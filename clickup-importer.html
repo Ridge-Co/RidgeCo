@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClickUp Importer — Ridge Co</title>
+<style>
+  :root { --bg:#0f0f0f; --surface:#1a1a1a; --surface2:#242424; --border:#2e2e2e; --text:#e8e6e1; --muted:#888; --accent:#e8a020; --accent2:#4ade80; --danger:#f87171; --warn:#fbbf24; --radius:6px; --font:'Courier New',monospace; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:var(--font); font-size:13px; padding:20px; }
+  h1 { color:var(--accent); font-size:1.2rem; letter-spacing:0.15em; margin-bottom:4px; }
+  p.sub { color:var(--muted); font-size:11px; margin-bottom:20px; }
+  .section-title { color:var(--muted); font-size:10px; letter-spacing:0.15em; text-transform:uppercase; border-bottom:1px solid var(--border); padding-bottom:6px; margin:20px 0 12px; }
+  .btn { background:var(--accent); color:#000; border:none; padding:9px 16px; border-radius:var(--radius); font-family:var(--font); font-size:12px; font-weight:bold; cursor:pointer; letter-spacing:0.05em; }
+  .btn:hover { opacity:0.85; }
+  .btn.secondary { background:var(--surface2); color:var(--text); border:1px solid var(--border); }
+  .btn.success { background:var(--accent2); color:#000; }
+  .btn.small { padding:5px 10px; font-size:11px; }
+  input, select { background:var(--surface2); border:1px solid var(--border); color:var(--text); padding:7px 10px; border-radius:var(--radius); font-family:var(--font); font-size:12px; }
+  input:focus, select:focus { outline:none; border-color:var(--accent); }
+  .config-row { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  .config-row label { color:var(--muted); font-size:11px; min-width:120px; }
+  .config-row input { flex:1; min-width:200px; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; padding:7px 10px; font-size:10px; color:var(--muted); letter-spacing:0.1em; text-transform:uppercase; border-bottom:1px solid var(--border); }
+  td { padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:middle; }
+  tr:hover td { background:var(--surface2); }
+  .badge { padding:2px 7px; border-radius:20px; font-size:10px; font-weight:bold; text-transform:uppercase; }
+  .badge-new { background:#1e3a5f; color:var(--warn); }
+  .badge-invoiced { background:#2d1f06; color:var(--accent); }
+  .badge-inprogress { background:#1a3320; color:var(--accent2); }
+  .prop-select { width:100%; min-width:160px; }
+  #log { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-top:16px; max-height:200px; overflow-y:auto; font-size:11px; }
+  .log-ok { color:var(--accent2); }
+  .log-err { color:var(--danger); }
+  .log-info { color:var(--muted); }
+  .progress-bar { background:var(--surface2); border-radius:20px; height:8px; margin:8px 0; overflow:hidden; }
+  .progress-fill { background:var(--accent); height:100%; transition:width 0.3s; border-radius:20px; }
+  #toast { position:fixed; bottom:20px; right:20px; background:var(--surface2); border:1px solid var(--border); padding:12px 16px; border-radius:var(--radius); font-size:12px; display:none; }
+  #toast.success { border-left:3px solid var(--accent2); }
+  #toast.error { border-left:3px solid var(--danger); }
+</style>
+</head>
+<body>
+
+<h1>RIDGE CO — CLICKUP IMPORTER</h1>
+<p class="sub">Import work orders from ClickUp into Maintenance Hub. Properties must be mapped before import.</p>
+
+<div class="section-title">STEP 1 — CONNECTION</div>
+<div class="config-row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev"></div>
+<div class="config-row"><label>Access Token</label><input id="auth-token" type="password" placeholder="mh-secret-2026-brett"></div>
+<button class="btn" onclick="loadProperties()">Connect & Load Properties</button>
+<div id="connect-status" style="margin-top:8px;font-size:11px;color:var(--muted)"></div>
+
+<div class="section-title">STEP 2 — MAP PROPERTIES</div>
+<p style="color:var(--muted);font-size:11px;margin-bottom:12px">Each ClickUp property ID needs to be matched to a property in your Sheet. Select from the dropdown for each row.</p>
+<table id="prop-map-table">
+  <thead><tr><th>ClickUp ID</th><th>Appears In</th><th>Match to Sheet Property</th></tr></thead>
+  <tbody id="prop-map-body"><tr><td colspan="3" style="color:var(--muted)">Connect first to load properties</td></tr></tbody>
+</table>
+
+<div class="section-title">STEP 3 — PREVIEW WORK ORDERS</div>
+<p style="color:var(--muted);font-size:11px;margin-bottom:12px">16 work orders ready to import. Uncheck any you want to skip.</p>
+<table>
+  <thead><tr><th style="width:30px"></th><th>ClickUp ID</th><th>Description</th><th>Trade</th><th>Status</th><th>Priority</th><th>Property (mapped)</th></tr></thead>
+  <tbody id="wo-preview-body"></tbody>
+</table>
+
+<div class="section-title">STEP 4 — IMPORT</div>
+<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+  <button class="btn success" onclick="startImport()">Import Selected Work Orders</button>
+  <button class="btn secondary" onclick="selectAll(true)">Select All</button>
+  <button class="btn secondary" onclick="selectAll(false)">Deselect All</button>
+  <span id="import-count" style="color:var(--muted);font-size:11px"></span>
+</div>
+<div class="progress-bar" id="progress-bar" style="display:none"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+<div id="log"><div class="log-info">Ready. Connect and map properties to begin.</div></div>
+
+<div id="toast"></div>
+
+<script>
+const CLICKUP_PROP_IDS = ["86dzt4gb7","86dzt4g5x","86dzt4g6j","86dzt4g5b","86dzt4g66","86dztr2rk","86dzt4g6a","86dzt7x9m","86dzt4gbm","86dzt4g7g","86dzt4g9k","86dzt4g9b","86dzt4g53","86dzt4g7v","86dzt4gdd"];
+
+const WORK_ORDERS = [
+  {clickup_id:"FIX-1151",name:"1214 Apt 4 Dryer filter, bulbs",status:"Invoiced",priority:"normal",trade:"Appliance",description:"1214 Apt 4 Dryer filter, bulbs",notes:"3/12/26: troubleshoot, clear blockage from dryer vent, get part info, clean dryer 1 hr 3/23/26: Clean 1hr attempt dryer part install. defective/wrong part, install replacement bulbs",clickup_prop_id:"86dzt4g66"},
+  {clickup_id:"FIX-1148",name:"1214 North Calvert new trash cans",status:"Invoiced",priority:"normal",trade:"General",description:"1214 North Calvert new trash cans",notes:"3x trash 3x recycling including one already made",clickup_prop_id:"86dzt4g6a"},
+  {clickup_id:"FIX-1024",name:"Microwave Not Working",status:"In Progress",priority:"urgent",trade:"Appliance",description:"Microwave Not Working",notes:"Changed microwave outlet to 20 amp per circuit. Plugged stove into backsplash outlet temporarily.",clickup_prop_id:"86dzt4g9b"},
+  {clickup_id:"FIX-1150",name:"1214 Apt 3 cabinet off hinges",status:"New",priority:"normal",trade:"General",description:"1214 Apt 3 cabinet off hinges",notes:"Needs cabinet mounting screws",clickup_prop_id:"86dzt4g5x"},
+  {clickup_id:"FIX-1149",name:"1214 Front drain",status:"New",priority:"normal",trade:"General",description:"1214 Front drain",notes:"",clickup_prop_id:"86dzt4g6a"},
+  {clickup_id:"FIX-1142",name:"20 E Eager St Apt 1 dryer making noise and loose kitchen sink",status:"New",priority:"normal",trade:"General",description:"20 E Eager St Apt 1 dryer making noise and loose kitchen sink",notes:"",clickup_prop_id:"86dzt4g7v"},
+  {clickup_id:"FIX-1135",name:"Apartment turnover 115 #2",status:"New",priority:"normal",trade:"General",description:"Apartment turnover 115 #2",notes:"",clickup_prop_id:"86dzt4g53"},
+  {clickup_id:"FIX-1018",name:"Backyard cleanup, big branch and cut overhanging branch",status:"New",priority:"low",trade:"Landscaping",description:"Backyard cleanup, big branch and cut overhanging branch",notes:"",clickup_prop_id:"86dzt4g9k"},
+  {clickup_id:"FIX-1015",name:"Clean exterior AC condenser unit",status:"New",priority:"low",trade:"HVAC",description:"Clean exterior AC condenser unit",notes:"Waiting for warmer weather",clickup_prop_id:"86dzt4g6j"},
+  {clickup_id:"FIX-1017",name:"Front yard makeover",status:"New",priority:"low",trade:"Landscaping",description:"Front yard makeover",notes:"",clickup_prop_id:"86dzt7x9m"},
+  {clickup_id:"FIX-1020",name:"Front yard makeover (2930)",status:"New",priority:"low",trade:"Landscaping",description:"Front yard makeover",notes:"",clickup_prop_id:"86dzt4gdd"},
+  {clickup_id:"FIX-1126",name:"Heating system check-up and service with All-Steamed-Up",status:"New",priority:"normal",trade:"HVAC",description:"Heating system check-up and service with All-Steamed-Up",notes:"",clickup_prop_id:"86dztr2rk"},
+  {clickup_id:"FIX-1019",name:"Noisy HVAC",status:"New",priority:"low",trade:"HVAC",description:"Noisy HVAC",notes:"",clickup_prop_id:"86dzt4gb7"},
+  {clickup_id:"FIX-1021",name:"Replace door gasket on refrigerator",status:"New",priority:"low",trade:"Appliance",description:"Replace door gasket on refrigerator",notes:"Locate fridge model number and order",clickup_prop_id:"86dzt4g5b"},
+  {clickup_id:"FIX-1125",name:"Replace walk-in bottom door gasket",status:"New",priority:"low",trade:"Appliance",description:"Replace walk-in bottom door gasket",notes:"see email door sweep 8/5/25 for more info",clickup_prop_id:"86dzt4gbm"},
+  {clickup_id:"FIX-1023",name:"Yard cleanup",status:"New",priority:"low",trade:"Landscaping",description:"Yard cleanup",notes:"test note",clickup_prop_id:"86dzt4g7g"},
+];
+
+// Map: clickup_prop_id -> names of WOs using it
+const propUsage = {};
+CLICKUP_PROP_IDS.forEach(id => { propUsage[id] = []; });
+WORK_ORDERS.forEach(wo => { if(propUsage[wo.clickup_prop_id]) propUsage[wo.clickup_prop_id].push(wo.clickup_id); });
+
+let sheetProperties = [];
+let propMapping = {}; // clickup_prop_id -> sheet property ID
+
+function getWorker() { return document.getElementById('worker-url').value.trim(); }
+function getToken() { return document.getElementById('auth-token').value.trim(); }
+
+async function apiCall(path) {
+  const res = await fetch(getWorker() + path, { headers: { 'X-Auth-Token': getToken(), 'Content-Type': 'application/json' } });
+  return res.json();
+}
+async function apiPost(path, body) {
+  const res = await fetch(getWorker() + path, { method:'POST', headers: { 'X-Auth-Token': getToken(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return res.json();
+}
+
+async function loadProperties() {
+  document.getElementById('connect-status').textContent = 'Connecting...';
+  try {
+    sheetProperties = await apiCall('/properties');
+    if (!Array.isArray(sheetProperties)) throw new Error('Bad response: ' + JSON.stringify(sheetProperties));
+    document.getElementById('connect-status').textContent = `✅ Connected — ${sheetProperties.length} properties loaded`;
+    renderPropMap();
+    renderWOPreview();
+  } catch(e) {
+    document.getElementById('connect-status').textContent = '❌ Error: ' + e.message;
+  }
+}
+
+function renderPropMap() {
+  const tbody = document.getElementById('prop-map-body');
+  tbody.innerHTML = CLICKUP_PROP_IDS.map(cupId => {
+    const usage = propUsage[cupId] || [];
+    const opts = sheetProperties.map(p => `<option value="${p.ID}">${p.Address}${p.City?' — '+p.City:''}</option>`).join('');
+    return `<tr>
+      <td style="color:var(--muted);font-size:11px">${cupId}</td>
+      <td style="font-size:11px;color:var(--warn)">${usage.join(', ')}</td>
+      <td><select class="prop-select" id="map-${cupId}" onchange="updateMapping('${cupId}')">
+        <option value="">— Not mapped —</option>
+        ${opts}
+      </select></td>
+    </tr>`;
+  }).join('');
+}
+
+function updateMapping(cupId) {
+  const val = document.getElementById('map-'+cupId).value;
+  propMapping[cupId] = val;
+  renderWOPreview();
+}
+
+function renderWOPreview() {
+  const tbody = document.getElementById('wo-preview-body');
+  tbody.innerHTML = WORK_ORDERS.map((wo, i) => {
+    const mappedProp = sheetProperties.find(p => p.ID === propMapping[wo.clickup_prop_id]);
+    const propName = mappedProp ? mappedProp.Address : `<span style="color:var(--danger)">Not mapped</span>`;
+    const sc = 'badge-'+(wo.status||'new').toLowerCase().replace(/\s/g,'');
+    return `<tr>
+      <td><input type="checkbox" id="wo-check-${i}" checked onchange="updateCount()"></td>
+      <td style="color:var(--accent);font-size:11px">${wo.clickup_id}</td>
+      <td style="max-width:220px;font-size:12px">${wo.description}</td>
+      <td>${wo.trade}</td>
+      <td><span class="badge ${sc}">${wo.status}</span></td>
+      <td style="color:${wo.priority==='urgent'?'var(--danger)':'var(--muted)'}">${wo.priority}</td>
+      <td style="font-size:11px">${propName}</td>
+    </tr>`;
+  }).join('');
+  updateCount();
+}
+
+function updateCount() {
+  const checked = WORK_ORDERS.filter((_,i) => document.getElementById('wo-check-'+i)?.checked).length;
+  document.getElementById('import-count').textContent = `${checked} of ${WORK_ORDERS.length} selected`;
+}
+
+function selectAll(val) {
+  WORK_ORDERS.forEach((_,i) => { const el = document.getElementById('wo-check-'+i); if(el) el.checked = val; });
+  updateCount();
+}
+
+async function startImport() {
+  const toImport = WORK_ORDERS.filter((_,i) => document.getElementById('wo-check-'+i)?.checked);
+  if (!toImport.length) { showToast('No work orders selected','error'); return; }
+
+  const unmapped = toImport.filter(wo => !propMapping[wo.clickup_prop_id]);
+  if (unmapped.length) {
+    showToast(`${unmapped.length} WOs have unmapped properties. Map all properties first.`, 'error');
+    return;
+  }
+
+  const logEl = document.getElementById('log');
+  logEl.innerHTML = '';
+  const bar = document.getElementById('progress-bar');
+  const fill = document.getElementById('progress-fill');
+  bar.style.display = 'block';
+
+  let success = 0, fail = 0;
+
+  for (let i = 0; i < toImport.length; i++) {
+    const wo = toImport[i];
+    const propId = propMapping[wo.clickup_prop_id];
+    fill.style.width = Math.round((i / toImport.length) * 100) + '%';
+
+    try {
+      const res = await apiPost('/workorder', {
+        property_id: propId,
+        unit_id: '',
+        tenant_id: '',
+        trade: wo.trade,
+        priority: wo.priority,
+        type: 'manual',
+        description: wo.description,
+        notes: `[${wo.clickup_id}] ${wo.notes}`,
+        created_by: 'clickup-import',
+      });
+
+      // If status isn't New, update it
+      if (wo.status !== 'New' && res.id) {
+        await apiPost('/status', { wo_id: res.id, status: wo.status });
+      }
+
+      if (res.id) {
+        success++;
+        logEl.innerHTML += `<div class="log-ok">✅ ${wo.clickup_id} → ${res.id} | ${wo.description.substring(0,50)}</div>`;
+      } else {
+        fail++;
+        logEl.innerHTML += `<div class="log-err">❌ ${wo.clickup_id} | ${JSON.stringify(res)}</div>`;
+      }
+    } catch(e) {
+      fail++;
+      logEl.innerHTML += `<div class="log-err">❌ ${wo.clickup_id} | ${e.message}</div>`;
+    }
+
+    logEl.scrollTop = logEl.scrollHeight;
+    await new Promise(r => setTimeout(r, 300)); // small delay to avoid rate limiting
+  }
+
+  fill.style.width = '100%';
+  logEl.innerHTML += `<div class="log-info" style="margin-top:8px;font-weight:bold">Done: ${success} imported, ${fail} failed.</div>`;
+  showToast(`Import complete: ${success} success, ${fail} failed`, success > 0 ? 'success' : 'error');
+}
+
+function showToast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = type;
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 4000);
+}
+
+// Init
+updateCount();
+</script>
+</body>
+</html>
