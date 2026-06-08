@@ -327,6 +327,7 @@ const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
 const SECRET_KEY = 'mh_auth';
 let AUTH_TOKEN = '';
 let state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };
+function safeArray(val) { return Array.isArray(val) ? val : []; }
 let assignWOId = null;
 let invoiceWOId = null;
 
@@ -370,7 +371,15 @@ async function loadAll() {
       api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
       api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners')
     ]);
-    state = {properties:props,units:units,tenants:tenants,vendors:vendors,workorders:workorders,invoices:invoices,owners:owners};
+    state = {
+      properties: Array.isArray(props) ? props : [],
+      units: Array.isArray(units) ? units : [],
+      tenants: Array.isArray(tenants) ? tenants : [],
+      vendors: Array.isArray(vendors) ? vendors : [],
+      workorders: Array.isArray(workorders) ? workorders : [],
+      invoices: Array.isArray(invoices) ? invoices : [],
+      owners: Array.isArray(owners) ? owners : []
+    };
     renderDashboard(); renderWOPage(); renderPropertiesPage(); renderVendorsPage(); renderInvoicesPage();
     toast('Data loaded','success');
   } catch(e) { logError('Load all data',e.message); toast('Load error: '+e.message,'error'); }
@@ -384,8 +393,7 @@ function showPage(name, btn) {
 }
 
 function renderDashboard() {
-  if(!Array.isArray(state.workorders)) return;
-  const wos = state.workorders;
+  const wos = safeArray(state.workorders);
   document.getElementById('stat-open').textContent = wos.filter(w=>!['Complete','Paid'].includes(w.Status)).length;
   document.getElementById('stat-urgent').textContent = wos.filter(w=>w.Priority==='urgent'&&!['Complete','Paid'].includes(w.Status)).length;
   document.getElementById('stat-invoiced').textContent = wos.filter(w=>w.Status==='Invoiced').length;
@@ -396,9 +404,9 @@ function renderDashboard() {
 }
 
 function woCard(w) {
-  const prop = state.properties.find(p=>p.ID===w.Property_ID);
-  const vendor = state.vendors.find(v=>v.ID===w.Vendor_ID);
-  const unit = state.units.find(u=>u.ID===w.Unit_ID);
+  const prop = safeArray(state.properties).find(p=>p.ID===w.Property_ID);
+  const vendor = safeArray(state.vendors).find(v=>v.ID===w.Vendor_ID);
+  const unit = safeArray(state.units).find(u=>u.ID===w.Unit_ID);
   const addr = prop ? prop.Address : (w.Property_ID||'—');
   const sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s/g,'');
   return `<div class="wo-card priority-${w.Priority||'normal'}" onclick="openWODetail('${w.ID}')">
@@ -417,8 +425,7 @@ function woCard(w) {
 function renderWOPage() {
   const filter = document.getElementById('wo-filter')?.value||'all';
   const search = (document.getElementById('wo-search')?.value||'').toLowerCase();
-  if(!Array.isArray(state.workorders)) return;
-  let wos = [...state.workorders];
+  let wos = [...safeArray(state.workorders)];
   if(filter!=='all') wos = wos.filter(w=>w.Status===filter);
   if(search) wos = wos.filter(w=>{
     const prop = state.properties.find(p=>p.ID===w.Property_ID);
@@ -546,7 +553,7 @@ async function submitNewWO(){
 
 function renderPropertiesPage(){
   const search=(document.getElementById('prop-search')?.value||'').toLowerCase();
-  let props=[...state.properties].filter(p=>p.Active!=='FALSE');
+  let props=[...safeArray(state.properties)].filter(p=>p.Active!=='FALSE');
   if(search) props=props.filter(p=>(p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search));
   const el=document.getElementById('properties-list');
   if(!props.length){el.innerHTML='<div class="loading">No properties found</div>';return;}
@@ -558,15 +565,15 @@ function renderPropertiesPage(){
 
 function renderVendorsPage(){
   const el=document.getElementById('vendors-list');
-  if(!state.vendors.length){el.innerHTML='<div class="loading">No vendors yet</div>';return;}
-  el.innerHTML=`<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th></tr></thead><tbody>`+state.vendors.filter(v=>v.Active!=='FALSE').map(v=>{
+  if(!safeArray(state.vendors).length){el.innerHTML='<div class="loading">No vendors yet</div>';return;}
+  el.innerHTML=`<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th></tr></thead><tbody>`+safeArray(state.vendors).filter(v=>v.Active!=='FALSE').map(v=>{
     const open=state.workorders.filter(w=>w.Vendor_ID===v.ID&&!['Complete','Paid'].includes(w.Status)).length;
     return `<tr><td>${v.Name}${v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':''}</td><td>${v.Trade||'—'}</td><td><a href="tel:${v.Phone}" style="color:var(--accent);text-decoration:none">${v.Phone||'—'}</a></td><td>${v.Markets||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td></tr>`;
   }).join('')+'</tbody></table>';
 }
 
 function renderInvoicesPage(){
-  const pending=state.invoices.filter(i=>i.Status!=='Paid');
+  const pending=safeArray(state.invoices).filter(i=>i.Status!=='Paid');
   const el=document.getElementById('invoices-list');
   if(!pending.length){el.innerHTML='<div class="loading">No outstanding invoices</div>';return;}
   const total=pending.reduce((s,i)=>s+parseFloat(i.Amount||0),0);
