@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Patch Importer</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--radius:6px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:800px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.15em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn.success{background:var(--accent2);color:#000;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  input{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+  .row label{color:var(--muted);font-size:11px;min-width:100px;}
+  .row input{flex:1;}
+  #log{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:300px;overflow-y:auto;font-size:11px;margin-top:10px;}
+  .ok{color:var(--accent2);}
+  .err{color:var(--danger);}
+  .info{color:var(--muted);}
+  .progress-bar{background:var(--surface2);border-radius:20px;height:6px;margin:8px 0;overflow:hidden;}
+  .progress-fill{background:var(--accent);height:100%;transition:width 0.3s;border-radius:20px;}
+  #toast{position:fixed;bottom:20px;right:20px;background:var(--surface2);border:1px solid var(--border);padding:12px 16px;border-radius:var(--radius);font-size:12px;display:none;}
+  #toast.success{border-left:3px solid var(--accent2);}
+  #toast.error{border-left:3px solid var(--danger);}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — PATCH IMPORTER</h1>
+<p class="sub">Adds missing units and tenants for properties 9-13. Run once.</p>
+
+<div class="section">
+  <div class="section-title">CONNECTION</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev"></div>
+  <div class="row"><label>Access Token</label><input id="auth-token" type="password" placeholder="mh-secret-2026-brett"></div>
+  <button class="btn" onclick="connect()">Connect</button>
+  <span id="conn-status" style="margin-left:10px;font-size:11px;color:var(--muted)"></span>
+</div>
+
+<div class="section">
+  <div class="section-title">MISSING DATA TO IMPORT</div>
+  <p style="color:var(--muted);font-size:11px;margin-bottom:12px">The following units and tenants are missing from your Sheet. All property IDs are confirmed from your Sheet.</p>
+  
+  <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px">
+    <thead><tr>
+      <th style="text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border)">Property ID</th>
+      <th style="text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border)">Address</th>
+      <th style="text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border)">Units to Add</th>
+      <th style="text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border)">Tenants</th>
+    </tr></thead>
+    <tbody>
+      <tr><td style="padding:6px 8px;border-bottom:1px solid var(--border)">8</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">3014 N Calvert St</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">—</td><td style="padding:6px 8px;border-bottom:1px solid var(--border);color:var(--warn)">Missing: Mariam, Kevin, VeAmber (units already exist)</td></tr>
+      <tr><td style="padding:6px 8px;border-bottom:1px solid var(--border)">9</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">807 N Calvert St</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">Apt 2A, 2B, 3A, 3B, Bsmt</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">Alex Rouse (Bsmt)</td></tr>
+      <tr><td style="padding:6px 8px;border-bottom:1px solid var(--border)">10</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">828 S Charles St</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">No units in ClickUp</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">None</td></tr>
+      <tr><td style="padding:6px 8px;border-bottom:1px solid var(--border)">11</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">928 N Calvert St</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">Apt 1F, 1R, 2F, 2R, 3F, 3R, B, Carriage House</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">Antoine(1R), Cole(2F), Gwyneth(2R), Saul(3F), Claudia(3R)</td></tr>
+      <tr><td style="padding:6px 8px;border-bottom:1px solid var(--border)">12</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">926 N Calvert St</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">No units in ClickUp</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">None</td></tr>
+      <tr><td style="padding:6px 8px">13</td><td style="padding:6px 8px">20 E Eager St</td><td style="padding:6px 8px">—</td><td style="padding:6px 8px;color:var(--warn)">Missing: James(1), Abby(2), Kelsey(3) (units already exist)</td></tr>
+    </tbody>
+  </table>
+
+  <div style="display:flex;gap:8px">
+    <button class="btn success" onclick="runPatch()">Run Patch Import</button>
+  </div>
+  <div class="progress-bar" id="progress-bar" style="display:none"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+  <div id="log"><div class="info">Connect first, then run patch.</div></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+function getWorker(){return document.getElementById('worker-url').value.trim();}
+function getToken(){return document.getElementById('auth-token').value.trim();}
+
+async function apiGet(path){
+  const r=await fetch(getWorker()+path,{headers:{'X-Auth-Token':getToken(),'Content-Type':'application/json'}});
+  return r.json();
+}
+async function apiPost(path,body){
+  const r=await fetch(getWorker()+path,{method:'POST',headers:{'X-Auth-Token':getToken(),'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return r.json();
+}
+
+let connected = false;
+let existingUnits = [];
+let existingTenants = [];
+
+async function connect(){
+  document.getElementById('conn-status').textContent='Connecting...';
+  try{
+    const props = await apiGet('/properties');
+    if(!Array.isArray(props)) throw new Error('Bad response');
+    existingUnits = await apiGet('/units');
+    existingTenants = await apiGet('/tenants');
+    connected = true;
+    document.getElementById('conn-status').textContent=`✅ Connected — ${props.length} properties, ${existingUnits.length} units, ${existingTenants.length} tenants`;
+    toast('Connected','success');
+  }catch(e){
+    document.getElementById('conn-status').textContent='❌ '+e.message;
+  }
+}
+
+async function runPatch(){
+  if(!connected){toast('Connect first','error');return;}
+  
+  const logEl = document.getElementById('log');
+  logEl.innerHTML = '';
+  const bar = document.getElementById('progress-bar');
+  const fill = document.getElementById('progress-fill');
+  bar.style.display = 'block';
+
+  // Find existing unit IDs for properties 8 and 13
+  // These properties already have units, just missing tenants
+  const prop8Units = existingUnits.filter(u => u.Property_ID === '8');
+  const prop13Units = existingUnits.filter(u => u.Property_ID === '13');
+
+  logEl.innerHTML += `<div class="info">Found ${prop8Units.length} units for prop 8 (3014 N Calvert)</div>`;
+  logEl.innerHTML += `<div class="info">Found ${prop13Units.length} units for prop 13 (20 E Eager)</div>`;
+
+  const steps = [];
+
+  // ── Property 8: 3014 N Calvert — missing tenants only ──
+  // Units: Apt 1=ID18, Apt 2=?, Apt 3=?, Apt B=?
+  // We need to find unit IDs by label
+  const missingTenants8 = [
+    {unit_label:'Apt 2', first:'Mariam', last:'', phone:'+1 786 391 7241', email:''},
+    {unit_label:'Apt 3', first:'Kevin', last:'', phone:'+1 716 418 3481', email:''},
+    {unit_label:'Apt B', first:'VeAmber', last:'', phone:'+1 630 452 4216', email:''},
+  ];
+  missingTenants8.forEach(t => {
+    const unit = prop8Units.find(u => u.Unit_Label === t.unit_label);
+    if(unit) steps.push({type:'tenant', prop_id:'8', unit_id:unit.ID, ...t});
+    else steps.push({type:'unit_then_tenant', prop_id:'8', unit_label:t.unit_label, ...t});
+  });
+
+  // ── Property 9: 807 N Calvert — units + 1 tenant ──
+  steps.push({type:'unit', prop_id:'9', unit_label:'Apt 2A', tenant:null});
+  steps.push({type:'unit', prop_id:'9', unit_label:'Apt 2B', tenant:null});
+  steps.push({type:'unit', prop_id:'9', unit_label:'Apt 3A', tenant:null});
+  steps.push({type:'unit', prop_id:'9', unit_label:'Apt 3B', tenant:null});
+  steps.push({type:'unit', prop_id:'9', unit_label:'Apt Bsmt', tenant:{first:'Alex', last:'Rouse', phone:'+1 315 558 8520', email:''}});
+
+  // ── Property 11: 928 N Calvert — units + tenants ──
+  steps.push({type:'unit', prop_id:'11', unit_label:'Apt 1F', tenant:null});
+  steps.push({type:'unit', prop_id:'11', unit_label:'Apt 1R', tenant:{first:'Antoine', last:'', phone:'+1 443 571 3615', email:''}});
+  steps.push({type:'unit', prop_id:'11', unit_label:'Apt 2F', tenant:{first:'Cole', last:'', phone:'+18324924271', email:''}});
+  steps.push({type:'unit', prop_id:'11', unit_label:'Apt 2R', tenant:{first:'Gwyneth', last:'', phone:'+16673348295', email:''}});
+  steps.push({type:'unit', prop_id:'11', unit_label:'Apt 3F', tenant:{first:'Saul', last:'', phone:'+1 443 810 8018', email:''}});
+  steps.push({type:'unit', prop_id:'11', unit_label:'Apt 3R', tenant:{first:'Claudia', last:'', phone:'+1 574 315 5720', email:''}});
+  steps.push({type:'unit', prop_id:'11', unit_label:'Apt B', tenant:null});
+  steps.push({type:'unit', prop_id:'11', unit_label:'Carriage House', tenant:null});
+
+  // ── Property 13: 20 E Eager — missing tenants only ──
+  const missingTenants13 = [
+    {unit_label:'Apt 1', first:'James', last:'', phone:'+1 443 603 7450', email:''},
+    {unit_label:'Apt 2', first:'Abby', last:'', phone:'+1 202 341 4172', email:''},
+    {unit_label:'Apt 3', first:'Kelsey', last:'', phone:'+1 443 603 7450', email:''},
+  ];
+  missingTenants13.forEach(t => {
+    const unit = prop13Units.find(u => u.Unit_Label === t.unit_label);
+    if(unit) steps.push({type:'tenant', prop_id:'13', unit_id:unit.ID, ...t});
+    else steps.push({type:'unit_then_tenant', prop_id:'13', unit_label:t.unit_label, ...t});
+  });
+
+  logEl.innerHTML += `<div class="info">Running ${steps.length} steps...</div>`;
+
+  let ok=0, fail=0;
+
+  for(let i=0; i<steps.length; i++){
+    const s = steps[i];
+    fill.style.width = Math.round((i/steps.length)*100)+'%';
+
+    try{
+      if(s.type === 'tenant'){
+        // Add tenant to existing unit
+        const tRes = await apiPost('/tenant/add', {
+          First_Name: s.first, Last_Name: s.last||'',
+          Phone: s.phone, Email: s.email||'',
+          Unit_ID: s.unit_id, Property_ID: s.prop_id, Active:'TRUE'
+        });
+        if(tRes.id){
+          await apiPost('/unit/update', {id: s.unit_id, fields:{Tenant_ID: tRes.id}});
+          logEl.innerHTML += `<div class="ok">✅ Tenant ${s.first} → Unit ${s.unit_label} (ID ${s.unit_id})</div>`;
+          ok++;
+        } else {
+          logEl.innerHTML += `<div class="err">❌ Tenant ${s.first}: ${JSON.stringify(tRes)}</div>`;
+          fail++;
+        }
+
+      } else if(s.type === 'unit'){
+        // Create unit, optionally with tenant
+        const uRes = await apiPost('/unit/add', {
+          Property_ID: s.prop_id, Unit_Label: s.unit_label,
+          Tenant_ID:'', Notes:'', Active:'TRUE'
+        });
+        if(uRes.id){
+          if(s.tenant){
+            const tRes = await apiPost('/tenant/add', {
+              First_Name: s.tenant.first, Last_Name: s.tenant.last||'',
+              Phone: s.tenant.phone, Email: s.tenant.email||'',
+              Unit_ID: uRes.id, Property_ID: s.prop_id, Active:'TRUE'
+            });
+            if(tRes.id){
+              await apiPost('/unit/update', {id: uRes.id, fields:{Tenant_ID: tRes.id}});
+              logEl.innerHTML += `<div class="ok">✅ Unit ${s.unit_label} + tenant ${s.tenant.first}</div>`;
+            }
+          } else {
+            logEl.innerHTML += `<div class="ok">✅ Unit ${s.unit_label} (vacant)</div>`;
+          }
+          ok++;
+        } else {
+          logEl.innerHTML += `<div class="err">❌ Unit ${s.unit_label}: ${JSON.stringify(uRes)}</div>`;
+          fail++;
+        }
+
+      } else if(s.type === 'unit_then_tenant'){
+        // Unit doesn't exist — create it then add tenant
+        const uRes = await apiPost('/unit/add', {
+          Property_ID: s.prop_id, Unit_Label: s.unit_label,
+          Tenant_ID:'', Notes:'', Active:'TRUE'
+        });
+        if(uRes.id){
+          const tRes = await apiPost('/tenant/add', {
+            First_Name: s.first, Last_Name: s.last||'',
+            Phone: s.phone, Email: s.email||'',
+            Unit_ID: uRes.id, Property_ID: s.prop_id, Active:'TRUE'
+          });
+          if(tRes.id){
+            await apiPost('/unit/update', {id: uRes.id, fields:{Tenant_ID: tRes.id}});
+            logEl.innerHTML += `<div class="ok">✅ Created unit ${s.unit_label} + tenant ${s.first}</div>`;
+          }
+          ok++;
+        } else {
+          logEl.innerHTML += `<div class="err">❌ ${s.unit_label}: ${JSON.stringify(uRes)}</div>`;
+          fail++;
+        }
+      }
+    }catch(e){
+      logEl.innerHTML += `<div class="err">❌ Error: ${e.message}</div>`;
+      fail++;
+    }
+
+    logEl.scrollTop = logEl.scrollHeight;
+    await new Promise(r=>setTimeout(r,300));
+  }
+
+  fill.style.width='100%';
+  logEl.innerHTML += `<div class="info" style="font-weight:bold;margin-top:6px">Done: ${ok} ok, ${fail} failed.</div>`;
+  toast(`Patch complete: ${ok} items`,'success');
+}
+
+function toast(msg,type='info'){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.className=type;el.style.display='block';
+  setTimeout(()=>el.style.display='none',3500);
+}
+</script>
+</body>
+</html>
