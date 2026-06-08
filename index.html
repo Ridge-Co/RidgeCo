@@ -367,21 +367,25 @@ async function api(method, path, body) {
 
 async function loadAll() {
   try {
-    const [props,units,tenants,vendors,workorders,invoices,owners] = await Promise.all([
+    const results = await Promise.allSettled([
       api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
       api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners')
     ]);
-    state = {
-      properties: Array.isArray(props) ? props : [],
-      units: Array.isArray(units) ? units : [],
-      tenants: Array.isArray(tenants) ? tenants : [],
-      vendors: Array.isArray(vendors) ? vendors : [],
-      workorders: Array.isArray(workorders) ? workorders : [],
-      invoices: Array.isArray(invoices) ? invoices : [],
-      owners: Array.isArray(owners) ? owners : []
-    };
+    const names = ['properties','units','tenants','vendors','workorders','invoices','owners'];
+    results.forEach((r,i) => {
+      if(r.status === 'fulfilled') {
+        const val = r.value;
+        // Worker may return array directly or {error:...} or something else
+        state[names[i]] = Array.isArray(val) ? val : (Array.isArray(val?.data) ? val.data : []);
+        if(!Array.isArray(r.value)) logError('Load '+names[i], 'Not array: '+JSON.stringify(r.value).substring(0,100));
+      } else {
+        state[names[i]] = [];
+        logError('Load '+names[i], r.reason?.message || 'Failed');
+      }
+    });
     renderDashboard(); renderWOPage(); renderPropertiesPage(); renderVendorsPage(); renderInvoicesPage();
-    toast('Data loaded','success');
+    const loaded = names.filter((_,i)=>results[i].status==='fulfilled').length;
+    toast('Loaded '+loaded+'/7 data sets','success');
   } catch(e) { logError('Load all data',e.message); toast('Load error: '+e.message,'error'); }
 }
 
