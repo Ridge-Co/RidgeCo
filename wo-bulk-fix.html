@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — WO Bulk Fix</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--radius:6px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1000px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.15em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn.success{background:var(--accent2);color:#000;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  .btn.small{padding:4px 8px;font-size:11px;}
+  input,select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+  .row label{color:var(--muted);font-size:11px;min-width:100px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border);}
+  td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  tr:hover td{background:var(--surface2);}
+  select.inline{width:100%;min-width:140px;}
+  #log{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:200px;overflow-y:auto;font-size:11px;margin-top:10px;}
+  .ok{color:var(--accent2);}
+  .err{color:var(--danger);}
+  .info{color:var(--muted);}
+  .progress-bar{background:var(--surface2);border-radius:20px;height:6px;margin:8px 0;overflow:hidden;}
+  .progress-fill{background:var(--accent);height:100%;transition:width 0.3s;border-radius:20px;}
+  #toast{position:fixed;bottom:20px;right:20px;background:var(--surface2);border:1px solid var(--border);padding:12px 16px;border-radius:var(--radius);font-size:12px;display:none;z-index:999;}
+  #toast.success{border-left:3px solid var(--accent2);}
+  #toast.error{border-left:3px solid var(--danger);}
+  .auto-tag{background:#1a3320;color:var(--accent2);padding:2px 6px;border-radius:10px;font-size:10px;margin-left:4px;}
+  .warn-tag{background:#2d2006;color:var(--warn);padding:2px 6px;border-radius:10px;font-size:10px;margin-left:4px;}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — WORK ORDER BULK FIX</h1>
+<p class="sub">Auto-assigns units and tenants to existing work orders. Review then apply.</p>
+
+<div class="section">
+  <div class="section-title">CONNECTION</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
+  <div class="row"><label>Access Token</label><input id="auth-token" type="password" placeholder="mh-secret-2026-brett" style="flex:1"></div>
+  <button class="btn" onclick="loadData()">Connect & Load</button>
+  <span id="conn-status" style="margin-left:10px;font-size:11px;color:var(--muted)"></span>
+</div>
+
+<div class="section">
+  <div class="section-title">WORK ORDERS — REVIEW & EDIT BEFORE APPLYING</div>
+  <p style="color:var(--muted);font-size:11px;margin-bottom:12px">
+    <span class="auto-tag">AUTO</span> = auto-matched from unit · 
+    <span class="warn-tag">MANUAL</span> = needs your selection · 
+    Green rows are ready · Change any dropdown before applying.
+  </p>
+  <div id="wo-table"><div class="info" style="padding:20px;text-align:center">Connect to load work orders</div></div>
+  <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+    <button class="btn success" onclick="applyAll()">Apply All Changes</button>
+    <button class="btn secondary" onclick="loadData()">Reload</button>
+    <span id="ready-count" style="color:var(--muted);font-size:11px;line-height:32px"></span>
+  </div>
+  <div class="progress-bar" id="progress-bar" style="display:none"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+  <div id="log" style="display:none"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let state = {workorders:[],properties:[],units:[],tenants:[],vendors:[]};
+
+function getWorker(){return document.getElementById('worker-url').value.trim();}
+function getToken(){return document.getElementById('auth-token').value.trim();}
+async function apiGet(path){const r=await fetch(getWorker()+path,{headers:{'X-Auth-Token':getToken(),'Content-Type':'application/json'}});return r.json();}
+async function apiPost(path,body){const r=await fetch(getWorker()+path,{method:'POST',headers:{'X-Auth-Token':getToken(),'Content-Type':'application/json'},body:JSON.stringify(body)});return r.json();}
+
+async function loadData(){
+  document.getElementById('conn-status').textContent='Loading...';
+  try{
+    const [wos,props,units,tenants,vendors] = await Promise.all([
+      apiGet('/workorders'),apiGet('/properties'),apiGet('/units'),
+      apiGet('/tenants'),apiGet('/vendors')
+    ]);
+    state = {
+      workorders: Array.isArray(wos)?wos:[],
+      properties: Array.isArray(props)?props:[],
+      units: Array.isArray(units)?units:[],
+      tenants: Array.isArray(tenants)?tenants:[],
+      vendors: Array.isArray(vendors)?vendors:[],
+    };
+    document.getElementById('conn-status').textContent=`✅ ${state.workorders.length} WOs · ${state.properties.length} props · ${state.units.length} units · ${state.tenants.length} tenants`;
+    renderTable();
+  }catch(e){
+    document.getElementById('conn-status').textContent='❌ '+e.message;
+  }
+}
+
+function renderTable(){
+  const wos = state.workorders.filter(w=>!['Paid'].includes(w.Status));
+  
+  if(!wos.length){
+    document.getElementById('wo-table').innerHTML='<div class="info" style="padding:20px;text-align:center">No work orders found</div>';
+    return;
+  }
+
+  let html = `<table>
+    <thead><tr>
+      <th>WO</th><th>Description</th><th>Property</th><th>Unit</th><th>Tenant</th><th>Status</th>
+    </tr></thead><tbody>`;
+
+  wos.forEach(wo => {
+    const prop = state.properties.find(p=>p.ID===wo.Property_ID);
+    
+    // Get units for this property
+    const propUnits = state.units.filter(u=>u.Property_ID===wo.Property_ID);
+    
+    // Auto-find unit if WO has unit_id
+    const currentUnit = state.units.find(u=>u.ID===wo.Unit_ID);
+    
+    // Auto-find tenant from unit
+    let autoTenant = null;
+    if(currentUnit && currentUnit.Tenant_ID){
+      autoTenant = state.tenants.find(t=>t.ID===currentUnit.Tenant_ID);
+    }
+    
+    // Current tenant
+    const currentTenant = state.tenants.find(t=>t.ID===wo.Tenant_ID);
+
+    // Unit options
+    const unitOpts = '<option value="">Whole property</option>' +
+      propUnits.map(u=>`<option value="${u.ID}" ${u.ID===wo.Unit_ID?'selected':''}>${u.Unit_Label}</option>`).join('');
+
+    // Tenant options — all tenants for this property
+    const propTenants = state.tenants.filter(t=>t.Property_ID===wo.Property_ID&&t.Active!=='FALSE');
+    const tenantOpts = '<option value="">None</option>' +
+      state.tenants.filter(t=>t.Active!=='FALSE').map(t=>`<option value="${t.ID}" ${t.ID===(wo.Tenant_ID||(autoTenant?.ID||''))?'selected':''}>${t.First_Name} ${t.Last_Name} · ${t.Phone}</option>`).join('');
+
+    const hasUnit = !!wo.Unit_ID;
+    const hasTenant = !!(wo.Tenant_ID || autoTenant);
+    const rowColor = hasUnit && hasTenant ? 'border-left:3px solid var(--accent2)' : 
+                     hasUnit ? 'border-left:3px solid var(--warn)' : 
+                     'border-left:3px solid var(--border)';
+
+    html += `<tr style="${rowColor}">
+      <td style="color:var(--accent);white-space:nowrap">${wo.ID}</td>
+      <td style="max-width:180px;font-size:11px">${wo.Description||'—'}</td>
+      <td style="font-size:11px;color:var(--muted)">${prop?prop.Address:'—'}</td>
+      <td>
+        <select class="inline" id="unit-${wo.ID}" onchange="unitChanged('${wo.ID}')">
+          ${unitOpts}
+        </select>
+      </td>
+      <td>
+        <select class="inline" id="tenant-${wo.ID}">
+          ${tenantOpts}
+        </select>
+        ${autoTenant && !wo.Tenant_ID ? '<span class="auto-tag">AUTO</span>' : ''}
+        ${!autoTenant && !wo.Tenant_ID ? '<span class="warn-tag">MANUAL</span>' : ''}
+      </td>
+      <td><span style="font-size:11px;color:var(--muted)">${wo.Status||'New'}</span></td>
+    </tr>`;
+  });
+
+  html += '</tbody></table>';
+  document.getElementById('wo-table').innerHTML = html;
+  updateReadyCount();
+}
+
+function unitChanged(woId){
+  const unitId = document.getElementById('unit-'+woId)?.value;
+  if(!unitId) return;
+  
+  // Auto-populate tenant from unit
+  const unit = state.units.find(u=>u.ID===unitId);
+  if(unit && unit.Tenant_ID){
+    const tenantSel = document.getElementById('tenant-'+woId);
+    if(tenantSel) tenantSel.value = unit.Tenant_ID;
+  }
+  updateReadyCount();
+}
+
+function updateReadyCount(){
+  const wos = state.workorders.filter(w=>!['Paid'].includes(w.Status));
+  let ready = 0;
+  wos.forEach(wo=>{
+    const u = document.getElementById('unit-'+wo.ID)?.value;
+    const t = document.getElementById('tenant-'+wo.ID)?.value;
+    if(u||t) ready++;
+  });
+  document.getElementById('ready-count').textContent = `${ready} WOs have changes to apply`;
+}
+
+async function applyAll(){
+  const wos = state.workorders.filter(w=>!['Paid'].includes(w.Status));
+  const logEl = document.getElementById('log');
+  logEl.style.display='block';
+  logEl.innerHTML='';
+  const bar = document.getElementById('progress-bar');
+  const fill = document.getElementById('progress-fill');
+  bar.style.display='block';
+  
+  let ok=0, skip=0, fail=0;
+  
+  for(let i=0; i<wos.length; i++){
+    const wo = wos[i];
+    fill.style.width = Math.round((i/wos.length)*100)+'%';
+    
+    const unitId = document.getElementById('unit-'+wo.ID)?.value||'';
+    const tenantId = document.getElementById('tenant-'+wo.ID)?.value||'';
+    
+    // Skip if nothing changed
+    if(unitId===wo.Unit_ID && tenantId===wo.Tenant_ID){
+      skip++;
+      logEl.innerHTML+=`<div class="info">— ${wo.ID} unchanged</div>`;
+      continue;
+    }
+    
+    try{
+      const fields = {};
+      if(unitId !== wo.Unit_ID) fields.Unit_ID = unitId;
+      if(tenantId !== wo.Tenant_ID) fields.Tenant_ID = tenantId;
+      
+      const res = await apiPost('/workorder/update',{id:wo.ID, fields});
+      if(res.error){
+        logEl.innerHTML+=`<div class="err">❌ ${wo.ID}: ${res.error}</div>`;
+        fail++;
+      } else {
+        const unit = state.units.find(u=>u.ID===unitId);
+        const tenant = state.tenants.find(t=>t.ID===tenantId);
+        logEl.innerHTML+=`<div class="ok">✅ ${wo.ID} → Unit: ${unit?.Unit_Label||'none'} | Tenant: ${tenant?tenant.First_Name+' '+tenant.Last_Name:'none'}</div>`;
+        ok++;
+      }
+    }catch(e){
+      logEl.innerHTML+=`<div class="err">❌ ${wo.ID}: ${e.message}</div>`;
+      fail++;
+    }
+    logEl.scrollTop=logEl.scrollHeight;
+    await new Promise(r=>setTimeout(r,300));
+  }
+  
+  fill.style.width='100%';
+  logEl.innerHTML+=`<div class="info" style="font-weight:bold;margin-top:6px">Done: ${ok} updated, ${skip} unchanged, ${fail} failed.</div>`;
+  toast(`Applied: ${ok} updated`,'success');
+  
+  // Reload to reflect changes
+  await loadData();
+}
+
+function toast(msg,type='info'){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.className=type;el.style.display='block';
+  setTimeout(()=>el.style.display='none',4000);
+}
+</script>
+</body>
+</html>
