@@ -320,6 +320,131 @@
   </div>
 </div>
 
+<!-- EDIT WORK ORDER MODAL -->
+<div class="modal-overlay" id="modal-edit-wo">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header"><div class="modal-title">EDIT WORK ORDER — <span id="ewo-id-label"></span></div><button class="modal-close" onclick="closeModal('modal-edit-wo')">✕</button></div>
+    <input type="hidden" id="ewo-id">
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>Property</label>
+        <select id="ewo-property" onchange="ewoPropertyChanged()">
+          <option value="">Select property...</option>
+        </select>
+      </div>
+      <div class="form-group" id="ewo-unit-group">
+        <label>Unit</label>
+        <select id="ewo-unit" onchange="ewoUnitChanged()">
+          <option value="">Whole property</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Tenant (auto from unit)</label>
+        <select id="ewo-tenant">
+          <option value="">None</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Vendor</label>
+        <select id="ewo-vendor">
+          <option value="">Unassigned</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Trade</label>
+        <select id="ewo-trade">
+          <option>Plumbing</option><option>HVAC</option><option>Electric</option>
+          <option>General</option><option>Landscaping</option><option>Appliance</option>
+          <option>Roofing</option><option>Pest Control</option><option>Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Priority</label>
+        <select id="ewo-priority">
+          <option value="normal">Normal</option>
+          <option value="urgent">Urgent</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="ewo-status">
+          <option>New</option><option>Assigned</option><option>Accepted</option>
+          <option>Scheduled</option><option>In Progress</option><option>Complete</option>
+          <option>Invoiced</option><option>Paid</option><option>Declined</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Scheduled Date</label>
+        <input type="date" id="ewo-scheduled">
+      </div>
+      <div class="form-group full">
+        <label>Description</label>
+        <input type="text" id="ewo-description">
+      </div>
+      <div class="form-group full">
+        <label>Notes</label>
+        <textarea id="ewo-notes"></textarea>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-edit-wo')">Cancel</button>
+      <button class="btn" onclick="submitEditWO()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT VENDOR MODAL -->
+<div class="modal-overlay" id="modal-edit-vendor">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">EDIT VENDOR</div><button class="modal-close" onclick="closeModal('modal-edit-vendor')">✕</button></div>
+    <input type="hidden" id="ev-id">
+    <div class="form-grid">
+      <div class="form-group"><label>Name</label><input type="text" id="ev-name"></div>
+      <div class="form-group"><label>Company</label><input type="text" id="ev-company"></div>
+      <div class="form-group"><label>Phone</label><input type="tel" id="ev-phone"></div>
+      <div class="form-group"><label>Email</label><input type="email" id="ev-email"></div>
+      <div class="form-group"><label>Trade</label>
+        <select id="ev-trade">
+          <option>Plumbing</option><option>HVAC</option><option>Electric</option>
+          <option>General</option><option>Landscaping</option><option>Appliance</option>
+          <option>Roofing</option><option>Pest Control</option><option>Other</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Markets</label><input type="text" id="ev-markets"></div>
+      <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button>
+      <button class="btn" onclick="submitEditVendor()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT TENANT MODAL -->
+<div class="modal-overlay" id="modal-edit-tenant">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">EDIT TENANT</div><button class="modal-close" onclick="closeModal('modal-edit-tenant')">✕</button></div>
+    <input type="hidden" id="et-id">
+    <div class="form-grid">
+      <div class="form-group"><label>First Name</label><input type="text" id="et-first"></div>
+      <div class="form-group"><label>Last Name</label><input type="text" id="et-last"></div>
+      <div class="form-group"><label>Phone</label><input type="tel" id="et-phone"></div>
+      <div class="form-group"><label>Email</label><input type="email" id="et-email"></div>
+      <div class="form-group full"><label>Status</label>
+        <select id="et-active">
+          <option value="TRUE">Active</option>
+          <option value="FALSE">Inactive / Moved Out</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-edit-tenant')">Cancel</button>
+      <button class="btn" onclick="submitEditTenant()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast-container"></div>
 
 <script>
@@ -465,7 +590,7 @@ function openWODetail(woId) {
       <tr><td style="color:var(--muted)">Priority</td><td>${wo.Priority||'normal'}</td></tr>
       <tr><td style="color:var(--muted)">Description</td><td>${wo.Description||'—'}</td></tr>
       <tr><td style="color:var(--muted)">Vendor</td><td>${vendor?vendor.Name+' · '+vendor.Phone:'<span style="color:var(--warn)">Unassigned</span>'}</td></tr>
-      <tr><td style="color:var(--muted)">Tenant</td><td>${tenant?tenant.First_Name+' '+tenant.Last_Name+' · '+tenant.Phone:'—'}</td></tr>
+      <tr><td style="color:var(--muted)">Tenant</td><td>${tenant?`${tenant.First_Name} ${tenant.Last_Name} · ${tenant.Phone} <button class="btn small secondary" style="margin-left:8px" onclick="openEditTenantModal('${tenant.ID}')">Edit</button>`:'—'}</td></tr>
       <tr><td style="color:var(--muted)">Scheduled</td><td>${wo.Scheduled_Date||'—'}</td></tr>
       <tr><td style="color:var(--muted)">Vendor SMS</td><td>${wo.Vendor_SMS_Sent==='TRUE'?'✅ Sent':'—'}</td></tr>
       <tr><td style="color:var(--muted)">Tenant SMS</td><td>${wo.Tenant_SMS_Sent==='TRUE'?'✅ Sent':'—'}</td></tr>
@@ -476,6 +601,7 @@ function openWODetail(woId) {
   actions.innerHTML = '';
   const addBtn=(label,cls,fn)=>{ const b=document.createElement('button'); b.className='btn '+cls; b.textContent=label; b.onclick=fn; actions.appendChild(b); };
   addBtn('Close','secondary',()=>closeModal('modal-wo-detail'));
+  addBtn('Edit','secondary',()=>openEditWOModal(woId));
   if(!wo.Vendor_ID||wo.Status==='Declined') addBtn('Assign Vendor','',()=>openAssignModal(woId));
   if(['Assigned','Accepted','Scheduled'].includes(wo.Status)) addBtn('Mark In Progress','secondary',()=>updateWOStatus(woId,'In Progress'));
   if(['In Progress','Accepted','Scheduled'].includes(wo.Status)) addBtn('Mark Complete','success',()=>updateWOStatus(woId,'Complete'));
@@ -570,7 +696,7 @@ function renderPropertiesPage(){
 function renderVendorsPage(){
   const el=document.getElementById('vendors-list');
   if(!safeArray(state.vendors).length){el.innerHTML='<div class="loading">No vendors yet</div>';return;}
-  el.innerHTML=`<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th></tr></thead><tbody>`+safeArray(state.vendors).filter(v=>v.Active!=='FALSE').map(v=>{
+  el.innerHTML=`<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th></th></tr></thead><tbody>`+safeArray(state.vendors).filter(v=>v.Active!=='FALSE').map(v=>{
     const open=state.workorders.filter(w=>w.Vendor_ID===v.ID&&!['Complete','Paid'].includes(w.Status)).length;
     return `<tr><td>${v.Name}${v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':''}</td><td>${v.Trade||'—'}</td><td><a href="tel:${v.Phone}" style="color:var(--accent);text-decoration:none">${v.Phone||'—'}</a></td><td>${v.Markets||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td></tr>`;
   }).join('')+'</tbody></table>';
@@ -611,6 +737,162 @@ async function submitAddVendor(){
 function openModal(id){document.getElementById(id).classList.add('open');}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
+
+// ── Edit Work Order ──
+function openEditWOModal(woId) {
+  const wo = safeArray(state.workorders).find(w=>w.ID===woId); if(!wo) return;
+  document.getElementById('ewo-id').value = woId;
+  document.getElementById('ewo-id-label').textContent = woId;
+
+  // Populate property dropdown
+  const propSel = document.getElementById('ewo-property');
+  propSel.innerHTML = '<option value="">Select property...</option>' +
+    safeArray(state.properties).filter(p=>p.Active!=='FALSE')
+      .map(p=>`<option value="${p.ID}" ${p.ID===wo.Property_ID?'selected':''}>${p.Address}</option>`).join('');
+
+  // Populate units for current property
+  ewoPopulateUnits(wo.Property_ID, wo.Unit_ID);
+
+  // Populate tenant dropdown
+  ewoPopulateTenants(wo.Unit_ID, wo.Tenant_ID);
+
+  // Populate vendor dropdown
+  const vSel = document.getElementById('ewo-vendor');
+  vSel.innerHTML = '<option value="">Unassigned</option>' +
+    safeArray(state.vendors).filter(v=>v.Active!=='FALSE')
+      .map(v=>`<option value="${v.ID}" ${v.ID===wo.Vendor_ID?'selected':''}>${v.Name} — ${v.Trade}</option>`).join('');
+
+  // Set other fields
+  document.getElementById('ewo-trade').value = wo.Trade||'General';
+  document.getElementById('ewo-priority').value = wo.Priority||'normal';
+  document.getElementById('ewo-status').value = wo.Status||'New';
+  document.getElementById('ewo-scheduled').value = wo.Scheduled_Date||'';
+  document.getElementById('ewo-description').value = wo.Description||'';
+  document.getElementById('ewo-notes').value = wo.Notes||'';
+
+  closeModal('modal-wo-detail');
+  openModal('modal-edit-wo');
+}
+
+function ewoPopulateUnits(propId, selectedUnitId) {
+  const units = safeArray(state.units).filter(u=>u.Property_ID===propId);
+  const sel = document.getElementById('ewo-unit');
+  sel.innerHTML = '<option value="">Whole property</option>' +
+    units.map(u=>`<option value="${u.ID}" ${u.ID===selectedUnitId?'selected':''}>${u.Unit_Label}</option>`).join('');
+  document.getElementById('ewo-unit-group').style.display = units.length ? 'flex' : 'none';
+}
+
+function ewoPopulateTenants(unitId, selectedTenantId) {
+  // Auto-find tenant from unit if no tenant selected
+  let tenantId = selectedTenantId;
+  if(!tenantId && unitId) {
+    const unit = safeArray(state.units).find(u=>u.ID===unitId);
+    if(unit && unit.Tenant_ID) tenantId = unit.Tenant_ID;
+  }
+  const sel = document.getElementById('ewo-tenant');
+  sel.innerHTML = '<option value="">None</option>' +
+    safeArray(state.tenants).filter(t=>t.Active!=='FALSE')
+      .map(t=>`<option value="${t.ID}" ${t.ID===tenantId?'selected':''}>${t.First_Name} ${t.Last_Name} — ${t.Phone}</option>`).join('');
+}
+
+function ewoPropertyChanged() {
+  const propId = document.getElementById('ewo-property').value;
+  ewoPopulateUnits(propId, '');
+  ewoPopulateTenants('', '');
+}
+
+function ewoUnitChanged() {
+  const unitId = document.getElementById('ewo-unit').value;
+  // Auto-populate tenant from unit
+  ewoPopulateTenants(unitId, '');
+}
+
+async function submitEditWO() {
+  const woId = document.getElementById('ewo-id').value;
+  const fields = {
+    Property_ID: document.getElementById('ewo-property').value,
+    Unit_ID: document.getElementById('ewo-unit').value,
+    Tenant_ID: document.getElementById('ewo-tenant').value,
+    Vendor_ID: document.getElementById('ewo-vendor').value,
+    Trade: document.getElementById('ewo-trade').value,
+    Priority: document.getElementById('ewo-priority').value,
+    Status: document.getElementById('ewo-status').value,
+    Scheduled_Date: document.getElementById('ewo-scheduled').value,
+    Description: document.getElementById('ewo-description').value,
+    Notes: document.getElementById('ewo-notes').value,
+  };
+  try {
+    const res = await api('POST','/workorder/update',{id:woId, fields});
+    if(res.error){logError('Edit WO',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Work order updated','success');
+    closeModal('modal-edit-wo');
+    await loadAll();
+  } catch(e){logError('Edit WO',e.message);toast('Error: '+e.message,'error');}
+}
+
+// ── Edit Vendor ──
+function openEditVendorModal(id) {
+  const v = safeArray(state.vendors).find(x=>x.ID===id); if(!v) return;
+  document.getElementById('ev-id').value = v.ID;
+  document.getElementById('ev-name').value = v.Name||'';
+  document.getElementById('ev-company').value = v.Company||'';
+  document.getElementById('ev-phone').value = v.Phone||'';
+  document.getElementById('ev-email').value = v.Email||'';
+  document.getElementById('ev-trade').value = v.Trade||'General';
+  document.getElementById('ev-markets').value = v.Markets||'';
+  document.getElementById('ev-rates').value = v.Rate_Notes||'';
+  openModal('modal-edit-vendor');
+}
+
+async function submitEditVendor() {
+  const id = document.getElementById('ev-id').value;
+  const fields = {
+    Name: document.getElementById('ev-name').value,
+    Company: document.getElementById('ev-company').value,
+    Phone: document.getElementById('ev-phone').value,
+    Email: document.getElementById('ev-email').value,
+    Trade: document.getElementById('ev-trade').value,
+    Markets: document.getElementById('ev-markets').value,
+    Rate_Notes: document.getElementById('ev-rates').value,
+  };
+  try {
+    const res = await api('POST','/vendor/update',{id, fields});
+    if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Vendor updated','success');
+    closeModal('modal-edit-vendor');
+    await loadAll();
+  } catch(e){logError('Edit vendor',e.message);toast('Error: '+e.message,'error');}
+}
+
+// ── Edit Tenant ──
+function openEditTenantModal(id) {
+  const t = safeArray(state.tenants).find(x=>x.ID===id); if(!t) return;
+  document.getElementById('et-id').value = t.ID;
+  document.getElementById('et-first').value = t.First_Name||'';
+  document.getElementById('et-last').value = t.Last_Name||'';
+  document.getElementById('et-phone').value = t.Phone||'';
+  document.getElementById('et-email').value = t.Email||'';
+  document.getElementById('et-active').value = t.Active||'TRUE';
+  openModal('modal-edit-tenant');
+}
+
+async function submitEditTenant() {
+  const id = document.getElementById('et-id').value;
+  const fields = {
+    First_Name: document.getElementById('et-first').value,
+    Last_Name: document.getElementById('et-last').value,
+    Phone: document.getElementById('et-phone').value,
+    Email: document.getElementById('et-email').value,
+    Active: document.getElementById('et-active').value,
+  };
+  try {
+    const res = await api('POST','/tenant/update',{id, fields});
+    if(res.error){logError('Edit tenant',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Tenant updated','success');
+    closeModal('modal-edit-tenant');
+    await loadAll();
+  } catch(e){logError('Edit tenant',e.message);toast('Error: '+e.message,'error');}
+}
 
 function toast(msg,type='info'){const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;document.getElementById('toast-container').appendChild(el);setTimeout(()=>el.remove(),4000);}
 
