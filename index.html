@@ -5,27 +5,561 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Maintenance Hub</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: Georgia, serif;
-    background: #1a1a1a;
-    color: #f9f8f6;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  :root {
+    --bg: #0f0f0f;
+    --surface: #1a1a1a;
+    --surface2: #242424;
+    --border: #2e2e2e;
+    --text: #e8e6e1;
+    --muted: #888;
+    --accent: #e8a020;
+    --accent2: #4ade80;
+    --danger: #f87171;
+    --warn: #fbbf24;
+    --info: #60a5fa;
+    --radius: 6px;
+    --font: 'Courier New', monospace;
   }
-  .container { text-align: center; padding: 40px 24px; }
-  h1 { font-size: 2rem; font-weight: normal; letter-spacing: 0.05em; margin-bottom: 12px; }
-  p { color: #888; font-size: 0.95rem; }
-  .dot { display: inline-block; width: 8px; height: 8px; background: #4ade80; border-radius: 50%; margin-right: 8px; animation: pulse 2s infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; min-height: 100vh; }
+  #login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; flex-direction: column; gap: 16px; }
+  #login-screen h1 { font-size: 1.4rem; letter-spacing: 0.15em; color: var(--accent); }
+  #login-screen p { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.1em; }
+  .login-box { background: var(--surface); border: 1px solid var(--border); padding: 32px; border-radius: var(--radius); width: 320px; display: flex; flex-direction: column; gap: 12px; }
+  .login-box input { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 10px 12px; border-radius: var(--radius); font-family: var(--font); font-size: 14px; letter-spacing: 0.1em; }
+  .login-box input:focus { outline: none; border-color: var(--accent); }
+  .btn { background: var(--accent); color: #000; border: none; padding: 10px 16px; border-radius: var(--radius); font-family: var(--font); font-size: 13px; font-weight: bold; cursor: pointer; letter-spacing: 0.05em; transition: opacity 0.15s; }
+  .btn:hover { opacity: 0.85; }
+  .btn.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn.danger { background: var(--danger); color: #000; }
+  .btn.success { background: var(--accent2); color: #000; }
+  .btn.small { padding: 6px 10px; font-size: 12px; }
+  #login-error { color: var(--danger); font-size: 0.8rem; text-align: center; display: none; }
+  #app { display: none; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .logo { color: var(--accent); font-size: 1rem; letter-spacing: 0.15em; font-weight: bold; }
+  .logo span { color: var(--muted); font-weight: normal; }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  .nav-btn { background: none; border: none; color: var(--muted); padding: 6px 12px; border-radius: var(--radius); cursor: pointer; font-family: var(--font); font-size: 12px; letter-spacing: 0.08em; transition: all 0.15s; }
+  .nav-btn:hover { color: var(--text); background: var(--surface2); }
+  .nav-btn.active { color: var(--accent); background: var(--surface2); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); display: inline-block; margin-right: 6px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .page { display: none; padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .page.active { display: block; }
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .stat-card .num { font-size: 2rem; font-weight: bold; color: var(--accent); }
+  .stat-card .label { color: var(--muted); font-size: 11px; letter-spacing: 0.1em; margin-top: 4px; }
+  .section-title { color: var(--muted); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .wo-list { display: flex; flex-direction: column; gap: 8px; }
+  .wo-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: border-color 0.15s; }
+  .wo-card:hover { border-color: var(--accent); }
+  .wo-id { color: var(--accent); font-size: 11px; min-width: 70px; }
+  .wo-info { flex: 1; }
+  .wo-addr { font-size: 13px; }
+  .wo-desc { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .wo-right { display: flex; align-items: center; gap: 10px; }
+  .badge { padding: 3px 8px; border-radius: 20px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: bold; }
+  .badge-new { background: #1e3a5f; color: var(--info); }
+  .badge-assigned { background: #2d2006; color: var(--warn); }
+  .badge-accepted { background: #1a3320; color: var(--accent2); }
+  .badge-scheduled { background: #1a3320; color: var(--accent2); }
+  .badge-inprogress,.badge-in { background: #1a3320; color: var(--accent2); }
+  .badge-complete { background: #1f2d1f; color: #6ee7b7; }
+  .badge-invoiced { background: #2d1f06; color: var(--accent); }
+  .badge-paid { background: #1f2d1f; color: #6ee7b7; }
+  .badge-declined { background: #2d1a1a; color: var(--danger); }
+  .priority-urgent { border-left: 3px solid var(--danger); }
+  .priority-normal { border-left: 3px solid var(--border); }
+  .priority-low { border-left: 3px solid var(--muted); }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group.full { grid-column: 1 / -1; }
+  label { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  input, select, textarea { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 9px 12px; border-radius: var(--radius); font-family: var(--font); font-size: 13px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 80px; }
+  select option { background: var(--surface2); }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; align-items: flex-start; justify-content: center; padding: 40px 20px; overflow-y: auto; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); width: 100%; max-width: 580px; padding: 24px; }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .modal-title { font-size: 1rem; color: var(--accent); letter-spacing: 0.1em; }
+  .modal-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.2rem; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; flex-wrap: wrap; }
+  .prop-detail { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .prop-name { font-size: 1rem; color: var(--accent); margin-bottom: 10px; }
+  .prop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  .pf-label { font-size: 10px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+  .pf-val { font-size: 13px; margin-top: 2px; }
+  .pf-val.sensitive { color: var(--accent); font-weight: bold; letter-spacing: 0.05em; }
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table th { text-align: left; padding: 8px 12px; font-size: 10px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+  .data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: top; }
+  .data-table tr:hover td { background: var(--surface2); }
+  .data-table tr:last-child td { border-bottom: none; }
+  .search-bar { position: relative; margin-bottom: 16px; }
+  .search-bar input { width: 100%; padding-left: 32px; }
+  .search-bar::before { content: '⌕'; position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 16px; pointer-events: none; }
+  #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+  .toast { background: var(--surface2); border: 1px solid var(--border); padding: 12px 16px; border-radius: var(--radius); font-size: 13px; max-width: 320px; animation: slideIn 0.2s ease; }
+  .toast.success { border-left: 3px solid var(--accent2); }
+  .toast.error { border-left: 3px solid var(--danger); }
+  .toast.info { border-left: 3px solid var(--info); }
+  @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  .loading { color: var(--muted); font-size: 12px; padding: 20px; text-align: center; letter-spacing: 0.1em; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } .stats-row { grid-template-columns: repeat(2, 1fr); } .wo-right { flex-direction: column; gap: 4px; } }
 </style>
 </head>
 <body>
-<div class="container">
-  <h1>Ridge Co</h1>
-  <p><span class="dot"></span>Maintenance Hub — Coming Soon</p>
+
+<div id="login-screen">
+  <h1>RIDGE CO</h1>
+  <p>MAINTENANCE HUB</p>
+  <div class="login-box">
+    <input type="password" id="login-input" placeholder="Access code" autocomplete="off" />
+    <button class="btn" onclick="doLogin()">Enter</button>
+    <div id="login-error">Incorrect access code</div>
+  </div>
 </div>
+
+<div id="app">
+  <header>
+    <div class="logo">RIDGE CO <span>/ HUB</span></div>
+    <nav>
+      <button class="nav-btn active" onclick="showPage('dashboard',this)">DASHBOARD</button>
+      <button class="nav-btn" onclick="showPage('workorders',this)">WORK ORDERS</button>
+      <button class="nav-btn" onclick="showPage('properties',this)">PROPERTIES</button>
+      <button class="nav-btn" onclick="showPage('vendors',this)">VENDORS</button>
+      <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
+    </nav>
+    <div><span class="status-dot"></span><span style="color:var(--muted);font-size:11px">LIVE</span></div>
+  </header>
+
+  <div class="page active" id="page-dashboard">
+    <div class="stats-row">
+      <div class="stat-card"><div class="num" id="stat-open">—</div><div class="label">OPEN WOs</div></div>
+      <div class="stat-card"><div class="num" id="stat-urgent">—</div><div class="label">URGENT</div></div>
+      <div class="stat-card"><div class="num" id="stat-invoiced">—</div><div class="label">AWAITING PAYMENT</div></div>
+      <div class="stat-card"><div class="num" id="stat-props">—</div><div class="label">PROPERTIES</div></div>
+    </div>
+    <div class="section-title">ACTIVE WORK ORDERS</div>
+    <div class="wo-list" id="dashboard-wo-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+    <br>
+    <button class="btn" onclick="openNewWOModal()">+ New Work Order</button>
+  </div>
+
+  <div class="page" id="page-workorders">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <button class="btn" onclick="openNewWOModal()">+ New Work Order</button>
+      <select id="wo-filter" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius);font-family:var(--font);font-size:12px">
+        <option value="all">ALL STATUSES</option>
+        <option value="New">NEW</option>
+        <option value="Assigned">ASSIGNED</option>
+        <option value="Accepted">ACCEPTED</option>
+        <option value="Scheduled">SCHEDULED</option>
+        <option value="Complete">COMPLETE</option>
+        <option value="Invoiced">INVOICED</option>
+        <option value="Paid">PAID</option>
+        <option value="Declined">DECLINED</option>
+      </select>
+    </div>
+    <div class="search-bar"><input type="text" id="wo-search" placeholder="Search by address, trade, or WO ID..." oninput="renderWOPage()"></div>
+    <div class="wo-list" id="wo-list-full"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <div class="page" id="page-properties">
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <button class="btn" onclick="openAddPropertyModal()">+ Add Property</button>
+    </div>
+    <div class="search-bar"><input type="text" id="prop-search" placeholder="Search properties..." oninput="renderPropertiesPage()"></div>
+    <div id="properties-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <div class="page" id="page-vendors">
+    <div style="display:flex;gap:8px;margin-bottom:16px">
+      <button class="btn" onclick="openAddVendorModal()">+ Add Vendor</button>
+    </div>
+    <div id="vendors-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <div class="page" id="page-invoices">
+    <div class="section-title">OUTSTANDING INVOICES</div>
+    <div id="invoices-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+</div>
+
+<!-- NEW WORK ORDER MODAL -->
+<div class="modal-overlay" id="modal-new-wo">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">NEW WORK ORDER</div><button class="modal-close" onclick="closeModal('modal-new-wo')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Property</label><select id="wo-property" onchange="loadUnitsForWO()"><option value="">Select property...</option></select></div>
+      <div class="form-group" id="wo-unit-group" style="display:none"><label>Unit</label><select id="wo-unit"><option value="">Whole property</option></select></div>
+      <div class="form-group"><label>Trade</label><select id="wo-trade"><option value="">Select...</option><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
+      <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
+      <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
+      <div class="form-group full"><label>Description</label><textarea id="wo-desc" placeholder="Describe the issue..."></textarea></div>
+      <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
+    </div>
+    <div id="wo-prop-preview" style="display:none;margin-top:12px"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-new-wo')">Cancel</button><button class="btn" onclick="submitNewWO()">Create Work Order</button></div>
+  </div>
+</div>
+
+<!-- WO DETAIL MODAL -->
+<div class="modal-overlay" id="modal-wo-detail">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header"><div class="modal-title" id="detail-wo-id">WO-XXXX</div><button class="modal-close" onclick="closeModal('modal-wo-detail')">✕</button></div>
+    <div id="detail-body"></div>
+    <div class="modal-actions" id="detail-actions"></div>
+  </div>
+</div>
+
+<!-- ASSIGN VENDOR MODAL -->
+<div class="modal-overlay" id="modal-assign">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">ASSIGN VENDOR</div><button class="modal-close" onclick="closeModal('modal-assign')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Select Vendor</label><select id="assign-vendor-select" onchange="updateAssignPreview()"><option value="">Select vendor...</option></select></div>
+    </div>
+    <div id="assign-preview" style="margin-top:12px;color:var(--muted);font-size:12px"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-assign')">Cancel</button><button class="btn success" onclick="submitAssign()">Assign + Send SMS</button></div>
+  </div>
+</div>
+
+<!-- INVOICE MODAL -->
+<div class="modal-overlay" id="modal-invoice">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">LOG INVOICE</div><button class="modal-close" onclick="closeModal('modal-invoice')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Amount ($)</label><input type="number" id="inv-amount" placeholder="0.00" step="0.01"></div>
+      <div class="form-group full"><label>QB Reference # (optional)</label><input type="text" id="inv-qb" placeholder="QuickBooks ref"></div>
+      <div class="form-group full"><label>Notes</label><textarea id="inv-notes" placeholder="Invoice notes..."></textarea></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-invoice')">Cancel</button><button class="btn" onclick="submitInvoice()">Log Invoice</button></div>
+  </div>
+</div>
+
+<!-- ADD PROPERTY MODAL -->
+<div class="modal-overlay" id="modal-add-property">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">ADD PROPERTY</div><button class="modal-close" onclick="closeModal('modal-add-property')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Address</label><input type="text" id="p-address" placeholder="123 Main St"></div>
+      <div class="form-group"><label>City</label><input type="text" id="p-city" placeholder="Baltimore"></div>
+      <div class="form-group"><label>Market</label><select id="p-market"><option>Baltimore</option><option>Waynesboro</option><option>Winchester</option><option>Other</option></select></div>
+      <div class="form-group"><label>Type</label><select id="p-type"><option value="house">House</option><option value="rowhome">Rowhome</option><option value="multi">Multi-Unit</option><option value="condo">Condo</option></select></div>
+      <div class="form-group"><label>Unit Count</label><input type="number" id="p-units" value="1" min="1"></div>
+      <div class="form-group"><label>Lockbox Code</label><input type="text" id="p-lockbox" placeholder="4421"></div>
+      <div class="form-group"><label>Door Lock Code</label><input type="text" id="p-lockcode" placeholder="1234"></div>
+      <div class="form-group"><label>Water Shutoff</label><input type="text" id="p-shutoff" placeholder="Basement left wall"></div>
+      <div class="form-group"><label>HVAC Filter Size</label><input type="text" id="p-hvac" placeholder="16x20x1"></div>
+      <div class="form-group"><label>Breaker Location</label><input type="text" id="p-breaker" placeholder="Utility closet"></div>
+      <div class="form-group full"><label>Access Notes</label><textarea id="p-access" placeholder="Gate code, parking, special instructions..."></textarea></div>
+      <div class="form-group full"><label>Owner</label><select id="p-owner"><option value="">No owner assigned</option></select></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-add-property')">Cancel</button><button class="btn" onclick="submitAddProperty()">Add Property</button></div>
+  </div>
+</div>
+
+<!-- ADD VENDOR MODAL -->
+<div class="modal-overlay" id="modal-add-vendor">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">ADD VENDOR</div><button class="modal-close" onclick="closeModal('modal-add-vendor')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Name</label><input type="text" id="v-name" placeholder="Mike Smith"></div>
+      <div class="form-group"><label>Company (optional)</label><input type="text" id="v-company" placeholder="Smith Plumbing LLC"></div>
+      <div class="form-group"><label>Phone (SMS)</label><input type="tel" id="v-phone" placeholder="+14435551234"></div>
+      <div class="form-group"><label>Email (optional)</label><input type="email" id="v-email" placeholder="mike@example.com"></div>
+      <div class="form-group"><label>Trade</label><select id="v-trade"><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
+      <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
+      <div class="form-group full"><label>Rate Notes</label><textarea id="v-rates" placeholder="Hourly rate, trip charge, etc..."></textarea></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-add-vendor')">Cancel</button><button class="btn" onclick="submitAddVendor()">Add Vendor</button></div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+const SECRET_KEY = 'mh_auth';
+let AUTH_TOKEN = '';
+let state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };
+let assignWOId = null;
+let invoiceWOId = null;
+
+function doLogin() {
+  const val = document.getElementById('login-input').value.trim();
+  AUTH_TOKEN = val;
+  api('GET','/config').then(() => {
+    localStorage.setItem(SECRET_KEY, val);
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    loadAll();
+  }).catch(() => {
+    AUTH_TOKEN = '';
+    document.getElementById('login-error').style.display = 'block';
+  });
+}
+document.getElementById('login-input').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+
+const stored = localStorage.getItem(SECRET_KEY);
+if (stored) {
+  AUTH_TOKEN = stored;
+  api('GET','/config').then(() => {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    loadAll();
+  }).catch(() => { localStorage.removeItem(SECRET_KEY); AUTH_TOKEN = ''; });
+}
+
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(WORKER + path, opts);
+  const data = await res.json();
+  if (data.error === 'Unauthorized') throw new Error('Unauthorized');
+  return data;
+}
+
+async function loadAll() {
+  try {
+    const [props,units,tenants,vendors,workorders,invoices,owners] = await Promise.all([
+      api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
+      api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners')
+    ]);
+    state = {properties:props,units:units,tenants:tenants,vendors:vendors,workorders:workorders,invoices:invoices,owners:owners};
+    renderDashboard(); renderWOPage(); renderPropertiesPage(); renderVendorsPage(); renderInvoicesPage();
+    toast('Data loaded','success');
+  } catch(e) { toast('Load error: '+e.message,'error'); }
+}
+
+function showPage(name, btn) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  if(btn) btn.classList.add('active');
+}
+
+function renderDashboard() {
+  const wos = state.workorders;
+  document.getElementById('stat-open').textContent = wos.filter(w=>!['Complete','Paid'].includes(w.Status)).length;
+  document.getElementById('stat-urgent').textContent = wos.filter(w=>w.Priority==='urgent'&&!['Complete','Paid'].includes(w.Status)).length;
+  document.getElementById('stat-invoiced').textContent = wos.filter(w=>w.Status==='Invoiced').length;
+  document.getElementById('stat-props').textContent = state.properties.length;
+  const active = wos.filter(w=>!['Complete','Paid'].includes(w.Status)).sort((a,b)=>({urgent:0,normal:1,low:2}[a.Priority]||1)-({urgent:0,normal:1,low:2}[b.Priority]||1)).slice(0,15);
+  const el = document.getElementById('dashboard-wo-list');
+  el.innerHTML = active.length ? active.map(woCard).join('') : '<div class="loading">No active work orders</div>';
+}
+
+function woCard(w) {
+  const prop = state.properties.find(p=>p.ID===w.Property_ID);
+  const vendor = state.vendors.find(v=>v.ID===w.Vendor_ID);
+  const unit = state.units.find(u=>u.ID===w.Unit_ID);
+  const addr = prop ? prop.Address : (w.Property_ID||'—');
+  const sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s/g,'');
+  return `<div class="wo-card priority-${w.Priority||'normal'}" onclick="openWODetail('${w.ID}')">
+    <div class="wo-id">${w.ID}</div>
+    <div class="wo-info">
+      <div class="wo-addr">${addr}${unit?' · Unit '+unit.Unit_Label:''}</div>
+      <div class="wo-desc">${w.Trade||''}${w.Description?' · '+w.Description.substring(0,60):''}</div>
+    </div>
+    <div class="wo-right">
+      <span class="badge ${sc}">${w.Status||'New'}</span>
+      ${vendor?`<span style="font-size:11px;color:var(--muted)">${vendor.Name}</span>`:''}
+    </div>
+  </div>`;
+}
+
+function renderWOPage() {
+  const filter = document.getElementById('wo-filter')?.value||'all';
+  const search = (document.getElementById('wo-search')?.value||'').toLowerCase();
+  let wos = [...state.workorders];
+  if(filter!=='all') wos = wos.filter(w=>w.Status===filter);
+  if(search) wos = wos.filter(w=>{
+    const prop = state.properties.find(p=>p.ID===w.Property_ID);
+    return (prop?.Address||'').toLowerCase().includes(search)||(w.Trade||'').toLowerCase().includes(search)||(w.ID||'').toLowerCase().includes(search)||(w.Description||'').toLowerCase().includes(search);
+  });
+  wos.sort((a,b)=>new Date(b.Created_Date)-new Date(a.Created_Date));
+  const el = document.getElementById('wo-list-full');
+  el.innerHTML = wos.length ? wos.map(woCard).join('') : '<div class="loading">No work orders found</div>';
+}
+
+function openWODetail(woId) {
+  const wo = state.workorders.find(w=>w.ID===woId); if(!wo) return;
+  const prop = state.properties.find(p=>p.ID===wo.Property_ID);
+  const unit = state.units.find(u=>u.ID===wo.Unit_ID);
+  const vendor = state.vendors.find(v=>v.ID===wo.Vendor_ID);
+  const tenant = state.tenants.find(t=>t.ID===wo.Tenant_ID||(unit&&t.ID===unit.Tenant_ID));
+  document.getElementById('detail-wo-id').textContent = woId;
+  const sc = 'badge-'+(wo.Status||'new').toLowerCase().replace(/\s/g,'');
+  let propHtml = '';
+  if(prop) {
+    propHtml = `<div class="prop-detail"><div class="prop-name">${prop.Address}${unit?' — Unit '+unit.Unit_Label:''}</div><div class="prop-grid">
+      ${prop.Lockbox_Code?`<div><div class="pf-label">Lockbox</div><div class="pf-val sensitive">${prop.Lockbox_Code}</div></div>`:''}
+      ${prop.Lock_Code?`<div><div class="pf-label">Door Code</div><div class="pf-val sensitive">${prop.Lock_Code}</div></div>`:''}
+      ${prop.Water_Shutoff?`<div><div class="pf-label">Water Shutoff</div><div class="pf-val">${prop.Water_Shutoff}</div></div>`:''}
+      ${prop.HVAC_Filter_Size?`<div><div class="pf-label">HVAC Filter</div><div class="pf-val">${prop.HVAC_Filter_Size}</div></div>`:''}
+      ${prop.Access_Notes?`<div><div class="pf-label">Access Notes</div><div class="pf-val">${prop.Access_Notes}</div></div>`:''}
+    </div></div>`;
+  }
+  document.getElementById('detail-body').innerHTML = propHtml+`
+    <table class="data-table" style="margin-bottom:16px">
+      <tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge ${sc}">${wo.Status||'New'}</span></td></tr>
+      <tr><td style="color:var(--muted)">Trade</td><td>${wo.Trade||'—'}</td></tr>
+      <tr><td style="color:var(--muted)">Priority</td><td>${wo.Priority||'normal'}</td></tr>
+      <tr><td style="color:var(--muted)">Description</td><td>${wo.Description||'—'}</td></tr>
+      <tr><td style="color:var(--muted)">Vendor</td><td>${vendor?vendor.Name+' · '+vendor.Phone:'<span style="color:var(--warn)">Unassigned</span>'}</td></tr>
+      <tr><td style="color:var(--muted)">Tenant</td><td>${tenant?tenant.First_Name+' '+tenant.Last_Name+' · '+tenant.Phone:'—'}</td></tr>
+      <tr><td style="color:var(--muted)">Scheduled</td><td>${wo.Scheduled_Date||'—'}</td></tr>
+      <tr><td style="color:var(--muted)">Vendor SMS</td><td>${wo.Vendor_SMS_Sent==='TRUE'?'✅ Sent':'—'}</td></tr>
+      <tr><td style="color:var(--muted)">Tenant SMS</td><td>${wo.Tenant_SMS_Sent==='TRUE'?'✅ Sent':'—'}</td></tr>
+      <tr><td style="color:var(--muted)">Notes</td><td>${wo.Notes||'—'}</td></tr>
+      <tr><td style="color:var(--muted)">Created</td><td>${wo.Created_Date?wo.Created_Date.split('T')[0]:'—'}</td></tr>
+    </table>`;
+  const actions = document.getElementById('detail-actions');
+  actions.innerHTML = '';
+  const addBtn=(label,cls,fn)=>{ const b=document.createElement('button'); b.className='btn '+cls; b.textContent=label; b.onclick=fn; actions.appendChild(b); };
+  addBtn('Close','secondary',()=>closeModal('modal-wo-detail'));
+  if(!wo.Vendor_ID||wo.Status==='Declined') addBtn('Assign Vendor','',()=>openAssignModal(woId));
+  if(['Assigned','Accepted','Scheduled'].includes(wo.Status)) addBtn('Mark In Progress','secondary',()=>updateWOStatus(woId,'In Progress'));
+  if(['In Progress','Accepted','Scheduled'].includes(wo.Status)) addBtn('Mark Complete','success',()=>updateWOStatus(woId,'Complete'));
+  if(wo.Status==='Complete') addBtn('Log Invoice','',()=>openInvoiceModal(woId));
+  if(wo.Status==='Invoiced') addBtn('Mark Paid','success',()=>updateWOStatus(woId,'Paid'));
+  openModal('modal-wo-detail');
+}
+
+function openAssignModal(woId) {
+  assignWOId = woId;
+  const sel = document.getElementById('assign-vendor-select');
+  sel.innerHTML = '<option value="">Select vendor...</option>'+state.vendors.filter(v=>v.Active!=='FALSE').map(v=>`<option value="${v.ID}">${v.Name} — ${v.Trade} — ${v.Phone}</option>`).join('');
+  document.getElementById('assign-preview').textContent = '';
+  closeModal('modal-wo-detail');
+  openModal('modal-assign');
+}
+function updateAssignPreview() {
+  const v = state.vendors.find(x=>x.ID===document.getElementById('assign-vendor-select').value);
+  document.getElementById('assign-preview').textContent = v ? `SMS will be sent to ${v.Name} (${v.Phone}) with job details and access info.` : '';
+}
+async function submitAssign() {
+  const vendorId = document.getElementById('assign-vendor-select').value;
+  if(!vendorId){toast('Select a vendor','error');return;}
+  try {
+    const res = await api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId});
+    if(res.success){toast(`Assigned. Vendor SMS: ${res.vendor_sms?'✅':'❌'} | Tenant SMS: ${res.tenant_sms?'✅':'—'}`,'success');closeModal('modal-assign');await loadAll();}
+  } catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function updateWOStatus(woId,status) {
+  try { await api('POST','/status',{wo_id:woId,status}); toast('Status: '+status,'success'); closeModal('modal-wo-detail'); await loadAll(); }
+  catch(e){toast('Error: '+e.message,'error');}
+}
+
+function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
+async function submitInvoice(){
+  const amount=document.getElementById('inv-amount').value;
+  if(!amount){toast('Enter amount','error');return;}
+  const wo=state.workorders.find(w=>w.ID===invoiceWOId);
+  try{await api('POST','/invoice',{wo_id:invoiceWOId,vendor_id:wo?.Vendor_ID||'',amount,qb_ref:document.getElementById('inv-qb').value,notes:document.getElementById('inv-notes').value});toast('Invoice logged','success');closeModal('modal-invoice');await loadAll();}
+  catch(e){toast('Error: '+e.message,'error');}
+}
+
+function openNewWOModal(){
+  document.getElementById('wo-property').innerHTML='<option value="">Select property...</option>'+state.properties.filter(p=>p.Active!=='FALSE').map(p=>`<option value="${p.ID}">${p.Address} — ${p.City}</option>`).join('');
+  document.getElementById('wo-prop-preview').style.display='none';
+  document.getElementById('wo-unit-group').style.display='none';
+  openModal('modal-new-wo');
+}
+function loadUnitsForWO(){
+  const propId=document.getElementById('wo-property').value;
+  const prop=state.properties.find(p=>p.ID===propId);
+  const preview=document.getElementById('wo-prop-preview');
+  if(!prop){preview.style.display='none';document.getElementById('wo-unit-group').style.display='none';return;}
+  let h=`<div class="prop-detail"><div class="prop-name">${prop.Address}</div><div class="prop-grid">`;
+  if(prop.Lockbox_Code) h+=`<div><div class="pf-label">Lockbox</div><div class="pf-val sensitive">${prop.Lockbox_Code}</div></div>`;
+  if(prop.Lock_Code) h+=`<div><div class="pf-label">Door Code</div><div class="pf-val sensitive">${prop.Lock_Code}</div></div>`;
+  if(prop.Water_Shutoff) h+=`<div><div class="pf-label">Water Shutoff</div><div class="pf-val">${prop.Water_Shutoff}</div></div>`;
+  if(prop.HVAC_Filter_Size) h+=`<div><div class="pf-label">HVAC Filter</div><div class="pf-val">${prop.HVAC_Filter_Size}</div></div>`;
+  h+='</div></div>';
+  preview.innerHTML=h; preview.style.display='block';
+  const units=state.units.filter(u=>u.Property_ID===propId);
+  if(units.length){const sel=document.getElementById('wo-unit');sel.innerHTML='<option value="">Whole property</option>'+units.map(u=>`<option value="${u.ID}">Unit ${u.Unit_Label}</option>`).join('');document.getElementById('wo-unit-group').style.display='flex';}
+  else document.getElementById('wo-unit-group').style.display='none';
+}
+async function submitNewWO(){
+  const propId=document.getElementById('wo-property').value;
+  const trade=document.getElementById('wo-trade').value;
+  if(!propId){toast('Select a property','error');return;}
+  if(!trade){toast('Select a trade','error');return;}
+  const unitId=document.getElementById('wo-unit').value;
+  const unit=state.units.find(u=>u.ID===unitId);
+  try{const res=await api('POST','/workorder',{property_id:propId,unit_id:unitId,tenant_id:unit?.Tenant_ID||'',trade,priority:document.getElementById('wo-priority').value,type:document.getElementById('wo-type').value,description:document.getElementById('wo-desc').value,notes:document.getElementById('wo-notes').value,created_by:'admin'});toast('Created '+res.id,'success');closeModal('modal-new-wo');await loadAll();}
+  catch(e){toast('Error: '+e.message,'error');}
+}
+
+function renderPropertiesPage(){
+  const search=(document.getElementById('prop-search')?.value||'').toLowerCase();
+  let props=[...state.properties].filter(p=>p.Active!=='FALSE');
+  if(search) props=props.filter(p=>(p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search));
+  const el=document.getElementById('properties-list');
+  if(!props.length){el.innerHTML='<div class="loading">No properties found</div>';return;}
+  el.innerHTML=`<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Lockbox</th><th>HVAC Filter</th><th>Open WOs</th></tr></thead><tbody>`+props.map(p=>{
+    const open=state.workorders.filter(w=>w.Property_ID===p.ID&&!['Complete','Paid'].includes(w.Status)).length;
+    return `<tr><td>${p.Address}</td><td>${p.City||'—'}</td><td>${p.Type||'—'}</td><td style="color:var(--accent);font-weight:bold">${p.Lockbox_Code||'—'}</td><td>${p.HVAC_Filter_Size||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td></tr>`;
+  }).join('')+'</tbody></table>';
+}
+
+function renderVendorsPage(){
+  const el=document.getElementById('vendors-list');
+  if(!state.vendors.length){el.innerHTML='<div class="loading">No vendors yet</div>';return;}
+  el.innerHTML=`<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th></tr></thead><tbody>`+state.vendors.filter(v=>v.Active!=='FALSE').map(v=>{
+    const open=state.workorders.filter(w=>w.Vendor_ID===v.ID&&!['Complete','Paid'].includes(w.Status)).length;
+    return `<tr><td>${v.Name}${v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':''}</td><td>${v.Trade||'—'}</td><td><a href="tel:${v.Phone}" style="color:var(--accent);text-decoration:none">${v.Phone||'—'}</a></td><td>${v.Markets||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td></tr>`;
+  }).join('')+'</tbody></table>';
+}
+
+function renderInvoicesPage(){
+  const pending=state.invoices.filter(i=>i.Status!=='Paid');
+  const el=document.getElementById('invoices-list');
+  if(!pending.length){el.innerHTML='<div class="loading">No outstanding invoices</div>';return;}
+  const total=pending.reduce((s,i)=>s+parseFloat(i.Amount||0),0);
+  el.innerHTML=`<div style="margin-bottom:16px;color:var(--accent);font-size:1.2rem;font-weight:bold">Outstanding: $${total.toFixed(2)}</div><table class="data-table"><thead><tr><th>WO</th><th>Vendor</th><th>Amount</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>`+pending.map(inv=>{
+    const v=state.vendors.find(x=>x.ID===inv.Vendor_ID);
+    const wo=state.workorders.find(w=>w.ID===inv.WO_ID);
+    const prop=wo?state.properties.find(p=>p.ID===wo.Property_ID):null;
+    return `<tr><td>${inv.WO_ID}<br><span style="color:var(--muted);font-size:11px">${prop?.Address||''}</span></td><td>${v?.Name||'—'}</td><td style="color:var(--accent);font-weight:bold">$${parseFloat(inv.Amount||0).toFixed(2)}</td><td>${inv.Date_Submitted||'—'}</td><td><span class="badge badge-invoiced">${inv.Status}</span></td><td><button class="btn small success" onclick="markInvoicePaid('${inv.WO_ID}')">Mark Paid</button></td></tr>`;
+  }).join('')+'</tbody></table>';
+}
+async function markInvoicePaid(woId){try{await api('POST','/status',{wo_id:woId,status:'Paid'});toast('Marked paid','success');await loadAll();}catch(e){toast('Error: '+e.message,'error');}}
+
+function openAddPropertyModal(){
+  document.getElementById('p-owner').innerHTML='<option value="">No owner assigned</option>'+state.owners.map(o=>`<option value="${o.ID}">${o.First_Name} ${o.Last_Name}</option>`).join('');
+  openModal('modal-add-property');
+}
+async function submitAddProperty(){
+  const body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Unit_Count:document.getElementById('p-units').value,Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
+  if(!body.Address){toast('Address required','error');return;}
+  try{const res=await api('POST','/property/add',body);toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');await loadAll();}catch(e){toast('Error: '+e.message,'error');}
+}
+
+function openAddVendorModal(){openModal('modal-add-vendor');}
+async function submitAddVendor(){
+  const body={Name:document.getElementById('v-name').value,Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:document.getElementById('v-trade').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
+  if(!body.Name){toast('Name required','error');return;}
+  if(!body.Phone){toast('Phone required','error');return;}
+  try{const res=await api('POST','/vendor/add',body);toast('Vendor added (ID: '+res.id+')','success');closeModal('modal-add-vendor');await loadAll();}catch(e){toast('Error: '+e.message,'error');}
+}
+
+function openModal(id){document.getElementById(id).classList.add('open');}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
+
+function toast(msg,type='info'){const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;document.getElementById('toast-container').appendChild(el);setTimeout(()=>el.remove(),4000);}
+</script>
 </body>
 </html>
