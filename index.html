@@ -135,6 +135,7 @@
       <button class="nav-btn" onclick="showPage('properties',this)">PROPERTIES</button>
       <button class="nav-btn" onclick="showPage('vendors',this)">VENDORS</button>
       <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
+      <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
     </nav>
     <div><span class="status-dot"></span><span style="color:var(--muted);font-size:11px">LIVE</span></div>
   </header>
@@ -191,6 +192,21 @@
     <div id="invoices-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 </div>
+
+  <div class="page" id="page-devlog">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <button class="btn danger small" onclick="clearErrorLog()">Clear Errors</button>
+      <button class="btn secondary small" onclick="clearWishlist()">Clear Wishlist</button>
+    </div>
+    <div class="section-title">ERROR LOG</div>
+    <div id="error-log-list" style="margin-bottom:24px"><div class="loading">No errors logged</div></div>
+    <div class="section-title">WISHLIST / IMPROVEMENTS</div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input type="text" id="wishlist-input" placeholder="Type an idea or improvement..." style="flex:1">
+      <button class="btn" onclick="addWishlistItem()">Add</button>
+    </div>
+    <div id="wishlist-list"><div class="loading">No items yet</div></div>
+  </div>
 
 <!-- NEW WORK ORDER MODAL -->
 <div class="modal-overlay" id="modal-new-wo">
@@ -357,7 +373,7 @@ async function loadAll() {
     state = {properties:props,units:units,tenants:tenants,vendors:vendors,workorders:workorders,invoices:invoices,owners:owners};
     renderDashboard(); renderWOPage(); renderPropertiesPage(); renderVendorsPage(); renderInvoicesPage();
     toast('Data loaded','success');
-  } catch(e) { toast('Load error: '+e.message,'error'); }
+  } catch(e) { logError('Load all data',e.message); toast('Load error: '+e.message,'error'); }
 }
 
 function showPage(name, btn) {
@@ -368,6 +384,7 @@ function showPage(name, btn) {
 }
 
 function renderDashboard() {
+  if(!Array.isArray(state.workorders)) return;
   const wos = state.workorders;
   document.getElementById('stat-open').textContent = wos.filter(w=>!['Complete','Paid'].includes(w.Status)).length;
   document.getElementById('stat-urgent').textContent = wos.filter(w=>w.Priority==='urgent'&&!['Complete','Paid'].includes(w.Status)).length;
@@ -400,6 +417,7 @@ function woCard(w) {
 function renderWOPage() {
   const filter = document.getElementById('wo-filter')?.value||'all';
   const search = (document.getElementById('wo-search')?.value||'').toLowerCase();
+  if(!Array.isArray(state.workorders)) return;
   let wos = [...state.workorders];
   if(filter!=='all') wos = wos.filter(w=>w.Status===filter);
   if(search) wos = wos.filter(w=>{
@@ -473,12 +491,12 @@ async function submitAssign() {
   try {
     const res = await api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId});
     if(res.success){toast(`Assigned. Vendor SMS: ${res.vendor_sms?'✅':'❌'} | Tenant SMS: ${res.tenant_sms?'✅':'—'}`,'success');closeModal('modal-assign');await loadAll();}
-  } catch(e){toast('Error: '+e.message,'error');}
+  } catch(e){logError('Assign vendor',e.message);toast('Error: '+e.message,'error');}
 }
 
 async function updateWOStatus(woId,status) {
   try { await api('POST','/status',{wo_id:woId,status}); toast('Status: '+status,'success'); closeModal('modal-wo-detail'); await loadAll(); }
-  catch(e){toast('Error: '+e.message,'error');}
+  catch(e){logError('Update status',e.message);toast('Error: '+e.message,'error');}
 }
 
 function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
@@ -487,7 +505,7 @@ async function submitInvoice(){
   if(!amount){toast('Enter amount','error');return;}
   const wo=state.workorders.find(w=>w.ID===invoiceWOId);
   try{await api('POST','/invoice',{wo_id:invoiceWOId,vendor_id:wo?.Vendor_ID||'',amount,qb_ref:document.getElementById('inv-qb').value,notes:document.getElementById('inv-notes').value});toast('Invoice logged','success');closeModal('modal-invoice');await loadAll();}
-  catch(e){toast('Error: '+e.message,'error');}
+  catch(e){logError('Log invoice',e.message);toast('Error: '+e.message,'error');}
 }
 
 function openNewWOModal(){
@@ -521,9 +539,9 @@ async function submitNewWO(){
   const unit=state.units.find(u=>u.ID===unitId);
   try{
     const res=await api('POST','/workorder',{property_id:propId,unit_id:unitId,tenant_id:unit?.Tenant_ID||'',trade,priority:document.getElementById('wo-priority').value,type:document.getElementById('wo-type').value,description:document.getElementById('wo-desc').value,notes:document.getElementById('wo-notes').value,created_by:'admin'});
-    if(res.error){toast('WO Error: '+res.error,'error');return;}
+    if(res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
     toast('Created '+res.id,'success');closeModal('modal-new-wo');await loadAll();
-  }catch(e){toast('Error: '+e.message+' '+JSON.stringify(e),'error');}
+  }catch(e){logError('Create WO',e.message);toast('Error: '+e.message,'error');}
 }
 
 function renderPropertiesPage(){
@@ -568,7 +586,7 @@ function openAddPropertyModal(){
 async function submitAddProperty(){
   const body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Unit_Count:document.getElementById('p-units').value,Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
   if(!body.Address){toast('Address required','error');return;}
-  try{const res=await api('POST','/property/add',body);toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');await loadAll();}catch(e){toast('Error: '+e.message,'error');}
+  try{const res=await api('POST','/property/add',body);if(res.error){logError('Add property',res.error);toast('Error: '+res.error,'error');return;}toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');await loadAll();}catch(e){logError('Add property',e.message);toast('Error: '+e.message,'error');}
 }
 
 function openAddVendorModal(){openModal('modal-add-vendor');}
@@ -576,7 +594,7 @@ async function submitAddVendor(){
   const body={Name:document.getElementById('v-name').value,Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:document.getElementById('v-trade').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
   if(!body.Name){toast('Name required','error');return;}
   if(!body.Phone){toast('Phone required','error');return;}
-  try{const res=await api('POST','/vendor/add',body);toast('Vendor added (ID: '+res.id+')','success');closeModal('modal-add-vendor');await loadAll();}catch(e){toast('Error: '+e.message,'error');}
+  try{const res=await api('POST','/vendor/add',body);if(res.error){logError('Add vendor',res.error);toast('Error: '+res.error,'error');return;}toast('Vendor added (ID: '+res.id+')','success');closeModal('modal-add-vendor');await loadAll();}catch(e){logError('Add vendor',e.message);toast('Error: '+e.message,'error');}
 }
 
 function openModal(id){document.getElementById(id).classList.add('open');}
@@ -584,6 +602,67 @@ function closeModal(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
 
 function toast(msg,type='info'){const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;document.getElementById('toast-container').appendChild(el);setTimeout(()=>el.remove(),4000);}
+
+// wishlist enter key
+document.addEventListener('DOMContentLoaded',()=>{
+  const wi=document.getElementById('wishlist-input');
+  if(wi) wi.addEventListener('keydown',e=>{if(e.key==='Enter')addWishlistItem();});
+});
+
+// ── Error Log ──
+function logError(context, message) {
+  const logs = JSON.parse(localStorage.getItem('mh_errors')||'[]');
+  logs.unshift({ time: new Date().toISOString(), context, message: String(message) });
+  if(logs.length > 50) logs.pop();
+  localStorage.setItem('mh_errors', JSON.stringify(logs));
+  renderErrorLog();
+}
+function renderErrorLog() {
+  const logs = JSON.parse(localStorage.getItem('mh_errors')||'[]');
+  const el = document.getElementById('error-log-list');
+  if(!el) return;
+  if(!logs.length){el.innerHTML='<div class="loading">No errors logged</div>';return;}
+  el.innerHTML = logs.map(l=>`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:8px">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${l.time.replace('T',' ').split('.')[0]} — ${l.context}</div>
+    <div style="font-size:12px;color:var(--danger)">${l.message}</div>
+  </div>`).join('');
+}
+function clearErrorLog(){localStorage.removeItem('mh_errors');renderErrorLog();toast('Error log cleared','info');}
+
+// ── Wishlist ──
+function addWishlistItem(){
+  const input=document.getElementById('wishlist-input');
+  const val=input.value.trim(); if(!val) return;
+  const items=JSON.parse(localStorage.getItem('mh_wishlist')||'[]');
+  items.unshift({time:new Date().toISOString(),text:val});
+  localStorage.setItem('mh_wishlist',JSON.stringify(items));
+  input.value='';
+  renderWishlist();
+  toast('Added to wishlist','success');
+}
+function renderWishlist(){
+  const items=JSON.parse(localStorage.getItem('mh_wishlist')||'[]');
+  const el=document.getElementById('wishlist-list');
+  if(!el) return;
+  if(!items.length){el.innerHTML='<div class="loading">No items yet</div>';return;}
+  el.innerHTML=items.map((item,i)=>`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--info);border-radius:var(--radius);padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${item.time.replace('T',' ').split('.')[0]}</div>
+      <div style="font-size:13px">${item.text}</div>
+    </div>
+    <button class="btn small danger" onclick="deleteWishlistItem(${i})">✕</button>
+  </div>`).join('');
+}
+function deleteWishlistItem(i){
+  const items=JSON.parse(localStorage.getItem('mh_wishlist')||'[]');
+  items.splice(i,1);
+  localStorage.setItem('mh_wishlist',JSON.stringify(items));
+  renderWishlist();
+}
+function clearWishlist(){localStorage.removeItem('mh_wishlist');renderWishlist();toast('Wishlist cleared','info');}
+
+// init dev log on load
+document.addEventListener('DOMContentLoaded',()=>{renderErrorLog();renderWishlist();});
 
 function openEditPropertyModal(id){
   const p=state.properties.find(x=>x.ID===id); if(!p) return;
@@ -614,8 +693,8 @@ async function submitEditProperty(){
     Breaker_Location:document.getElementById('ep-breaker').value,
     Access_Notes:document.getElementById('ep-access').value,
   };
-  try{const res=await api('POST','/property/update',{id,fields});if(res.error){toast('Error: '+res.error,'error');return;}toast('Property updated','success');closeModal('modal-edit-property');await loadAll();}
-  catch(e){toast('Error: '+e.message,'error');}
+  try{const res=await api('POST','/property/update',{id,fields});if(res.error){logError('Edit property',res.error);toast('Error: '+res.error,'error');return;}toast('Property updated','success');closeModal('modal-edit-property');await loadAll();}
+  catch(e){logError('Edit property',e.message);toast('Error: '+e.message,'error');}
 }
 </script>
 </body>
