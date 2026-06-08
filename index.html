@@ -283,6 +283,27 @@
   </div>
 </div>
 
+<!-- EDIT PROPERTY MODAL -->
+<div class="modal-overlay" id="modal-edit-property">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">EDIT PROPERTY</div><button class="modal-close" onclick="closeModal('modal-edit-property')">✕</button></div>
+    <div class="form-grid">
+      <input type="hidden" id="ep-id">
+      <div class="form-group full"><label>Address</label><input type="text" id="ep-address"></div>
+      <div class="form-group"><label>City</label><input type="text" id="ep-city"></div>
+      <div class="form-group"><label>Market</label><select id="ep-market"><option>Baltimore</option><option>Waynesboro</option><option>Winchester</option><option>Other</option></select></div>
+      <div class="form-group"><label>Type</label><select id="ep-type"><option value="house">House</option><option value="rowhome">Rowhome</option><option value="multi">Multi-Unit</option><option value="condo">Condo</option></select></div>
+      <div class="form-group"><label>Lockbox Code</label><input type="text" id="ep-lockbox"></div>
+      <div class="form-group"><label>Door Lock Code</label><input type="text" id="ep-lockcode"></div>
+      <div class="form-group"><label>Water Shutoff</label><input type="text" id="ep-shutoff"></div>
+      <div class="form-group"><label>HVAC Filter Size</label><input type="text" id="ep-hvac"></div>
+      <div class="form-group"><label>Breaker Location</label><input type="text" id="ep-breaker"></div>
+      <div class="form-group full"><label>Access Notes</label><textarea id="ep-access"></textarea></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-property')">Cancel</button><button class="btn" onclick="submitEditProperty()">Save Changes</button></div>
+  </div>
+</div>
+
 <div id="toast-container"></div>
 
 <script>
@@ -498,8 +519,11 @@ async function submitNewWO(){
   if(!trade){toast('Select a trade','error');return;}
   const unitId=document.getElementById('wo-unit').value;
   const unit=state.units.find(u=>u.ID===unitId);
-  try{const res=await api('POST','/workorder',{property_id:propId,unit_id:unitId,tenant_id:unit?.Tenant_ID||'',trade,priority:document.getElementById('wo-priority').value,type:document.getElementById('wo-type').value,description:document.getElementById('wo-desc').value,notes:document.getElementById('wo-notes').value,created_by:'admin'});toast('Created '+res.id,'success');closeModal('modal-new-wo');await loadAll();}
-  catch(e){toast('Error: '+e.message,'error');}
+  try{
+    const res=await api('POST','/workorder',{property_id:propId,unit_id:unitId,tenant_id:unit?.Tenant_ID||'',trade,priority:document.getElementById('wo-priority').value,type:document.getElementById('wo-type').value,description:document.getElementById('wo-desc').value,notes:document.getElementById('wo-notes').value,created_by:'admin'});
+    if(res.error){toast('WO Error: '+res.error,'error');return;}
+    toast('Created '+res.id,'success');closeModal('modal-new-wo');await loadAll();
+  }catch(e){toast('Error: '+e.message+' '+JSON.stringify(e),'error');}
 }
 
 function renderPropertiesPage(){
@@ -508,9 +532,9 @@ function renderPropertiesPage(){
   if(search) props=props.filter(p=>(p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search));
   const el=document.getElementById('properties-list');
   if(!props.length){el.innerHTML='<div class="loading">No properties found</div>';return;}
-  el.innerHTML=`<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Lockbox</th><th>HVAC Filter</th><th>Open WOs</th></tr></thead><tbody>`+props.map(p=>{
+  el.innerHTML=`<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Lockbox</th><th>HVAC Filter</th><th>Open WOs</th><th></th></tr></thead><tbody>`+props.map(p=>{
     const open=state.workorders.filter(w=>w.Property_ID===p.ID&&!['Complete','Paid'].includes(w.Status)).length;
-    return `<tr><td>${p.Address}</td><td>${p.City||'—'}</td><td>${p.Type||'—'}</td><td style="color:var(--accent);font-weight:bold">${p.Lockbox_Code||'—'}</td><td>${p.HVAC_Filter_Size||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td></tr>`;
+    return `<tr><td>${p.Address}</td><td>${p.City||'—'}</td><td>${p.Type||'—'}</td><td style="color:var(--accent);font-weight:bold">${p.Lockbox_Code||'—'}</td><td>${p.HVAC_Filter_Size||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td><td><button class="btn small secondary" onclick="openEditPropertyModal('${p.ID}')">Edit</button></td></tr>`;
   }).join('')+'</tbody></table>';
 }
 
@@ -560,6 +584,39 @@ function closeModal(id){document.getElementById(id).classList.remove('open');}
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
 
 function toast(msg,type='info'){const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;document.getElementById('toast-container').appendChild(el);setTimeout(()=>el.remove(),4000);}
+
+function openEditPropertyModal(id){
+  const p=state.properties.find(x=>x.ID===id); if(!p) return;
+  document.getElementById('ep-id').value=p.ID;
+  document.getElementById('ep-address').value=p.Address||'';
+  document.getElementById('ep-city').value=p.City||'';
+  document.getElementById('ep-market').value=p.Market||'Baltimore';
+  document.getElementById('ep-type').value=p.Type||'house';
+  document.getElementById('ep-lockbox').value=p.Lockbox_Code||'';
+  document.getElementById('ep-lockcode').value=p.Lock_Code||'';
+  document.getElementById('ep-shutoff').value=p.Water_Shutoff||'';
+  document.getElementById('ep-hvac').value=p.HVAC_Filter_Size||'';
+  document.getElementById('ep-breaker').value=p.Breaker_Location||'';
+  document.getElementById('ep-access').value=p.Access_Notes||'';
+  openModal('modal-edit-property');
+}
+async function submitEditProperty(){
+  const id=document.getElementById('ep-id').value;
+  const fields={
+    Address:document.getElementById('ep-address').value,
+    City:document.getElementById('ep-city').value,
+    Market:document.getElementById('ep-market').value,
+    Type:document.getElementById('ep-type').value,
+    Lockbox_Code:document.getElementById('ep-lockbox').value,
+    Lock_Code:document.getElementById('ep-lockcode').value,
+    Water_Shutoff:document.getElementById('ep-shutoff').value,
+    HVAC_Filter_Size:document.getElementById('ep-hvac').value,
+    Breaker_Location:document.getElementById('ep-breaker').value,
+    Access_Notes:document.getElementById('ep-access').value,
+  };
+  try{const res=await api('POST','/property/update',{id,fields});if(res.error){toast('Error: '+res.error,'error');return;}toast('Property updated','success');closeModal('modal-edit-property');await loadAll();}
+  catch(e){toast('Error: '+e.message,'error');}
+}
 </script>
 </body>
 </html>
