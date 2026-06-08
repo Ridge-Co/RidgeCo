@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Data Importer</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:6px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1100px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.2rem;letter-spacing:0.15em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:20px;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn:hover{opacity:0.85;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  .btn.success{background:var(--accent2);color:#000;}
+  .btn.danger{background:var(--danger);color:#000;}
+  .btn.small{padding:4px 9px;font-size:11px;}
+  input,select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  input:focus,select:focus{outline:none;border-color:var(--accent);}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
+  .row label{color:var(--muted);font-size:11px;min-width:110px;}
+  .row input{flex:1;min-width:180px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);letter-spacing:0.1em;text-transform:uppercase;border-bottom:1px solid var(--border);}
+  td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  tr:hover td{background:var(--surface2);}
+  .badge{padding:2px 6px;border-radius:20px;font-size:10px;font-weight:bold;text-transform:uppercase;}
+  .badge-active{background:#1a3320;color:var(--accent2);}
+  .badge-vacant{background:#2d1f06;color:var(--warn);}
+  .badge-baltimore{background:#1e3a5f;color:var(--info);}
+  .badge-waynesboro{background:#2d1a2d;color:#c084fc;}
+  #log{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:160px;overflow-y:auto;font-size:11px;margin-top:10px;}
+  .log-ok{color:var(--accent2);}
+  .log-err{color:var(--danger);}
+  .log-info{color:var(--muted);}
+  .progress-bar{background:var(--surface2);border-radius:20px;height:6px;margin:8px 0;overflow:hidden;}
+  .progress-fill{background:var(--accent);height:100%;transition:width 0.3s;border-radius:20px;}
+  .tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0;}
+  .tab{background:none;border:none;color:var(--muted);padding:8px 14px;cursor:pointer;font-family:var(--font);font-size:12px;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+  .tab-panel{display:none;}
+  .tab-panel.active{display:block;}
+  .editable{background:var(--surface2);border:1px solid transparent;border-radius:3px;padding:3px 6px;min-width:80px;}
+  .editable:focus{outline:none;border-color:var(--accent);}
+  #toast{position:fixed;bottom:20px;right:20px;background:var(--surface2);border:1px solid var(--border);padding:12px 16px;border-radius:var(--radius);font-size:12px;display:none;z-index:999;}
+  #toast.success{border-left:3px solid var(--accent2);}
+  #toast.error{border-left:3px solid var(--danger);}
+  #toast.info{border-left:3px solid var(--info);}
+  .market-tag{font-size:10px;padding:2px 6px;border-radius:10px;}
+  .split-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  @media(max-width:600px){.split-row{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — DATA IMPORTER</h1>
+<p class="sub">Import properties, units, and tenants from all sources into Maintenance Hub.</p>
+
+<div class="section">
+  <div class="section-title">CONNECTION</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev"></div>
+  <div class="row"><label>Access Token</label><input id="auth-token" type="password" placeholder="mh-secret-2026-brett"></div>
+  <button class="btn" onclick="connect()">Connect</button>
+  <span id="conn-status" style="margin-left:10px;font-size:11px;color:var(--muted)"></span>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('tab-bmore')">BALTIMORE (ClickUp)</button>
+  <button class="tab" onclick="showTab('tab-waynesboro')">BALTIMORE — AMANDA (43)</button>
+  <button class="tab" onclick="showTab('tab-manual')">MANUAL ENTRY</button>
+  <button class="tab" onclick="showTab('tab-tenants')">TENANT UPDATER</button>
+</div>
+
+<!-- BALTIMORE TAB -->
+<div class="tab-panel active" id="tab-bmore">
+  <div class="section">
+    <div class="section-title">BALTIMORE PROPERTIES — 11 from ClickUp</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">Review and edit before importing. All are multi-unit Baltimore properties.</p>
+    <table>
+      <thead><tr><th><input type="checkbox" id="check-all-props" onchange="toggleAll('prop-check-',this.checked)"></th><th>Address</th><th>Type</th><th>Owner</th><th>Units</th></tr></thead>
+      <tbody id="bmore-props-body"></tbody>
+    </table>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn success" onclick="importBmoreProperties()">Import Selected Properties + Units + Tenants</button>
+      <span id="bmore-count" style="color:var(--muted);font-size:11px;line-height:32px"></span>
+    </div>
+    <div class="progress-bar" id="bmore-progress" style="display:none"><div class="progress-fill" id="bmore-fill" style="width:0%"></div></div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<!-- WAYNESBORO TAB -->
+<div class="tab-panel" id="tab-waynesboro">
+  <div class="section">
+    <div class="section-title">BALTIMORE PROPERTIES — 43 from Amanda Ireland email</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">All Baltimore properties for one client. Set owner name before importing.</p>
+    <div class="row" style="margin-bottom:12px">
+      <label>City for all</label>
+      <select id="wb-city" style="width:160px"><option>Baltimore</option><option>Waynesboro</option><option>Winchester</option><option>Other</option></select>
+      <input id="wb-city-other" placeholder="Custom city..." style="display:none;width:140px">
+      <label style="margin-left:16px">Owner name</label>
+      <input id="wb-owner" placeholder="Owner name..." style="width:160px">
+    </div>
+    <table>
+      <thead><tr><th><input type="checkbox" id="check-all-wb" onchange="toggleAll('wb-check-',this.checked)"></th><th>Address</th><th>Type</th></tr></thead>
+      <tbody id="wb-props-body"></tbody>
+    </table>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn success" onclick="importWbProperties()">Import Selected</button>
+      <span id="wb-count" style="color:var(--muted);font-size:11px;line-height:32px"></span>
+    </div>
+    <div class="progress-bar" id="wb-progress" style="display:none"><div class="progress-fill" id="wb-fill" style="width:0%"></div></div>
+    <div id="wb-log" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:120px;overflow-y:auto;font-size:11px;margin-top:10px;"></div>
+  </div>
+</div>
+
+<!-- MANUAL TAB -->
+<div class="tab-panel" id="tab-manual">
+  <div class="section">
+    <div class="section-title">MANUAL PROPERTY ENTRY</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Pre-loaded: 1125 St Paul St. Add more below.</p>
+    <div id="manual-entries"></div>
+    <button class="btn secondary small" onclick="addManualEntry()" style="margin-top:8px">+ Add Another</button>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn success" onclick="importManual()">Import All Manual Entries</button>
+    </div>
+    <div id="manual-log" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:120px;overflow-y:auto;font-size:11px;margin-top:10px;"></div>
+  </div>
+</div>
+
+<!-- TENANT UPDATER TAB -->
+<div class="tab-panel" id="tab-tenants">
+  <div class="section">
+    <div class="section-title">TENANT UPDATER — Move-in / Move-out / Update</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Search for a unit, then update tenant info or mark as vacant.</p>
+    <div class="row">
+      <label>Search unit</label>
+      <input id="tenant-search" placeholder="Address or unit..." oninput="searchUnits()" style="flex:1">
+    </div>
+    <div id="unit-results" style="margin-top:8px"></div>
+    <div id="tenant-edit-form" style="display:none;margin-top:16px">
+      <div class="section-title">EDIT TENANT — <span id="edit-unit-label"></span></div>
+      <input type="hidden" id="edit-unit-id">
+      <input type="hidden" id="edit-tenant-id">
+      <div class="split-row" style="margin-bottom:10px">
+        <div>
+          <div style="color:var(--muted);font-size:10px;margin-bottom:4px">FIRST NAME</div>
+          <input id="edit-first" style="width:100%">
+        </div>
+        <div>
+          <div style="color:var(--muted);font-size:10px;margin-bottom:4px">LAST NAME</div>
+          <input id="edit-last" style="width:100%">
+        </div>
+        <div>
+          <div style="color:var(--muted);font-size:10px;margin-bottom:4px">PHONE</div>
+          <input id="edit-phone" style="width:100%">
+        </div>
+        <div>
+          <div style="color:var(--muted);font-size:10px;margin-bottom:4px">EMAIL</div>
+          <input id="edit-email" style="width:100%">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn success" onclick="saveTenantEdit()">Save Changes</button>
+        <button class="btn danger" onclick="markVacant()">Mark Vacant (Move-out)</button>
+        <button class="btn secondary" onclick="document.getElementById('tenant-edit-form').style.display='none'">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const WORKER_DEFAULT = 'https://maintenance-hub.brett-2f8.workers.dev';
+let connected = false;
+let sheetUnits = [];
+let sheetTenants = [];
+
+// ── Data ──
+const BMORE_PROPERTIES = [
+  {clickup_id:"86dzt4g58",address:"115 W 29th St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt4g6a",address:"1214 N Calvert St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt4g6z",address:"151 W Lanvale St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt4g7g",address:"153 W Lanvale St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt4g9k",address:"2930 St Paul St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt4gaj",address:"3014 N Calvert St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt4gbr",address:"807 N Calvert St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt4gbx",address:"828 S Charles St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt4gdd",address:"928 N Calvert St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dzt7x9m",address:"926 N Calvert St",city:"Baltimore",market:"Baltimore",type:"multi"},
+  {clickup_id:"86dztr2rk",address:"20 E Eager St",city:"Baltimore",market:"Baltimore",type:"multi"},
+];
+
+const BMORE_UNITS = [
+  {unit_label:"Apt 1",prop_clickup_id:"86dzt4g58",tenant_name:"Daniel Naiman",tenant_phone:"+19086087752",tenant_email:""},
+  {unit_label:"Apt 2",prop_clickup_id:"86dzt4g58",tenant_name:"",tenant_phone:"",tenant_email:""},
+  {unit_label:"Apt 3",prop_clickup_id:"86dzt4g58",tenant_name:"Cassidy",tenant_phone:"+1 914 907 1358",tenant_email:""},
+  {unit_label:"Apt 1",prop_clickup_id:"86dzt4g6a",tenant_name:"Rachel Luce",tenant_phone:"+16107036551",tenant_email:""},
+  {unit_label:"Apt 2",prop_clickup_id:"86dzt4g6a",tenant_name:"Valeria Pomales",tenant_phone:"+1 787 507 7480",tenant_email:""},
+  {unit_label:"Apt 3",prop_clickup_id:"86dzt4g6a",tenant_name:"Celia Martyn",tenant_phone:"+15714222516",tenant_email:""},
+  {unit_label:"Apt 4",prop_clickup_id:"86dzt4g6a",tenant_name:"Sarah",tenant_phone:"+18653358874",tenant_email:""},
+  {unit_label:"Apt 1",prop_clickup_id:"86dzt4g6z",tenant_name:"Ericka",tenant_phone:"+1 443 492 8653",tenant_email:"ericka4181@gmail.com"},
+  {unit_label:"Apt 2",prop_clickup_id:"86dzt4g6z",tenant_name:"Ian",tenant_phone:"+1 443 710 5944",tenant_email:"",tenant2_name:"Emily",tenant2_phone:"+1 410 599 8501"},
+  {unit_label:"Apt 3",prop_clickup_id:"86dzt4g6z",tenant_name:"Matt",tenant_phone:"+1 443 813 1027",tenant_email:""},
+  {unit_label:"Apt 1",prop_clickup_id:"86dzt4g7g",tenant_name:"Sean",tenant_phone:"+1 443 610 7391",tenant_email:"",tenant2_name:"Will",tenant2_phone:"+1 443 562 9017"},
+  {unit_label:"Apt 2",prop_clickup_id:"86dzt4g7g",tenant_name:"Chen",tenant_phone:"+1 443 630 8854",tenant_email:""},
+  {unit_label:"Apt 1F",prop_clickup_id:"86dzt4g9k",tenant_name:"Mackenzie Crim",tenant_phone:"+1 910 508 3832",tenant_email:""},
+  {unit_label:"Apt 1R",prop_clickup_id:"86dzt4g9k",tenant_name:"Ashley",tenant_phone:"+1 410 302 1670",tenant_email:""},
+  {unit_label:"Apt 2F",prop_clickup_id:"86dzt4g9k",tenant_name:"",tenant_phone:"",tenant_email:""},
+  {unit_label:"Apt 2R",prop_clickup_id:"86dzt4g9k",tenant_name:"",tenant_phone:"",tenant_email:""},
+  {unit_label:"Apt 3",prop_clickup_id:"86dzt4g9k",tenant_name:"Alex Chao",tenant_phone:"+1 914 267 6237",tenant_email:""},
+  {unit_label:"Apt 1",prop_clickup_id:"86dzt4gaj",tenant_name:"Ava",tenant_phone:"+1 615 670 6355",tenant_email:""},
+  {unit_label:"Apt 2",prop_clickup_id:"86dzt4gaj",tenant_name:"Mariam",tenant_phone:"+1 786 391 7241",tenant_email:""},
+  {unit_label:"Apt 3",prop_clickup_id:"86dzt4gaj",tenant_name:"Kevin",tenant_phone:"+1 716 418 3481",tenant_email:""},
+  {unit_label:"Apt B",prop_clickup_id:"86dzt4gaj",tenant_name:"VeAmber",tenant_phone:"+1 630 452 4216",tenant_email:""},
+  {unit_label:"Apt 2A",prop_clickup_id:"86dzt4gbr",tenant_name:"",tenant_phone:"",tenant_email:""},
+  {unit_label:"Apt 2B",prop_clickup_id:"86dzt4gbr",tenant_name:"",tenant_phone:"",tenant_email:""},
+  {unit_label:"Apt 3A",prop_clickup_id:"86dzt4gbr",tenant_name:"",tenant_phone:"",tenant_email:""},
+  {unit_label:"Apt 3B",prop_clickup_id:"86dzt4gbr",tenant_name:"",tenant_phone:"",tenant_email:""},
+  {unit_label:"Apt Bsmt",prop_clickup_id:"86dzt4gbr",tenant_name:"Alex Rouse",tenant_phone:"+1 315 558 8520",tenant_email:""},
+  {unit_label:"Apt 1F",prop_clickup_id:"86dzt4gdd",tenant_name:"",tenant_phone:"",tenant_email:""},
+  {unit_label:"Apt 1R",prop_clickup_id:"86dzt4gdd",tenant_name:"Antoine",tenant_phone:"+1 443 571 3615",tenant_email:""},
+  {unit_label:"Apt 2F",prop_clickup_id:"86dzt4gdd",tenant_name:"Cole",tenant_phone:"+18324924271",tenant_email:""},
+  {unit_label:"Apt 2R",prop_clickup_id:"86dzt4gdd",tenant_name:"Gwyneth",tenant_phone:"+16673348295",tenant_email:""},
+  {unit_label:"Apt 3F",prop_clickup_id:"86dzt4gdd",tenant_name:"Saul",tenant_phone:"+1 443 810 8018",tenant_email:""},
+  {unit_label:"Apt 3R",prop_clickup_id:"86dzt4gdd",tenant_name:"Claudia",tenant_phone:"+1 574 315 5720",tenant_email:""},
+  {unit_label:"Apt 1",prop_clickup_id:"86dztr2rk",tenant_name:"James",tenant_phone:"+1 443 603 7450",tenant_email:""},
+  {unit_label:"Apt 2",prop_clickup_id:"86dztr2rk",tenant_name:"Abby",tenant_phone:"+1 202 341 4172",tenant_email:""},
+  {unit_label:"Apt 3",prop_clickup_id:"86dztr2rk",tenant_name:"Kelsey",tenant_phone:"+1 443 603 7450",tenant_email:""},
+];
+
+const AMANDA_PROPERTIES = [
+  "567 Welbrook rd","1216 Kevin rd","5433 Jonquil Ave","420 Denison St.",
+  "5425 Belle Vista Ave","1427 N Dukeland","3737 Clarks Lane Unit #104",
+  "4210 Ivanhoe","619 Denison St.","2842 Oakford Avenue","56 S Culver St.",
+  "906 N Franklintown Rd","1575 Ingleside Ave.","1577 Ingleside Ave.",
+  "1581 Ingleside Ave","1589 Ingleside Ave.","1599 Ingleside Ave.",
+  "1601 Ingleside Ave","1609 Ingleside Ave.","2740 Kinsey Ave",
+  "4107 Norfolk Ave","2527 Cecil Ave","2224 Penrose Ave","545 Wellesley St.",
+  "2628 W. Cold Spring Ln","2730 Kinsey Ave","707 N. Curley St.",
+  "713 N. Curley","525 S. Catherine","4420 Reisterstown Road",
+  "2223 Cecil Ave","2144 Aiken St.","2931 Belmont Ave",
+  "1110 N. Dukeland st","1217 W Mulberry","2839 W Lafayette",
+  "4431 Wrenwood Ave","1106 N. Bond St.","1928 E. 28th St.",
+  "2309 Robb St.","2927 Rockrose Ave","2338 Garrett Ave","4225 Roland View Ave"
+];
+
+// ── Connection ──
+function getWorker(){return document.getElementById('worker-url').value.trim();}
+function getToken(){return document.getElementById('auth-token').value.trim();}
+async function apiGet(path){const r=await fetch(getWorker()+path,{headers:{'X-Auth-Token':getToken(),'Content-Type':'application/json'}});return r.json();}
+async function apiPost(path,body){const r=await fetch(getWorker()+path,{method:'POST',headers:{'X-Auth-Token':getToken(),'Content-Type':'application/json'},body:JSON.stringify(body)});return r.json();}
+
+async function connect(){
+  document.getElementById('conn-status').textContent='Connecting...';
+  try{
+    const props=await apiGet('/properties');
+    if(!Array.isArray(props))throw new Error('Bad response');
+    connected=true;
+    document.getElementById('conn-status').textContent=`✅ Connected — ${props.length} properties in Sheet`;
+    // Load units and tenants for updater
+    sheetUnits=await apiGet('/units');
+    sheetTenants=await apiGet('/tenants');
+    renderBmoreProps();
+    renderWbProps();
+    renderManual();
+    toast('Connected','success');
+  }catch(e){document.getElementById('conn-status').textContent='❌ '+e.message;}
+}
+
+// ── Tabs ──
+function showTab(id){
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+
+function toggleAll(prefix,val){
+  let i=0;while(document.getElementById(prefix+i)){document.getElementById(prefix+i).checked=val;i++;}
+  updateCounts();
+}
+function updateCounts(){
+  let bp=0;let i=0;while(document.getElementById('prop-check-'+i)){if(document.getElementById('prop-check-'+i).checked)bp++;i++;}
+  document.getElementById('bmore-count').textContent=bp+' properties selected';
+  let wc=0;i=0;while(document.getElementById('wb-check-'+i)){if(document.getElementById('wb-check-'+i).checked)wc++;i++;}
+  document.getElementById('wb-count').textContent=wc+' properties selected';
+}
+
+// ── Baltimore ──
+function renderBmoreProps(){
+  const tbody=document.getElementById('bmore-props-body');
+  const unitCounts={};
+  BMORE_UNITS.forEach(u=>{unitCounts[u.prop_clickup_id]=(unitCounts[u.prop_clickup_id]||0)+1;});
+  tbody.innerHTML=BMORE_PROPERTIES.map((p,i)=>{
+    const uc=unitCounts[p.clickup_id]||0;
+    const hasT=BMORE_UNITS.filter(u=>u.prop_clickup_id===p.clickup_id&&u.tenant_name).length;
+    return `<tr>
+      <td><input type="checkbox" id="prop-check-${i}" checked onchange="updateCounts()"></td>
+      <td>${p.address}</td>
+      <td><select id="prop-type-${i}" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:4px;font-family:var(--font);font-size:11px"><option value="multi" selected>Multi-Unit</option><option value="house">House</option><option value="rowhome">Rowhome</option></select></td>
+      <td><input id="prop-owner-${i}" value="Owner 1" style="width:120px;padding:4px 6px;font-size:11px"></td>
+      <td style="color:var(--muted)">${uc} units, ${hasT} tenants</td>
+    </tr>`;
+  }).join('');
+  updateCounts();
+}
+
+// Map clickup_id -> sheet property ID after import
+let cupToSheetId = {};
+
+async function importBmoreProperties(){
+  if(!connected){toast('Connect first','error');return;}
+  const selected=BMORE_PROPERTIES.filter((_,i)=>document.getElementById('prop-check-'+i)?.checked);
+  if(!selected.length){toast('Select properties','error');return;}
+  
+  const logEl=document.getElementById('log');
+  logEl.innerHTML='';
+  const bar=document.getElementById('bmore-progress');
+  const fill=document.getElementById('bmore-fill');
+  bar.style.display='block';
+  
+  let total=0,fail=0;
+  const steps=[];
+  selected.forEach(p=>{ steps.push({type:'prop',data:p}); });
+  BMORE_UNITS.forEach(u=>{ if(selected.find(p=>p.clickup_id===u.prop_clickup_id)) steps.push({type:'unit',data:u}); });
+
+  for(let i=0;i<steps.length;i++){
+    const s=steps[i];
+    fill.style.width=Math.round((i/steps.length)*100)+'%';
+    
+    try{
+      if(s.type==='prop'){
+        const idx=BMORE_PROPERTIES.indexOf(s.data);
+        const res=await apiPost('/property/add',{
+          Address:s.data.address,City:s.data.city,Market:s.data.market,
+          Type:document.getElementById('prop-type-'+idx)?.value||'multi',
+          Unit_Count:'',
+          Owner_ID:'',
+          Active:'TRUE'
+        });
+        if(res.id){
+          cupToSheetId[s.data.clickup_id]=res.id;
+          logEl.innerHTML+=`<div class="log-ok">✅ Property: ${s.data.address} → ID ${res.id}</div>`;
+          total++;
+        } else {
+          logEl.innerHTML+=`<div class="log-err">❌ Property ${s.data.address}: ${JSON.stringify(res)}</div>`;
+          fail++;
+        }
+      } else if(s.type==='unit'){
+        const propSheetId=cupToSheetId[s.data.prop_clickup_id];
+        if(!propSheetId){logEl.innerHTML+=`<div class="log-err">⚠️ Unit ${s.data.unit_label} skipped — property not imported yet</div>`;continue;}
+        
+        // Create unit
+        const uRes=await apiPost('/unit/add',{
+          Property_ID:propSheetId,
+          Unit_Label:s.data.unit_label,
+          Tenant_ID:'',
+          Notes:'',
+          Active:'TRUE'
+        });
+        
+        // Create tenant if exists
+        if(s.data.tenant_name && uRes.id){
+          const nameParts=s.data.tenant_name.trim().split(' ');
+          const tRes=await apiPost('/tenant/add',{
+            First_Name:nameParts[0]||'',
+            Last_Name:nameParts.slice(1).join(' ')||'',
+            Phone:s.data.tenant_phone||'',
+            Email:s.data.tenant_email||'',
+            Unit_ID:uRes.id,
+            Property_ID:propSheetId,
+            Active:'TRUE'
+          });
+          // Update unit with tenant ID
+          if(tRes.id){
+            await apiPost('/unit/update',{id:uRes.id,fields:{Tenant_ID:tRes.id}});
+            logEl.innerHTML+=`<div class="log-ok">  ↳ Unit ${s.data.unit_label} + tenant ${s.data.tenant_name}</div>`;
+          }
+          // Second tenant
+          if(s.data.tenant2_name){
+            const n2=s.data.tenant2_name.trim().split(' ');
+            await apiPost('/tenant/add',{First_Name:n2[0]||'',Last_Name:n2.slice(1).join(' ')||'',Phone:s.data.tenant2_phone||'',Email:'',Unit_ID:uRes.id,Property_ID:propSheetId,Active:'TRUE'});
+            logEl.innerHTML+=`<div class="log-ok">  ↳ Tenant 2: ${s.data.tenant2_name}</div>`;
+          }
+        } else if(uRes.id){
+          logEl.innerHTML+=`<div class="log-ok">  ↳ Unit ${s.data.unit_label} (vacant)</div>`;
+        }
+        total++;
+      }
+    }catch(e){
+      logEl.innerHTML+=`<div class="log-err">❌ Error: ${e.message}</div>`;
+      fail++;
+    }
+    logEl.scrollTop=logEl.scrollHeight;
+    await new Promise(r=>setTimeout(r,250));
+  }
+  
+  fill.style.width='100%';
+  logEl.innerHTML+=`<div class="log-info" style="margin-top:6px;font-weight:bold">Done: ${total} imported, ${fail} failed.</div>`;
+  toast(`Import complete: ${total} items`,'success');
+}
+
+// ── Waynesboro ──
+function renderWbProps(){
+  const tbody=document.getElementById('wb-props-body');
+  tbody.innerHTML=AMANDA_PROPERTIES.map((addr,i)=>`<tr>
+    <td><input type="checkbox" id="wb-check-${i}" checked onchange="updateCounts()"></td>
+    <td>${addr}</td>
+    <td><select id="wb-type-${i}" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:4px;font-family:var(--font);font-size:11px"><option value="house" selected>House</option><option value="multi">Multi-Unit</option><option value="rowhome">Rowhome</option></select></td>
+  </tr>`).join('');
+  updateCounts();
+}
+
+async function importWbProperties(){
+  if(!connected){toast('Connect first','error');return;}
+  const city=document.getElementById('wb-city').value;
+  const owner=document.getElementById('wb-owner').value||'';
+  const selected=AMANDA_PROPERTIES.filter((_,i)=>document.getElementById('wb-check-'+i)?.checked);
+  if(!selected.length){toast('Select properties','error');return;}
+  
+  const logEl=document.getElementById('wb-log');
+  logEl.innerHTML='';
+  const bar=document.getElementById('wb-progress');
+  const fill=document.getElementById('wb-fill');
+  bar.style.display='block';
+  let ok=0,fail=0;
+  
+  for(let i=0;i<selected.length;i++){
+    const addr=selected[i];
+    const origIdx=AMANDA_PROPERTIES.indexOf(addr);
+    fill.style.width=Math.round((i/selected.length)*100)+'%';
+    try{
+      const res=await apiPost('/property/add',{
+        Address:addr,City:city,Market:city,
+        Type:document.getElementById('wb-type-'+origIdx)?.value||'house',
+        Unit_Count:'1',Active:'TRUE'
+      });
+      if(res.id){logEl.innerHTML+=`<div class="log-ok">✅ ${addr} → ID ${res.id}</div>`;ok++;}
+      else{logEl.innerHTML+=`<div class="log-err">❌ ${addr}: ${JSON.stringify(res)}</div>`;fail++;}
+    }catch(e){logEl.innerHTML+=`<div class="log-err">❌ ${addr}: ${e.message}</div>`;fail++;}
+    logEl.scrollTop=logEl.scrollHeight;
+    await new Promise(r=>setTimeout(r,250));
+  }
+  fill.style.width='100%';
+  logEl.innerHTML+=`<div class="log-info" style="font-weight:bold">Done: ${ok} imported, ${fail} failed.</div>`;
+  toast(`Waynesboro import: ${ok} done`,'success');
+}
+
+// ── Manual ──
+let manualCount=0;
+function renderManual(){
+  document.getElementById('manual-entries').innerHTML='';
+  addManualEntry('1125 St Paul St','Baltimore','multi');
+}
+function addManualEntry(addr,city,type){
+  const i=manualCount++;
+  const div=document.createElement('div');
+  div.style.cssText='display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:center';
+  div.innerHTML=`
+    <input id="m-addr-${i}" value="${addr||''}" placeholder="Address">
+    <input id="m-city-${i}" value="${city||'Baltimore'}" placeholder="City">
+    <select id="m-type-${i}" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px">
+      <option value="multi" ${type==='multi'?'selected':''}>Multi-Unit</option>
+      <option value="house" ${type==='house'?'selected':''}>House</option>
+      <option value="rowhome">Rowhome</option>
+    </select>
+    <button class="btn danger small" onclick="this.parentElement.remove()">✕</button>
+  `;
+  document.getElementById('manual-entries').appendChild(div);
+}
+
+async function importManual(){
+  if(!connected){toast('Connect first','error');return;}
+  const logEl=document.getElementById('manual-log');
+  logEl.innerHTML='';
+  const entries=document.querySelectorAll('#manual-entries > div');
+  let ok=0,fail=0;
+  for(const div of entries){
+    const inputs=div.querySelectorAll('input,select');
+    const addr=inputs[0].value.trim();
+    const city=inputs[1].value.trim();
+    const type=inputs[2].value;
+    if(!addr)continue;
+    try{
+      const res=await apiPost('/property/add',{Address:addr,City:city,Market:city,Type:type,Active:'TRUE'});
+      if(res.id){logEl.innerHTML+=`<div class="log-ok">✅ ${addr} → ID ${res.id}</div>`;ok++;}
+      else{logEl.innerHTML+=`<div class="log-err">❌ ${addr}: ${JSON.stringify(res)}</div>`;fail++;}
+    }catch(e){logEl.innerHTML+=`<div class="log-err">❌ ${addr}: ${e.message}</div>`;fail++;}
+    await new Promise(r=>setTimeout(r,250));
+  }
+  logEl.innerHTML+=`<div class="log-info" style="font-weight:bold">Done: ${ok} imported.</div>`;
+  toast(`Manual import: ${ok} done`,'success');
+}
+
+// ── Tenant Updater ──
+function searchUnits(){
+  const q=(document.getElementById('tenant-search').value||'').toLowerCase();
+  if(!q||q.length<2){document.getElementById('unit-results').innerHTML='';return;}
+  const results=(Array.isArray(sheetUnits)?sheetUnits:[]).filter(u=>{
+    return (u.Unit_Label||'').toLowerCase().includes(q)||
+      (sheetTenants.find(t=>t.ID===u.Tenant_ID)?.First_Name||'').toLowerCase().includes(q)||
+      (sheetTenants.find(t=>t.ID===u.Tenant_ID)?.Last_Name||'').toLowerCase().includes(q);
+  }).slice(0,10);
+  
+  if(!results.length){document.getElementById('unit-results').innerHTML='<div style="color:var(--muted);font-size:11px">No units found</div>';return;}
+  
+  document.getElementById('unit-results').innerHTML=`<table><thead><tr><th>Unit ID</th><th>Unit</th><th>Tenant</th><th>Phone</th><th></th></tr></thead><tbody>`+
+    results.map(u=>{
+      const t=sheetTenants.find(x=>x.ID===u.Tenant_ID);
+      return `<tr>
+        <td style="color:var(--muted)">${u.ID}</td>
+        <td>${u.Unit_Label||'—'}</td>
+        <td>${t?t.First_Name+' '+t.Last_Name:'<span style="color:var(--warn)">Vacant</span>'}</td>
+        <td>${t?.Phone||'—'}</td>
+        <td><button class="btn small" onclick="editTenant('${u.ID}','${u.Tenant_ID||''}','${u.Unit_Label||''}')">Edit</button></td>
+      </tr>`;
+    }).join('')+'</tbody></table>';
+}
+
+function editTenant(unitId,tenantId,unitLabel){
+  document.getElementById('edit-unit-id').value=unitId;
+  document.getElementById('edit-tenant-id').value=tenantId;
+  document.getElementById('edit-unit-label').textContent=unitLabel;
+  const t=sheetTenants.find(x=>x.ID===tenantId);
+  document.getElementById('edit-first').value=t?.First_Name||'';
+  document.getElementById('edit-last').value=t?.Last_Name||'';
+  document.getElementById('edit-phone').value=t?.Phone||'';
+  document.getElementById('edit-email').value=t?.Email||'';
+  document.getElementById('tenant-edit-form').style.display='block';
+}
+
+async function saveTenantEdit(){
+  const tenantId=document.getElementById('edit-tenant-id').value;
+  const unitId=document.getElementById('edit-unit-id').value;
+  const first=document.getElementById('edit-first').value;
+  const last=document.getElementById('edit-last').value;
+  const phone=document.getElementById('edit-phone').value;
+  const email=document.getElementById('edit-email').value;
+  
+  try{
+    if(tenantId){
+      // Update existing tenant
+      await apiPost('/tenant/update',{id:tenantId,fields:{First_Name:first,Last_Name:last,Phone:phone,Email:email}});
+      toast('Tenant updated','success');
+    } else {
+      // New tenant for vacant unit — get property ID from unit
+      const unit=sheetUnits.find(u=>u.ID===unitId);
+      const res=await apiPost('/tenant/add',{First_Name:first,Last_Name:last,Phone:phone,Email:email,Unit_ID:unitId,Property_ID:unit?.Property_ID||'',Active:'TRUE'});
+      if(res.id){
+        await apiPost('/unit/update',{id:unitId,fields:{Tenant_ID:res.id}});
+        toast('New tenant added','success');
+      }
+    }
+    document.getElementById('tenant-edit-form').style.display='none';
+    // Refresh
+    sheetUnits=await apiGet('/units');
+    sheetTenants=await apiGet('/tenants');
+    searchUnits();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function markVacant(){
+  const tenantId=document.getElementById('edit-tenant-id').value;
+  const unitId=document.getElementById('edit-unit-id').value;
+  if(!tenantId){toast('No tenant to remove','error');return;}
+  if(!confirm('Mark this unit as vacant? This will deactivate the tenant record.'))return;
+  try{
+    await apiPost('/tenant/update',{id:tenantId,fields:{Active:'FALSE'}});
+    await apiPost('/unit/update',{id:unitId,fields:{Tenant_ID:''}});
+    toast('Unit marked vacant','success');
+    document.getElementById('tenant-edit-form').style.display='none';
+    sheetUnits=await apiGet('/units');
+    sheetTenants=await apiGet('/tenants');
+    searchUnits();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+function toast(msg,type='info'){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.className=type;el.style.display='block';
+  setTimeout(()=>el.style.display='none',3500);
+}
+
+// Init
+renderBmoreProps();
+renderWbProps();
+renderManual();
+updateCounts();
+</script>
+</body>
+</html>
