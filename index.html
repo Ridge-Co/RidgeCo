@@ -978,29 +978,33 @@ function renderCache() {
   if(!el) return;
   if(!cacheItems.length) { el.innerHTML='<div class="loading">No cached responses yet</div>'; return; }
   
-  el.innerHTML = cacheItems.map(c => {
+  el.innerHTML = cacheItems.map(function(c) {
     const flagged = c.Flagged === 'TRUE';
     const hasResponse = !!c.Response;
     const borderColor = flagged ? 'var(--danger)' : hasResponse ? 'var(--accent2)' : 'var(--warn)';
     const statusLabel = flagged ? '⚑ FLAGGED' : hasResponse ? '✓ CACHED' : '○ EMPTY';
     const statusColor = flagged ? 'var(--danger)' : hasResponse ? 'var(--accent2)' : 'var(--warn)';
-    const season = c.Season ? ` · ${c.Season}` : '';
-    return `<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ${borderColor};border-radius:var(--radius);padding:12px;margin-bottom:8px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
-        <div>
-          <div style="font-size:12px;font-weight:bold">${c.Trade||'—'} · ${c.Keywords||'—'}${season}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">Used ${c.Use_Count||0}× · Last: ${c.Last_Used||'never'}</div>
-          ${c.Flag_Reason?`<div style="font-size:11px;color:var(--danger);margin-top:4px">Flag: ${c.Flag_Reason}</div>`:''}
-        </div>
-        <span style="font-size:10px;color:${statusColor};font-weight:bold;white-space:nowrap;margin-left:8px">${statusLabel}</span>
-      </div>
-      ${hasResponse?`<div style="font-size:11px;color:var(--muted);margin-bottom:8px;max-height:60px;overflow:hidden">${c.Response.substring(0,150)}${c.Response.length>150?'…':''}</div>`:''}
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        ${!flagged?`<button class="btn small secondary" style="color:var(--warn);border-color:var(--warn)" onclick="flagCache('${c.ID}')">⚑ Flag</button>`:''}
-        <button class="btn small secondary" onclick="refreshCache('${c.ID}')">↻ Refresh</button>
-        ${c.Season!==undefined?`<button class="btn small secondary" onclick="editCacheSeason('${c.ID}','${c.Season||''}')">✎ Season</button>`:''}
-      </div>
-    </div>`;
+    const season = c.Season ? ' · ' + c.Season : '';
+    const flagBtn = !flagged ? '<button class="btn small secondary" style="color:var(--warn);border-color:var(--warn)" onclick="flagCache(\'' + c.ID + '\')">⚑ Flag</button>' : '';
+    const seasonBtn = c.Season !== undefined ? '<button class="btn small secondary" onclick="editCacheSeason(\'' + c.ID + '\',\'' + (c.Season||'') + '\')">✎ Season</button>' : '';
+    const responseDiv = hasResponse ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;max-height:60px;overflow:hidden">' + c.Response.substring(0,150) + (c.Response.length>150?'…':'') + '</div>' : '';
+    const flagReasonDiv = c.Flag_Reason ? '<div style="font-size:11px;color:var(--danger);margin-top:4px">Flag: ' + c.Flag_Reason + '</div>' : '';
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + borderColor + ';border-radius:var(--radius);padding:12px;margin-bottom:8px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">' +
+        '<div>' +
+          '<div style="font-size:12px;font-weight:bold">' + (c.Trade||'—') + ' · ' + (c.Keywords||'—') + season + '</div>' +
+          '<div style="font-size:10px;color:var(--muted);margin-top:2px">Used ' + (c.Use_Count||0) + '× · Last: ' + (c.Last_Used||'never') + '</div>' +
+          flagReasonDiv +
+        '</div>' +
+        '<span style="font-size:10px;color:' + statusColor + ';font-weight:bold;white-space:nowrap;margin-left:8px">' + statusLabel + '</span>' +
+      '</div>' +
+      responseDiv +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        flagBtn +
+        '<button class="btn small secondary" onclick="refreshCache(\'' + c.ID + '\')">↻ Refresh</button>' +
+        seasonBtn +
+      '</div>' +
+    '</div>';
   }).join('');
 }
 
@@ -1025,12 +1029,8 @@ async function refreshCache(id) {
 
 async function editCacheSeason(id, currentSeason) {
   const seasons = ['','Winter (Nov-Mar)','Spring (Mar-May)','Summer (Jun-Aug)','Fall (Sep-Nov)','Year-round'];
-  const choice = prompt(`Set season tag:
-${seasons.map((s,i)=>`${i}: ${s||'(none)'}`).join('
-')}
-
-Current: ${currentSeason||'none'}
-Enter number:`);
+    const seasonList = seasons.map((s,i) => i + ': ' + (s || '(none)')).join('\n');
+  const choice = prompt('Set season tag:\n' + seasonList + '\n\nCurrent: ' + (currentSeason || 'none') + '\nEnter number:');
   if(choice === null) return;
   const season = seasons[parseInt(choice)] ?? '';
   try {
