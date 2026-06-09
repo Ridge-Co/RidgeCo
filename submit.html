@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Submit Maintenance Request</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--radius:8px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:520px;padding:28px;}
+  .logo{color:var(--accent);font-size:1.1rem;letter-spacing:0.15em;font-weight:bold;margin-bottom:4px;}
+  .subtitle{color:var(--muted);font-size:11px;letter-spacing:0.1em;margin-bottom:24px;}
+  .field{margin-bottom:16px;}
+  label{display:block;color:var(--muted);font-size:11px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;}
+  input,select,textarea{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 12px;border-radius:var(--radius);font-family:var(--font);font-size:13px;}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
+  textarea{resize:vertical;min-height:100px;}
+  select option{background:var(--surface2);}
+  .btn{width:100%;background:var(--accent);color:#000;border:none;padding:12px;border-radius:var(--radius);font-family:var(--font);font-size:14px;font-weight:bold;cursor:pointer;letter-spacing:0.05em;margin-top:8px;}
+  .btn:hover{opacity:0.85;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:20px;text-align:center;cursor:pointer;transition:border-color 0.2s;position:relative;}
+  .upload-zone:hover,.upload-zone.dragover{border-color:var(--accent);}
+  .upload-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
+  .upload-zone p{color:var(--muted);font-size:12px;}
+  .upload-zone .icon{font-size:2rem;margin-bottom:8px;}
+  .preview-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:8px;margin-top:10px;}
+  .preview-item{position:relative;aspect-ratio:1;border-radius:4px;overflow:hidden;background:var(--surface2);}
+  .preview-item img,.preview-item video{width:100%;height:100%;object-fit:cover;}
+  .preview-item .remove{position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.7);color:#fff;border:none;border-radius:50%;width:18px;height:18px;font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .error{color:var(--danger);font-size:12px;margin-top:4px;display:none;}
+  .success-screen{display:none;text-align:center;padding:40px 20px;}
+  .success-screen .check{font-size:3rem;margin-bottom:16px;}
+  .success-screen h2{color:var(--accent2);font-size:1.2rem;margin-bottom:8px;}
+  .success-screen p{color:var(--muted);font-size:12px;line-height:1.6;}
+  .loading-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;z-index:100;flex-direction:column;gap:12px;}
+  .loading-overlay.show{display:flex;}
+  .spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.6s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .step{color:var(--muted);font-size:12px;}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">RIDGE CO</div>
+  <div class="subtitle">MAINTENANCE REQUEST</div>
+
+  <div id="form-screen">
+    <div class="field">
+      <label>Your Address</label>
+      <select id="property-select" onchange="loadUnits()">
+        <option value="">Loading properties...</option>
+      </select>
+    </div>
+
+    <div class="field" id="unit-field" style="display:none">
+      <label>Your Unit</label>
+      <select id="unit-select" onchange="loadTenant()">
+        <option value="">Select unit...</option>
+      </select>
+    </div>
+
+    <div class="field" id="tenant-field" style="display:none">
+      <label>Your Name</label>
+      <input type="text" id="tenant-name" placeholder="Confirm your name">
+      <div class="field" style="margin-top:10px">
+        <label>Your Phone</label>
+        <input type="tel" id="tenant-phone" placeholder="Best number to reach you">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Type of Issue</label>
+      <select id="trade-select">
+        <option value="">Select...</option>
+        <option>Plumbing</option>
+        <option>HVAC</option>
+        <option>Electric</option>
+        <option>General</option>
+        <option>Appliance</option>
+        <option>Pest Control</option>
+        <option>Other</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Describe the Issue</label>
+      <textarea id="description" placeholder="Please describe the problem in as much detail as possible. When did it start? Is it getting worse?"></textarea>
+    </div>
+
+    <div class="field">
+      <label>Photos / Videos <span style="color:var(--muted);font-weight:normal;text-transform:none">(strongly recommended)</span></label>
+      <div class="upload-zone" id="upload-zone">
+        <input type="file" id="file-input" accept="image/*,video/*" multiple onchange="handleFiles(this.files)">
+        <div class="icon">📷</div>
+        <p>Tap to add photos or video</p>
+        <p style="font-size:10px;margin-top:4px">Helps us understand the issue faster</p>
+      </div>
+      <div class="preview-grid" id="preview-grid"></div>
+    </div>
+
+    <div class="field">
+      <label>Priority</label>
+      <select id="priority-select">
+        <option value="normal">Normal — schedule when available</option>
+        <option value="urgent">Urgent — needs attention soon</option>
+        <option value="low">Low — no rush</option>
+      </select>
+    </div>
+
+    <div id="form-error" class="error"></div>
+    <button class="btn" id="submit-btn" onclick="submitRequest()">Submit Request</button>
+    <p style="color:var(--muted);font-size:10px;text-align:center;margin-top:12px">Your coordinator will be notified immediately.</p>
+  </div>
+
+  <div class="success-screen" id="success-screen">
+    <div class="check">✅</div>
+    <h2>Request Submitted</h2>
+    <p>Your maintenance request has been received.<br>Your coordinator will be in touch shortly.<br><br>
+    Reference: <span id="wo-ref" style="color:var(--accent)"></span></p>
+    <button class="btn" onclick="resetForm()" style="margin-top:20px;width:auto;padding:10px 24px">Submit Another</button>
+  </div>
+</div>
+
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+  <div class="step" id="loading-step">Submitting...</div>
+</div>
+
+<script>
+const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+const TOKEN = 'mh-secret-2026-brett';
+
+let allProperties = [];
+let allUnits = [];
+let allTenants = [];
+let selectedFiles = [];
+let currentPropId = '';
+let currentUnitId = '';
+let currentTenantId = '';
+
+async function api(path, opts={}) {
+  const res = await fetch(WORKER + path, {
+    ...opts,
+    headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json', ...(opts.headers||{}) }
+  });
+  return res.json();
+}
+
+async function init() {
+  try {
+    const [props, units, tenants] = await Promise.all([
+      api('/properties'), api('/units'), api('/tenants')
+    ]);
+    allProperties = Array.isArray(props) ? props.filter(p=>p.Active!=='FALSE') : [];
+    allUnits = Array.isArray(units) ? units : [];
+    allTenants = Array.isArray(tenants) ? tenants : [];
+
+    const sel = document.getElementById('property-select');
+    sel.innerHTML = '<option value="">Select your address...</option>' +
+      allProperties.map(p=>`<option value="${p.ID}">${p.Address}${p.City?' — '+p.City:''}</option>`).join('');
+  } catch(e) {
+    document.getElementById('property-select').innerHTML = '<option>Error loading — please refresh</option>';
+  }
+}
+
+function loadUnits() {
+  const propId = document.getElementById('property-select').value;
+  currentPropId = propId;
+  currentUnitId = '';
+  currentTenantId = '';
+
+  const units = allUnits.filter(u=>u.Property_ID===propId);
+  const unitField = document.getElementById('unit-field');
+  const tenantField = document.getElementById('tenant-field');
+
+  if (units.length > 0) {
+    const sel = document.getElementById('unit-select');
+    sel.innerHTML = '<option value="">Select your unit...</option>' +
+      units.map(u=>`<option value="${u.ID}">${u.Unit_Label}</option>`).join('');
+    unitField.style.display = 'block';
+    tenantField.style.display = 'none';
+  } else {
+    unitField.style.display = 'none';
+    // Single family — try to find tenant directly
+    loadTenantForProp(propId);
+  }
+}
+
+function loadTenant() {
+  const unitId = document.getElementById('unit-select').value;
+  currentUnitId = unitId;
+  if (!unitId) return;
+  
+  const unit = allUnits.find(u=>u.ID===unitId);
+  const tenant = unit ? allTenants.find(t=>t.ID===unit.Tenant_ID) : null;
+  
+  showTenantField(tenant);
+}
+
+function loadTenantForProp(propId) {
+  const propUnits = allUnits.filter(u=>u.Property_ID===propId);
+  const tenant = propUnits.length===1 ? 
+    allTenants.find(t=>t.ID===propUnits[0].Tenant_ID) : null;
+  showTenantField(tenant);
+}
+
+function showTenantField(tenant) {
+  const tenantField = document.getElementById('tenant-field');
+  tenantField.style.display = 'block';
+  if (tenant) {
+    document.getElementById('tenant-name').value = tenant.First_Name + ' ' + (tenant.Last_Name||'');
+    document.getElementById('tenant-phone').value = tenant.Phone||'';
+    currentTenantId = tenant.ID;
+  } else {
+    document.getElementById('tenant-name').value = '';
+    document.getElementById('tenant-phone').value = '';
+    currentTenantId = '';
+  }
+}
+
+// ── File handling ──
+function handleFiles(files) {
+  Array.from(files).forEach(file => {
+    if(selectedFiles.length >= 6) return; // max 6 files
+    selectedFiles.push(file);
+  });
+  renderPreviews();
+}
+
+function renderPreviews() {
+  const grid = document.getElementById('preview-grid');
+  grid.innerHTML = selectedFiles.map((f,i) => {
+    const url = URL.createObjectURL(f);
+    const isVideo = f.type.startsWith('video/');
+    return `<div class="preview-item">
+      ${isVideo 
+        ? `<video src="${url}" muted></video>` 
+        : `<img src="${url}" alt="preview">`}
+      <button class="remove" onclick="removeFile(${i})">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function removeFile(i) {
+  selectedFiles.splice(i, 1);
+  renderPreviews();
+}
+
+// Drag and drop
+const zone = document.getElementById('upload-zone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+zone.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.classList.remove('dragover');
+  handleFiles(e.dataTransfer.files);
+});
+
+// ── Submit ──
+async function submitRequest() {
+  const propId = document.getElementById('property-select').value;
+  const unitId = currentUnitId || document.getElementById('unit-select')?.value || '';
+  const trade = document.getElementById('trade-select').value;
+  const desc = document.getElementById('description').value.trim();
+  const priority = document.getElementById('priority-select').value;
+  const tenantName = document.getElementById('tenant-name').value.trim();
+  const tenantPhone = document.getElementById('tenant-phone').value.trim();
+  const errEl = document.getElementById('form-error');
+
+  errEl.style.display = 'none';
+
+  if (!propId) { showError('Please select your address.'); return; }
+  if (!trade) { showError('Please select the type of issue.'); return; }
+  if (!desc) { showError('Please describe the issue.'); return; }
+
+  document.getElementById('submit-btn').disabled = true;
+  showLoading('Creating work order...');
+
+  try {
+    // Create work order
+    const wo = await fetch(WORKER + '/workorder', {
+      method: 'POST',
+      headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        property_id: propId,
+        unit_id: unitId,
+        tenant_id: currentTenantId,
+        trade,
+        priority,
+        description: desc,
+        type: 'tenant',
+        created_by: tenantName || 'tenant',
+        notes: tenantPhone ? `Tenant phone: ${tenantPhone}` : '',
+      })
+    }).then(r=>r.json());
+
+    if (!wo.id) throw new Error(wo.error || 'Failed to create work order');
+
+    // Upload files if any
+    if (selectedFiles.length > 0) {
+      for (let i = 0; i < selectedFiles.length; i++) {
+        showLoading(`Uploading photo ${i+1} of ${selectedFiles.length}...`);
+        const fd = new FormData();
+        fd.append('file', selectedFiles[i]);
+        fd.append('wo_id', wo.id);
+        await fetch(WORKER + '/upload-photo', {
+          method: 'POST',
+          headers: { 'X-Auth-Token': TOKEN },
+          body: fd
+        });
+      }
+    }
+
+    hideLoading();
+    document.getElementById('wo-ref').textContent = wo.id;
+    document.getElementById('form-screen').style.display = 'none';
+    document.getElementById('success-screen').style.display = 'block';
+
+  } catch(e) {
+    hideLoading();
+    showError('Error: ' + e.message);
+    document.getElementById('submit-btn').disabled = false;
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById('form-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+function showLoading(msg) {
+  document.getElementById('loading-step').textContent = msg;
+  document.getElementById('loading').classList.add('show');
+}
+function hideLoading() {
+  document.getElementById('loading').classList.remove('show');
+}
+function resetForm() {
+  selectedFiles = [];
+  currentPropId = '';
+  currentUnitId = '';
+  currentTenantId = '';
+  document.getElementById('form-screen').style.display = 'block';
+  document.getElementById('success-screen').style.display = 'none';
+  document.getElementById('submit-btn').disabled = false;
+  document.getElementById('property-select').value = '';
+  document.getElementById('unit-field').style.display = 'none';
+  document.getElementById('tenant-field').style.display = 'none';
+  document.getElementById('description').value = '';
+  document.getElementById('preview-grid').innerHTML = '';
+}
+
+init();
+</script>
+</body>
+</html>
