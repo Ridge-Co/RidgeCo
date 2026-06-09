@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Owner Setup</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--radius:6px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:800px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.15em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn.success{background:var(--accent2);color:#000;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  input{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+  .row label{color:var(--muted);font-size:11px;min-width:100px;}
+  .row input{flex:1;}
+  #log{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:250px;overflow-y:auto;font-size:11px;margin-top:10px;}
+  .ok{color:var(--accent2);}
+  .err{color:var(--danger);}
+  .info{color:var(--muted);}
+  .progress-bar{background:var(--surface2);border-radius:20px;height:6px;margin:8px 0;overflow:hidden;}
+  .progress-fill{background:var(--accent);height:100%;transition:width 0.3s;border-radius:20px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border);}
+  td{padding:7px 8px;border-bottom:1px solid var(--border);}
+  .pin-badge{background:#1a3320;color:var(--accent2);padding:2px 6px;border-radius:10px;font-size:11px;font-weight:bold;letter-spacing:0.1em;}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — OWNER SETUP</h1>
+<p class="sub">Adds owners to Sheet and links properties. Run once.</p>
+
+<div class="section">
+  <div class="section-title">CONNECTION</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
+  <div class="row"><label>Access Token</label><input id="auth-token" type="password" value="mh-secret-2026-brett" style="flex:1"></div>
+  <button class="btn" onclick="connect()">Connect</button>
+  <span id="conn-status" style="margin-left:10px;font-size:11px;color:var(--muted)"></span>
+</div>
+
+<div class="section">
+  <div class="section-title">OWNERS TO ADD</div>
+  <table>
+    <thead><tr><th>Name</th><th>Company</th><th>Phone</th><th>PIN</th><th>Properties</th></tr></thead>
+    <tbody>
+      <tr><td>Amanda</td><td>Phoenix Estates</td><td>4106158842</td><td><span class="pin-badge">8842</span></td><td>43 Amanda Ireland properties</td></tr>
+      <tr><td>Mark</td><td>Phoenix Estates</td><td>4438864174</td><td><span class="pin-badge">4174</span></td><td>43 Amanda Ireland properties (shared)</td></tr>
+      <tr><td>Jennifer Goldszmidt</td><td>Goldszmidt Properties</td><td>4102745614</td><td><span class="pin-badge">5614</span></td><td>11 ClickUp properties</td></tr>
+      <tr><td>Adrian Goldszmidt</td><td>Goldszmidt Properties</td><td>4104995237</td><td><span class="pin-badge">5237</span></td><td>11 ClickUp properties (shared)</td></tr>
+      <tr><td>Heather</td><td>(none)</td><td>4438454983</td><td><span class="pin-badge">4983</span></td><td>1125 St Paul St</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:12px;display:flex;gap:8px">
+    <button class="btn success" onclick="runSetup()">Add Owners + Link Properties</button>
+  </div>
+  <div class="progress-bar" id="progress-bar" style="display:none"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+  <div id="log"><div class="info">Connect first, then run setup.</div></div>
+</div>
+
+<script>
+const WORKER_URL = () => document.getElementById('worker-url').value.trim();
+const TOKEN = () => document.getElementById('auth-token').value.trim();
+
+async function apiGet(path){
+  const r=await fetch(WORKER_URL()+path,{headers:{'X-Auth-Token':TOKEN(),'Content-Type':'application/json'}});
+  return r.json();
+}
+async function apiPost(path,body){
+  const r=await fetch(WORKER_URL()+path,{method:'POST',headers:{'X-Auth-Token':TOKEN(),'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return r.json();
+}
+
+let connected=false;
+let sheetProperties=[];
+
+async function connect(){
+  document.getElementById('conn-status').textContent='Connecting...';
+  try{
+    sheetProperties=await apiGet('/properties');
+    if(!Array.isArray(sheetProperties)) throw new Error('Bad response');
+    connected=true;
+    document.getElementById('conn-status').textContent=`✅ Connected — ${sheetProperties.length} properties loaded`;
+  }catch(e){
+    document.getElementById('conn-status').textContent='❌ '+e.message;
+  }
+}
+
+// Phoenix properties: IDs 14-56 (Amanda Ireland email properties)
+// Goldszmidt properties: IDs 2-13 (ClickUp properties, minus 1125 St Paul)
+// Heather: ID 57 (1125 St Paul St)
+
+async function runSetup(){
+  if(!connected){alert('Connect first');return;}
+  const logEl=document.getElementById('log');
+  const bar=document.getElementById('progress-bar');
+  const fill=document.getElementById('progress-fill');
+  logEl.innerHTML='';
+  bar.style.display='block';
+
+  const owners = [
+    {First_Name:'Amanda',Last_Name:'',Company:'Phoenix Estates',Phone:'4106158842',PIN:'8842',Active:'TRUE'},
+    {First_Name:'Mark',Last_Name:'',Company:'Phoenix Estates',Phone:'4438864174',PIN:'4174',Active:'TRUE'},
+    {First_Name:'Jennifer',Last_Name:'Goldszmidt',Company:'Goldszmidt Properties',Phone:'4102745614',PIN:'5614',Active:'TRUE'},
+    {First_Name:'Adrian',Last_Name:'Goldszmidt',Company:'Goldszmidt Properties',Phone:'4104995237',PIN:'5237',Active:'TRUE'},
+    {First_Name:'Heather',Last_Name:'',Company:'',Phone:'4438454983',PIN:'4983',Active:'TRUE'},
+  ];
+
+  // Step 1: Add owners
+  const ownerIds = {};
+  logEl.innerHTML+='<div class="info">Adding owners...</div>';
+  
+  for(let i=0;i<owners.length;i++){
+    fill.style.width=Math.round((i/(owners.length+10))*100)+'%';
+    try{
+      const res=await apiPost('/owner/add',owners[i]);
+      if(res.id){
+        ownerIds[owners[i].First_Name+'_'+owners[i].Last_Name]=res.id;
+        logEl.innerHTML+=`<div class="ok">✅ Owner: ${owners[i].First_Name} ${owners[i].Last_Name} → ID ${res.id} PIN: ${owners[i].PIN}</div>`;
+      }else{
+        logEl.innerHTML+=`<div class="err">❌ ${owners[i].First_Name}: ${JSON.stringify(res)}</div>`;
+      }
+    }catch(e){logEl.innerHTML+=`<div class="err">❌ ${owners[i].First_Name}: ${e.message}</div>`;}
+    await new Promise(r=>setTimeout(r,300));
+  }
+
+  // Get the actual IDs assigned
+  const freshOwners = await apiGet('/owners');
+  const amanda = freshOwners.find(o=>o.First_Name==='Amanda'&&o.Company==='Phoenix Estates');
+  const mark = freshOwners.find(o=>o.First_Name==='Mark'&&o.Company==='Phoenix Estates');
+  const jennifer = freshOwners.find(o=>o.First_Name==='Jennifer');
+  const adrian = freshOwners.find(o=>o.First_Name==='Adrian');
+  const heather = freshOwners.find(o=>o.First_Name==='Heather');
+
+  logEl.innerHTML+=`<div class="info">Owner IDs: Amanda=${amanda?.ID} Mark=${mark?.ID} Jennifer=${jennifer?.ID} Adrian=${adrian?.ID} Heather=${heather?.ID}</div>`;
+
+  // Step 2: Link properties to owners
+  logEl.innerHTML+='<div class="info">Linking properties to owners...</div>';
+
+  // Phoenix properties: IDs 14-56 (the Amanda Ireland ones)
+  const phoenixProps = sheetProperties.filter(p=>parseInt(p.ID)>=14&&parseInt(p.ID)<=56);
+  // Goldszmidt properties: IDs 2-13 (ClickUp multis, but not 928 N Calvert which is already 11)
+  const goldszmidtProps = sheetProperties.filter(p=>parseInt(p.ID)>=2&&parseInt(p.ID)<=13);
+  // Heather: 1125 St Paul St
+  const heatherProps = sheetProperties.filter(p=>p.Address&&p.Address.toLowerCase().includes('1125'));
+
+  logEl.innerHTML+=`<div class="info">Phoenix: ${phoenixProps.length} props | Goldszmidt: ${goldszmidtProps.length} props | Heather: ${heatherProps.length} props</div>`;
+
+  const phoenixId = amanda?.ID||'1';
+  const goldszmidtId = jennifer?.ID||'3';
+  const heatherId = heather?.ID||'5';
+
+  let total=0;
+  const allUpdates=[
+    ...phoenixProps.map(p=>({id:p.ID,owner_id:phoenixId})),
+    ...goldszmidtProps.map(p=>({id:p.ID,owner_id:goldszmidtId})),
+    ...heatherProps.map(p=>({id:p.ID,owner_id:heatherId})),
+  ];
+
+  for(let i=0;i<allUpdates.length;i++){
+    const u=allUpdates[i];
+    fill.style.width=Math.round(((owners.length+i)/(owners.length+allUpdates.length))*100)+'%';
+    try{
+      await apiPost('/property/update',{id:u.id,fields:{Owner_ID:u.owner_id}});
+      total++;
+    }catch(e){logEl.innerHTML+=`<div class="err">❌ Prop ${u.id}: ${e.message}</div>`;}
+    if(i%5===0) logEl.innerHTML+=`<div class="info">Linked ${i+1}/${allUpdates.length} properties...</div>`;
+    await new Promise(r=>setTimeout(r,200));
+    logEl.scrollTop=logEl.scrollHeight;
+  }
+
+  fill.style.width='100%';
+  logEl.innerHTML+=`<div class="ok" style="font-weight:bold;margin-top:6px">✅ Done! ${owners.length} owners added, ${total} properties linked.</div>`;
+  logEl.innerHTML+=`<div class="info" style="margin-top:6px">PINs: Amanda=8842 Mark=4174 Jennifer=5614 Adrian=5237 Heather=4983</div>`;
+  logEl.scrollTop=logEl.scrollHeight;
+}
+</script>
+</body>
+</html>
