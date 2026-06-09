@@ -20,16 +20,13 @@
   .btn:hover{opacity:0.85;}
   .btn:disabled{opacity:0.4;cursor:not-allowed;}
   .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
-  /* PIN screen */
   .pin-screen{text-align:center;padding:20px 0;}
   .pin-screen p{color:var(--muted);font-size:12px;margin-bottom:20px;line-height:1.6;}
-  .pin-input{font-size:2rem;letter-spacing:0.5em;text-align:center;max-width:160px;margin:0 auto 16px;display:block;padding:12px;}
+  .pin-input-box{font-size:2rem;letter-spacing:0.5em;text-align:center;max-width:180px;margin:0 auto 16px;display:block;padding:12px;}
   .pin-error{color:var(--danger);font-size:12px;text-align:center;margin-bottom:12px;display:none;}
-  /* Tenant confirm */
   .tenant-confirm{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:20px;}
   .tenant-confirm .name{font-size:1rem;color:var(--accent);margin-bottom:4px;}
   .tenant-confirm .addr{font-size:12px;color:var(--muted);}
-  /* Upload */
   .upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:16px;text-align:center;cursor:pointer;position:relative;transition:border-color 0.2s;}
   .upload-zone:hover,.upload-zone.dragover{border-color:var(--accent);}
   .upload-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
@@ -54,23 +51,20 @@
   <div class="logo">RIDGE CO</div>
   <div class="subtitle">MAINTENANCE REQUEST</div>
 
-  <!-- PIN SCREEN -->
   <div id="pin-screen">
     <div class="pin-screen">
-      <p>Enter your 4-digit access PIN.<br>This is the last 5 digits of your phone number<br>unless you've been given a different one.</p>
-      <input type="tel" class="pin-input" id="pin-input" maxlength="5" placeholder="····" inputmode="numeric" pattern="[0-9]*">
-      <div class="pin-error" id="pin-error">PIN not recognized. Please contact your coordinator.</div>
+      <p>Enter your 5-digit access PIN.<br>This is the last 5 digits of your phone number<br>unless you have been given a different one.</p>
+      <input type="tel" class="pin-input-box" id="pin-input" maxlength="5" placeholder="·····" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+      <div class="pin-error" id="pin-error"></div>
       <button class="btn" onclick="lookupPin()">Continue</button>
     </div>
   </div>
 
-  <!-- REQUEST FORM -->
   <div id="form-screen" style="display:none">
     <div class="tenant-confirm" id="tenant-confirm">
       <div class="name" id="tc-name"></div>
       <div class="addr" id="tc-addr"></div>
     </div>
-
     <div class="field">
       <label>Type of Issue</label>
       <select id="trade-select">
@@ -80,22 +74,19 @@
         <option>Pest Control</option><option>Other</option>
       </select>
     </div>
-
     <div class="field">
       <label>Describe the Issue</label>
-      <textarea id="description" placeholder="What's happening? When did it start? Is it getting worse?"></textarea>
+      <textarea id="description" placeholder="What is happening? When did it start? Is it getting worse?"></textarea>
     </div>
-
     <div class="field">
-      <label>Photos / Video <span style="color:var(--muted);font-weight:normal;text-transform:none">(strongly recommended)</span></label>
+      <label>Photos / Video (strongly recommended)</label>
       <div class="upload-zone" id="upload-zone">
         <input type="file" id="file-input" accept="image/*,video/*" multiple onchange="handleFiles(this.files)">
-        <p>📷 Tap to add photos or video</p>
+        <p>Tap to add photos or video</p>
         <p style="font-size:10px;margin-top:3px">Helps us fix it faster</p>
       </div>
       <div class="preview-grid" id="preview-grid"></div>
     </div>
-
     <div class="field">
       <label>How urgent is this?</label>
       <select id="priority-select">
@@ -104,45 +95,41 @@
         <option value="low">Low — no rush</option>
       </select>
     </div>
-
     <div class="form-error" id="form-error"></div>
     <button class="btn" id="submit-btn" onclick="submitRequest()">Submit Request</button>
     <button class="btn secondary" onclick="resetToPin()" style="margin-top:8px">Not you? Go back</button>
     <p style="color:var(--muted);font-size:10px;text-align:center;margin-top:12px">Your coordinator is notified immediately.</p>
   </div>
 
-  <!-- SUCCESS -->
   <div class="success-screen" id="success-screen">
     <div style="font-size:3rem;margin-bottom:12px">✅</div>
     <h2>Request Submitted</h2>
-    <p>Your coordinator has been notified.<br>Reference: <span id="wo-ref" style="color:var(--accent)"></span><br><br>
-    You'll hear from us soon.</p>
+    <p>Your coordinator has been notified.<br>Reference: <span id="wo-ref" style="color:var(--accent)"></span><br><br>You will hear from us soon.</p>
     <button class="btn" onclick="submitAnother()" style="margin-top:20px;width:auto;padding:10px 24px">Submit Another Issue</button>
   </div>
 </div>
 
 <div class="loading-overlay" id="loading">
   <div class="spinner"></div>
-  <div class="step" id="loading-step">Looking up PIN...</div>
+  <div class="step" id="loading-step">Please wait...</div>
 </div>
 
 <script>
-const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-const TOKEN = 'mh-secret-2026-brett';
-let tenantData = null;
-let selectedFiles = [];
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var TOKEN = 'mh-secret-2026-brett';
+var tenantData = null;
+var selectedFiles = [];
 
-// Enter key on PIN field
-document.getElementById('pin-input').addEventListener('keydown', e => {
+document.getElementById('pin-input').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') lookupPin();
 });
 
-async function lookupPin() {
-  const pin = document.getElementById('pin-input').value.trim();
-  const errEl = document.getElementById('pin-error');
+function lookupPin() {
+  var pin = document.getElementById('pin-input').value.trim();
+  var errEl = document.getElementById('pin-error');
   errEl.style.display = 'none';
 
-  if (pin.length !== 4) {
+  if (pin.length !== 5) {
     errEl.textContent = 'Please enter your 5-digit PIN.';
     errEl.style.display = 'block';
     return;
@@ -150,63 +137,61 @@ async function lookupPin() {
 
   showLoading('Looking up PIN...');
 
-  try {
-    const res = await fetch(`${WORKER}/tenant-by-pin?pin=${pin}`, {
-      headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' }
-    }).then(r => r.json());
-
+  fetch(WORKER + '/tenant-by-pin?pin=' + pin, {
+    headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' }
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(res) {
     hideLoading();
-
     if (res.error) {
       errEl.textContent = 'PIN not recognized. Please contact your coordinator.';
       errEl.style.display = 'block';
       return;
     }
-
     tenantData = res;
-
-    // Show tenant confirm
     document.getElementById('tc-name').textContent = res.tenant_name;
     document.getElementById('tc-addr').textContent =
-      res.property_address + (res.unit_label ? ' · ' + res.unit_label : '') +
+      res.property_address +
+      (res.unit_label ? ' · ' + res.unit_label : '') +
       (res.property_city ? ', ' + res.property_city : '');
-
     document.getElementById('pin-screen').style.display = 'none';
     document.getElementById('form-screen').style.display = 'block';
-
-  } catch(e) {
+  })
+  .catch(function(e) {
     hideLoading();
     errEl.textContent = 'Connection error. Please try again.';
     errEl.style.display = 'block';
-  }
+  });
 }
 
 function handleFiles(files) {
-  Array.from(files).forEach(f => { if (selectedFiles.length < 6) selectedFiles.push(f); });
+  Array.from(files).forEach(function(f) { if (selectedFiles.length < 6) selectedFiles.push(f); });
   renderPreviews();
 }
+
 function renderPreviews() {
-  document.getElementById('preview-grid').innerHTML = selectedFiles.map((f, i) => {
-    const url = URL.createObjectURL(f);
-    const isVideo = f.type.startsWith('video/');
-    return `<div class="preview-item">
-      ${isVideo ? `<video src="${url}" muted></video>` : `<img src="${url}" alt="">`}
-      <button class="remove" onclick="removeFile(${i})">✕</button>
-    </div>`;
+  document.getElementById('preview-grid').innerHTML = selectedFiles.map(function(f, i) {
+    var url = URL.createObjectURL(f);
+    var isVideo = f.type.startsWith('video/');
+    return '<div class="preview-item">' +
+      (isVideo ? '<video src="' + url + '" muted></video>' : '<img src="' + url + '" alt="">') +
+      '<button class="remove" onclick="removeFile(' + i + ')">&#x2715;</button>' +
+      '</div>';
   }).join('');
 }
+
 function removeFile(i) { selectedFiles.splice(i, 1); renderPreviews(); }
 
-const zone = document.getElementById('upload-zone');
-zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
-zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
+var zone = document.getElementById('upload-zone');
+zone.addEventListener('dragover', function(e) { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', function() { zone.classList.remove('dragover'); });
+zone.addEventListener('drop', function(e) { e.preventDefault(); zone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
 
-async function submitRequest() {
-  const trade = document.getElementById('trade-select').value;
-  const desc = document.getElementById('description').value.trim();
-  const priority = document.getElementById('priority-select').value;
-  const errEl = document.getElementById('form-error');
+function submitRequest() {
+  var trade = document.getElementById('trade-select').value;
+  var desc = document.getElementById('description').value.trim();
+  var priority = document.getElementById('priority-select').value;
+  var errEl = document.getElementById('form-error');
   errEl.style.display = 'none';
 
   if (!trade) { errEl.textContent = 'Please select the type of issue.'; errEl.style.display = 'block'; return; }
@@ -215,48 +200,51 @@ async function submitRequest() {
   document.getElementById('submit-btn').disabled = true;
   showLoading('Submitting request...');
 
-  try {
-    const wo = await fetch(WORKER + '/workorder', {
-      method: 'POST',
-      headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        property_id: tenantData.property_id,
-        unit_id: tenantData.unit_id,
-        tenant_id: tenantData.tenant_id,
-        trade, priority, description: desc,
-        type: 'tenant',
-        created_by: tenantData.tenant_name,
-        notes: '',
-      })
-    }).then(r => r.json());
-
+  fetch(WORKER + '/workorder', {
+    method: 'POST',
+    headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      property_id: tenantData.property_id,
+      unit_id: tenantData.unit_id,
+      tenant_id: tenantData.tenant_id,
+      trade: trade,
+      priority: priority,
+      description: desc,
+      type: 'tenant',
+      created_by: tenantData.tenant_name,
+      notes: ''
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(wo) {
     if (!wo.id) throw new Error(wo.error || 'Failed to create work order');
 
-    if (selectedFiles.length > 0) {
-      for (let i = 0; i < selectedFiles.length; i++) {
-        showLoading(`Uploading photo ${i + 1} of ${selectedFiles.length}...`);
-        const fd = new FormData();
-        fd.append('file', selectedFiles[i]);
-        fd.append('wo_id', wo.id);
-        await fetch(WORKER + '/upload-photo', {
-          method: 'POST',
-          headers: { 'X-Auth-Token': TOKEN },
-          body: fd
-        });
+    var uploadNext = function(i) {
+      if (i >= selectedFiles.length) {
+        hideLoading();
+        document.getElementById('wo-ref').textContent = wo.id;
+        document.getElementById('form-screen').style.display = 'none';
+        document.getElementById('success-screen').style.display = 'block';
+        return;
       }
-    }
-
-    hideLoading();
-    document.getElementById('wo-ref').textContent = wo.id;
-    document.getElementById('form-screen').style.display = 'none';
-    document.getElementById('success-screen').style.display = 'block';
-
-  } catch(e) {
+      showLoading('Uploading photo ' + (i + 1) + ' of ' + selectedFiles.length + '...');
+      var fd = new FormData();
+      fd.append('file', selectedFiles[i]);
+      fd.append('wo_id', wo.id);
+      fetch(WORKER + '/upload-photo', {
+        method: 'POST',
+        headers: { 'X-Auth-Token': TOKEN },
+        body: fd
+      }).then(function() { uploadNext(i + 1); });
+    };
+    uploadNext(0);
+  })
+  .catch(function(e) {
     hideLoading();
     errEl.textContent = 'Error: ' + e.message;
     errEl.style.display = 'block';
     document.getElementById('submit-btn').disabled = false;
-  }
+  });
 }
 
 function resetToPin() {
@@ -278,8 +266,13 @@ function submitAnother() {
   document.getElementById('form-screen').style.display = 'block';
 }
 
-function showLoading(msg) { document.getElementById('loading-step').textContent = msg; document.getElementById('loading').classList.add('show'); }
-function hideLoading() { document.getElementById('loading').classList.remove('show'); }
+function showLoading(msg) {
+  document.getElementById('loading-step').textContent = msg;
+  document.getElementById('loading').classList.add('show');
+}
+function hideLoading() {
+  document.getElementById('loading').classList.remove('show');
+}
 </script>
 </body>
 </html>
