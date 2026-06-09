@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ridge Co — Building Info</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:8px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;padding:16px;max-width:600px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1rem;letter-spacing:0.15em;margin-bottom:2px;}
+  .sub{color:var(--muted);font-size:11px;margin-bottom:16px;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px;}
+  .card-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:10px;}
+  label{display:block;color:var(--muted);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px;}
+  input,select,textarea{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:var(--radius);font-family:var(--font);font-size:13px;margin-bottom:4px;}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
+  textarea{resize:vertical;min-height:60px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:10px 16px;border-radius:var(--radius);font-family:var(--font);font-size:13px;font-weight:bold;cursor:pointer;width:100%;margin-top:4px;}
+  .btn:hover{opacity:0.85;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  .btn.small{padding:6px 10px;font-size:11px;width:auto;}
+  .btn.success{background:var(--accent2);color:#000;}
+
+  /* Score bar */
+  .score-bar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+  .score-item{text-align:center;flex:1;min-width:80px;}
+  .score-circle{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;margin:0 auto 4px;border:3px solid;}
+  .score-label{font-size:10px;color:var(--muted);letter-spacing:0.05em;}
+  .score-full{border-color:var(--accent2);color:var(--accent2);background:rgba(74,222,128,0.1);}
+  .score-partial{border-color:var(--warn);color:var(--warn);background:rgba(251,191,36,0.1);}
+  .score-empty{border-color:var(--danger);color:var(--danger);background:rgba(248,113,113,0.1);}
+
+  /* Field rows */
+  .field-row{margin-bottom:12px;position:relative;}
+  .field-indicator{width:8px;height:8px;border-radius:50%;position:absolute;right:10px;top:50%;transform:translateY(-50%);pointer-events:none;}
+  .field-filled .field-indicator{background:var(--accent2);}
+  .field-missing .field-indicator{background:var(--danger);}
+  .field-row.field-missing input,.field-row.field-missing select,.field-row.field-missing textarea{border-color:rgba(248,113,113,0.4);}
+  .field-row.field-filled input,.field-row.field-filled select,.field-row.field-filled textarea{border-color:rgba(74,222,128,0.3);}
+
+  /* Section */
+  .section{margin-bottom:4px;}
+  .section-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;user-select:none;}
+  .section-header:hover{border-color:var(--accent);}
+  .section-title-row{display:flex;align-items:center;gap:8px;}
+  .section-name{font-size:12px;letter-spacing:0.08em;}
+  .section-score{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:bold;}
+  .section-chevron{color:var(--muted);transition:transform 0.2s;font-size:12px;}
+  .section-body{display:none;padding:12px 14px;border:1px solid var(--border);border-top:none;border-radius:0 0 var(--radius) var(--radius);background:var(--surface);margin-bottom:8px;}
+  .section-body.open{display:block;}
+
+  /* Toggle */
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+  .toggle-label{font-size:11px;color:var(--muted);}
+  .toggle-switch{display:flex;gap:4px;}
+  .toggle-btn{padding:4px 10px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--muted);font-family:var(--font);}
+  .toggle-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
+
+  /* Bulk apply */
+  .bulk-panel{background:var(--surface2);border:1px solid var(--warn);border-radius:var(--radius);padding:12px;margin-top:10px;display:none;}
+  .bulk-panel.open{display:block;}
+  .bulk-title{color:var(--warn);font-size:11px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:8px;}
+  .unit-checkboxes{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+  .unit-check{display:flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px;}
+  .unit-check input{width:auto;margin:0;padding:0;}
+  .unit-check.checked{border-color:var(--accent2);color:var(--accent2);}
+
+  /* Search */
+  .search-select{position:relative;margin-bottom:10px;}
+  .search-select input{margin-bottom:0;}
+  .search-dropdown{display:none;position:absolute;top:100%;left:0;right:0;background:var(--surface2);border:1px solid var(--accent);border-radius:0 0 var(--radius) var(--radius);max-height:180px;overflow-y:auto;z-index:50;}
+  .search-dropdown.open{display:block;}
+  .search-opt{padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);}
+  .search-opt:hover{background:var(--surface);color:var(--accent);}
+  .search-opt .opt-sub{font-size:10px;color:var(--muted);margin-top:2px;}
+
+  .loading{color:var(--muted);font-size:12px;text-align:center;padding:20px;}
+  .toast-msg{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--border);padding:10px 16px;border-radius:var(--radius);font-size:12px;display:none;z-index:999;white-space:nowrap;}
+  .toast-msg.success{border-left:3px solid var(--accent2);}
+  .toast-msg.error{border-left:3px solid var(--danger);}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — BUILDING INFO</h1>
+<div class="sub">On-site data entry. Missing fields highlighted in red.</div>
+
+<!-- Step 1: Select property -->
+<div class="card" id="select-card">
+  <div class="card-title">SELECT PROPERTY</div>
+  <div class="search-select">
+    <input type="text" id="prop-search" placeholder="Type to search properties..." oninput="filterProps()" onfocus="openPropDrop()" autocomplete="off">
+    <input type="hidden" id="prop-id">
+    <div class="search-dropdown" id="prop-dropdown"></div>
+  </div>
+  <div id="unit-select-area" style="display:none">
+    <label>Level</label>
+    <select id="level-select" onchange="levelChanged()">
+      <option value="property">Property-level (applies to whole building)</option>
+    </select>
+  </div>
+  <button class="btn" onclick="loadInfo()" style="margin-top:8px">Load Info</button>
+</div>
+
+<!-- Score + toggle -->
+<div id="score-area" style="display:none">
+  <div class="score-bar" id="score-bar"></div>
+  <div class="toggle-row">
+    <span class="toggle-label">SHOW FIELDS</span>
+    <div class="toggle-switch">
+      <button class="toggle-btn active" id="toggle-missing" onclick="setToggle('missing')">Missing Only</button>
+      <button class="toggle-btn" id="toggle-all" onclick="setToggle('all')">All Fields</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sections -->
+<div id="sections-area"></div>
+
+<!-- Bulk apply panel -->
+<div class="bulk-panel" id="bulk-panel">
+  <div class="bulk-title">⚡ BULK APPLY TO UNITS</div>
+  <div id="unit-checkboxes" class="unit-checkboxes"></div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <button class="btn small success" onclick="selectAllUnits()">Select All</button>
+    <button class="btn small secondary" onclick="deselectAllUnits()">None</button>
+  </div>
+</div>
+
+<!-- Save -->
+<div id="save-area" style="display:none;margin-top:12px">
+  <button class="btn" id="show-bulk-btn" onclick="toggleBulkPanel()" style="margin-bottom:8px;background:var(--surface2);color:var(--warn);border:1px solid var(--warn)">⚡ Bulk Apply to Other Units</button>
+  <button class="btn success" onclick="saveInfo()">Save Changes</button>
+</div>
+
+<div class="toast-msg" id="toast"></div>
+
+<script>
+const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+const TOKEN = 'mh-secret-2026-brett';
+
+let allProperties = [];
+let allUnits = [];
+let currentProp = null;
+let currentUnit = null;
+let currentLevel = 'property';
+let showMode = 'missing';
+let formData = {};
+
+// Field definitions by section
+const PROP_SECTIONS = [
+  { key: 'access', label: 'Access & Entry', fields: [
+    { key: 'Lockbox_Code', label: 'Lockbox Code', type: 'text' },
+    { key: 'Lock_Code', label: 'Door Lock Code', type: 'text' },
+    { key: 'Access_Notes', label: 'Access Notes', type: 'textarea' },
+    { key: 'Parking_Notes', label: 'Parking Notes', type: 'textarea' },
+  ]},
+  { key: 'heating', label: 'Heating & Cooling', fields: [
+    { key: 'Heating_Type', label: 'Heating Type', type: 'select', options: ['','Gas Boiler','Gas Furnace','Electric Baseboard','Heat Pump','Steam Radiator','Other'] },
+    { key: 'Thermostat_Access', label: 'Thermostat Access', type: 'select', options: ['','Tenant','Coordinator Only','Common Area'] },
+    { key: 'Furnace_Access', label: 'Furnace/Boiler Access', type: 'select', options: ['','Tenant','Coordinator Only','No Tenant Access'] },
+  ]},
+  { key: 'water', label: 'Water & Plumbing', fields: [
+    { key: 'Water_Shutoff', label: 'Main Water Shutoff Location', type: 'text' },
+    { key: 'Gas_Shutoff', label: 'Gas Shutoff Location', type: 'text' },
+    { key: 'HW_Type', label: 'Hot Water Type', type: 'select', options: ['','Gas Boiler Shared','Gas HWH Unit','Electric HWH Unit','Tankless','Other'] },
+    { key: 'HW_Shared', label: 'Hot Water Shared', type: 'select', options: ['','TRUE','FALSE'] },
+  ]},
+  { key: 'electric', label: 'Electrical', fields: [
+    { key: 'Breaker_Location', label: 'Main Breaker Location', type: 'text' },
+    { key: 'HVAC_Filter_Size', label: 'HVAC Filter Size', type: 'text' },
+  ]},
+  { key: 'notes', label: 'Known Issues', fields: [
+    { key: 'Known_Issues', label: 'Property-Level Known Issues', type: 'textarea' },
+  ]},
+];
+
+const UNIT_SECTIONS = [
+  { key: 'access', label: 'Unit Access', fields: [
+    { key: 'Lock_Code', label: 'Unit Lock Code', type: 'text' },
+    { key: 'Notes', label: 'Unit Access Notes', type: 'textarea' },
+  ]},
+  { key: 'hvac', label: 'Heating & Cooling', fields: [
+    { key: 'Thermostat_Location', label: 'Thermostat Location', type: 'text', placeholder: 'e.g. In hallway / In Apt 3 / On east wall' },
+    { key: 'AC_Type', label: 'AC Type', type: 'select', options: ['','Central','Window Unit','Mini Split','None'] },
+  ]},
+  { key: 'water', label: 'Water', fields: [
+    { key: 'HW_Access', label: 'Hot Water Access', type: 'select', options: ['','Tenant','Coordinator Only','Shared Basement'] },
+  ]},
+  { key: 'electric', label: 'Electrical', fields: [
+    { key: 'Breaker_Notes', label: 'Breaker Notes', type: 'text', placeholder: 'e.g. Kitchen breaker in hallway panel slot 4' },
+  ]},
+  { key: 'notes', label: 'Known Issues', fields: [
+    { key: 'Known_Issues', label: 'Unit-Level Known Issues', type: 'textarea' },
+  ]},
+];
+
+async function init() {
+  try {
+    const [props, units] = await Promise.all([
+      fetch(WORKER+'/properties',{headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'}}).then(r=>r.json()),
+      fetch(WORKER+'/units',{headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'}}).then(r=>r.json()),
+    ]);
+    allProperties = Array.isArray(props) ? props.filter(p=>p.Active!=='FALSE') : [];
+    allUnits = Array.isArray(units) ? units : [];
+    buildPropDropdown(allProperties);
+  } catch(e) { showToast('Connection error','error'); }
+}
+
+function buildPropDropdown(props) {
+  const dd = document.getElementById('prop-dropdown');
+  dd.innerHTML = props.map(p => `<div class="search-opt" onclick="selectProp('${p.ID}')">
+    <div>${p.Address}</div>
+    <div class="opt-sub">${p.City||''} · ${p.Type||''}</div>
+  </div>`).join('') || '<div class="search-opt" style="color:var(--muted)">No properties found</div>';
+}
+
+function filterProps() {
+  const q = document.getElementById('prop-search').value.toLowerCase();
+  const filtered = q ? allProperties.filter(p=>(p.Address||'').toLowerCase().includes(q)) : allProperties;
+  buildPropDropdown(filtered);
+  openPropDrop();
+  document.getElementById('prop-id').value='';
+}
+
+function openPropDrop() { document.getElementById('prop-dropdown').classList.add('open'); }
+
+function selectProp(id) {
+  const p = allProperties.find(x=>x.ID===id);
+  if(!p) return;
+  currentProp = p;
+  document.getElementById('prop-id').value = id;
+  document.getElementById('prop-search').value = p.Address;
+  document.getElementById('prop-dropdown').classList.remove('open');
+
+  // Build level selector
+  const units = allUnits.filter(u=>u.Property_ID===id);
+  const sel = document.getElementById('level-select');
+  sel.innerHTML = '<option value="property">Property-level (whole building)</option>' +
+    units.map(u=>`<option value="${u.ID}">Unit: ${u.Unit_Label}</option>`).join('');
+  document.getElementById('unit-select-area').style.display = 'block';
+}
+
+function levelChanged() {
+  const val = document.getElementById('level-select').value;
+  currentLevel = val === 'property' ? 'property' : 'unit';
+  currentUnit = val === 'property' ? null : allUnits.find(u=>u.ID===val);
+}
+
+document.addEventListener('click', e => {
+  if(!e.target.closest('.search-select')) document.getElementById('prop-dropdown').classList.remove('open');
+});
+
+async function loadInfo() {
+  const propId = document.getElementById('prop-id').value;
+  if(!propId){showToast('Select a property first','error');return;}
+  levelChanged();
+
+  // Build form from current data
+  formData = currentLevel === 'property' ? {...currentProp} : {...currentUnit};
+
+  // Show score + sections
+  document.getElementById('score-area').style.display='block';
+  document.getElementById('save-area').style.display='block';
+  
+  // Show bulk panel button only for units
+  document.getElementById('show-bulk-btn').style.display = currentLevel==='unit' ? 'block' : 'none';
+
+  renderSections();
+  renderScore();
+  buildBulkUnits();
+}
+
+function getSections() { return currentLevel === 'property' ? PROP_SECTIONS : UNIT_SECTIONS; }
+
+function renderSections() {
+  const sections = getSections();
+  const area = document.getElementById('sections-area');
+  area.innerHTML = sections.map(sec => {
+    const fields = sec.fields;
+    const filled = fields.filter(f=>formData[f.key]&&formData[f.key]!=='').length;
+    const total = fields.length;
+    const allFilled = filled===total;
+    const noneFilled = filled===0;
+    const scoreClass = allFilled?'score-full':noneFilled?'score-empty':'score-partial';
+    const scoreColor = allFilled?'var(--accent2)':noneFilled?'var(--danger)':'var(--warn)';
+    const hasAnyMissing = fields.some(f=>!formData[f.key]||formData[f.key]==='');
+    const shouldShow = showMode==='all' || hasAnyMissing;
+    if(!shouldShow) return '';
+
+    return `<div class="section">
+      <div class="section-header" onclick="toggleSection('sec-${sec.key}',this)">
+        <div class="section-title-row">
+          <span class="section-name">${sec.label.toUpperCase()}</span>
+          <span class="section-score ${scoreClass}" style="background:rgba(0,0,0,0.3);color:${scoreColor};border:1px solid ${scoreColor}">${filled}/${total}</span>
+        </div>
+        <span class="section-chevron" id="chev-${sec.key}">▼</span>
+      </div>
+      <div class="section-body" id="sec-${sec.key}">
+        ${fields.map(f => renderField(f)).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Auto-open sections with missing fields
+  sections.forEach(sec => {
+    const hasMissing = sec.fields.some(f=>!formData[f.key]||formData[f.key]==='');
+    if(hasMissing) {
+      const body = document.getElementById('sec-'+sec.key);
+      if(body) body.classList.add('open');
+    }
+  });
+}
+
+function renderField(f) {
+  const val = formData[f.key]||'';
+  const filled = val !== '';
+  const cls = filled ? 'field-filled' : 'field-missing';
+  let input = '';
+  if(f.type==='select') {
+    input = `<select onchange="fieldChanged('${f.key}',this.value)">
+      ${f.options.map(o=>`<option value="${o}" ${o===val?'selected':''}>${o||'Select...'}</option>`).join('')}
+    </select>`;
+  } else if(f.type==='textarea') {
+    input = `<textarea onchange="fieldChanged('${f.key}',this.value)" placeholder="${f.placeholder||''}">${val}</textarea>`;
+  } else {
+    input = `<input type="text" value="${val}" placeholder="${f.placeholder||''}" oninput="fieldChanged('${f.key}',this.value)">`;
+  }
+  return `<div class="field-row ${cls}" id="field-${f.key}">
+    <label>${f.label}</label>
+    ${input}
+    <div class="field-indicator"></div>
+  </div>`;
+}
+
+function fieldChanged(key, val) {
+  formData[key] = val;
+  const row = document.getElementById('field-'+key);
+  if(row) {
+    row.className = 'field-row ' + (val ? 'field-filled' : 'field-missing');
+  }
+  renderScore();
+}
+
+function renderScore() {
+  const sections = getSections();
+  const bar = document.getElementById('score-bar');
+  bar.innerHTML = sections.map(sec => {
+    const filled = sec.fields.filter(f=>formData[f.key]&&formData[f.key]!=='').length;
+    const total = sec.fields.length;
+    const cls = filled===total?'score-full':filled===0?'score-empty':'score-partial';
+    return `<div class="score-item">
+      <div class="score-circle ${cls}">${filled}/${total}</div>
+      <div class="score-label">${sec.label.split(' ')[0].toUpperCase()}</div>
+    </div>`;
+  }).join('');
+}
+
+function toggleSection(id, header) {
+  const body = document.getElementById(id);
+  const key = id.replace('sec-','');
+  const chev = document.getElementById('chev-'+key);
+  body.classList.toggle('open');
+  chev.textContent = body.classList.contains('open') ? '▲' : '▼';
+}
+
+function setToggle(mode) {
+  showMode = mode;
+  document.getElementById('toggle-missing').className='toggle-btn'+(mode==='missing'?' active':'');
+  document.getElementById('toggle-all').className='toggle-btn'+(mode==='all'?' active':'');
+  renderSections();
+}
+
+function buildBulkUnits() {
+  if(currentLevel !== 'unit' || !currentProp) return;
+  const units = allUnits.filter(u=>u.Property_ID===currentProp.ID && u.ID !== currentUnit?.ID);
+  const box = document.getElementById('unit-checkboxes');
+  box.innerHTML = units.map(u=>`<label class="unit-check" id="uc-${u.ID}">
+    <input type="checkbox" value="${u.ID}" onchange="updateUnitCheck('${u.ID}',this.checked)">
+    ${u.Unit_Label}
+  </label>`).join('');
+}
+
+function updateUnitCheck(id, checked) {
+  const el = document.getElementById('uc-'+id);
+  if(el) el.className='unit-check'+(checked?' checked':'');
+}
+
+function selectAllUnits() {
+  document.querySelectorAll('#unit-checkboxes input').forEach(cb=>{cb.checked=true;updateUnitCheck(cb.value,true);});
+}
+function deselectAllUnits() {
+  document.querySelectorAll('#unit-checkboxes input').forEach(cb=>{cb.checked=false;updateUnitCheck(cb.value,false);});
+}
+
+function toggleBulkPanel() {
+  const panel = document.getElementById('bulk-panel');
+  const btn = document.getElementById('show-bulk-btn');
+  const open = panel.classList.toggle('open');
+  btn.textContent = open ? '⚡ Hide Bulk Panel' : '⚡ Bulk Apply to Other Units';
+}
+
+async function saveInfo() {
+  const id = currentLevel==='property' ? currentProp?.ID : currentUnit?.ID;
+  if(!id){showToast('No record selected','error');return;}
+
+  // Get bulk unit IDs
+  const bulkIds = currentLevel==='unit'
+    ? Array.from(document.querySelectorAll('#unit-checkboxes input:checked')).map(c=>c.value)
+    : [];
+
+  // Only send fields that exist in our sections
+  const sections = getSections();
+  const allKeys = sections.flatMap(s=>s.fields.map(f=>f.key));
+  const fields = {};
+  allKeys.forEach(k=>{ if(formData[k]!==undefined) fields[k]=formData[k]; });
+
+  try {
+    const res = await fetch(WORKER+'/building-info/save',{
+      method:'POST',
+      headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'},
+      body:JSON.stringify({type:currentLevel, id, fields, bulk_unit_ids:bulkIds})
+    }).then(r=>r.json());
+
+    if(res.error){showToast('Error: '+res.error,'error');return;}
+    
+    const bulkCount = bulkIds.length;
+    showToast(bulkCount>0 ? `Saved + applied to ${bulkCount} other unit${bulkCount>1?'s':''}` : 'Saved','success');
+    
+    // Refresh data
+    const updatedUnits = await fetch(WORKER+'/units',{headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'}}).then(r=>r.json());
+    if(Array.isArray(updatedUnits)) allUnits = updatedUnits;
+    const updatedProps = await fetch(WORKER+'/properties',{headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'}}).then(r=>r.json());
+    if(Array.isArray(updatedProps)) { allProperties = updatedProps; currentProp = updatedProps.find(p=>p.ID===currentProp?.ID); }
+    if(currentUnit) currentUnit = allUnits.find(u=>u.ID===currentUnit.ID);
+    formData = currentLevel==='property' ? {...currentProp} : {...currentUnit};
+    renderSections();
+    renderScore();
+
+  } catch(e){showToast('Error: '+e.message,'error');}
+}
+
+function showToast(msg,type='info'){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.className='toast-msg '+type;el.style.display='block';
+  setTimeout(()=>el.style.display='none',3000);
+}
+
+init();
+</script>
+</body>
+</html>

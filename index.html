@@ -213,7 +213,11 @@
       <input type="text" id="wishlist-input" placeholder="Type an idea or improvement..." style="flex:1">
       <button class="btn" onclick="addWishlistItem()">Add</button>
     </div>
-    <div id="wishlist-list"><div class="loading">No items yet</div></div>
+    <div id="wishlist-list" style="margin-bottom:24px"><div class="loading">No items yet</div></div>
+    <div class="section-title">TROUBLESHOOTING CACHE</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review. Refresh clears the response so it regenerates next use.</p>
+    <button class="btn secondary small" onclick="loadCache()" style="margin-bottom:12px">↻ Refresh Cache List</button>
+    <div id="cache-list"><div class="loading">Click refresh to load</div></div>
   </div>
 
 <!-- NEW WORK ORDER MODAL -->
@@ -737,12 +741,12 @@ function renderTenantsPage(){
 
 async function setTenantPin(tenantId, phone) {
   // Default to last 4 of phone
-  const defaultPin = phone ? phone.replace(/\D/g,'').slice(-4) : '';
+  const defaultPin = phone ? phone.replace(/\D/g,'').slice(-5) : '';
   const pin = prompt(`Set PIN for tenant (current default: ${defaultPin||'none'}):
 Leave blank to use last 4 of phone.`) ;
   if (pin === null) return; // cancelled
   const finalPin = pin.trim() || defaultPin;
-  if (!finalPin || finalPin.length !== 4) { toast('PIN must be 4 digits','error'); return; }
+  if (!finalPin || finalPin.length !== 5) { toast('PIN must be 5 digits','error'); return; }
   try {
     await api('POST','/set-pin',{tenant_id:tenantId, pin:finalPin});
     toast('PIN set: '+finalPin,'success');
@@ -756,8 +760,8 @@ async function bulkSetPins() {
   if(!confirm(`Auto-set PINs for ${tenants.length} tenants without PINs (last 4 of phone)?`)) return;
   let ok=0;
   for(const t of tenants){
-    const pin=t.Phone.replace(/\D/g,'').slice(-4);
-    if(pin.length===4){
+    const pin=t.Phone.replace(/\D/g,'').slice(-5);
+    if(pin.length===5){
       try{ await api('POST','/set-pin',{tenant_id:t.ID,pin}); ok++; }catch(e){}
       await new Promise(r=>setTimeout(r,200));
     }
@@ -958,12 +962,91 @@ async function submitEditTenant() {
   } catch(e){logError('Edit tenant',e.message);toast('Error: '+e.message,'error');}
 }
 
+// ── Cache Management ──
+let cacheItems = [];
+
+async function loadCache() {
+  try {
+    const items = await api('GET','/cache');
+    cacheItems = Array.isArray(items) ? items.filter(i=>i.Active!=='FALSE') : [];
+    renderCache();
+  } catch(e) { logError('Load cache',e.message); }
+}
+
+function renderCache() {
+  const el = document.getElementById('cache-list');
+  if(!el) return;
+  if(!cacheItems.length) { el.innerHTML='<div class="loading">No cached responses yet</div>'; return; }
+  
+  el.innerHTML = cacheItems.map(c => {
+    const flagged = c.Flagged === 'TRUE';
+    const hasResponse = !!c.Response;
+    const borderColor = flagged ? 'var(--danger)' : hasResponse ? 'var(--accent2)' : 'var(--warn)';
+    const statusLabel = flagged ? '⚑ FLAGGED' : hasResponse ? '✓ CACHED' : '○ EMPTY';
+    const statusColor = flagged ? 'var(--danger)' : hasResponse ? 'var(--accent2)' : 'var(--warn)';
+    const season = c.Season ? ` · ${c.Season}` : '';
+    return `<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ${borderColor};border-radius:var(--radius);padding:12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+        <div>
+          <div style="font-size:12px;font-weight:bold">${c.Trade||'—'} · ${c.Keywords||'—'}${season}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">Used ${c.Use_Count||0}× · Last: ${c.Last_Used||'never'}</div>
+          ${c.Flag_Reason?`<div style="font-size:11px;color:var(--danger);margin-top:4px">Flag: ${c.Flag_Reason}</div>`:''}
+        </div>
+        <span style="font-size:10px;color:${statusColor};font-weight:bold;white-space:nowrap;margin-left:8px">${statusLabel}</span>
+      </div>
+      ${hasResponse?`<div style="font-size:11px;color:var(--muted);margin-bottom:8px;max-height:60px;overflow:hidden">${c.Response.substring(0,150)}${c.Response.length>150?'…':''}</div>`:''}
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${!flagged?`<button class="btn small secondary" style="color:var(--warn);border-color:var(--warn)" onclick="flagCache('${c.ID}')">⚑ Flag</button>`:''}
+        <button class="btn small secondary" onclick="refreshCache('${c.ID}')">↻ Refresh</button>
+        ${c.Season!==undefined?`<button class="btn small secondary" onclick="editCacheSeason('${c.ID}','${c.Season||''}')">✎ Season</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function flagCache(id) {
+  const reason = prompt('Reason for flagging (optional):') ?? '';
+  if(reason === null) return;
+  try {
+    await api('POST','/cache/flag',{id, reason});
+    toast('Flagged for review','info');
+    await loadCache();
+  } catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function refreshCache(id) {
+  if(!confirm('Clear this cached response? It will be regenerated on next use.')) return;
+  try {
+    await api('POST','/cache/refresh',{id});
+    toast('Cache entry cleared — will regenerate on next use','success');
+    await loadCache();
+  } catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function editCacheSeason(id, currentSeason) {
+  const seasons = ['','Winter (Nov-Mar)','Spring (Mar-May)','Summer (Jun-Aug)','Fall (Sep-Nov)','Year-round'];
+  const choice = prompt(`Set season tag:
+${seasons.map((s,i)=>`${i}: ${s||'(none)'}`).join('
+')}
+
+Current: ${currentSeason||'none'}
+Enter number:`);
+  if(choice === null) return;
+  const season = seasons[parseInt(choice)] ?? '';
+  try {
+    // Use updateRow via workorder/update pattern - need a direct cache update
+    await api('POST','/cache/flag',{id, reason:'Season updated to: '+season});
+    toast('Update season via Sheet directly for now','info');
+  } catch(e){toast('Error: '+e.message,'error');}
+}
+
 function toast(msg,type='info'){const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;document.getElementById('toast-container').appendChild(el);setTimeout(()=>el.remove(),4000);}
 
 // wishlist enter key
 document.addEventListener('DOMContentLoaded',()=>{
   const wi=document.getElementById('wishlist-input');
   if(wi) wi.addEventListener('keydown',e=>{if(e.key==='Enter')addWishlistItem();});
+  renderErrorLog();
 });
 
 // ── Error Log ──
@@ -984,42 +1067,59 @@ function renderErrorLog() {
     <div style="font-size:12px;color:var(--danger)">${l.message}</div>
   </div>`).join('');
 }
-function clearErrorLog(){localStorage.removeItem('mh_errors');renderErrorLog();toast('Error log cleared','info');}
+function clearErrorLog(){if(!confirm('Clear all error logs?')) return;localStorage.removeItem('mh_errors');renderErrorLog();toast('Error log cleared','info');}
 
-// ── Wishlist ──
-function addWishlistItem(){
+// ── Wishlist (Sheet-backed) ──
+let wishlistItems = [];
+
+async function loadWishlist(){
+  try{
+    const items = await api('GET','/wishlist');
+    wishlistItems = Array.isArray(items) ? items.filter(i=>i.Active!=='FALSE') : [];
+    renderWishlist();
+  }catch(e){ console.log('Wishlist load error',e); }
+}
+
+async function addWishlistItem(){
   const input=document.getElementById('wishlist-input');
   const val=input.value.trim(); if(!val) return;
-  const items=JSON.parse(localStorage.getItem('mh_wishlist')||'[]');
-  items.unshift({time:new Date().toISOString(),text:val});
-  localStorage.setItem('mh_wishlist',JSON.stringify(items));
-  input.value='';
-  renderWishlist();
-  toast('Added to wishlist','success');
+  try{
+    await api('POST','/wishlist/add',{text:val});
+    input.value='';
+    await loadWishlist();
+    toast('Added to wishlist','success');
+  }catch(e){toast('Error: '+e.message,'error');}
 }
+
 function renderWishlist(){
-  const items=JSON.parse(localStorage.getItem('mh_wishlist')||'[]');
   const el=document.getElementById('wishlist-list');
   if(!el) return;
-  if(!items.length){el.innerHTML='<div class="loading">No items yet</div>';return;}
-  el.innerHTML=items.map((item,i)=>`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--info);border-radius:var(--radius);padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+  if(!wishlistItems.length){el.innerHTML='<div class="loading">No items yet</div>';return;}
+  el.innerHTML=[...wishlistItems].reverse().map(item=>`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--info);border-radius:var(--radius);padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
     <div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${item.time.replace('T',' ').split('.')[0]}</div>
-      <div style="font-size:13px">${item.text}</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${item.Created||''}</div>
+      <div style="font-size:13px">${item.Text||''}</div>
     </div>
-    <button class="btn small danger" onclick="deleteWishlistItem(${i})">✕</button>
+    <button class="btn small danger" onclick="deleteWishlistItem('${item.ID}')">✕</button>
   </div>`).join('');
 }
-function deleteWishlistItem(i){
-  const items=JSON.parse(localStorage.getItem('mh_wishlist')||'[]');
-  items.splice(i,1);
-  localStorage.setItem('mh_wishlist',JSON.stringify(items));
-  renderWishlist();
-}
-function clearWishlist(){localStorage.removeItem('mh_wishlist');renderWishlist();toast('Wishlist cleared','info');}
 
-// init dev log on load
-document.addEventListener('DOMContentLoaded',()=>{renderErrorLog();renderWishlist();});
+async function deleteWishlistItem(id){
+  if(!confirm('Remove this item?')) return;
+  try{
+    await api('POST','/wishlist/delete',{id});
+    await loadWishlist();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+function clearWishlist(){
+  if(!confirm('Clear ALL wishlist items? This cannot be undone.')) return;
+  Promise.all(wishlistItems.map(i=>api('POST','/wishlist/delete',{id:i.ID})))
+    .then(()=>{loadWishlist();toast('Wishlist cleared','info');})
+    .catch(e=>toast('Error: '+e.message,'error'));
+}
+
+
 
 function openEditPropertyModal(id){
   const p=state.properties.find(x=>x.ID===id); if(!p) return;

@@ -48,11 +48,11 @@
   <table>
     <thead><tr><th>Name</th><th>Company</th><th>Phone</th><th>PIN</th><th>Properties</th></tr></thead>
     <tbody>
-      <tr><td>Amanda</td><td>Phoenix Estates</td><td>4106158842</td><td><span class="pin-badge">8842</span></td><td>43 Amanda Ireland properties</td></tr>
-      <tr><td>Mark</td><td>Phoenix Estates</td><td>4438864174</td><td><span class="pin-badge">4174</span></td><td>43 Amanda Ireland properties (shared)</td></tr>
-      <tr><td>Jennifer Goldszmidt</td><td>Goldszmidt Properties</td><td>4102745614</td><td><span class="pin-badge">5614</span></td><td>11 ClickUp properties</td></tr>
-      <tr><td>Adrian Goldszmidt</td><td>Goldszmidt Properties</td><td>4104995237</td><td><span class="pin-badge">5237</span></td><td>11 ClickUp properties (shared)</td></tr>
-      <tr><td>Heather</td><td>(none)</td><td>4438454983</td><td><span class="pin-badge">4983</span></td><td>1125 St Paul St</td></tr>
+      <tr><td>Amanda</td><td>Phoenix Estates</td><td>4106158842</td><td><span class="pin-badge">58842</span></td><td>43 Amanda Ireland properties</td></tr>
+      <tr><td>Mark</td><td>Phoenix Estates</td><td>4438864174</td><td><span class="pin-badge">64174</span></td><td>43 Amanda Ireland properties (shared)</td></tr>
+      <tr><td>Jennifer Goldszmidt</td><td>Goldszmidt Properties</td><td>4102745614</td><td><span class="pin-badge">45614</span></td><td>11 ClickUp properties</td></tr>
+      <tr><td>Adrian Goldszmidt</td><td>Goldszmidt Properties</td><td>4104995237</td><td><span class="pin-badge">95237</span></td><td>11 ClickUp properties (shared)</td></tr>
+      <tr><td>Heather</td><td>(none)</td><td>4438454983</td><td><span class="pin-badge">54983</span></td><td>1125 St Paul St</td></tr>
     </tbody>
   </table>
   <div style="margin-top:12px;display:flex;gap:8px">
@@ -103,11 +103,11 @@ async function runSetup(){
   bar.style.display='block';
 
   const owners = [
-    {First_Name:'Amanda',Last_Name:'',Company:'Phoenix Estates',Phone:'4106158842',PIN:'8842',Active:'TRUE'},
-    {First_Name:'Mark',Last_Name:'',Company:'Phoenix Estates',Phone:'4438864174',PIN:'4174',Active:'TRUE'},
-    {First_Name:'Jennifer',Last_Name:'Goldszmidt',Company:'Goldszmidt Properties',Phone:'4102745614',PIN:'5614',Active:'TRUE'},
-    {First_Name:'Adrian',Last_Name:'Goldszmidt',Company:'Goldszmidt Properties',Phone:'4104995237',PIN:'5237',Active:'TRUE'},
-    {First_Name:'Heather',Last_Name:'',Company:'',Phone:'4438454983',PIN:'4983',Active:'TRUE'},
+    {First_Name:'Amanda',Last_Name:'',Company:'Phoenix Estates',Phone:'4106158842',PIN:'58842',Active:'TRUE'},
+    {First_Name:'Mark',Last_Name:'',Company:'Phoenix Estates',Phone:'4438864174',PIN:'64174',Active:'TRUE'},
+    {First_Name:'Jennifer',Last_Name:'Goldszmidt',Company:'Goldszmidt Properties',Phone:'4102745614',PIN:'45614',Active:'TRUE'},
+    {First_Name:'Adrian',Last_Name:'Goldszmidt',Company:'Goldszmidt Properties',Phone:'4104995237',PIN:'95237',Active:'TRUE'},
+    {First_Name:'Heather',Last_Name:'',Company:'',Phone:'4438454983',PIN:'54983',Active:'TRUE'},
   ];
 
   // Step 1: Add owners
@@ -175,7 +175,7 @@ async function runSetup(){
 
   fill.style.width='100%';
   logEl.innerHTML+=`<div class="ok" style="font-weight:bold;margin-top:6px">✅ Done! ${owners.length} owners added, ${total} properties linked.</div>`;
-  logEl.innerHTML+=`<div class="info" style="margin-top:6px">PINs: Amanda=8842 Mark=4174 Jennifer=5614 Adrian=5237 Heather=4983</div>`;
+  logEl.innerHTML+=`<div class="info" style="margin-top:6px">PINs: Amanda=58842 Mark=64174 Jennifer=45614 Adrian=95237 Heather=54983</div>`;
   logEl.scrollTop=logEl.scrollHeight;
 }
 </script>

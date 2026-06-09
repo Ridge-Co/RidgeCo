@@ -66,8 +66,8 @@
   <!-- PIN SCREEN -->
   <div id="pin-screen">
     <div class="pin-screen">
-      <p>Enter your 4-digit access PIN.<br>This is the last 4 digits of your phone number<br>unless you've been given a different one.</p>
-      <input type="tel" class="pin-input" id="pin-input" maxlength="4" placeholder="····" inputmode="numeric" pattern="[0-9]*">
+      <p>Enter your 4-digit access PIN.<br>This is the last 5 digits of your phone number<br>unless you've been given a different one.</p>
+      <input type="tel" class="pin-input" id="pin-input" maxlength="5" placeholder="····" inputmode="numeric" pattern="[0-9]*">
       <div class="pin-error" id="pin-error"></div>
       <button class="btn" onclick="lookupPin()">Continue</button>
     </div>
@@ -173,7 +173,7 @@ async function lookupPin() {
   const pin = document.getElementById('pin-input').value.trim();
   const errEl = document.getElementById('pin-error');
   errEl.style.display='none';
-  if(pin.length!==4){errEl.textContent='Please enter your 4-digit PIN.';errEl.style.display='block';return;}
+  if(pin.length!==5){errEl.textContent='Please enter your 5-digit PIN.';errEl.style.display='block';return;}
 
   showLoading('Looking up PIN...');
   try {

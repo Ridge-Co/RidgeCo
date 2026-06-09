@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ridge Co — Key Registry</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:8px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:16px;max-width:700px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1rem;letter-spacing:0.15em;margin-bottom:2px;}
+  .sub{color:var(--muted);font-size:11px;margin-bottom:16px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn:hover{opacity:0.85;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  .btn.success{background:var(--accent2);color:#000;}
+  .btn.danger{background:var(--danger);color:#000;}
+  .btn.small{padding:5px 9px;font-size:11px;}
+  input,select,textarea{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
+
+  /* Search bar */
+  .search-area{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px;}
+  .search-row{display:flex;gap:8px;margin-bottom:8px;}
+  .search-row input{flex:1;}
+  .filters{display:flex;gap:6px;flex-wrap:wrap;}
+  .filter-btn{padding:4px 10px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--muted);font-family:var(--font);}
+  .filter-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
+
+  /* Results */
+  .results-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+  .results-count{color:var(--muted);font-size:11px;}
+
+  /* Key card */
+  .key-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:8px;position:relative;}
+  .key-card.unknown{border-left:3px solid var(--danger);}
+  .key-card.active{border-left:3px solid var(--accent2);}
+  .key-card.internal{border-left:3px solid var(--warn);}
+  .key-card-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
+  .key-addr{font-size:13px;font-weight:bold;}
+  .key-unit{color:var(--muted);font-size:11px;margin-top:2px;}
+  .key-type-badge{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:bold;white-space:nowrap;}
+  .badge-fd{background:#1e3a5f;color:var(--info);}
+  .badge-unit{background:#1a2d1a;color:var(--accent2);}
+  .badge-lockbox{background:#2d2006;color:var(--warn);}
+  .badge-gate{background:#2d1a2d;color:#c084fc;}
+  .badge-garage{background:#2d1a2d;color:#c084fc;}
+  .badge-other{background:var(--surface2);color:var(--muted);}
+  .key-codes{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0;}
+  .code-item{background:var(--surface2);border-radius:4px;padding:6px 10px;}
+  .code-label{font-size:9px;color:var(--muted);letter-spacing:0.1em;text-transform:uppercase;}
+  .code-value{font-size:15px;font-weight:bold;color:var(--accent);letter-spacing:0.1em;margin-top:2px;}
+  .code-value.unknown{color:var(--danger);}
+  .key-meta{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:6px;}
+  .key-actions{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;}
+  .key-notes{font-size:11px;color:var(--warn);margin-top:6px;padding:6px 8px;background:rgba(251,191,36,0.08);border-radius:4px;}
+  .internal-warning{font-size:10px;color:var(--danger);margin-top:4px;}
+
+  /* Modal */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:200;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:500px;padding:20px;}
+  .modal-title{color:var(--accent);font-size:0.95rem;letter-spacing:0.1em;margin-bottom:16px;}
+  .form-field{margin-bottom:12px;}
+  .form-field label{display:block;color:var(--muted);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px;}
+  .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;}
+
+  /* History */
+  .history-item{background:var(--surface2);border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;}
+  .history-codes{display:flex;gap:8px;align-items:center;margin-bottom:2px;}
+  .old-code{color:var(--danger);text-decoration:line-through;}
+  .arrow{color:var(--muted);}
+  .new-code{color:var(--accent2);}
+  .history-meta{color:var(--muted);font-size:10px;}
+
+  .loading{color:var(--muted);font-size:12px;text-align:center;padding:20px;}
+  .toast-msg{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--border);padding:10px 16px;border-radius:var(--radius);font-size:12px;display:none;z-index:999;}
+  .toast-msg.success{border-left:3px solid var(--accent2);}
+  .toast-msg.error{border-left:3px solid var(--danger);}
+  .toast-msg.info{border-left:3px solid var(--info);}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — KEY REGISTRY</h1>
+<div class="sub">Search by key code, address, or unit. All data is admin-only.</div>
+
+<div class="search-area">
+  <div class="search-row">
+    <input type="text" id="search-input" placeholder="Search: A123, 3672, 115 W 29th, Apt 2..." oninput="doSearch()" autofocus>
+    <button class="btn secondary small" onclick="clearSearch()">Clear</button>
+  </div>
+  <div class="filters">
+    <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+    <button class="filter-btn" onclick="setFilter('Front Door',this)">Front Door</button>
+    <button class="filter-btn" onclick="setFilter('Unit Key',this)">Unit Keys</button>
+    <button class="filter-btn" onclick="setFilter('Lockbox',this)">Lockboxes</button>
+    <button class="filter-btn" onclick="setFilter('Gate Code',this)">Gate/Garage</button>
+    <button class="filter-btn" onclick="setFilter('Unknown',this)">Unknown</button>
+  </div>
+</div>
+
+<div class="results-header">
+  <span class="results-count" id="results-count">Loading...</span>
+  <button class="btn small" onclick="openAddModal()">+ Add Key</button>
+</div>
+
+<div id="results-list"><div class="loading">Loading key registry...</div></div>
+
+<!-- EDIT/UPDATE MODAL -->
+<div class="modal-overlay" id="modal-edit">
+  <div class="modal">
+    <div class="modal-title" id="edit-modal-title">UPDATE KEY</div>
+    <input type="hidden" id="edit-id">
+    <div class="form-field"><label>Key Code</label><input type="text" id="edit-key-code" placeholder="e.g. A123"></div>
+    <div class="form-field"><label>Lockbox Code</label><input type="text" id="edit-lb-code" placeholder="e.g. 3672"></div>
+    <div class="form-field"><label>Lockbox Location</label><input type="text" id="edit-lb-loc" placeholder="e.g. Front handrail"></div>
+    <div class="form-field"><label>Status</label>
+      <select id="edit-status">
+        <option value="Active">Active</option>
+        <option value="Unknown">Unknown</option>
+        <option value="Lost">Lost</option>
+        <option value="Replaced">Replaced</option>
+        <option value="Returned">Returned</option>
+      </select>
+    </div>
+    <div class="form-field"><label>Notes</label><textarea id="edit-notes" rows="2"></textarea></div>
+    <div class="form-field" style="background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.3);border-radius:var(--radius);padding:10px;">
+      <label style="color:var(--danger)">Reason for Change (required if code changes)</label>
+      <input type="text" id="edit-reason" placeholder="e.g. Tenant moved out, Lost key, Routine change">
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-edit')">Cancel</button>
+      <button class="btn success" onclick="saveKeyUpdate()">Save + Log History</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD KEY MODAL -->
+<div class="modal-overlay" id="modal-add">
+  <div class="modal">
+    <div class="modal-title">ADD NEW KEY</div>
+    <div class="form-field"><label>Property</label>
+      <select id="add-prop" onchange="loadAddUnits()">
+        <option value="">Select property...</option>
+      </select>
+    </div>
+    <div class="form-field" id="add-unit-field"><label>Unit (leave blank for property-level)</label>
+      <select id="add-unit"><option value="">Property-level</option></select>
+    </div>
+    <div class="form-field"><label>Key Type</label>
+      <select id="add-type">
+        <option>Front Door</option><option>Unit Key</option><option>Lockbox</option>
+        <option>Gate Code</option><option>Garage Code</option><option>Mailbox</option>
+        <option>Utility</option><option>Rear Access</option><option>Other</option>
+      </select>
+    </div>
+    <div class="form-field"><label>Key Code</label><input type="text" id="add-key-code" placeholder="e.g. A123"></div>
+    <div class="form-field"><label>Lockbox Code</label><input type="text" id="add-lb-code" placeholder="e.g. 3672"></div>
+    <div class="form-field"><label>Lockbox Location</label><input type="text" id="add-lb-loc" placeholder="e.g. Front handrail"></div>
+    <div class="form-field"><label>Notes</label><textarea id="add-notes" rows="2"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-add')">Cancel</button>
+      <button class="btn success" onclick="saveNewKey()">Add Key</button>
+    </div>
+  </div>
+</div>
+
+<!-- HISTORY MODAL -->
+<div class="modal-overlay" id="modal-history">
+  <div class="modal">
+    <div class="modal-title" id="history-title">KEY HISTORY</div>
+    <div id="history-list"><div class="loading">Loading...</div></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-history')">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-msg" id="toast"></div>
+
+<script>
+const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+const TOKEN = 'mh-secret-2026-brett';
+
+let allKeys = [];
+let allHistory = [];
+let allProperties = [];
+let allUnits = [];
+let currentFilter = 'all';
+let currentSearch = '';
+
+async function apiFetch(path){
+  const r=await fetch(WORKER+path,{headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'}});
+  return r.json();
+}
+async function apiPost(path,body){
+  const r=await fetch(WORKER+path,{method:'POST',headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return r.json();
+}
+
+async function init(){
+  try{
+    const [keys,history,props,units]=await Promise.all([
+      apiFetch('/keys'),apiFetch('/keys-history'),
+      apiFetch('/properties'),apiFetch('/units')
+    ]);
+    allKeys=Array.isArray(keys)?keys.filter(k=>k.Active!=='FALSE'):[];
+    allHistory=Array.isArray(history)?history:[];
+    allProperties=Array.isArray(props)?props.filter(p=>p.Active!=='FALSE'):[];
+    allUnits=Array.isArray(units)?units:[];
+    populateAddProps();
+    render();
+  }catch(e){
+    document.getElementById('results-list').innerHTML='<div class="loading">Connection error — check token</div>';
+  }
+}
+
+function populateAddProps(){
+  const sel=document.getElementById('add-prop');
+  sel.innerHTML='<option value="">Select property...</option>'+
+    allProperties.map(p=>`<option value="${p.ID}">${p.Address}</option>`).join('');
+}
+function loadAddUnits(){
+  const propId=document.getElementById('add-prop').value;
+  const units=allUnits.filter(u=>u.Property_ID===propId);
+  const sel=document.getElementById('add-unit');
+  sel.innerHTML='<option value="">Property-level</option>'+
+    units.map(u=>`<option value="${u.ID}">${u.Unit_Label}</option>`).join('');
+}
+
+function doSearch(){currentSearch=document.getElementById('search-input').value.toLowerCase();render();}
+function clearSearch(){document.getElementById('search-input').value='';currentSearch='';render();}
+function setFilter(f,btn){
+  currentFilter=f;
+  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+
+function render(){
+  let keys=[...allKeys];
+
+  // Filter by type
+  if(currentFilter==='all'){}
+  else if(currentFilter==='Gate Code') keys=keys.filter(k=>k.Key_Type==='Gate Code'||k.Key_Type==='Garage Code');
+  else if(currentFilter==='Unknown') keys=keys.filter(k=>k.Status==='Unknown'||k.Status==='Lost');
+  else keys=keys.filter(k=>k.Key_Type===currentFilter);
+
+  // Search
+  if(currentSearch){
+    keys=keys.filter(k=>{
+      const prop=allProperties.find(p=>p.ID===k.Property_ID);
+      return (k.Key_Code||'').toLowerCase().includes(currentSearch)||
+        (k.Lockbox_Code||'').toLowerCase().includes(currentSearch)||
+        (prop?.Address||'').toLowerCase().includes(currentSearch)||
+        (k.Unit_Label||'').toLowerCase().includes(currentSearch)||
+        (k.Notes||'').toLowerCase().includes(currentSearch)||
+        (k.Lockbox_Location||'').toLowerCase().includes(currentSearch);
+    });
+  }
+
+  // Sort: unknowns first, then by address
+  keys.sort((a,b)=>{
+    if(a.Status==='Unknown'&&b.Status!=='Unknown') return -1;
+    if(b.Status==='Unknown'&&a.Status!=='Unknown') return 1;
+    const pa=allProperties.find(p=>p.ID===a.Property_ID);
+    const pb=allProperties.find(p=>p.ID===b.Property_ID);
+    return (pa?.Address||'').localeCompare(pb?.Address||'');
+  });
+
+  document.getElementById('results-count').textContent=`${keys.length} record${keys.length!==1?'s':''}`;
+
+  if(!keys.length){
+    document.getElementById('results-list').innerHTML='<div class="loading">No records found</div>';
+    return;
+  }
+
+  document.getElementById('results-list').innerHTML=keys.map(k=>renderKeyCard(k)).join('');
+}
+
+function renderKeyCard(k){
+  const prop=allProperties.find(p=>p.ID===k.Property_ID);
+  const isInternal=k.Notes&&k.Notes.toLowerCase().includes('internal use only');
+  const cardClass=isInternal?'internal':k.Status==='Unknown'||k.Status==='Lost'?'unknown':'active';
+  
+  const typeClass={
+    'Front Door':'badge-fd','Unit Key':'badge-unit','Lockbox':'badge-lockbox',
+    'Gate Code':'badge-gate','Garage Code':'badge-garage'
+  }[k.Key_Type]||'badge-other';
+
+  const histCount=allHistory.filter(h=>h.Key_ID===k.ID).length;
+
+  return `<div class="key-card ${cardClass}">
+    <div class="key-card-header">
+      <div>
+        <div class="key-addr">${prop?.Address||k.Property_ID||'Unknown Property'}</div>
+        <div class="key-unit">${k.Unit_Label||'Property-level'} · ${k.Key_Type}</div>
+      </div>
+      <span class="key-type-badge ${typeClass}">${k.Key_Type}</span>
+    </div>
+    <div class="key-codes">
+      ${k.Key_Code?`<div class="code-item"><div class="code-label">Key Code</div><div class="code-value ${k.Status==='Unknown'||k.Key_Code==='?'?'unknown':''}">${k.Key_Code}</div></div>`:''}
+      ${k.Lockbox_Code?`<div class="code-item"><div class="code-label">Lockbox</div><div class="code-value">${k.Lockbox_Code}</div></div>`:''}
+      ${!k.Key_Code&&!k.Lockbox_Code?`<div class="code-item"><div class="code-label">Code</div><div class="code-value unknown">UNKNOWN</div></div>`:''}
+    </div>
+    ${k.Lockbox_Location?`<div class="key-meta">📍 ${k.Lockbox_Location}</div>`:''}
+    ${k.Last_Changed?`<div class="key-meta">Last changed: ${k.Last_Changed}</div>`:''}
+    ${k.Notes&&!isInternal?`<div class="key-notes">📝 ${k.Notes}</div>`:''}
+    ${isInternal?`<div class="internal-warning">⚠ INTERNAL USE ONLY — DO NOT SHARE</div>`:''}
+    <div class="key-actions">
+      <button class="btn small" onclick="openEditModal('${k.ID}')">Update Code</button>
+      ${histCount>0?`<button class="btn small secondary" onclick="showHistory('${k.ID}')">History (${histCount})</button>`:''}
+    </div>
+  </div>`;
+}
+
+function openEditModal(id){
+  const k=allKeys.find(x=>x.ID===id); if(!k) return;
+  const prop=allProperties.find(p=>p.ID===k.Property_ID);
+  document.getElementById('edit-id').value=id;
+  document.getElementById('edit-modal-title').textContent=`UPDATE — ${prop?.Address||''} ${k.Unit_Label||''} ${k.Key_Type}`;
+  document.getElementById('edit-key-code').value=k.Key_Code||'';
+  document.getElementById('edit-lb-code').value=k.Lockbox_Code||'';
+  document.getElementById('edit-lb-loc').value=k.Lockbox_Location||'';
+  document.getElementById('edit-status').value=k.Status||'Active';
+  document.getElementById('edit-notes').value=k.Notes||'';
+  document.getElementById('edit-reason').value='';
+  openModal('modal-edit');
+}
+
+async function saveKeyUpdate(){
+  const id=document.getElementById('edit-id').value;
+  const keyCode=document.getElementById('edit-key-code').value.trim();
+  const lbCode=document.getElementById('edit-lb-code').value.trim();
+  const reason=document.getElementById('edit-reason').value.trim();
+  const k=allKeys.find(x=>x.ID===id);
+  const codeChanged=(keyCode&&keyCode!==k.Key_Code)||(lbCode&&lbCode!==k.Lockbox_Code);
+  if(codeChanged&&!reason){showToast('Please enter a reason for the code change','error');return;}
+  try{
+    const res=await apiPost('/key/update',{
+      id,
+      fields:{
+        Key_Code:keyCode,
+        Lockbox_Code:lbCode,
+        Lockbox_Location:document.getElementById('edit-lb-loc').value.trim(),
+        Status:document.getElementById('edit-status').value,
+        Notes:document.getElementById('edit-notes').value.trim(),
+      },
+      reason,
+      changed_by:'admin'
+    });
+    if(res.error){showToast('Error: '+res.error,'error');return;}
+    showToast('Updated'+(codeChanged?' + history logged':''),'success');
+    closeModal('modal-edit');
+    await init();
+  }catch(e){showToast('Error: '+e.message,'error');}
+}
+
+function openAddModal(){openModal('modal-add');}
+
+async function saveNewKey(){
+  const propId=document.getElementById('add-prop').value;
+  const unitId=document.getElementById('add-unit').value;
+  const unit=allUnits.find(u=>u.ID===unitId);
+  if(!propId){showToast('Select a property','error');return;}
+  try{
+    const res=await apiPost('/key/add',{
+      Property_ID:propId,
+      Unit_ID:unitId||'',
+      Unit_Label:unit?.Unit_Label||'',
+      Owner_ID:'',
+      Key_Type:document.getElementById('add-type').value,
+      Key_Code:document.getElementById('add-key-code').value.trim(),
+      Lockbox_Code:document.getElementById('add-lb-code').value.trim(),
+      Lockbox_Location:document.getElementById('add-lb-loc').value.trim(),
+      Notes:document.getElementById('add-notes').value.trim(),
+      Status:'Active',
+      Last_Changed:new Date().toISOString().split('T')[0],
+      Active:'TRUE',
+    });
+    if(res.error){showToast('Error: '+res.error,'error');return;}
+    showToast('Key added','success');
+    closeModal('modal-add');
+    await init();
+  }catch(e){showToast('Error: '+e.message,'error');}
+}
+
+function showHistory(keyId){
+  const k=allKeys.find(x=>x.ID===keyId);
+  const prop=allProperties.find(p=>p.ID===k?.Property_ID);
+  document.getElementById('history-title').textContent=`HISTORY — ${prop?.Address||''} ${k?.Unit_Label||''} ${k?.Key_Type||''}`;
+  const hist=allHistory.filter(h=>h.Key_ID===keyId).sort((a,b)=>new Date(b.Changed_Date)-new Date(a.Changed_Date));
+  if(!hist.length){
+    document.getElementById('history-list').innerHTML='<div class="loading">No history yet</div>';
+  } else {
+    document.getElementById('history-list').innerHTML=hist.map(h=>`<div class="history-item">
+      <div class="history-codes">
+        <span class="old-code">${h.Old_Code||'?'}</span>
+        <span class="arrow">→</span>
+        <span class="new-code">${h.New_Code||'?'}</span>
+      </div>
+      <div class="history-meta">${h.Changed_Date} · ${h.Changed_By||'admin'}${h.Reason?' · '+h.Reason:''}</div>
+      ${h.Notes?`<div style="color:var(--muted);font-size:10px;margin-top:2px">${h.Notes}</div>`:''}
+    </div>`).join('');
+  }
+  openModal('modal-history');
+}
+
+function openModal(id){document.getElementById(id).classList.add('open');}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
+
+function showToast(msg,type='info'){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.className='toast-msg '+type;el.style.display='block';
+  setTimeout(()=>el.style.display='none',3500);
+}
+
+init();
+</script>
+</body>
+</html>
