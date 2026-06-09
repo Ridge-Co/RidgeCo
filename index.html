@@ -134,6 +134,7 @@
       <button class="nav-btn" onclick="showPage('workorders',this)">WORK ORDERS</button>
       <button class="nav-btn" onclick="showPage('properties',this)">PROPERTIES</button>
       <button class="nav-btn" onclick="showPage('vendors',this)">VENDORS</button>
+      <button class="nav-btn" onclick="showPage('tenants',this)">TENANTS</button>
       <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
     </nav>
@@ -185,6 +186,13 @@
       <button class="btn" onclick="openAddVendorModal()">+ Add Vendor</button>
     </div>
     <div id="vendors-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <div class="page" id="page-tenants">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <button class="btn secondary small" onclick="bulkSetPins()">Auto-Set PINs from Phone</button>
+    </div>
+    <div id="tenants-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 
   <div class="page" id="page-invoices">
@@ -508,7 +516,7 @@ async function loadAll() {
         logError('Load '+names[i], r.reason?.message || 'Failed');
       }
     });
-    renderDashboard(); renderWOPage(); renderPropertiesPage(); renderVendorsPage(); renderInvoicesPage();
+    renderDashboard(); renderWOPage(); renderPropertiesPage(); renderVendorsPage(); renderTenantsPage(); renderInvoicesPage();
     const loaded = names.filter((_,i)=>results[i].status==='fulfilled').length;
     toast('Loaded '+loaded+'/7 data sets','success');
   } catch(e) { logError('Load all data',e.message); toast('Load error: '+e.message,'error'); }
@@ -700,6 +708,62 @@ function renderVendorsPage(){
     const open=state.workorders.filter(w=>w.Vendor_ID===v.ID&&!['Complete','Paid'].includes(w.Status)).length;
     return `<tr><td>${v.Name}${v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':''}</td><td>${v.Trade||'—'}</td><td><a href="tel:${v.Phone}" style="color:var(--accent);text-decoration:none">${v.Phone||'—'}</a></td><td>${v.Markets||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td></tr>`;
   }).join('')+'</tbody></table>';
+}
+
+function renderTenantsPage(){
+  const el=document.getElementById('tenants-list');
+  const tenants=safeArray(state.tenants).filter(t=>t.Active!=='FALSE');
+  if(!tenants.length){el.innerHTML='<div class="loading">No tenants yet</div>';return;}
+  el.innerHTML=`<table class="data-table"><thead><tr>
+    <th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>PIN</th><th></th>
+  </tr></thead><tbody>`+tenants.map(t=>{
+    const unit=safeArray(state.units).find(u=>u.ID===t.Unit_ID);
+    const prop=safeArray(state.properties).find(p=>p.ID===(t.Property_ID||unit?.Property_ID));
+    const pin=t.PIN||'—';
+    const pinColor=t.PIN?'color:var(--accent2)':'color:var(--danger)';
+    return `<tr>
+      <td>${t.First_Name||''} ${t.Last_Name||''}</td>
+      <td>${t.Phone||'—'}</td>
+      <td>${unit?.Unit_Label||'—'}</td>
+      <td style="font-size:11px;color:var(--muted)">${prop?.Address||'—'}</td>
+      <td style="${pinColor};font-weight:bold;letter-spacing:0.1em">${pin}</td>
+      <td style="display:flex;gap:4px">
+        <button class="btn small secondary" onclick="openEditTenantModal('${t.ID}')">Edit</button>
+        <button class="btn small secondary" onclick="setTenantPin('${t.ID}','${t.Phone||''}')">Set PIN</button>
+      </td>
+    </tr>`;
+  }).join('')+'</tbody></table>';
+}
+
+async function setTenantPin(tenantId, phone) {
+  // Default to last 4 of phone
+  const defaultPin = phone ? phone.replace(/\D/g,'').slice(-4) : '';
+  const pin = prompt(`Set PIN for tenant (current default: ${defaultPin||'none'}):
+Leave blank to use last 4 of phone.`) ;
+  if (pin === null) return; // cancelled
+  const finalPin = pin.trim() || defaultPin;
+  if (!finalPin || finalPin.length !== 4) { toast('PIN must be 4 digits','error'); return; }
+  try {
+    await api('POST','/set-pin',{tenant_id:tenantId, pin:finalPin});
+    toast('PIN set: '+finalPin,'success');
+    await loadAll();
+  } catch(e) { toast('Error: '+e.message,'error'); }
+}
+
+async function bulkSetPins() {
+  const tenants = safeArray(state.tenants).filter(t=>t.Active!=='FALSE'&&t.Phone&&!t.PIN);
+  if(!tenants.length){toast('All tenants already have PINs','info');return;}
+  if(!confirm(`Auto-set PINs for ${tenants.length} tenants without PINs (last 4 of phone)?`)) return;
+  let ok=0;
+  for(const t of tenants){
+    const pin=t.Phone.replace(/\D/g,'').slice(-4);
+    if(pin.length===4){
+      try{ await api('POST','/set-pin',{tenant_id:t.ID,pin}); ok++; }catch(e){}
+      await new Promise(r=>setTimeout(r,200));
+    }
+  }
+  toast(`Set ${ok} PINs`,'success');
+  await loadAll();
 }
 
 function renderInvoicesPage(){
