@@ -22,23 +22,21 @@
   .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
   .pin-screen{text-align:center;padding:20px 0;}
   .pin-screen p{color:var(--muted);font-size:12px;margin-bottom:20px;line-height:1.6;}
-  .pin-input{font-size:2rem;letter-spacing:0.5em;text-align:center;max-width:160px;margin:0 auto 16px;display:block;padding:12px;}
+  .pin-input{font-size:1.5rem;letter-spacing:0.15em;text-align:center;width:100%;margin:0 auto 16px;display:block;padding:14px;text-transform:uppercase;}
   .pin-error{color:var(--danger);font-size:12px;text-align:center;margin-bottom:12px;display:none;}
   .owner-confirm{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:20px;}
   .owner-confirm .name{font-size:1rem;color:var(--accent);margin-bottom:2px;}
   .owner-confirm .company{font-size:12px;color:var(--muted);}
-
   /* Searchable property select */
   .search-select{position:relative;}
-  .search-select input{width:100%;}
-  .search-dropdown{display:none;position:absolute;top:100%;left:0;right:0;background:var(--surface2);border:1px solid var(--accent);border-radius:0 0 var(--radius) var(--radius);max-height:200px;overflow-y:auto;z-index:50;}
+  .search-select input[type=text]{width:100%;}
+  .search-dropdown{display:none;position:absolute;top:100%;left:0;right:0;background:var(--surface2);border:1px solid var(--accent);border-top:none;border-radius:0 0 var(--radius) var(--radius);max-height:220px;overflow-y:auto;z-index:50;}
   .search-dropdown.open{display:block;}
   .search-option{padding:10px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);}
-  .search-option:hover{background:var(--surface);color:var(--accent);}
+  .search-option:hover,.search-option:focus{background:var(--surface);color:var(--accent);}
   .search-option:last-child{border-bottom:none;}
   .search-option .addr{font-size:13px;}
-  .search-option .units{font-size:11px;color:var(--muted);margin-top:2px;}
-
+  .search-option .meta{font-size:11px;color:var(--muted);margin-top:2px;}
   .upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:16px;text-align:center;cursor:pointer;position:relative;transition:border-color 0.2s;}
   .upload-zone:hover{border-color:var(--accent);}
   .upload-zone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
@@ -56,6 +54,7 @@
   .spinner{width:28px;height:28px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.6s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
   .step{color:var(--muted);font-size:12px;}
+  .attempt-hint{color:var(--muted);font-size:11px;text-align:center;margin-top:8px;}
 </style>
 </head>
 <body>
@@ -66,10 +65,11 @@
   <!-- PIN SCREEN -->
   <div id="pin-screen">
     <div class="pin-screen">
-      <p>Enter your 4-digit access PIN.<br>This is the last 5 digits of your phone number<br>unless you've been given a different one.</p>
-      <input type="tel" class="pin-input" id="pin-input" maxlength="5" placeholder="····" inputmode="numeric" pattern="[0-9]*">
+      <p>Enter your access PIN.<br><span style="font-size:11px">3 letters + last 5 digits of your phone number</span></p>
+      <input type="text" class="pin-input" id="pin-input" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
       <div class="pin-error" id="pin-error"></div>
       <button class="btn" onclick="lookupPin()">Continue</button>
+      <div class="attempt-hint" id="attempt-hint"></div>
     </div>
   </div>
 
@@ -83,7 +83,7 @@
     <div class="field">
       <label>Property</label>
       <div class="search-select">
-        <input type="text" id="prop-search" placeholder="Type to search your properties..." oninput="filterProperties()" onfocus="openDropdown()" autocomplete="off">
+        <input type="text" id="prop-search" placeholder="Type address or street number..." oninput="filterProperties()" onfocus="openPropDropdown()" autocomplete="off">
         <input type="hidden" id="prop-id">
         <div class="search-dropdown" id="prop-dropdown"></div>
       </div>
@@ -115,6 +115,10 @@
       </select>
     </div>
 
+    <div class="field">
+      <label>Your Reference / Tracking # <span style="font-weight:normal;color:var(--muted)">(optional)</span></label>
+      <input type="text" id="owner-ref" placeholder="Your internal WO or PO number...">
+    </div>
     <div class="field">
       <label>Description</label>
       <textarea id="description" placeholder="Describe the issue, any background context, or special instructions..."></textarea>
@@ -149,198 +153,248 @@
 </div>
 
 <script>
-const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-const TOKEN = 'mh-secret-2026-brett';
-let ownerData = null;
-let ownerProperties = [];
-let selectedFiles = [];
-let selectedProp = null;
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var TOKEN  = 'mh-secret-2026-brett';
+var ownerData = null;
+var ownerProperties = [];
+var selectedFiles = [];
+var selectedProp = null;
 
-document.getElementById('pin-input').addEventListener('keydown', e => {
-  if(e.key==='Enter') lookupPin();
+// ── Numeric address sort ─────────────────────────────────────
+function sortPropsNumeric(props) {
+  return props.slice().sort(function(a, b) {
+    var na = parseInt((a.Address||'').match(/^\d+/)?.[0] || '99999');
+    var nb = parseInt((b.Address||'').match(/^\d+/)?.[0] || '99999');
+    if (na !== nb) return na - nb;
+    return (a.Address||'').localeCompare(b.Address||'');
+  });
+}
+
+document.getElementById('pin-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') lookupPin();
+});
+document.getElementById('pin-input').addEventListener('input', function() {
+  this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
 });
 
-async function apiFetch(path) {
-  const r = await fetch(WORKER+path, {headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'}});
-  return r.json();
+function apiFetch(path) {
+  return fetch(WORKER+path, {headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'}}).then(function(r){return r.json();});
 }
-async function apiPost(path, body) {
-  const r = await fetch(WORKER+path, {method:'POST',headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'},body:JSON.stringify(body)});
-  return r.json();
+function apiPost(path, body) {
+  return fetch(WORKER+path, {method:'POST',headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();});
 }
 
-async function lookupPin() {
-  const pin = document.getElementById('pin-input').value.trim();
-  const errEl = document.getElementById('pin-error');
-  errEl.style.display='none';
-  if(pin.length!==5){errEl.textContent='Please enter your 5-digit PIN.';errEl.style.display='block';return;}
-
-  showLoading('Looking up PIN...');
-  try {
-    const res = await apiFetch(`/owner-by-pin?pin=${pin}`);
-    if(res.error){hideLoading();errEl.textContent='PIN not recognized. Contact your coordinator.';errEl.style.display='block';return;}
-    ownerData = res;
-
-    showLoading('Loading your properties...');
-    const props = await apiFetch(`/owner-properties?owner_id=${res.owner_id}`);
-    ownerProperties = Array.isArray(props) ? props : [];
-    hideLoading();
-
-    document.getElementById('oc-name').textContent = res.owner_name;
-    document.getElementById('oc-company').textContent = res.owner_company || '';
-    document.getElementById('pin-screen').style.display='none';
-    document.getElementById('form-screen').style.display='block';
-    buildDropdown(ownerProperties);
-  } catch(e) {
-    hideLoading();
-    errEl.textContent='Connection error. Please try again.';
-    errEl.style.display='block';
+function lookupPin() {
+  var pin = document.getElementById('pin-input').value.trim();
+  var errEl = document.getElementById('pin-error');
+  errEl.style.display = 'none';
+  if (pin.length < 8) {
+    errEl.textContent = 'PIN must be 8 characters (3 letters + 5 digits).';
+    errEl.style.display = 'block';
+    return;
   }
+  showLoading('Verifying PIN...');
+  apiFetch('/owner-by-pin?pin=' + encodeURIComponent(pin))
+    .then(function(res) {
+      if (res.error) {
+        hideLoading();
+        if (res.locked) {
+          errEl.textContent = 'Account locked. Try again in ' + res.minutes_remaining + ' minute' + (res.minutes_remaining !== 1 ? 's' : '') + '.';
+          document.getElementById('pin-input').disabled = true;
+          setTimeout(function() { document.getElementById('pin-input').disabled = false; }, res.minutes_remaining * 60000);
+        } else {
+          errEl.textContent = res.error;
+          var hint = document.getElementById('attempt-hint');
+          hint.textContent = '';
+        }
+        errEl.style.display = 'block';
+        return;
+      }
+      ownerData = res;
+      showLoading('Loading your properties...');
+      return apiFetch('/owner-properties?owner_id=' + res.owner_id)
+        .then(function(props) {
+          ownerProperties = sortPropsNumeric(Array.isArray(props) ? props : []);
+          hideLoading();
+          document.getElementById('oc-name').textContent = res.owner_name;
+          document.getElementById('oc-company').textContent = res.owner_company || '';
+          document.getElementById('pin-screen').style.display = 'none';
+          document.getElementById('form-screen').style.display = 'block';
+          buildPropDropdown(ownerProperties);
+        });
+    })
+    .catch(function() {
+      hideLoading();
+      errEl.textContent = 'Connection error. Please try again.';
+      errEl.style.display = 'block';
+    });
 }
 
-function buildDropdown(props) {
-  const dd = document.getElementById('prop-dropdown');
-  dd.innerHTML = props.map(p => {
-    const unitCount = p.units ? p.units.length : 0;
-    return `<div class="search-option" onclick="selectProperty('${p.ID}')">
-      <div class="addr">${p.Address}${p.City?', '+p.City:''}</div>
-      ${unitCount>0?`<div class="units">${unitCount} unit${unitCount!==1?'s':''}</div>`:''}
-    </div>`;
-  }).join('') || '<div class="search-option" style="color:var(--muted)">No properties found</div>';
+// ── Property dropdown ────────────────────────────────────────
+
+function buildPropDropdown(props) {
+  var dd = document.getElementById('prop-dropdown');
+  if (!props.length) {
+    dd.innerHTML = '<div class="search-option" style="color:var(--muted)">No properties found</div>';
+    return;
+  }
+  dd.innerHTML = props.map(function(p) {
+    var unitCount = p.units ? p.units.length : 0;
+    var meta = (p.City ? p.City : '') + (unitCount > 0 ? (p.City ? ' · ' : '') + unitCount + ' unit' + (unitCount !== 1 ? 's' : '') : '');
+    return '<div class="search-option" onclick="selectProperty(\'' + p.ID + '\')">' +
+      '<div class="addr">' + p.Address + '</div>' +
+      (meta ? '<div class="meta">' + meta + '</div>' : '') +
+      '</div>';
+  }).join('');
 }
 
 function filterProperties() {
-  const q = document.getElementById('prop-search').value.toLowerCase();
-  const filtered = q ? ownerProperties.filter(p=>(p.Address||'').toLowerCase().includes(q)) : ownerProperties;
-  buildDropdown(filtered);
-  openDropdown();
-  // Clear selection if user is typing
-  document.getElementById('prop-id').value='';
-  selectedProp=null;
-  document.getElementById('unit-field').style.display='none';
+  var q = document.getElementById('prop-search').value.toLowerCase();
+  var filtered = q
+    ? ownerProperties.filter(function(p) {
+        return (p.Address||'').toLowerCase().includes(q) || (p.City||'').toLowerCase().includes(q);
+      })
+    : ownerProperties;
+  buildPropDropdown(filtered);
+  openPropDropdown();
+  // Clear selection while typing
+  document.getElementById('prop-id').value = '';
+  selectedProp = null;
+  document.getElementById('unit-field').style.display = 'none';
 }
 
-function openDropdown() {
+function openPropDropdown() {
   document.getElementById('prop-dropdown').classList.add('open');
 }
 
 function selectProperty(propId) {
-  const prop = ownerProperties.find(p=>p.ID===propId);
-  if(!prop) return;
+  var prop = ownerProperties.find(function(p) { return p.ID === propId; });
+  if (!prop) return;
   selectedProp = prop;
   document.getElementById('prop-id').value = propId;
-  document.getElementById('prop-search').value = prop.Address + (prop.City?', '+prop.City:'');
+  document.getElementById('prop-search').value = prop.Address + (prop.City ? ', ' + prop.City : '');
   document.getElementById('prop-dropdown').classList.remove('open');
-
-  // Show units if multi
-  if(prop.units && prop.units.length > 0) {
-    const sel = document.getElementById('unit-select');
+  if (prop.units && prop.units.length > 0) {
+    var sel = document.getElementById('unit-select');
     sel.innerHTML = '<option value="">Whole property</option>' +
-      prop.units.map(u=>`<option value="${u.ID}">${u.Unit_Label}</option>`).join('');
-    document.getElementById('unit-field').style.display='block';
+      prop.units.map(function(u) { return '<option value="' + u.ID + '">' + u.Unit_Label + '</option>'; }).join('');
+    document.getElementById('unit-field').style.display = 'block';
   } else {
-    document.getElementById('unit-field').style.display='none';
+    document.getElementById('unit-field').style.display = 'none';
   }
 }
 
-// Close dropdown when clicking outside
-document.addEventListener('click', e => {
-  if(!e.target.closest('.search-select')) {
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.search-select'))
     document.getElementById('prop-dropdown').classList.remove('open');
-  }
 });
 
+// ── Files ────────────────────────────────────────────────────
+
 function handleFiles(files) {
-  Array.from(files).forEach(f=>{if(selectedFiles.length<6)selectedFiles.push(f);});
+  Array.from(files).forEach(function(f) { if (selectedFiles.length < 6) selectedFiles.push(f); });
   renderPreviews();
 }
 function renderPreviews() {
-  document.getElementById('preview-grid').innerHTML=selectedFiles.map((f,i)=>{
-    const url=URL.createObjectURL(f);
-    const isVideo=f.type.startsWith('video/');
-    const isPDF=f.type==='application/pdf';
-    return `<div class="preview-item">
-      ${isPDF?`<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:1.5rem">📄</div>`
-        :isVideo?`<video src="${url}" muted></video>`:`<img src="${url}">`}
-      <button class="remove" onclick="removeFile(${i})">✕</button>
-    </div>`;
+  document.getElementById('preview-grid').innerHTML = selectedFiles.map(function(f, i) {
+    var url = URL.createObjectURL(f);
+    var isPDF = f.type === 'application/pdf';
+    var isVideo = f.type.startsWith('video/');
+    return '<div class="preview-item">' +
+      (isPDF ? '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:1.5rem">📄</div>'
+             : isVideo ? '<video src="' + url + '" muted></video>'
+             : '<img src="' + url + '">') +
+      '<button class="remove" onclick="removeFile(' + i + ')">✕</button></div>';
   }).join('');
 }
-function removeFile(i){selectedFiles.splice(i,1);renderPreviews();}
+function removeFile(i) { selectedFiles.splice(i, 1); renderPreviews(); }
 
-async function submitRequest() {
-  const propId = document.getElementById('prop-id').value;
-  const unitId = document.getElementById('unit-select').value||'';
-  const trade = document.getElementById('trade-select').value;
-  const desc = document.getElementById('description').value.trim();
-  const priority = document.getElementById('priority-select').value;
-  const errEl = document.getElementById('form-error');
-  errEl.style.display='none';
+// ── Submit ───────────────────────────────────────────────────
 
-  if(!propId){errEl.textContent='Please select a property.';errEl.style.display='block';return;}
-  if(!trade){errEl.textContent='Please select issue type.';errEl.style.display='block';return;}
-  if(!desc){errEl.textContent='Please describe the issue.';errEl.style.display='block';return;}
+function submitRequest() {
+  var propId = document.getElementById('prop-id').value;
+  var unitId = document.getElementById('unit-select').value || '';
+  var trade = document.getElementById('trade-select').value;
+  var desc = document.getElementById('description').value.trim();
+  var priority = document.getElementById('priority-select').value;
+  var errEl = document.getElementById('form-error');
+  errEl.style.display = 'none';
 
-  document.getElementById('submit-btn').disabled=true;
+  if (!propId) { errEl.textContent = 'Please select a property.'; errEl.style.display = 'block'; return; }
+  if (!trade)  { errEl.textContent = 'Please select issue type.'; errEl.style.display = 'block'; return; }
+  if (!desc)   { errEl.textContent = 'Please describe the issue.'; errEl.style.display = 'block'; return; }
+
+  document.getElementById('submit-btn').disabled = true;
   showLoading('Creating work order...');
 
-  try {
-    const wo = await fetch(WORKER+'/workorder',{
-      method:'POST',
-      headers:{'X-Auth-Token':TOKEN,'Content-Type':'application/json'},
-      body:JSON.stringify({
-        property_id:propId, unit_id:unitId, tenant_id:'',
-        trade, priority, description:desc, type:'owner',
-        created_by:ownerData.owner_name,
-        notes:`Owner request from ${ownerData.owner_name}${ownerData.owner_company?' ('+ownerData.owner_company+')':''}`,
-      })
-    }).then(r=>r.json());
-
-    if(!wo.id) throw new Error(wo.error||'Failed');
-
-    if(selectedFiles.length>0){
-      for(let i=0;i<selectedFiles.length;i++){
-        showLoading(`Uploading file ${i+1} of ${selectedFiles.length}...`);
-        const fd=new FormData();
-        fd.append('file',selectedFiles[i]);
-        fd.append('wo_id',wo.id);
-        await fetch(WORKER+'/upload-photo',{method:'POST',headers:{'X-Auth-Token':TOKEN},body:fd});
-      }
-    }
-
+  fetch(WORKER + '/workorder', {
+    method: 'POST',
+    headers: {'X-Auth-Token': TOKEN, 'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      property_id: propId, unit_id: unitId, tenant_id: '',
+      trade: trade, priority: priority, description: desc, type: 'owner',
+      owner_wo_ref: (document.getElementById('owner-ref').value||'').trim(),
+      created_by: ownerData.owner_name,
+      notes: 'Owner request from ' + ownerData.owner_name + (ownerData.owner_company ? ' (' + ownerData.owner_company + ')' : ''),
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(wo) {
+    if (!wo.id) throw new Error(wo.error || 'Failed to create work order');
+    var woId = wo.id;
+    var uploads = Promise.resolve();
+    selectedFiles.forEach(function(f, i) {
+      uploads = uploads.then(function() {
+        showLoading('Uploading file ' + (i+1) + ' of ' + selectedFiles.length + '...');
+        var fd = new FormData();
+        fd.append('file', f);
+        fd.append('wo_id', woId);
+        fd.append('type', 'other');
+        fd.append('uploaded_by', ownerData.owner_name);
+        return fetch(WORKER + '/upload-photo', {method:'POST', headers:{'X-Auth-Token':TOKEN}, body:fd});
+      });
+    });
+    return uploads.then(function() {
+      hideLoading();
+      document.getElementById('wo-ref').textContent = woId;
+      document.getElementById('form-screen').style.display = 'none';
+      document.getElementById('success-screen').style.display = 'block';
+    });
+  })
+  .catch(function(e) {
     hideLoading();
-    document.getElementById('wo-ref').textContent=wo.id;
-    document.getElementById('form-screen').style.display='none';
-    document.getElementById('success-screen').style.display='block';
-  } catch(e) {
-    hideLoading();
-    errEl.textContent='Error: '+e.message;
-    errEl.style.display='block';
-    document.getElementById('submit-btn').disabled=false;
-  }
+    errEl.textContent = 'Error: ' + e.message;
+    errEl.style.display = 'block';
+    document.getElementById('submit-btn').disabled = false;
+  });
 }
 
-function resetToPin(){
-  ownerData=null; ownerProperties=[]; selectedFiles=[]; selectedProp=null;
-  document.getElementById('pin-input').value='';
-  document.getElementById('pin-error').style.display='none';
-  document.getElementById('form-screen').style.display='none';
-  document.getElementById('pin-screen').style.display='block';
-}
-function submitAnother(){
-  selectedFiles=[];
-  document.getElementById('success-screen').style.display='none';
-  document.getElementById('description').value='';
-  document.getElementById('trade-select').value='';
-  document.getElementById('prop-search').value='';
-  document.getElementById('prop-id').value='';
-  document.getElementById('preview-grid').innerHTML='';
-  document.getElementById('submit-btn').disabled=false;
-  document.getElementById('form-screen').style.display='block';
+function resetToPin() {
+  ownerData = null; ownerProperties = []; selectedFiles = []; selectedProp = null;
+  document.getElementById('pin-input').value = '';
+  document.getElementById('pin-input').disabled = false;
+  document.getElementById('pin-error').style.display = 'none';
+  document.getElementById('attempt-hint').textContent = '';
+  document.getElementById('form-screen').style.display = 'none';
+  document.getElementById('pin-screen').style.display = 'block';
 }
 
-function showLoading(msg){document.getElementById('loading-step').textContent=msg;document.getElementById('loading').classList.add('show');}
-function hideLoading(){document.getElementById('loading').classList.remove('show');}
+function submitAnother() {
+  selectedFiles = [];
+  document.getElementById('success-screen').style.display = 'none';
+  document.getElementById('description').value = '';
+  document.getElementById('trade-select').value = '';
+  document.getElementById('owner-ref').value = '';
+  document.getElementById('prop-search').value = '';
+  document.getElementById('prop-id').value = '';
+  document.getElementById('preview-grid').innerHTML = '';
+  document.getElementById('submit-btn').disabled = false;
+  document.getElementById('form-error').style.display = 'none';
+  document.getElementById('form-screen').style.display = 'block';
+}
+
+function showLoading(msg) { document.getElementById('loading-step').textContent = msg; document.getElementById('loading').classList.add('show'); }
+function hideLoading() { document.getElementById('loading').classList.remove('show'); }
 </script>
 </body>
 </html>

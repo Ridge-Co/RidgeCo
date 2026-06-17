@@ -158,7 +158,8 @@ input[type=file]{display:none;}
     <div class="tab" id="tabAll" onclick="switchTab('all')">ALL JOBS</div>
   </div>
 
-  <div id="woList"><div class="spinner">Loading work orders…</div></div>
+  <div style="margin-bottom:12px;position:relative"><input type="text" id="woSearch" placeholder="Search by WO # or owner ref #…" oninput="filterVendorWOs()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px 10px 10px 32px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none">⌕</span></div>
+<div id="woList"><div class="spinner">Loading work orders…</div></div>
 </div>
 
 <script>
@@ -257,6 +258,18 @@ function updateDots() {
 
 // ── Work Orders ──────────────────────────────────────────────
 
+function filterVendorWOs() {
+  var q = (document.getElementById('woSearch').value||'').toLowerCase().trim();
+  if (!q) { renderWOs(window._wos||[]); return; }
+  var filtered = (window._wos||[]).filter(function(wo) {
+    return (wo.ID||'').toLowerCase().includes(q) ||
+           (wo.Owner_WO_Ref||'').toLowerCase().includes(q) ||
+           (wo.property_address||'').toLowerCase().includes(q) ||
+           (wo.Trade||'').toLowerCase().includes(q);
+  });
+  renderWOs(filtered);
+}
+
 function switchTab(tab) {
   currentTab = tab;
   document.getElementById('tabOpen').className = 'tab' + (tab === 'open' ? ' active' : '');
@@ -268,6 +281,7 @@ function loadWorkOrders() {
   if (!session) return;
   var list = document.getElementById('woList');
   list.innerHTML = '<div class="spinner">Loading…</div>';
+  document.getElementById('woSearch').value = '';
   var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
   api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed)
     .then(function(wos) {
@@ -330,7 +344,7 @@ function renderWOs(wos) {
     html += '<div class="wo-card ' + pri + '" id="card-' + idx + '">' +
       '<div class="wo-header" onclick="toggleCard(' + idx + ')">' +
         '<div class="wo-header-left">' +
-          '<div class="wo-id">' + esc(wo.ID) + '</div>' +
+          '<div class="wo-id">' + esc(wo.ID) + (wo.Owner_WO_Ref ? ' <span style="color:var(--info);font-size:10px">[' + esc(wo.Owner_WO_Ref) + ']</span>' : '') + '</div>' +
           '<div class="wo-address">' + esc(addrLine) + '</div>' +
           '<div class="wo-trade">' + esc(wo.Trade || '—') + '</div>' +
           '<div class="wo-desc">' + esc(descShort) + '</div>' +
@@ -343,6 +357,7 @@ function renderWOs(wos) {
       '</div>' +
       '<div class="wo-detail" id="detail-' + idx + '">' +
         '<div class="detail-row"><span class="detail-label">Address</span><span class="detail-val">' + esc(wo.property_address) + (wo.unit_label ? ' Unit ' + esc(wo.unit_label) : '') + '</span></div>' +
+        (wo.Owner_WO_Ref ? '<div class="detail-row"><span class="detail-label">Owner Ref #</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Owner_WO_Ref) + '</span></div>' : '') +
         '<div class="detail-row"><span class="detail-label">Issue</span><span class="detail-val">' + esc(wo.Description || '—') + '</span></div>' +
         '<div class="detail-row"><span class="detail-label">Tenant</span><span class="detail-val">' + tenantHtml + '</span></div>' +
         (wo.Notes ? '<div class="detail-row"><span class="detail-label">Notes</span><span class="detail-val">' + esc(wo.Notes) + '</span></div>' : '') +

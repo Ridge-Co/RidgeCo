@@ -246,6 +246,7 @@
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
       <div class="form-group full"><label>Description</label><textarea id="wo-desc" placeholder="Describe the issue..."></textarea></div>
       <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
+      <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
     </div>
     <div id="wo-prop-preview" style="display:none;margin-top:12px"></div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-new-wo')">Cancel</button><button class="btn" onclick="submitNewWO()">Create Work Order</button></div>
@@ -375,6 +376,7 @@
       <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
       <div class="form-group full"><label>Description</label><input type="text" id="ewo-description"></div>
       <div class="form-group full"><label>Notes</label><textarea id="ewo-notes"></textarea></div>
+      <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(owner's internal tracking number)</span></label><input type="text" id="ewo-owner-ref" placeholder="e.g. PM-4821"></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-wo')">Cancel</button><button class="btn" onclick="submitEditWO()">Save Changes</button></div>
   </div>
@@ -604,7 +606,7 @@ function woCard(w) {
   return '<div class="wo-card priority-'+(w.Priority||'normal')+'" onclick="openWODetail(\''+w.ID+'\')">' +
     '<div class="wo-id">'+w.ID+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
-    '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+'</div></div>' +
+    '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+'</div></div>' +
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
     (vendor?'<span style="font-size:11px;color:var(--muted)">'+vendor.Name+'</span>':'')+'</div></div>';
 }
@@ -617,7 +619,7 @@ function renderWOPage() {
   if (filter !== 'all') wos = wos.filter(function(w){return w.Status===filter;});
   if (search) wos = wos.filter(function(w){
     var prop = state.properties.find(function(p){return p.ID===w.Property_ID;});
-    return (prop&&(prop.Address||'').toLowerCase().includes(search))||(w.Trade||'').toLowerCase().includes(search)||(w.ID||'').toLowerCase().includes(search)||(w.Description||'').toLowerCase().includes(search);
+    return (prop&&(prop.Address||'').toLowerCase().includes(search))||(w.Trade||'').toLowerCase().includes(search)||(w.ID||'').toLowerCase().includes(search)||(w.Description||'').toLowerCase().includes(search)||(w.Owner_WO_Ref||'').toLowerCase().includes(search);
   });
   wos.sort(function(a,b){return new Date(b.Created_Date)-new Date(a.Created_Date);});
   var el = document.getElementById('wo-list-full');
@@ -627,7 +629,7 @@ function renderWOPage() {
 // ── WO Detail ────────────────────────────────────────────────
 function openWODetail(woId) {
   var wo = state.workorders.find(function(w){return w.ID===woId;}); if(!wo) return;
-  var prop = state.properties.find(function(p){return p.ID===wo.Property_ID;});
+  var prop = state.properties.find(function(p){return String(p.ID)===String(wo.Property_ID);});
   var unit = state.units.find(function(u){return u.ID===wo.Unit_ID;});
   var vendor = state.vendors.find(function(v){return v.ID===wo.Vendor_ID;});
   var tenant = state.tenants.find(function(t){return t.ID===wo.Tenant_ID||(unit&&t.ID===unit.Tenant_ID);});
@@ -654,6 +656,8 @@ function openWODetail(woId) {
     '<tr><td style="color:var(--muted)">Scheduled</td><td>'+(wo.Scheduled_Date||'—')+'</td></tr>' +
     '<tr><td style="color:var(--muted)">Notes</td><td style="word-break:break-word;max-width:380px">'+linkify(wo.Notes||'—')+'</td></tr>' +
     '<tr><td style="color:var(--muted)">Created</td><td>'+(wo.Created_Date?wo.Created_Date.split('T')[0]:'—')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Owner Ref #</td><td style="color:var(--info);font-weight:bold;letter-spacing:0.05em">'+(wo.Owner_WO_Ref||'<span style="color:var(--muted)">—</span>')+'</td></tr>' +
+    '<tr><td style="color:var(--muted);font-size:10px">Property ID (raw)</td><td style="color:var(--muted);font-size:11px">'+(wo.Property_ID||'—')+'</td></tr>' +
     '</table>';
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
@@ -716,6 +720,7 @@ function submitInvoice(){
 // ── New WO ───────────────────────────────────────────────────
 function openNewWOModal() {
   document.getElementById('wo-prop-filter').value = '';
+  document.getElementById('wo-owner-ref').value = '';
   document.getElementById('wo-prop-preview').style.display = 'none';
   document.getElementById('wo-unit-group').style.display = 'none';
   var sorted = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
@@ -735,7 +740,9 @@ function submitNewWO() {
     trade:trade, priority:document.getElementById('wo-priority').value,
     type:document.getElementById('wo-type').value,
     description:document.getElementById('wo-desc').value,
-    notes:document.getElementById('wo-notes').value, created_by:'admin'
+    notes:document.getElementById('wo-notes').value,
+    owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
+    created_by:'admin'
   }).then(function(res){
     if (res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
     toast('Created '+res.id,'success'); closeModal('modal-new-wo'); loadAll();
@@ -896,6 +903,7 @@ function openEditWOModal(woId) {
   document.getElementById('ewo-scheduled').value = wo.Scheduled_Date||'';
   document.getElementById('ewo-description').value = wo.Description||'';
   document.getElementById('ewo-notes').value = wo.Notes||'';
+  document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
   closeModal('modal-wo-detail');
   openModal('modal-edit-wo');
 }
@@ -932,6 +940,7 @@ function submitEditWO() {
     Scheduled_Date: document.getElementById('ewo-scheduled').value,
     Description: document.getElementById('ewo-description').value,
     Notes: document.getElementById('ewo-notes').value,
+    Owner_WO_Ref: document.getElementById('ewo-owner-ref').value.trim(),
   };
   api('POST','/workorder/update',{id:woId, fields:fields}).then(function(res){
     if(res.error){logError('Edit WO',res.error);toast('Error: '+res.error,'error');return;}
