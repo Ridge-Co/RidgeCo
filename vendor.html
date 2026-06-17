@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ridge Co — Vendor Portal</title>
+<style>
+:root {
+  --bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;
+  --text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;
+  --danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--purple:#c084fc;
+  --radius:8px;--font:'Courier New',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh;padding:16px;}
+.screen{display:none;}
+.screen.active{display:block;}
+
+/* ── Login ── */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:380px;padding:28px;}
+.logo{color:var(--accent);font-size:1.1rem;letter-spacing:.15em;font-weight:bold;margin-bottom:4px;}
+.logo-sub{color:var(--muted);font-size:11px;letter-spacing:.1em;margin-bottom:24px;}
+label{display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;}
+input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:18px;padding:12px;letter-spacing:.2em;text-align:center;text-transform:uppercase;}
+input:focus{outline:none;border-color:var(--accent);}
+.btn{width:100%;background:var(--accent);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.08em;padding:12px;cursor:pointer;margin-top:12px;}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+.btn-sm{width:auto;padding:6px 12px;font-size:12px;margin-top:0;}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
+.btn-outline:hover{background:var(--accent);color:#000;}
+.btn-danger{background:var(--danger);color:#000;}
+.btn-green{background:var(--accent2);color:#000;}
+.btn-blue{background:var(--info);color:#000;}
+.msg{margin-top:12px;padding:10px;border-radius:6px;font-size:12px;text-align:center;}
+.msg.error{background:#3b0000;border:1px solid var(--danger);color:var(--danger);}
+.msg.warn{background:#2d2000;border:1px solid var(--warn);color:var(--warn);}
+.msg.success{background:#002d0f;border:1px solid var(--accent2);color:var(--accent2);}
+.attempt-dots{display:flex;gap:6px;justify-content:center;margin-top:10px;}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--border);}
+.dot.used{background:var(--danger);}
+
+/* ── Dashboard ── */
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border);}
+.header-left .name{color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.1em;}
+.header-left .role{color:var(--muted);font-size:11px;}
+.badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;}
+.badge-urgent{background:#5c0000;color:var(--danger);border:1px solid var(--danger);}
+.badge-high{background:#3d2200;color:var(--warn);border:1px solid var(--warn);}
+.badge-normal{background:#1a2a1a;color:var(--accent2);border:1px solid var(--accent2);}
+.badge-low{background:#1a1a2a;color:var(--info);border:1px solid var(--info);}
+.badge-status{background:var(--surface2);color:var(--muted);border:1px solid var(--border);}
+.badge-accepted{background:#1a2a1a;color:var(--accent2);border:1px solid var(--accent2);}
+.badge-inprogress{background:#1a2500;color:#86efac;border:1px solid #86efac;}
+.badge-onhold{background:#2a1a00;color:var(--warn);border:1px solid var(--warn);}
+
+.tabs{display:flex;gap:2px;margin-bottom:16px;background:var(--surface2);border-radius:6px;padding:3px;}
+.tab{flex:1;text-align:center;padding:7px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.06em;color:var(--muted);}
+.tab.active{background:var(--surface);color:var(--accent);}
+
+.wo-count{color:var(--muted);font-size:11px;margin-bottom:10px;}
+
+/* ── WO Card ── */
+.wo-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;overflow:hidden;}
+.wo-card.urgent{border-left:3px solid var(--danger);}
+.wo-card.high{border-left:3px solid var(--warn);}
+.wo-card.normal{border-left:3px solid var(--accent2);}
+.wo-card.low{border-left:3px solid var(--info);}
+.wo-header{padding:12px;cursor:pointer;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}
+.wo-header-left{flex:1;min-width:0;}
+.wo-id{color:var(--muted);font-size:10px;letter-spacing:.08em;}
+.wo-address{color:var(--accent);font-size:.9rem;font-weight:bold;margin:2px 0;}
+.wo-trade{color:var(--text);font-size:12px;}
+.wo-desc{color:var(--muted);font-size:11px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.wo-header-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;}
+.expand-icon{color:var(--muted);font-size:14px;transition:transform .2s;}
+.wo-card.expanded .expand-icon{transform:rotate(180deg);}
+
+.wo-detail{display:none;border-top:1px solid var(--border);padding:12px;}
+.wo-card.expanded .wo-detail{display:block;}
+
+.detail-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;gap:8px;}
+.detail-label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;flex-shrink:0;}
+.detail-val{color:var(--text);font-size:12px;text-align:right;word-break:break-word;}
+.detail-val a{color:var(--accent2);text-decoration:none;}
+.detail-val a:hover{text-decoration:underline;}
+
+.lb-list{margin-top:4px;}
+.lb-item{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:7px 10px;margin-bottom:6px;}
+.lb-code{color:var(--accent);font-size:1rem;font-weight:bold;letter-spacing:.1em;}
+.lb-loc{color:var(--muted);font-size:11px;margin-top:2px;}
+
+.action-section{margin-top:14px;padding-top:12px;border-top:1px solid var(--border);}
+.action-title{color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px;}
+.status-btns{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.status-btn{flex:1;min-width:80px;padding:8px 6px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--muted);font-family:var(--font);font-size:11px;cursor:pointer;text-align:center;}
+.status-btn:hover,.status-btn.current{background:var(--surface);border-color:var(--accent);color:var(--accent);}
+.status-btn.s-accepted:hover,.status-btn.s-accepted.current{border-color:var(--accent2);color:var(--accent2);}
+.status-btn.s-inprogress:hover,.status-btn.s-inprogress.current{border-color:#86efac;color:#86efac;}
+.status-btn.s-onhold:hover,.status-btn.s-onhold.current{border-color:var(--warn);color:var(--warn);}
+.status-btn.s-complete:hover,.status-btn.s-complete.current{border-color:var(--accent2);color:var(--accent2);background:#002d0f;}
+textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:12px;padding:8px;resize:vertical;min-height:60px;margin-bottom:8px;}
+textarea:focus{outline:none;border-color:var(--accent);}
+.btn-row{display:flex;gap:8px;}
+.file-label{display:block;background:var(--surface2);border:1px dashed var(--border);border-radius:6px;padding:10px;text-align:center;cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:8px;}
+.file-label:hover{border-color:var(--accent);color:var(--accent);}
+input[type=file]{display:none;}
+.photo-preview{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
+.photo-thumb{width:60px;height:60px;object-fit:cover;border-radius:4px;border:1px solid var(--border);}
+
+.empty{text-align:center;color:var(--muted);padding:40px 16px;font-size:13px;}
+.empty .icon{font-size:2rem;margin-bottom:8px;}
+.spinner{text-align:center;color:var(--muted);padding:40px;font-size:13px;}
+
+.toggle-closed{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;cursor:pointer;margin-bottom:12px;user-select:none;}
+.toggle-closed input{width:auto;font-size:inherit;padding:0;}
+</style>
+</head>
+<body>
+
+<!-- LOGIN SCREEN -->
+<div id="screenLogin" class="screen active">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="logo">RIDGE CO</div>
+      <div class="logo-sub">VENDOR PORTAL</div>
+      <div style="margin-bottom:16px;">
+        <label for="pinInput">YOUR ACCESS PIN</label>
+        <input type="text" id="pinInput" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
+      </div>
+      <button class="btn" id="loginBtn" onclick="doLogin()">SIGN IN</button>
+      <div id="loginMsg"></div>
+      <div class="attempt-dots" id="attemptDots">
+        <div class="dot" id="d1"></div>
+        <div class="dot" id="d2"></div>
+        <div class="dot" id="d3"></div>
+        <div class="dot" id="d4"></div>
+      </div>
+      <div style="margin-top:20px;text-align:center;">
+        <a href="submit.html" style="color:var(--muted);font-size:11px;">Submit a maintenance request →</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DASHBOARD SCREEN -->
+<div id="screenDash" class="screen">
+  <div class="header">
+    <div class="header-left">
+      <div class="name" id="vendorName">—</div>
+      <div class="role">VENDOR PORTAL</div>
+    </div>
+    <button class="btn btn-sm btn-outline" onclick="doLogout()">LOG OUT</button>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" id="tabOpen" onclick="switchTab('open')">OPEN JOBS</div>
+    <div class="tab" id="tabAll" onclick="switchTab('all')">ALL JOBS</div>
+  </div>
+
+  <div id="woList"><div class="spinner">Loading work orders…</div></div>
+</div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET = 'mh-secret-2026-brett';
+var session = null;
+var currentTab = 'open';
+var failCount = 0;
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  opts.headers['X-Auth-Token'] = SECRET;
+  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+}
+
+// ── Login ────────────────────────────────────────────────────
+
+document.getElementById('pinInput').addEventListener('keydown', function(e){
+  if (e.key === 'Enter') doLogin();
+});
+
+document.getElementById('pinInput').addEventListener('input', function(){
+  this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+});
+
+function doLogin() {
+  var pin = document.getElementById('pinInput').value.trim();
+  if (pin.length < 8) {
+    showLoginMsg('PIN must be 8 characters (3 letters + 5 digits)', 'error');
+    return;
+  }
+  var btn = document.getElementById('loginBtn');
+  btn.disabled = true;
+  btn.textContent = 'CHECKING…';
+  showLoginMsg('', '');
+
+  api('/vendor-by-pin?pin=' + encodeURIComponent(pin))
+    .then(function(data) {
+      btn.disabled = false;
+      btn.textContent = 'SIGN IN';
+      if (data.error) {
+        if (data.locked) {
+          showLoginMsg('Account locked. Try again in ' + data.minutes_remaining + ' minute' + (data.minutes_remaining !== 1 ? 's' : '') + '.', 'error');
+          document.getElementById('pinInput').disabled = true;
+          btn.disabled = true;
+          setTimeout(function(){ document.getElementById('pinInput').disabled = false; btn.disabled = false; showLoginMsg('',''); }, data.minutes_remaining * 60000);
+        } else {
+          failCount++;
+          updateDots();
+          showLoginMsg(data.error, 'error');
+        }
+        return;
+      }
+      // Success
+      session = data;
+      failCount = 0;
+      updateDots();
+      document.getElementById('vendorName').textContent = data.vendor_name;
+      show('screenLogin', false);
+      show('screenDash', true);
+      loadWorkOrders();
+    })
+    .catch(function(err) {
+      btn.disabled = false;
+      btn.textContent = 'SIGN IN';
+      showLoginMsg('Connection error. Please try again.', 'error');
+    });
+}
+
+function doLogout() {
+  session = null;
+  failCount = 0;
+  updateDots();
+  document.getElementById('pinInput').value = '';
+  document.getElementById('pinInput').disabled = false;
+  document.getElementById('loginBtn').disabled = false;
+  showLoginMsg('', '');
+  document.getElementById('woList').innerHTML = '<div class="spinner">Loading work orders…</div>';
+  show('screenDash', false);
+  show('screenLogin', true);
+}
+
+function showLoginMsg(msg, type) {
+  var el = document.getElementById('loginMsg');
+  if (!msg) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="msg ' + type + '">' + msg + '</div>';
+}
+
+function updateDots() {
+  for (var i = 1; i <= 4; i++) {
+    var dot = document.getElementById('d' + i);
+    if (dot) dot.className = 'dot' + (i <= failCount ? ' used' : '');
+  }
+}
+
+// ── Work Orders ──────────────────────────────────────────────
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tabOpen').className = 'tab' + (tab === 'open' ? ' active' : '');
+  document.getElementById('tabAll').className = 'tab' + (tab === 'all' ? ' active' : '');
+  loadWorkOrders();
+}
+
+function loadWorkOrders() {
+  if (!session) return;
+  var list = document.getElementById('woList');
+  list.innerHTML = '<div class="spinner">Loading…</div>';
+  var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
+  api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed)
+    .then(function(wos) {
+      renderWOs(wos);
+    })
+    .catch(function() {
+      list.innerHTML = '<div class="msg error">Failed to load work orders.</div>';
+    });
+}
+
+function renderWOs(wos) {
+  var list = document.getElementById('woList');
+  if (!wos || !wos.length) {
+    list.innerHTML = '<div class="empty"><div class="icon">✓</div>No ' + (currentTab === 'open' ? 'open ' : '') + 'work orders.</div>';
+    return;
+  }
+
+  var html = '<div class="wo-count">' + wos.length + ' work order' + (wos.length !== 1 ? 's' : '') + '</div>';
+  wos.forEach(function(wo, idx) {
+    var pri = (wo.Priority || 'normal').toLowerCase();
+    var statusClass = {
+      'accepted': 'badge-accepted',
+      'in progress': 'badge-inprogress',
+      'on hold': 'badge-onhold',
+    }[wo.Status.toLowerCase()] || 'badge-status';
+
+    var addrLine = wo.property_address + (wo.unit_label ? ' — Unit ' + wo.unit_label : '');
+    var descShort = (wo.Description || '').substring(0, 80) + (wo.Description && wo.Description.length > 80 ? '…' : '');
+
+    var lbHtml = '';
+    if (wo.lockboxes && wo.lockboxes.length) {
+      lbHtml = '<div class="lb-list">';
+      wo.lockboxes.forEach(function(lb) {
+        lbHtml += '<div class="lb-item"><div class="lb-code">' + esc(lb.code) + '</div>';
+        if (lb.location) lbHtml += '<div class="lb-loc">📍 ' + esc(lb.location) + '</div>';
+        if (lb.notes) lbHtml += '<div class="lb-loc">' + esc(lb.notes) + '</div>';
+        lbHtml += '</div>';
+      });
+      lbHtml += '</div>';
+    } else if (wo.legacy_lockbox) {
+      lbHtml = '<div class="lb-list"><div class="lb-item"><div class="lb-code">' + esc(wo.legacy_lockbox) + '</div></div></div>';
+    } else {
+      lbHtml = '<span style="color:var(--muted)">None on file</span>';
+    }
+
+    var tenantHtml = wo.tenant_name
+      ? esc(wo.tenant_name) + (wo.tenant_phone ? ' — <a href="tel:' + esc(wo.tenant_phone) + '">' + esc(wo.tenant_phone) + '</a>' : '')
+      : '<span style="color:var(--muted)">—</span>';
+
+    var statusBtns = [
+      ['Accepted','s-accepted'],
+      ['In Progress','s-inprogress'],
+      ['On Hold','s-onhold'],
+      ['Complete','s-complete'],
+    ].map(function(s) {
+      var isCurrent = wo.Status === s[0];
+      return '<button class="status-btn ' + s[1] + (isCurrent ? ' current' : '') + '" onclick="setStatus(\'' + wo.ID + '\',' + idx + ',\'' + s[0] + '\')">' + s[0] + '</button>';
+    }).join('');
+
+    html += '<div class="wo-card ' + pri + '" id="card-' + idx + '">' +
+      '<div class="wo-header" onclick="toggleCard(' + idx + ')">' +
+        '<div class="wo-header-left">' +
+          '<div class="wo-id">' + esc(wo.ID) + '</div>' +
+          '<div class="wo-address">' + esc(addrLine) + '</div>' +
+          '<div class="wo-trade">' + esc(wo.Trade || '—') + '</div>' +
+          '<div class="wo-desc">' + esc(descShort) + '</div>' +
+        '</div>' +
+        '<div class="wo-header-right">' +
+          '<span class="badge badge-' + pri + '">' + pri + '</span>' +
+          '<span class="badge ' + statusClass + '">' + esc(wo.Status) + '</span>' +
+          '<span class="expand-icon">▾</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="wo-detail" id="detail-' + idx + '">' +
+        '<div class="detail-row"><span class="detail-label">Address</span><span class="detail-val">' + esc(wo.property_address) + (wo.unit_label ? ' Unit ' + esc(wo.unit_label) : '') + '</span></div>' +
+        '<div class="detail-row"><span class="detail-label">Issue</span><span class="detail-val">' + esc(wo.Description || '—') + '</span></div>' +
+        '<div class="detail-row"><span class="detail-label">Tenant</span><span class="detail-val">' + tenantHtml + '</span></div>' +
+        (wo.Notes ? '<div class="detail-row"><span class="detail-label">Notes</span><span class="detail-val">' + esc(wo.Notes) + '</span></div>' : '') +
+        (wo.Scheduled_Date ? '<div class="detail-row"><span class="detail-label">Scheduled</span><span class="detail-val">' + esc(wo.Scheduled_Date) + '</span></div>' : '') +
+        (wo.access_notes ? '<div class="detail-row"><span class="detail-label">Access</span><span class="detail-val">' + esc(wo.access_notes) + '</span></div>' : '') +
+        '<div style="margin-bottom:8px;"><div class="detail-label" style="margin-bottom:6px;">LOCKBOX</div>' + lbHtml + '</div>' +
+        '<div class="action-section">' +
+          '<div class="action-title">UPDATE STATUS</div>' +
+          '<div class="status-btns">' + statusBtns + '</div>' +
+          '<textarea id="notes-' + idx + '" placeholder="Add notes (optional)…"></textarea>' +
+          '<div class="btn-row">' +
+            '<button class="btn btn-sm btn-green" onclick="submitStatus(\'' + wo.ID + '\',' + idx + ')">SAVE STATUS</button>' +
+            '<label class="btn btn-sm btn-blue" style="display:inline-block;cursor:pointer;">' +
+              '📷 PHOTO' +
+              '<input type="file" accept="image/*" onchange="uploadPhoto(\'' + wo.ID + '\',this)">' +
+            '</label>' +
+          '</div>' +
+          '<div id="photo-preview-' + idx + '" class="photo-preview" style="margin-top:8px;"></div>' +
+          '<div id="action-msg-' + idx + '"></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  });
+
+  list.innerHTML = html;
+
+  // Store WOs for status tracking
+  window._wos = wos;
+  window._pendingStatus = {};
+}
+
+function toggleCard(idx) {
+  var card = document.getElementById('card-' + idx);
+  card.classList.toggle('expanded');
+}
+
+// ── Status ───────────────────────────────────────────────────
+
+function setStatus(woId, idx, status) {
+  if (!window._pendingStatus) window._pendingStatus = {};
+  window._pendingStatus[idx] = status;
+  // Update button highlights
+  var btns = document.querySelectorAll('#detail-' + idx + ' .status-btn');
+  btns.forEach(function(b) {
+    b.classList.remove('current');
+    if (b.textContent === status) b.classList.add('current');
+  });
+}
+
+function submitStatus(woId, idx) {
+  var status = window._pendingStatus && window._pendingStatus[idx];
+  var notes = document.getElementById('notes-' + idx).value.trim();
+  if (!status) {
+    showActionMsg(idx, 'Select a status first.', 'warn');
+    return;
+  }
+  showActionMsg(idx, 'Saving…', '');
+  api('/status', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ wo_id: woId, status: status, notes: notes }),
+  }).then(function(data) {
+    if (data.success) {
+      showActionMsg(idx, '✓ Status updated to ' + status, 'success');
+      // Update badge in card header
+      var card = document.getElementById('card-' + idx);
+      var badge = card.querySelector('.wo-header-right .badge:last-of-type');
+      if (badge) {
+        badge.textContent = status;
+        var statusClass = {
+          'Accepted': 'badge-accepted',
+          'In Progress': 'badge-inprogress',
+          'On Hold': 'badge-onhold',
+        }[status] || 'badge-status';
+        badge.className = 'badge ' + statusClass;
+      }
+      if (status === 'Complete' && currentTab === 'open') {
+        setTimeout(function(){ loadWorkOrders(); }, 1500);
+      }
+    } else {
+      showActionMsg(idx, 'Error saving status.', 'error');
+    }
+  }).catch(function() {
+    showActionMsg(idx, 'Connection error.', 'error');
+  });
+}
+
+// ── Photo Upload ─────────────────────────────────────────────
+
+function uploadPhoto(woId, input) {
+  if (!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  // Find the idx from the input's ancestor card
+  var card = input.closest('.wo-card');
+  var idx = card ? card.id.replace('card-','') : '0';
+
+  showActionMsg(idx, 'Uploading photo…', '');
+  var form = new FormData();
+  form.append('file', file);
+  form.append('wo_id', woId);
+
+  fetch(WORKER + '/upload-photo', {
+    method: 'POST',
+    headers: {'X-Auth-Token': SECRET},
+    body: form,
+  }).then(function(r){ return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        showActionMsg(idx, '✓ Photo uploaded', 'success');
+        var preview = document.getElementById('photo-preview-' + idx);
+        if (preview && data.view_url) {
+          var img = document.createElement('img');
+          img.src = data.view_url.replace('/view','');
+          img.className = 'photo-thumb';
+          img.onclick = function(){ window.open(data.view_url,'_blank'); };
+          preview.appendChild(img);
+        }
+      } else {
+        showActionMsg(idx, 'Upload failed: ' + (data.error||'unknown'), 'error');
+      }
+    }).catch(function() {
+      showActionMsg(idx, 'Upload failed.', 'error');
+    });
+  input.value = '';
+}
+
+function showActionMsg(idx, msg, type) {
+  var el = document.getElementById('action-msg-' + idx);
+  if (!el) return;
+  if (!msg) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div class="msg ' + (type || '') + '" style="margin-top:8px;">' + msg + '</div>';
+}
+
+// ── Utility ──────────────────────────────────────────────────
+
+function show(id, visible) {
+  document.getElementById(id).className = 'screen' + (visible ? ' active' : '');
+}
+
+function esc(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
