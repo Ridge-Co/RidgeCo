@@ -62,6 +62,7 @@
   .badge-invoiced { background: #2d1f06; color: var(--accent); }
   .badge-paid { background: #1f2d1f; color: #6ee7b7; }
   .badge-declined { background: #2d1a1a; color: var(--danger); }
+  .badge-cancelled { background: #1e1e1e; color: var(--muted); border: 1px solid var(--border); }
   .priority-urgent { border-left: 3px solid var(--danger); }
   .priority-normal { border-left: 3px solid var(--border); }
   .priority-low { border-left: 3px solid var(--muted); }
@@ -112,6 +113,9 @@
   .loading { color: var(--muted); font-size: 12px; padding: 20px; text-align: center; letter-spacing: 0.1em; }
   .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 8px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* Native select dark theme — make selection visible */
+  select[size] option:checked, select[size] option:hover { background: var(--accent) !important; color: #000 !important; }
+  select[size] option { padding: 6px 10px; }
   @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } .stats-row { grid-template-columns: repeat(2, 1fr); } .wo-right { flex-direction: column; gap: 4px; } }
 </style>
 </head>
@@ -170,6 +174,7 @@
         <option value="Invoiced">INVOICED</option>
         <option value="Paid">PAID</option>
         <option value="Declined">DECLINED</option>
+        <option value="Cancelled">CANCELLED</option>
       </select>
     </div>
     <div class="search-bar"><input type="text" id="wo-search" placeholder="Search by address, trade, or WO ID..." oninput="renderWOPage()"></div>
@@ -231,7 +236,7 @@
       <div class="form-group full">
         <label>Property</label>
         <input type="text" id="wo-prop-filter" placeholder="Filter by address or number..." oninput="filterWOPropsNative()" autocomplete="off" style="margin-bottom:6px">
-        <select id="wo-property" onchange="woPropertySelected()" size="6" style="height:auto;min-height:120px;font-size:13px">
+        <select id="wo-property" onchange="woPropertySelected()" onclick="woPropertySelected()" size="6" style="height:auto;min-height:120px;font-size:13px;cursor:pointer">
           <option value="">— select a property —</option>
         </select>
       </div>
@@ -350,7 +355,7 @@
       <div class="form-group full">
         <label>Property</label>
         <input type="text" id="ewo-prop-filter" placeholder="Filter by address or number..." oninput="filterEWOPropsNative()" autocomplete="off" style="margin-bottom:6px">
-        <select id="ewo-property" onchange="ewoPropertySelected()" size="5" style="height:auto;min-height:100px;font-size:13px">
+        <select id="ewo-property" onchange="ewoPropertySelected()" onclick="ewoPropertySelected()" size="5" style="height:auto;min-height:100px;font-size:13px;cursor:pointer">
           <option value="">— select a property —</option>
         </select>
       </div>
@@ -364,6 +369,7 @@
           <option>New</option><option>Assigned</option><option>Accepted</option>
           <option>In Progress</option><option>On Hold</option><option>Complete</option>
           <option>Pending Invoice</option><option>Invoiced</option><option>Paid</option><option>Declined</option>
+          <option>Cancelled</option>
         </select>
       </div>
       <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
@@ -436,7 +442,7 @@ function populatePropSelect(selectId, props, selectedId) {
   sel.innerHTML = props.map(function(p) {
     var units = safeArray(state.units).filter(function(u){return u.Property_ID===p.ID;});
     var label = p.Address + (p.City ? ', '+p.City : '') + (units.length ? '  (' + units.length + ' unit' + (units.length!==1?'s':'') + ')' : '');
-    return '<option value="' + p.ID + '"' + (p.ID===selectedId?' selected':'') + '>' + label + '</option>';
+    return '<option value="' + p.ID + '"' + (String(p.ID)===String(selectedId)?' selected':'') + '>' + label + '</option>';
   }).join('');
 }
 
@@ -449,6 +455,11 @@ function filterWOPropsNative() {
   }));
   var cur = document.getElementById('wo-property').value;
   populatePropSelect('wo-property', filtered, cur);
+  // Auto-select when exactly one result remains
+  if (filtered.length === 1) {
+    document.getElementById('wo-property').value = filtered[0].ID;
+    woPropertySelected();
+  }
 }
 
 function woPropertySelected() {
@@ -488,6 +499,11 @@ function filterEWOPropsNative() {
   }));
   var cur = document.getElementById('ewo-property').value;
   populatePropSelect('ewo-property', filtered, cur);
+  // Auto-select when exactly one result remains
+  if (filtered.length === 1) {
+    document.getElementById('ewo-property').value = filtered[0].ID;
+    ewoPropertySelected();
+  }
 }
 
 function ewoPropertySelected() {
@@ -650,6 +666,7 @@ function openWODetail(woId) {
   if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
   if (['Complete','Pending Invoice'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
+  if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   openModal('modal-wo-detail');
 }
 
@@ -671,6 +688,13 @@ function submitAssign() {
   api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId}).then(function(res){
     if (res.success) { toast('Assigned. Vendor SMS: '+(res.vendor_sms?'✅':'❌')+' | Tenant SMS: '+(res.tenant_sms?'✅':'—'),'success'); closeModal('modal-assign'); loadAll(); }
   }).catch(function(e){logError('Assign vendor',e.message);toast('Error: '+e.message,'error');});
+}
+
+function cancelWO(woId) {
+  if (!confirm('Cancel work order ' + woId + '? This cannot be undone.')) return;
+  api('POST','/workorder/update',{id:woId, fields:{Status:'Cancelled'}}).then(function(){
+    toast(woId + ' cancelled','info'); closeModal('modal-wo-detail'); loadAll();
+  }).catch(function(e){toast('Error: '+e.message,'error');});
 }
 
 function updateWOStatus(woId,status) {
