@@ -6,18 +6,9 @@
 <title>Ridge Co — Maintenance Hub</title>
 <style>
   :root {
-    --bg: #0f0f0f;
-    --surface: #1a1a1a;
-    --surface2: #242424;
-    --border: #2e2e2e;
-    --text: #e8e6e1;
-    --muted: #888;
-    --accent: #e8a020;
-    --accent2: #4ade80;
-    --danger: #f87171;
-    --warn: #fbbf24;
-    --info: #60a5fa;
-    --radius: 6px;
+    --bg: #0f0f0f; --surface: #1a1a1a; --surface2: #242424; --border: #2e2e2e;
+    --text: #e8e6e1; --muted: #888; --accent: #e8a020; --accent2: #4ade80;
+    --danger: #f87171; --warn: #fbbf24; --info: #60a5fa; --radius: 6px;
     --font: 'Courier New', monospace;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -65,8 +56,9 @@
   .badge-assigned { background: #2d2006; color: var(--warn); }
   .badge-accepted { background: #1a3320; color: var(--accent2); }
   .badge-scheduled { background: #1a3320; color: var(--accent2); }
-  .badge-inprogress,.badge-in { background: #1a3320; color: var(--accent2); }
+  .badge-inprogress,.badge-in,.badge-in-progress { background: #1a3320; color: var(--accent2); }
   .badge-complete { background: #1f2d1f; color: #6ee7b7; }
+  .badge-pendinginvoice,.badge-pending-invoice { background: #2d1f06; color: var(--warn); }
   .badge-invoiced { background: #2d1f06; color: var(--accent); }
   .badge-paid { background: #1f2d1f; color: #6ee7b7; }
   .badge-declined { background: #2d1a1a; color: var(--danger); }
@@ -81,6 +73,15 @@
   input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
   textarea { resize: vertical; min-height: 80px; }
   select option { background: var(--surface2); }
+  /* Searchable property dropdown */
+  .search-select { position: relative; }
+  .search-select input[type=text] { width: 100%; }
+  .prop-dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; background: var(--surface2); border: 1px solid var(--accent); border-top: none; border-radius: 0 0 var(--radius) var(--radius); max-height: 220px; overflow-y: auto; z-index: 300; }
+  .prop-dropdown.open { display: block; }
+  .prop-option { padding: 9px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .prop-option:hover { background: var(--surface); color: var(--accent); }
+  .prop-option:last-child { border-bottom: none; }
+  .prop-option .po-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; align-items: flex-start; justify-content: center; padding: 40px 20px; overflow-y: auto; }
   .modal-overlay.open { display: flex; }
   .modal { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); width: 100%; max-width: 580px; padding: 24px; }
@@ -162,8 +163,10 @@
         <option value="New">NEW</option>
         <option value="Assigned">ASSIGNED</option>
         <option value="Accepted">ACCEPTED</option>
-        <option value="Scheduled">SCHEDULED</option>
+        <option value="In Progress">IN PROGRESS</option>
+        <option value="On Hold">ON HOLD</option>
         <option value="Complete">COMPLETE</option>
+        <option value="Pending Invoice">PENDING INVOICE</option>
         <option value="Invoiced">INVOICED</option>
         <option value="Paid">PAID</option>
         <option value="Declined">DECLINED</option>
@@ -199,7 +202,6 @@
     <div class="section-title">OUTSTANDING INVOICES</div>
     <div id="invoices-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
-</div>
 
   <div class="page" id="page-devlog">
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
@@ -215,17 +217,24 @@
     </div>
     <div id="wishlist-list" style="margin-bottom:24px"><div class="loading">No items yet</div></div>
     <div class="section-title">TROUBLESHOOTING CACHE</div>
-    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review. Refresh clears the response so it regenerates next use.</p>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review.</p>
     <button class="btn secondary small" onclick="loadCache()" style="margin-bottom:12px">↻ Refresh Cache List</button>
     <div id="cache-list"><div class="loading">Click refresh to load</div></div>
   </div>
+</div>
 
 <!-- NEW WORK ORDER MODAL -->
 <div class="modal-overlay" id="modal-new-wo">
   <div class="modal">
     <div class="modal-header"><div class="modal-title">NEW WORK ORDER</div><button class="modal-close" onclick="closeModal('modal-new-wo')">✕</button></div>
     <div class="form-grid">
-      <div class="form-group full"><label>Property</label><select id="wo-property" onchange="loadUnitsForWO()"><option value="">Select property...</option></select></div>
+      <div class="form-group full">
+        <label>Property</label>
+        <input type="text" id="wo-prop-filter" placeholder="Filter by address or number..." oninput="filterWOPropsNative()" autocomplete="off" style="margin-bottom:6px">
+        <select id="wo-property" onchange="woPropertySelected()" size="6" style="height:auto;min-height:120px;font-size:13px">
+          <option value="">— select a property —</option>
+        </select>
+      </div>
       <div class="form-group" id="wo-unit-group" style="display:none"><label>Unit</label><select id="wo-unit"><option value="">Whole property</option></select></div>
       <div class="form-group"><label>Trade</label><select id="wo-trade"><option value="">Select...</option><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
       <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
@@ -340,69 +349,28 @@
     <div class="form-grid">
       <div class="form-group full">
         <label>Property</label>
-        <select id="ewo-property" onchange="ewoPropertyChanged()">
-          <option value="">Select property...</option>
+        <input type="text" id="ewo-prop-filter" placeholder="Filter by address or number..." oninput="filterEWOPropsNative()" autocomplete="off" style="margin-bottom:6px">
+        <select id="ewo-property" onchange="ewoPropertySelected()" size="5" style="height:auto;min-height:100px;font-size:13px">
+          <option value="">— select a property —</option>
         </select>
       </div>
-      <div class="form-group" id="ewo-unit-group">
-        <label>Unit</label>
-        <select id="ewo-unit" onchange="ewoUnitChanged()">
-          <option value="">Whole property</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Tenant (auto from unit)</label>
-        <select id="ewo-tenant">
-          <option value="">None</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Vendor</label>
-        <select id="ewo-vendor">
-          <option value="">Unassigned</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Trade</label>
-        <select id="ewo-trade">
-          <option>Plumbing</option><option>HVAC</option><option>Electric</option>
-          <option>General</option><option>Landscaping</option><option>Appliance</option>
-          <option>Roofing</option><option>Pest Control</option><option>Other</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Priority</label>
-        <select id="ewo-priority">
-          <option value="normal">Normal</option>
-          <option value="urgent">Urgent</option>
-          <option value="low">Low</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Status</label>
+      <div class="form-group" id="ewo-unit-group"><label>Unit</label><select id="ewo-unit" onchange="ewoUnitChanged()"><option value="">Whole property</option></select></div>
+      <div class="form-group"><label>Tenant (auto from unit)</label><select id="ewo-tenant"><option value="">None</option></select></div>
+      <div class="form-group"><label>Vendor</label><select id="ewo-vendor"><option value="">Unassigned</option></select></div>
+      <div class="form-group"><label>Trade</label><select id="ewo-trade"><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
+      <div class="form-group"><label>Priority</label><select id="ewo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
+      <div class="form-group"><label>Status</label>
         <select id="ewo-status">
           <option>New</option><option>Assigned</option><option>Accepted</option>
-          <option>Scheduled</option><option>In Progress</option><option>Complete</option>
-          <option>Invoiced</option><option>Paid</option><option>Declined</option>
+          <option>In Progress</option><option>On Hold</option><option>Complete</option>
+          <option>Pending Invoice</option><option>Invoiced</option><option>Paid</option><option>Declined</option>
         </select>
       </div>
-      <div class="form-group">
-        <label>Scheduled Date</label>
-        <input type="date" id="ewo-scheduled">
-      </div>
-      <div class="form-group full">
-        <label>Description</label>
-        <input type="text" id="ewo-description">
-      </div>
-      <div class="form-group full">
-        <label>Notes</label>
-        <textarea id="ewo-notes"></textarea>
-      </div>
+      <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
+      <div class="form-group full"><label>Description</label><input type="text" id="ewo-description"></div>
+      <div class="form-group full"><label>Notes</label><textarea id="ewo-notes"></textarea></div>
     </div>
-    <div class="modal-actions">
-      <button class="btn secondary" onclick="closeModal('modal-edit-wo')">Cancel</button>
-      <button class="btn" onclick="submitEditWO()">Save Changes</button>
-    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-wo')">Cancel</button><button class="btn" onclick="submitEditWO()">Save Changes</button></div>
   </div>
 </div>
 
@@ -416,20 +384,11 @@
       <div class="form-group"><label>Company</label><input type="text" id="ev-company"></div>
       <div class="form-group"><label>Phone</label><input type="tel" id="ev-phone"></div>
       <div class="form-group"><label>Email</label><input type="email" id="ev-email"></div>
-      <div class="form-group"><label>Trade</label>
-        <select id="ev-trade">
-          <option>Plumbing</option><option>HVAC</option><option>Electric</option>
-          <option>General</option><option>Landscaping</option><option>Appliance</option>
-          <option>Roofing</option><option>Pest Control</option><option>Other</option>
-        </select>
-      </div>
+      <div class="form-group"><label>Trade</label><select id="ev-trade"><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
       <div class="form-group"><label>Markets</label><input type="text" id="ev-markets"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
     </div>
-    <div class="modal-actions">
-      <button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button>
-      <button class="btn" onclick="submitEditVendor()">Save Changes</button>
-    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
   </div>
 </div>
 
@@ -443,441 +402,502 @@
       <div class="form-group"><label>Last Name</label><input type="text" id="et-last"></div>
       <div class="form-group"><label>Phone</label><input type="tel" id="et-phone"></div>
       <div class="form-group"><label>Email</label><input type="email" id="et-email"></div>
-      <div class="form-group full"><label>Status</label>
-        <select id="et-active">
-          <option value="TRUE">Active</option>
-          <option value="FALSE">Inactive / Moved Out</option>
-        </select>
-      </div>
+      <div class="form-group full"><label>Status</label><select id="et-active"><option value="TRUE">Active</option><option value="FALSE">Inactive / Moved Out</option></select></div>
     </div>
-    <div class="modal-actions">
-      <button class="btn secondary" onclick="closeModal('modal-edit-tenant')">Cancel</button>
-      <button class="btn" onclick="submitEditTenant()">Save Changes</button>
-    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-tenant')">Cancel</button><button class="btn" onclick="submitEditTenant()">Save Changes</button></div>
   </div>
 </div>
 
 <div id="toast-container"></div>
 
 <script>
-const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-const SECRET_KEY = 'mh_auth';
-let AUTH_TOKEN = '';
-let state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };
-function safeArray(val) { return Array.isArray(val) ? val : []; }
-let assignWOId = null;
-let invoiceWOId = null;
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';
+var AUTH_TOKEN = '';
+var state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };
+function safeArray(v) { return Array.isArray(v) ? v : []; }
+var assignWOId = null;
+var invoiceWOId = null;
 
+// ── Numeric address sort ───────────────────────────────────────────
+function sortPropsNumeric(props) {
+  return props.slice().sort(function(a, b) {
+    var numA = parseInt((a.Address||'').split(' ')[0]) || 99999;
+    var numB = parseInt((b.Address||'').split(' ')[0]) || 99999;
+    if (numA !== numB) return numA - numB;
+    return (a.Address||'').localeCompare(b.Address||'');
+  });
+}
+
+// Populate a native <select> with sorted/filtered properties
+function populatePropSelect(selectId, props, selectedId) {
+  var sel = document.getElementById(selectId);
+  if (!props.length) { sel.innerHTML = '<option value="">No properties found</option>'; return; }
+  sel.innerHTML = props.map(function(p) {
+    var units = safeArray(state.units).filter(function(u){return u.Property_ID===p.ID;});
+    var label = p.Address + (p.City ? ', '+p.City : '') + (units.length ? '  (' + units.length + ' unit' + (units.length!==1?'s':'') + ')' : '');
+    return '<option value="' + p.ID + '"' + (p.ID===selectedId?' selected':'') + '>' + label + '</option>';
+  }).join('');
+}
+
+// ─── New WO property picker ───────────────────────────────────────────────
+function filterWOPropsNative() {
+  var q = (document.getElementById('wo-prop-filter').value||'').toLowerCase();
+  var filtered = sortPropsNumeric(safeArray(state.properties).filter(function(p){
+    return p.Active !== 'FALSE' &&
+      ((p.Address||'').toLowerCase().indexOf(q) > -1 || (p.City||'').toLowerCase().indexOf(q) > -1);
+  }));
+  var cur = document.getElementById('wo-property').value;
+  populatePropSelect('wo-property', filtered, cur);
+}
+
+function woPropertySelected() {
+  var propId = document.getElementById('wo-property').value;
+  var prop = safeArray(state.properties).find(function(p){ return p.ID === propId; });
+  var preview = document.getElementById('wo-prop-preview');
+  if (!prop || !propId) {
+    preview.style.display = 'none';
+    document.getElementById('wo-unit-group').style.display = 'none';
+    return;
+  }
+  var h = '<div class="prop-detail"><div class="prop-name">' + prop.Address + '</div><div class="prop-grid">';
+  if (prop.Lockbox_Code)    h += '<div><div class="pf-label">Lockbox</div><div class="pf-val sensitive">' + prop.Lockbox_Code + '</div></div>';
+  if (prop.Lock_Code)       h += '<div><div class="pf-label">Door Code</div><div class="pf-val sensitive">' + prop.Lock_Code + '</div></div>';
+  if (prop.Water_Shutoff)   h += '<div><div class="pf-label">Water Shutoff</div><div class="pf-val">' + prop.Water_Shutoff + '</div></div>';
+  if (prop.HVAC_Filter_Size) h += '<div><div class="pf-label">HVAC Filter</div><div class="pf-val">' + prop.HVAC_Filter_Size + '</div></div>';
+  h += '</div></div>';
+  preview.innerHTML = h;
+  preview.style.display = 'block';
+  var units = safeArray(state.units).filter(function(u){ return u.Property_ID === propId; });
+  if (units.length) {
+    var sel = document.getElementById('wo-unit');
+    sel.innerHTML = '<option value="">Whole property</option>' +
+      units.map(function(u){ return '<option value="' + u.ID + '">Unit ' + u.Unit_Label + '</option>'; }).join('');
+    document.getElementById('wo-unit-group').style.display = 'flex';
+  } else {
+    document.getElementById('wo-unit-group').style.display = 'none';
+  }
+}
+
+// ─── Edit WO property picker ───────────────────────────────────────────────
+function filterEWOPropsNative() {
+  var q = (document.getElementById('ewo-prop-filter').value||'').toLowerCase();
+  var filtered = sortPropsNumeric(safeArray(state.properties).filter(function(p){
+    return p.Active !== 'FALSE' &&
+      ((p.Address||'').toLowerCase().indexOf(q) > -1 || (p.City||'').toLowerCase().indexOf(q) > -1);
+  }));
+  var cur = document.getElementById('ewo-property').value;
+  populatePropSelect('ewo-property', filtered, cur);
+}
+
+function ewoPropertySelected() {
+  var propId = document.getElementById('ewo-property').value;
+  ewoPopulateUnits(propId, '');
+  ewoPopulateTenants('', '');
+}
+
+// ── Login ────────────────────────────────────────────────────
 function doLogin() {
-  const val = document.getElementById('login-input').value.trim();
+  var val = document.getElementById('login-input').value.trim();
   AUTH_TOKEN = val;
-  api('GET','/config').then(() => {
+  api('GET','/config').then(function() {
     localStorage.setItem(SECRET_KEY, val);
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     loadAll();
-  }).catch(() => {
+  }).catch(function() {
     AUTH_TOKEN = '';
     document.getElementById('login-error').style.display = 'block';
   });
 }
-document.getElementById('login-input').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+document.getElementById('login-input').addEventListener('keydown', function(e) { if(e.key==='Enter') doLogin(); });
 
-const stored = localStorage.getItem(SECRET_KEY);
+var stored = localStorage.getItem(SECRET_KEY);
 if (stored) {
   AUTH_TOKEN = stored;
-  api('GET','/config').then(() => {
+  api('GET','/config').then(function() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     loadAll();
-  }).catch(() => { localStorage.removeItem(SECRET_KEY); AUTH_TOKEN = ''; });
+  }).catch(function() { localStorage.removeItem(SECRET_KEY); AUTH_TOKEN = ''; });
 }
 
-async function api(method, path, body) {
-  const opts = { method, headers: {'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+function api(method, path, body) {
+  var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(WORKER + path, opts);
-  const data = await res.json();
-  if (data.error === 'Unauthorized') throw new Error('Unauthorized');
-  return data;
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.json().then(function(data){
+      if (data.error === 'Unauthorized') throw new Error('Unauthorized');
+      return data;
+    });
+  });
 }
 
-async function loadAll() {
-  try {
-    const results = await Promise.allSettled([
-      api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
-      api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners')
-    ]);
-    const names = ['properties','units','tenants','vendors','workorders','invoices','owners'];
-    results.forEach((r,i) => {
-      if(r.status === 'fulfilled') {
-        const val = r.value;
-        // Worker may return array directly or {error:...} or something else
-        state[names[i]] = Array.isArray(val) ? val : (Array.isArray(val?.data) ? val.data : []);
-        if(!Array.isArray(r.value)) logError('Load '+names[i], 'Not array: '+JSON.stringify(r.value).substring(0,100));
+function loadAll() {
+  Promise.allSettled([
+    api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
+    api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners')
+  ]).then(function(results) {
+    var names = ['properties','units','tenants','vendors','workorders','invoices','owners'];
+    results.forEach(function(r,i) {
+      if (r.status === 'fulfilled') {
+        state[names[i]] = Array.isArray(r.value) ? r.value : [];
+        if (!Array.isArray(r.value)) logError('Load '+names[i], 'Not array: '+JSON.stringify(r.value).substring(0,100));
       } else {
         state[names[i]] = [];
         logError('Load '+names[i], r.reason?.message || 'Failed');
       }
     });
-    renderDashboard(); renderWOPage(); renderPropertiesPage(); renderVendorsPage(); renderTenantsPage(); renderInvoicesPage();
-    const loaded = names.filter((_,i)=>results[i].status==='fulfilled').length;
+    renderDashboard(); renderWOPage(); renderPropertiesPage();
+    renderVendorsPage(); renderTenantsPage(); renderInvoicesPage();
+    loadWishlist();
+    var loaded = results.filter(function(r){return r.status==='fulfilled';}).length;
     toast('Loaded '+loaded+'/7 data sets','success');
-  } catch(e) { logError('Load all data',e.message); toast('Load error: '+e.message,'error'); }
+  });
 }
 
 function showPage(name, btn) {
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
+  document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('page-'+name).classList.add('active');
-  if(btn) btn.classList.add('active');
+  if (btn) btn.classList.add('active');
+  if (name === 'devlog') { renderErrorLog(); loadWishlist(); }
 }
 
+// ── Dashboard ────────────────────────────────────────────────
 function renderDashboard() {
-  const wos = safeArray(state.workorders);
-  document.getElementById('stat-open').textContent = wos.filter(w=>!['Complete','Paid'].includes(w.Status)).length;
-  document.getElementById('stat-urgent').textContent = wos.filter(w=>w.Priority==='urgent'&&!['Complete','Paid'].includes(w.Status)).length;
-  document.getElementById('stat-invoiced').textContent = wos.filter(w=>w.Status==='Invoiced').length;
+  var wos = safeArray(state.workorders);
+  var closed = ['Complete','Paid'];
+  document.getElementById('stat-open').textContent = wos.filter(function(w){return !closed.includes(w.Status);}).length;
+  document.getElementById('stat-urgent').textContent = wos.filter(function(w){return w.Priority==='urgent'&&!closed.includes(w.Status);}).length;
+  document.getElementById('stat-invoiced').textContent = wos.filter(function(w){return w.Status==='Invoiced';}).length;
   document.getElementById('stat-props').textContent = state.properties.length;
-  const active = wos.filter(w=>!['Complete','Paid'].includes(w.Status)).sort((a,b)=>({urgent:0,normal:1,low:2}[a.Priority]||1)-({urgent:0,normal:1,low:2}[b.Priority]||1)).slice(0,15);
-  const el = document.getElementById('dashboard-wo-list');
+  var active = wos.filter(function(w){return !closed.includes(w.Status);})
+    .sort(function(a,b){return ({urgent:0,normal:1,low:2}[a.Priority]||1)-({urgent:0,normal:1,low:2}[b.Priority]||1);})
+    .slice(0,15);
+  var el = document.getElementById('dashboard-wo-list');
   el.innerHTML = active.length ? active.map(woCard).join('') : '<div class="loading">No active work orders</div>';
 }
 
 function woCard(w) {
-  const prop = safeArray(state.properties).find(p=>p.ID===w.Property_ID);
-  const vendor = safeArray(state.vendors).find(v=>v.ID===w.Vendor_ID);
-  const unit = safeArray(state.units).find(u=>u.ID===w.Unit_ID);
-  const addr = prop ? prop.Address : (w.Property_ID||'—');
-  const sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s/g,'');
-  return `<div class="wo-card priority-${w.Priority||'normal'}" onclick="openWODetail('${w.ID}')">
-    <div class="wo-id">${w.ID}</div>
-    <div class="wo-info">
-      <div class="wo-addr">${addr}${unit?' · Unit '+unit.Unit_Label:''}</div>
-      <div class="wo-desc">${w.Trade||''}${w.Description?' · '+w.Description.substring(0,60):''}</div>
-    </div>
-    <div class="wo-right">
-      <span class="badge ${sc}">${w.Status||'New'}</span>
-      ${vendor?`<span style="font-size:11px;color:var(--muted)">${vendor.Name}</span>`:''}
-    </div>
-  </div>`;
+  var prop = safeArray(state.properties).find(function(p){return p.ID===w.Property_ID;});
+  var vendor = safeArray(state.vendors).find(function(v){return v.ID===w.Vendor_ID;});
+  var unit = safeArray(state.units).find(function(u){return u.ID===w.Unit_ID;});
+  var addr = prop ? prop.Address : (w.Property_ID||'—');
+  var sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s+/g,'');
+  return '<div class="wo-card priority-'+(w.Priority||'normal')+'" onclick="openWODetail(\''+w.ID+'\')">' +
+    '<div class="wo-id">'+w.ID+'</div>' +
+    '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
+    '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+'</div></div>' +
+    '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
+    (vendor?'<span style="font-size:11px;color:var(--muted)">'+vendor.Name+'</span>':'')+'</div></div>';
 }
 
+// ── Work Orders page ─────────────────────────────────────────
 function renderWOPage() {
-  const filter = document.getElementById('wo-filter')?.value||'all';
-  const search = (document.getElementById('wo-search')?.value||'').toLowerCase();
-  let wos = [...safeArray(state.workorders)];
-  if(filter!=='all') wos = wos.filter(w=>w.Status===filter);
-  if(search) wos = wos.filter(w=>{
-    const prop = state.properties.find(p=>p.ID===w.Property_ID);
-    return (prop?.Address||'').toLowerCase().includes(search)||(w.Trade||'').toLowerCase().includes(search)||(w.ID||'').toLowerCase().includes(search)||(w.Description||'').toLowerCase().includes(search);
+  var filter = (document.getElementById('wo-filter')||{}).value||'all';
+  var search = ((document.getElementById('wo-search')||{}).value||'').toLowerCase();
+  var wos = safeArray(state.workorders).slice();
+  if (filter !== 'all') wos = wos.filter(function(w){return w.Status===filter;});
+  if (search) wos = wos.filter(function(w){
+    var prop = state.properties.find(function(p){return p.ID===w.Property_ID;});
+    return (prop&&(prop.Address||'').toLowerCase().includes(search))||(w.Trade||'').toLowerCase().includes(search)||(w.ID||'').toLowerCase().includes(search)||(w.Description||'').toLowerCase().includes(search);
   });
-  wos.sort((a,b)=>new Date(b.Created_Date)-new Date(a.Created_Date));
-  const el = document.getElementById('wo-list-full');
+  wos.sort(function(a,b){return new Date(b.Created_Date)-new Date(a.Created_Date);});
+  var el = document.getElementById('wo-list-full');
   el.innerHTML = wos.length ? wos.map(woCard).join('') : '<div class="loading">No work orders found</div>';
 }
 
+// ── WO Detail ────────────────────────────────────────────────
 function openWODetail(woId) {
-  const wo = state.workorders.find(w=>w.ID===woId); if(!wo) return;
-  const prop = state.properties.find(p=>p.ID===wo.Property_ID);
-  const unit = state.units.find(u=>u.ID===wo.Unit_ID);
-  const vendor = state.vendors.find(v=>v.ID===wo.Vendor_ID);
-  const tenant = state.tenants.find(t=>t.ID===wo.Tenant_ID||(unit&&t.ID===unit.Tenant_ID));
+  var wo = state.workorders.find(function(w){return w.ID===woId;}); if(!wo) return;
+  var prop = state.properties.find(function(p){return p.ID===wo.Property_ID;});
+  var unit = state.units.find(function(u){return u.ID===wo.Unit_ID;});
+  var vendor = state.vendors.find(function(v){return v.ID===wo.Vendor_ID;});
+  var tenant = state.tenants.find(function(t){return t.ID===wo.Tenant_ID||(unit&&t.ID===unit.Tenant_ID);});
   document.getElementById('detail-wo-id').textContent = woId;
-  const sc = 'badge-'+(wo.Status||'new').toLowerCase().replace(/\s/g,'');
-  let propHtml = '';
-  if(prop) {
-    propHtml = `<div class="prop-detail"><div class="prop-name">${prop.Address}${unit?' — Unit '+unit.Unit_Label:''}</div><div class="prop-grid">
-      ${prop.Lockbox_Code?`<div><div class="pf-label">Lockbox</div><div class="pf-val sensitive">${prop.Lockbox_Code}</div></div>`:''}
-      ${prop.Lock_Code?`<div><div class="pf-label">Door Code</div><div class="pf-val sensitive">${prop.Lock_Code}</div></div>`:''}
-      ${prop.Water_Shutoff?`<div><div class="pf-label">Water Shutoff</div><div class="pf-val">${prop.Water_Shutoff}</div></div>`:''}
-      ${prop.HVAC_Filter_Size?`<div><div class="pf-label">HVAC Filter</div><div class="pf-val">${prop.HVAC_Filter_Size}</div></div>`:''}
-      ${prop.Access_Notes?`<div><div class="pf-label">Access Notes</div><div class="pf-val">${prop.Access_Notes}</div></div>`:''}
-    </div></div>`;
+  var sc = 'badge-'+(wo.Status||'new').toLowerCase().replace(/\s+/g,'');
+  var propHtml = '';
+  if (prop) {
+    propHtml = '<div class="prop-detail"><div class="prop-name">'+prop.Address+(unit?' — Unit '+unit.Unit_Label:'')+'</div><div class="prop-grid">' +
+      (prop.Lockbox_Code?'<div><div class="pf-label">Lockbox</div><div class="pf-val sensitive">'+prop.Lockbox_Code+'</div></div>':'') +
+      (prop.Lock_Code?'<div><div class="pf-label">Door Code</div><div class="pf-val sensitive">'+prop.Lock_Code+'</div></div>':'') +
+      (prop.Water_Shutoff?'<div><div class="pf-label">Water Shutoff</div><div class="pf-val">'+prop.Water_Shutoff+'</div></div>':'') +
+      (prop.HVAC_Filter_Size?'<div><div class="pf-label">HVAC Filter</div><div class="pf-val">'+prop.HVAC_Filter_Size+'</div></div>':'') +
+      (prop.Access_Notes?'<div><div class="pf-label">Access Notes</div><div class="pf-val">'+prop.Access_Notes+'</div></div>':'') +
+      '</div></div>';
   }
-  document.getElementById('detail-body').innerHTML = propHtml+`
-    <table class="data-table" style="margin-bottom:16px">
-      <tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge ${sc}">${wo.Status||'New'}</span></td></tr>
-      <tr><td style="color:var(--muted)">Trade</td><td>${wo.Trade||'—'}</td></tr>
-      <tr><td style="color:var(--muted)">Priority</td><td>${wo.Priority||'normal'}</td></tr>
-      <tr><td style="color:var(--muted)">Description</td><td>${wo.Description||'—'}</td></tr>
-      <tr><td style="color:var(--muted)">Vendor</td><td>${vendor?vendor.Name+' · '+vendor.Phone:'<span style="color:var(--warn)">Unassigned</span>'}</td></tr>
-      <tr><td style="color:var(--muted)">Tenant</td><td>${tenant?`${tenant.First_Name} ${tenant.Last_Name} · ${tenant.Phone} <button class="btn small secondary" style="margin-left:8px" onclick="openEditTenantModal('${tenant.ID}')">Edit</button>`:'—'}</td></tr>
-      <tr><td style="color:var(--muted)">Scheduled</td><td>${wo.Scheduled_Date||'—'}</td></tr>
-      <tr><td style="color:var(--muted)">Vendor SMS</td><td>${wo.Vendor_SMS_Sent==='TRUE'?'✅ Sent':'—'}</td></tr>
-      <tr><td style="color:var(--muted)">Tenant SMS</td><td>${wo.Tenant_SMS_Sent==='TRUE'?'✅ Sent':'—'}</td></tr>
-      <tr><td style="color:var(--muted)">Notes</td><td>${wo.Notes||'—'}</td></tr>
-      <tr><td style="color:var(--muted)">Created</td><td>${wo.Created_Date?wo.Created_Date.split('T')[0]:'—'}</td></tr>
-    </table>`;
-  const actions = document.getElementById('detail-actions');
+  document.getElementById('detail-body').innerHTML = propHtml +
+    '<table class="data-table" style="margin-bottom:16px">' +
+    '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span></td></tr>' +
+    '<tr><td style="color:var(--muted)">Trade</td><td>'+(wo.Trade||'—')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Priority</td><td>'+(wo.Priority||'normal')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Description</td><td style="word-break:break-word;max-width:380px">'+linkify(wo.Description||'—')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Vendor</td><td>'+(vendor?vendor.Name+' · '+vendor.Phone:'<span style="color:var(--warn)">Unassigned</span>')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Tenant</td><td>'+(tenant?tenant.First_Name+' '+tenant.Last_Name+' · '+tenant.Phone:'—')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Scheduled</td><td>'+(wo.Scheduled_Date||'—')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Notes</td><td style="word-break:break-word;max-width:380px">'+linkify(wo.Notes||'—')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Created</td><td>'+(wo.Created_Date?wo.Created_Date.split('T')[0]:'—')+'</td></tr>' +
+    '</table>';
+  var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
-  const addBtn=(label,cls,fn)=>{ const b=document.createElement('button'); b.className='btn '+cls; b.textContent=label; b.onclick=fn; actions.appendChild(b); };
-  addBtn('Close','secondary',()=>closeModal('modal-wo-detail'));
-  addBtn('Edit','secondary',()=>openEditWOModal(woId));
-  if(!wo.Vendor_ID||wo.Status==='Declined') addBtn('Assign Vendor','',()=>openAssignModal(woId));
-  if(['Assigned','Accepted','Scheduled'].includes(wo.Status)) addBtn('Mark In Progress','secondary',()=>updateWOStatus(woId,'In Progress'));
-  if(['In Progress','Accepted','Scheduled'].includes(wo.Status)) addBtn('Mark Complete','success',()=>updateWOStatus(woId,'Complete'));
-  if(wo.Status==='Complete') addBtn('Log Invoice','',()=>openInvoiceModal(woId));
-  if(wo.Status==='Invoiced') addBtn('Mark Paid','success',()=>updateWOStatus(woId,'Paid'));
+  function addBtn(label,cls,fn){var b=document.createElement('button');b.className='btn '+cls;b.textContent=label;b.onclick=fn;actions.appendChild(b);}
+  addBtn('Close','secondary',function(){closeModal('modal-wo-detail');});
+  addBtn('Edit','secondary',function(){openEditWOModal(woId);});
+  if (!wo.Vendor_ID||wo.Status==='Declined') addBtn('Assign Vendor','',function(){openAssignModal(woId);});
+  if (['Assigned','Accepted'].includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
+  if (['In Progress','Accepted','On Hold'].includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
+  if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
+  if (['Complete','Pending Invoice'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
+  if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   openModal('modal-wo-detail');
 }
 
 function openAssignModal(woId) {
   assignWOId = woId;
-  const sel = document.getElementById('assign-vendor-select');
-  sel.innerHTML = '<option value="">Select vendor...</option>'+state.vendors.filter(v=>v.Active!=='FALSE').map(v=>`<option value="${v.ID}">${v.Name} — ${v.Trade} — ${v.Phone}</option>`).join('');
+  document.getElementById('assign-vendor-select').innerHTML = '<option value="">Select vendor...</option>' +
+    state.vendors.filter(function(v){return v.Active!=='FALSE';}).map(function(v){return '<option value="'+v.ID+'">'+v.Name+' — '+v.Trade+' — '+v.Phone+'</option>';}).join('');
   document.getElementById('assign-preview').textContent = '';
   closeModal('modal-wo-detail');
   openModal('modal-assign');
 }
 function updateAssignPreview() {
-  const v = state.vendors.find(x=>x.ID===document.getElementById('assign-vendor-select').value);
-  document.getElementById('assign-preview').textContent = v ? `SMS will be sent to ${v.Name} (${v.Phone}) with job details and access info.` : '';
+  var v = state.vendors.find(function(x){return x.ID===document.getElementById('assign-vendor-select').value;});
+  document.getElementById('assign-preview').textContent = v ? 'SMS will be sent to '+v.Name+' ('+v.Phone+') with job details and access info.' : '';
 }
-async function submitAssign() {
-  const vendorId = document.getElementById('assign-vendor-select').value;
-  if(!vendorId){toast('Select a vendor','error');return;}
-  try {
-    const res = await api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId});
-    if(res.success){toast(`Assigned. Vendor SMS: ${res.vendor_sms?'✅':'❌'} | Tenant SMS: ${res.tenant_sms?'✅':'—'}`,'success');closeModal('modal-assign');await loadAll();}
-  } catch(e){logError('Assign vendor',e.message);toast('Error: '+e.message,'error');}
+function submitAssign() {
+  var vendorId = document.getElementById('assign-vendor-select').value;
+  if (!vendorId) { toast('Select a vendor','error'); return; }
+  api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId}).then(function(res){
+    if (res.success) { toast('Assigned. Vendor SMS: '+(res.vendor_sms?'✅':'❌')+' | Tenant SMS: '+(res.tenant_sms?'✅':'—'),'success'); closeModal('modal-assign'); loadAll(); }
+  }).catch(function(e){logError('Assign vendor',e.message);toast('Error: '+e.message,'error');});
 }
 
-async function updateWOStatus(woId,status) {
-  try { await api('POST','/status',{wo_id:woId,status}); toast('Status: '+status,'success'); closeModal('modal-wo-detail'); await loadAll(); }
-  catch(e){logError('Update status',e.message);toast('Error: '+e.message,'error');}
+function updateWOStatus(woId,status) {
+  api('POST','/status',{wo_id:woId,status:status,updated_by:'admin'}).then(function(){
+    toast('Status: '+status,'success'); closeModal('modal-wo-detail'); loadAll();
+  }).catch(function(e){logError('Update status',e.message);toast('Error: '+e.message,'error');});
 }
 
 function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
-async function submitInvoice(){
-  const amount=document.getElementById('inv-amount').value;
+function submitInvoice(){
+  var amount=document.getElementById('inv-amount').value;
   if(!amount){toast('Enter amount','error');return;}
-  const wo=state.workorders.find(w=>w.ID===invoiceWOId);
-  try{await api('POST','/invoice',{wo_id:invoiceWOId,vendor_id:wo?.Vendor_ID||'',amount,qb_ref:document.getElementById('inv-qb').value,notes:document.getElementById('inv-notes').value});toast('Invoice logged','success');closeModal('modal-invoice');await loadAll();}
-  catch(e){logError('Log invoice',e.message);toast('Error: '+e.message,'error');}
+  var wo=state.workorders.find(function(w){return w.ID===invoiceWOId;});
+  api('POST','/invoice',{wo_id:invoiceWOId,vendor_id:wo?wo.Vendor_ID||'':'',amount:amount,qb_ref:document.getElementById('inv-qb').value,notes:document.getElementById('inv-notes').value})
+    .then(function(){toast('Invoice logged','success');closeModal('modal-invoice');loadAll();})
+    .catch(function(e){logError('Log invoice',e.message);toast('Error: '+e.message,'error');});
 }
 
-function openNewWOModal(){
-  document.getElementById('wo-property').innerHTML='<option value="">Select property...</option>'+state.properties.filter(p=>p.Active!=='FALSE').map(p=>`<option value="${p.ID}">${p.Address} — ${p.City}</option>`).join('');
-  document.getElementById('wo-prop-preview').style.display='none';
-  document.getElementById('wo-unit-group').style.display='none';
+// ── New WO ───────────────────────────────────────────────────
+function openNewWOModal() {
+  document.getElementById('wo-prop-filter').value = '';
+  document.getElementById('wo-prop-preview').style.display = 'none';
+  document.getElementById('wo-unit-group').style.display = 'none';
+  var sorted = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
+  populatePropSelect('wo-property', sorted, '');
   openModal('modal-new-wo');
 }
-function loadUnitsForWO(){
-  const propId=document.getElementById('wo-property').value;
-  const prop=state.properties.find(p=>p.ID===propId);
-  const preview=document.getElementById('wo-prop-preview');
-  if(!prop){preview.style.display='none';document.getElementById('wo-unit-group').style.display='none';return;}
-  let h=`<div class="prop-detail"><div class="prop-name">${prop.Address}</div><div class="prop-grid">`;
-  if(prop.Lockbox_Code) h+=`<div><div class="pf-label">Lockbox</div><div class="pf-val sensitive">${prop.Lockbox_Code}</div></div>`;
-  if(prop.Lock_Code) h+=`<div><div class="pf-label">Door Code</div><div class="pf-val sensitive">${prop.Lock_Code}</div></div>`;
-  if(prop.Water_Shutoff) h+=`<div><div class="pf-label">Water Shutoff</div><div class="pf-val">${prop.Water_Shutoff}</div></div>`;
-  if(prop.HVAC_Filter_Size) h+=`<div><div class="pf-label">HVAC Filter</div><div class="pf-val">${prop.HVAC_Filter_Size}</div></div>`;
-  h+='</div></div>';
-  preview.innerHTML=h; preview.style.display='block';
-  const units=state.units.filter(u=>u.Property_ID===propId);
-  if(units.length){const sel=document.getElementById('wo-unit');sel.innerHTML='<option value="">Whole property</option>'+units.map(u=>`<option value="${u.ID}">Unit ${u.Unit_Label}</option>`).join('');document.getElementById('wo-unit-group').style.display='flex';}
-  else document.getElementById('wo-unit-group').style.display='none';
-}
-async function submitNewWO(){
-  const propId=document.getElementById('wo-property').value;
-  const trade=document.getElementById('wo-trade').value;
-  if(!propId){toast('Select a property','error');return;}
-  if(!trade){toast('Select a trade','error');return;}
-  const unitId=document.getElementById('wo-unit').value;
-  const unit=state.units.find(u=>u.ID===unitId);
-  try{
-    const res=await api('POST','/workorder',{property_id:propId,unit_id:unitId,tenant_id:unit?.Tenant_ID||'',trade,priority:document.getElementById('wo-priority').value,type:document.getElementById('wo-type').value,description:document.getElementById('wo-desc').value,notes:document.getElementById('wo-notes').value,created_by:'admin'});
-    if(res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
-    toast('Created '+res.id,'success');closeModal('modal-new-wo');await loadAll();
-  }catch(e){logError('Create WO',e.message);toast('Error: '+e.message,'error');}
+
+function submitNewWO() {
+  var propId = document.getElementById('wo-property').value;
+  var trade  = document.getElementById('wo-trade').value;
+  if (!propId) { toast('Select a property','error'); return; }
+  if (!trade)  { toast('Select a trade','error'); return; }
+  var unitId = document.getElementById('wo-unit').value;
+  var unit   = state.units.find(function(u){return u.ID===unitId;});
+  api('POST','/workorder',{
+    property_id:propId, unit_id:unitId, tenant_id:unit?unit.Tenant_ID||'':'',
+    trade:trade, priority:document.getElementById('wo-priority').value,
+    type:document.getElementById('wo-type').value,
+    description:document.getElementById('wo-desc').value,
+    notes:document.getElementById('wo-notes').value, created_by:'admin'
+  }).then(function(res){
+    if (res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
+    toast('Created '+res.id,'success'); closeModal('modal-new-wo'); loadAll();
+  }).catch(function(e){logError('Create WO',e.message);toast('Error: '+e.message,'error');});
 }
 
-function renderPropertiesPage(){
-  const search=(document.getElementById('prop-search')?.value||'').toLowerCase();
-  let props=[...safeArray(state.properties)].filter(p=>p.Active!=='FALSE');
-  if(search) props=props.filter(p=>(p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search));
-  const el=document.getElementById('properties-list');
-  if(!props.length){el.innerHTML='<div class="loading">No properties found</div>';return;}
-  el.innerHTML=`<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Lockbox</th><th>HVAC Filter</th><th>Open WOs</th><th></th></tr></thead><tbody>`+props.map(p=>{
-    const open=state.workorders.filter(w=>w.Property_ID===p.ID&&!['Complete','Paid'].includes(w.Status)).length;
-    return `<tr><td>${p.Address}</td><td>${p.City||'—'}</td><td>${p.Type||'—'}</td><td style="color:var(--accent);font-weight:bold">${p.Lockbox_Code||'—'}</td><td>${p.HVAC_Filter_Size||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td><td><button class="btn small secondary" onclick="openEditPropertyModal('${p.ID}')">Edit</button></td></tr>`;
-  }).join('')+'</tbody></table>';
+// ── Properties page ──────────────────────────────────────────
+function renderPropertiesPage() {
+  var search = ((document.getElementById('prop-search')||{}).value||'').toLowerCase();
+  var props = sortPropsNumeric(safeArray(state.properties).filter(function(p){
+    if (p.Active==='FALSE') return false;
+    if (!search) return true;
+    return (p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search);
+  }));
+  var el = document.getElementById('properties-list');
+  if (!props.length) { el.innerHTML='<div class="loading">No properties found</div>'; return; }
+  el.innerHTML = '<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Lockbox</th><th>HVAC Filter</th><th>Open WOs</th><th></th></tr></thead><tbody>' +
+    props.map(function(p){
+      var open = state.workorders.filter(function(w){return w.Property_ID===p.ID&&!['Complete','Paid'].includes(w.Status);}).length;
+      return '<tr><td>'+p.Address+'</td><td>'+(p.City||'—')+'</td><td>'+(p.Type||'—')+'</td>' +
+        '<td style="color:var(--accent);font-weight:bold">'+(p.Lockbox_Code||'—')+'</td>' +
+        '<td>'+(p.HVAC_Filter_Size||'—')+'</td>' +
+        '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
+        '<td><button class="btn small secondary" onclick="openEditPropertyModal(\''+p.ID+'\')">Edit</button></td></tr>';
+    }).join('') + '</tbody></table>';
 }
 
-function renderVendorsPage(){
-  const el=document.getElementById('vendors-list');
-  if(!safeArray(state.vendors).length){el.innerHTML='<div class="loading">No vendors yet</div>';return;}
-  el.innerHTML=`<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th></th></tr></thead><tbody>`+safeArray(state.vendors).filter(v=>v.Active!=='FALSE').map(v=>{
-    const open=state.workorders.filter(w=>w.Vendor_ID===v.ID&&!['Complete','Paid'].includes(w.Status)).length;
-    return `<tr><td>${v.Name}${v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':''}</td><td>${v.Trade||'—'}</td><td><a href="tel:${v.Phone}" style="color:var(--accent);text-decoration:none">${v.Phone||'—'}</a></td><td>${v.Markets||'—'}</td><td>${open>0?`<span style="color:var(--warn)">${open}</span>`:'0'}</td></tr>`;
-  }).join('')+'</tbody></table>';
+// ── Vendors ──────────────────────────────────────────────────
+function renderVendorsPage() {
+  var el = document.getElementById('vendors-list');
+  var vendors = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
+  if (!vendors.length) { el.innerHTML='<div class="loading">No vendors yet</div>'; return; }
+  el.innerHTML = '<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th></th></tr></thead><tbody>' +
+    vendors.map(function(v){
+      var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid'].includes(w.Status);}).length;
+      return '<tr><td>'+v.Name+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
+        '<td>'+(v.Trade||'—')+'</td><td><a href="tel:'+v.Phone+'" style="color:var(--accent);text-decoration:none">'+(v.Phone||'—')+'</a></td>' +
+        '<td>'+(v.Markets||'—')+'</td><td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
+        '<td><button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button></td></tr>';
+    }).join('') + '</tbody></table>';
 }
 
-function renderTenantsPage(){
-  const el=document.getElementById('tenants-list');
-  const tenants=safeArray(state.tenants).filter(t=>t.Active!=='FALSE');
-  if(!tenants.length){el.innerHTML='<div class="loading">No tenants yet</div>';return;}
-  el.innerHTML=`<table class="data-table"><thead><tr>
-    <th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>PIN</th><th></th>
-  </tr></thead><tbody>`+tenants.map(t=>{
-    const unit=safeArray(state.units).find(u=>u.ID===t.Unit_ID);
-    const prop=safeArray(state.properties).find(p=>p.ID===(t.Property_ID||unit?.Property_ID));
-    const pin=t.PIN||'—';
-    const pinColor=t.PIN?'color:var(--accent2)':'color:var(--danger)';
-    return `<tr>
-      <td>${t.First_Name||''} ${t.Last_Name||''}</td>
-      <td>${t.Phone||'—'}</td>
-      <td>${unit?.Unit_Label||'—'}</td>
-      <td style="font-size:11px;color:var(--muted)">${prop?.Address||'—'}</td>
-      <td style="${pinColor};font-weight:bold;letter-spacing:0.1em">${pin}</td>
-      <td style="display:flex;gap:4px">
-        <button class="btn small secondary" onclick="openEditTenantModal('${t.ID}')">Edit</button>
-        <button class="btn small secondary" onclick="setTenantPin('${t.ID}','${t.Phone||''}')">Set PIN</button>
-      </td>
-    </tr>`;
-  }).join('')+'</tbody></table>';
+// ── Tenants ──────────────────────────────────────────────────
+function renderTenantsPage() {
+  var el = document.getElementById('tenants-list');
+  var tenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
+  if (!tenants.length) { el.innerHTML='<div class="loading">No tenants yet</div>'; return; }
+  el.innerHTML = '<table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>PIN</th><th></th></tr></thead><tbody>' +
+    tenants.map(function(t){
+      var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
+      var prop = safeArray(state.properties).find(function(p){return p.ID===(t.Property_ID||unit&&unit.Property_ID);});
+      var pinColor = t.PIN ? 'color:var(--accent2)' : 'color:var(--danger)';
+      return '<tr><td>'+t.First_Name+' '+(t.Last_Name||'')+'</td><td>'+(t.Phone||'—')+'</td>' +
+        '<td>'+(unit?unit.Unit_Label:'—')+'</td>' +
+        '<td style="font-size:11px;color:var(--muted)">'+(prop?prop.Address:'—')+'</td>' +
+        '<td style="'+pinColor+';font-weight:bold;letter-spacing:0.1em">'+(t.PIN||'—')+'</td>' +
+        '<td style="display:flex;gap:4px"><button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+        '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+t.Phone+'\')">Set PIN</button></td></tr>';
+    }).join('') + '</tbody></table>';
 }
 
-async function setTenantPin(tenantId, phone) {
-  // Default to last 4 of phone
-  const defaultPin = phone ? phone.replace(/\D/g,'').slice(-5) : '';
-  const pin = prompt(`Set PIN for tenant (current default: ${defaultPin||'none'}):
-Leave blank to use last 4 of phone.`) ;
-  if (pin === null) return; // cancelled
-  const finalPin = pin.trim() || defaultPin;
-  if (!finalPin || finalPin.length !== 5) { toast('PIN must be 5 digits','error'); return; }
-  try {
-    await api('POST','/set-pin',{tenant_id:tenantId, pin:finalPin});
-    toast('PIN set: '+finalPin,'success');
-    await loadAll();
-  } catch(e) { toast('Error: '+e.message,'error'); }
+function setTenantPin(tenantId, phone) {
+  var last5 = phone ? phone.replace(/\D/g,'').slice(-5) : '';
+  var pin = prompt('Set PIN for tenant.\nFormat: 3 letters + 5 digits (e.g. ABC'+last5+')\nLeave blank to cancel:');
+  if (!pin) return;
+  pin = pin.trim().toUpperCase();
+  if (pin.length !== 8) { toast('PIN must be 8 characters (3 letters + 5 digits)','error'); return; }
+  api('POST','/set-pin',{tenant_id:tenantId, pin:pin}).then(function(){
+    toast('PIN set: '+pin,'success'); loadAll();
+  }).catch(function(e){toast('Error: '+e.message,'error');});
 }
 
-async function bulkSetPins() {
-  const tenants = safeArray(state.tenants).filter(t=>t.Active!=='FALSE'&&t.Phone&&!t.PIN);
-  if(!tenants.length){toast('All tenants already have PINs','info');return;}
-  if(!confirm(`Auto-set PINs for ${tenants.length} tenants without PINs (last 4 of phone)?`)) return;
-  let ok=0;
-  for(const t of tenants){
-    const pin=t.Phone.replace(/\D/g,'').slice(-5);
-    if(pin.length===5){
-      try{ await api('POST','/set-pin',{tenant_id:t.ID,pin}); ok++; }catch(e){}
-      await new Promise(r=>setTimeout(r,200));
-    }
-  }
-  toast(`Set ${ok} PINs`,'success');
-  await loadAll();
+function bulkSetPins() {
+  var tenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE'&&t.Phone&&!t.PIN;});
+  if (!tenants.length) { toast('All tenants already have PINs','info'); return; }
+  if (!confirm('Auto-set PINs for '+tenants.length+' tenants?\nFormat: XYZ + last 5 of phone')) return;
+  var letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // skip I and O to avoid confusion
+  var count = 0;
+  var chain = Promise.resolve();
+  tenants.forEach(function(t) {
+    var last5 = t.Phone.replace(/\D/g,'').slice(-5);
+    if (last5.length !== 5) return;
+    var prefix = letters[Math.floor(Math.random()*letters.length)] + letters[Math.floor(Math.random()*letters.length)] + letters[Math.floor(Math.random()*letters.length)];
+    var pin = prefix + last5;
+    chain = chain.then(function(){
+      return api('POST','/set-pin',{tenant_id:t.ID,pin:pin}).then(function(){count++;});
+    }).then(function(){ return new Promise(function(r){setTimeout(r,150);}); });
+  });
+  chain.then(function(){ toast('Set '+count+' PINs','success'); loadAll(); });
 }
 
-function renderInvoicesPage(){
-  const pending=safeArray(state.invoices).filter(i=>i.Status!=='Paid');
-  const el=document.getElementById('invoices-list');
-  if(!pending.length){el.innerHTML='<div class="loading">No outstanding invoices</div>';return;}
-  const total=pending.reduce((s,i)=>s+parseFloat(i.Amount||0),0);
-  el.innerHTML=`<div style="margin-bottom:16px;color:var(--accent);font-size:1.2rem;font-weight:bold">Outstanding: $${total.toFixed(2)}</div><table class="data-table"><thead><tr><th>WO</th><th>Vendor</th><th>Amount</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>`+pending.map(inv=>{
-    const v=state.vendors.find(x=>x.ID===inv.Vendor_ID);
-    const wo=state.workorders.find(w=>w.ID===inv.WO_ID);
-    const prop=wo?state.properties.find(p=>p.ID===wo.Property_ID):null;
-    return `<tr><td>${inv.WO_ID}<br><span style="color:var(--muted);font-size:11px">${prop?.Address||''}</span></td><td>${v?.Name||'—'}</td><td style="color:var(--accent);font-weight:bold">$${parseFloat(inv.Amount||0).toFixed(2)}</td><td>${inv.Date_Submitted||'—'}</td><td><span class="badge badge-invoiced">${inv.Status}</span></td><td><button class="btn small success" onclick="markInvoicePaid('${inv.WO_ID}')">Mark Paid</button></td></tr>`;
-  }).join('')+'</tbody></table>';
+// ── Invoices ─────────────────────────────────────────────────
+function renderInvoicesPage() {
+  var pending = safeArray(state.invoices).filter(function(i){return i.Status!=='Paid';});
+  var el = document.getElementById('invoices-list');
+  if (!pending.length) { el.innerHTML='<div class="loading">No outstanding invoices</div>'; return; }
+  var total = pending.reduce(function(s,i){return s+parseFloat(i.Amount||0);},0);
+  el.innerHTML = '<div style="margin-bottom:16px;color:var(--accent);font-size:1.2rem;font-weight:bold">Outstanding: $'+total.toFixed(2)+'</div>' +
+    '<table class="data-table"><thead><tr><th>WO</th><th>Vendor</th><th>Amount</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>' +
+    pending.map(function(inv){
+      var v = state.vendors.find(function(x){return x.ID===inv.Vendor_ID;});
+      var wo = state.workorders.find(function(w){return w.ID===inv.WO_ID;});
+      var prop = wo ? state.properties.find(function(p){return p.ID===wo.Property_ID;}) : null;
+      return '<tr><td>'+inv.WO_ID+'<br><span style="color:var(--muted);font-size:11px">'+(prop?prop.Address:'')+'</span></td>' +
+        '<td>'+(v?v.Name:'—')+'</td><td style="color:var(--accent);font-weight:bold">$'+parseFloat(inv.Amount||0).toFixed(2)+'</td>' +
+        '<td>'+(inv.Date_Submitted||'—')+'</td><td><span class="badge badge-invoiced">'+inv.Status+'</span></td>' +
+        '<td><button class="btn small success" onclick="markInvoicePaid(\''+inv.WO_ID+'\')">Mark Paid</button></td></tr>';
+    }).join('') + '</tbody></table>';
 }
-async function markInvoicePaid(woId){try{await api('POST','/status',{wo_id:woId,status:'Paid'});toast('Marked paid','success');await loadAll();}catch(e){toast('Error: '+e.message,'error');}}
+function markInvoicePaid(woId){
+  api('POST','/status',{wo_id:woId,status:'Paid'}).then(function(){toast('Marked paid','success');loadAll();}).catch(function(e){toast('Error: '+e.message,'error');});
+}
 
-function openAddPropertyModal(){
-  document.getElementById('p-owner').innerHTML='<option value="">No owner assigned</option>'+state.owners.map(o=>`<option value="${o.ID}">${o.First_Name} ${o.Last_Name}</option>`).join('');
+// ── Add Property ─────────────────────────────────────────────
+function openAddPropertyModal() {
+  document.getElementById('p-owner').innerHTML = '<option value="">No owner assigned</option>' +
+    state.owners.map(function(o){return '<option value="'+o.ID+'">'+o.First_Name+' '+o.Last_Name+'</option>';}).join('');
   openModal('modal-add-property');
 }
-async function submitAddProperty(){
-  const body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Unit_Count:document.getElementById('p-units').value,Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
-  if(!body.Address){toast('Address required','error');return;}
-  try{const res=await api('POST','/property/add',body);if(res.error){logError('Add property',res.error);toast('Error: '+res.error,'error');return;}toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');await loadAll();}catch(e){logError('Add property',e.message);toast('Error: '+e.message,'error');}
+function submitAddProperty() {
+  var body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Unit_Count:document.getElementById('p-units').value,Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
+  if (!body.Address) { toast('Address required','error'); return; }
+  api('POST','/property/add',body).then(function(res){
+    if (res.error){logError('Add property',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');loadAll();
+  }).catch(function(e){logError('Add property',e.message);toast('Error: '+e.message,'error');});
 }
 
+// ── Add Vendor ───────────────────────────────────────────────
 function openAddVendorModal(){openModal('modal-add-vendor');}
-async function submitAddVendor(){
-  const body={Name:document.getElementById('v-name').value,Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:document.getElementById('v-trade').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
+function submitAddVendor(){
+  var body={Name:document.getElementById('v-name').value,Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:document.getElementById('v-trade').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
   if(!body.Name){toast('Name required','error');return;}
   if(!body.Phone){toast('Phone required','error');return;}
-  try{const res=await api('POST','/vendor/add',body);if(res.error){logError('Add vendor',res.error);toast('Error: '+res.error,'error');return;}toast('Vendor added (ID: '+res.id+')','success');closeModal('modal-add-vendor');await loadAll();}catch(e){logError('Add vendor',e.message);toast('Error: '+e.message,'error');}
+  api('POST','/vendor/add',body).then(function(res){
+    if(res.error){logError('Add vendor',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Vendor added (ID: '+res.id+')','success');closeModal('modal-add-vendor');loadAll();
+  }).catch(function(e){logError('Add vendor',e.message);toast('Error: '+e.message,'error');});
 }
 
-function openModal(id){document.getElementById(id).classList.add('open');}
-function closeModal(id){document.getElementById(id).classList.remove('open');}
-document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
-
-// ── Edit Work Order ──
+// ── Edit WO ──────────────────────────────────────────────────
 function openEditWOModal(woId) {
-  const wo = safeArray(state.workorders).find(w=>w.ID===woId); if(!wo) return;
+  var wo = safeArray(state.workorders).find(function(w){return w.ID===woId;}); if(!wo) return;
   document.getElementById('ewo-id').value = woId;
   document.getElementById('ewo-id-label').textContent = woId;
-
-  // Populate property dropdown
-  const propSel = document.getElementById('ewo-property');
-  propSel.innerHTML = '<option value="">Select property...</option>' +
-    safeArray(state.properties).filter(p=>p.Active!=='FALSE')
-      .map(p=>`<option value="${p.ID}" ${p.ID===wo.Property_ID?'selected':''}>${p.Address}</option>`).join('');
-
-  // Populate units for current property
+  // Property native select
+  document.getElementById('ewo-prop-filter').value = '';
+  var sorted = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
+  populatePropSelect('ewo-property', sorted, wo.Property_ID||'');
+  // Units / tenants / vendors
   ewoPopulateUnits(wo.Property_ID, wo.Unit_ID);
-
-  // Populate tenant dropdown
   ewoPopulateTenants(wo.Unit_ID, wo.Tenant_ID);
-
-  // Populate vendor dropdown
-  const vSel = document.getElementById('ewo-vendor');
-  vSel.innerHTML = '<option value="">Unassigned</option>' +
-    safeArray(state.vendors).filter(v=>v.Active!=='FALSE')
-      .map(v=>`<option value="${v.ID}" ${v.ID===wo.Vendor_ID?'selected':''}>${v.Name} — ${v.Trade}</option>`).join('');
-
-  // Set other fields
+  document.getElementById('ewo-vendor').innerHTML = '<option value="">Unassigned</option>' +
+    safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){return '<option value="'+v.ID+'"'+(v.ID===wo.Vendor_ID?' selected':'')+'>'+v.Name+' — '+v.Trade+'</option>';}).join('');
   document.getElementById('ewo-trade').value = wo.Trade||'General';
   document.getElementById('ewo-priority').value = wo.Priority||'normal';
   document.getElementById('ewo-status').value = wo.Status||'New';
   document.getElementById('ewo-scheduled').value = wo.Scheduled_Date||'';
   document.getElementById('ewo-description').value = wo.Description||'';
   document.getElementById('ewo-notes').value = wo.Notes||'';
-
   closeModal('modal-wo-detail');
   openModal('modal-edit-wo');
 }
 
 function ewoPopulateUnits(propId, selectedUnitId) {
-  const units = safeArray(state.units).filter(u=>u.Property_ID===propId);
-  const sel = document.getElementById('ewo-unit');
-  sel.innerHTML = '<option value="">Whole property</option>' +
-    units.map(u=>`<option value="${u.ID}" ${u.ID===selectedUnitId?'selected':''}>${u.Unit_Label}</option>`).join('');
+  var units = safeArray(state.units).filter(function(u){return u.Property_ID===propId;});
+  document.getElementById('ewo-unit').innerHTML = '<option value="">Whole property</option>' +
+    units.map(function(u){return '<option value="'+u.ID+'"'+(u.ID===selectedUnitId?' selected':'')+'>'+u.Unit_Label+'</option>';}).join('');
   document.getElementById('ewo-unit-group').style.display = units.length ? 'flex' : 'none';
 }
 
 function ewoPopulateTenants(unitId, selectedTenantId) {
-  // Auto-find tenant from unit if no tenant selected
-  let tenantId = selectedTenantId;
-  if(!tenantId && unitId) {
-    const unit = safeArray(state.units).find(u=>u.ID===unitId);
-    if(unit && unit.Tenant_ID) tenantId = unit.Tenant_ID;
+  var tenantId = selectedTenantId;
+  if (!tenantId && unitId) {
+    var unit = safeArray(state.units).find(function(u){return u.ID===unitId;});
+    if (unit && unit.Tenant_ID) tenantId = unit.Tenant_ID;
   }
-  const sel = document.getElementById('ewo-tenant');
-  sel.innerHTML = '<option value="">None</option>' +
-    safeArray(state.tenants).filter(t=>t.Active!=='FALSE')
-      .map(t=>`<option value="${t.ID}" ${t.ID===tenantId?'selected':''}>${t.First_Name} ${t.Last_Name} — ${t.Phone}</option>`).join('');
+  document.getElementById('ewo-tenant').innerHTML = '<option value="">None</option>' +
+    safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';}).map(function(t){return '<option value="'+t.ID+'"'+(t.ID===tenantId?' selected':'')+'>'+t.First_Name+' '+t.Last_Name+' — '+t.Phone+'</option>';}).join('');
 }
 
-function ewoPropertyChanged() {
-  const propId = document.getElementById('ewo-property').value;
-  ewoPopulateUnits(propId, '');
-  ewoPopulateTenants('', '');
-}
+function ewoUnitChanged() { ewoPopulateTenants(document.getElementById('ewo-unit').value, ''); }
 
-function ewoUnitChanged() {
-  const unitId = document.getElementById('ewo-unit').value;
-  // Auto-populate tenant from unit
-  ewoPopulateTenants(unitId, '');
-}
-
-async function submitEditWO() {
-  const woId = document.getElementById('ewo-id').value;
-  const fields = {
+function submitEditWO() {
+  var woId = document.getElementById('ewo-id').value;
+  var fields = {
     Property_ID: document.getElementById('ewo-property').value,
     Unit_ID: document.getElementById('ewo-unit').value,
     Tenant_ID: document.getElementById('ewo-tenant').value,
@@ -889,270 +909,173 @@ async function submitEditWO() {
     Description: document.getElementById('ewo-description').value,
     Notes: document.getElementById('ewo-notes').value,
   };
-  try {
-    const res = await api('POST','/workorder/update',{id:woId, fields});
+  api('POST','/workorder/update',{id:woId, fields:fields}).then(function(res){
     if(res.error){logError('Edit WO',res.error);toast('Error: '+res.error,'error');return;}
-    toast('Work order updated','success');
-    closeModal('modal-edit-wo');
-    await loadAll();
-  } catch(e){logError('Edit WO',e.message);toast('Error: '+e.message,'error');}
+    toast('Work order updated','success');closeModal('modal-edit-wo');loadAll();
+  }).catch(function(e){logError('Edit WO',e.message);toast('Error: '+e.message,'error');});
 }
 
-// ── Edit Vendor ──
+// ── Edit Vendor ──────────────────────────────────────────────
 function openEditVendorModal(id) {
-  const v = safeArray(state.vendors).find(x=>x.ID===id); if(!v) return;
-  document.getElementById('ev-id').value = v.ID;
-  document.getElementById('ev-name').value = v.Name||'';
-  document.getElementById('ev-company').value = v.Company||'';
-  document.getElementById('ev-phone').value = v.Phone||'';
-  document.getElementById('ev-email').value = v.Email||'';
-  document.getElementById('ev-trade').value = v.Trade||'General';
-  document.getElementById('ev-markets').value = v.Markets||'';
-  document.getElementById('ev-rates').value = v.Rate_Notes||'';
+  var v = safeArray(state.vendors).find(function(x){return x.ID===id;}); if(!v) return;
+  document.getElementById('ev-id').value=v.ID; document.getElementById('ev-name').value=v.Name||'';
+  document.getElementById('ev-company').value=v.Company||''; document.getElementById('ev-phone').value=v.Phone||'';
+  document.getElementById('ev-email').value=v.Email||''; document.getElementById('ev-trade').value=v.Trade||'General';
+  document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
   openModal('modal-edit-vendor');
 }
-
-async function submitEditVendor() {
-  const id = document.getElementById('ev-id').value;
-  const fields = {
-    Name: document.getElementById('ev-name').value,
-    Company: document.getElementById('ev-company').value,
-    Phone: document.getElementById('ev-phone').value,
-    Email: document.getElementById('ev-email').value,
-    Trade: document.getElementById('ev-trade').value,
-    Markets: document.getElementById('ev-markets').value,
-    Rate_Notes: document.getElementById('ev-rates').value,
-  };
-  try {
-    const res = await api('POST','/vendor/update',{id, fields});
+function submitEditVendor() {
+  var id=document.getElementById('ev-id').value;
+  var fields={Name:document.getElementById('ev-name').value,Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Rate_Notes:document.getElementById('ev-rates').value};
+  api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
-    toast('Vendor updated','success');
-    closeModal('modal-edit-vendor');
-    await loadAll();
-  } catch(e){logError('Edit vendor',e.message);toast('Error: '+e.message,'error');}
+    toast('Vendor updated','success');closeModal('modal-edit-vendor');loadAll();
+  }).catch(function(e){logError('Edit vendor',e.message);toast('Error: '+e.message,'error');});
 }
 
-// ── Edit Tenant ──
+// ── Edit Tenant ──────────────────────────────────────────────
 function openEditTenantModal(id) {
-  const t = safeArray(state.tenants).find(x=>x.ID===id); if(!t) return;
-  document.getElementById('et-id').value = t.ID;
-  document.getElementById('et-first').value = t.First_Name||'';
-  document.getElementById('et-last').value = t.Last_Name||'';
-  document.getElementById('et-phone').value = t.Phone||'';
-  document.getElementById('et-email').value = t.Email||'';
-  document.getElementById('et-active').value = t.Active||'TRUE';
+  var t=safeArray(state.tenants).find(function(x){return x.ID===id;}); if(!t) return;
+  document.getElementById('et-id').value=t.ID; document.getElementById('et-first').value=t.First_Name||'';
+  document.getElementById('et-last').value=t.Last_Name||''; document.getElementById('et-phone').value=t.Phone||'';
+  document.getElementById('et-email').value=t.Email||''; document.getElementById('et-active').value=t.Active||'TRUE';
   openModal('modal-edit-tenant');
 }
-
-async function submitEditTenant() {
-  const id = document.getElementById('et-id').value;
-  const fields = {
-    First_Name: document.getElementById('et-first').value,
-    Last_Name: document.getElementById('et-last').value,
-    Phone: document.getElementById('et-phone').value,
-    Email: document.getElementById('et-email').value,
-    Active: document.getElementById('et-active').value,
-  };
-  try {
-    const res = await api('POST','/tenant/update',{id, fields});
+function submitEditTenant() {
+  var id=document.getElementById('et-id').value;
+  var fields={First_Name:document.getElementById('et-first').value,Last_Name:document.getElementById('et-last').value,Phone:document.getElementById('et-phone').value,Email:document.getElementById('et-email').value,Active:document.getElementById('et-active').value};
+  api('POST','/tenant/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit tenant',res.error);toast('Error: '+res.error,'error');return;}
-    toast('Tenant updated','success');
-    closeModal('modal-edit-tenant');
-    await loadAll();
-  } catch(e){logError('Edit tenant',e.message);toast('Error: '+e.message,'error');}
+    toast('Tenant updated','success');closeModal('modal-edit-tenant');loadAll();
+  }).catch(function(e){logError('Edit tenant',e.message);toast('Error: '+e.message,'error');});
 }
 
-// ── Cache Management ──
-let cacheItems = [];
-
-async function loadCache() {
-  try {
-    const items = await api('GET','/cache');
-    cacheItems = Array.isArray(items) ? items.filter(i=>i.Active!=='FALSE') : [];
-    renderCache();
-  } catch(e) { logError('Load cache',e.message); }
-}
-
-function renderCache() {
-  const el = document.getElementById('cache-list');
-  if(!el) return;
-  if(!cacheItems.length) { el.innerHTML='<div class="loading">No cached responses yet</div>'; return; }
-  
-  el.innerHTML = cacheItems.map(function(c) {
-    const flagged = c.Flagged === 'TRUE';
-    const hasResponse = !!c.Response;
-    const borderColor = flagged ? 'var(--danger)' : hasResponse ? 'var(--accent2)' : 'var(--warn)';
-    const statusLabel = flagged ? '⚑ FLAGGED' : hasResponse ? '✓ CACHED' : '○ EMPTY';
-    const statusColor = flagged ? 'var(--danger)' : hasResponse ? 'var(--accent2)' : 'var(--warn)';
-    const season = c.Season ? ' · ' + c.Season : '';
-    const flagBtn = !flagged ? '<button class="btn small secondary" style="color:var(--warn);border-color:var(--warn)" onclick="flagCache(\'' + c.ID + '\')">⚑ Flag</button>' : '';
-    const seasonBtn = c.Season !== undefined ? '<button class="btn small secondary" onclick="editCacheSeason(\'' + c.ID + '\',\'' + (c.Season||'') + '\')">✎ Season</button>' : '';
-    const responseDiv = hasResponse ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px;max-height:60px;overflow:hidden">' + c.Response.substring(0,150) + (c.Response.length>150?'…':'') + '</div>' : '';
-    const flagReasonDiv = c.Flag_Reason ? '<div style="font-size:11px;color:var(--danger);margin-top:4px">Flag: ' + c.Flag_Reason + '</div>' : '';
-    return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + borderColor + ';border-radius:var(--radius);padding:12px;margin-bottom:8px">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">' +
-        '<div>' +
-          '<div style="font-size:12px;font-weight:bold">' + (c.Trade||'—') + ' · ' + (c.Keywords||'—') + season + '</div>' +
-          '<div style="font-size:10px;color:var(--muted);margin-top:2px">Used ' + (c.Use_Count||0) + '× · Last: ' + (c.Last_Used||'never') + '</div>' +
-          flagReasonDiv +
-        '</div>' +
-        '<span style="font-size:10px;color:' + statusColor + ';font-weight:bold;white-space:nowrap;margin-left:8px">' + statusLabel + '</span>' +
-      '</div>' +
-      responseDiv +
-      '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
-        flagBtn +
-        '<button class="btn small secondary" onclick="refreshCache(\'' + c.ID + '\')">↻ Refresh</button>' +
-        seasonBtn +
-      '</div>' +
-    '</div>';
-  }).join('');
-}
-
-async function flagCache(id) {
-  const reason = prompt('Reason for flagging (optional):') ?? '';
-  if(reason === null) return;
-  try {
-    await api('POST','/cache/flag',{id, reason});
-    toast('Flagged for review','info');
-    await loadCache();
-  } catch(e){toast('Error: '+e.message,'error');}
-}
-
-async function refreshCache(id) {
-  if(!confirm('Clear this cached response? It will be regenerated on next use.')) return;
-  try {
-    await api('POST','/cache/refresh',{id});
-    toast('Cache entry cleared — will regenerate on next use','success');
-    await loadCache();
-  } catch(e){toast('Error: '+e.message,'error');}
-}
-
-async function editCacheSeason(id, currentSeason) {
-  const seasons = ['','Winter (Nov-Mar)','Spring (Mar-May)','Summer (Jun-Aug)','Fall (Sep-Nov)','Year-round'];
-    const seasonList = seasons.map((s,i) => i + ': ' + (s || '(none)')).join('\n');
-  const choice = prompt('Set season tag:\n' + seasonList + '\n\nCurrent: ' + (currentSeason || 'none') + '\nEnter number:');
-  if(choice === null) return;
-  const season = seasons[parseInt(choice)] ?? '';
-  try {
-    // Use updateRow via workorder/update pattern - need a direct cache update
-    await api('POST','/cache/flag',{id, reason:'Season updated to: '+season});
-    toast('Update season via Sheet directly for now','info');
-  } catch(e){toast('Error: '+e.message,'error');}
-}
-
-function toast(msg,type='info'){const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;document.getElementById('toast-container').appendChild(el);setTimeout(()=>el.remove(),4000);}
-
-// wishlist enter key
-document.addEventListener('DOMContentLoaded',()=>{
-  const wi=document.getElementById('wishlist-input');
-  if(wi) wi.addEventListener('keydown',e=>{if(e.key==='Enter')addWishlistItem();});
-  renderErrorLog();
-});
-
-// ── Error Log ──
-function logError(context, message) {
-  const logs = JSON.parse(localStorage.getItem('mh_errors')||'[]');
-  logs.unshift({ time: new Date().toISOString(), context, message: String(message) });
-  if(logs.length > 50) logs.pop();
-  localStorage.setItem('mh_errors', JSON.stringify(logs));
-  renderErrorLog();
-}
-function renderErrorLog() {
-  const logs = JSON.parse(localStorage.getItem('mh_errors')||'[]');
-  const el = document.getElementById('error-log-list');
-  if(!el) return;
-  if(!logs.length){el.innerHTML='<div class="loading">No errors logged</div>';return;}
-  el.innerHTML = logs.map(l=>`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:8px">
-    <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${l.time.replace('T',' ').split('.')[0]} — ${l.context}</div>
-    <div style="font-size:12px;color:var(--danger)">${l.message}</div>
-  </div>`).join('');
-}
-function clearErrorLog(){if(!confirm('Clear all error logs?')) return;localStorage.removeItem('mh_errors');renderErrorLog();toast('Error log cleared','info');}
-
-// ── Wishlist (Sheet-backed) ──
-let wishlistItems = [];
-
-async function loadWishlist(){
-  try{
-    const items = await api('GET','/wishlist');
-    wishlistItems = Array.isArray(items) ? items.filter(i=>i.Active!=='FALSE') : [];
-    renderWishlist();
-  }catch(e){ console.log('Wishlist load error',e); }
-}
-
-async function addWishlistItem(){
-  const input=document.getElementById('wishlist-input');
-  const val=input.value.trim(); if(!val) return;
-  try{
-    await api('POST','/wishlist/add',{text:val});
-    input.value='';
-    await loadWishlist();
-    toast('Added to wishlist','success');
-  }catch(e){toast('Error: '+e.message,'error');}
-}
-
-function renderWishlist(){
-  const el=document.getElementById('wishlist-list');
-  if(!el) return;
-  if(!wishlistItems.length){el.innerHTML='<div class="loading">No items yet</div>';return;}
-  el.innerHTML=[...wishlistItems].reverse().map(item=>`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--info);border-radius:var(--radius);padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
-    <div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${item.Created||''}</div>
-      <div style="font-size:13px">${item.Text||''}</div>
-    </div>
-    <button class="btn small danger" onclick="deleteWishlistItem('${item.ID}')">✕</button>
-  </div>`).join('');
-}
-
-async function deleteWishlistItem(id){
-  if(!confirm('Remove this item?')) return;
-  try{
-    await api('POST','/wishlist/delete',{id});
-    await loadWishlist();
-  }catch(e){toast('Error: '+e.message,'error');}
-}
-
-function clearWishlist(){
-  if(!confirm('Clear ALL wishlist items? This cannot be undone.')) return;
-  Promise.all(wishlistItems.map(i=>api('POST','/wishlist/delete',{id:i.ID})))
-    .then(()=>{loadWishlist();toast('Wishlist cleared','info');})
-    .catch(e=>toast('Error: '+e.message,'error'));
-}
-
-
-
+// ── Edit Property ────────────────────────────────────────────
 function openEditPropertyModal(id){
-  const p=state.properties.find(x=>x.ID===id); if(!p) return;
-  document.getElementById('ep-id').value=p.ID;
-  document.getElementById('ep-address').value=p.Address||'';
-  document.getElementById('ep-city').value=p.City||'';
-  document.getElementById('ep-market').value=p.Market||'Baltimore';
-  document.getElementById('ep-type').value=p.Type||'house';
-  document.getElementById('ep-lockbox').value=p.Lockbox_Code||'';
-  document.getElementById('ep-lockcode').value=p.Lock_Code||'';
-  document.getElementById('ep-shutoff').value=p.Water_Shutoff||'';
-  document.getElementById('ep-hvac').value=p.HVAC_Filter_Size||'';
-  document.getElementById('ep-breaker').value=p.Breaker_Location||'';
+  var p=state.properties.find(function(x){return x.ID===id;}); if(!p) return;
+  document.getElementById('ep-id').value=p.ID; document.getElementById('ep-address').value=p.Address||'';
+  document.getElementById('ep-city').value=p.City||''; document.getElementById('ep-market').value=p.Market||'Baltimore';
+  document.getElementById('ep-type').value=p.Type||'house'; document.getElementById('ep-lockbox').value=p.Lockbox_Code||'';
+  document.getElementById('ep-lockcode').value=p.Lock_Code||''; document.getElementById('ep-shutoff').value=p.Water_Shutoff||'';
+  document.getElementById('ep-hvac').value=p.HVAC_Filter_Size||''; document.getElementById('ep-breaker').value=p.Breaker_Location||'';
   document.getElementById('ep-access').value=p.Access_Notes||'';
   openModal('modal-edit-property');
 }
-async function submitEditProperty(){
-  const id=document.getElementById('ep-id').value;
-  const fields={
-    Address:document.getElementById('ep-address').value,
-    City:document.getElementById('ep-city').value,
-    Market:document.getElementById('ep-market').value,
-    Type:document.getElementById('ep-type').value,
-    Lockbox_Code:document.getElementById('ep-lockbox').value,
-    Lock_Code:document.getElementById('ep-lockcode').value,
-    Water_Shutoff:document.getElementById('ep-shutoff').value,
-    HVAC_Filter_Size:document.getElementById('ep-hvac').value,
-    Breaker_Location:document.getElementById('ep-breaker').value,
-    Access_Notes:document.getElementById('ep-access').value,
-  };
-  try{const res=await api('POST','/property/update',{id,fields});if(res.error){logError('Edit property',res.error);toast('Error: '+res.error,'error');return;}toast('Property updated','success');closeModal('modal-edit-property');await loadAll();}
-  catch(e){logError('Edit property',e.message);toast('Error: '+e.message,'error');}
+function submitEditProperty(){
+  var id=document.getElementById('ep-id').value;
+  var fields={Address:document.getElementById('ep-address').value,City:document.getElementById('ep-city').value,Market:document.getElementById('ep-market').value,Type:document.getElementById('ep-type').value,Lockbox_Code:document.getElementById('ep-lockbox').value,Lock_Code:document.getElementById('ep-lockcode').value,Water_Shutoff:document.getElementById('ep-shutoff').value,HVAC_Filter_Size:document.getElementById('ep-hvac').value,Breaker_Location:document.getElementById('ep-breaker').value,Access_Notes:document.getElementById('ep-access').value};
+  api('POST','/property/update',{id:id,fields:fields}).then(function(res){
+    if(res.error){logError('Edit property',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Property updated','success');closeModal('modal-edit-property');loadAll();
+  }).catch(function(e){logError('Edit property',e.message);toast('Error: '+e.message,'error');});
 }
+
+// ── Modals ───────────────────────────────────────────────────
+function openModal(id){document.getElementById(id).classList.add('open');}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+document.querySelectorAll('.modal-overlay').forEach(function(m){
+  m.addEventListener('click',function(e){if(e.target===m)m.classList.remove('open');});
+});
+
+// ── Toasts ───────────────────────────────────────────────────
+// Convert URLs in text to clickable links
+function linkify(text) {
+  if (!text) return '—';
+  var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:var(--info);word-break:break-all">$1</a>');
+}
+
+function toast(msg,type){
+  type=type||'info';
+  var el=document.createElement('div'); el.className='toast '+type; el.textContent=msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(function(){el.remove();},4000);
+}
+
+// ── Error Log ────────────────────────────────────────────────
+function logError(context,message){
+  var logs=JSON.parse(localStorage.getItem('mh_errors')||'[]');
+  logs.unshift({time:new Date().toISOString(),context:context,message:String(message)});
+  if(logs.length>50)logs.pop();
+  localStorage.setItem('mh_errors',JSON.stringify(logs));
+  renderErrorLog();
+}
+function renderErrorLog(){
+  var logs=JSON.parse(localStorage.getItem('mh_errors')||'[]');
+  var el=document.getElementById('error-log-list'); if(!el) return;
+  if(!logs.length){el.innerHTML='<div class="loading">No errors logged</div>';return;}
+  el.innerHTML=logs.map(function(l){return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:8px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+l.time.replace('T',' ').split('.')[0]+' — '+l.context+'</div><div style="font-size:12px;color:var(--danger)">'+l.message+'</div></div>';}).join('');
+}
+function clearErrorLog(){if(!confirm('Clear all error logs?'))return;localStorage.removeItem('mh_errors');renderErrorLog();toast('Error log cleared','info');}
+
+// ── Wishlist ─────────────────────────────────────────────────
+var wishlistItems=[];
+function loadWishlist(){
+  api('GET','/wishlist').then(function(items){
+    wishlistItems=Array.isArray(items)?items.filter(function(i){return i.Active!=='FALSE';}):[]; renderWishlist();
+  }).catch(function(e){console.log('Wishlist load error',e);});
+}
+function addWishlistItem(){
+  var input=document.getElementById('wishlist-input'); var val=input.value.trim(); if(!val)return;
+  api('POST','/wishlist/add',{text:val}).then(function(){input.value='';loadWishlist();toast('Added to wishlist','success');}).catch(function(e){toast('Error: '+e.message,'error');});
+}
+function renderWishlist(){
+  var el=document.getElementById('wishlist-list'); if(!el)return;
+  if(!wishlistItems.length){el.innerHTML='<div class="loading">No items yet</div>';return;}
+  el.innerHTML=[...wishlistItems].reverse().map(function(item){return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--info);border-radius:var(--radius);padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+(item.Created||'')+'</div><div style="font-size:13px">'+(item.Text||'')+'</div></div><button class="btn small danger" onclick="deleteWishlistItem(\''+item.ID+'\')">✕</button></div>';}).join('');
+}
+function deleteWishlistItem(id){
+  if(!confirm('Remove this item?'))return;
+  api('POST','/wishlist/delete',{id:id}).then(function(){loadWishlist();}).catch(function(e){toast('Error: '+e.message,'error');});
+}
+function clearWishlist(){
+  if(!confirm('Clear ALL wishlist items?'))return;
+  Promise.all(wishlistItems.map(function(i){return api('POST','/wishlist/delete',{id:i.ID});}))
+    .then(function(){loadWishlist();toast('Wishlist cleared','info');}).catch(function(e){toast('Error: '+e.message,'error');});
+}
+
+// ── Cache ────────────────────────────────────────────────────
+var cacheItems=[];
+function loadCache(){
+  api('GET','/cache').then(function(items){
+    cacheItems=Array.isArray(items)?items.filter(function(i){return i.Active!=='FALSE';}):[]; renderCache();
+  }).catch(function(e){logError('Load cache',e.message);});
+}
+function renderCache(){
+  var el=document.getElementById('cache-list'); if(!el)return;
+  if(!cacheItems.length){el.innerHTML='<div class="loading">No cached responses yet</div>';return;}
+  el.innerHTML=cacheItems.map(function(c){
+    var flagged=c.Flagged==='TRUE'; var hasResponse=!!c.Response;
+    var bc=flagged?'var(--danger)':hasResponse?'var(--accent2)':'var(--warn)';
+    var sl=flagged?'⚑ FLAGGED':hasResponse?'✓ CACHED':'○ EMPTY';
+    var sc=flagged?'var(--danger)':hasResponse?'var(--accent2)':'var(--warn)';
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid '+bc+';border-radius:var(--radius);padding:12px;margin-bottom:8px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">'+
+      '<div><div style="font-size:12px;font-weight:bold">'+(c.Trade||'—')+' · '+(c.Keywords||'—')+(c.Season?' · '+c.Season:'')+'</div>'+
+      '<div style="font-size:10px;color:var(--muted);margin-top:2px">Used '+(c.Use_Count||0)+'× · Last: '+(c.Last_Used||'never')+'</div>'+
+      (c.Flag_Reason?'<div style="font-size:11px;color:var(--danger);margin-top:4px">Flag: '+c.Flag_Reason+'</div>':'')+'</div>'+
+      '<span style="font-size:10px;color:'+sc+';font-weight:bold;white-space:nowrap;margin-left:8px">'+sl+'</span></div>'+
+      (hasResponse?'<div style="font-size:11px;color:var(--muted);margin-bottom:8px;max-height:60px;overflow:hidden">'+c.Response.substring(0,150)+(c.Response.length>150?'…':'')+'</div>':'')+
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
+      (!flagged?'<button class="btn small secondary" style="color:var(--warn);border-color:var(--warn)" onclick="flagCache(\''+c.ID+'\')">⚑ Flag</button>':'')+
+      '<button class="btn small secondary" onclick="refreshCache(\''+c.ID+'\')">↻ Refresh</button></div></div>';
+  }).join('');
+}
+function flagCache(id){
+  var reason=prompt('Reason for flagging (optional):')||'';
+  api('POST','/cache/flag',{id:id,reason:reason}).then(function(){toast('Flagged','info');loadCache();}).catch(function(e){toast('Error: '+e.message,'error');});
+}
+function refreshCache(id){
+  if(!confirm('Clear this cached response?'))return;
+  api('POST','/cache/refresh',{id:id}).then(function(){toast('Cache cleared','success');loadCache();}).catch(function(e){toast('Error: '+e.message,'error');});
+}
+
+// ── Init ─────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',function(){
+  var wi=document.getElementById('wishlist-input');
+  if(wi)wi.addEventListener('keydown',function(e){if(e.key==='Enter')addWishlistItem();});
+  renderErrorLog();
+});
 </script>
 </body>
 </html>
