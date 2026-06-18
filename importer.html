@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Tenant Importer</title>
+<style>
+:root{
+  --bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;
+  --text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;
+  --danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:6px;
+  --font:'Courier New',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh;padding:20px;}
+.wrap{max-width:960px;margin:0 auto;}
+h1{color:var(--accent);font-size:1rem;letter-spacing:.15em;margin-bottom:4px;}
+.subtitle{color:var(--muted);font-size:11px;letter-spacing:.1em;margin-bottom:24px;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;}
+.card-title{color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+label{display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;}
+input,select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:var(--radius);font-family:var(--font);font-size:13px;width:100%;}
+input:focus,select:focus{outline:none;border-color:var(--accent);}
+textarea{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%;min-height:140px;resize:vertical;}
+textarea:focus{outline:none;border-color:var(--accent);}
+.btn{background:var(--accent);color:#000;border:none;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;letter-spacing:.06em;padding:9px 16px;cursor:pointer;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
+.btn-outline:hover{background:var(--accent);color:#000;}
+.btn-green{background:var(--accent2);color:#000;}
+.btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.btn-sm{padding:5px 10px;font-size:11px;}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.msg{padding:10px 12px;border-radius:var(--radius);font-size:12px;margin-top:10px;}
+.msg.error{background:#3b0000;border:1px solid var(--danger);color:var(--danger);}
+.msg.success{background:#002d0f;border:1px solid var(--accent2);color:var(--accent2);}
+.msg.warn{background:#2d2000;border:1px solid var(--warn);color:var(--warn);}
+.msg.info{background:#001d3d;border:1px solid var(--info);color:var(--info);}
+/* Column map grid */
+.col-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:14px;}
+.col-map .field{display:flex;flex-direction:column;gap:4px;}
+/* Preview table */
+.preview-controls{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;}
+.preview-table-wrap{overflow-x:auto;max-height:480px;overflow-y:auto;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th{text-align:left;padding:7px 10px;font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface);z-index:1;}
+td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top;}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:var(--surface2);}
+.status-pill{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:bold;letter-spacing:.06em;white-space:nowrap;}
+.pill-ready{background:#002d0f;border:1px solid var(--accent2);color:var(--accent2);}
+.pill-skip{background:#2d1a1a;border:1px solid var(--danger);color:var(--danger);}
+.pill-nomatch{background:#2d2000;border:1px solid var(--warn);color:var(--warn);}
+.pill-imported{background:#1a2a3a;border:1px solid var(--info);color:var(--info);}
+.pill-error{background:#3b0000;border:1px solid var(--danger);color:var(--danger);}
+/* Progress */
+.progress-bar{background:var(--surface2);border-radius:4px;height:8px;margin:8px 0;}
+.progress-fill{background:var(--accent2);height:100%;border-radius:4px;transition:width .2s;}
+/* Upload zone */
+.upload-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:24px;text-align:center;cursor:pointer;position:relative;transition:border-color .2s;margin-bottom:12px;}
+.upload-zone:hover{border-color:var(--accent);}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
+.upload-zone p{color:var(--muted);font-size:12px;}
+.upload-zone .icon{font-size:1.8rem;margin-bottom:6px;}
+/* Steps */
+.steps{display:flex;gap:0;margin-bottom:20px;}
+.step-item{flex:1;text-align:center;padding:10px 4px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--border);}
+.step-item.active{color:var(--accent);border-bottom-color:var(--accent);}
+.step-item.done{color:var(--accent2);border-bottom-color:var(--accent2);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>RIDGE CO — TENANT IMPORTER</h1>
+  <div class="subtitle">SAFE IMPORT · PREVIEW BEFORE COMMIT · NEVER OVERWRITES EXISTING TENANTS</div>
+
+  <div class="steps">
+    <div class="step-item active" id="step1">1 · LOAD CSV</div>
+    <div class="step-item" id="step2">2 · MAP COLUMNS</div>
+    <div class="step-item" id="step3">3 · PREVIEW</div>
+    <div class="step-item" id="step4">4 · IMPORT</div>
+  </div>
+
+  <!-- STEP 1: Load CSV -->
+  <div id="panelStep1">
+    <div class="card">
+      <div class="card-title">LOAD YOUR CSV</div>
+      <div class="upload-zone" id="uploadZone">
+        <input type="file" accept=".csv,.txt" onchange="handleFileUpload(this)">
+        <div class="icon">📄</div>
+        <p>Click or drag a CSV file here</p>
+        <p style="font-size:11px;margin-top:4px">Export from Google Sheets: File → Download → CSV</p>
+      </div>
+      <div style="margin-bottom:10px;color:var(--muted);font-size:11px;text-align:center">— or paste CSV text directly —</div>
+      <textarea id="csvPaste" placeholder="Paste CSV contents here..."></textarea>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn" onclick="parseCSV()">PARSE CSV →</button>
+      </div>
+      <div id="step1msg"></div>
+    </div>
+  </div>
+
+  <!-- STEP 2: Map Columns -->
+  <div id="panelStep2" style="display:none">
+    <div class="card">
+      <div class="card-title">MAP COLUMNS — tell us which column is which</div>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:14px">First row detected as headers. Match each field to the right column.</p>
+      <div class="col-map" id="colMap"></div>
+      <div id="colPreview" style="margin-bottom:14px;overflow-x:auto;max-height:200px;overflow-y:auto;"></div>
+      <div class="btn-row">
+        <button class="btn-muted btn btn-sm" onclick="goStep(1)">← Back</button>
+        <button class="btn btn-green" onclick="runPreview()">PREVIEW IMPORT →</button>
+      </div>
+      <div id="step2msg"></div>
+    </div>
+  </div>
+
+  <!-- STEP 3: Preview -->
+  <div id="panelStep3" style="display:none">
+    <div class="card">
+      <div class="card-title">IMPORT PREVIEW</div>
+      <div id="previewStats" style="margin-bottom:12px;font-size:12px;display:flex;gap:16px;flex-wrap:wrap;"></div>
+      <div class="preview-controls">
+        <button class="btn btn-sm btn-outline" onclick="selectAll(true)">Select All Ready</button>
+        <button class="btn btn-sm btn-muted" onclick="selectAll(false)">Deselect All</button>
+        <span style="color:var(--muted);font-size:11px" id="selCount"></span>
+      </div>
+      <div class="preview-table-wrap">
+        <table id="previewTable">
+          <thead><tr>
+            <th style="width:32px"><input type="checkbox" id="checkAll" onchange="toggleAll(this.checked)"></th>
+            <th>CSV Address</th>
+            <th>Matched Property</th>
+            <th>Tenant Name</th>
+            <th>Phone</th>
+            <th>Email</th>
+            <th>Status</th>
+            <th>Notes</th>
+          </tr></thead>
+          <tbody id="previewBody"></tbody>
+        </table>
+      </div>
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn-muted btn btn-sm" onclick="goStep(2)">← Back</button>
+        <button class="btn btn-green" id="importBtn" onclick="runImport()">IMPORT SELECTED →</button>
+      </div>
+      <div id="step3msg"></div>
+    </div>
+  </div>
+
+  <!-- STEP 4: Results -->
+  <div id="panelStep4" style="display:none">
+    <div class="card">
+      <div class="card-title">IMPORT COMPLETE</div>
+      <div id="resultsBody"></div>
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn btn-outline" onclick="resetAll()">START NEW IMPORT</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET = 'mh-secret-2026-brett';
+
+var csvRows = [];      // raw parsed CSV rows (arrays)
+var csvHeaders = [];   // header row
+var colMap = {};       // { address, tenant, phone, email, unit }
+var previewRows = [];  // processed preview objects
+var hubProps = [];     // properties from hub
+var hubTenants = [];   // existing tenants from hub
+var hubUnits = [];     // units from hub
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  opts.headers['X-Auth-Token'] = SECRET;
+  if (opts.body && typeof opts.body === 'object') {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  return fetch(WORKER + path, opts).then(function(r) { return r.json(); });
+}
+
+// ── CSV Parsing ───────────────────────────────────────────────
+
+function handleFileUpload(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    document.getElementById('csvPaste').value = e.target.result;
+  };
+  reader.readAsText(file);
+}
+
+function parseCSV() {
+  var raw = document.getElementById('csvPaste').value.trim();
+  if (!raw) { showMsg('step1msg', 'Paste or upload a CSV first.', 'error'); return; }
+
+  var lines = raw.split(/\r?\n/);
+  csvRows = lines.map(function(line) { return parseCSVLine(line); });
+  csvHeaders = csvRows[0] || [];
+
+  if (csvHeaders.length < 2) { showMsg('step1msg', 'Could not parse CSV — check format.', 'error'); return; }
+
+  goStep(2);
+  buildColMap();
+}
+
+function parseCSVLine(line) {
+  var result = [], current = '', inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    var ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; }
+    else if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+    else { current += ch; }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+// ── Column Mapping ────────────────────────────────────────────
+
+function buildColMap() {
+  // Auto-detect common column names
+  var guesses = { address: -1, tenant: -1, phone: -1, email: -1 };
+  csvHeaders.forEach(function(h, i) {
+    var hl = h.toLowerCase();
+    if (hl.includes('address') || hl.includes('addr')) guesses.address = i;
+    if (hl.includes('tenant') || hl.includes('name') || hl.includes('contact')) guesses.tenant = i;
+    if (hl.includes('phone') || hl.includes('mobile') || hl.includes('cell')) guesses.phone = i;
+    if (hl.includes('email') || hl.includes('mail')) guesses.email = i;
+  });
+
+  var fields = [
+    { key:'address', label:'Property Address *', required: true },
+    { key:'tenant',  label:'Tenant Name *', required: true },
+    { key:'phone',   label:'Phone Number', required: false },
+    { key:'email',   label:'Email', required: false },
+  ];
+
+  var opts = '<option value="">— skip —</option>' + csvHeaders.map(function(h, i) {
+    return '<option value="' + i + '">' + i + ': ' + h + '</option>';
+  }).join('');
+
+  document.getElementById('colMap').innerHTML = fields.map(function(f) {
+    var sel = '<option value="">— skip —</option>' + csvHeaders.map(function(h, i) {
+      var sel2 = (guesses[f.key] === i) ? ' selected' : '';
+      return '<option value="' + i + '"' + sel2 + '>' + i + ': ' + h + '</option>';
+    }).join('');
+    return '<div class="field"><label>' + f.label + '</label>' +
+      '<select id="col_' + f.key + '" onchange="updateColPreview()">' + sel + '</select></div>';
+  }).join('');
+
+  // Preview table of first 5 rows
+  updateColPreview();
+}
+
+function updateColPreview() {
+  var preview = csvRows.slice(1, 6);
+  var html = '<table><thead><tr>' + csvHeaders.map(function(h, i) {
+    return '<th>' + i + ': ' + h + '</th>';
+  }).join('') + '</tr></thead><tbody>';
+  html += preview.map(function(row) {
+    return '<tr>' + csvHeaders.map(function(_, i) {
+      return '<td>' + esc(row[i]||'') + '</td>';
+    }).join('') + '</tr>';
+  }).join('');
+  html += '</tbody></table>';
+  document.getElementById('colPreview').innerHTML = html;
+}
+
+// ── Preview ───────────────────────────────────────────────────
+
+function runPreview() {
+  var addrCol  = parseInt(document.getElementById('col_address').value);
+  var tenantCol= parseInt(document.getElementById('col_tenant').value);
+  var phoneCol = document.getElementById('col_phone').value;
+  var emailCol = document.getElementById('col_email').value;
+
+  if (isNaN(addrCol))   { showMsg('step2msg', 'Address column is required.', 'error'); return; }
+  if (isNaN(tenantCol)) { showMsg('step2msg', 'Tenant name column is required.', 'error'); return; }
+
+  colMap = { address: addrCol, tenant: tenantCol, phone: phoneCol !== '' ? parseInt(phoneCol) : -1, email: emailCol !== '' ? parseInt(emailCol) : -1 };
+
+  showMsg('step2msg', 'Loading hub data…', 'info');
+
+  Promise.all([
+    api('/properties'), api('/tenants'), api('/units'),
+  ]).then(function(results) {
+    hubProps   = Array.isArray(results[0]) ? results[0] : [];
+    hubTenants = Array.isArray(results[1]) ? results[1] : [];
+    hubUnits   = Array.isArray(results[2]) ? results[2] : [];
+
+    buildPreview();
+    goStep(3);
+    showMsg('step2msg', '', '');
+  }).catch(function(e) {
+    showMsg('step2msg', 'Failed to load hub data: ' + e.message, 'error');
+  });
+}
+
+function buildPreview() {
+  var dataRows = csvRows.slice(1).filter(function(r) { return r.some(function(c){ return c.trim(); }); });
+  previewRows = dataRows.map(function(row) {
+    var rawAddr   = (row[colMap.address]  || '').trim();
+    var rawName   = (row[colMap.tenant]   || '').trim();
+    var rawPhone  = colMap.phone  >= 0 ? (row[colMap.phone]  || '').trim() : '';
+    var rawEmail  = colMap.email  >= 0 ? (row[colMap.email]  || '').trim() : '';
+
+    var parsed = parseAddress(rawAddr);
+    var matchedProp = findProperty(parsed.baseAddress);
+    var matchedUnit = null;
+    var notes = [];
+
+    // Check for unit match
+    if (matchedProp && parsed.unitLabel) {
+      matchedUnit = hubUnits.find(function(u) {
+        return u.Property_ID === matchedProp.ID &&
+          normalizeUnit(u.Unit_Label) === normalizeUnit(parsed.unitLabel);
+      });
+      if (!matchedUnit) notes.push('Unit "' + parsed.unitLabel + '" not found — will link to property only');
+    }
+
+    // Check if property already has an active tenant
+    var existingTenant = null;
+    if (matchedProp) {
+      existingTenant = hubTenants.find(function(t) {
+        return t.Active !== 'FALSE' &&
+          (t.Property_ID === matchedProp.ID ||
+           (matchedUnit && t.Unit_ID === matchedUnit.ID));
+      });
+    }
+
+    // Parse name — handle "Person A and Person B"
+    var names = parseName(rawName);
+    var firstName = names.first;
+    var lastName  = names.last;
+    var secondaryName = names.secondary;
+    if (secondaryName) notes.push('Second occupant noted: ' + secondaryName);
+
+    // Clean phone
+    var cleanedPhone = cleanPhone(rawPhone);
+    var phoneNote = rawPhone !== cleanedPhone && rawPhone ? 'Phone cleaned from: ' + rawPhone : '';
+    if (phoneNote) notes.push(phoneNote);
+
+    var status, statusLabel;
+    if (!rawAddr) { status = 'error'; statusLabel = 'No address'; }
+    else if (!matchedProp) { status = 'nomatch'; statusLabel = 'No property match'; }
+    else if (existingTenant) { status = 'skip'; statusLabel = 'Has tenant already'; }
+    else { status = 'ready'; statusLabel = 'Ready'; }
+
+    return {
+      rawAddr, rawName, rawPhone, rawEmail,
+      parsedBase: parsed.baseAddress, parsedUnit: parsed.unitLabel,
+      matchedProp, matchedUnit, existingTenant,
+      firstName, lastName, secondaryName,
+      cleanedPhone, cleanedEmail: rawEmail,
+      status, statusLabel,
+      notes: notes.join(' | '),
+      selected: status === 'ready',
+    };
+  });
+
+  renderPreviewTable();
+  updateSelCount();
+}
+
+function renderPreviewTable() {
+  var counts = { ready:0, skip:0, nomatch:0, error:0 };
+  previewRows.forEach(function(r) { counts[r.status] = (counts[r.status]||0) + 1; });
+
+  document.getElementById('previewStats').innerHTML =
+    stat(counts.ready, '🟢 Ready to import', 'var(--accent2)') +
+    stat(counts.skip, '🔴 Skipped (has tenant)', 'var(--danger)') +
+    stat(counts.nomatch, '🟡 No property match', 'var(--warn)') +
+    (counts.error ? stat(counts.error, '⚠️ Errors', 'var(--danger)') : '');
+
+  document.getElementById('previewBody').innerHTML = previewRows.map(function(r, i) {
+    var pillClass = { ready:'pill-ready', skip:'pill-skip', nomatch:'pill-nomatch', error:'pill-error' }[r.status];
+    var propDisplay = r.matchedProp ? (r.matchedProp.Address + (r.matchedProp.City ? ', ' + r.matchedProp.City : '')) : '—';
+    if (r.matchedUnit) propDisplay += ' · Unit ' + r.matchedUnit.Unit_Label;
+    var canSelect = r.status === 'ready';
+    return '<tr>' +
+      '<td><input type="checkbox" class="row-check" data-idx="' + i + '" ' + (r.selected?'checked':'') + (canSelect?'':' disabled') + ' onchange="rowCheckChanged(' + i + ',this.checked)"></td>' +
+      '<td>' + esc(r.rawAddr) + '</td>' +
+      '<td style="color:' + (r.matchedProp?'var(--text)':'var(--warn)') + '">' + esc(propDisplay) + '</td>' +
+      '<td>' + esc(r.firstName) + (r.lastName ? ' ' + esc(r.lastName) : '') + '</td>' +
+      '<td>' + esc(r.cleanedPhone||'—') + '</td>' +
+      '<td style="font-size:11px">' + esc(r.cleanedEmail||'—') + '</td>' +
+      '<td><span class="status-pill ' + pillClass + '">' + r.statusLabel + '</span></td>' +
+      '<td style="color:var(--muted);font-size:11px">' + esc(r.notes||'—') + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function stat(count, label, color) {
+  return '<span style="color:' + color + '">' + count + ' ' + label + '</span>';
+}
+
+function rowCheckChanged(idx, checked) {
+  previewRows[idx].selected = checked;
+  updateSelCount();
+}
+
+function selectAll(readyOnly) {
+  previewRows.forEach(function(r, i) {
+    if (r.status === 'ready') r.selected = readyOnly;
+  });
+  renderPreviewTable(); updateSelCount();
+}
+
+function toggleAll(checked) {
+  previewRows.forEach(function(r, i) {
+    if (r.status === 'ready') r.selected = checked;
+  });
+  document.querySelectorAll('.row-check:not([disabled])').forEach(function(cb){ cb.checked = checked; });
+  updateSelCount();
+}
+
+function updateSelCount() {
+  var n = previewRows.filter(function(r){ return r.selected; }).length;
+  document.getElementById('selCount').textContent = n + ' selected for import';
+}
+
+// ── Import ────────────────────────────────────────────────────
+
+async function runImport() {
+  var toImport = previewRows.filter(function(r){ return r.selected && r.status === 'ready'; });
+  if (!toImport.length) { showMsg('step3msg','No rows selected.','warn'); return; }
+
+  document.getElementById('importBtn').disabled = true;
+  showMsg('step3msg', 'Importing ' + toImport.length + ' tenants…', 'info');
+
+  var created = 0, errors = [], results = [];
+  var progress = document.createElement('div');
+  progress.className = 'progress-bar';
+  progress.innerHTML = '<div class="progress-fill" id="progFill" style="width:0"></div>';
+  document.getElementById('step3msg').appendChild(progress);
+
+  for (var i = 0; i < toImport.length; i++) {
+    var r = toImport[i];
+    var pct = Math.round(((i+1) / toImport.length) * 100);
+    var fill = document.getElementById('progFill');
+    if (fill) fill.style.width = pct + '%';
+
+    try {
+      var body = {
+        First_Name: r.firstName,
+        Last_Name:  r.lastName || '',
+        Phone:      r.cleanedPhone || '',
+        Email:      r.cleanedEmail || '',
+        Property_ID: r.matchedProp.ID,
+        Unit_ID:    r.matchedUnit ? r.matchedUnit.ID : '',
+        Active:     'TRUE',
+      };
+      // Add note about second occupant if any
+      if (r.secondaryName) body.Notes = 'Also: ' + r.secondaryName;
+
+      var res = await api('/tenant/add', { method:'POST', body: body });
+      if (res.error) {
+        errors.push({ name: r.firstName + ' ' + r.lastName, addr: r.rawAddr, error: res.error });
+      } else {
+        created++;
+        results.push({ name: r.firstName + (r.lastName ? ' '+r.lastName:''), addr: r.rawAddr, id: res.id, phone: r.cleanedPhone });
+      }
+    } catch(e) {
+      errors.push({ name: r.firstName, addr: r.rawAddr, error: e.message });
+    }
+    // Small delay to avoid rate limiting
+    await new Promise(function(res){ setTimeout(res, 120); });
+  }
+
+  showResults(created, errors, results);
+  goStep(4);
+}
+
+function showResults(created, errors, results) {
+  var html = '';
+  html += '<div style="display:flex;gap:20px;margin-bottom:16px;flex-wrap:wrap">';
+  html += '<div style="color:var(--accent2);font-size:1.5rem;font-weight:bold">' + created + ' <span style="font-size:13px;color:var(--muted)">created</span></div>';
+  if (errors.length) html += '<div style="color:var(--danger);font-size:1.5rem;font-weight:bold">' + errors.length + ' <span style="font-size:13px;color:var(--muted)">errors</span></div>';
+  html += '</div>';
+
+  if (created > 0) {
+    html += '<div style="margin-bottom:16px"><div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">✓ CREATED</div>';
+    html += '<table><thead><tr><th>Name</th><th>Address</th><th>Phone</th><th>ID</th></tr></thead><tbody>';
+    html += results.map(function(r){
+      return '<tr><td>' + esc(r.name) + '</td><td>' + esc(r.addr) + '</td><td>' + esc(r.phone||'—') + '</td><td style="color:var(--muted)">'+esc(r.id)+'</td></tr>';
+    }).join('');
+    html += '</tbody></table></div>';
+  }
+
+  if (errors.length) {
+    html += '<div><div style="color:var(--danger);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">⚠ ERRORS</div>';
+    html += '<table><thead><tr><th>Name</th><th>Address</th><th>Error</th></tr></thead><tbody>';
+    html += errors.map(function(e){
+      return '<tr><td>' + esc(e.name) + '</td><td>' + esc(e.addr) + '</td><td style="color:var(--danger)">' + esc(e.error) + '</td></tr>';
+    }).join('');
+    html += '</tbody></table></div>';
+  }
+
+  document.getElementById('resultsBody').innerHTML = html;
+}
+
+// ── Address / Name / Phone helpers ────────────────────────────
+
+function parseAddress(raw) {
+  // Split "3737 Clarks Lane Unit #104" → base + unit
+  var unitMatch = raw.match(/\b(?:unit|apt|apt\.|suite|ste|#)\s*([^\s,]+)/i);
+  var unitLabel = unitMatch ? unitMatch[1].replace('#','') : '';
+  var baseAddress = raw.replace(/\b(?:unit|apt|apt\.|suite|ste|#)\s*[^\s,]+/i, '').replace(/,\s*$/, '').trim();
+  return { baseAddress: baseAddress, unitLabel: unitLabel };
+}
+
+function normalizeAddr(addr) {
+  return addr.toLowerCase()
+    .replace(/\bst\b\.?/g,'st').replace(/\brd\b\.?/g,'rd')
+    .replace(/\bave?\b\.?/g,'ave').replace(/\bdr\b\.?/g,'dr')
+    .replace(/\bln\b\.?/g,'ln').replace(/\bblvd\b\.?/g,'blvd')
+    .replace(/\bct\b\.?/g,'ct').replace(/\bpl\b\.?/g,'pl')
+    .replace(/[^a-z0-9\s]/g,'').replace(/\s+/g,' ').trim();
+}
+
+function normalizeUnit(u) {
+  return (u||'').toString().toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+
+function findProperty(addr) {
+  var normAddr = normalizeAddr(addr);
+  // Exact normalized match first
+  var match = hubProps.find(function(p) {
+    return normalizeAddr(p.Address || '') === normAddr;
+  });
+  if (match) return match;
+  // Starts-with match (address without suffix differences)
+  match = hubProps.find(function(p) {
+    var pn = normalizeAddr(p.Address || '');
+    return pn.startsWith(normAddr) || normAddr.startsWith(pn);
+  });
+  if (match) return match;
+  // Number + first word match (fallback)
+  var parts = normAddr.split(' ');
+  if (parts.length >= 2) {
+    var num = parts[0];
+    var street1 = parts[1];
+    match = hubProps.find(function(p) {
+      var pn = normalizeAddr(p.Address || '').split(' ');
+      return pn[0] === num && pn[1] === street1;
+    });
+  }
+  return match || null;
+}
+
+function parseName(raw) {
+  // Handle "First Last and First2 Last2" — split on " and "
+  var andIdx = raw.toLowerCase().indexOf(' and ');
+  var primary = andIdx >= 0 ? raw.substring(0, andIdx).trim() : raw.trim();
+  var secondary = andIdx >= 0 ? raw.substring(andIdx + 5).trim() : '';
+  // Split primary into first/last
+  var parts = primary.split(/\s+/);
+  var first = parts[0] || primary;
+  var last  = parts.slice(1).join(' ');
+  return { first: first, last: last, secondary: secondary };
+}
+
+function cleanPhone(raw) {
+  if (!raw) return '';
+  // Remove text-in-parens that contain letters (e.g. "(Alexis)" "(Carmen)")
+  var cleaned = raw.replace(/\([^)]*[a-zA-Z][^)]*\)/g, '').trim();
+  // Remove trailing/leading non-digit noise
+  cleaned = cleaned.replace(/^\s*[-–—,]+|[-–—,]+\s*$/g,'').trim();
+  return cleaned;
+}
+
+// ── Navigation ────────────────────────────────────────────────
+
+function goStep(n) {
+  for (var i=1;i<=4;i++) {
+    var panel = document.getElementById('panelStep'+i);
+    var step  = document.getElementById('step'+i);
+    if (panel) panel.style.display = i===n ? '' : 'none';
+    if (step)  step.className = 'step-item' + (i<n?' done':i===n?' active':'');
+  }
+}
+
+function resetAll() {
+  csvRows=[]; csvHeaders=[]; colMap={}; previewRows=[]; hubProps=[]; hubTenants=[]; hubUnits=[];
+  document.getElementById('csvPaste').value='';
+  showMsg('step1msg','','');
+  goStep(1);
+}
+
+function showMsg(id, msg, type) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.innerHTML = msg ? '<div class="msg ' + type + '">' + msg + '</div>' : '';
+}
+
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
