@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ridge Co — Owner Portal</title>
+<style>
+:root{
+  --bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;
+  --text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;
+  --danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--purple:#c084fc;
+  --radius:8px;--font:'Courier New',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh;padding:0;}
+
+/* ── Login ── */
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:380px;padding:28px;}
+.logo{color:var(--accent);font-size:1.1rem;letter-spacing:.15em;font-weight:bold;margin-bottom:4px;}
+.logo-sub{color:var(--muted);font-size:11px;letter-spacing:.1em;margin-bottom:24px;}
+label{display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;}
+input,select,textarea{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px 12px;border-radius:6px;}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
+textarea{resize:vertical;min-height:70px;}
+.pin-input{font-size:1.5rem;letter-spacing:.15em;text-align:center;padding:14px;text-transform:uppercase;}
+.btn{background:var(--accent);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.06em;padding:10px 16px;cursor:pointer;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-full{width:100%;margin-top:10px;}
+.btn-sm{padding:5px 10px;font-size:11px;}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
+.btn-outline:hover{background:var(--accent);color:#000;}
+.btn-green{background:var(--accent2);color:#000;}
+.btn-blue{background:var(--info);color:#000;}
+.btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.msg{margin-top:10px;padding:9px 12px;border-radius:6px;font-size:12px;}
+.msg.error{background:#3b0000;border:1px solid var(--danger);color:var(--danger);}
+.msg.success{background:#002d0f;border:1px solid var(--accent2);color:var(--accent2);}
+.msg.info{background:#001d3d;border:1px solid var(--info);color:var(--info);}
+
+/* ── App shell ── */
+.screen{display:none;}
+.screen.active{display:block;}
+.app-header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
+.app-header .name{color:var(--accent);font-weight:bold;letter-spacing:.08em;}
+.app-header .sub{color:var(--muted);font-size:11px;}
+.main{padding:16px;max-width:720px;margin:0 auto;}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:2px;background:var(--surface2);border-radius:6px;padding:3px;margin-bottom:16px;}
+.tab{flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted);user-select:none;}
+.tab.active{background:var(--surface);color:var(--accent);}
+
+/* ── Filters ── */
+.filter-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+.filter-row select,.filter-row input{flex:1;min-width:120px;font-size:12px;padding:7px 10px;}
+.toggle-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:12px;color:var(--muted);}
+.toggle-bar label{display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;}
+.toggle-bar input[type=checkbox]{width:auto;font-size:inherit;padding:0;margin:0;}
+
+/* ── Stats row ── */
+.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px;}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;text-align:center;}
+.stat .num{font-size:1.6rem;font-weight:bold;color:var(--accent);}
+.stat .lbl{color:var(--muted);font-size:10px;letter-spacing:.08em;margin-top:2px;}
+
+/* ── WO Cards ── */
+.wo-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:10px;overflow:hidden;}
+.wo-card.urgent{border-left:3px solid var(--danger);}
+.wo-card.high{border-left:3px solid var(--warn);}
+.wo-card.normal{border-left:3px solid var(--border);}
+.wo-card.low{border-left:3px solid var(--muted);}
+.wo-head{padding:12px;cursor:pointer;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}
+.wo-head-left{flex:1;min-width:0;}
+.wo-id{color:var(--muted);font-size:10px;letter-spacing:.08em;}
+.wo-addr{color:var(--accent);font-size:.9rem;font-weight:bold;margin:2px 0;}
+.wo-trade{color:var(--text);font-size:12px;}
+.wo-desc-preview{color:var(--muted);font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;}
+.wo-head-right{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;}
+.badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;}
+.badge-new{background:#1e3a5f;color:var(--info);}
+.badge-assigned,.badge-accepted{background:#1a2a1a;color:var(--accent2);}
+.badge-inprogress,.badge-in-progress{background:#1a2500;color:#86efac;}
+.badge-onhold{background:#2a1a00;color:var(--warn);}
+.badge-complete{background:#1f2d1f;color:#6ee7b7;}
+.badge-pendinginvoice{background:#2d1f06;color:var(--warn);}
+.badge-invoiced{background:#2d1f06;color:var(--accent);}
+.badge-paid{background:#1f2d1f;color:#6ee7b7;}
+.badge-cancelled{background:#1e1e1e;color:var(--muted);}
+.badge-pri-urgent{background:#5c0000;color:var(--danger);border:1px solid var(--danger);}
+.badge-pri-high{background:#3d2200;color:var(--warn);border:1px solid var(--warn);}
+.badge-pri-normal{background:#1a2a1a;color:var(--accent2);border:1px solid var(--accent2);}
+.badge-pri-low{background:#1a1a2a;color:var(--info);border:1px solid var(--info);}
+.expand-icon{color:var(--muted);font-size:14px;transition:transform .2s;}
+.wo-card.expanded .expand-icon{transform:rotate(180deg);}
+
+/* ── WO Detail ── */
+.wo-detail{display:none;border-top:1px solid var(--border);padding:14px;}
+.wo-card.expanded .wo-detail{display:block;}
+.detail-section{margin-bottom:14px;}
+.detail-section-title{color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border);}
+.detail-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:7px;gap:8px;}
+.dl{color:var(--muted);font-size:11px;letter-spacing:.05em;flex-shrink:0;padding-top:1px;}
+.dv{color:var(--text);font-size:12px;text-align:right;word-break:break-word;max-width:240px;}
+.dv.accent{color:var(--accent);font-weight:bold;}
+.dv.info{color:var(--info);}
+.dv a{color:var(--info);}
+
+/* Description threading */
+.desc-thread{background:var(--surface2);border-radius:6px;padding:10px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;}
+.desc-original{color:var(--text);}
+.desc-update{color:var(--accent2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border);}
+.desc-update .update-attr{color:var(--muted);font-size:11px;margin-bottom:4px;}
+
+/* Inline edit */
+.inline-edit{display:flex;gap:6px;align-items:center;margin-top:6px;}
+.inline-edit input{flex:1;font-size:12px;padding:6px 8px;}
+.editable-row{cursor:pointer;}
+.editable-row .dv{color:var(--info);text-decoration:underline dotted;}
+
+/* Audit trail */
+.audit-entry{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);font-size:11px;}
+.audit-entry:last-child{border-bottom:none;}
+.audit-time{color:var(--muted);flex-shrink:0;min-width:110px;}
+.audit-who{flex-shrink:0;}
+.audit-who .role-admin{color:var(--accent);}
+.audit-who .role-owner{color:var(--info);}
+.audit-who .role-vendor{color:var(--accent2);}
+.audit-who .role-system{color:var(--muted);}
+.audit-change{color:var(--text);flex:1;}
+.audit-field{font-weight:bold;}
+.audit-old{color:var(--danger);text-decoration:line-through;}
+.audit-new{color:var(--accent2);}
+
+/* Modal overlay */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;padding:16px;}
+.modal-overlay.open{display:flex;}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:460px;padding:20px;}
+.modal-title{color:var(--accent);font-size:.95rem;letter-spacing:.08em;margin-bottom:14px;}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;}
+
+/* Submit form */
+.field{margin-bottom:14px;}
+.field label{margin-bottom:6px;}
+
+/* Search select (property picker on submit) */
+.search-select{position:relative;}
+.prop-dropdown{display:none;position:absolute;top:100%;left:0;right:0;background:var(--surface2);border:1px solid var(--accent);border-top:none;border-radius:0 0 var(--radius) var(--radius);max-height:200px;overflow-y:auto;z-index:50;}
+.prop-dropdown.open{display:block;}
+.prop-option{padding:9px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--border);}
+.prop-option:hover{background:var(--surface);color:var(--accent);}
+.prop-option:last-child{border-bottom:none;}
+.prop-option .po-meta{font-size:11px;color:var(--muted);margin-top:2px;}
+
+.empty{text-align:center;color:var(--muted);padding:32px 16px;}
+.spinner-msg{text-align:center;color:var(--muted);padding:24px;font-size:12px;}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="screenLogin" class="screen active">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="logo">RIDGE CO</div>
+      <div class="logo-sub">OWNER PORTAL</div>
+      <div style="margin-bottom:14px;">
+        <label>ACCESS PIN</label>
+        <input type="text" class="pin-input" id="pinInput" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
+      </div>
+      <button class="btn btn-full" id="loginBtn" onclick="doLogin()">SIGN IN</button>
+      <div id="loginMsg"></div>
+    </div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="screenDash" class="screen">
+  <div class="app-header">
+    <div>
+      <div class="name" id="ownerName">—</div>
+      <div class="sub" id="ownerCompany"></div>
+    </div>
+    <button class="btn btn-sm btn-outline" onclick="doLogout()">LOG OUT</button>
+  </div>
+
+  <div class="main">
+    <div class="stats-row">
+      <div class="stat"><div class="num" id="statOpen">—</div><div class="lbl">OPEN</div></div>
+      <div class="stat"><div class="num" id="statUrgent">—</div><div class="lbl">URGENT</div></div>
+      <div class="stat"><div class="num" id="statProps">—</div><div class="lbl">PROPERTIES</div></div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" id="tabWOs" onclick="switchTab('wos')">WORK ORDERS</div>
+      <div class="tab" id="tabSubmit" onclick="switchTab('submit')">SUBMIT REQUEST</div>
+    </div>
+
+    <!-- WORK ORDERS TAB -->
+    <div id="panelWOs">
+      <div class="filter-row">
+        <select id="filterProp" onchange="renderWOs()"><option value="">All Properties</option></select>
+        <select id="filterStatus" onchange="renderWOs()">
+          <option value="open">Open Only</option>
+          <option value="all">All Statuses</option>
+          <option value="New">New</option>
+          <option value="Assigned">Assigned</option>
+          <option value="Accepted">Accepted</option>
+          <option value="In Progress">In Progress</option>
+          <option value="Complete">Complete</option>
+          <option value="Pending Invoice">Pending Invoice</option>
+          <option value="Invoiced">Invoiced</option>
+          <option value="Paid">Paid</option>
+        </select>
+        <input type="text" id="filterSearch" placeholder="Search WO# or ref#…" oninput="renderWOs()" style="min-width:140px;">
+      </div>
+      <div id="woList"><div class="spinner-msg">Loading…</div></div>
+    </div>
+
+    <!-- SUBMIT TAB -->
+    <div id="panelSubmit" style="display:none">
+      <div class="field">
+        <label>Property</label>
+        <div class="search-select">
+          <input type="text" id="sPropSearch" placeholder="Type to search your properties…" oninput="filterSubmitProps()" onfocus="openSubmitDD()" autocomplete="off">
+          <input type="hidden" id="sPropId">
+          <div class="prop-dropdown" id="sPropDD"></div>
+        </div>
+      </div>
+      <div class="field" id="sUnitField" style="display:none">
+        <label>Unit (optional)</label>
+        <select id="sUnitId"><option value="">Whole property</option></select>
+      </div>
+      <div class="field">
+        <label>Type of Issue</label>
+        <select id="sTrade">
+          <option value="">Select…</option>
+          <option>Plumbing</option><option>HVAC</option><option>Electric</option>
+          <option>General</option><option>Appliance</option><option>Landscaping</option>
+          <option>Roofing</option><option>Pest Control</option><option>Other</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Priority</label>
+        <select id="sPriority">
+          <option value="normal">Normal</option>
+          <option value="urgent">Urgent</option>
+          <option value="low">Low / Preventive</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Your Reference # <span style="color:var(--muted);font-weight:normal">(optional)</span></label>
+        <input type="text" id="sOwnerRef" placeholder="Your internal WO or PO number">
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <textarea id="sDesc" placeholder="Describe the issue…"></textarea>
+      </div>
+      <div id="sFormMsg"></div>
+      <button class="btn btn-full" id="sSubmitBtn" onclick="submitRequest()">SUBMIT REQUEST</button>
+    </div>
+  </div>
+</div>
+
+<!-- DESCRIPTION UPDATE MODAL -->
+<div class="modal-overlay" id="modalDescUpdate">
+  <div class="modal">
+    <div class="modal-title">ADD DESCRIPTION UPDATE</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Original description is preserved. Your update will be appended below with your name and timestamp.</p>
+    <textarea id="descUpdateText" placeholder="e.g. Tenant said the leak happens after her son showers on the 3rd floor…" style="min-height:100px"></textarea>
+    <div id="descUpdateMsg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm btn-muted" onclick="closeModal('modalDescUpdate')">Cancel</button>
+      <button class="btn btn-sm btn-green" id="descUpdateBtn" onclick="submitDescUpdate()">APPEND UPDATE</button>
+    </div>
+  </div>
+</div>
+
+<!-- NOTE MODAL -->
+<div class="modal-overlay" id="modalNote">
+  <div class="modal">
+    <div class="modal-title">ADD NOTE</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Notes are attributed and cannot be removed — they become part of the permanent record.</p>
+    <textarea id="noteText" placeholder="Enter your note…" style="min-height:80px"></textarea>
+    <div id="noteMsg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm btn-muted" onclick="closeModal('modalNote')">Cancel</button>
+      <button class="btn btn-sm btn-green" id="noteBtn" onclick="submitNote()">ADD NOTE</button>
+    </div>
+  </div>
+</div>
+
+<!-- EDIT FIELD MODAL -->
+<div class="modal-overlay" id="modalEditField">
+  <div class="modal">
+    <div class="modal-title" id="editFieldTitle">EDIT FIELD</div>
+    <div id="editFieldBody"></div>
+    <div id="editFieldMsg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm btn-muted" onclick="closeModal('modalEditField')">Cancel</button>
+      <button class="btn btn-sm" id="editFieldBtn" onclick="submitFieldEdit()">SAVE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET = 'mh-secret-2026-brett';
+var session = null;
+var ownerProps = [];
+var allWOs = [];
+var activeWOId = null;
+var activeEditField = null;
+
+var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  opts.headers['X-Auth-Token'] = SECRET;
+  if (opts.body && typeof opts.body === 'object') {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+}
+
+function sortPropsNumeric(props) {
+  return props.slice().sort(function(a,b){
+    var na = parseInt((a.Address||'').split(' ')[0]) || 99999;
+    var nb = parseInt((b.Address||'').split(' ')[0]) || 99999;
+    return na !== nb ? na - nb : (a.Address||'').localeCompare(b.Address||'');
+  });
+}
+
+// ── Login ────────────────────────────────────────────────────
+
+document.getElementById('pinInput').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
+document.getElementById('pinInput').addEventListener('input', function(){ this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,''); });
+
+function doLogin() {
+  var pin = document.getElementById('pinInput').value.trim();
+  if (pin.length < 8) { showLoginMsg('PIN must be 8 characters (3 letters + 5 digits)', 'error'); return; }
+  var btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = 'VERIFYING…';
+  showLoginMsg('','');
+
+  api('/owner-by-pin?pin=' + encodeURIComponent(pin))
+    .then(function(data) {
+      btn.disabled = false; btn.textContent = 'SIGN IN';
+      if (data.error) {
+        if (data.locked) {
+          showLoginMsg('Locked for ' + data.minutes_remaining + ' min after too many attempts.', 'error');
+          document.getElementById('pinInput').disabled = true;
+          setTimeout(function(){ document.getElementById('pinInput').disabled = false; }, data.minutes_remaining * 60000);
+        } else {
+          showLoginMsg(data.error, 'error');
+        }
+        return;
+      }
+      session = data;
+      document.getElementById('ownerName').textContent = data.owner_name;
+      document.getElementById('ownerCompany').textContent = data.owner_company || 'Owner Portal';
+      show('screenLogin', false);
+      show('screenDash', true);
+      loadDashboard();
+    })
+    .catch(function(){ btn.disabled = false; btn.textContent = 'SIGN IN'; showLoginMsg('Connection error.','error'); });
+}
+
+function doLogout() {
+  session = null; ownerProps = []; allWOs = [];
+  document.getElementById('pinInput').value = '';
+  document.getElementById('pinInput').disabled = false;
+  document.getElementById('loginBtn').disabled = false;
+  show('screenDash', false);
+  show('screenLogin', true);
+}
+
+function showLoginMsg(msg, type) {
+  var el = document.getElementById('loginMsg');
+  el.innerHTML = msg ? '<div class="msg ' + type + '">' + esc(msg) + '</div>' : '';
+}
+
+// ── Dashboard load ────────────────────────────────────────────
+
+function loadDashboard() {
+  Promise.all([
+    api('/owner-properties?owner_id=' + session.owner_id),
+    api('/owner-workorders?owner_id=' + session.owner_id + '&include_closed=true'),
+  ]).then(function(results) {
+    ownerProps = sortPropsNumeric(Array.isArray(results[0]) ? results[0] : []);
+    allWOs = Array.isArray(results[1]) ? results[1] : [];
+
+    // Stats
+    var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
+    var urgent = open.filter(function(w){ return (w.Priority||'').toLowerCase() === 'urgent'; });
+    document.getElementById('statOpen').textContent = open.length;
+    document.getElementById('statUrgent').textContent = urgent.length;
+    document.getElementById('statProps').textContent = ownerProps.length;
+
+    // Property filter
+    var propFilter = document.getElementById('filterProp');
+    propFilter.innerHTML = '<option value="">All Properties</option>' +
+      ownerProps.map(function(p){ return '<option value="' + p.ID + '">' + p.Address + '</option>'; }).join('');
+
+    // Submit form property dropdown
+    buildSubmitDD(ownerProps);
+    renderWOs();
+  });
+}
+
+// ── Work Orders ───────────────────────────────────────────────
+
+function switchTab(tab) {
+  document.getElementById('tabWOs').className = 'tab' + (tab==='wos'?' active':'');
+  document.getElementById('tabSubmit').className = 'tab' + (tab==='submit'?' active':'');
+  document.getElementById('panelWOs').style.display = tab==='wos' ? '' : 'none';
+  document.getElementById('panelSubmit').style.display = tab==='submit' ? '' : 'none';
+}
+
+function renderWOs() {
+  var propId = document.getElementById('filterProp').value;
+  var status = document.getElementById('filterStatus').value;
+  var search = (document.getElementById('filterSearch').value||'').toLowerCase();
+
+  var wos = allWOs.slice();
+  if (propId) wos = wos.filter(function(w){ return w.Property_ID === propId; });
+  if (status === 'open') wos = wos.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
+  else if (status !== 'all') wos = wos.filter(function(w){ return w.Status === status; });
+  if (search) wos = wos.filter(function(w){
+    return (w.ID||'').toLowerCase().includes(search) ||
+           (w.Owner_WO_Ref||'').toLowerCase().includes(search) ||
+           (w.property_address||'').toLowerCase().includes(search) ||
+           (w.Description||'').toLowerCase().includes(search) ||
+           (w.Trade||'').toLowerCase().includes(search);
+  });
+  wos.sort(function(a,b){ return new Date(b.Created_Date) - new Date(a.Created_Date); });
+
+  var list = document.getElementById('woList');
+  if (!wos.length) { list.innerHTML = '<div class="empty">No work orders found.</div>'; return; }
+
+  list.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">' + wos.length + ' work order' + (wos.length!==1?'s':'') + '</div>' +
+    wos.map(function(wo, idx) {
+      var pri = (wo.Priority||'normal').toLowerCase();
+      var sc = 'badge-' + (wo.Status||'new').toLowerCase().replace(/\s+/g,'');
+      var descShort = (wo.Description||'').split('\n')[0].substring(0,70);
+      return '<div class="wo-card ' + pri + '" id="wocard-' + idx + '">' +
+        '<div class="wo-head" onclick="toggleWO(' + idx + ',\'' + wo.ID + '\')">' +
+          '<div class="wo-head-left">' +
+            '<div class="wo-id">' + esc(wo.ID) + (wo.Owner_WO_Ref ? ' <span style="color:var(--info)">[' + esc(wo.Owner_WO_Ref) + ']</span>' : '') + '</div>' +
+            '<div class="wo-addr">' + esc(wo.property_address) + (wo.unit_label ? ' — Unit ' + esc(wo.unit_label) : '') + '</div>' +
+            '<div class="wo-trade">' + esc(wo.Trade||'—') + '</div>' +
+            '<div class="wo-desc-preview">' + esc(descShort) + '</div>' +
+          '</div>' +
+          '<div class="wo-head-right">' +
+            '<span class="badge ' + sc + '">' + esc(wo.Status) + '</span>' +
+            '<span class="badge badge-pri-' + pri + '">' + pri + '</span>' +
+            '<span class="expand-icon">▾</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="wo-detail" id="wodetail-' + idx + '"></div>' +
+      '</div>';
+    }).join('');
+
+  window._renderedWOs = wos;
+}
+
+function toggleWO(idx, woId) {
+  var card = document.getElementById('wocard-' + idx);
+  var detail = document.getElementById('wodetail-' + idx);
+  var isExpanded = card.classList.contains('expanded');
+  // Collapse all
+  document.querySelectorAll('.wo-card').forEach(function(c){ c.classList.remove('expanded'); });
+  if (!isExpanded) {
+    card.classList.add('expanded');
+    loadWODetail(idx, woId);
+  }
+}
+
+function loadWODetail(idx, woId) {
+  var wo = (window._renderedWOs||[]).find(function(w){ return w.ID === woId; });
+  if (!wo) return;
+  var detail = document.getElementById('wodetail-' + idx);
+  detail.innerHTML = '<div class="spinner-msg">Loading…</div>';
+  activeWOId = woId;
+
+  // Load audit trail
+  api('/wo-audit?wo_id=' + woId).then(function(audit) {
+    detail.innerHTML = buildWODetail(wo, Array.isArray(audit) ? audit : []);
+  }).catch(function() {
+    detail.innerHTML = buildWODetail(wo, []);
+  });
+}
+
+function buildWODetail(wo, audit) {
+  var html = '<div style="padding:4px 0">';
+
+  // ── Core info ──
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">DETAILS</div>';
+  html += row('Trade', wo.Trade||'—');
+  html += row('Status', '<span class="badge badge-' + (wo.Status||'new').toLowerCase().replace(/\s+/g,'') + '">' + esc(wo.Status) + '</span>');
+  html += row('Created', wo.Created_Date ? wo.Created_Date.split('T')[0] : '—');
+  html += row('Scheduled', wo.Scheduled_Date||'—');
+  html += row('Vendor', wo.vendor_name || '—');
+  if (wo.Owner_WO_Ref) html += row('Your Ref #', '<span class="dv info">' + esc(wo.Owner_WO_Ref) + '</span>');
+  html += '</div>';
+
+  // ── Description (threaded) ──
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">DESCRIPTION</div>';
+  html += renderDescription(wo.Description||'—');
+  html += '<div style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="openDescUpdate(\'' + wo.ID + '\')">+ ADD UPDATE</button></div>';
+  html += '</div>';
+
+  // ── Notes ──
+  if (wo.Notes) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">NOTES</div>';
+    html += '<div class="desc-thread">' + esc(wo.Notes) + '</div>';
+    html += '</div>';
+  }
+  html += '<div style="margin-bottom:12px"><button class="btn btn-sm btn-outline" onclick="openNote(\'' + wo.ID + '\')">+ ADD NOTE</button></div>';
+
+  // ── Owner-editable fields ──
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">FIELDS YOU CAN EDIT <span style="font-size:10px;color:var(--muted)">(all changes are logged)</span></div>';
+  html += editableRow('Your Reference #', wo.Owner_WO_Ref||'—', wo.ID, 'Owner_WO_Ref', 'text', wo.Owner_WO_Ref||'');
+  html += editableRow('Priority', wo.Priority||'normal', wo.ID, 'Priority', 'priority', wo.Priority||'normal');
+  html += editableRow('Scheduled Date', wo.Scheduled_Date||'—', wo.ID, 'Scheduled_Date', 'date', wo.Scheduled_Date||'');
+  html += '</div>';
+
+  // ── Audit trail ──
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">AUDIT TRAIL <span style="font-size:10px;color:var(--muted)">— every change recorded</span></div>';
+  if (!audit.length) {
+    html += '<div style="color:var(--muted);font-size:11px">No changes recorded yet.</div>';
+  } else {
+    html += audit.slice().reverse().map(function(a) {
+      var roleClass = 'role-' + (a.Changed_By_Role||'unknown');
+      var ts = a.Timestamp ? a.Timestamp.replace('T',' ').split('.')[0] : '—';
+      var fieldStr = '<span class="audit-field">' + esc(a.Field) + '</span>';
+      var changeStr = '';
+      if (a.Field === 'Description' || a.Field === 'Notes') {
+        changeStr = ' updated (description/note appended)';
+      } else if (a.Old_Value !== undefined && a.New_Value !== undefined) {
+        changeStr = ': <span class="audit-old">' + esc(truncate(a.Old_Value,40)) + '</span> → <span class="audit-new">' + esc(truncate(a.New_Value,40)) + '</span>';
+      }
+      return '<div class="audit-entry">' +
+        '<div class="audit-time">' + esc(ts) + '</div>' +
+        '<div class="audit-who"><span class="' + roleClass + '">' + esc(a.Changed_By||'?') + '</span></div>' +
+        '<div class="audit-change">' + fieldStr + changeStr + (a.Notes ? ' <span style="color:var(--muted)">(' + esc(a.Notes) + ')</span>' : '') + '</div>' +
+      '</div>';
+    }).join('');
+  }
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+function renderDescription(desc) {
+  if (!desc || desc === '—') return '<div class="desc-thread desc-original">—</div>';
+  // Split on [UPDATE ... pattern
+  var parts = desc.split(/\n\n(?=\[)/);
+  var html = '<div class="desc-thread">';
+  parts.forEach(function(part, i) {
+    if (i === 0) {
+      html += '<div class="desc-original">' + esc(part) + '</div>';
+    } else {
+      // Extract attribution line
+      var attrMatch = part.match(/^\[([^\]]+)\]\s*/);
+      if (attrMatch) {
+        html += '<div class="desc-update"><div class="update-attr">📝 ' + esc(attrMatch[1]) + '</div>' + esc(part.replace(attrMatch[0], '')) + '</div>';
+      } else {
+        html += '<div class="desc-update">' + esc(part) + '</div>';
+      }
+    }
+  });
+  html += '</div>';
+  return html;
+}
+
+function editableRow(label, displayVal, woId, field, type, currentVal) {
+  return '<div class="detail-row editable-row" onclick="openEditField(\'' + woId + '\',\'' + field + '\',\'' + type + '\',\'' + esc(currentVal) + '\',' + JSON.stringify(label) + ')">' +
+    '<span class="dl">' + label + '</span>' +
+    '<span class="dv info">' + esc(String(displayVal)) + ' ✎</span>' +
+  '</div>';
+}
+
+function row(label, val) {
+  return '<div class="detail-row"><span class="dl">' + label + '</span><span class="dv">' + val + '</span></div>';
+}
+
+// ── Description update ────────────────────────────────────────
+var _descWOId = null;
+function openDescUpdate(woId) { _descWOId = woId; document.getElementById('descUpdateText').value=''; document.getElementById('descUpdateMsg').innerHTML=''; openModal('modalDescUpdate'); }
+function submitDescUpdate() {
+  var text = document.getElementById('descUpdateText').value.trim();
+  if (!text) return;
+  document.getElementById('descUpdateBtn').disabled = true;
+  api('/wo/append-description', { method:'POST', body: {
+    wo_id: _descWOId, text: text,
+    author: session.owner_name, author_role: 'owner', owner_id: session.owner_id,
+  }}).then(function(res) {
+    document.getElementById('descUpdateBtn').disabled = false;
+    if (res.success) {
+      closeModal('modalDescUpdate');
+      refreshWOInList(_descWOId);
+    } else {
+      document.getElementById('descUpdateMsg').innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>';
+    }
+  }).catch(function(){ document.getElementById('descUpdateBtn').disabled = false; });
+}
+
+// ── Note ──────────────────────────────────────────────────────
+var _noteWOId = null;
+function openNote(woId) { _noteWOId = woId; document.getElementById('noteText').value=''; document.getElementById('noteMsg').innerHTML=''; openModal('modalNote'); }
+function submitNote() {
+  var text = document.getElementById('noteText').value.trim();
+  if (!text) return;
+  document.getElementById('noteBtn').disabled = true;
+  api('/wo/add-note', { method:'POST', body: {
+    wo_id: _noteWOId, note: text,
+    author: session.owner_name, author_role: 'owner', owner_id: session.owner_id,
+  }}).then(function(res) {
+    document.getElementById('noteBtn').disabled = false;
+    if (res.success) { closeModal('modalNote'); refreshWOInList(_noteWOId); }
+    else document.getElementById('noteMsg').innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>';
+  }).catch(function(){ document.getElementById('noteBtn').disabled = false; });
+}
+
+// ── Field edit ────────────────────────────────────────────────
+var _editWOId = null;
+var _editField = null;
+function openEditField(woId, field, type, currentVal, label) {
+  _editWOId = woId; _editField = field;
+  document.getElementById('editFieldTitle').textContent = 'EDIT — ' + label.toUpperCase();
+  document.getElementById('editFieldMsg').innerHTML = '';
+  var body = '';
+  if (type === 'priority') {
+    body = '<select id="editFieldInput" style="width:100%"><option value="normal"' + (currentVal==='normal'?' selected':'') + '>Normal</option>' +
+           '<option value="urgent"' + (currentVal==='urgent'?' selected':'') + '>Urgent</option>' +
+           '<option value="high"' + (currentVal==='high'?' selected':'') + '>High</option>' +
+           '<option value="low"' + (currentVal==='low'?' selected':'') + '>Low</option></select>';
+  } else if (type === 'date') {
+    body = '<input type="date" id="editFieldInput" value="' + esc(currentVal) + '" style="width:100%">';
+  } else {
+    body = '<input type="text" id="editFieldInput" value="' + esc(currentVal) + '" style="width:100%">';
+  }
+  document.getElementById('editFieldBody').innerHTML = '<div style="margin-bottom:8px;color:var(--muted);font-size:11px">Your change will be logged with your name and timestamp.</div>' + body;
+  openModal('modalEditField');
+  setTimeout(function(){ var el = document.getElementById('editFieldInput'); if(el) el.focus(); }, 100);
+}
+function submitFieldEdit() {
+  var val = document.getElementById('editFieldInput').value.trim();
+  document.getElementById('editFieldBtn').disabled = true;
+  var fields = {};
+  fields[_editField] = val;
+  api('/wo/owner-update', { method:'POST', body: {
+    wo_id: _editWOId, owner_id: session.owner_id, owner_name: session.owner_name, fields: fields,
+  }}).then(function(res) {
+    document.getElementById('editFieldBtn').disabled = false;
+    if (res.success) { closeModal('modalEditField'); refreshWOInList(_editWOId); }
+    else document.getElementById('editFieldMsg').innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>';
+  }).catch(function(){ document.getElementById('editFieldBtn').disabled = false; });
+}
+
+function refreshWOInList(woId) {
+  // Reload WOs and re-render, keeping the expanded card open
+  api('/owner-workorders?owner_id=' + session.owner_id + '&include_closed=true').then(function(data) {
+    allWOs = Array.isArray(data) ? data : [];
+    var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
+    var urgent = open.filter(function(w){ return (w.Priority||'').toLowerCase() === 'urgent'; });
+    document.getElementById('statOpen').textContent = open.length;
+    document.getElementById('statUrgent').textContent = urgent.length;
+    renderWOs();
+    // Re-expand the card
+    var rendered = window._renderedWOs || [];
+    var idx = rendered.findIndex(function(w){ return w.ID === woId; });
+    // After renderWOs the indices change — find by WO ID in new rendered list
+    var newRendered = window._renderedWOs || [];
+    var newIdx = newRendered.findIndex(function(w){ return w.ID === woId; });
+    if (newIdx >= 0) toggleWO(newIdx, woId);
+  });
+}
+
+// ── Submit Request ────────────────────────────────────────────
+function buildSubmitDD(props) {
+  window._submitProps = props;
+}
+function filterSubmitProps() {
+  var q = (document.getElementById('sPropSearch').value||'').toLowerCase();
+  var filtered = (window._submitProps||[]).filter(function(p){
+    return (p.Address||'').toLowerCase().includes(q) || (p.City||'').toLowerCase().includes(q);
+  });
+  renderSubmitDD(filtered);
+  document.getElementById('sPropDD').classList.add('open');
+  document.getElementById('sPropId').value = '';
+  document.getElementById('sUnitField').style.display = 'none';
+}
+function openSubmitDD() { renderSubmitDD(window._submitProps||[]); document.getElementById('sPropDD').classList.add('open'); }
+function renderSubmitDD(props) {
+  var dd = document.getElementById('sPropDD');
+  dd.innerHTML = props.map(function(p){
+    var units = p.units ? p.units.length : 0;
+    return '<div class="prop-option" onclick="selectSubmitProp(\'' + p.ID + '\')">' +
+      p.Address + (p.City ? ', ' + p.City : '') +
+      (units > 0 ? '<div class="po-meta">' + units + ' unit' + (units!==1?'s':'') + '</div>' : '') + '</div>';
+  }).join('') || '<div class="prop-option" style="color:var(--muted)">No properties found</div>';
+}
+function selectSubmitProp(propId) {
+  var prop = (window._submitProps||[]).find(function(p){ return p.ID === propId; });
+  if (!prop) return;
+  document.getElementById('sPropId').value = propId;
+  document.getElementById('sPropSearch').value = prop.Address + (prop.City ? ', ' + prop.City : '');
+  document.getElementById('sPropDD').classList.remove('open');
+  if (prop.units && prop.units.length > 0) {
+    var sel = document.getElementById('sUnitId');
+    sel.innerHTML = '<option value="">Whole property</option>' +
+      prop.units.map(function(u){ return '<option value="' + u.ID + '">' + u.Unit_Label + '</option>'; }).join('');
+    document.getElementById('sUnitField').style.display = '';
+  } else {
+    document.getElementById('sUnitField').style.display = 'none';
+  }
+}
+document.addEventListener('click', function(e){ if (!e.target.closest('.search-select')) document.querySelectorAll('.prop-dropdown').forEach(function(d){ d.classList.remove('open'); }); });
+
+function submitRequest() {
+  var propId = document.getElementById('sPropId').value;
+  var trade = document.getElementById('sTrade').value;
+  var desc = document.getElementById('sDesc').value.trim();
+  var msgEl = document.getElementById('sFormMsg');
+  msgEl.innerHTML = '';
+  if (!propId) { msgEl.innerHTML = '<div class="msg error">Select a property.</div>'; return; }
+  if (!trade)  { msgEl.innerHTML = '<div class="msg error">Select issue type.</div>'; return; }
+  if (!desc)   { msgEl.innerHTML = '<div class="msg error">Describe the issue.</div>'; return; }
+  document.getElementById('sSubmitBtn').disabled = true;
+  api('/workorder', { method:'POST', body: {
+    property_id: propId, unit_id: document.getElementById('sUnitId').value||'',
+    trade: trade, priority: document.getElementById('sPriority').value,
+    description: desc, type: 'owner',
+    owner_wo_ref: document.getElementById('sOwnerRef').value.trim(),
+    created_by: session.owner_name,
+    notes: 'Owner request from ' + session.owner_name + (session.owner_company ? ' (' + session.owner_company + ')' : ''),
+  }}).then(function(res) {
+    document.getElementById('sSubmitBtn').disabled = false;
+    if (!res.id) { msgEl.innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>'; return; }
+    msgEl.innerHTML = '<div class="msg success">✓ Work order ' + esc(res.id) + ' created. Your coordinator will follow up.</div>';
+    document.getElementById('sDesc').value = '';
+    document.getElementById('sOwnerRef').value = '';
+    document.getElementById('sTrade').value = '';
+    document.getElementById('sPropSearch').value = '';
+    document.getElementById('sPropId').value = '';
+    loadDashboard();
+    setTimeout(function(){ switchTab('wos'); }, 2000);
+  }).catch(function(){ document.getElementById('sSubmitBtn').disabled = false; msgEl.innerHTML = '<div class="msg error">Connection error.</div>'; });
+}
+
+// ── Modal / Util ──────────────────────────────────────────────
+function openModal(id){ document.getElementById(id).classList.add('open'); }
+function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(function(m){
+  m.addEventListener('click', function(e){ if(e.target===m) m.classList.remove('open'); });
+});
+function show(id, visible) { document.getElementById(id).className = 'screen' + (visible?' active':''); }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function truncate(s, n) { s = String(s||''); return s.length > n ? s.substring(0,n) + '…' : s; }
+</script>
+</body>
+</html>

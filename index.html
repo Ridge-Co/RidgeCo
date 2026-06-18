@@ -645,6 +645,10 @@ function openWODetail(woId) {
       (prop.Access_Notes?'<div><div class="pf-label">Access Notes</div><div class="pf-val">'+prop.Access_Notes+'</div></div>':'') +
       '</div></div>';
   }
+  var auditHtml = '<div style="margin-top:14px">' +
+    '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:8px">AUDIT TRAIL</div>' +
+    '<div id="auditTrailBody" style="font-size:11px"><div style="color:var(--muted)">Loading…</div></div>' +
+  '</div>';
   document.getElementById('detail-body').innerHTML = propHtml +
     '<table class="data-table" style="margin-bottom:16px">' +
     '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span></td></tr>' +
@@ -659,6 +663,29 @@ function openWODetail(woId) {
     '<tr><td style="color:var(--muted)">Owner Ref #</td><td style="color:var(--info);font-weight:bold;letter-spacing:0.05em">'+(wo.Owner_WO_Ref||'<span style="color:var(--muted)">—</span>')+'</td></tr>' +
     '<tr><td style="color:var(--muted);font-size:10px">Property ID (raw)</td><td style="color:var(--muted);font-size:11px">'+(wo.Property_ID||'—')+'</td></tr>' +
     '</table>';
+  // Append audit section after the detail body builds
+  document.getElementById('detail-body').innerHTML += auditHtml;
+  // Load audit trail
+  api('GET','/wo-audit?wo_id='+woId).then(function(entries){
+    var el = document.getElementById('auditTrailBody');
+    if (!el) return;
+    if (!entries || !entries.length) { el.innerHTML='<span style="color:var(--muted)">No changes recorded yet.</span>'; return; }
+    var rows = entries.slice().reverse().map(function(a){
+      var roleColor = {admin:'var(--accent)',owner:'var(--info)',vendor:'var(--accent2)',system:'var(--muted)'}[a.Changed_By_Role||'system']||'var(--muted)';
+      var ts = (a.Timestamp||'').replace('T',' ').split('.')[0];
+      var change = '';
+      if (a.Field==='Description'||a.Field==='Notes') { change = 'content appended'; }
+      else { change = '<span style="color:var(--danger);text-decoration:line-through">'+(a.Old_Value||'—').substring(0,40)+'</span> → <span style="color:var(--accent2)">'+(a.New_Value||'—').substring(0,40)+'</span>'; }
+      return '<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:11px">' +
+        '<span style="color:var(--muted);flex-shrink:0;min-width:100px">'+ts+'</span>' +
+        '<span style="flex-shrink:0;color:'+roleColor+'">'+a.Changed_By+'</span>' +
+        '<span style="color:var(--muted);flex-shrink:0">('+a.Changed_By_Role+')</span>' +
+        '<span><b>'+a.Field+'</b> '+change+'</span>' +
+      '</div>';
+    }).join('');
+    el.innerHTML = rows;
+  }).catch(function(){ var el=document.getElementById('auditTrailBody'); if(el) el.innerHTML='<span style="color:var(--muted)">Unavailable</span>'; });
+
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
   function addBtn(label,cls,fn){var b=document.createElement('button');b.className='btn '+cls;b.textContent=label;b.onclick=fn;actions.appendChild(b);}
@@ -942,7 +969,7 @@ function submitEditWO() {
     Notes: document.getElementById('ewo-notes').value,
     Owner_WO_Ref: document.getElementById('ewo-owner-ref').value.trim(),
   };
-  api('POST','/workorder/update',{id:woId, fields:fields}).then(function(res){
+  api('POST','/wo/admin-update',{wo_id:woId, fields:fields, admin_name:'Admin'}).then(function(res){
     if(res.error){logError('Edit WO',res.error);toast('Error: '+res.error,'error');return;}
     toast('Work order updated','success');closeModal('modal-edit-wo');loadAll();
   }).catch(function(e){logError('Edit WO',e.message);toast('Error: '+e.message,'error');});

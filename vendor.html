@@ -418,7 +418,7 @@ function submitStatus(woId, idx) {
   api('/status', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ wo_id: woId, status: status, notes: notes }),
+    body: JSON.stringify({ wo_id: woId, status: status, notes: notes, updated_by: session.vendor_name, updated_by_role: 'vendor' }),
   }).then(function(data) {
     if (data.success) {
       showActionMsg(idx, '✓ Status updated to ' + status, 'success');
