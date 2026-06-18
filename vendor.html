@@ -151,6 +151,7 @@ input[type=file]{display:none;}
       <div class="role">VENDOR PORTAL</div>
     </div>
     <button class="btn btn-sm btn-outline" onclick="doLogout()">LOG OUT</button>
+  <button class="btn btn-sm btn-muted" onclick="openFeedback()" style="font-size:10px;padding:4px 8px">💬 FEEDBACK</button>
   </div>
 
   <div class="tabs">
@@ -158,7 +159,7 @@ input[type=file]{display:none;}
     <div class="tab" id="tabAll" onclick="switchTab('all')">ALL JOBS</div>
   </div>
 
-  <div style="margin-bottom:12px;position:relative"><input type="text" id="woSearch" placeholder="Search by WO # or owner ref #…" oninput="filterVendorWOs()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px 10px 10px 32px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none">⌕</span></div>
+  <div style="margin-bottom:10px;position:relative"><input type="text" id="woSearch" placeholder="Search by WO #, ref #, address, trade…" oninput="filterVendorWOs()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px 10px 10px 32px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none">⌕</span></div><div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"><select id="vFilterTrade" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Trades</option><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select><select id="vFilterPriority" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><select id="vSort" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="priority">Priority</option><option value="address">Address A-Z</option><option value="date-desc">Newest First</option><option value="date-asc">Oldest First</option></select></div>
 <div id="woList"><div class="spinner">Loading work orders…</div></div>
 </div>
 
@@ -259,13 +260,25 @@ function updateDots() {
 // ── Work Orders ──────────────────────────────────────────────
 
 function filterVendorWOs() {
-  var q = (document.getElementById('woSearch').value||'').toLowerCase().trim();
-  if (!q) { renderWOs(window._wos||[]); return; }
+  var q        = (document.getElementById('woSearch').value||'').toLowerCase().trim();
+  var trade    = (document.getElementById('vFilterTrade')||{}).value||'';
+  var priority = (document.getElementById('vFilterPriority')||{}).value||'';
+  var sort     = (document.getElementById('vSort')||{}).value||'priority';
+  var PRI = {urgent:0,high:1,normal:2,low:3};
   var filtered = (window._wos||[]).filter(function(wo) {
-    return (wo.ID||'').toLowerCase().includes(q) ||
-           (wo.Owner_WO_Ref||'').toLowerCase().includes(q) ||
-           (wo.property_address||'').toLowerCase().includes(q) ||
-           (wo.Trade||'').toLowerCase().includes(q);
+    if (trade    && (wo.Trade||'').toLowerCase() !== trade.toLowerCase()) return false;
+    if (priority && (wo.Priority||'normal').toLowerCase() !== priority.toLowerCase()) return false;
+    if (q && !((wo.ID||'').toLowerCase().includes(q)||(wo.Owner_WO_Ref||'').toLowerCase().includes(q)||
+               (wo.property_address||'').toLowerCase().includes(q)||(wo.Trade||'').toLowerCase().includes(q)||
+               (wo.Description||'').toLowerCase().includes(q))) return false;
+    return true;
+  });
+  filtered.sort(function(a,b){
+    if (sort==='address') return (a.property_address||'').localeCompare(b.property_address||'');
+    if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
+    if (sort==='date-desc') return new Date(b.Created_Date)-new Date(a.Created_Date);
+    var pa=(PRI[(a.Priority||'normal').toLowerCase()]??2), pb=(PRI[(b.Priority||'normal').toLowerCase()]??2);
+    return pa!==pb?pa-pb:(a.property_address||'').localeCompare(b.property_address||'');
   });
   renderWOs(filtered);
 }
@@ -499,6 +512,47 @@ function show(id, visible) {
 
 function esc(str) {
   return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+
+<!-- FEEDBACK MODAL -->
+<div class="modal-overlay" id="modalFeedback" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:420px;padding:20px">
+    <div style="color:var(--accent);font-size:.9rem;letter-spacing:.1em;margin-bottom:8px">REPORT ISSUE / REQUEST FEATURE</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Your feedback goes directly to the admin team. Include as much detail as you can.</p>
+    <select id="feedbackType" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;margin-bottom:8px">
+      <option value="bug">🐛 Bug / Something broken</option>
+      <option value="feature">💡 Feature request</option>
+      <option value="other">💬 Other feedback</option>
+    </select>
+    <textarea id="feedbackText" placeholder="Describe the issue or request…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:100px;resize:vertical;margin-bottom:8px"></textarea>
+    <div id="feedbackMsg"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-sm btn-muted" onclick="closeFeedback()">Cancel</button>
+      <button class="btn btn-sm" id="feedbackBtn" onclick="submitFeedback()">SEND</button>
+    </div>
+  </div>
+</div>
+<script>
+var _feedbackSource = "VENDOR";
+function openFeedback() { document.getElementById("feedbackText").value=""; document.getElementById("feedbackMsg").innerHTML=""; document.getElementById("modalFeedback").style.display="flex"; }
+function closeFeedback() { document.getElementById("modalFeedback").style.display="none"; }
+function submitFeedback() {
+  var type = document.getElementById("feedbackType").value;
+  var text = document.getElementById("feedbackText").value.trim();
+  if (!text) return;
+  var typeLabel = {bug:"[BUG]",feature:"[FEATURE]",other:"[FEEDBACK]"}[type]||"[FEEDBACK]";
+  var who = (session && session.vendor_name) ? " from " + session.vendor_name : "";
+  var fullText = "[" + _feedbackSource + "] " + typeLabel + who + ": " + text;
+  document.getElementById("feedbackBtn").disabled = true;
+  fetch("https://maintenance-hub.brett-2f8.workers.dev/wishlist/add", {
+    method:"POST", headers:{"X-Auth-Token":"mh-secret-2026-brett","Content-Type":"application/json"},
+    body:JSON.stringify({text:fullText})
+  }).then(function(r){return r.json();}).then(function(res){
+    document.getElementById("feedbackBtn").disabled = false;
+    if (res.success) { document.getElementById("feedbackMsg").innerHTML='<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent — thank you!</div>'; setTimeout(closeFeedback,1500); }
+    else document.getElementById("feedbackMsg").innerHTML='<div style="color:var(--danger);font-size:12px;margin-top:6px">Error sending</div>';
+  }).catch(function(){ document.getElementById("feedbackBtn").disabled=false; });
 }
 </script>
 </body>

@@ -113,6 +113,17 @@
   .loading { color: var(--muted); font-size: 12px; padding: 20px; text-align: center; letter-spacing: 0.1em; }
   .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 8px; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  .portal-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:border-color .15s;cursor:pointer;height:100%;}
+  .portal-card:hover{border-color:var(--accent);}
+  .portal-icon{font-size:1.6rem;margin-bottom:8px;}
+  .portal-name{color:var(--accent);font-size:.9rem;font-weight:bold;letter-spacing:.08em;margin-bottom:6px;}
+  .portal-desc{color:var(--muted);font-size:11px;line-height:1.5;}
+  .share-link-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .share-label{color:var(--muted);font-size:11px;min-width:100px;}
+  .share-url{background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:5px 10px;font-size:12px;color:var(--info);cursor:pointer;letter-spacing:.02em;}
+  .share-url:hover{border-color:var(--accent);}
+  .copy-hint{color:var(--muted);font-size:10px;}
+
   /* Native select dark theme — make selection visible */
   select[size] option:checked, select[size] option:hover { background: var(--accent) !important; color: #000 !important; }
   select[size] option { padding: 6px 10px; }
@@ -142,6 +153,7 @@
       <button class="nav-btn" onclick="showPage('tenants',this)">TENANTS</button>
       <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
+      <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
     </nav>
     <div><span class="status-dot"></span><span style="color:var(--muted);font-size:11px">LIVE</span></div>
   </header>
@@ -160,24 +172,63 @@
   </div>
 
   <div class="page" id="page-workorders">
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
       <button class="btn" onclick="openNewWOModal()">+ New Work Order</button>
-      <select id="wo-filter" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius);font-family:var(--font);font-size:12px">
-        <option value="all">ALL STATUSES</option>
-        <option value="New">NEW</option>
-        <option value="Assigned">ASSIGNED</option>
-        <option value="Accepted">ACCEPTED</option>
-        <option value="In Progress">IN PROGRESS</option>
-        <option value="On Hold">ON HOLD</option>
-        <option value="Complete">COMPLETE</option>
-        <option value="Pending Invoice">PENDING INVOICE</option>
-        <option value="Invoiced">INVOICED</option>
-        <option value="Paid">PAID</option>
-        <option value="Declined">DECLINED</option>
-        <option value="Cancelled">CANCELLED</option>
-      </select>
+      <button class="btn secondary small" id="filterToggleBtn" onclick="toggleFilterPanel()">FILTERS <span id="filterBadge" style="display:none;background:var(--accent);color:#000;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span> ▾</button>
+      <button class="btn secondary small" onclick="clearWOFilters()" id="clearFiltersBtn" style="display:none">CLEAR ALL</button>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <label style="margin:0;font-size:11px;color:var(--muted)">SORT</label>
+        <select id="wo-sort" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:11px">
+          <option value="date-desc">Newest First</option>
+          <option value="date-asc">Oldest First</option>
+          <option value="priority">Priority</option>
+          <option value="status">Status</option>
+          <option value="address">Address A-Z</option>
+        </select>
+      </div>
     </div>
-    <div class="search-bar"><input type="text" id="wo-search" placeholder="Search by address, trade, or WO ID..." oninput="renderWOPage()"></div>
+    <!-- Filter Panel -->
+    <div id="filterPanel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px">
+        <div><label>STATUS</label>
+          <select id="wo-filter" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
+            <option value="open">Open (default)</option>
+            <option value="all">All Statuses</option>
+            <option value="New">New</option><option value="Assigned">Assigned</option>
+            <option value="Accepted">Accepted</option><option value="In Progress">In Progress</option>
+            <option value="On Hold">On Hold</option><option value="Complete">Complete</option>
+            <option value="Pending Invoice">Pending Invoice</option><option value="Invoiced">Invoiced</option>
+            <option value="Paid">Paid</option><option value="Declined">Declined</option><option value="Cancelled">Cancelled</option>
+          </select></div>
+        <div><label>OWNER</label>
+          <select id="f-owner" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
+            <option value="">All Owners</option></select></div>
+        <div><label>PROPERTY</label>
+          <select id="f-property" onchange="onPropertyFilterChange()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
+            <option value="">All Properties</option></select></div>
+        <div><label>UNIT</label>
+          <select id="f-unit" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
+            <option value="">All Units</option></select></div>
+        <div><label>VENDOR</label>
+          <select id="f-vendor" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
+            <option value="">All Vendors</option></select></div>
+        <div><label>TRADE</label>
+          <select id="f-trade" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
+            <option value="">All Trades</option>
+            <option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option>
+            <option>Landscaping</option><option>Appliance</option><option>Roofing</option>
+            <option>Pest Control</option><option>Other</option>
+          </select></div>
+        <div><label>PRIORITY</label>
+          <select id="f-priority" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
+            <option value="">All Priorities</option>
+            <option value="urgent">Urgent</option><option value="high">High</option>
+            <option value="normal">Normal</option><option value="low">Low</option>
+          </select></div>
+        <div><label>SEARCH</label>
+          <input type="text" id="wo-search" placeholder="WO#, address, ref#, desc…" oninput="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%"></div>
+      </div>
+    </div>
     <div class="wo-list" id="wo-list-full"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 
@@ -206,6 +257,23 @@
   <div class="page" id="page-invoices">
     <div class="section-title">OUTSTANDING INVOICES</div>
     <div id="invoices-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <div class="page" id="page-portals">
+    <div class="section-title">PORTALS &amp; TOOLS</div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:20px">Quick links to all Ridge Co pages. Right-click → Open in new tab to keep the hub open.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-bottom:28px">
+      <a href="owner.html" target="_blank" style="text-decoration:none"><div class="portal-card"><div class="portal-icon">🏠</div><div class="portal-name">Owner Portal</div><div class="portal-desc">Owner login, view open work orders, submit requests, add notes. Audit trail visible.</div></div></a>
+      <a href="vendor.html" target="_blank" style="text-decoration:none"><div class="portal-card"><div class="portal-icon">🔧</div><div class="portal-name">Vendor Portal</div><div class="portal-desc">Vendor login, see assigned jobs, update status, upload photos and receipts.</div></div></a>
+      <a href="importer.html" target="_blank" style="text-decoration:none"><div class="portal-card"><div class="portal-icon">📥</div><div class="portal-name">Tenant Importer</div><div class="portal-desc">Import tenants from CSV. Preview before committing. Never overwrites existing records.</div></div></a>
+      <a href="owner-submit.html" target="_blank" style="text-decoration:none"><div class="portal-card" style="opacity:.7"><div class="portal-icon">📝</div><div class="portal-name">Owner Submit (legacy)</div><div class="portal-desc">Submit-only owner page. Use Owner Portal instead — it includes this plus WO view.</div></div></a>
+    </div>
+    <div class="section-title">SHARE LINKS</div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Copy these links to share with owners or vendors.</p>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div class="share-link-row"><span class="share-label">Owner Portal</span><code class="share-url" onclick="copyLink(this)">ridge-co.github.io/RidgeCo/owner.html</code><span class="copy-hint">click to copy</span></div>
+      <div class="share-link-row"><span class="share-label">Vendor Portal</span><code class="share-url" onclick="copyLink(this)">ridge-co.github.io/RidgeCo/vendor.html</code><span class="copy-hint">click to copy</span></div>
+    </div>
   </div>
 
   <div class="page" id="page-devlog">
@@ -612,18 +680,125 @@ function woCard(w) {
 }
 
 // ── Work Orders page ─────────────────────────────────────────
+function populateFilterDropdowns() {
+  var ownerSel = document.getElementById('f-owner');
+  if (ownerSel) {
+    var cur = ownerSel.value;
+    ownerSel.innerHTML = '<option value="">All Owners</option>' +
+      safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'"'+(o.ID===cur?' selected':'')+'>'+o.First_Name+' '+(o.Last_Name||'')+'</option>'; }).join('');
+  }
+  var propSel = document.getElementById('f-property');
+  if (propSel) {
+    var cur2 = propSel.value;
+    var sorted = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
+    propSel.innerHTML = '<option value="">All Properties</option>' +
+      sorted.map(function(p){ return '<option value="'+p.ID+'"'+(p.ID===cur2?' selected':'')+'>'+p.Address+(p.City?', '+p.City:'')+'</option>'; }).join('');
+  }
+  var vendSel = document.getElementById('f-vendor');
+  if (vendSel) {
+    var cur3 = vendSel.value;
+    vendSel.innerHTML = '<option value="">All Vendors</option>' +
+      safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){ return '<option value="'+v.ID+'"'+(v.ID===cur3?' selected':'')+'>'+v.Name+'</option>'; }).join('');
+  }
+}
+
+function onPropertyFilterChange() {
+  var propId = (document.getElementById('f-property')||{}).value;
+  var unitSel = document.getElementById('f-unit');
+  if (unitSel) {
+    var units = propId ? safeArray(state.units).filter(function(u){return u.Property_ID===propId;}) : [];
+    unitSel.innerHTML = '<option value="">All Units</option>' +
+      units.map(function(u){ return '<option value="'+u.ID+'">Unit '+u.Unit_Label+'</option>'; }).join('');
+  }
+  renderWOPage();
+}
+
+function toggleFilterPanel() {
+  var panel = document.getElementById('filterPanel');
+  var isOpen = panel.style.display !== 'none';
+  panel.style.display = isOpen ? 'none' : '';
+  if (!isOpen) populateFilterDropdowns();
+  document.getElementById('filterToggleBtn').textContent = (isOpen ? 'FILTERS ▾' : 'FILTERS ▴');
+  updateFilterBadge();
+}
+
+function clearWOFilters() {
+  var f = document.getElementById('wo-filter'); if(f) f.value='open';
+  ['f-owner','f-property','f-unit','f-vendor','f-trade','f-priority'].forEach(function(id){
+    var el=document.getElementById(id); if(el) el.value='';
+  });
+  var s = document.getElementById('wo-search'); if(s) s.value='';
+  var u = document.getElementById('f-unit'); if(u) u.innerHTML='<option value="">All Units</option>';
+  var so = document.getElementById('wo-sort'); if(so) so.value='date-desc';
+  updateFilterBadge();
+  renderWOPage();
+}
+
+function updateFilterBadge() {
+  var count = 0;
+  var f = document.getElementById('wo-filter'); if(f && f.value!=='open' && f.value!=='') count++;
+  ['f-owner','f-property','f-unit','f-vendor','f-trade','f-priority'].forEach(function(id){
+    var el=document.getElementById(id); if(el&&el.value) count++;
+  });
+  var s=document.getElementById('wo-search'); if(s&&s.value.trim()) count++;
+  var badge = document.getElementById('filterBadge');
+  if(badge){badge.style.display=count?'inline':'none';badge.textContent=count;}
+  var clearBtn = document.getElementById('clearFiltersBtn');
+  if(clearBtn) clearBtn.style.display = count ? '' : 'none';
+}
+
 function renderWOPage() {
-  var filter = (document.getElementById('wo-filter')||{}).value||'all';
-  var search = ((document.getElementById('wo-search')||{}).value||'').toLowerCase();
+  var filter   = (document.getElementById('wo-filter')||{}).value||'open';
+  var search   = ((document.getElementById('wo-search')||{}).value||'').toLowerCase();
+  var ownerId  = (document.getElementById('f-owner')||{}).value||'';
+  var propId   = (document.getElementById('f-property')||{}).value||'';
+  var unitId   = (document.getElementById('f-unit')||{}).value||'';
+  var vendId   = (document.getElementById('f-vendor')||{}).value||'';
+  var trade    = (document.getElementById('f-trade')||{}).value||'';
+  var priority = (document.getElementById('f-priority')||{}).value||'';
+  var sort     = (document.getElementById('wo-sort')||{}).value||'date-desc';
+  var OPEN     = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+
   var wos = safeArray(state.workorders).slice();
-  if (filter !== 'all') wos = wos.filter(function(w){return w.Status===filter;});
+
+  if (filter === 'open') wos = wos.filter(function(w){ return OPEN.includes(w.Status); });
+  else if (filter !== 'all') wos = wos.filter(function(w){ return w.Status===filter; });
+
+  if (ownerId) {
+    var ownerPropIds = new Set(safeArray(state.properties).filter(function(p){return p.Owner_ID===ownerId;}).map(function(p){return p.ID;}));
+    wos = wos.filter(function(w){ return ownerPropIds.has(w.Property_ID); });
+  }
+  if (propId)   wos = wos.filter(function(w){ return w.Property_ID===propId; });
+  if (unitId)   wos = wos.filter(function(w){ return w.Unit_ID===unitId; });
+  if (vendId)   wos = wos.filter(function(w){ return w.Vendor_ID===vendId; });
+  if (trade)    wos = wos.filter(function(w){ return (w.Trade||'').toLowerCase()===trade.toLowerCase(); });
+  if (priority) wos = wos.filter(function(w){ return (w.Priority||'normal').toLowerCase()===priority.toLowerCase(); });
   if (search) wos = wos.filter(function(w){
     var prop = state.properties.find(function(p){return p.ID===w.Property_ID;});
-    return (prop&&(prop.Address||'').toLowerCase().includes(search))||(w.Trade||'').toLowerCase().includes(search)||(w.ID||'').toLowerCase().includes(search)||(w.Description||'').toLowerCase().includes(search)||(w.Owner_WO_Ref||'').toLowerCase().includes(search);
+    var vendor = state.vendors.find(function(v){return v.ID===w.Vendor_ID;});
+    return (prop&&(prop.Address||'').toLowerCase().includes(search))||
+           (w.Trade||'').toLowerCase().includes(search)||
+           (w.ID||'').toLowerCase().includes(search)||
+           (w.Description||'').toLowerCase().includes(search)||
+           (w.Owner_WO_Ref||'').toLowerCase().includes(search)||
+           (vendor&&(vendor.Name||'').toLowerCase().includes(search));
   });
-  wos.sort(function(a,b){return new Date(b.Created_Date)-new Date(a.Created_Date);});
+
+  var PRI = {urgent:0,high:1,normal:2,low:3};
+  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
+  wos.sort(function(a,b){
+    if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
+    if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
+    if (sort==='status') return (STA[a.Status]??99)-(STA[b.Status]??99);
+    if (sort==='address') { var pa=state.properties.find(function(p){return p.ID===a.Property_ID;}); var pb=state.properties.find(function(p){return p.ID===b.Property_ID;}); return (pa?.Address||'').localeCompare(pb?.Address||''); }
+    return new Date(b.Created_Date)-new Date(a.Created_Date);
+  });
+
+  updateFilterBadge();
   var el = document.getElementById('wo-list-full');
-  el.innerHTML = wos.length ? wos.map(woCard).join('') : '<div class="loading">No work orders found</div>';
+  el.innerHTML = wos.length
+    ? '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+wos.length+' work order'+(wos.length!==1?'s':'')+' — <span style="cursor:pointer;color:var(--info)" onclick="toggleFilterPanel()">adjust filters</span></div>'+wos.map(woCard).join('')
+    : '<div class="loading">No work orders match your filters. <span style="cursor:pointer;color:var(--info)" onclick="clearWOFilters()">Clear filters</span></div>';
 }
 
 // ── WO Detail ────────────────────────────────────────────────
@@ -1043,6 +1218,13 @@ function linkify(text) {
   if (!text) return '—';
   var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:var(--info);word-break:break-all">$1</a>');
+}
+
+function copyLink(el) {
+  var text = "https://" + el.textContent;
+  navigator.clipboard.writeText(text).then(function(){
+    toast("Copied: " + text, "success");
+  }).catch(function(){ toast("Copy failed — select and copy manually", "warn"); });
 }
 
 function toast(msg,type){

@@ -182,6 +182,7 @@ textarea{resize:vertical;min-height:70px;}
       <div class="sub" id="ownerCompany"></div>
     </div>
     <button class="btn btn-sm btn-outline" onclick="doLogout()">LOG OUT</button>
+  <button class="btn btn-sm btn-muted" onclick="openFeedback()" style="font-size:10px;padding:4px 8px">💬 FEEDBACK</button>
   </div>
 
   <div class="main">
@@ -203,16 +204,30 @@ textarea{resize:vertical;min-height:70px;}
         <select id="filterStatus" onchange="renderWOs()">
           <option value="open">Open Only</option>
           <option value="all">All Statuses</option>
-          <option value="New">New</option>
-          <option value="Assigned">Assigned</option>
-          <option value="Accepted">Accepted</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Complete">Complete</option>
-          <option value="Pending Invoice">Pending Invoice</option>
-          <option value="Invoiced">Invoiced</option>
-          <option value="Paid">Paid</option>
+          <option value="New">New</option><option value="Assigned">Assigned</option>
+          <option value="Accepted">Accepted</option><option value="In Progress">In Progress</option>
+          <option value="Complete">Complete</option><option value="Pending Invoice">Pending Invoice</option>
+          <option value="Invoiced">Invoiced</option><option value="Paid">Paid</option>
         </select>
-        <input type="text" id="filterSearch" placeholder="Search WO# or ref#…" oninput="renderWOs()" style="min-width:140px;">
+        <select id="filterTrade" onchange="renderWOs()">
+          <option value="">All Trades</option>
+          <option>Plumbing</option><option>HVAC</option><option>Electric</option>
+          <option>General</option><option>Appliance</option><option>Landscaping</option>
+          <option>Roofing</option><option>Pest Control</option><option>Other</option>
+        </select>
+        <select id="filterPriority" onchange="renderWOs()">
+          <option value="">All Priorities</option>
+          <option value="urgent">Urgent</option><option value="high">High</option>
+          <option value="normal">Normal</option><option value="low">Low</option>
+        </select>
+        <select id="filterSort" onchange="renderWOs()">
+          <option value="date-desc">Newest First</option>
+          <option value="date-asc">Oldest First</option>
+          <option value="priority">Priority</option>
+          <option value="address">Address A-Z</option>
+          <option value="status">Status</option>
+        </select>
+        <input type="text" id="filterSearch" placeholder="Search WO# or ref#…" oninput="renderWOs()" style="min-width:130px;">
       </div>
       <div id="woList"><div class="spinner-msg">Loading…</div></div>
     </div>
@@ -420,22 +435,33 @@ function switchTab(tab) {
 }
 
 function renderWOs() {
-  var propId = document.getElementById('filterProp').value;
-  var status = document.getElementById('filterStatus').value;
-  var search = (document.getElementById('filterSearch').value||'').toLowerCase();
+  var propId   = document.getElementById('filterProp').value;
+  var status   = document.getElementById('filterStatus').value;
+  var trade    = (document.getElementById('filterTrade')||{}).value||'';
+  var priority = (document.getElementById('filterPriority')||{}).value||'';
+  var sort     = (document.getElementById('filterSort')||{}).value||'date-desc';
+  var search   = (document.getElementById('filterSearch').value||'').toLowerCase();
+  var PRI = {urgent:0,high:1,normal:2,low:3};
+  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8};
 
   var wos = allWOs.slice();
-  if (propId) wos = wos.filter(function(w){ return w.Property_ID === propId; });
+  if (propId)   wos = wos.filter(function(w){ return w.Property_ID === propId; });
   if (status === 'open') wos = wos.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
   else if (status !== 'all') wos = wos.filter(function(w){ return w.Status === status; });
+  if (trade)    wos = wos.filter(function(w){ return (w.Trade||'').toLowerCase()===trade.toLowerCase(); });
+  if (priority) wos = wos.filter(function(w){ return (w.Priority||'normal').toLowerCase()===priority.toLowerCase(); });
   if (search) wos = wos.filter(function(w){
-    return (w.ID||'').toLowerCase().includes(search) ||
-           (w.Owner_WO_Ref||'').toLowerCase().includes(search) ||
-           (w.property_address||'').toLowerCase().includes(search) ||
-           (w.Description||'').toLowerCase().includes(search) ||
+    return (w.ID||'').toLowerCase().includes(search)||(w.Owner_WO_Ref||'').toLowerCase().includes(search)||
+           (w.property_address||'').toLowerCase().includes(search)||(w.Description||'').toLowerCase().includes(search)||
            (w.Trade||'').toLowerCase().includes(search);
   });
-  wos.sort(function(a,b){ return new Date(b.Created_Date) - new Date(a.Created_Date); });
+  wos.sort(function(a,b){
+    if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
+    if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
+    if (sort==='status') return (STA[a.Status]??99)-(STA[b.Status]??99);
+    if (sort==='address') return (a.property_address||'').localeCompare(b.property_address||'');
+    return new Date(b.Created_Date)-new Date(a.Created_Date);
+  });
 
   var list = document.getElementById('woList');
   if (!wos.length) { list.innerHTML = '<div class="empty">No work orders found.</div>'; return; }
@@ -767,6 +793,45 @@ document.querySelectorAll('.modal-overlay').forEach(function(m){
 function show(id, visible) { document.getElementById(id).className = 'screen' + (visible?' active':''); }
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function truncate(s, n) { s = String(s||''); return s.length > n ? s.substring(0,n) + '…' : s; }
+</script>
+
+<!-- FEEDBACK MODAL -->
+<div class="modal-overlay" id="modalFeedback">
+  <div class="modal">
+    <div class="modal-title">REPORT ISSUE / REQUEST FEATURE</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Your feedback goes directly to the admin team.</p>
+    <select id="feedbackType" style="width:100%;margin-bottom:8px">
+      <option value="bug">🐛 Bug / Something broken</option>
+      <option value="feature">💡 Feature request</option>
+      <option value="other">💬 Other feedback</option>
+    </select>
+    <textarea id="feedbackText" placeholder="Describe the issue or request…" style="min-height:90px;margin-bottom:8px"></textarea>
+    <div id="feedbackMsg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm btn-muted" onclick="closeModal('modalFeedback')">Cancel</button>
+      <button class="btn btn-sm" id="feedbackBtn" onclick="submitFeedback()">SEND</button>
+    </div>
+  </div>
+</div>
+<script>
+function openFeedback() { document.getElementById("feedbackText").value=""; document.getElementById("feedbackMsg").innerHTML=""; openModal("modalFeedback"); }
+function submitFeedback() {
+  var type = document.getElementById("feedbackType").value;
+  var text = document.getElementById("feedbackText").value.trim();
+  if (!text) return;
+  var typeLabel = {bug:"[BUG]",feature:"[FEATURE]",other:"[FEEDBACK]"}[type]||"[FEEDBACK]";
+  var who = session ? " from " + session.owner_name : "";
+  var fullText = "[OWNER] " + typeLabel + who + ": " + text;
+  document.getElementById("feedbackBtn").disabled = true;
+  fetch("https://maintenance-hub.brett-2f8.workers.dev/wishlist/add", {
+    method:"POST", headers:{"X-Auth-Token":"mh-secret-2026-brett","Content-Type":"application/json"},
+    body:JSON.stringify({text:fullText})
+  }).then(function(r){return r.json();}).then(function(res){
+    document.getElementById("feedbackBtn").disabled = false;
+    if (res.success) { document.getElementById("feedbackMsg").innerHTML='<div class="msg success">✓ Sent — thank you!</div>'; setTimeout(function(){ closeModal("modalFeedback"); },1500); }
+    else document.getElementById("feedbackMsg").innerHTML='<div class="msg error">Error sending</div>';
+  }).catch(function(){ document.getElementById("feedbackBtn").disabled=false; });
+}
 </script>
 </body>
 </html>
