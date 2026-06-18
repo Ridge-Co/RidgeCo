@@ -6,9 +6,9 @@
 <title>Ridge Co — Owner Portal</title>
 <style>
 :root{
-  --bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;
-  --text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;
-  --danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--purple:#c084fc;
+  --bg:#06091a;--surface:#0c1530;--surface2:#142040;--border:#1e2d55;
+  --text:#dde6f8;--muted:#6b80ad;--accent:#4575d4;--accent2:#4ade80;
+  --danger:#f87171;--warn:#f59e0b;--info:#7ab4f0;--purple:#c084fc;
   --radius:8px;--font:'Courier New',monospace;
 }
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -24,12 +24,12 @@ input,select,textarea{width:100%;background:var(--surface2);border:1px solid var
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
 textarea{resize:vertical;min-height:70px;}
 .pin-input{font-size:1.5rem;letter-spacing:.15em;text-align:center;padding:14px;text-transform:uppercase;}
-.btn{background:var(--accent);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.06em;padding:10px 16px;cursor:pointer;}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.06em;padding:10px 16px;cursor:pointer;}
 .btn:disabled{opacity:.4;cursor:not-allowed;}
 .btn-full{width:100%;margin-top:10px;}
 .btn-sm{padding:5px 10px;font-size:11px;}
 .btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
-.btn-outline:hover{background:var(--accent);color:#000;}
+.btn-outline:hover{background:var(--accent);color:#fff;}
 .btn-green{background:var(--accent2);color:#000;}
 .btn-blue{background:var(--info);color:#000;}
 .btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
@@ -162,6 +162,7 @@ textarea{resize:vertical;min-height:70px;}
 <div id="screenLogin" class="screen active">
   <div class="login-wrap">
     <div class="login-card">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:0 auto 12px"><rect x="2" y="2" width="44" height="44" rx="8" fill="#142040" stroke="#4575d4" stroke-width="2"/><polygon points="24,8 40,38 8,38" fill="none" stroke="#4575d4" stroke-width="2" stroke-linejoin="round"/><polygon points="24,18 33,38 15,38" fill="#4575d4" fill-opacity="0.4"/></svg>
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub">OWNER PORTAL</div>
       <div style="margin-bottom:14px;">
@@ -195,6 +196,7 @@ textarea{resize:vertical;min-height:70px;}
     <div class="tabs">
       <div class="tab active" id="tabWOs" onclick="switchTab('wos')">WORK ORDERS</div>
       <div class="tab" id="tabSubmit" onclick="switchTab('submit')">SUBMIT REQUEST</div>
+      <div class="tab" id="tabNotify" onclick="switchTab('notify')">NOTIFICATIONS</div>
     </div>
 
     <!-- WORK ORDERS TAB -->
@@ -288,6 +290,68 @@ textarea{resize:vertical;min-height:70px;}
       </div>
       <div id="sFormMsg"></div>
       <button class="btn btn-full" id="sSubmitBtn" onclick="submitRequest()">SUBMIT REQUEST</button>
+    </div>
+  </div>
+</div>
+
+    <!-- NOTIFICATIONS TAB -->
+    <div id="panelNotify" style="display:none">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px">
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">NOTIFICATION METHOD</div>
+        <p style="color:var(--muted);font-size:11px;margin-bottom:12px">How should we contact you about your work orders?</p>
+        <select id="nMethod" style="width:100%;margin-bottom:4px">
+          <option value="sms">Text Message (SMS)</option>
+          <option value="email">Email</option>
+          <option value="both">Both SMS &amp; Email</option>
+          <option value="none">Portal only — no push notifications</option>
+        </select>
+        <p style="color:var(--muted);font-size:10px;margin-top:6px">Email notifications coming soon.</p>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px">
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">NOTIFICATION TRIGGERS BY PRIORITY</div>
+        <p style="color:var(--muted);font-size:11px;margin-bottom:14px">Choose how much detail you want for each priority level. These are your defaults — you can override per work order.</p>
+
+        <div style="margin-bottom:12px">
+          <label style="color:var(--danger);font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;display:block">🔴 Urgent Work Orders</label>
+          <select id="nUrgent" style="width:100%">
+            <option value="always">Always notify — every status change</option>
+            <option value="key">Key moments — assigned, scheduled, complete, invoiced</option>
+            <option value="completion">Completion only — complete &amp; invoiced</option>
+            <option value="off">Off — check portal manually</option>
+          </select>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="color:var(--warn);font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;display:block">🟡 Normal Work Orders</label>
+          <select id="nNormal" style="width:100%">
+            <option value="always">Always notify — every status change</option>
+            <option value="key">Key moments — assigned, scheduled, complete, invoiced</option>
+            <option value="completion">Completion only — complete &amp; invoiced</option>
+            <option value="off">Off — check portal manually</option>
+          </select>
+        </div>
+        <div style="margin-bottom:16px">
+          <label style="color:var(--muted);font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;display:block">⚪ Low Priority Work Orders</label>
+          <select id="nLow" style="width:100%">
+            <option value="always">Always notify — every status change</option>
+            <option value="key">Key moments — assigned, scheduled, complete, invoiced</option>
+            <option value="completion">Completion only — complete &amp; invoiced</option>
+            <option value="off">Off — check portal manually</option>
+          </select>
+        </div>
+        <div id="notifyPrefsMsg"></div>
+        <button class="btn" onclick="saveNotifyPrefs()" style="width:100%">SAVE PREFERENCES</button>
+      </div>
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">WHAT EACH TIER MEANS</div>
+        <div style="font-size:11px;color:var(--muted);display:flex;flex-direction:column;gap:8px">
+          <div><span style="color:var(--accent)">Always notify:</span> Technician assigned → Scheduled → In Progress → Complete → Invoiced</div>
+          <div><span style="color:var(--info)">Key moments:</span> Technician assigned → Scheduled → Complete → Invoiced</div>
+          <div><span style="color:var(--accent2)">Completion only:</span> Complete → Invoiced</div>
+          <div><span style="color:var(--muted)">Off:</span> Log in to portal to check status</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -445,8 +509,11 @@ function loadDashboard() {
 function switchTab(tab) {
   document.getElementById('tabWOs').className = 'tab' + (tab==='wos'?' active':'');
   document.getElementById('tabSubmit').className = 'tab' + (tab==='submit'?' active':'');
+  document.getElementById('tabNotify').className = 'tab' + (tab==='notify'?' active':'');
   document.getElementById('panelWOs').style.display = tab==='wos' ? '' : 'none';
   document.getElementById('panelSubmit').style.display = tab==='submit' ? '' : 'none';
+  document.getElementById('panelNotify').style.display = tab==='notify' ? '' : 'none';
+  if (tab==='notify') loadNotifyPrefs();
 }
 
 function renderWOs() {
@@ -853,6 +920,39 @@ function truncate(s, n) { s = String(s||''); return s.length > n ? s.substring(0
   </div>
 </div>
 <script>
+
+var _notifyPrefsLoaded = false;
+function loadNotifyPrefs() {
+  if (_notifyPrefsLoaded) return;
+  api('/owner-notifications?owner_id=' + session.owner_id)
+    .then(function(prefs) {
+      document.getElementById('nMethod').value  = prefs.method  || 'sms';
+      document.getElementById('nUrgent').value  = prefs.urgent  || 'always';
+      document.getElementById('nNormal').value  = prefs.normal  || 'key';
+      document.getElementById('nLow').value     = prefs.low     || 'completion';
+      _notifyPrefsLoaded = true;
+    }).catch(function(){});
+}
+function saveNotifyPrefs() {
+  var msgEl = document.getElementById('notifyPrefsMsg');
+  var prefs = {
+    owner_id: session.owner_id,
+    method: document.getElementById('nMethod').value,
+    urgent: document.getElementById('nUrgent').value,
+    normal: document.getElementById('nNormal').value,
+    low:    document.getElementById('nLow').value,
+  };
+  api('/owner/notifications', {method:'POST', body: prefs})
+    .then(function(res) {
+      if (res.success) {
+        msgEl.innerHTML = '<div class="msg success" style="margin-bottom:8px">✓ Preferences saved.</div>';
+        setTimeout(function(){ msgEl.innerHTML=''; }, 3000);
+      } else {
+        msgEl.innerHTML = '<div class="msg error" style="margin-bottom:8px">Error saving: ' + (res.error||'unknown') + '</div>';
+      }
+    });
+}
+
 function openFeedback() { document.getElementById("feedbackText").value=""; document.getElementById("feedbackMsg").innerHTML=""; openModal("modalFeedback"); }
 function submitFeedback() {
   var type = document.getElementById("feedbackType").value;

@@ -6,9 +6,9 @@
 <title>Ridge Co — Vendor Portal</title>
 <style>
 :root {
-  --bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;
-  --text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;
-  --danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--purple:#c084fc;
+  --bg:#06091a;--surface:#0c1530;--surface2:#142040;--border:#1e2d55;
+  --text:#dde6f8;--muted:#6b80ad;--accent:#4575d4;--accent2:#4ade80;
+  --danger:#f87171;--warn:#f59e0b;--info:#7ab4f0;--purple:#c084fc;
   --radius:8px;--font:'Courier New',monospace;
 }
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -24,11 +24,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13
 label{display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;}
 input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:18px;padding:12px;letter-spacing:.2em;text-align:center;text-transform:uppercase;}
 input:focus{outline:none;border-color:var(--accent);}
-.btn{width:100%;background:var(--accent);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.08em;padding:12px;cursor:pointer;margin-top:12px;}
+.btn{width:100%;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.08em;padding:12px;cursor:pointer;margin-top:12px;}
 .btn:disabled{opacity:.5;cursor:not-allowed;}
 .btn-sm{width:auto;padding:6px 12px;font-size:12px;margin-top:0;}
 .btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
-.btn-outline:hover{background:var(--accent);color:#000;}
+.btn-outline:hover{background:var(--accent);color:#fff;}
 .btn-danger{background:var(--danger);color:#000;}
 .btn-green{background:var(--accent2);color:#000;}
 .btn-blue{background:var(--info);color:#000;}
@@ -114,6 +114,26 @@ input[type=file]{display:none;}
 
 .toggle-closed{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;cursor:pointer;margin-bottom:12px;user-select:none;}
 .toggle-closed input{width:auto;font-size:inherit;padding:0;}
+
+  /* Scheduling modal */
+  .sched-date-row{display:flex;gap:8px;margin-bottom:10px;}
+  .sched-date-row > *{flex:1;}
+  .sched-today-btn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 10px;font-family:var(--font);font-size:11px;cursor:pointer;white-space:nowrap;}
+  .sched-today-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .sched-custom{display:none;margin-top:8px;}
+  .sched-notify-row{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--muted);}
+  .sched-notify-row input{width:auto;padding:0;}
+  .sched-urgent-banner{background:#002d0f;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--accent2);margin-bottom:10px;display:none;}
+
+  /* Scheduling modal */
+  .sched-date-row{display:flex;gap:8px;margin-bottom:10px;}
+  .sched-date-row > *{flex:1;}
+  .sched-today-btn{background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 10px;font-family:var(--font);font-size:11px;cursor:pointer;white-space:nowrap;}
+  .sched-today-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .sched-custom{display:none;margin-top:8px;}
+  .sched-notify-row{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--muted);}
+  .sched-notify-row input{width:auto;padding:0;}
+  .sched-urgent-banner{background:#002d0f;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--accent2);margin-bottom:10px;display:none;}
 </style>
 </head>
 <body>
@@ -122,6 +142,7 @@ input[type=file]{display:none;}
 <div id="screenLogin" class="screen active">
   <div class="login-wrap">
     <div class="login-card">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:0 auto 12px"><rect x="2" y="2" width="44" height="44" rx="8" fill="#142040" stroke="#4575d4" stroke-width="2"/><polygon points="24,8 40,38 8,38" fill="none" stroke="#4575d4" stroke-width="2" stroke-linejoin="round"/><polygon points="24,18 33,38 15,38" fill="#4575d4" fill-opacity="0.4"/></svg>
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub">VENDOR PORTAL</div>
       <div style="margin-bottom:16px;">
@@ -554,6 +575,327 @@ function submitFeedback() {
     else document.getElementById("feedbackMsg").innerHTML='<div style="color:var(--danger);font-size:12px;margin-top:6px">Error sending</div>';
   }).catch(function(){ document.getElementById("feedbackBtn").disabled=false; });
 }
+</script>
+
+<!-- SCHEDULING MODAL -->
+<div class="modal-overlay" id="modalSched">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-title">📅 SCHEDULE / DISPATCH</div>
+    <div class="sched-urgent-banner" id="modalSched-banner">
+      ⚡ <b>Within 1 hour</b> selected — tenant SMS will be sent immediately on save.
+    </div>
+    <div class="sched-date-row">
+      <div>
+        <label>DATE</label>
+        <input type="date" id="modalSched-date">
+      </div>
+      <div style="display:flex;align-items:flex-end;padding-bottom:1px">
+        <button class="sched-today-btn" onclick="document.getElementById('modalSched-date').value=todayStr()">Today</button>
+      </div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>TIME WINDOW</label>
+      <select id="modalSched-window" onchange="schedWindowChanged('modalSched')" style="width:100%">
+        <option value="">— Select time window —</option>
+                <optgroup label="⚡ Urgent">
+                <option value="Within 1 hour">⚡ Within 1 hour — sends immediate tenant SMS</option>
+                </optgroup>
+                <optgroup label="2-Hour Windows">
+                <option value="7:00 AM – 9:00 AM">7:00 AM – 9:00 AM</option>
+                <option value="8:00 AM – 10:00 AM">8:00 AM – 10:00 AM</option>
+                <option value="9:00 AM – 11:00 AM">9:00 AM – 11:00 AM</option>
+                <option value="10:00 AM – 12:00 PM">10:00 AM – 12:00 PM</option>
+                <option value="11:00 AM – 1:00 PM">11:00 AM – 1:00 PM</option>
+                <option value="12:00 PM – 2:00 PM">12:00 PM – 2:00 PM</option>
+                <option value="1:00 PM – 3:00 PM">1:00 PM – 3:00 PM</option>
+                <option value="2:00 PM – 4:00 PM">2:00 PM – 4:00 PM</option>
+                <option value="3:00 PM – 5:00 PM">3:00 PM – 5:00 PM</option>
+                <option value="4:00 PM – 6:00 PM">4:00 PM – 6:00 PM</option>
+                <option value="5:00 PM – 7:00 PM">5:00 PM – 7:00 PM</option>
+                <option value="6:00 PM – 8:00 PM">6:00 PM – 8:00 PM</option>
+                </optgroup>
+                <optgroup label="3-Hour Windows">
+                <option value="8:00 AM – 11:00 AM">8:00 AM – 11:00 AM</option>
+                <option value="9:00 AM – 12:00 PM">9:00 AM – 12:00 PM</option>
+                <option value="10:00 AM – 1:00 PM">10:00 AM – 1:00 PM</option>
+                <option value="11:00 AM – 2:00 PM">11:00 AM – 2:00 PM</option>
+                <option value="12:00 PM – 3:00 PM">12:00 PM – 3:00 PM</option>
+                <option value="1:00 PM – 4:00 PM">1:00 PM – 4:00 PM</option>
+                <option value="2:00 PM – 5:00 PM">2:00 PM – 5:00 PM</option>
+                <option value="3:00 PM – 6:00 PM">3:00 PM – 6:00 PM</option>
+                <option value="4:00 PM – 7:00 PM">4:00 PM – 7:00 PM</option>
+                <option value="5:00 PM – 8:00 PM">5:00 PM – 8:00 PM</option>
+                </optgroup>
+                <optgroup label="4-Hour Windows">
+                <option value="8:00 AM – 12:00 PM">8:00 AM – 12:00 PM</option>
+                <option value="9:00 AM – 1:00 PM">9:00 AM – 1:00 PM</option>
+                <option value="10:00 AM – 2:00 PM">10:00 AM – 2:00 PM</option>
+                <option value="11:00 AM – 3:00 PM">11:00 AM – 3:00 PM</option>
+                <option value="12:00 PM – 4:00 PM">12:00 PM – 4:00 PM</option>
+                <option value="1:00 PM – 5:00 PM">1:00 PM – 5:00 PM</option>
+                <option value="2:00 PM – 6:00 PM">2:00 PM – 6:00 PM</option>
+                <option value="3:00 PM – 7:00 PM">3:00 PM – 7:00 PM</option>
+                <option value="4:00 PM – 8:00 PM">4:00 PM – 8:00 PM</option>
+                </optgroup>
+                <optgroup label="Half-Day Blocks">
+                <option value="Morning (8:00 AM – 12:00 PM)">Morning (8:00 AM – 12:00 PM)</option>
+                <option value="Afternoon (12:00 PM – 5:00 PM)">Afternoon (12:00 PM – 5:00 PM)</option>
+                <option value="Evening (5:00 PM – 8:00 PM)">Evening (5:00 PM – 8:00 PM)</option>
+                <option value="All Day">All Day</option>
+                </optgroup>
+                <optgroup label="Custom">
+                <option value="custom">Custom — enter time below</option>
+                </optgroup>
+      </select>
+    </div>
+    <div class="sched-custom" id="modalSched-custom">
+      <label>CUSTOM TIME</label>
+      <input type="text" id="modalSched-custom-val" placeholder="e.g. 2:30 PM – 4:30 PM">
+    </div>
+    <div class="sched-notify-row">
+      <input type="checkbox" id="modalSched-notify" checked>
+      <label style="margin:0;text-transform:none;letter-spacing:0;cursor:pointer" for="modalSched-notify">
+        Notify tenant by SMS
+      </label>
+    </div>
+    <div id="modalSched-msg" style="margin-top:8px"></div>
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn-sm btn-muted btn" onclick="closeSchedModal('modalSched')">Cancel</button>
+      <button class="btn-sm btn-green btn" id="modalSched-save" onclick="submitVendorSched('modalSched')">SAVE SCHEDULE</button>
+    </div>
+  </div>
+</div>
+<script>
+
+var _schedWOId = null;
+function todayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+function openSchedModal(modalId, woId) {
+  _schedWOId = woId;
+  document.getElementById(modalId+'-date').value = todayStr();
+  document.getElementById(modalId+'-window').value = '';
+  var custom = document.getElementById(modalId+'-custom');
+  if (custom) custom.style.display = 'none';
+  var banner = document.getElementById(modalId+'-banner');
+  if (banner) banner.style.display = 'none';
+  document.getElementById(modalId+'-msg').innerHTML = '';
+  openModal(modalId);
+}
+function closeSchedModal(id) { closeModal(id); }
+function schedWindowChanged(modalId) {
+  var val = document.getElementById(modalId+'-window').value;
+  var custom = document.getElementById(modalId+'-custom');
+  var banner = document.getElementById(modalId+'-banner');
+  if (custom) custom.style.display = val === 'custom' ? '' : 'none';
+  if (banner) banner.style.display = val === 'Within 1 hour' ? '' : 'none';
+  if (val === 'Within 1 hour') document.getElementById(modalId+'-date').value = todayStr();
+}
+function submitSchedModal(modalId, updatedBy, updatedByRole, apiFn) {
+  var date   = document.getElementById(modalId+'-date').value;
+  var window_ = document.getElementById(modalId+'-window').value;
+  var custom = document.getElementById(modalId+'-custom-val');
+  var notify = document.getElementById(modalId+'-notify').checked;
+  var msgEl  = document.getElementById(modalId+'-msg');
+  if (window_ === 'custom') window_ = (custom ? custom.value.trim() : '');
+  if (!date)    { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Select a date.</div>'; return; }
+  if (!window_) { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Select a time window.</div>'; return; }
+  document.getElementById(modalId+'-save').disabled = true;
+  apiFn(_schedWOId, date, window_, notify, updatedBy, updatedByRole, msgEl, function(res) {
+    document.getElementById(modalId+'-save').disabled = false;
+    if (res && res.success) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:12px">✓ Scheduled' + (res.tenant_sms ? ' — tenant notified.' : '.') + '</div>';
+      setTimeout(function(){ closeModal(modalId); }, 1200);
+    } else {
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">' + (res ? res.error : 'Error') + '</div>';
+    }
+  });
+}
+function submitVendorSched(modalId) {
+  var date    = document.getElementById(modalId+'-date').value;
+  var winEl   = document.getElementById(modalId+'-window');
+  var window_ = winEl.value === 'custom' ? (document.getElementById(modalId+'-custom-val')||{}).value||'' : winEl.value;
+  var notify  = document.getElementById(modalId+'-notify').checked;
+  var msgEl   = document.getElementById(modalId+'-msg');
+  if (!date)    { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Select a date.</div>'; return; }
+  if (!window_) { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Select a time window.</div>'; return; }
+  document.getElementById(modalId+'-save').disabled = true;
+  fetch(WORKER + '/schedule', {
+    method:'POST', headers:{'X-Auth-Token':SECRET,'Content-Type':'application/json'},
+    body:JSON.stringify({wo_id:_schedWOId, date:date, window:window_, notify_tenant:notify,
+                         updated_by:session.vendor_name, updated_by_role:'vendor'})
+  }).then(function(r){return r.json();}).then(function(res){
+    document.getElementById(modalId+'-save').disabled = false;
+    if (res && res.success) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:12px">Scheduled' + (res.tenant_sms?' — tenant notified.':'.') + '</div>';
+      setTimeout(function(){ closeModal(modalId); loadWorkOrders(); }, 1300);
+    } else {
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">' + ((res&&res.error)||'Error') + '</div>';
+    }
+  }).catch(function(){ document.getElementById(modalId+'-save').disabled=false; });
+}
+</script>
+
+<!-- SCHEDULING MODAL -->
+<div class="modal-overlay" id="modalSched">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-title">📅 SCHEDULE / DISPATCH</div>
+    <div class="sched-urgent-banner" id="modalSched-banner">
+      ⚡ <b>Within 1 hour</b> selected — tenant SMS will be sent immediately on save.
+    </div>
+    <div class="sched-date-row">
+      <div>
+        <label>DATE</label>
+        <input type="date" id="modalSched-date">
+      </div>
+      <div style="display:flex;align-items:flex-end;padding-bottom:1px">
+        <button class="sched-today-btn" onclick="document.getElementById('modalSched-date').value=todayStr()">Today</button>
+      </div>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>TIME WINDOW</label>
+      <select id="modalSched-window" onchange="schedWindowChanged('modalSched')" style="width:100%">
+        <option value="">— Select time window —</option>
+                <optgroup label="⚡ Urgent">
+                <option value="Within 1 hour">⚡ Within 1 hour — sends immediate tenant SMS</option>
+                </optgroup>
+                <optgroup label="2-Hour Windows">
+                <option value="7:00 AM – 9:00 AM">7:00 AM – 9:00 AM</option>
+                <option value="8:00 AM – 10:00 AM">8:00 AM – 10:00 AM</option>
+                <option value="9:00 AM – 11:00 AM">9:00 AM – 11:00 AM</option>
+                <option value="10:00 AM – 12:00 PM">10:00 AM – 12:00 PM</option>
+                <option value="11:00 AM – 1:00 PM">11:00 AM – 1:00 PM</option>
+                <option value="12:00 PM – 2:00 PM">12:00 PM – 2:00 PM</option>
+                <option value="1:00 PM – 3:00 PM">1:00 PM – 3:00 PM</option>
+                <option value="2:00 PM – 4:00 PM">2:00 PM – 4:00 PM</option>
+                <option value="3:00 PM – 5:00 PM">3:00 PM – 5:00 PM</option>
+                <option value="4:00 PM – 6:00 PM">4:00 PM – 6:00 PM</option>
+                <option value="5:00 PM – 7:00 PM">5:00 PM – 7:00 PM</option>
+                <option value="6:00 PM – 8:00 PM">6:00 PM – 8:00 PM</option>
+                </optgroup>
+                <optgroup label="3-Hour Windows">
+                <option value="8:00 AM – 11:00 AM">8:00 AM – 11:00 AM</option>
+                <option value="9:00 AM – 12:00 PM">9:00 AM – 12:00 PM</option>
+                <option value="10:00 AM – 1:00 PM">10:00 AM – 1:00 PM</option>
+                <option value="11:00 AM – 2:00 PM">11:00 AM – 2:00 PM</option>
+                <option value="12:00 PM – 3:00 PM">12:00 PM – 3:00 PM</option>
+                <option value="1:00 PM – 4:00 PM">1:00 PM – 4:00 PM</option>
+                <option value="2:00 PM – 5:00 PM">2:00 PM – 5:00 PM</option>
+                <option value="3:00 PM – 6:00 PM">3:00 PM – 6:00 PM</option>
+                <option value="4:00 PM – 7:00 PM">4:00 PM – 7:00 PM</option>
+                <option value="5:00 PM – 8:00 PM">5:00 PM – 8:00 PM</option>
+                </optgroup>
+                <optgroup label="4-Hour Windows">
+                <option value="8:00 AM – 12:00 PM">8:00 AM – 12:00 PM</option>
+                <option value="9:00 AM – 1:00 PM">9:00 AM – 1:00 PM</option>
+                <option value="10:00 AM – 2:00 PM">10:00 AM – 2:00 PM</option>
+                <option value="11:00 AM – 3:00 PM">11:00 AM – 3:00 PM</option>
+                <option value="12:00 PM – 4:00 PM">12:00 PM – 4:00 PM</option>
+                <option value="1:00 PM – 5:00 PM">1:00 PM – 5:00 PM</option>
+                <option value="2:00 PM – 6:00 PM">2:00 PM – 6:00 PM</option>
+                <option value="3:00 PM – 7:00 PM">3:00 PM – 7:00 PM</option>
+                <option value="4:00 PM – 8:00 PM">4:00 PM – 8:00 PM</option>
+                </optgroup>
+                <optgroup label="Half-Day Blocks">
+                <option value="Morning (8:00 AM – 12:00 PM)">Morning (8:00 AM – 12:00 PM)</option>
+                <option value="Afternoon (12:00 PM – 5:00 PM)">Afternoon (12:00 PM – 5:00 PM)</option>
+                <option value="Evening (5:00 PM – 8:00 PM)">Evening (5:00 PM – 8:00 PM)</option>
+                <option value="All Day">All Day</option>
+                </optgroup>
+                <optgroup label="Custom">
+                <option value="custom">Custom — enter time below</option>
+                </optgroup>
+      </select>
+    </div>
+    <div class="sched-custom" id="modalSched-custom">
+      <label>CUSTOM TIME</label>
+      <input type="text" id="modalSched-custom-val" placeholder="e.g. 2:30 PM – 4:30 PM">
+    </div>
+    <div class="sched-notify-row">
+      <input type="checkbox" id="modalSched-notify" checked>
+      <label style="margin:0;text-transform:none;letter-spacing:0;cursor:pointer" for="modalSched-notify">
+        Notify tenant by SMS
+      </label>
+    </div>
+    <div id="modalSched-msg" style="margin-top:8px"></div>
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn-sm btn-muted btn" onclick="closeSchedModal('modalSched')">Cancel</button>
+      <button class="btn-sm btn-green btn" id="modalSched-save" onclick="submitVendorSched('modalSched')">SAVE SCHEDULE</button>
+    </div>
+  </div>
+</div>
+<script>
+
+var _schedWOId = null;
+function todayStr() {
+  return new Date().toISOString().split('T')[0];
+}
+function openSchedModal(modalId, woId) {
+  _schedWOId = woId;
+  document.getElementById(modalId+'-date').value = todayStr();
+  document.getElementById(modalId+'-window').value = '';
+  var custom = document.getElementById(modalId+'-custom');
+  if (custom) custom.style.display = 'none';
+  var banner = document.getElementById(modalId+'-banner');
+  if (banner) banner.style.display = 'none';
+  document.getElementById(modalId+'-msg').innerHTML = '';
+  openModal(modalId);
+}
+function closeSchedModal(id) { closeModal(id); }
+function schedWindowChanged(modalId) {
+  var val = document.getElementById(modalId+'-window').value;
+  var custom = document.getElementById(modalId+'-custom');
+  var banner = document.getElementById(modalId+'-banner');
+  if (custom) custom.style.display = val === 'custom' ? '' : 'none';
+  if (banner) banner.style.display = val === 'Within 1 hour' ? '' : 'none';
+  if (val === 'Within 1 hour') document.getElementById(modalId+'-date').value = todayStr();
+}
+function submitSchedModal(modalId, updatedBy, updatedByRole, apiFn) {
+  var date   = document.getElementById(modalId+'-date').value;
+  var window_ = document.getElementById(modalId+'-window').value;
+  var custom = document.getElementById(modalId+'-custom-val');
+  var notify = document.getElementById(modalId+'-notify').checked;
+  var msgEl  = document.getElementById(modalId+'-msg');
+  if (window_ === 'custom') window_ = (custom ? custom.value.trim() : '');
+  if (!date)    { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Select a date.</div>'; return; }
+  if (!window_) { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Select a time window.</div>'; return; }
+  document.getElementById(modalId+'-save').disabled = true;
+  apiFn(_schedWOId, date, window_, notify, updatedBy, updatedByRole, msgEl, function(res) {
+    document.getElementById(modalId+'-save').disabled = false;
+    if (res && res.success) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:12px">✓ Scheduled' + (res.tenant_sms ? ' — tenant notified.' : '.') + '</div>';
+      setTimeout(function(){ closeModal(modalId); }, 1200);
+    } else {
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">' + (res ? res.error : 'Error') + '</div>';
+    }
+  });
+}
+function submitVendorSched(modalId) {
+  var date    = document.getElementById(modalId+'-date').value;
+  var winEl   = document.getElementById(modalId+'-window');
+  var window_ = winEl.value === 'custom'
+    ? ((document.getElementById(modalId+'-custom-val')||{}).value||'').trim()
+    : winEl.value;
+  var notify  = document.getElementById(modalId+'-notify').checked;
+  var msgEl   = document.getElementById(modalId+'-msg');
+  if (!date)    { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Please select a date.</div>'; return; }
+  if (!window_) { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Please select a time window.</div>'; return; }
+  document.getElementById(modalId+'-save').disabled = true;
+  fetch(WORKER + '/schedule', {
+    method:'POST', headers:{'X-Auth-Token':SECRET,'Content-Type':'application/json'},
+    body:JSON.stringify({wo_id:_schedWOId, date:date, window:window_, notify_tenant:notify,
+                         updated_by:session.vendor_name, updated_by_role:'vendor'})
+  }).then(function(r){return r.json();}).then(function(res){
+    document.getElementById(modalId+'-save').disabled = false;
+    if (res&&res.success) {
+      msgEl.innerHTML='<div style="color:var(--accent2);font-size:12px">✓ Scheduled'+(res.tenant_sms?' — tenant notified.':' — no tenant SMS.')+'</div>';
+      setTimeout(function(){ closeModal(modalId); loadWorkOrders(); }, 1400);
+    } else {
+      msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">'+((res&&res.error)||'Error')+'</div>';
+    }
+  }).catch(function(){ document.getElementById(modalId+'-save').disabled=false; });
+}
+
 </script>
 </body>
 </html>
