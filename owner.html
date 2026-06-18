@@ -271,6 +271,21 @@ textarea{resize:vertical;min-height:70px;}
         <label>Description</label>
         <textarea id="sDesc" placeholder="Describe the issue…"></textarea>
       </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px">
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">TENANT NOTIFICATION SETTINGS</div>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);margin-bottom:8px">
+          <input type="checkbox" id="tvVisible" checked style="width:auto;padding:0">
+          <div><div style="font-size:12px">Show to tenant</div><div style="color:var(--muted);font-size:11px">Tenant can see this in their portal</div></div>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);margin-bottom:8px">
+          <input type="checkbox" id="tvNotifyCreated" checked style="width:auto;padding:0">
+          <div><div style="font-size:12px">Notify tenant when created</div><div style="color:var(--muted);font-size:11px">Sends text message to tenant</div></div>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
+          <input type="checkbox" id="tvNotifyUpdates" checked style="width:auto;padding:0">
+          <div><div style="font-size:12px">Notify tenant on updates</div><div style="color:var(--muted);font-size:11px">Sends text when status changes</div></div>
+        </label>
+      </div>
       <div id="sFormMsg"></div>
       <button class="btn btn-full" id="sSubmitBtn" onclick="submitRequest()">SUBMIT REQUEST</button>
     </div>
@@ -556,6 +571,11 @@ function buildWODetail(wo, audit) {
   html += editableRow('Priority', wo.Priority||'normal', wo.ID, 'Priority', 'priority', wo.Priority||'normal');
   html += editableRow('Scheduled Date', wo.Scheduled_Date||'—', wo.ID, 'Scheduled_Date', 'date', wo.Scheduled_Date||'');
   html += '</div>';
+  // Tenant visibility toggles
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">TENANT ACCESS <span style="font-size:10px;color:var(--muted)">(changes logged)</span></div>';
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px">' + ownerTvToggle('Tenant_Visible',wo.Tenant_Visible,'Show to Tenant',wo.ID) + ownerTvToggle('Tenant_Notify_Created',wo.Tenant_Notify_Created,'Notify on Creation',wo.ID) + ownerTvToggle('Tenant_Notify_Updates',wo.Tenant_Notify_Updates,'Notify on Updates',wo.ID) + '</div>';
+  html += '</div>';
 
   // ── Audit trail ──
   html += '<div class="detail-section">';
@@ -606,6 +626,22 @@ function renderDescription(desc) {
   });
   html += '</div>';
   return html;
+}
+
+function ownerTvToggle(field, currentVal, label, woId) {
+  var isOn = currentVal !== "FALSE";
+  var color = isOn ? "var(--accent2)" : "var(--danger)";
+  return '<button onclick="toggleOwnerTvField(\''+ woId +'\',\''+ field +'\',\'' + (isOn?"FALSE":"TRUE") + '\')"' +
+    ' style="background:var(--surface);border:1px solid '+ color +';border-radius:6px;color:'+ color +';font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer">' +
+    (isOn?"✓ ":"✗ ") + label + '</button>';
+}
+
+function toggleOwnerTvField(woId, field, newVal) {
+  var fields = {}; fields[field] = newVal;
+  api("/wo/set-tenant-visibility", { method:"POST", body: { wo_id: woId, fields: fields, changed_by: session.owner_name, changed_by_role: "owner" } })
+    .then(function(res){
+      if (res.success) refreshWOInList(woId);
+    });
 }
 
 function editableRow(label, displayVal, woId, field, type, currentVal) {
@@ -768,6 +804,9 @@ function submitRequest() {
     trade: trade, priority: document.getElementById('sPriority').value,
     description: desc, type: 'owner',
     owner_wo_ref: document.getElementById('sOwnerRef').value.trim(),
+    tenant_visible: document.getElementById('tvVisible') ? document.getElementById('tvVisible').checked : true,
+    tenant_notify_created: document.getElementById('tvNotifyCreated') ? document.getElementById('tvNotifyCreated').checked : true,
+    tenant_notify_updates: document.getElementById('tvNotifyUpdates') ? document.getElementById('tvNotifyUpdates').checked : true,
     created_by: session.owner_name,
     notes: 'Owner request from ' + session.owner_name + (session.owner_company ? ' (' + session.owner_company + ')' : ''),
   }}).then(function(res) {

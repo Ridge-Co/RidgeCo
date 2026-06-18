@@ -265,6 +265,7 @@
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-bottom:28px">
       <a href="owner.html" target="_blank" style="text-decoration:none"><div class="portal-card"><div class="portal-icon">🏠</div><div class="portal-name">Owner Portal</div><div class="portal-desc">Owner login, view open work orders, submit requests, add notes. Audit trail visible.</div></div></a>
       <a href="vendor.html" target="_blank" style="text-decoration:none"><div class="portal-card"><div class="portal-icon">🔧</div><div class="portal-name">Vendor Portal</div><div class="portal-desc">Vendor login, see assigned jobs, update status, upload photos and receipts.</div></div></a>
+      <a href="tenant.html" target="_blank" style="text-decoration:none"><div class="portal-card"><div class="portal-icon">🏠</div><div class="portal-name">Tenant Portal</div><div class="portal-desc">Tenant PIN login, view their unit's work orders, add notes, see status timeline. Never shows hidden WOs.</div></div></a>
       <a href="importer.html" target="_blank" style="text-decoration:none"><div class="portal-card"><div class="portal-icon">📥</div><div class="portal-name">Tenant Importer</div><div class="portal-desc">Import tenants from CSV. Preview before committing. Never overwrites existing records.</div></div></a>
       <a href="owner-submit.html" target="_blank" style="text-decoration:none"><div class="portal-card" style="opacity:.7"><div class="portal-icon">📝</div><div class="portal-name">Owner Submit (legacy)</div><div class="portal-desc">Submit-only owner page. Use Owner Portal instead — it includes this plus WO view.</div></div></a>
     </div>
@@ -317,7 +318,7 @@
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
     </div>
     <div id="wo-prop-preview" style="display:none;margin-top:12px"></div>
-    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-new-wo')">Cancel</button><button class="btn" onclick="submitNewWO()">Create Work Order</button></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-new-wo')">Cancel</button><button class="btn" onclick="openTenantSafetyScreen()">Create Work Order →</button></div>
   </div>
 </div>
 
@@ -481,6 +482,32 @@
       <div class="form-group full"><label>Status</label><select id="et-active"><option value="TRUE">Active</option><option value="FALSE">Inactive / Moved Out</option></select></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-tenant')">Cancel</button><button class="btn" onclick="submitEditTenant()">Save Changes</button></div>
+  </div>
+</div>
+
+<!-- TENANT SAFETY SCREEN -->
+<div class="modal-overlay" id="modal-tenant-safety">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header"><div class="modal-title">TENANT ACCESS — CONFIRM BEFORE CREATING</div></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:16px">These settings can be changed any time after creation. Defaults are shown below.</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
+        <input type="checkbox" id="safety-visible" checked style="width:auto;padding:0;font-size:16px">
+        <div><div style="font-size:13px">Show this work order to tenant</div><div style="color:var(--muted);font-size:11px">Tenant can see it in their portal</div></div>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
+        <input type="checkbox" id="safety-notify-created" checked style="width:auto;padding:0;font-size:16px">
+        <div><div style="font-size:13px">Notify tenant when created</div><div style="color:var(--muted);font-size:11px">Sends SMS to tenant on creation</div></div>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
+        <input type="checkbox" id="safety-notify-updates" checked style="width:auto;padding:0;font-size:16px">
+        <div><div style="font-size:13px">Notify tenant on status updates</div><div style="color:var(--muted);font-size:11px">Sends SMS when status changes to Complete etc.</div></div>
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-tenant-safety')">← Back to Edit</button>
+      <button class="btn success" onclick="submitNewWO()">CREATE WORK ORDER</button>
+    </div>
   </div>
 </div>
 
@@ -861,6 +888,16 @@ function openWODetail(woId) {
     el.innerHTML = rows;
   }).catch(function(){ var el=document.getElementById('auditTrailBody'); if(el) el.innerHTML='<span style="color:var(--muted)">Unavailable</span>'; });
 
+  // Tenant visibility controls in detail
+  var tvSection = '<div style="margin-top:14px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">TENANT ACCESS SETTINGS</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+    tenantToggle('Tenant_Visible',wo.Tenant_Visible,'Show to Tenant',woId) +
+    tenantToggle('Tenant_Notify_Created',wo.Tenant_Notify_Created,'Notify on Creation',woId) +
+    tenantToggle('Tenant_Notify_Updates',wo.Tenant_Notify_Updates,'Notify on Updates',woId) +
+    '</div></div>';
+  document.getElementById('detail-body').innerHTML += tvSection;
+
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
   function addBtn(label,cls,fn){var b=document.createElement('button');b.className='btn '+cls;b.textContent=label;b.onclick=fn;actions.appendChild(b);}
@@ -930,6 +967,18 @@ function openNewWOModal() {
   openModal('modal-new-wo');
 }
 
+function openTenantSafetyScreen() {
+  var propId = document.getElementById('wo-property').value;
+  var trade  = document.getElementById('wo-trade').value;
+  if (!propId) { toast('Select a property','error'); return; }
+  if (!trade)  { toast('Select a trade','error'); return; }
+  // Reset safety screen to defaults
+  document.getElementById('safety-visible').checked = true;
+  document.getElementById('safety-notify-created').checked = true;
+  document.getElementById('safety-notify-updates').checked = true;
+  openModal('modal-tenant-safety');
+}
+
 function submitNewWO() {
   var propId = document.getElementById('wo-property').value;
   var trade  = document.getElementById('wo-trade').value;
@@ -937,6 +986,9 @@ function submitNewWO() {
   if (!trade)  { toast('Select a trade','error'); return; }
   var unitId = document.getElementById('wo-unit').value;
   var unit   = state.units.find(function(u){return u.ID===unitId;});
+  var tvVisible = document.getElementById('safety-visible') ? document.getElementById('safety-visible').checked : true;
+  var tvCreated = document.getElementById('safety-notify-created') ? document.getElementById('safety-notify-created').checked : true;
+  var tvUpdates = document.getElementById('safety-notify-updates') ? document.getElementById('safety-notify-updates').checked : true;
   api('POST','/workorder',{
     property_id:propId, unit_id:unitId, tenant_id:unit?unit.Tenant_ID||'':'',
     trade:trade, priority:document.getElementById('wo-priority').value,
@@ -944,10 +996,11 @@ function submitNewWO() {
     description:document.getElementById('wo-desc').value,
     notes:document.getElementById('wo-notes').value,
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
+    tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
     created_by:'admin'
   }).then(function(res){
     if (res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
-    toast('Created '+res.id,'success'); closeModal('modal-new-wo'); loadAll();
+    toast('Created '+res.id,'success'); closeModal('modal-new-wo'); closeModal('modal-tenant-safety'); loadAll();
   }).catch(function(e){logError('Create WO',e.message);toast('Error: '+e.message,'error');});
 }
 
@@ -1218,6 +1271,23 @@ function linkify(text) {
   if (!text) return '—';
   var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:var(--info);word-break:break-all">$1</a>');
+}
+
+function tenantToggle(field, currentVal, label, woId) {
+  var isOn = currentVal !== "FALSE";
+  var color = isOn ? "var(--accent2)" : "var(--danger)";
+  var icon = isOn ? "✓" : "✗";
+  return '<button onclick="toggleTenantField(\''+ woId +'\',\''+ field +'\',\'' + (isOn?'FALSE':'TRUE') + '\')"' +
+    ' style="background:var(--surface);border:1px solid '+ color +';border-radius:6px;color:'+ color +';font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;white-space:nowrap">' +
+    icon + ' '+ label +'</button>';
+}
+
+function toggleTenantField(woId, field, newVal) {
+  var fields = {}; fields[field] = newVal;
+  api('POST','/wo/set-tenant-visibility',{wo_id:woId, fields:fields, changed_by:'Admin', changed_by_role:'admin'}).then(function(res){
+    if (res.success) { toast(field.replace('Tenant_','')+' → '+newVal,'success'); loadAll().then(function(){ openWODetail(woId); }); }
+    else toast('Error: '+(res.error||''),'error');
+  });
 }
 
 function copyLink(el) {

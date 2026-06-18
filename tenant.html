@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ridge Co — Tenant Portal</title>
+<style>
+:root{
+  --bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;
+  --text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;
+  --danger:#f87171;--warn:#fbbf24;--info:#60a5fa;
+  --radius:8px;--font:'Courier New',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh;}
+
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:360px;padding:28px;}
+.logo{color:var(--accent);font-size:1.1rem;letter-spacing:.15em;font-weight:bold;margin-bottom:4px;}
+.logo-sub{color:var(--muted);font-size:11px;letter-spacing:.1em;margin-bottom:24px;}
+label{display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;}
+input,select,textarea{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px 12px;border-radius:6px;}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
+textarea{resize:vertical;min-height:70px;}
+.pin-input{font-size:1.5rem;letter-spacing:.15em;text-align:center;padding:14px;text-transform:uppercase;}
+.btn{background:var(--accent);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.06em;padding:10px 16px;cursor:pointer;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-full{width:100%;margin-top:10px;}
+.btn-sm{padding:5px 10px;font-size:11px;}
+.btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
+.btn-outline:hover{background:var(--accent);color:#000;}
+.btn-green{background:var(--accent2);color:#000;}
+.btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.msg{margin-top:10px;padding:9px 12px;border-radius:6px;font-size:12px;}
+.msg.error{background:#3b0000;border:1px solid var(--danger);color:var(--danger);}
+.msg.success{background:#002d0f;border:1px solid var(--accent2);color:var(--accent2);}
+
+.screen{display:none;}
+.screen.active{display:block;}
+
+.app-header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
+.app-header .name{color:var(--accent);font-weight:bold;letter-spacing:.08em;font-size:.9rem;}
+.app-header .sub{color:var(--muted);font-size:11px;}
+.main{padding:16px;max-width:640px;margin:0 auto;}
+
+/* Status bar */
+.status-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+.stat-pill{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:5px 14px;font-size:11px;color:var(--muted);}
+.stat-pill span{color:var(--accent);font-weight:bold;}
+
+/* Filter */
+.filter-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
+.filter-row select,.filter-row input{flex:1;min-width:100px;font-size:12px;padding:7px 10px;}
+
+/* WO Timeline card */
+.wo-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;overflow:hidden;}
+.wo-card.urgent{border-left:3px solid var(--danger);}
+.wo-card.high{border-left:3px solid var(--warn);}
+.wo-card.normal{border-left:3px solid var(--border);}
+.wo-card.low{border-left:3px solid var(--muted);}
+.wo-head{padding:14px;cursor:pointer;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
+.wo-trade{color:var(--text);font-size:.95rem;font-weight:bold;}
+.wo-date{color:var(--muted);font-size:11px;margin-top:3px;}
+.wo-desc-prev{color:var(--muted);font-size:12px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px;}
+.status-block{text-align:right;flex-shrink:0;}
+.badge{display:inline-block;padding:3px 9px;border-radius:4px;font-size:11px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;}
+.badge-new{background:#1e3a5f;color:var(--info);}
+.badge-assigned,.badge-accepted{background:#1a2a1a;color:var(--accent2);}
+.badge-in-progress,.badge-inprogress{background:#1a2500;color:#86efac;}
+.badge-onhold{background:#2a1a00;color:var(--warn);}
+.badge-complete{background:#1f2d1f;color:#6ee7b7;}
+.badge-pendinginvoice,.badge-invoiced,.badge-paid{background:#1f2d1f;color:#6ee7b7;}
+.badge-scheduled{color:var(--muted);font-size:11px;display:block;margin-top:4px;}
+.expand-icon{color:var(--muted);font-size:14px;margin-top:2px;transition:transform .2s;}
+.wo-card.expanded .expand-icon{transform:rotate(180deg);}
+
+/* Detail */
+.wo-detail{display:none;border-top:1px solid var(--border);}
+.wo-card.expanded .wo-detail{display:block;}
+.detail-section{padding:14px;border-bottom:1px solid var(--border);}
+.detail-section:last-child{border-bottom:none;}
+.detail-section-title{color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;}
+.detail-row{display:flex;justify-content:space-between;margin-bottom:7px;gap:8px;font-size:12px;}
+.dl{color:var(--muted);}
+.dv{text-align:right;word-break:break-word;max-width:240px;}
+
+/* Status timeline */
+.timeline{display:flex;flex-direction:column;gap:0;}
+.tl-item{display:flex;gap:12px;padding:6px 0;}
+.tl-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:3px;}
+.tl-dot.done{background:var(--accent2);}
+.tl-dot.current{background:var(--accent);box-shadow:0 0 0 3px rgba(232,160,32,.2);}
+.tl-dot.future{background:var(--border);}
+.tl-label{font-size:12px;color:var(--muted);}
+.tl-label.current{color:var(--accent);font-weight:bold;}
+.tl-label.done{color:var(--accent2);}
+
+/* Note area */
+.note-box{padding:14px;}
+.note-thread{background:var(--surface2);border-radius:6px;padding:10px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;margin-bottom:10px;color:var(--muted);}
+
+/* Empty */
+.empty{text-align:center;color:var(--muted);padding:40px 16px;font-size:13px;}
+.spinner-msg{text-align:center;color:var(--muted);padding:24px;font-size:12px;}
+
+/* Feedback */
+.feedback-btn{position:fixed;bottom:20px;right:16px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:20px;padding:7px 14px;font-size:11px;cursor:pointer;font-family:var(--font);z-index:50;}
+.feedback-btn:hover{border-color:var(--accent);color:var(--accent);}
+
+/* Modal */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;padding:16px;}
+.modal-overlay.open{display:flex;}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:420px;padding:20px;}
+.modal-title{color:var(--accent);font-size:.9rem;letter-spacing:.08em;margin-bottom:12px;}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="screenLogin" class="screen active">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="logo">RIDGE CO</div>
+      <div class="logo-sub">TENANT PORTAL</div>
+      <div style="margin-bottom:14px">
+        <label>YOUR ACCESS PIN</label>
+        <input type="text" class="pin-input" id="pinInput" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
+      </div>
+      <button class="btn btn-full" id="loginBtn" onclick="doLogin()">SIGN IN</button>
+      <div id="loginMsg"></div>
+      <p style="color:var(--muted);font-size:11px;text-align:center;margin-top:16px">Your PIN is provided by your property manager.<br>Contact them if you need access.</p>
+    </div>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="screenDash" class="screen">
+  <div class="app-header">
+    <div>
+      <div class="name" id="tenantName">—</div>
+      <div class="sub" id="tenantAddr"></div>
+    </div>
+    <button class="btn btn-sm btn-muted" onclick="doLogout()">LOG OUT</button>
+  </div>
+
+  <div class="main">
+    <div class="status-bar">
+      <div class="stat-pill">Open: <span id="statOpen">—</span></div>
+      <div class="stat-pill">Completed: <span id="statDone">—</span></div>
+    </div>
+
+    <div class="filter-row">
+      <select id="fStatus" onchange="renderWOs()">
+        <option value="open">Open / In Progress</option>
+        <option value="all">All Work Orders</option>
+        <option value="Complete">Completed</option>
+        <option value="Paid">Closed / Paid</option>
+      </select>
+      <input type="text" id="fSearch" placeholder="Search…" oninput="renderWOs()" style="min-width:120px">
+    </div>
+
+    <div id="woList"><div class="spinner-msg">Loading your work orders…</div></div>
+  </div>
+</div>
+
+<!-- NOTE MODAL -->
+<div class="modal-overlay" id="modalNote">
+  <div class="modal">
+    <div class="modal-title">ADD INFORMATION</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">Share additional details with your property manager. This cannot be edited after submission.</p>
+    <textarea id="noteText" placeholder="e.g. The leak is getting worse after rain. I'm available Tuesday afternoon after 3pm…" style="min-height:90px;margin-bottom:8px"></textarea>
+    <div id="noteMsg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm btn-muted" onclick="closeModal('modalNote')">Cancel</button>
+      <button class="btn btn-sm btn-green" id="noteBtn" onclick="submitNote()">SEND</button>
+    </div>
+  </div>
+</div>
+
+<!-- FEEDBACK MODAL -->
+<div class="modal-overlay" id="modalFeedback">
+  <div class="modal">
+    <div class="modal-title">REPORT ISSUE / REQUEST FEATURE</div>
+    <select id="feedbackType" style="width:100%;margin-bottom:8px">
+      <option value="bug">🐛 Something isn't working</option>
+      <option value="feature">💡 Suggestion</option>
+      <option value="other">💬 Other feedback</option>
+    </select>
+    <textarea id="feedbackText" placeholder="Describe the issue or suggestion…" style="min-height:80px;margin-bottom:8px"></textarea>
+    <div id="feedbackMsg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm btn-muted" onclick="closeModal('modalFeedback')">Cancel</button>
+      <button class="btn btn-sm" id="feedbackBtn" onclick="submitFeedback()">SEND</button>
+    </div>
+  </div>
+</div>
+
+<button class="feedback-btn" onclick="openModal('modalFeedback')" id="feedbackFloatBtn" style="display:none">💬 Feedback</button>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET = 'mh-secret-2026-brett';
+var session = null;
+var allWOs = [];
+var activeNoteWOId = null;
+
+var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice'];
+var STATUS_TIMELINE = ['New','Assigned','Accepted','In Progress','Complete','Invoiced','Paid'];
+var STATUS_LABELS = {
+  'New':'Request received',
+  'Assigned':'Technician assigned',
+  'Accepted':'Technician confirmed',
+  'In Progress':'Work in progress',
+  'On Hold':'On hold',
+  'Complete':'Work complete',
+  'Pending Invoice':'Work complete — billing pending',
+  'Invoiced':'Invoice submitted',
+  'Paid':'Closed',
+  'Declined':'Request declined',
+  'Cancelled':'Cancelled',
+};
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  opts.headers['X-Auth-Token'] = SECRET;
+  if (opts.body && typeof opts.body === 'object') {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+}
+
+// ── Login ────────────────────────────────────────────────────
+document.getElementById('pinInput').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
+document.getElementById('pinInput').addEventListener('input', function(){ this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,''); });
+
+function doLogin() {
+  var pin = document.getElementById('pinInput').value.trim();
+  if (pin.length < 8) { showLoginMsg('PIN must be 8 characters (3 letters + 5 digits)', 'error'); return; }
+  var btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = 'VERIFYING…';
+
+  api('/tenant-by-pin?pin=' + encodeURIComponent(pin))
+    .then(function(data) {
+      btn.disabled = false; btn.textContent = 'SIGN IN';
+      if (data.error) {
+        if (data.locked) {
+          showLoginMsg('Locked for ' + data.minutes_remaining + ' min — too many attempts.', 'error');
+          document.getElementById('pinInput').disabled = true;
+          setTimeout(function(){ document.getElementById('pinInput').disabled = false; }, data.minutes_remaining * 60000);
+        } else {
+          showLoginMsg(data.error, 'error');
+        }
+        return;
+      }
+      session = data;
+      document.getElementById('tenantName').textContent = data.tenant_name;
+      document.getElementById('tenantAddr').textContent = data.property_address + (data.unit_label ? ' · Unit ' + data.unit_label : '');
+      document.getElementById('feedbackFloatBtn').style.display = '';
+      show('screenLogin', false);
+      show('screenDash', true);
+      loadWOs();
+    })
+    .catch(function(){ btn.disabled=false; btn.textContent='SIGN IN'; showLoginMsg('Connection error.','error'); });
+}
+
+function doLogout() {
+  session = null; allWOs = [];
+  document.getElementById('pinInput').value = '';
+  document.getElementById('pinInput').disabled = false;
+  document.getElementById('feedbackFloatBtn').style.display = 'none';
+  show('screenDash', false);
+  show('screenLogin', true);
+}
+
+function showLoginMsg(msg, type) {
+  document.getElementById('loginMsg').innerHTML = msg ? '<div class="msg ' + type + '">' + esc(msg) + '</div>' : '';
+}
+
+// ── Work Orders ───────────────────────────────────────────────
+function loadWOs() {
+  api('/tenant-workorders?tenant_id=' + session.tenant_id + '&include_closed=true')
+    .then(function(data) {
+      allWOs = Array.isArray(data) ? data : [];
+      var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
+      var done = allWOs.filter(function(w){ return ['Complete','Invoiced','Paid'].includes(w.Status); });
+      document.getElementById('statOpen').textContent = open.length;
+      document.getElementById('statDone').textContent = done.length;
+      renderWOs();
+    });
+}
+
+function renderWOs() {
+  var status = document.getElementById('fStatus').value;
+  var search = (document.getElementById('fSearch').value||'').toLowerCase();
+
+  var wos = allWOs.slice();
+  if (status === 'open') wos = wos.filter(function(w){ return OPEN_STATUSES.includes(w.Status) || w.Status==='Complete'; });
+  else if (status !== 'all') wos = wos.filter(function(w){ return w.Status === status; });
+  if (search) wos = wos.filter(function(w){
+    return (w.ID||'').toLowerCase().includes(search) ||
+           (w.Trade||'').toLowerCase().includes(search) ||
+           (w.Description||'').toLowerCase().includes(search);
+  });
+
+  var list = document.getElementById('woList');
+  if (!wos.length) { list.innerHTML = '<div class="empty">No work orders to show.</div>'; return; }
+
+  list.innerHTML = wos.map(function(wo, idx) {
+    var pri = (wo.Priority||'normal').toLowerCase();
+    var sc = 'badge-' + (wo.Status||'new').toLowerCase().replace(/\s+/g,'');
+    var statusLabel = STATUS_LABELS[wo.Status] || wo.Status;
+    var descPrev = (wo.Description||'').split('\n')[0].substring(0, 65);
+    return '<div class="wo-card ' + pri + '" id="tc-' + idx + '">' +
+      '<div class="wo-head" onclick="toggleCard(' + idx + ')">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="wo-trade">' + esc(wo.Trade||'Maintenance Request') + '</div>' +
+          '<div class="wo-date">Submitted ' + fmtDate(wo.Created_Date) + (wo.ID ? ' · ' + esc(wo.ID) : '') + '</div>' +
+          '<div class="wo-desc-prev">' + esc(descPrev) + '</div>' +
+        '</div>' +
+        '<div class="status-block">' +
+          '<span class="badge ' + sc + '">' + esc(statusLabel) + '</span>' +
+          (wo.Scheduled_Date ? '<span class="badge-scheduled">Scheduled: ' + esc(wo.Scheduled_Date) + '</span>' : '') +
+          '<div class="expand-icon" style="text-align:right;margin-top:6px">▾</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="wo-detail" id="td-' + idx + '">' + buildDetail(wo, idx) + '</div>' +
+    '</div>';
+  }).join('');
+
+  window._renderedWOs = wos;
+}
+
+function toggleCard(idx) {
+  var card = document.getElementById('tc-' + idx);
+  document.querySelectorAll('.wo-card').forEach(function(c){ c.classList.remove('expanded'); });
+  card.classList.toggle('expanded');
+}
+
+function buildDetail(wo, idx) {
+  var html = '';
+
+  // Status timeline
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">STATUS TIMELINE</div>';
+  html += '<div class="timeline">';
+  var tlSteps = ['New','Assigned','In Progress','Complete','Paid'];
+  var curIdx = tlSteps.indexOf(wo.Status);
+  if (['Accepted'].includes(wo.Status)) curIdx = 2; // In Progress equivalent
+  if (['Pending Invoice','Invoiced'].includes(wo.Status)) curIdx = 4;
+  tlSteps.forEach(function(s, i) {
+    var cls = i < curIdx ? 'done' : i === curIdx ? 'current' : 'future';
+    var labels = {New:'Request received',Assigned:'Technician assigned','In Progress':'Work in progress',Complete:'Work complete',Paid:'Closed'};
+    html += '<div class="tl-item"><div class="tl-dot ' + cls + '"></div><div class="tl-label ' + cls + '">' + (labels[s]||s) + '</div></div>';
+  });
+  html += '</div></div>';
+
+  // Description
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">DESCRIPTION</div>';
+  html += renderDescription(wo.Description||'No description provided.');
+  html += '</div>';
+
+  // Info
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">DETAILS</div>';
+  if (wo.vendor_name) {
+    html += '<div class="detail-row"><span class="dl">Technician</span><span class="dv">' + esc(wo.vendor_name) + '</span></div>';
+  }
+  if (wo.Scheduled_Date) {
+    html += '<div class="detail-row"><span class="dl">Scheduled</span><span class="dv">' + esc(wo.Scheduled_Date) + '</span></div>';
+  }
+  if (wo.Completed_Date) {
+    html += '<div class="detail-row"><span class="dl">Completed</span><span class="dv">' + fmtDate(wo.Completed_Date) + '</span></div>';
+  }
+  html += '</div>';
+
+  // Notes (if any)
+  if (wo.Notes) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">UPDATES &amp; NOTES</div>';
+    html += '<div class="note-thread">' + esc(wo.Notes) + '</div>';
+    html += '</div>';
+  }
+
+  // Add info button
+  html += '<div class="note-box">';
+  html += '<button class="btn btn-sm btn-outline" onclick="openNote(\'' + wo.ID + '\')">+ ADD INFORMATION</button>';
+  html += '<p style="color:var(--muted);font-size:11px;margin-top:8px">Provide additional details, availability, or updates to your property manager.</p>';
+  html += '</div>';
+
+  return html;
+}
+
+function renderDescription(desc) {
+  // Show threaded description nicely
+  var parts = desc.split(/\n\n(?=\[)/);
+  var html = '';
+  parts.forEach(function(part, i) {
+    if (i === 0) {
+      html += '<div style="font-size:12px;line-height:1.6;white-space:pre-wrap">' + esc(part) + '</div>';
+    } else {
+      var attrMatch = part.match(/^\[([^\]]+)\]\s*/);
+      if (attrMatch) {
+        html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">' +
+          '<div style="color:var(--muted);font-size:11px;margin-bottom:4px">📝 ' + esc(attrMatch[1]) + '</div>' +
+          '<div style="font-size:12px;line-height:1.6">' + esc(part.replace(attrMatch[0],'')) + '</div>' +
+          '</div>';
+      } else {
+        html += '<div style="margin-top:8px;font-size:12px;line-height:1.6">' + esc(part) + '</div>';
+      }
+    }
+  });
+  return html;
+}
+
+// ── Note ──────────────────────────────────────────────────────
+function openNote(woId) {
+  activeNoteWOId = woId;
+  document.getElementById('noteText').value = '';
+  document.getElementById('noteMsg').innerHTML = '';
+  openModal('modalNote');
+}
+
+function submitNote() {
+  var text = document.getElementById('noteText').value.trim();
+  if (!text) return;
+  document.getElementById('noteBtn').disabled = true;
+  api('/wo/add-note', { method:'POST', body: {
+    wo_id: activeNoteWOId, note: text,
+    author: session.tenant_name, author_role: 'tenant',
+  }}).then(function(res) {
+    document.getElementById('noteBtn').disabled = false;
+    if (res.success) {
+      document.getElementById('noteMsg').innerHTML = '<div class="msg success">✓ Sent to your property manager.</div>';
+      setTimeout(function(){ closeModal('modalNote'); loadWOs(); }, 1500);
+    } else {
+      document.getElementById('noteMsg').innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>';
+    }
+  }).catch(function(){ document.getElementById('noteBtn').disabled = false; });
+}
+
+// ── Feedback ──────────────────────────────────────────────────
+function submitFeedback() {
+  var type = document.getElementById('feedbackType').value;
+  var text = document.getElementById('feedbackText').value.trim();
+  if (!text) return;
+  var typeLabel = {bug:'[BUG]',feature:'[FEATURE]',other:'[FEEDBACK]'}[type]||'[FEEDBACK]';
+  var fullText = '[TENANT] ' + typeLabel + ' from ' + (session?session.tenant_name:'unknown') + ': ' + text;
+  document.getElementById('feedbackBtn').disabled = true;
+  fetch(WORKER + '/wishlist/add', {
+    method:'POST', headers:{'X-Auth-Token':SECRET,'Content-Type':'application/json'},
+    body:JSON.stringify({text:fullText})
+  }).then(function(r){return r.json();}).then(function(res){
+    document.getElementById('feedbackBtn').disabled = false;
+    if (res.success) {
+      document.getElementById('feedbackMsg').innerHTML = '<div class="msg success">✓ Sent — thank you!</div>';
+      setTimeout(function(){ closeModal('modalFeedback'); }, 1500);
+    }
+  }).catch(function(){ document.getElementById('feedbackBtn').disabled=false; });
+}
+
+// ── Utils ─────────────────────────────────────────────────────
+function fmtDate(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+  catch(e) { return iso.split('T')[0]; }
+}
+function openModal(id){ document.getElementById(id).classList.add('open'); }
+function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(function(m){
+  m.addEventListener('click',function(e){ if(e.target===m) m.classList.remove('open'); });
+});
+function show(id,visible){ document.getElementById(id).className='screen'+(visible?' active':''); }
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+</script>
+</body>
+</html>
