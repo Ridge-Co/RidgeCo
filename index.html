@@ -6,8 +6,8 @@
 <title>Ridge Co — Maintenance Hub</title>
 <style>
   :root {
-    --bg: #06091a; --surface: #0c1530; --surface2: #142040; --border: #1e2d55;
-    --text: #dde6f8; --muted: #6b80ad; --accent: #4575d4; --accent2: #4ade80;
+    --bg: #06091a; --surface: #0d1835; --surface2: #142040; --border: #1e2d55;
+    --text: #f8faff; --muted: #94a8c8; --accent: #4575d4; --accent2: #4ade80;
     --danger: #f87171; --warn: #f59e0b; --info: #7ab4f0; --radius: 6px;
     --font: 'Courier New', monospace;
   }
@@ -52,7 +52,7 @@
   .wo-desc { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .wo-right { display: flex; align-items: center; gap: 10px; }
   .badge { padding: 3px 8px; border-radius: 20px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: bold; }
-  .badge-new { background: #1e3a5f; color: var(--info); }
+  .badge-new { background: #1c3d6e; color: var(--info); }
   .badge-assigned { background: #2d2006; color: var(--warn); }
   .badge-accepted { background: #1a3320; color: var(--accent2); }
   .badge-scheduled { background: #1a3320; color: var(--accent2); }
@@ -324,6 +324,9 @@
       <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
       <div class="form-group full"><label>Description</label><textarea id="wo-desc" placeholder="Describe the issue..."></textarea></div>
+      <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" style="width:100%"><option value="">Assign after creation</option></select></div>
+      <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
+      <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
       <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
     </div>
@@ -622,6 +625,20 @@ var assignWOId = null;
 var invoiceWOId = null;
 
 // ── Numeric address sort ───────────────────────────────────────────
+function buildTimeWindowOpts() {
+  var groups = [
+    {g:"⚡ Urgent",opts:["Within 1 hour"]},
+    {g:"2-Hour Windows",opts:["7:00 AM – 9:00 AM","8:00 AM – 10:00 AM","9:00 AM – 11:00 AM","10:00 AM – 12:00 PM","11:00 AM – 1:00 PM","12:00 PM – 2:00 PM","1:00 PM – 3:00 PM","2:00 PM – 4:00 PM","3:00 PM – 5:00 PM","4:00 PM – 6:00 PM","5:00 PM – 7:00 PM","6:00 PM – 8:00 PM"]},
+    {g:"3-Hour Windows",opts:["8:00 AM – 11:00 AM","9:00 AM – 12:00 PM","10:00 AM – 1:00 PM","11:00 AM – 2:00 PM","12:00 PM – 3:00 PM","1:00 PM – 4:00 PM","2:00 PM – 5:00 PM","3:00 PM – 6:00 PM","4:00 PM – 7:00 PM","5:00 PM – 8:00 PM"]},
+    {g:"4-Hour Windows",opts:["8:00 AM – 12:00 PM","9:00 AM – 1:00 PM","10:00 AM – 2:00 PM","11:00 AM – 3:00 PM","12:00 PM – 4:00 PM","1:00 PM – 5:00 PM","2:00 PM – 6:00 PM","3:00 PM – 7:00 PM","4:00 PM – 8:00 PM"]},
+    {g:"Half-Day / Full Day",opts:["Morning (8:00 AM – 12:00 PM)","Afternoon (12:00 PM – 5:00 PM)","Evening (5:00 PM – 8:00 PM)","All Day"]},
+    {g:"Custom",opts:["Custom — enter time in notes"]},
+  ];
+  return '<option value="">— time window —</option>' + groups.map(function(g){
+    return '<optgroup label="'+g.g+'">'+g.opts.map(function(o){ return '<option value="'+o+'">'+o+'</option>'; }).join('') + '</optgroup>';
+  }).join('');
+}
+
 function sortPropsNumeric(props) {
   return props.slice().sort(function(a, b) {
     var numA = parseInt((a.Address||'').split(' ')[0]) || 99999;
@@ -745,6 +762,10 @@ function api(method, path, body) {
   });
 }
 
+function processNotificationsBackground() {
+  api('GET','/notifications/pending').catch(function(){});
+}
+
 function loadAll() {
   Promise.allSettled([
     api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
@@ -763,6 +784,7 @@ function loadAll() {
     renderDashboard(); renderWOPage(); renderPropertiesPage();
     renderVendorsPage(); renderTenantsPage(); renderInvoicesPage();
     loadWishlist();
+    processNotificationsBackground();
     var loaded = results.filter(function(r){return r.status==='fulfilled';}).length;
     toast('Loaded '+loaded+'/7 data sets','success');
   });
@@ -967,6 +989,32 @@ function openWODetail(woId) {
   // Append audit section after the detail body builds
   document.getElementById('detail-body').innerHTML += auditHtml;
   // Load audit trail
+  // Fetch fresh lockbox/keys data every time WO detail opens
+  if (wo.Unit_ID || wo.Property_ID) {
+    var keysUrl = wo.Unit_ID
+      ? '/keys-by-unit?unit_id='+wo.Unit_ID+'&property_id='+wo.Property_ID
+      : '/keys-by-property?property_id='+wo.Property_ID;
+    api('GET', keysUrl).then(function(freshKeys) {
+      if (Array.isArray(freshKeys) && freshKeys.length) {
+        var lockboxes = freshKeys.filter(function(k){ return k.Key_Type==='Lockbox'; });
+        if (lockboxes.length) {
+          var lbHtml = lockboxes.map(function(lb){
+            return '<div style="margin-bottom:4px"><span style="color:var(--accent);font-weight:bold;letter-spacing:.1em">'+(lb.Lockbox_Code||lb.Key_Code||'—')+'</span>'
+              +(lb.Lockbox_Location?'<span style="color:var(--muted);font-size:11px"> · '+lb.Lockbox_Location+'</span>':'')+'</div>';
+          }).join('');
+          var lbEl = document.querySelector('#detail-body .pf-val.sensitive');
+          if (!lbEl) {
+            var lbDiv = document.createElement('div');
+            lbDiv.style.cssText = 'padding:10px 14px;background:var(--surface2);border-top:1px solid var(--border);font-size:12px';
+            lbDiv.innerHTML = '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">CURRENT LOCKBOXES (live)</span><div style="margin-top:6px">'+lbHtml+'</div>';
+            var db = document.getElementById('detail-body');
+            if (db) db.insertAdjacentElement('afterbegin', lbDiv);
+          }
+        }
+      }
+    }).catch(function(){});
+  }
+
   api('GET','/wo-audit?wo_id='+woId).then(function(entries){
     var el = document.getElementById('auditTrailBody');
     if (!el) return;
@@ -1062,8 +1110,22 @@ function openNewWOModal() {
   document.getElementById('wo-owner-ref').value = '';
   document.getElementById('wo-prop-preview').style.display = 'none';
   document.getElementById('wo-unit-group').style.display = 'none';
+  document.getElementById('wo-sched-date-opt').value = '';
   var sorted = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
   populatePropSelect('wo-property', sorted, '');
+  // Populate optional vendor dropdown
+  var vs = document.getElementById('wo-vendor-opt');
+  if (vs) vs.innerHTML = '<option value="">Assign after creation</option>' +
+    safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){
+      return '<option value="'+v.ID+'">'+v.Name+' — '+v.Trade+'</option>';
+    }).join('');
+  // Populate schedule time window
+  var sw = document.getElementById('wo-sched-window-opt');
+  if (sw && !sw.options.length) sw.innerHTML = buildTimeWindowOpts();
+  var sd = document.getElementById('wo-sched-date-opt');
+  if (sd) sd.addEventListener('change', function(){
+    document.getElementById('wo-sched-window-group').style.display = sd.value ? '' : 'none';
+  });
   openModal('modal-new-wo');
 }
 
@@ -1100,7 +1162,18 @@ function submitNewWO() {
     created_by:'admin'
   }).then(function(res){
     if (res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
-    toast('Created '+res.id,'success'); closeModal('modal-new-wo'); closeModal('modal-tenant-safety'); loadAll();
+    var woId = res.id;
+    var vendorId = (document.getElementById('wo-vendor-opt')||{}).value||'';
+    var schedDate = (document.getElementById('wo-sched-date-opt')||{}).value||'';
+    var schedWin  = (document.getElementById('wo-sched-window-opt')||{}).value||'';
+    var chain = Promise.resolve();
+    if (vendorId) chain = chain.then(function(){ return api('POST','/assign',{wo_id:woId,vendor_id:vendorId}); });
+    if (schedDate && schedWin) chain = chain.then(function(){
+      return api('POST','/schedule',{wo_id:woId,date:schedDate,window:schedWin,notify_tenant:tvCreated,updated_by:'Admin',updated_by_role:'admin'});
+    });
+    chain.then(function(){ loadAll(); });
+    toast('Created '+woId+(vendorId?' + assigned':'')+(schedDate?' + scheduled':''),'success');
+    closeModal('modal-new-wo'); closeModal('modal-tenant-safety');
   }).catch(function(e){logError('Create WO',e.message);toast('Error: '+e.message,'error');});
 }
 

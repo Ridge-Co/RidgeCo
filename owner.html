@@ -6,8 +6,8 @@
 <title>Ridge Co — Owner Portal</title>
 <style>
 :root{
-  --bg:#06091a;--surface:#0c1530;--surface2:#142040;--border:#1e2d55;
-  --text:#dde6f8;--muted:#6b80ad;--accent:#4575d4;--accent2:#4ade80;
+  --bg:#06091a;--surface:#0d1835;--surface2:#142040;--border:#1e2d55;
+  --text:#f8faff;--muted:#94a8c8;--accent:#4575d4;--accent2:#4ade80;
   --danger:#f87171;--warn:#f59e0b;--info:#7ab4f0;--purple:#c084fc;
   --radius:8px;--font:'Courier New',monospace;
 }
@@ -453,8 +453,12 @@ function doLogin() {
         return;
       }
       session = data;
-      document.getElementById('ownerName').textContent = data.owner_name;
-      document.getElementById('ownerCompany').textContent = data.owner_company || 'Owner Portal';
+      var displayName = data.user_name || data.owner_name;
+      var displayCo = data.is_sub_user && data.owner_company
+        ? data.owner_company
+        : (data.owner_company || 'Owner Portal');
+      document.getElementById('ownerName').textContent = displayName;
+      document.getElementById('ownerCompany').textContent = displayCo;
       show('screenLogin', false);
       show('screenDash', true);
       loadDashboard();
