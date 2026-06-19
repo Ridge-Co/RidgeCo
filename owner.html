@@ -566,7 +566,7 @@ function renderWOs() {
             '<div class="wo-desc-preview">' + esc(descShort) + '</div>' +
           '</div>' +
           '<div class="wo-head-right">' +
-            '<span class="badge ' + sc + '">' + esc(wo.Status) + '</span>' +
+            '<span class="badge ' + sc + '">' + esc(displayStatus) + '</span>' +
             '<span class="badge badge-pri-' + pri + '">' + pri + '</span>' +
             '<span class="expand-icon">▾</span>' +
           '</div>' +
@@ -612,7 +612,8 @@ function buildWODetail(wo, audit) {
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">DETAILS</div>';
   html += row('Trade', wo.Trade||'—');
-  html += row('Status', '<span class="badge badge-' + (wo.Status||'new').toLowerCase().replace(/\s+/g,'') + '">' + esc(wo.Status) + '</span>');
+  var ownerDisplayStatus = wo.Display_Status || wo.Status;
+  html += row('Status', '<span class="badge badge-' + ownerDisplayStatus.toLowerCase().replace(/\s+/g,'') + '">' + esc(ownerDisplayStatus) + '</span>');
   html += row('Created', wo.Created_Date ? wo.Created_Date.split('T')[0] : '—');
   html += row('Scheduled', wo.Scheduled_Date||'—');
   html += row('Vendor', wo.vendor_name || '—');

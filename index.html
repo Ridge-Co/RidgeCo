@@ -162,6 +162,7 @@
       <button class="nav-btn" onclick="showPage('vendors',this)">VENDORS</button>
       <button class="nav-btn" onclick="showPage('tenants',this)">TENANTS</button>
       <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
+      <button class="nav-btn" onclick="showPage('owners',this)">OWNERS</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
     </nav>
@@ -254,6 +255,11 @@
     <div style="display:flex;gap:8px;margin-bottom:16px">
       <button class="btn" onclick="openAddVendorModal()">+ Add Vendor</button>
     </div>
+    <div id="vendors-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
+      <button class="btn small" onclick="bulkSendPinFromTab()">📱 Send PIN to Selected</button>
+      <button class="btn small secondary" onclick="clearPinChecks()">Deselect All</button>
+    </div>
     <div id="vendors-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 
@@ -261,12 +267,27 @@
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <button class="btn secondary small" onclick="bulkSetPins()">Auto-Set PINs from Phone</button>
     </div>
+    <div id="tenants-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
+      <button class="btn small" onclick="bulkSendPinFromTab()">📱 Send PIN to Selected</button>
+      <button class="btn small secondary" onclick="clearPinChecks()">Deselect All</button>
+    </div>
     <div id="tenants-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 
   <div class="page" id="page-invoices">
     <div class="section-title">OUTSTANDING INVOICES</div>
     <div id="invoices-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <div class="page" id="page-owners">
+    <div class="section-title">OWNERS &amp; USERS</div>
+    <div id="owners-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
+      <button class="btn small" onclick="bulkSendPinFromTab()">📱 Send PIN to Selected</button>
+      <button class="btn small secondary" onclick="clearPinChecks()">Deselect All</button>
+    </div>
+    <div id="owners-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 
   <div class="page" id="page-portals">
@@ -782,7 +803,7 @@ function loadAll() {
       }
     });
     renderDashboard(); renderWOPage(); renderPropertiesPage();
-    renderVendorsPage(); renderTenantsPage(); renderInvoicesPage();
+    renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
     loadWishlist();
     processNotificationsBackground();
     var loaded = results.filter(function(r){return r.status==='fulfilled';}).length;
@@ -1203,13 +1224,25 @@ function renderVendorsPage() {
   var el = document.getElementById('vendors-list');
   var vendors = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
   if (!vendors.length) { el.innerHTML='<div class="loading">No vendors yet</div>'; return; }
-  el.innerHTML = '<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<table class="data-table"><thead><tr>' +
+    '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
+    '<th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
-      var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid'].includes(w.Status);}).length;
-      return '<tr><td>'+v.Name+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
-        '<td>'+(v.Trade||'—')+'</td><td><a href="tel:'+v.Phone+'" style="color:var(--accent);text-decoration:none">'+(v.Phone||'—')+'</a></td>' +
-        '<td>'+(v.Markets||'—')+'</td><td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
-        '<td><button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button></td></tr>';
+      var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
+      var canSend = !!(v.PIN && v.Phone);
+      var nm = v.Name || '';
+      return '<tr>' +
+        '<td><input type="checkbox" class="pin-check" data-id="'+v.ID+'" data-type="vendor" data-name="'+nm+'" data-phone="'+(v.Phone||'')+'" onchange="updatePinActionBar(\'vendors-action-bar\')"></td>' +
+        '<td>'+nm+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
+        '<td>'+(v.Trade||'—')+'</td>' +
+        '<td><a href="tel:'+v.Phone+'" style="color:var(--accent);text-decoration:none">'+(v.Phone||'—')+'</a></td>' +
+        '<td>'+(v.Markets||'—')+'</td>' +
+        '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
+        '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
+        '<td style="display:flex;gap:4px">' +
+        '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
+        '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+        '</td></tr>';
     }).join('') + '</tbody></table>';
 }
 
@@ -1218,17 +1251,26 @@ function renderTenantsPage() {
   var el = document.getElementById('tenants-list');
   var tenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
   if (!tenants.length) { el.innerHTML='<div class="loading">No tenants yet</div>'; return; }
-  el.innerHTML = '<table class="data-table"><thead><tr><th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>PIN</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<table class="data-table"><thead><tr>' +
+    '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'tenants-action-bar\')"></th>' +
+    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>PIN</th><th></th></tr></thead><tbody>' +
     tenants.map(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
       var prop = safeArray(state.properties).find(function(p){return p.ID===(t.Property_ID||unit&&unit.Property_ID);});
       var pinColor = t.PIN ? 'color:var(--accent2)' : 'color:var(--danger)';
-      return '<tr><td>'+t.First_Name+' '+(t.Last_Name||'')+'</td><td>'+(t.Phone||'—')+'</td>' +
+      var canSend = !!(t.PIN && t.Phone);
+      var nm = (t.First_Name+' '+(t.Last_Name||'')).trim();
+      return '<tr>' +
+        '<td><input type="checkbox" class="pin-check" data-id="'+t.ID+'" data-type="tenant" data-name="'+nm+'" data-phone="'+(t.Phone||'')+'" onchange="updatePinActionBar(\'tenants-action-bar\')"></td>' +
+        '<td>'+nm+'</td><td>'+(t.Phone||'—')+'</td>' +
         '<td>'+(unit?unit.Unit_Label:'—')+'</td>' +
         '<td style="font-size:11px;color:var(--muted)">'+(prop?prop.Address:'—')+'</td>' +
         '<td style="'+pinColor+';font-weight:bold;letter-spacing:0.1em">'+(t.PIN||'—')+'</td>' +
-        '<td style="display:flex;gap:4px"><button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
-        '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+t.Phone+'\')">Set PIN</button></td></tr>';
+        '<td style="display:flex;gap:4px">' +
+        '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+        '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+t.Phone+'\')" >Set PIN</button>' +
+        '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'tenant\',\''+t.ID+'\',\''+t.First_Name+'\',\''+t.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+        '</td></tr>';
     }).join('') + '</tbody></table>';
 }
 
@@ -1632,6 +1674,190 @@ document.addEventListener('DOMContentLoaded',function(){
   if(wi)wi.addEventListener('keydown',function(e){if(e.key==='Enter')addWishlistItem();});
   renderErrorLog();
 });
+
+// ── PIN Send System ──────────────────────────────────────────
+var _pinSendQueue = [];
+var _currentPinSend = null;
+
+function updatePinActionBar(barId) {
+  var checked = document.querySelectorAll('.pin-check:checked');
+  var bar = document.getElementById(barId);
+  if (!bar) return;
+  bar.style.display = checked.length > 0 ? 'flex' : 'none';
+  var lbl = bar.querySelector('.pin-count-label');
+  if (lbl) lbl.textContent = checked.length + ' selected';
+}
+
+function selectAllPinChecks(headerCb, barId) {
+  var allCbs = document.querySelectorAll('.pin-check');
+  allCbs.forEach(function(cb){ cb.checked = headerCb.checked; });
+  updatePinActionBar(barId);
+}
+
+function clearPinChecks() {
+  document.querySelectorAll('.pin-check').forEach(function(cb){ cb.checked = false; });
+  ['tenants-action-bar','vendors-action-bar','owners-action-bar'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+}
+
+function previewSendPin(type, id, name, phone) {
+  _currentPinSend = { type: type, id: id };
+  document.getElementById('send-pin-to').textContent = 'To: ' + name + ' · ' + phone;
+  document.getElementById('send-pin-preview').textContent = 'Loading preview…';
+  document.getElementById('send-pin-msg').innerHTML = '';
+  document.getElementById('send-pin-confirm-btn').disabled = false;
+  openModal('modal-send-pin');
+  api('POST', '/send-pin', { type: type, id: id, preview_only: true }).then(function(res) {
+    if (res.preview) {
+      document.getElementById('send-pin-preview').textContent = res.preview;
+    } else {
+      document.getElementById('send-pin-preview').textContent = '⚠ ' + (res.error || 'Cannot preview');
+      document.getElementById('send-pin-confirm-btn').disabled = true;
+    }
+  });
+}
+
+function confirmSendPin() {
+  if (!_currentPinSend) return;
+  var btn = document.getElementById('send-pin-confirm-btn');
+  btn.disabled = true; btn.textContent = 'SENDING…';
+  document.getElementById('send-pin-msg').innerHTML = '';
+  api('POST', '/send-pin', { type: _currentPinSend.type, id: _currentPinSend.id }).then(function(res) {
+    btn.textContent = 'SEND SMS';
+    if (res.success) {
+      document.getElementById('send-pin-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>';
+      setTimeout(function(){ closeModal('modal-send-pin'); }, 1800);
+    } else {
+      btn.disabled = false;
+      document.getElementById('send-pin-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + (res.error||'Error') + '</div>';
+    }
+  });
+}
+
+function bulkSendPinFromTab() {
+  var checked = Array.from(document.querySelectorAll('.pin-check:checked'));
+  if (!checked.length) return;
+  _pinSendQueue = checked.map(function(cb) {
+    return { type: cb.dataset.type, id: cb.dataset.id, name: cb.dataset.name, phone: cb.dataset.phone };
+  });
+  var listEl = document.getElementById('bulk-pin-list');
+  listEl.innerHTML = _pinSendQueue.map(function(item) {
+    return '<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface2);border-radius:4px;align-items:center">' +
+      '<span>' + esc(item.name) + '</span>' +
+      '<span style="color:var(--muted)">' + esc(item.phone || '—') + '</span>' +
+      '<span style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:10px;color:var(--muted)">' + (item.type||'').toUpperCase() + '</span>' +
+      '</div>';
+  }).join('');
+  document.getElementById('bulk-pin-progress').style.display = 'none';
+  document.getElementById('bulk-pin-msg').innerHTML = '';
+  document.getElementById('bulk-pin-send-btn').disabled = false;
+  document.getElementById('bulk-pin-send-btn').textContent = 'SEND TO ALL (' + _pinSendQueue.length + ')';
+  openModal('modal-send-pin-bulk');
+}
+
+async function executeBulkSendPin() {
+  var total = _pinSendQueue.length;
+  if (!total) return;
+  var sendBtn = document.getElementById('bulk-pin-send-btn');
+  var cancelBtn = document.getElementById('bulk-pin-cancel-btn');
+  sendBtn.disabled = true;
+  cancelBtn.textContent = 'Close';
+  document.getElementById('bulk-pin-progress').style.display = '';
+  var sent = 0, errors = [];
+  for (var i = 0; i < total; i++) {
+    var item = _pinSendQueue[i];
+    document.getElementById('bulk-pin-status').textContent = 'Sending to ' + item.name + '… (' + (i+1) + '/' + total + ')';
+    document.getElementById('bulk-pin-bar').style.width = Math.round(((i+1)/total)*100) + '%';
+    try {
+      var res = await apiPromise('POST', '/send-pin', { type: item.type, id: item.id });
+      if (res.success) { sent++; }
+      else { errors.push(item.name + ': ' + (res.error||'error')); }
+    } catch(e) { errors.push(item.name + ': connection error'); }
+    await new Promise(function(r){ setTimeout(r, 300); }); // rate limit buffer
+  }
+  document.getElementById('bulk-pin-status').textContent = '✓ Done: ' + sent + ' sent' + (errors.length ? ', ' + errors.length + ' failed' : '');
+  document.getElementById('bulk-pin-msg').innerHTML = errors.length
+    ? '<div style="color:var(--danger);font-size:11px;margin-top:8px">' + errors.map(function(e){return esc(e);}).join('<br>') + '</div>'
+    : '<div style="color:var(--accent2);font-size:12px;margin-top:8px">All messages sent successfully.</div>';
+  clearPinChecks();
+}
+
+function apiPromise(method, path, body) {
+  return api(method, path, body);
+}
+
+// ── Owners Page Render ────────────────────────────────────────
+function renderOwnersPage() {
+  var el = document.getElementById('owners-list');
+  if (!el) return;
+  var owners = safeArray(state.owners);
+  if (!owners.length) { el.innerHTML='<div class="loading">No owners on file</div>'; return; }
+
+  // Load Owner_Users too
+  api('GET', '/owner-users?owner_id=all').catch(function(){ return []; }).then(function() {});
+
+  var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11px">PIN messages go to the Owner_Users sub-users when available. Set up Owner_Users tab in Sheet to enable per-person PINs.</div>';
+  html += '<table class="data-table"><thead><tr>' +
+    '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'owners-action-bar\')"></th>' +
+    '<th>Name / Company</th><th>Phone</th><th>Properties</th><th>PIN</th><th></th></tr></thead><tbody>';
+
+  html += owners.map(function(o) {
+    var propCount = safeArray(state.properties).filter(function(p){return p.Owner_ID===o.ID;}).length;
+    var canSend = !!(o.PIN && o.Phone);
+    var nm = (o.First_Name+' '+(o.Last_Name||'')).trim();
+    var display = nm + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '');
+    return '<tr>' +
+      '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
+      '<td>'+display+'</td>' +
+      '<td>'+(o.Phone||'—')+'</td>' +
+      '<td>'+propCount+' propert'+(propCount===1?'y':'ies')+'</td>' +
+      '<td style="color:'+(o.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(o.PIN||'—')+'</td>' +
+      '<td style="display:flex;gap:4px">' +
+      '<button class="btn small secondary" onclick="toast(\'Edit owners via Sheet for now\',\'info\')">Edit</button>' +
+      '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+      '</td></tr>';
+  }).join('');
+
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
 </script>
+
+<!-- SEND PIN PREVIEW MODAL -->
+<div class="modal-overlay" id="modal-send-pin">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-title">📱 SEND PIN — PREVIEW</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Review the message before sending. This will be sent as an SMS to the number shown.</p>
+    <div id="send-pin-to" style="color:var(--info);font-size:12px;margin-bottom:10px"></div>
+    <div id="send-pin-preview" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;white-space:pre-wrap;line-height:1.6;color:var(--text);margin-bottom:10px"></div>
+    <div id="send-pin-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-send-pin')">Cancel</button>
+      <button class="btn" id="send-pin-confirm-btn" onclick="confirmSendPin()">SEND SMS</button>
+    </div>
+  </div>
+</div>
+
+<!-- BULK SEND PIN MODAL -->
+<div class="modal-overlay" id="modal-send-pin-bulk">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title">📱 SEND PIN — BULK</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">Each person listed will receive an SMS with their portal link and PIN. Only those with both a phone number and PIN set are included.</p>
+    <div id="bulk-pin-list" style="max-height:220px;overflow-y:auto;margin-bottom:12px;font-size:12px;display:flex;flex-direction:column;gap:6px"></div>
+    <div id="bulk-pin-progress" style="display:none">
+      <div style="background:var(--surface2);border-radius:4px;height:6px;margin-bottom:8px">
+        <div id="bulk-pin-bar" style="background:var(--accent2);height:100%;border-radius:4px;width:0;transition:width .3s"></div>
+      </div>
+      <div id="bulk-pin-status" style="color:var(--muted);font-size:12px"></div>
+    </div>
+    <div id="bulk-pin-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" id="bulk-pin-cancel-btn" onclick="closeModal('modal-send-pin-bulk')">Cancel</button>
+      <button class="btn" id="bulk-pin-send-btn" onclick="executeBulkSendPin()">SEND TO ALL</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
