@@ -349,7 +349,10 @@ function renderWOs(wos) {
     if (wo.lockboxes && wo.lockboxes.length) {
       lbHtml = '<div class="lb-list">';
       wo.lockboxes.forEach(function(lb) {
-        lbHtml += '<div class="lb-item"><div class="lb-code">' + esc(lb.code) + '</div>';
+        var scopeColor = lb.scope === 'building' ? 'var(--muted)' : 'var(--info)';
+        lbHtml += '<div class="lb-item">';
+        lbHtml += '<div style="color:' + scopeColor + ';font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px">' + esc(lb.label||'Lockbox') + '</div>';
+        lbHtml += '<div class="lb-code">' + esc(lb.code||'—') + '</div>';
         if (lb.location) lbHtml += '<div class="lb-loc">📍 ' + esc(lb.location) + '</div>';
         if (lb.notes) lbHtml += '<div class="lb-loc">' + esc(lb.notes) + '</div>';
         lbHtml += '</div>';
@@ -399,7 +402,7 @@ function renderWOs(wos) {
         (wo.access_notes ? '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:10px 12px;margin-bottom:10px">' +
         '<div style="color:var(--accent2);font-size:10px;letter-spacing:.08em;font-weight:bold;margin-bottom:4px">⚠ ACCESS INSTRUCTIONS</div>' +
         '<div style="color:var(--text);font-size:12px;white-space:pre-wrap">' + esc(wo.access_notes) + '</div></div>' : '') +
-        '<div style="margin-bottom:8px;"><div class="detail-label" style="margin-bottom:6px;">LOCKBOX</div>' + lbHtml + '</div>' +
+        '<div style="margin-bottom:8px;"><div class="detail-label" style="margin-bottom:6px;">ACCESS KEYS</div>' + lbHtml + '</div>' +
         '<div class="action-section">' +
           '<div class="action-title">UPDATE STATUS</div>' +
           '<div class="status-btns">' + statusBtns + '</div>' +

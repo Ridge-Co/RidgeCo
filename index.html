@@ -1056,8 +1056,13 @@ function openWODetail(woId) {
         var lockboxes = freshKeys.filter(function(k){ return k.Key_Type==='Lockbox'; });
         if (lockboxes.length) {
           var lbHtml = lockboxes.map(function(lb){
-            return '<div style="margin-bottom:4px"><span style="color:var(--accent);font-weight:bold;letter-spacing:.1em">'+(lb.Lockbox_Code||lb.Key_Code||'—')+'</span>'
-              +(lb.Lockbox_Location?'<span style="color:var(--muted);font-size:11px"> · '+lb.Lockbox_Location+'</span>':'')+'</div>';
+            var sc = (lb.scope||'building')==='building' ? 'var(--muted)' : 'var(--info)';
+            var lbl = lb.label || (lb.scope==='unit'?'Unit Lockbox':'Building Lockbox');
+            return '<div style="margin-bottom:6px">' +
+              '<div style="color:'+sc+';font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px">'+lbl+'</div>' +
+              '<span style="color:var(--accent);font-weight:bold;letter-spacing:.08em;font-size:14px">'+(lb.code||lb.Lockbox_Code||lb.Key_Code||'—')+'</span>' +
+              ((lb.location||lb.Lockbox_Location)?'<span style="color:var(--muted);font-size:11px"> · '+(lb.location||lb.Lockbox_Location)+'</span>':'') +
+              '</div>';
           }).join('');
           var lbEl = document.querySelector('#detail-body .pf-val.sensitive');
           if (!lbEl) {
@@ -1408,6 +1413,13 @@ function openEditWOModal(woId) {
   document.getElementById('ewo-status').value = wo.Status||'New';
   document.getElementById('ewo-scheduled').value = wo.Scheduled_Date||'';
   document.getElementById('ewo-description').value = wo.Description||'';
+  // Force textarea to show full content regardless of CSS cache
+  setTimeout(function(){
+    var ta = document.getElementById('ewo-description');
+    if (ta) { ta.style.height='auto'; ta.style.height=Math.max(140,ta.scrollHeight)+'px'; }
+    var tn = document.getElementById('ewo-notes');
+    if (tn && tn.value) { tn.style.height='auto'; tn.style.height=Math.max(80,tn.scrollHeight)+'px'; }
+  }, 30);
   document.getElementById('ewo-notes').value = wo.Notes||'';
   document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
   document.getElementById('ewo-contact-name').value = wo.WO_Contact_Name||'';
