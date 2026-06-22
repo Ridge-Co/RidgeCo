@@ -244,11 +244,17 @@
   </div>
 
   <div class="page" id="page-properties">
-    <div style="display:flex;gap:8px;margin-bottom:16px">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <button class="btn" onclick="openAddPropertyModal()">+ Add Property</button>
+      <button class="btn secondary small" onclick="showKeysView()" id="btn-keys-view">🔑 Keys / Lockboxes</button>
+      <button class="btn secondary small" style="display:none" onclick="hideKeysView()" id="btn-keys-back">← Properties</button>
     </div>
     <div class="search-bar"><input type="text" id="prop-search" placeholder="Search properties..." oninput="renderPropertiesPage()"></div>
     <div id="properties-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+    <div id="keys-view" style="display:none">
+      <div style="color:var(--muted);font-size:12px;margin-bottom:12px">Showing all properties and their Keys/Lockboxes from the Keys tab. To update a lockbox code, go to Google Sheets → Keys tab and edit the row for that property.</div>
+      <div id="keys-view-content"><div class="loading">Loading keys…</div></div>
+    </div>
   </div>
 
   <div class="page" id="page-vendors">
@@ -265,6 +271,7 @@
 
   <div class="page" id="page-tenants">
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <button class="btn" onclick="openMoveInModal()">+ Move In Tenant</button>
       <button class="btn secondary small" onclick="bulkSetPins()">Auto-Set PINs from Phone</button>
     </div>
     <div id="tenants-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
@@ -352,7 +359,7 @@
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
     </div>
     <div id="wo-prop-preview" style="display:none;margin-top:12px"></div>
-    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-new-wo')">Cancel</button><button class="btn" onclick="openTenantSafetyScreen()">Create Work Order →</button></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="openTemplateModal()" style="margin-right:auto">📋 From Template</button><button class="btn secondary" onclick="closeModal('modal-new-wo')">Cancel</button><button class="btn" onclick="openTenantSafetyScreen()">Create Work Order →</button></div>
   </div>
 </div>
 
@@ -405,7 +412,7 @@
       <div class="form-group"><label>Water Shutoff</label><input type="text" id="p-shutoff" placeholder="Basement left wall"></div>
       <div class="form-group"><label>HVAC Filter Size</label><input type="text" id="p-hvac" placeholder="16x20x1"></div>
       <div class="form-group"><label>Breaker Location</label><input type="text" id="p-breaker" placeholder="Utility closet"></div>
-      <div class="form-group full"><label>Access Notes</label><textarea id="p-access" placeholder="Gate code, parking, special instructions..."></textarea></div>
+      <div class="form-group full"><label>Access Notes <span style="font-weight:normal;color:var(--muted)">— shown to vendors on every WO for this property</span></label><textarea id="p-access" placeholder="e.g. Contact tenant for access · No lockbox — call owner for key · Gate code 1234# · Spare key under mat" style="min-height:80px;resize:vertical"></textarea></div>
       <div class="form-group full"><label>Owner</label><select id="p-owner"><option value="">No owner assigned</option></select></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-add-property')">Cancel</button><button class="btn" onclick="submitAddProperty()">Add Property</button></div>
@@ -444,7 +451,7 @@
       <div class="form-group"><label>Water Shutoff</label><input type="text" id="ep-shutoff"></div>
       <div class="form-group"><label>HVAC Filter Size</label><input type="text" id="ep-hvac"></div>
       <div class="form-group"><label>Breaker Location</label><input type="text" id="ep-breaker"></div>
-      <div class="form-group full"><label>Access Notes</label><textarea id="ep-access"></textarea></div>
+      <div class="form-group full"><label>Access Notes <span style="font-weight:normal;color:var(--muted)">— shown to vendors on every WO for this property</span></label><textarea id="ep-access" placeholder="e.g. Contact tenant for access · No lockbox — call owner for key · Gate code 1234# · Spare key under mat" style="min-height:80px;resize:vertical"></textarea></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-property')">Cancel</button><button class="btn" onclick="submitEditProperty()">Save Changes</button></div>
   </div>
@@ -477,9 +484,13 @@
         </select>
       </div>
       <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
-      <div class="form-group full"><label>Description</label><input type="text" id="ewo-description"></div>
+      <div class="form-group full"><label>Description</label><textarea id="ewo-description" style="min-height:120px;resize:vertical"></textarea></div>
       <div class="form-group full"><label>Notes</label><textarea id="ewo-notes"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(owner's internal tracking number)</span></label><input type="text" id="ewo-owner-ref" placeholder="e.g. PM-4821"></div>
+      <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">CONTACT OVERRIDE <span style="font-weight:normal;text-transform:none;letter-spacing:0">— overrides tenant record on this WO only. Edit the tenant record itself in the Tenants tab.</span></div></div>
+      <div class="form-group"><label>Tenant on this WO</label><select id="ewo-tenant-id" style="width:100%"><option value="">— linked tenant (default) —</option></select></div>
+      <div class="form-group"><label>Contact Name <span style="font-weight:normal;color:var(--muted)">(WO override)</span></label><input type="text" id="ewo-contact-name" placeholder="Leave blank to use tenant record"></div>
+      <div class="form-group"><label>Contact Phone <span style="font-weight:normal;color:var(--muted)">(WO override)</span></label><input type="tel" id="ewo-contact-phone" placeholder="Leave blank to use tenant record"></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-wo')">Cancel</button><button class="btn" onclick="submitEditWO()">Save Changes</button></div>
   </div>
@@ -840,11 +851,20 @@ function woCard(w) {
   var unit = safeArray(state.units).find(function(u){return u.ID===w.Unit_ID;});
   var addr = prop ? prop.Address : (w.Property_ID||'—');
   var sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s+/g,'');
+  // Aging calculation
+  var OPEN_WO = ['New','Assigned','Accepted','In Progress','On Hold'];
+  var daysOpen = w.Created_Date ? Math.floor((Date.now()-new Date(w.Created_Date))/(86400000)) : 0;
+  var agingBadge = '';
+  if (OPEN_WO.includes(w.Status)) {
+    if (daysOpen >= 14) agingBadge = '<span class="badge" style="background:#3b0000;border:1px solid var(--danger);color:var(--danger);margin-left:4px">'+daysOpen+'d OVERDUE</span>';
+    else if (daysOpen >= 7) agingBadge = '<span class="badge" style="background:#2d2000;border:1px solid var(--warn);color:var(--warn);margin-left:4px">'+daysOpen+'d AGING</span>';
+  }
   return '<div class="wo-card priority-'+(w.Priority||'normal')+'" onclick="openWODetail(\''+w.ID+'\')">' +
     '<div class="wo-id">'+w.ID+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+'</div></div>' +
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
+    agingBadge +
     (vendor?'<span style="font-size:11px;color:var(--muted)">'+vendor.Name+'</span>':'')+'</div></div>';
 }
 
@@ -986,7 +1006,9 @@ function openWODetail(woId) {
       (prop.Lock_Code?'<div><div class="pf-label">Door Code</div><div class="pf-val sensitive">'+prop.Lock_Code+'</div></div>':'') +
       (prop.Water_Shutoff?'<div><div class="pf-label">Water Shutoff</div><div class="pf-val">'+prop.Water_Shutoff+'</div></div>':'') +
       (prop.HVAC_Filter_Size?'<div><div class="pf-label">HVAC Filter</div><div class="pf-val">'+prop.HVAC_Filter_Size+'</div></div>':'') +
-      (prop.Access_Notes?'<div><div class="pf-label">Access Notes</div><div class="pf-val">'+prop.Access_Notes+'</div></div>':'') +
+      (prop.Access_Notes?'<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;margin-top:6px">' +
+      '<div style="color:var(--accent2);font-size:10px;letter-spacing:.08em;font-weight:bold;margin-bottom:3px">ACCESS NOTES</div>' +
+      '<div style="color:var(--text);font-size:12px">'+prop.Access_Notes+'</div></div>':'') +
       '</div></div>';
   }
   var auditHtml = '<div style="margin-top:14px">' +
@@ -994,15 +1016,29 @@ function openWODetail(woId) {
     '<div id="auditTrailBody" style="font-size:11px"><div style="color:var(--muted)">Loading…</div></div>' +
   '</div>';
   document.getElementById('detail-body').innerHTML = propHtml +
+    '<div style="margin-bottom:14px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">DESCRIPTION</div>' +
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto">' +
+    linkify(wo.Description||'No description') +
+    '</div></div>' +
+    (wo.Notes ? '<div style="margin-bottom:14px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">NOTES</div>' +
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;color:var(--muted)">' +
+    linkify(wo.Notes) + '</div></div>' : '') +
     '<table class="data-table" style="margin-bottom:16px">' +
     '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span></td></tr>' +
     '<tr><td style="color:var(--muted)">Trade</td><td>'+(wo.Trade||'—')+'</td></tr>' +
     '<tr><td style="color:var(--muted)">Priority</td><td>'+(wo.Priority||'normal')+'</td></tr>' +
-    '<tr><td style="color:var(--muted)">Description</td><td style="word-break:break-word;max-width:380px">'+linkify(wo.Description||'—')+'</td></tr>' +
     '<tr><td style="color:var(--muted)">Vendor</td><td>'+(vendor?vendor.Name+' · '+vendor.Phone:'<span style="color:var(--warn)">Unassigned</span>')+'</td></tr>' +
-    '<tr><td style="color:var(--muted)">Tenant</td><td>'+(tenant?tenant.First_Name+' '+tenant.Last_Name+' · '+tenant.Phone:'—')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Tenant</td><td>' +
+    (wo.WO_Contact_Name
+      ? '<span style="color:var(--info)">' + esc(wo.WO_Contact_Name) + '</span>' +
+        (wo.WO_Contact_Phone ? ' · <a href="tel:'+wo.WO_Contact_Phone+'" style="color:var(--accent)">' + esc(wo.WO_Contact_Phone) + '</a>' : '') +
+        ' <span style="color:var(--muted);font-size:10px">(WO override)</span>'
+      : (tenant ? tenant.First_Name+' '+(tenant.Last_Name||'')+' · '+tenant.Phone : '—')) +
+    '</td></tr>' +
     '<tr><td style="color:var(--muted)">Scheduled</td><td>'+(wo.Scheduled_Date||'—')+'</td></tr>' +
-    '<tr><td style="color:var(--muted)">Notes</td><td style="word-break:break-word;max-width:380px">'+linkify(wo.Notes||'—')+'</td></tr>' +
+    
     '<tr><td style="color:var(--muted)">Created</td><td>'+(wo.Created_Date?wo.Created_Date.split('T')[0]:'—')+'</td></tr>' +
     '<tr><td style="color:var(--muted)">Owner Ref #</td><td style="color:var(--info);font-weight:bold;letter-spacing:0.05em">'+(wo.Owner_WO_Ref||'<span style="color:var(--muted)">—</span>')+'</td></tr>' +
     '<tr><td style="color:var(--muted);font-size:10px">Property ID (raw)</td><td style="color:var(--muted);font-size:11px">'+(wo.Property_ID||'—')+'</td></tr>' +
@@ -1208,12 +1244,12 @@ function renderPropertiesPage() {
   }));
   var el = document.getElementById('properties-list');
   if (!props.length) { el.innerHTML='<div class="loading">No properties found</div>'; return; }
-  el.innerHTML = '<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Lockbox</th><th>HVAC Filter</th><th>Open WOs</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Lockbox</th><th>Access Notes</th><th>Open WOs</th><th></th></tr></thead><tbody>' +
     props.map(function(p){
       var open = state.workorders.filter(function(w){return w.Property_ID===p.ID&&!['Complete','Paid'].includes(w.Status);}).length;
       return '<tr><td>'+p.Address+'</td><td>'+(p.City||'—')+'</td><td>'+(p.Type||'—')+'</td>' +
         '<td style="color:var(--accent);font-weight:bold">'+(p.Lockbox_Code||'—')+'</td>' +
-        '<td>'+(p.HVAC_Filter_Size||'—')+'</td>' +
+        '<td style="font-size:11px;color:var(--muted);max-width:200px">'+(p.Access_Notes?'<span style="color:var(--accent2)">'+p.Access_Notes.substring(0,50)+(p.Access_Notes.length>50?'…':'')+'</span>':'—')+'</td>' +
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
         '<td><button class="btn small secondary" onclick="openEditPropertyModal(\''+p.ID+'\')">Edit</button></td></tr>';
     }).join('') + '</tbody></table>';
@@ -1374,6 +1410,22 @@ function openEditWOModal(woId) {
   document.getElementById('ewo-description').value = wo.Description||'';
   document.getElementById('ewo-notes').value = wo.Notes||'';
   document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
+  document.getElementById('ewo-contact-name').value = wo.WO_Contact_Name||'';
+  document.getElementById('ewo-contact-phone').value = wo.WO_Contact_Phone||'';
+  // Populate tenant dropdown with tenants from same property
+  var tenantSel = document.getElementById('ewo-tenant-id');
+  if (tenantSel) {
+    var propTenants = safeArray(state.tenants).filter(function(t){
+      var tu = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
+      return t.Property_ID===wo.Property_ID || (tu&&tu.Property_ID===wo.Property_ID);
+    });
+    tenantSel.innerHTML = '<option value="">— linked tenant (default) —</option>' +
+      safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';}).map(function(t){
+        var u = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
+        return '<option value="'+t.ID+'"'+(t.ID===wo.Tenant_ID?' selected':'')+'>'+
+          t.First_Name+' '+(t.Last_Name||'')+(u?' · Unit '+u.Unit_Label:'')+'</option>';
+      }).join('');
+  }
   closeModal('modal-wo-detail');
   openModal('modal-edit-wo');
 }
@@ -1411,7 +1463,11 @@ function submitEditWO() {
     Description: document.getElementById('ewo-description').value,
     Notes: document.getElementById('ewo-notes').value,
     Owner_WO_Ref: document.getElementById('ewo-owner-ref').value.trim(),
+    WO_Contact_Name: document.getElementById('ewo-contact-name').value.trim(),
+    WO_Contact_Phone: document.getElementById('ewo-contact-phone').value.trim(),
   };
+  var newTenant = document.getElementById('ewo-tenant-id').value;
+  if (newTenant) fields.Tenant_ID = newTenant;
   api('POST','/wo/admin-update',{wo_id:woId, fields:fields, admin_name:'Admin'}).then(function(res){
     if(res.error){logError('Edit WO',res.error);toast('Error: '+res.error,'error');return;}
     toast('Work order updated','success');closeModal('modal-edit-wo');loadAll();
@@ -1823,6 +1879,244 @@ function renderOwnersPage() {
   html += '</tbody></table>';
   el.innerHTML = html;
 }
+
+// ── Move In Tenant ────────────────────────────────────────────
+
+function openMoveInModal() {
+  document.getElementById('mi-first').value = '';
+  document.getElementById('mi-last').value = '';
+  document.getElementById('mi-phone').value = '';
+  document.getElementById('mi-email').value = '';
+  document.getElementById('mi-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('mi-msg').innerHTML = '';
+  document.getElementById('mi-current-tenant-banner').style.display = 'none';
+
+  var propSel = document.getElementById('mi-property');
+  var sorted = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
+  propSel.innerHTML = '<option value="">Select property…</option>' +
+    sorted.map(function(p){ return '<option value="'+p.ID+'">'+p.Address+(p.City?', '+p.City:'')+'</option>'; }).join('');
+  document.getElementById('mi-unit').innerHTML = '<option value="">Whole property / single family</option>';
+  document.getElementById('mi-unit-group').style.display = 'none';
+
+  openModal('modal-move-in');
+}
+
+function onMoveInPropertyChange() {
+  var propId = document.getElementById('mi-property').value;
+  var unitSel = document.getElementById('mi-unit');
+  var unitGroup = document.getElementById('mi-unit-group');
+  var units = propId ? safeArray(state.units).filter(function(u){return u.Property_ID===propId;}) : [];
+  unitSel.innerHTML = '<option value="">Whole property / single family</option>' +
+    units.map(function(u){ return '<option value="'+u.ID+'">Unit '+u.Unit_Label+'</option>'; }).join('');
+  unitGroup.style.display = units.length ? '' : 'none';
+  document.getElementById('mi-current-tenant-banner').style.display = 'none';
+  onMoveInUnitChange();
+}
+
+function onMoveInUnitChange() {
+  var propId = document.getElementById('mi-property').value;
+  var unitId = document.getElementById('mi-unit').value;
+  var banner = document.getElementById('mi-current-tenant-banner');
+  var nameEl = document.getElementById('mi-current-tenant-name');
+
+  // Find current active tenant for this property/unit
+  var current = safeArray(state.tenants).find(function(t) {
+    return t.Active !== 'FALSE' &&
+      (unitId ? t.Unit_ID === unitId : (!t.Unit_ID && t.Property_ID === propId));
+  });
+  if (current) {
+    nameEl.textContent = current.First_Name + ' ' + (current.Last_Name||'');
+    banner.style.display = '';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+async function submitMoveIn() {
+  var propId = document.getElementById('mi-property').value;
+  var unitId = document.getElementById('mi-unit').value;
+  var first  = document.getElementById('mi-first').value.trim();
+  var last   = document.getElementById('mi-last').value.trim();
+  var phone  = document.getElementById('mi-phone').value.trim();
+  var email  = document.getElementById('mi-email').value.trim();
+  var msgEl  = document.getElementById('mi-msg');
+
+  if (!propId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
+  if (!first)  { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">First name is required.</div>'; return; }
+
+  var btn = document.getElementById('mi-submit-btn');
+  btn.disabled = true; btn.textContent = 'Moving in…';
+  msgEl.innerHTML = '';
+
+  try {
+    // 1. Move out current tenant if any
+    var current = safeArray(state.tenants).find(function(t) {
+      return t.Active !== 'FALSE' &&
+        (unitId ? t.Unit_ID === unitId : (!t.Unit_ID && t.Property_ID === propId));
+    });
+    if (current) {
+      await api('POST', '/tenant/update', { id: current.ID, fields: { Active: 'FALSE' } });
+    }
+
+    // 2. Create new tenant
+    var newTenantBody = {
+      First_Name: first, Last_Name: last, Phone: phone, Email: email,
+      Property_ID: propId, Unit_ID: unitId||'', Active: 'TRUE',
+    };
+    var res = await api('POST', '/tenant/add', newTenantBody);
+    if (res.error) throw new Error(res.error);
+
+    // 3. If there's a unit, update its Tenant_ID
+    if (unitId) {
+      await api('POST', '/unit/update', { id: unitId, fields: { Tenant_ID: res.id } });
+    }
+
+    toast('Tenant moved in: ' + first + (last?' '+last:''), 'success');
+    closeModal('modal-move-in');
+    loadAll();
+  } catch(e) {
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Error: ' + esc(e.message) + '</div>';
+    btn.disabled = false; btn.textContent = 'MOVE IN';
+  }
+}
+
+// ── WO Templates ──────────────────────────────────────────────
+
+var WO_TEMPLATES = [
+  { name: 'HVAC Filter Change', trade: 'HVAC', priority: 'low',
+    description: 'Replace HVAC filter. Check filter size before ordering.' },
+  { name: 'HVAC Tune-Up (Pre-Season)', trade: 'HVAC', priority: 'normal',
+    description: 'Seasonal HVAC tune-up and inspection. Check refrigerant, clean coils, test operation.' },
+  { name: 'Pest Control — Routine', trade: 'Pest Control', priority: 'normal',
+    description: 'Routine pest control treatment. Check for signs of entry, treat interior and exterior perimeter.' },
+  { name: 'Exterminator — Bed Bugs', trade: 'Pest Control', priority: 'urgent',
+    description: 'Bed bug treatment. Tenant should wash all bedding and bag clothing before treatment. Schedule follow-up in 2 weeks.' },
+  { name: 'Annual Property Inspection', trade: 'General', priority: 'normal',
+    description: 'Annual inspection. Check HVAC filters, smoke/CO detectors, water heater, plumbing for leaks, condition of appliances, exterior.' },
+  { name: 'Smoke / CO Detector Check', trade: 'General', priority: 'normal',
+    description: 'Test all smoke and CO detectors. Replace batteries as needed. Replace any units older than 10 years.' },
+  { name: 'Dryer Vent Cleaning', trade: 'General', priority: 'low',
+    description: 'Clean dryer vent from dryer to exterior. Check for kinks, blockages, and proper exterior cap.' },
+  { name: 'Gutter Cleaning', trade: 'Landscaping', priority: 'low',
+    description: 'Clean gutters and downspouts. Check for damage, proper slope, and secure attachment. Flush with water.' },
+  { name: 'Caulk / Weather Stripping', trade: 'General', priority: 'low',
+    description: 'Inspect and replace door/window caulk and weather stripping as needed. Check for drafts and water intrusion.' },
+  { name: 'Plumbing Leak Check', trade: 'Plumbing', priority: 'normal',
+    description: 'Inspect under all sinks, around toilets, water heater, and washing machine connections for leaks or corrosion.' },
+  { name: 'Property Walk-Through', trade: 'General', priority: 'normal',
+    description: 'Property walk-through with tenant. Document condition of all rooms, appliances, fixtures. Note any deferred maintenance.' },
+  { name: 'Appliance Repair / Service', trade: 'Appliance', priority: 'normal',
+    description: 'Appliance service call. [Specify appliance and issue below.]' },
+];
+
+function openTemplateModal() {
+  var listEl = document.getElementById('template-list');
+  if (listEl) {
+    listEl.innerHTML = WO_TEMPLATES.map(function(t, i) {
+      return '<div class="template-item" onclick="applyTemplate(' + i + ')" style="' +
+        'padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);' +
+        'display:flex;justify-content:space-between;align-items:center">' +
+        '<div><div style="font-size:13px;color:var(--text)">' + esc(t.name) + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + esc(t.trade) + ' · ' + t.priority + '</div></div>' +
+        '<span style="color:var(--accent);font-size:12px">Use →</span></div>';
+    }).join('');
+  }
+  openModal('modal-templates');
+}
+
+function applyTemplate(idx) {
+  var t = WO_TEMPLATES[idx];
+  if (!t) return;
+  document.getElementById('wo-trade').value = t.trade;
+  document.getElementById('wo-priority').value = t.priority;
+  document.getElementById('wo-desc').value = t.description;
+  closeModal('modal-templates');
+  toast('Template applied: ' + t.name, 'success');
+}
+
+
+// ── Keys / Lockboxes Admin View ───────────────────────────────
+
+function showKeysView() {
+  document.getElementById('properties-list').style.display = 'none';
+  document.getElementById('prop-search').style.display = 'none';
+  document.getElementById('keys-view').style.display = '';
+  document.getElementById('btn-keys-view').style.display = 'none';
+  document.getElementById('btn-keys-back').style.display = '';
+  renderKeysView();
+}
+
+function hideKeysView() {
+  document.getElementById('properties-list').style.display = '';
+  document.getElementById('prop-search').style.display = '';
+  document.getElementById('keys-view').style.display = 'none';
+  document.getElementById('btn-keys-view').style.display = '';
+  document.getElementById('btn-keys-back').style.display = 'none';
+}
+
+function renderKeysView() {
+  var el = document.getElementById('keys-view-content');
+  el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading keys…</div>';
+
+  api('GET', '/keys').then(function(keys) {
+    var props = safeArray(state.properties);
+    var sorted = sortPropsNumeric(props.filter(function(p){ return p.Active !== 'FALSE'; }));
+
+    if (!sorted.length) { el.innerHTML = '<div class="loading">No properties</div>'; return; }
+
+    var html = '<table class="data-table">';
+    html += '<thead><tr>';
+    html += '<th>Property ID</th>';
+    html += '<th>Address</th>';
+    html += '<th>Key Type</th>';
+    html += '<th style="color:var(--accent)">Code / Info</th>';
+    html += '<th>Location / Notes</th>';
+    html += '<th>Active</th>';
+    html += '</tr></thead><tbody>';
+
+    // Show all properties, even those with no keys (so Brett can spot gaps)
+    sorted.forEach(function(p) {
+      var propKeys = Array.isArray(keys)
+        ? keys.filter(function(k){ return String(k.Property_ID) === String(p.ID) && k.Active !== 'FALSE'; })
+        : [];
+
+      if (propKeys.length === 0) {
+        // Property with no keys — show placeholder row
+        var accessNote = p.Access_Notes
+          ? '<span style="color:var(--accent2);font-size:11px">' + esc(p.Access_Notes) + '</span>'
+          : '<span style="color:var(--danger);font-size:11px">No keys or access notes on file</span>';
+        html += '<tr style="opacity:.6">';
+        html += '<td style="color:var(--muted);font-size:11px">' + esc(p.ID) + '</td>';
+        html += '<td>' + esc(p.Address) + '</td>';
+        html += '<td style="color:var(--muted)">—</td>';
+        html += '<td colspan="2">' + accessNote + '</td>';
+        html += '<td>—</td>';
+        html += '</tr>';
+      } else {
+        propKeys.forEach(function(k, ki) {
+          html += '<tr>';
+          html += ki === 0
+            ? '<td style="color:var(--muted);font-size:11px">' + esc(p.ID) + '</td><td>' + esc(p.Address) + '</td>'
+            : '<td></td><td style="color:var(--muted);font-size:11px">' + esc(p.Address) + '</td>';
+          html += '<td style="font-size:11px;color:var(--info)">' + esc(k.Key_Type||'—') + '</td>';
+          var code = k.Lockbox_Code || k.Key_Code || '—';
+          html += '<td style="color:var(--accent);font-weight:bold;letter-spacing:.05em">' + esc(code) + '</td>';
+          html += '<td style="font-size:11px;color:var(--muted)">' + esc(k.Lockbox_Location || k.Notes || '—') + '</td>';
+          html += '<td style="font-size:11px">' + (k.Active === 'FALSE' ? '<span style="color:var(--danger)">Inactive</span>' : '<span style="color:var(--accent2)">Active</span>') + '</td>';
+          html += '</tr>';
+        });
+      }
+    });
+
+    html += '</tbody></table>';
+    html += '<p style="color:var(--muted);font-size:11px;margin-top:12px">To add or update lockbox codes, go to Google Sheets → Keys tab. '
+          + 'The <b>Property_ID</b> column must match the ID shown in the first column above.</p>';
+    el.innerHTML = html;
+  }).catch(function(e) {
+    el.innerHTML = '<div style="color:var(--danger)">Error loading keys: ' + esc(e.message||'unknown') + '</div>';
+  });
+}
+
 </script>
 
 <!-- SEND PIN PREVIEW MODAL -->
@@ -1856,6 +2150,62 @@ function renderOwnersPage() {
     <div class="modal-actions">
       <button class="btn secondary" id="bulk-pin-cancel-btn" onclick="closeModal('modal-send-pin-bulk')">Cancel</button>
       <button class="btn" id="bulk-pin-send-btn" onclick="executeBulkSendPin()">SEND TO ALL</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- WO TEMPLATES MODAL -->
+<div class="modal-overlay" id="modal-templates">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <div class="modal-title">WO TEMPLATES</div>
+      <button class="modal-close" onclick="closeModal('modal-templates')">✕</button>
+    </div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Select a template to pre-fill the new work order form. You can edit any field after applying.</p>
+    <div id="template-list" style="max-height:380px;overflow-y:auto;border:1px solid var(--border);border-radius:6px"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-templates')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- MOVE IN TENANT MODAL -->
+<div class="modal-overlay" id="modal-move-in">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <div class="modal-title">MOVE IN NEW TENANT</div>
+      <button class="modal-close" onclick="closeModal('modal-move-in')">✕</button>
+    </div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:14px">Select the property and unit, fill in the new tenant's details, and click Move In. The previous tenant (if any) will be automatically marked as moved out.</p>
+    <div class="form-grid">
+      <div class="form-group"><label>Property *</label>
+        <select id="mi-property" onchange="onMoveInPropertyChange()" style="width:100%">
+          <option value="">Select property…</option>
+        </select>
+      </div>
+      <div class="form-group" id="mi-unit-group">
+        <label>Unit <span style="color:var(--muted);font-weight:normal">(if multi-unit)</span></label>
+        <select id="mi-unit" onchange="onMoveInUnitChange()" style="width:100%">
+          <option value="">Whole property / single family</option>
+        </select>
+      </div>
+      <div id="mi-current-tenant-banner" style="display:none;grid-column:1/-1;background:#2d1a00;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--warn)">
+        ⚠ <span id="mi-current-tenant-name"></span> is currently linked to this unit and will be marked as <b>moved out</b>.
+      </div>
+      <div class="form-group"><label>First Name *</label><input type="text" id="mi-first" placeholder="e.g. Janice"></div>
+      <div class="form-group"><label>Last Name</label><input type="text" id="mi-last" placeholder="e.g. Johnson"></div>
+      <div class="form-group"><label>Phone</label><input type="tel" id="mi-phone" placeholder="(443) 555-1234"></div>
+      <div class="form-group"><label>Email</label><input type="email" id="mi-email" placeholder="tenant@email.com"></div>
+      <div class="form-group full">
+        <label>Move-In Date</label>
+        <input type="date" id="mi-date">
+      </div>
+    </div>
+    <div id="mi-msg" style="margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-move-in')">Cancel</button>
+      <button class="btn btn-green" id="mi-submit-btn" onclick="submitMoveIn()">MOVE IN</button>
     </div>
   </div>
 </div>
