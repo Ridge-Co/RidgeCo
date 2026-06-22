@@ -163,6 +163,7 @@
       <button class="nav-btn" onclick="showPage('tenants',this)">TENANTS</button>
       <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
       <button class="nav-btn" onclick="showPage('owners',this)">OWNERS</button>
+      <button class="nav-btn" onclick="showPage('shopping',this)">🛒 SHOPPING</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
     </nav>
@@ -295,6 +296,67 @@
       <button class="btn small secondary" onclick="clearPinChecks()">Deselect All</button>
     </div>
     <div id="owners-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <div class="page" id="page-shopping">
+    <!-- Sub-tabs -->
+    <div style="display:flex;gap:2px;background:var(--surface2);border-radius:var(--radius);padding:3px;margin-bottom:16px;max-width:600px">
+      <div class="tab active" id="stab-materials" onclick="switchShoppingTab('materials')" style="flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted)">📋 SHOPPING LIST</div>
+      <div class="tab" id="stab-returns" onclick="switchShoppingTab('returns')" style="flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted)">↩ RETURNS</div>
+      <div class="tab" id="stab-masterkeys" onclick="switchShoppingTab('masterkeys')" style="flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted)">🔑 MASTER KEYS</div>
+      <div class="tab" id="stab-templates" onclick="switchShoppingTab('templates')" style="flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted)">📄 TEMPLATES</div>
+    </div>
+
+    <!-- SHOPPING LIST panel -->
+    <div id="spanel-materials">
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+        <select id="mat-filter-trade" onchange="renderMaterials()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 10px;border-radius:var(--radius)">
+          <option value="">All Trades</option>
+          <option>Plumbing</option><option>HVAC</option><option>Electric</option>
+          <option>General</option><option>Appliance</option><option>Landscaping</option>
+          <option>Roofing</option><option>Pest Control</option><option>Other</option>
+        </select>
+        <select id="mat-filter-store" onchange="renderMaterials()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 10px;border-radius:var(--radius)">
+          <option value="">All Stores</option>
+          <option>Home Depot</option><option>Lowes</option><option>Supplies</option><option>Amazon</option><option>Other</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;cursor:pointer">
+          <input type="checkbox" id="mat-hide-onhold" onchange="renderMaterials()" style="width:auto;padding:0"> Hide on-hold WO items
+        </label>
+        <button class="btn small" onclick="refreshMaterials()">↻ Refresh</button>
+      </div>
+      <div id="materials-list"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- RETURNS panel -->
+    <div id="spanel-returns" style="display:none">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+        <button class="btn" onclick="openAddReturnModal()">+ Add Return</button>
+        <button class="btn secondary small" onclick="refreshReturns()">↻ Refresh</button>
+        <span style="color:var(--muted);font-size:12px" id="returns-total"></span>
+      </div>
+      <div id="returns-list"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- MASTER KEYS panel -->
+    <div id="spanel-masterkeys" style="display:none">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+        <button class="btn" onclick="openAddMasterKeyModal()">+ Add Master Key</button>
+        <button class="btn secondary small" onclick="refreshMasterKeys()">↻ Refresh</button>
+      </div>
+      <div style="color:var(--muted);font-size:12px;margin-bottom:12px">Master keys are assigned to properties. Vendors see the key name on every work order for that property.</div>
+      <div id="masterkeys-list"><div class="loading">Loading…</div></div>
+    </div>
+
+    <!-- TEMPLATES panel -->
+    <div id="spanel-templates" style="display:none">
+      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+        <button class="btn" onclick="openAddTemplateModal()">+ Add Template</button>
+        <button class="btn secondary small" onclick="refreshTemplates()">↻ Refresh</button>
+      </div>
+      <div style="color:var(--muted);font-size:12px;margin-bottom:12px">Templates pre-fill new WO forms. Include a link to a Google Sheet, document, or checklist that gets inserted into the WO description automatically.</div>
+      <div id="templates-list"><div class="loading">Loading…</div></div>
+    </div>
   </div>
 
   <div class="page" id="page-portals">
@@ -1043,6 +1105,16 @@ function openWODetail(woId) {
     '<tr><td style="color:var(--muted)">Owner Ref #</td><td style="color:var(--info);font-weight:bold;letter-spacing:0.05em">'+(wo.Owner_WO_Ref||'<span style="color:var(--muted)">—</span>')+'</td></tr>' +
     '<tr><td style="color:var(--muted);font-size:10px">Property ID (raw)</td><td style="color:var(--muted);font-size:11px">'+(wo.Property_ID||'—')+'</td></tr>' +
     '</table>';
+  // Materials section for this WO
+  var matHtml = '<div style="margin-top:14px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+    '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase">MATERIALS NEEDED</div>' +
+    '<button class="btn small" onclick="openAddMaterialModal(\''+woId+'\')">+ Add Item</button></div>' +
+    '<div id="wo-mat-list-'+woId+'" style="font-size:12px"><span style="color:var(--muted)">Loading…</span></div>' +
+  '</div>';
+  document.getElementById('detail-body').innerHTML += matHtml;
+  loadWOMaterials(woId);
+
   // Append audit section after the detail body builds
   document.getElementById('detail-body').innerHTML += auditHtml;
   // Load audit trail
@@ -2129,6 +2201,391 @@ function renderKeysView() {
   });
 }
 
+
+// ══════════════════════════════════════════════════════════════
+//  SHOPPING / MATERIALS SYSTEM
+// ══════════════════════════════════════════════════════════════
+
+var _materials  = [];
+var _returns    = [];
+var _masterKeys = [];
+var _woTemplates = [];
+
+function switchShoppingTab(tab) {
+  ['materials','returns','masterkeys','templates'].forEach(function(t) {
+    var p = document.getElementById('spanel-'+t);
+    var b = document.getElementById('stab-'+t);
+    if (p) p.style.display = t===tab ? '' : 'none';
+    if (b) b.style.cssText = b.style.cssText.replace(/color:[^;]+/, t===tab ? 'color:var(--accent)' : 'color:var(--muted)');
+    if (b) b.style.background = t===tab ? 'var(--surface)' : '';
+  });
+  if (tab==='materials')  refreshMaterials();
+  if (tab==='returns')    refreshReturns();
+  if (tab==='masterkeys') refreshMasterKeys();
+  if (tab==='templates')  refreshTemplates();
+}
+
+// ── Shopping List ────────────────────────────────────────────
+
+function refreshMaterials() {
+  api('GET','/materials?all=true').then(function(items) {
+    _materials = Array.isArray(items) ? items : [];
+    renderMaterials();
+  });
+}
+
+function renderMaterials() {
+  var el = document.getElementById('materials-list');
+  if (!el) return;
+  var filterTrade = (document.getElementById('mat-filter-trade')||{}).value||'';
+  var filterStore = (document.getElementById('mat-filter-store')||{}).value||'';
+  var hideOnHold  = document.getElementById('mat-hide-onhold') && document.getElementById('mat-hide-onhold').checked;
+
+  var items = _materials.slice();
+  if (filterTrade) items = items.filter(function(m){ return m.Trade===filterTrade; });
+  if (filterStore) items = items.filter(function(m){ return m.Store===filterStore; });
+  if (hideOnHold)  items = items.filter(function(m){ return m.wo_status !== 'On Hold'; });
+
+  if (!items.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No materials items yet. Open a work order and add items to its materials list.</div>'; return; }
+
+  // Group by trade
+  var byTrade = {};
+  items.forEach(function(m) {
+    var trade = m.Trade || m.wo_trade || 'General';
+    if (!byTrade[trade]) byTrade[trade] = [];
+    byTrade[trade].push(m);
+  });
+
+  var STORES = {'Home Depot':'#F96302','Lowes':'#004990','Amazon':'#FF9900','Supplies':'#4ade80','Other':'#888'};
+  var STATUS_STYLE = {
+    'needed':    'background:#1e3a5f;color:var(--info)',
+    'purchased': 'background:#1f2d1f;color:var(--accent2)',
+    'on-hand':   'background:#2d2000;color:var(--warn)',
+    'return':    'background:#3b0000;color:var(--danger)',
+  };
+
+  var html = '';
+  Object.keys(byTrade).sort().forEach(function(trade) {
+    var tradeItems = byTrade[trade];
+    html += '<div style="margin-bottom:20px">';
+    html += '<div style="color:var(--accent);font-size:12px;letter-spacing:.1em;text-transform:uppercase;font-weight:bold;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(trade) + ' <span style="color:var(--muted);font-size:10px">('+tradeItems.length+' item'+(tradeItems.length!==1?'s':'')+')</span></div>';
+    tradeItems.forEach(function(m) {
+      var isOnHold = m.wo_status === 'On Hold';
+      var isCancelled = ['Cancelled','Declined'].includes(m.wo_status);
+      var storeColor = STORES[m.Store] || '#888';
+      var statusStyle = STATUS_STYLE[m.Status||'needed'] || STATUS_STYLE['needed'];
+      html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;'+(isOnHold?'opacity:.5':'')+(isCancelled?'opacity:.3;text-decoration:line-through':'') + '">';
+      html += '<input type="checkbox" '+(m.Status==='purchased'?'checked':'')+' onchange="toggleMaterialStatus(\''+m.ID+'\',this.checked)" style="width:auto;flex-shrink:0" title="Mark purchased">';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:13px;font-weight:bold">' + esc(m.Item||'—') + (m.Qty?' <span style="color:var(--muted);font-size:11px">×'+esc(m.Qty)+(m.Unit?' '+esc(m.Unit):'')+'</span>':'') + '</div>';
+      html += '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + esc(m.WO_ID||'—') + (m.property_address?' · '+esc(m.property_address):'') + (isOnHold?' <span style="color:var(--warn);font-size:10px">⚠ ON HOLD</span>':isCancelled?' <span style="color:var(--danger);font-size:10px">CANCELLED</span>':'')+'</div>';
+      if (m.Notes) html += '<div style="font-size:11px;color:var(--muted)">' + esc(m.Notes) + '</div>';
+      html += '</div>';
+      if (m.Store) html += '<span style="font-size:10px;font-weight:bold;padding:2px 6px;border-radius:4px;background:' + storeColor + '20;color:' + storeColor + ';border:1px solid ' + storeColor + '60;white-space:nowrap">' + esc(m.Store) + '</span>';
+      html += '<span style="' + statusStyle + ';font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap">' + esc(m.Status||'needed') + '</span>';
+      html += '<button onclick="deleteMaterialItem(\''+m.ID+'\')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:0;flex-shrink:0" title="Remove">×</button>';
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function loadWOMaterials(woId) {
+  var el = document.getElementById('wo-mat-list-'+woId);
+  if (!el) return;
+  api('GET','/materials?wo_id='+woId).then(function(items) {
+    items = Array.isArray(items) ? items : [];
+    if (!items.length) { el.innerHTML = '<span style="color:var(--muted)">No items yet. Click + Add Item to track what you need for this job.</span>'; return; }
+    var STAT = {'needed':'var(--info)','purchased':'var(--accent2)','on-hand':'var(--warn)','return':'var(--danger)'};
+    el.innerHTML = items.map(function(m) {
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+        '<input type="checkbox" '+(m.Status==='purchased'?'checked':'')+' onchange="toggleMaterialStatus(\''+m.ID+'\',this.checked)" style="width:auto">' +
+        '<div style="flex:1">' +
+          '<span style="font-size:12px">' + esc(m.Item) + '</span>' +
+          (m.Qty?' <span style="color:var(--muted);font-size:11px">×'+esc(m.Qty)+(m.Unit?' '+esc(m.Unit):'')+'</span>':'') +
+          (m.Store?'<span style="color:var(--muted);font-size:11px"> · '+esc(m.Store)+'</span>':'') +
+        '</div>' +
+        '<span style="color:'+( STAT[m.Status||'needed']||'var(--muted)')+';font-size:10px">'+esc(m.Status||'needed')+'</span>' +
+        '<button onclick="deleteMaterialItem(\''+m.ID+'\')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0">×</button>' +
+      '</div>';
+    }).join('');
+  });
+}
+
+function toggleMaterialStatus(id, checked) {
+  api('POST','/material/update',{ id:id, fields:{ Status: checked?'purchased':'needed' } }).then(function(){ refreshMaterials(); });
+}
+
+function deleteMaterialItem(id) {
+  api('POST','/material/update',{ id:id, fields:{ Active:'FALSE' } });
+}
+
+var _addMatWOId = null;
+function openAddMaterialModal(woId) {
+  _addMatWOId = woId;
+  ['mat-item','mat-qty','mat-unit','mat-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  var trSel = document.getElementById('mat-trade');
+  if (trSel) {
+    // Try to get trade from current WO
+    var wo = safeArray(state.workorders).find(function(w){return w.ID===woId;});
+    if (wo && trSel) trSel.value = wo.Trade||'General';
+  }
+  openModal('modal-add-material');
+}
+
+function submitAddMaterial() {
+  var item = document.getElementById('mat-item').value.trim();
+  if (!item) { toast('Item name required','error'); return; }
+  var wo = safeArray(state.workorders).find(function(w){return w.ID===_addMatWOId;});
+  api('POST','/material/add',{
+    WO_ID: _addMatWOId,
+    Item: item,
+    Qty: document.getElementById('mat-qty').value.trim(),
+    Unit: document.getElementById('mat-unit').value.trim(),
+    Trade: document.getElementById('mat-trade').value || (wo?wo.Trade:''),
+    Store: document.getElementById('mat-store-sel').value,
+    Notes: document.getElementById('mat-notes').value.trim(),
+    Status: 'needed',
+    Added_By: 'admin',
+    Active: 'TRUE',
+  }).then(function(res){
+    if (res.id) {
+      toast('Item added','success');
+      closeModal('modal-add-material');
+      loadWOMaterials(_addMatWOId);
+    }
+  });
+}
+
+// ── Returns Tracker ──────────────────────────────────────────
+
+function refreshReturns() {
+  api('GET','/returns').then(function(items) {
+    _returns = Array.isArray(items) ? items : [];
+    renderReturns();
+  });
+}
+
+function renderReturns() {
+  var el = document.getElementById('returns-list');
+  if (!el) return;
+  var active = _returns.filter(function(r){ return r.Active!=='FALSE' && r.Status!=='returned'; });
+  var done = _returns.filter(function(r){ return r.Status==='returned'; });
+  var total = active.reduce(function(s,r){ return s+(parseFloat(r.Amount)||0); },0);
+  var totalEl = document.getElementById('returns-total');
+  if (totalEl) totalEl.textContent = active.length + ' pending · $' + total.toFixed(2) + ' value';
+
+  if (!_returns.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No returns logged. Click + Add Return to track items you need to bring back.</div>'; return; }
+
+  var html = '';
+  if (active.length) {
+    html += '<div style="margin-bottom:20px">';
+    html += '<div style="color:var(--warn);font-size:12px;letter-spacing:.1em;text-transform:uppercase;font-weight:bold;margin-bottom:8px">PENDING RETURNS</div>';
+    active.forEach(function(r) {
+      html += returnRow(r);
+    });
+    html += '</div>';
+  }
+  if (done.length) {
+    html += '<details><summary style="color:var(--muted);font-size:12px;cursor:pointer;margin-bottom:8px">Completed returns ('+done.length+')</summary>';
+    done.forEach(function(r){ html += returnRow(r, true); });
+    html += '</details>';
+  }
+  el.innerHTML = html;
+}
+
+function returnRow(r, done) {
+  return '<div style="display:flex;align-items:center;gap:8px;padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;'+(done?'opacity:.5':'') + '">' +
+    '<div style="flex:1">' +
+      '<div style="font-size:13px;font-weight:bold">' + esc(r.Item||'—') + (r.Amount?' <span style="color:var(--accent2);font-size:12px">$'+esc(r.Amount)+'</span>':'') + '</div>' +
+      '<div style="font-size:11px;color:var(--muted)">' + esc(r.Store||'—') + (r.WO_ID?' · '+esc(r.WO_ID):'') + (r.Notes?' · '+esc(r.Notes):'') + '</div>' +
+    '</div>' +
+    (done ? '' : '<button class="btn small" style="background:var(--accent2);color:#000" onclick="markReturned(\''+r.ID+'\')">✓ Returned</button>') +
+    '<button onclick="api(\'POST\',\'/return/update\',{id:\''+r.ID+'\',fields:{Active:\'FALSE\'}})" style="background:none;border:none;color:var(--muted);cursor:pointer">×</button>' +
+  '</div>';
+}
+
+function markReturned(id) {
+  api('POST','/return/update',{id:id,fields:{Status:'returned'}}).then(function(){ refreshReturns(); });
+}
+
+function openAddReturnModal() {
+  ['ret-item','ret-store','ret-amount','ret-notes','ret-wo'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  openModal('modal-add-return');
+}
+
+function submitAddReturn() {
+  var item = document.getElementById('ret-item').value.trim();
+  if (!item) { toast('Item name required','error'); return; }
+  api('POST','/return/add',{
+    Item: item, Store: document.getElementById('ret-store').value.trim(),
+    Amount: document.getElementById('ret-amount').value.trim(),
+    WO_ID: document.getElementById('ret-wo').value.trim(),
+    Notes: document.getElementById('ret-notes').value.trim(),
+    Status: 'pending', Active: 'TRUE',
+  }).then(function(res){
+    if(res.id){ toast('Return logged','success'); closeModal('modal-add-return'); refreshReturns(); }
+  });
+}
+
+// ── Master Keys ──────────────────────────────────────────────
+
+function refreshMasterKeys() {
+  Promise.all([api('GET','/master-keys'), api('GET','/owners')]).then(function(results) {
+    _masterKeys = Array.isArray(results[0]) ? results[0] : [];
+    renderMasterKeys(Array.isArray(results[1]) ? results[1] : []);
+  });
+}
+
+function renderMasterKeys(owners) {
+  var el = document.getElementById('masterkeys-list');
+  if (!el) return;
+  var active = _masterKeys.filter(function(k){ return k.Active!=='FALSE'; });
+  if (!active.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No master keys defined yet. Click + Add Master Key to create one.</div>'; return; }
+
+  el.innerHTML = '<table class="data-table"><thead><tr><th>Name</th><th>Owner</th><th>Notes</th><th>Properties</th><th></th></tr></thead><tbody>' +
+    active.map(function(k) {
+      var owner = owners.find(function(o){ return o.ID===k.Owner_ID; });
+      var propCount = safeArray(state.properties).filter(function(p){ return p.Master_Key_ID===k.ID; }).length;
+      return '<tr>' +
+        '<td style="color:var(--accent);font-weight:bold">' + esc(k.Name||'—') + '</td>' +
+        '<td>' + (owner?esc(owner.First_Name+' '+(owner.Last_Name||'')+' / '+(owner.Company||'')):'<span style="color:var(--muted)">—</span>') + '</td>' +
+        '<td style="color:var(--muted);font-size:11px">' + esc(k.Notes||'—') + '</td>' +
+        '<td style="color:var(--muted)">' + propCount + ' propert' + (propCount===1?'y':'ies') + '</td>' +
+        '<td style="display:flex;gap:4px">' +
+          '<button class="btn small secondary" onclick="openBulkAssignModal(\''+k.ID+'\',\''+esc(k.Name)+'\')" title="Bulk assign to owner properties">Assign to Owner</button>' +
+          '<button class="btn small secondary" onclick="if(confirm(\'Delete this master key?\')) api(\'POST\',\'/master-key/update\',{id:\''+k.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshMasterKeys)">Del</button>' +
+        '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
+
+var _bulkAssignKeyId = null;
+function openBulkAssignModal(keyId, keyName) {
+  _bulkAssignKeyId = keyId;
+  document.getElementById('bulk-assign-title').textContent = 'ASSIGN "' + keyName.toUpperCase() + '" TO ALL PROPERTIES OF:';
+  var sel = document.getElementById('bulk-assign-owner');
+  sel.innerHTML = '<option value="">— select owner —</option>' +
+    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Last_Name?' '+o.Last_Name:'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  document.getElementById('bulk-assign-msg').innerHTML = '';
+  openModal('modal-bulk-assign');
+}
+
+function submitBulkAssign() {
+  var ownerId = document.getElementById('bulk-assign-owner').value;
+  if (!ownerId) { toast('Select an owner','error'); return; }
+  api('POST','/master-key/bulk-assign',{ master_key_id: _bulkAssignKeyId, owner_id: ownerId }).then(function(res){
+    if (res.success) {
+      document.getElementById('bulk-assign-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px">✓ Assigned to '+res.updated+' properties.</div>';
+      loadAll();
+      setTimeout(function(){ closeModal('modal-bulk-assign'); }, 1500);
+    }
+  });
+}
+
+function openAddMasterKeyModal() {
+  ['mk-name','mk-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  var sel = document.getElementById('mk-owner');
+  if (sel) sel.innerHTML = '<option value="">No owner (global)</option>' +
+    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  openModal('modal-add-masterkey');
+}
+
+function submitAddMasterKey() {
+  var name = document.getElementById('mk-name').value.trim();
+  if (!name) { toast('Name required','error'); return; }
+  api('POST','/master-key/add',{
+    Name: name, Owner_ID: document.getElementById('mk-owner').value,
+    Notes: document.getElementById('mk-notes').value.trim(), Active: 'TRUE',
+  }).then(function(res){ if(res.id){ toast('Master key added','success'); closeModal('modal-add-masterkey'); refreshMasterKeys(); } });
+}
+
+// ── WO Templates ────────────────────────────────────────────
+
+function refreshTemplates() {
+  api('GET','/wo-templates').then(function(items) {
+    _woTemplates = Array.isArray(items) ? items : [];
+    renderTemplates();
+  });
+}
+
+function renderTemplates() {
+  var el = document.getElementById('templates-list');
+  if (!el) return;
+  if (!_woTemplates.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No templates yet. Built-in templates (HVAC filter, pest control, etc.) are available when creating a WO. Add here for custom templates with links.</div>'; return; }
+  el.innerHTML = '<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Link</th><th></th></tr></thead><tbody>' +
+    _woTemplates.map(function(t) {
+      var owner = safeArray(state.owners).find(function(o){ return o.ID===t.Owner_ID; });
+      return '<tr>' +
+        '<td style="font-weight:bold">' + esc(t.Name||'—') + '</td>' +
+        '<td>' + esc(t.Trade||'—') + '</td>' +
+        '<td style="color:var(--muted);font-size:11px">' + (owner?esc(owner.First_Name+(owner.Company?' / '+owner.Company:'')):'Global') + '</td>' +
+        '<td>' + (t.Link_URL?'<a href="'+esc(t.Link_URL)+'" target="_blank" style="color:var(--info)">'+esc(t.Link_Label||'View')+'</a>':'—') + '</td>' +
+        '<td style="display:flex;gap:4px">' +
+          '<button class="btn small secondary" onclick="applySheetTemplate(\''+t.ID+'\')">Use</button>' +
+          '<button class="btn small secondary" onclick="if(confirm(\'Delete?\')) api(\'POST\',\'/wo-template/update\',{id:\''+t.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshTemplates)">Del</button>' +
+        '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
+
+function openAddTemplateModal() {
+  ['tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  var sel = document.getElementById('tmpl-owner');
+  if (sel) sel.innerHTML = '<option value="">Global (all owners)</option>' +
+    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  openModal('modal-add-template');
+}
+
+function submitAddTemplate() {
+  var name = document.getElementById('tmpl-name').value.trim();
+  if (!name) { toast('Name required','error'); return; }
+  api('POST','/wo-template/add',{
+    Name: name, Owner_ID: document.getElementById('tmpl-owner').value,
+    Trade: document.getElementById('tmpl-trade').value,
+    Priority: document.getElementById('tmpl-priority').value,
+    Description: document.getElementById('tmpl-desc').value.trim(),
+    Link_URL: document.getElementById('tmpl-link-url').value.trim(),
+    Link_Label: document.getElementById('tmpl-link-label').value.trim()||'View',
+    Active: 'TRUE',
+  }).then(function(res){ if(res.id){ toast('Template added','success'); closeModal('modal-add-template'); refreshTemplates(); } });
+}
+
+function applySheetTemplate(id) {
+  var t = _woTemplates.find(function(x){ return x.ID===id; });
+  if (!t) return;
+  // Check if new WO modal is open
+  var newModal = document.getElementById('modal-new-wo');
+  var editModal = document.getElementById('modal-edit-wo');
+  var desc = '';
+  if (t.Description) desc += t.Description;
+  if (t.Link_URL) desc += (desc?'\n\n':'') + (t.Link_Label||'Link') + ': ' + t.Link_URL;
+
+  if (newModal && newModal.classList.contains('modal-active')) {
+    document.getElementById('wo-trade').value = t.Trade || document.getElementById('wo-trade').value;
+    document.getElementById('wo-priority').value = t.Priority || document.getElementById('wo-priority').value;
+    document.getElementById('wo-desc').value = desc;
+  } else if (editModal && editModal.classList.contains('modal-active')) {
+    var ta = document.getElementById('ewo-description');
+    if (ta) { ta.value = (ta.value?ta.value+'\n\n':'')+desc; ta.style.height='auto'; ta.style.height=Math.max(140,ta.scrollHeight)+'px'; }
+  }
+  closeModal('modal-add-template');
+  toast('Template applied: '+t.Name,'success');
+}
+
+
+
+// ── Master Key display in WO detail ─────────────────────────
+// Called after WO detail is built to show master key info
+function injectMasterKeyInfo(wo) {
+  if (!wo.master_key) return;
+  var detail = document.getElementById('detail-body');
+  if (!detail) return;
+  var mk_banner = document.createElement('div');
+  mk_banner.style.cssText = 'background:#1a2540;border:1px solid var(--info);border-radius:6px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px;font-size:12px';
+  mk_banner.innerHTML = '<span style="font-size:1.2rem">🔑</span><div><div style="color:var(--info);font-weight:bold;font-size:11px;letter-spacing:.06em">MASTER KEY REQUIRED</div><div style="color:var(--text)">' + esc(wo.master_key) + (wo.master_key_notes?'<span style="color:var(--muted)"> · '+esc(wo.master_key_notes)+'</span>':'') + '</div></div>';
+  detail.insertBefore(mk_banner, detail.firstChild);
+}
+
 </script>
 
 <!-- SEND PIN PREVIEW MODAL -->
@@ -2218,6 +2675,110 @@ function renderKeysView() {
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-move-in')">Cancel</button>
       <button class="btn btn-green" id="mi-submit-btn" onclick="submitMoveIn()">MOVE IN</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD MATERIAL MODAL -->
+<div class="modal-overlay" id="modal-add-material">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header"><div class="modal-title">ADD MATERIAL ITEM</div><button class="modal-close" onclick="closeModal('modal-add-material')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Item *</label><input type="text" id="mat-item" placeholder="e.g. 1/2 in shutoff valve, 20x20x1 HVAC filter"></div>
+      <div class="form-group"><label>Quantity</label><input type="text" id="mat-qty" placeholder="e.g. 2"></div>
+      <div class="form-group"><label>Unit</label><input type="text" id="mat-unit" placeholder="e.g. pcs, ft, bags"></div>
+      <div class="form-group"><label>Trade</label>
+        <select id="mat-trade">
+          <option>General</option><option>Plumbing</option><option>HVAC</option><option>Electric</option>
+          <option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Store</label>
+        <select id="mat-store-sel">
+          <option value="">— any —</option>
+          <option>Home Depot</option><option>Lowes</option><option>Supplies</option><option>Amazon</option><option>Other</option>
+        </select>
+      </div>
+      <div class="form-group full"><label>Notes</label><input type="text" id="mat-notes" placeholder="Color, spec, brand preference…"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-add-material')">Cancel</button>
+      <button class="btn" onclick="submitAddMaterial()">ADD ITEM</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD RETURN MODAL -->
+<div class="modal-overlay" id="modal-add-return">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header"><div class="modal-title">LOG RETURN ITEM</div><button class="modal-close" onclick="closeModal('modal-add-return')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Item *</label><input type="text" id="ret-item" placeholder="e.g. Wrong size P-trap, duplicate faucet"></div>
+      <div class="form-group"><label>Store</label><input type="text" id="ret-store" placeholder="Home Depot, Lowes…"></div>
+      <div class="form-group"><label>Value ($)</label><input type="number" id="ret-amount" placeholder="9.00" step="0.01"></div>
+      <div class="form-group"><label>WO # (optional)</label><input type="text" id="ret-wo" placeholder="WO-1020"></div>
+      <div class="form-group full"><label>Notes</label><input type="text" id="ret-notes" placeholder="Receipt in truck, wrong color, etc."></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-add-return')">Cancel</button>
+      <button class="btn" onclick="submitAddReturn()">LOG RETURN</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD MASTER KEY MODAL -->
+<div class="modal-overlay" id="modal-add-masterkey">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header"><div class="modal-title">ADD MASTER KEY</div><button class="modal-close" onclick="closeModal('modal-add-masterkey')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Name *</label><input type="text" id="mk-name" placeholder="e.g. Goldszmidt Master, Phoenix Master Key A"></div>
+      <div class="form-group full"><label>Owner <span style="font-weight:normal;color:var(--muted)">(which owner's properties use this key)</span></label><select id="mk-owner"><option value="">Global</option></select></div>
+      <div class="form-group full"><label>Notes</label><input type="text" id="mk-notes" placeholder="Key tag color, where it's kept, shape…"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-add-masterkey')">Cancel</button>
+      <button class="btn" onclick="submitAddMasterKey()">CREATE</button>
+    </div>
+  </div>
+</div>
+
+<!-- BULK ASSIGN MASTER KEY MODAL -->
+<div class="modal-overlay" id="modal-bulk-assign">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header"><div class="modal-title" id="bulk-assign-title">BULK ASSIGN MASTER KEY</div><button class="modal-close" onclick="closeModal('modal-bulk-assign')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:12px">All properties belonging to the selected owner will be assigned this master key.</p>
+    <select id="bulk-assign-owner" style="width:100%;margin-bottom:10px"><option value="">— select owner —</option></select>
+    <div id="bulk-assign-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-bulk-assign')">Cancel</button>
+      <button class="btn" onclick="submitBulkAssign()">ASSIGN TO ALL</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD TEMPLATE MODAL -->
+<div class="modal-overlay" id="modal-add-template">
+  <div class="modal" style="max-width:500px">
+    <div class="modal-header"><div class="modal-title">ADD WO TEMPLATE</div><button class="modal-close" onclick="closeModal('modal-add-template')">✕</button></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Template Name *</label><input type="text" id="tmpl-name" placeholder="e.g. Phoenix Inspection, HVAC PM, Pest Control Q"></div>
+      <div class="form-group"><label>Owner <span style="font-weight:normal;color:var(--muted)">(blank = global)</span></label><select id="tmpl-owner"><option value="">Global</option></select></div>
+      <div class="form-group"><label>Trade</label>
+        <select id="tmpl-trade">
+          <option value="">General</option><option>Plumbing</option><option>HVAC</option><option>Electric</option>
+          <option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Default Priority</label>
+        <select id="tmpl-priority"><option value="normal">Normal</option><option value="low">Low</option><option value="urgent">Urgent</option></select>
+      </div>
+      <div class="form-group full"><label>Description Template</label><textarea id="tmpl-desc" placeholder="Text to insert into WO description. The link will be appended below this." style="min-height:80px;resize:vertical"></textarea></div>
+      <div class="form-group"><label>Link URL <span style="font-weight:normal;color:var(--muted)">(Google Sheet, doc, checklist)</span></label><input type="url" id="tmpl-link-url" placeholder="https://docs.google.com/…"></div>
+      <div class="form-group"><label>Link Label</label><input type="text" id="tmpl-link-label" placeholder="Inspection Checklist"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-add-template')">Cancel</button>
+      <button class="btn" onclick="submitAddTemplate()">SAVE TEMPLATE</button>
     </div>
   </div>
 </div>
