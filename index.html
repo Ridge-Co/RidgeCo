@@ -1104,13 +1104,18 @@ function openWODetail(woId) {
     '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span></td></tr>' +
     '<tr><td style="color:var(--muted)">Trade</td><td>'+(wo.Trade||'—')+'</td></tr>' +
     '<tr><td style="color:var(--muted)">Priority</td><td>'+(wo.Priority||'normal')+'</td></tr>' +
-    '<tr><td style="color:var(--muted)">Vendor</td><td>'+(vendor?vendor.Name+' · '+vendor.Phone:'<span style="color:var(--warn)">Unassigned</span>')+'</td></tr>' +
+    '<tr><td style="color:var(--muted)">Vendor</td><td>' +
+    (vendor ? '<a onclick="showPage(\'vendors\',document.querySelector(\'[onclick*=vendors]\'))" style="color:var(--accent2);cursor:pointer;text-decoration:underline dotted">' + vendor.Name + '</a>' +
+    (vendor.Phone ? ' · <a href="tel:'+vendor.Phone+'" style="color:var(--muted)">' + vendor.Phone + '</a>' : '') :
+    '<span style="color:var(--warn)">Unassigned</span>') +
+    '</td></tr>' +
     '<tr><td style="color:var(--muted)">Tenant</td><td>' +
     (wo.WO_Contact_Name
       ? '<span style="color:var(--info)">' + esc(wo.WO_Contact_Name) + '</span>' +
         (wo.WO_Contact_Phone ? ' · <a href="tel:'+wo.WO_Contact_Phone+'" style="color:var(--accent)">' + esc(wo.WO_Contact_Phone) + '</a>' : '') +
         ' <span style="color:var(--muted);font-size:10px">(WO override)</span>'
-      : (tenant ? tenant.First_Name+' '+(tenant.Last_Name||'')+' · '+tenant.Phone : '—')) +
+      : (tenant ? '<a onclick="showPage(\'tenants\',document.querySelector(\'[onclick*=tenants]\'))" style="color:var(--info);cursor:pointer;text-decoration:underline dotted">' + tenant.First_Name + ' ' + (tenant.Last_Name||'') + '</a>' +
+        (tenant.Phone ? ' · <a href="tel:'+tenant.Phone+'" style="color:var(--accent)">' + tenant.Phone + '</a>' : '') : '—')) +
     '</td></tr>' +
     '<tr><td style="color:var(--muted)">Scheduled</td><td>'+(wo.Scheduled_Date||'—')+'</td></tr>' +
     
@@ -1206,6 +1211,14 @@ function openWODetail(woId) {
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   openModal('modal-wo-detail');
+  // Post-render: make property name clickable after detail modal opens
+  setTimeout(function(){
+    document.querySelectorAll('#modal-wo-detail .prop-name').forEach(function(el){
+      el.style.cursor='pointer'; el.title='Go to Properties';
+      el.style.textDecoration='underline dotted';
+      el.onclick = function(){ navigateTo('properties'); closeModal('modal-wo-detail'); };
+    });
+  }, 80);
 }
 
 function openAssignModal(woId) {
@@ -1375,44 +1388,46 @@ function renderVendorsPage() {
 // ── Tenants ──────────────────────────────────────────────────
 function renderTenantsPage() {
   var el = document.getElementById('tenants-list');
-  var search = ((document.getElementById('tenant-search')||{}).value||'').toLowerCase();
+  var search = ((document.getElementById('tenant-search')||{}).value||'').toLowerCase().trim();
   var allTenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
 
-  var tenants = allTenants.filter(function(t) {
-    if (!search) return true;
+  var tenants = search ? allTenants.filter(function(t) {
     var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
-    var prop = safeArray(state.properties).find(function(p){return p.ID===(t.Property_ID||(unit&&unit.Property_ID));});
-    return (t.First_Name||'').toLowerCase().includes(search) ||
-           (t.Last_Name||'').toLowerCase().includes(search) ||
+    var propId = t.Property_ID || (unit&&unit.Property_ID) || '';
+    var prop = safeArray(state.properties).find(function(p){return String(p.ID)===String(propId);});
+    return ((t.First_Name||'').toLowerCase()+''+( t.Last_Name||'').toLowerCase()).includes(search) ||
            (t.Phone||'').includes(search) ||
+           (unit&&(unit.Unit_Label||'').toLowerCase().includes(search)) ||
            (prop&&(prop.Address||'').toLowerCase().includes(search)) ||
-           (unit&&(unit.Unit_Label||'').toLowerCase().includes(search));
-  });
+           (prop&&(prop.City||'').toLowerCase().includes(search));
+  }) : allTenants;
 
-  if (!tenants.length) { el.innerHTML='<div class="loading">No tenants match your search</div>'; return; }
-  el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenants</div>' +
+  if (!tenants.length) { el.innerHTML='<div class="loading">No tenants match "'+esc(search)+'" — try name, address, phone, or unit</div>'; return; }
+  el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
     '<table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'tenants-action-bar\')"></th>' +
     '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th></th></tr></thead><tbody>' +
     tenants.map(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
-      var prop = safeArray(state.properties).find(function(p){return p.ID===(t.Property_ID||unit&&unit.Property_ID);});
+      var propId = t.Property_ID || (unit&&unit.Property_ID) || '';
+      var prop = safeArray(state.properties).find(function(p){return String(p.ID)===String(propId);});
       var pinColor = t.PIN ? 'color:var(--accent2)' : 'color:var(--danger)';
       var canSend = !!(t.PIN && t.Phone);
       var nm = (t.First_Name+' '+(t.Last_Name||'')).trim();
-      var moveIn = t.Move_In_Date ? '<span style="color:var(--muted);font-size:11px">'+t.Move_In_Date+'</span>' : '<span style="color:var(--border)">—</span>';
+      var moveIn = t.Move_In_Date ? '<span style="color:var(--muted);font-size:11px">'+esc(t.Move_In_Date)+'</span>' : '<span style="color:var(--border)">—</span>';
       return '<tr>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+t.ID+'" data-type="tenant" data-name="'+nm+'" data-phone="'+(t.Phone||'')+'" onchange="updatePinActionBar(\'tenants-action-bar\')"></td>' +
-        '<td><span style="cursor:pointer;color:var(--text)" onclick="showPage(\'tenants\')" title="Tenant details">'+nm+'</span></td>' +
-        '<td><a href="tel:'+t.Phone+'" style="color:var(--accent);text-decoration:none">'+(t.Phone||'—')+'</a></td>' +
-        '<td>'+(unit?unit.Unit_Label:'—')+'</td>' +
-        '<td style="font-size:11px;color:var(--muted)">'+(prop?'<span style="cursor:pointer;color:var(--info)" onclick="showPage(\'properties\')" title="Go to property">'+prop.Address+'</span>':'—')+'</td>' +
+        '<td>'+esc(nm)+'</td>' +
+        '<td><a href="tel:'+esc(t.Phone||'')+'" style="color:var(--accent);text-decoration:none">'+(t.Phone||'—')+'</a></td>' +
+        '<td style="color:var(--muted)">'+(unit?esc(unit.Unit_Label):'—')+'</td>' +
+        '<td style="font-size:11px;color:var(--muted)">'+(prop?esc(prop.Address):'—')+'</td>' +
         '<td>'+moveIn+'</td>' +
         '<td style="'+pinColor+';font-weight:bold;letter-spacing:0.1em">'+(t.PIN||'—')+'</td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
-        '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+t.Phone+'\')" >PIN</button>' +
-        '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'tenant\',\''+t.ID+'\',\''+t.First_Name+'\',\''+t.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+        '<button class="btn small secondary" onclick="openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')" style="background:var(--danger)20;border-color:var(--danger);color:var(--danger)">Move Out</button>' +
+        '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+esc(t.Phone||'')+'\')" title="Set PIN">PIN</button>' +
+        (canSend?'<button class="btn small" style="background:var(--info);color:#fff" onclick="previewSendPin(\'tenant\',\''+t.ID+'\',\''+esc(t.First_Name)+'\',\''+esc(t.Phone||'')+'\')">📱</button>':'') +
         '</td></tr>';
     }).join('') + '</tbody></table>';
 }
@@ -2058,6 +2073,14 @@ async function submitMoveIn() {
 
   if (!propId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
   if (!first)  { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">First name is required.</div>'; return; }
+
+  // Find current tenant for warning
+  var cur = safeArray(state.tenants).find(function(t){
+    return t.Active !== 'FALSE' && (unitId ? t.Unit_ID===unitId : (!t.Unit_ID && t.Property_ID===propId));
+  });
+  var confirmMsg = 'Move in ' + first + (last?' '+last:'') + ' to this property?';
+  if (cur) confirmMsg += '\n\n⚠ ' + cur.First_Name + ' ' + (cur.Last_Name||'') + ' is currently in this unit and will be moved out.';
+  if (!confirm(confirmMsg + '\n\nThis updates the tenant record immediately.')) return;
 
   var btn = document.getElementById('mi-submit-btn');
   btn.disabled = true; btn.textContent = 'Moving in…';
@@ -2963,6 +2986,67 @@ function submitAddKey() {
     else document.getElementById('ak-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+(res.error||'Error')+'</div>';
   });
 }
+
+var _moveOutTenantId = null;
+var _moveOutTenantName = '';
+
+function openMoveOutModal(tenantId, tenantName) {
+  _moveOutTenantId = tenantId;
+  _moveOutTenantName = tenantName;
+  document.getElementById('mo-tenant-name').textContent = tenantName;
+  document.getElementById('mo-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('mo-msg').innerHTML = '';
+  document.getElementById('mo-submit-btn').disabled = false;
+  document.getElementById('mo-submit-btn').textContent = 'CONFIRM MOVE OUT';
+  openModal('modal-move-out');
+}
+
+async function submitMoveOut() {
+  var date = document.getElementById('mo-date').value || new Date().toISOString().split('T')[0];
+  var msgEl = document.getElementById('mo-msg');
+  var btn = document.getElementById('mo-submit-btn');
+  btn.disabled = true; btn.textContent = 'Moving out…';
+  msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Updating tenant record…</div>';
+  try {
+    var res = await apiWithTimeout(api('POST', '/tenant/update', {
+      id: _moveOutTenantId, fields: { Active: 'FALSE', Move_Out_Date: date }
+    }), 8000);
+    if (res && res.error) throw new Error(res.error);
+    var t = safeArray(state.tenants).find(function(x){ return x.ID === _moveOutTenantId; });
+    if (t && t.Unit_ID) {
+      await apiWithTimeout(api('POST', '/unit/update', { id: t.Unit_ID, fields: { Tenant_ID: '' } }), 8000).catch(function(){});
+    }
+    toast('✓ ' + _moveOutTenantName + ' moved out', 'success');
+    closeModal('modal-move-out');
+    await loadAll();
+  } catch(e) {
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message||'Error') + '</div>';
+    btn.disabled = false; btn.textContent = 'CONFIRM MOVE OUT';
+  }
+}
+
 </script>
+
+<!-- MOVE OUT TENANT MODAL -->
+<div class="modal-overlay" id="modal-move-out">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <div class="modal-title" style="color:var(--danger)">MOVE OUT TENANT</div>
+      <button class="modal-close" onclick="closeModal('modal-move-out')">✕</button>
+    </div>
+    <div style="background:#2d0a0a;border:1px solid var(--danger);border-radius:6px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--danger)">
+      ⚠ <strong id="mo-tenant-name">Tenant</strong> will be marked as moved out. This cannot be undone from the hub — you would need to manually reactivate in the Sheet.
+    </div>
+    <div class="form-group">
+      <label>Move-Out Date</label>
+      <input type="date" id="mo-date" style="width:100%">
+    </div>
+    <div id="mo-msg" style="margin-top:8px"></div>
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn secondary" onclick="closeModal('modal-move-out')">Cancel</button>
+      <button class="btn" id="mo-submit-btn" onclick="submitMoveOut()" style="background:var(--danger);color:#fff">CONFIRM MOVE OUT</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
