@@ -6,9 +6,9 @@
 <title>Ridge Co — Tenant Portal</title>
 <style>
 :root{
-  --bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;
-  --text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;
-  --danger:#f87171;--warn:#fbbf24;--info:#60a5fa;
+  --bg:#06091a;--surface:#0d1835;--surface2:#142040;--border:#1e2d55;
+  --text:#f8faff;--muted:#94a8c8;--accent:#4575d4;--accent2:#4ade80;
+  --danger:#f87171;--warn:#f59e0b;--info:#7ab4f0;
   --radius:8px;--font:'Courier New',monospace;
 }
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -23,12 +23,12 @@ input,select,textarea{width:100%;background:var(--surface2);border:1px solid var
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
 textarea{resize:vertical;min-height:70px;}
 .pin-input{font-size:1.5rem;letter-spacing:.15em;text-align:center;padding:14px;text-transform:uppercase;}
-.btn{background:var(--accent);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.06em;padding:10px 16px;cursor:pointer;}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.06em;padding:10px 16px;cursor:pointer;}
 .btn:disabled{opacity:.4;cursor:not-allowed;}
 .btn-full{width:100%;margin-top:10px;}
 .btn-sm{padding:5px 10px;font-size:11px;}
 .btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
-.btn-outline:hover{background:var(--accent);color:#000;}
+.btn-outline:hover{background:var(--accent);color:#fff;}
 .btn-green{background:var(--accent2);color:#000;}
 .btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
 .msg{margin-top:10px;padding:9px 12px;border-radius:6px;font-size:12px;}
@@ -121,9 +121,12 @@ textarea{resize:vertical;min-height:70px;}
 <div id="screenLogin" class="screen active">
   <div class="login-wrap">
     <div class="login-card">
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:0 auto 12px"><rect x="2" y="2" width="44" height="44" rx="8" fill="#142040" stroke="#4575d4" stroke-width="2"/><polygon points="24,8 40,38 8,38" fill="none" stroke="#4575d4" stroke-width="2" stroke-linejoin="round"/><polygon points="24,18 33,38 15,38" fill="#4575d4" fill-opacity="0.4"/></svg>
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub">TENANT PORTAL</div>
       <div style="margin-bottom:14px">
+        <label>FIRST NAME <span style="font-weight:normal;color:var(--muted)">(e.g. Janice, Troy)</span></label>
+        <input type="text" id="nameInput" placeholder="Your first name" style="margin-bottom:10px;width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px 12px;border-radius:6px" autocorrect="off" spellcheck="false">
         <label>YOUR ACCESS PIN</label>
         <input type="text" class="pin-input" id="pinInput" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
       </div>
@@ -238,13 +241,19 @@ document.getElementById('pinInput').addEventListener('input', function(){ this.v
 
 function doLogin() {
   var pin = document.getElementById('pinInput').value.trim();
+  var firstName = ((document.getElementById('nameInput')||{}).value||'').trim();
+  if (!firstName) { showLoginMsg('Please enter your first name.', 'error'); return; }
   if (pin.length < 8) { showLoginMsg('PIN must be 8 characters (3 letters + 5 digits)', 'error'); return; }
   var btn = document.getElementById('loginBtn');
   btn.disabled = true; btn.textContent = 'VERIFYING…';
 
-  api('/tenant-by-pin?pin=' + encodeURIComponent(pin))
+  api('/tenant-by-pin?pin=' + encodeURIComponent(pin) + '&name=' + encodeURIComponent(((document.getElementById('nameInput')||{}).value||'').trim()))
     .then(function(data) {
       btn.disabled = false; btn.textContent = 'SIGN IN';
+      if (data.name_required) {
+        showLoginMsg('Please enter your first name.', 'error');
+        return;
+      }
       if (data.error) {
         if (data.locked) {
           showLoginMsg('Locked for ' + data.minutes_remaining + ' min — too many attempts.', 'error');
@@ -269,6 +278,7 @@ function doLogin() {
 function doLogout() {
   session = null; allWOs = [];
   document.getElementById('pinInput').value = '';
+  var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
   document.getElementById('feedbackFloatBtn').style.display = 'none';
   show('screenDash', false);

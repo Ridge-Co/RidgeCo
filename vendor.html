@@ -146,6 +146,8 @@ input[type=file]{display:none;}
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub">VENDOR PORTAL</div>
       <div style="margin-bottom:16px;">
+        <label>FIRST NAME <span style="font-weight:normal;color:var(--muted)">(e.g. Alex, Janice)</span></label>
+        <input type="text" id="nameInput" placeholder="Your first name" style="margin-bottom:10px" autocorrect="off" spellcheck="false">
         <label for="pinInput">YOUR ACCESS PIN</label>
         <input type="text" id="pinInput" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
       </div>
@@ -210,6 +212,8 @@ document.getElementById('pinInput').addEventListener('input', function(){
 
 function doLogin() {
   var pin = document.getElementById('pinInput').value.trim();
+  var firstName = ((document.getElementById('nameInput')||{}).value||'').trim();
+  if (!firstName) { showLoginMsg('Please enter your first name.', 'error'); return; }
   if (pin.length < 8) {
     showLoginMsg('PIN must be 8 characters (3 letters + 5 digits)', 'error');
     return;
@@ -219,10 +223,14 @@ function doLogin() {
   btn.textContent = 'CHECKING…';
   showLoginMsg('', '');
 
-  api('/vendor-by-pin?pin=' + encodeURIComponent(pin))
+  api('/vendor-by-pin?pin=' + encodeURIComponent(pin) + '&name=' + encodeURIComponent(((document.getElementById('nameInput')||{}).value||'').trim()))
     .then(function(data) {
       btn.disabled = false;
       btn.textContent = 'SIGN IN';
+      if (data.name_required) {
+        showLoginMsg('Please enter your first name.', 'error');
+        return;
+      }
       if (data.error) {
         if (data.locked) {
           showLoginMsg('Account locked. Try again in ' + data.minutes_remaining + ' minute' + (data.minutes_remaining !== 1 ? 's' : '') + '.', 'error');
@@ -257,6 +265,7 @@ function doLogout() {
   failCount = 0;
   updateDots();
   document.getElementById('pinInput').value = '';
+  var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
   document.getElementById('loginBtn').disabled = false;
   showLoginMsg('', '');

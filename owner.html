@@ -166,6 +166,8 @@ textarea{resize:vertical;min-height:70px;}
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub">OWNER PORTAL</div>
       <div style="margin-bottom:14px;">
+        <label>FIRST NAME <span style="font-weight:normal;color:var(--muted)">(e.g. Mark, Jennifer)</span></label>
+        <input type="text" id="nameInput" placeholder="Your first name" autocomplete="given-name" autocorrect="off" spellcheck="false" style="margin-bottom:10px">
         <label>ACCESS PIN</label>
         <input type="text" class="pin-input" id="pinInput" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
       </div>
@@ -434,14 +436,20 @@ document.getElementById('pinInput').addEventListener('input', function(){ this.v
 
 function doLogin() {
   var pin = document.getElementById('pinInput').value.trim();
+  var firstName = ((document.getElementById('nameInput')||{}).value||'').trim();
+  if (!firstName) { showLoginMsg('Please enter your first name.', 'error'); return; }
   if (pin.length < 8) { showLoginMsg('PIN must be 8 characters (3 letters + 5 digits)', 'error'); return; }
   var btn = document.getElementById('loginBtn');
   btn.disabled = true; btn.textContent = 'VERIFYING…';
   showLoginMsg('','');
 
-  api('/owner-by-pin?pin=' + encodeURIComponent(pin))
+  api('/owner-by-pin?pin=' + encodeURIComponent(pin) + '&name=' + encodeURIComponent((document.getElementById('nameInput')||{}).value||'').trim())
     .then(function(data) {
       btn.disabled = false; btn.textContent = 'SIGN IN';
+      if (data.name_required) {
+        showLoginMsg('Please enter your first name.', 'error');
+        return;
+      }
       if (data.error) {
         if (data.locked) {
           showLoginMsg('Locked for ' + data.minutes_remaining + ' min after too many attempts.', 'error');
@@ -469,6 +477,7 @@ function doLogin() {
 function doLogout() {
   session = null; ownerProps = []; allWOs = [];
   document.getElementById('pinInput').value = '';
+  var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
   document.getElementById('loginBtn').disabled = false;
   show('screenDash', false);
