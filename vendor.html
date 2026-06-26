@@ -6,8 +6,8 @@
 <title>Ridge Co — Vendor Portal</title>
 <style>
 :root {
-  --bg:#06091a;--surface:#0d1835;--surface2:#142040;--border:#1e2d55;
-  --text:#f8faff;--muted:#94a8c8;--accent:#4575d4;--accent2:#4ade80;
+  --bg:#040810;--surface:#0d1835;--surface2:#172d4e;--border:#2e4578;
+  --text:#edf2ff;--muted:#8aaed4;--accent:#4d7de8;--accent2:#4ade80;
   --danger:#f87171;--warn:#f59e0b;--info:#7ab4f0;--purple:#c084fc;
   --radius:8px;--font:'Courier New',monospace;
 }
@@ -419,6 +419,7 @@ function renderWOs(wos) {
           '<textarea id="notes-' + idx + '" placeholder="Add notes (optional)…"></textarea>' +
           '<div class="btn-row">' +
             '<button class="btn btn-sm btn-green" onclick="submitStatus(\'' + wo.ID + '\',' + idx + ')">SAVE STATUS</button>' +
+            '<button class="btn btn-sm" style="background:var(--accent2);color:#000" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
             '<label class="btn btn-sm btn-blue" style="display:inline-block;cursor:pointer;">' +
               '📷 PHOTO' +
               '<input type="file" accept="image/*" onchange="uploadPhoto(\'' + wo.ID + '\',this)">' +
@@ -911,6 +912,311 @@ function submitVendorSched(modalId) {
   }).catch(function(){ document.getElementById(modalId+'-save').disabled=false; });
 }
 
+</script>
+
+<!-- VENDOR BILLING MODAL -->
+<div class="modal-overlay" id="modal-vendor-bill" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:20px;margin:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">💰 SUBMIT BILL — <span id="bill-wo-id-label"></span></div>
+      <button onclick="closeBillModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+
+    <!-- Billing type toggle -->
+    <div style="display:flex;gap:4px;background:var(--surface2);border-radius:6px;padding:3px;margin-bottom:16px">
+      <div id="bill-tab-hourly" onclick="setBillType('hourly')" style="flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;background:var(--accent);color:#fff;font-family:var(--font)">⏱ By the Hour</div>
+      <div id="bill-tab-flat" onclick="setBillType('flat')" style="flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--muted);font-family:var(--font)">📋 Flat Price</div>
+    </div>
+
+    <!-- HOURLY section -->
+    <div id="bill-hourly-section">
+      <div style="background:var(--surface2);border-radius:6px;padding:12px;margin-bottom:12px">
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">LABOR</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div>
+            <div style="color:var(--muted);font-size:11px;margin-bottom:4px">Hours worked</div>
+            <input type="number" id="bill-hours" min="0" step="0.25" placeholder="0.0" oninput="calcBillTotal()" style="width:90px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:8px;border-radius:6px;text-align:center">
+          </div>
+          <div style="color:var(--muted);font-size:18px">×</div>
+          <div>
+            <div style="color:var(--muted);font-size:11px;margin-bottom:4px">Rate/hr</div>
+            <div id="bill-rate-display" style="font-size:16px;color:var(--accent);font-weight:bold;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;min-width:70px;text-align:center">$40</div>
+          </div>
+          <div style="color:var(--muted);font-size:18px">=</div>
+          <div>
+            <div style="color:var(--muted);font-size:11px;margin-bottom:4px">Labor total</div>
+            <div id="bill-labor-total" style="font-size:18px;color:var(--accent2);font-weight:bold;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;min-width:80px;text-align:center">$0.00</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FLAT PRICE section -->
+    <div id="bill-flat-section" style="display:none">
+      <div style="background:var(--surface2);border-radius:6px;padding:12px;margin-bottom:12px">
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">FLAT PRICE</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:var(--muted);font-size:20px">$</span>
+          <input type="number" id="bill-flat" min="0" step="0.01" placeholder="0.00" oninput="calcBillTotal()" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:20px;padding:10px;border-radius:6px">
+        </div>
+      </div>
+    </div>
+
+    <!-- TRUCK MATERIALS -->
+    <div style="background:var(--surface2);border-radius:6px;padding:12px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase">TRUCK STOCK USED</div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--muted);text-transform:none;letter-spacing:0">
+          <input type="checkbox" id="bill-truck-toggle" onchange="toggleTruckSection()" style="width:auto;padding:0"> Used truck stock
+        </label>
+      </div>
+      <div id="bill-truck-section" style="display:none">
+        <input type="text" id="bill-truck-desc" placeholder="e.g. 2 caulk tubes, electrical tape, wire nuts" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:var(--muted);font-size:16px">$</span>
+          <input type="number" id="bill-truck-amt" min="0" step="0.01" placeholder="0.00" oninput="calcBillTotal()" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:8px;border-radius:6px">
+          <span style="color:var(--muted);font-size:11px">estimated value</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- RECEIPTS -->
+    <div style="background:var(--surface2);border-radius:6px;padding:12px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase">RECEIPTS & PURCHASES</div>
+        <button onclick="addReceiptRow()" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-family:var(--font);font-size:11px;cursor:pointer">+ Add</button>
+      </div>
+      <div id="bill-receipts-list" style="display:flex;flex-direction:column;gap:8px"></div>
+    </div>
+
+    <!-- NOTES -->
+    <div style="margin-bottom:14px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">NOTES (optional)</label>
+      <textarea id="bill-notes" placeholder="Any extra info about the job, materials, or access issues…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px;min-height:60px;resize:vertical"></textarea>
+    </div>
+
+    <!-- TOTAL -->
+    <div style="background:var(--surface2);border:1px solid var(--accent2);border-radius:6px;padding:12px;margin-bottom:14px">
+      <div id="bill-breakdown" style="font-size:11px;color:var(--muted);margin-bottom:8px"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="color:var(--text);font-size:14px;font-weight:bold">TOTAL</span>
+        <span id="bill-grand-total" style="color:var(--accent2);font-size:24px;font-weight:bold">$0.00</span>
+      </div>
+    </div>
+
+    <div id="bill-msg"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeBillModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
+      <button id="bill-submit-btn" onclick="submitVendorBill()" style="background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT BILL</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var _billWOId = null;
+var _billType = 'hourly';
+var _vendorRate = 40;
+var _receiptCount = 0;
+var _uploadedPhotos = {};
+
+function openBillModal(woId, vendorName) {
+  _billWOId = woId;
+  _billType = 'hourly';
+  _receiptCount = 0;
+  _uploadedPhotos = {};
+
+  document.getElementById('bill-wo-id-label').textContent = woId;
+  document.getElementById('bill-hours').value = '';
+  document.getElementById('bill-flat').value = '';
+  document.getElementById('bill-truck-desc').value = '';
+  document.getElementById('bill-truck-amt').value = '';
+  document.getElementById('bill-notes').value = '';
+  document.getElementById('bill-truck-toggle').checked = false;
+  document.getElementById('bill-truck-section').style.display = 'none';
+  document.getElementById('bill-receipts-list').innerHTML = '';
+  document.getElementById('bill-msg').innerHTML = '';
+
+  // Load vendor rate from session
+  _vendorRate = parseFloat(session.vendor_rate || 40) || 40;
+  document.getElementById('bill-rate-display').textContent = '$' + _vendorRate.toFixed(0);
+
+  setBillType('hourly');
+  calcBillTotal();
+  document.getElementById('modal-vendor-bill').style.display = 'flex';
+}
+
+function closeBillModal() {
+  document.getElementById('modal-vendor-bill').style.display = 'none';
+}
+
+function setBillType(type) {
+  _billType = type;
+  document.getElementById('bill-tab-hourly').style.cssText = type === 'hourly'
+    ? 'flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;background:var(--accent);color:#fff;font-family:var(--font)'
+    : 'flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--muted);font-family:var(--font)';
+  document.getElementById('bill-tab-flat').style.cssText = type === 'flat'
+    ? 'flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;background:var(--accent);color:#fff;font-family:var(--font)'
+    : 'flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--muted);font-family:var(--font)';
+  document.getElementById('bill-hourly-section').style.display = type === 'hourly' ? '' : 'none';
+  document.getElementById('bill-flat-section').style.display = type === 'flat' ? '' : 'none';
+  calcBillTotal();
+}
+
+function toggleTruckSection() {
+  var checked = document.getElementById('bill-truck-toggle').checked;
+  document.getElementById('bill-truck-section').style.display = checked ? '' : 'none';
+  if (!checked) { document.getElementById('bill-truck-amt').value = ''; }
+  calcBillTotal();
+}
+
+function addReceiptRow() {
+  _receiptCount++;
+  var n = _receiptCount;
+  var div = document.createElement('div');
+  div.id = 'receipt-row-' + n;
+  div.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px';
+  div.innerHTML = '<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">' +
+    '<span style="color:var(--muted);font-size:16px">$</span>' +
+    '<input type="number" id="r-amt-' + n + '" placeholder="0.00" min="0" step="0.01" oninput="calcBillTotal()" style="width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:7px;border-radius:6px">' +
+    '<input type="text" id="r-desc-' + n + '" placeholder="What was purchased (e.g. 4 outlets HD)" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:7px;border-radius:6px">' +
+    '<button onclick="removeReceiptRow(' + n + ')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px">×</button>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:8px">' +
+    '<label id="r-photo-lbl-' + n + '" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px">' +
+    '📷 Upload Receipt<input type="file" accept="image/*,application/pdf" onchange="uploadReceiptPhoto(' + n + ',this)" style="display:none"></label>' +
+    '<span id="r-photo-status-' + n + '" style="font-size:11px;color:var(--muted)"></span>' +
+    '</div>';
+  document.getElementById('bill-receipts-list').appendChild(div);
+}
+
+function removeReceiptRow(n) {
+  var row = document.getElementById('receipt-row-' + n);
+  if (row) row.remove();
+  delete _uploadedPhotos[n];
+  calcBillTotal();
+}
+
+function uploadReceiptPhoto(n, input) {
+  var file = input.files[0];
+  if (!file) return;
+  var statusEl = document.getElementById('r-photo-status-' + n);
+  var lblEl = document.getElementById('r-photo-lbl-' + n);
+  statusEl.textContent = 'Uploading…';
+  statusEl.style.color = 'var(--muted)';
+  var fd = new FormData();
+  fd.append('photo', file);
+  fd.append('wo_id', _billWOId);
+  fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body:fd })
+    .then(function(r){return r.json();})
+    .then(function(res){
+      if (res.url) {
+        _uploadedPhotos[n] = res.url;
+        statusEl.textContent = '✓ Uploaded';
+        statusEl.style.color = 'var(--accent2)';
+        lblEl.style.borderColor = 'var(--accent2)';
+        lblEl.style.color = 'var(--accent2)';
+      } else {
+        statusEl.textContent = '⚠ Upload failed';
+        statusEl.style.color = 'var(--danger)';
+      }
+    }).catch(function(){ statusEl.textContent = '⚠ Error'; statusEl.style.color = 'var(--danger)'; });
+}
+
+function calcBillTotal() {
+  var labor = 0, flat = 0, truck = 0, receipts = 0;
+  var breakdown = [];
+
+  if (_billType === 'hourly') {
+    var hrs = parseFloat(document.getElementById('bill-hours').value) || 0;
+    labor = hrs * _vendorRate;
+    if (hrs > 0) breakdown.push(hrs + ' hrs × $' + _vendorRate + '/hr = $' + labor.toFixed(2));
+  } else {
+    flat = parseFloat(document.getElementById('bill-flat').value) || 0;
+    if (flat > 0) breakdown.push('Flat rate: $' + flat.toFixed(2));
+  }
+
+  if (document.getElementById('bill-truck-toggle').checked) {
+    truck = parseFloat(document.getElementById('bill-truck-amt').value) || 0;
+    var desc = document.getElementById('bill-truck-desc').value;
+    if (truck > 0) breakdown.push('Truck stock' + (desc?' ('+desc+')':'') + ': $' + truck.toFixed(2));
+  }
+
+  for (var i = 1; i <= _receiptCount; i++) {
+    var amtEl = document.getElementById('r-amt-' + i);
+    var descEl = document.getElementById('r-desc-' + i);
+    if (!amtEl) continue;
+    var amt = parseFloat(amtEl.value) || 0;
+    if (amt > 0) {
+      receipts += amt;
+      breakdown.push((descEl?descEl.value:'Receipt') + ': $' + amt.toFixed(2));
+    }
+  }
+
+  var total = labor + flat + truck + receipts;
+  document.getElementById('bill-breakdown').innerHTML = breakdown.join('<br>') || '<span style="color:var(--muted)">Enter hours or items above</span>';
+  document.getElementById('bill-grand-total').textContent = '$' + total.toFixed(2);
+}
+
+async function submitVendorBill() {
+  var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
+  var msgEl = document.getElementById('bill-msg');
+  if (total <= 0) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Enter at least one billable item.</div>'; return; }
+
+  var btn = document.getElementById('bill-submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+
+  // Build receipt items JSON
+  var receiptItems = [];
+  for (var i = 1; i <= _receiptCount; i++) {
+    var amtEl = document.getElementById('r-amt-' + i);
+    if (!amtEl) continue;
+    var amt = parseFloat(amtEl.value) || 0;
+    var desc = (document.getElementById('r-desc-' + i)||{}).value || '';
+    if (amt > 0 || desc) {
+      receiptItems.push({ amount: amt, desc: desc, url: _uploadedPhotos[i] || '' });
+    }
+  }
+
+  var hrs = _billType === 'hourly' ? (parseFloat(document.getElementById('bill-hours').value)||0) : 0;
+  var flat = _billType === 'flat' ? (parseFloat(document.getElementById('bill-flat').value)||0) : 0;
+  var truckUsed = document.getElementById('bill-truck-toggle').checked;
+  var truckAmt = truckUsed ? (parseFloat(document.getElementById('bill-truck-amt').value)||0) : 0;
+  var truckDesc = truckUsed ? document.getElementById('bill-truck-desc').value : '';
+  var receiptsTotal = receiptItems.reduce(function(s,r){return s+r.amount;},0);
+
+  var body = {
+    WO_ID: _billWOId,
+    Vendor_ID: session.vendor_id,
+    Vendor_Name: session.vendor_name,
+    Bill_Type: _billType,
+    Labor_Hours: String(hrs),
+    Labor_Rate: String(_vendorRate),
+    Labor_Total: String((hrs * _vendorRate).toFixed(2)),
+    Truck_Desc: truckDesc,
+    Truck_Amount: String(truckAmt.toFixed(2)),
+    Receipt_Items: JSON.stringify(receiptItems),
+    Receipts_Total: String(receiptsTotal.toFixed(2)),
+    Flat_Amount: String(flat.toFixed(2)),
+    Grand_Total: String(total.toFixed(2)),
+    Bill_Status: 'submitted',
+    Notes: document.getElementById('bill-notes').value,
+    Active: 'TRUE',
+  };
+
+  fetch(WORKER + '/vendor-bill/add', {
+    method: 'POST',
+    headers: {'X-Auth-Token': SECRET, 'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  }).then(function(r){return r.json();}).then(function(res){
+    btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+    if (res.id || res.success) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#002d0f;border-radius:6px">✓ Bill submitted! Total: $' + total.toFixed(2) + '</div>';
+      setTimeout(function(){ closeBillModal(); loadWorkOrders(); }, 2000);
+    } else {
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + (res.error||'Error submitting') + '</div>';
+    }
+  }).catch(function(e){ btn.disabled=false; btn.textContent='SUBMIT BILL'; msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Connection error</div>'; });
+}
 </script>
 </body>
 </html>
