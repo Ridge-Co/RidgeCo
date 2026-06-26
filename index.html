@@ -186,6 +186,7 @@
   <div class="page" id="page-workorders">
     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
       <button class="btn" onclick="openNewWOModal()">+ New Work Order</button>
+      <button class="btn secondary small" id="btn-bulk-mode" onclick="toggleBulkMode()">☑ Bulk Edit</button>
       <button class="btn secondary small" id="filterToggleBtn" onclick="toggleFilterPanel()">FILTERS <span id="filterBadge" style="display:none;background:var(--accent);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span> ▾</button>
       <button class="btn secondary small" onclick="clearWOFilters()" id="clearFiltersBtn" style="display:none">CLEAR ALL</button>
       <div style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0">
@@ -198,6 +199,19 @@
           <option value="address">Address A-Z</option>
         </select>
       </div>
+    </div>
+    <!-- Bulk action bar -->
+    <div id="bulk-wo-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="color:var(--accent);font-size:12px;font-weight:bold" id="bulk-count">0 selected</span>
+      <span style="color:var(--muted);font-size:12px">Change status to:</span>
+      <select id="bulk-status-sel" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;border-radius:var(--radius)">
+        <option value="">— select —</option>
+        <option>Assigned</option><option>Accepted</option><option>In Progress</option>
+        <option>On Hold</option><option>Complete</option><option>Pending Invoice</option>
+        <option>Invoiced</option><option>Paid</option><option>Cancelled</option>
+      </select>
+      <button class="btn small btn-green" id="bulk-apply-btn" onclick="applyBulkStatus()">Apply</button>
+      <button class="btn small secondary" onclick="document.querySelectorAll('.wo-bulk-check').forEach(function(c){c.checked=false;});document.getElementById('bulk-count').textContent='0 selected'">Deselect All</button>
     </div>
     <!-- Filter Panel -->
     <div id="filterPanel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px">
@@ -938,6 +952,8 @@ function woCard(w) {
     '<div class="wo-id">'+w.ID+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+'</div></div>' +
+    (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
+    ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\'" style="width:auto;margin-right:6px;cursor:pointer" />' : '') +
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
     agingBadge +
     (vendor?'<span style="font-size:11px;color:var(--muted)">'+vendor.Name+'</span>':'')+'</div></div>';
@@ -1029,10 +1045,10 @@ function renderWOPage() {
   else if (filter !== 'all') wos = wos.filter(function(w){ return w.Status===filter; });
 
   if (ownerId) {
-    var ownerPropIds = new Set(safeArray(state.properties).filter(function(p){return p.Owner_ID===ownerId;}).map(function(p){return p.ID;}));
-    wos = wos.filter(function(w){ return ownerPropIds.has(w.Property_ID); });
+    var ownerPropIds = new Set(safeArray(state.properties).filter(function(p){return String(p.Owner_ID)===String(ownerId);}).map(function(p){return String(p.ID);}));
+    wos = wos.filter(function(w){ return ownerPropIds.has(String(w.Property_ID)); });
   }
-  if (propId)   wos = wos.filter(function(w){ return w.Property_ID===propId; });
+  if (propId)   wos = wos.filter(function(w){ return String(w.Property_ID)===String(propId); });
   if (unitId)   wos = wos.filter(function(w){ return w.Unit_ID===unitId; });
   if (vendId)   wos = wos.filter(function(w){ return w.Vendor_ID===vendId; });
   if (trade)    wos = wos.filter(function(w){ return (w.Trade||'').toLowerCase()===trade.toLowerCase(); });
@@ -1203,6 +1219,17 @@ function openWODetail(woId) {
   addBtn('Close','secondary',function(){closeModal('modal-wo-detail');});
   addBtn('Edit','secondary',function(){openEditWOModal(woId);});
   addBtn('📅 Schedule','secondary',function(){openSchedModal('modalSchedAdmin',woId);});
+  // Quick status change select
+  var qsDiv = document.createElement('div');
+  qsDiv.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:8px';
+  qsDiv.innerHTML = '<span style="color:var(--muted);font-size:11px">Quick status:</span>' +
+    '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:5px 8px;border-radius:var(--radius)">' +
+    '<option value="">' + (wo.Status||'Current') + ' ▾</option>' +
+    ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'].map(function(s){
+      return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>';
+    }).join('') +
+    '</select>';
+  actions.appendChild(qsDiv);
   if (!wo.Vendor_ID||wo.Status==='Declined') addBtn('Assign Vendor','',function(){openAssignModal(woId);});
   if (['Assigned','Accepted'].includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
   if (['In Progress','Accepted','On Hold'].includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
@@ -1266,26 +1293,34 @@ function submitInvoice(){
 
 // ── New WO ───────────────────────────────────────────────────
 function openNewWOModal() {
-  document.getElementById('wo-prop-filter').value = '';
-  document.getElementById('wo-owner-ref').value = '';
+  // Clear EVERY field so nothing persists from previous WO creation
+  var toClear = ['wo-prop-filter','wo-owner-ref','wo-sched-date-opt'];
+  toClear.forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  // Clear textareas and reset selects
+  var desc = document.getElementById('wo-desc'); if(desc) desc.value='';
+  var notes = document.getElementById('wo-notes'); if(notes) notes.value='';
+  var trade = document.getElementById('wo-trade'); if(trade) trade.value='';
+  var priority = document.getElementById('wo-priority'); if(priority) priority.value='normal';
+  var type = document.getElementById('wo-type'); if(type) type.value='manual';
+  var ownerRef = document.getElementById('wo-owner-ref'); if(ownerRef) ownerRef.value='';
+  // Hide conditional sections
   document.getElementById('wo-prop-preview').style.display = 'none';
   document.getElementById('wo-unit-group').style.display = 'none';
-  document.getElementById('wo-sched-date-opt').value = '';
+  var swg = document.getElementById('wo-sched-window-group'); if(swg) swg.style.display='none';
+  // Reset property select to empty (clears tenant auto-fill)
   var sorted = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
   populatePropSelect('wo-property', sorted, '');
-  // Populate optional vendor dropdown
+  // Reset unit select
+  var unitSel = document.getElementById('wo-unit'); if(unitSel) unitSel.innerHTML='<option value="">Select unit...</option>';
+  // Reset vendor dropdown
   var vs = document.getElementById('wo-vendor-opt');
   if (vs) vs.innerHTML = '<option value="">Assign after creation</option>' +
     safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){
       return '<option value="'+v.ID+'">'+v.Name+' — '+v.Trade+'</option>';
     }).join('');
-  // Populate schedule time window
+  // Populate schedule time window options
   var sw = document.getElementById('wo-sched-window-opt');
-  if (sw && !sw.options.length) sw.innerHTML = buildTimeWindowOpts();
-  var sd = document.getElementById('wo-sched-date-opt');
-  if (sd) sd.addEventListener('change', function(){
-    document.getElementById('wo-sched-window-group').style.display = sd.value ? '' : 'none';
-  });
+  if (sw) sw.innerHTML = buildTimeWindowOpts();
   openModal('modal-new-wo');
 }
 
@@ -1339,22 +1374,38 @@ function submitNewWO() {
 
 // ── Properties page ──────────────────────────────────────────
 function renderPropertiesPage() {
-  var search = ((document.getElementById('prop-search')||{}).value||'').toLowerCase();
+  var search = ((document.getElementById('prop-search')||{}).value||'').toLowerCase().trim();
   var props = sortPropsNumeric(safeArray(state.properties).filter(function(p){
     if (p.Active==='FALSE') return false;
     if (!search) return true;
-    return (p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search);
+    return (p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search)||(p.Owner_ID||'').includes(search);
   }));
   var el = document.getElementById('properties-list');
-  if (!props.length) { el.innerHTML='<div class="loading">No properties found</div>'; return; }
-  el.innerHTML = '<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Lockbox</th><th>Access Notes</th><th>Open WOs</th><th></th></tr></thead><tbody>' +
+  if (!el) return;
+  if (!props.length) {
+    el.innerHTML = search
+      ? '<div class="loading">No properties match "'+esc(search)+'"</div>'
+      : '<div class="loading">No properties loaded — try refreshing the page</div>';
+    return;
+  }
+  el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+props.length+' propert'+(props.length===1?'y':'ies')+'</div>' +
+    '<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Access Notes</th><th>Open WOs</th><th></th></tr></thead><tbody>' +
     props.map(function(p){
-      var open = state.workorders.filter(function(w){return w.Property_ID===p.ID&&!['Complete','Paid'].includes(w.Status);}).length;
-      return '<tr><td>'+p.Address+'</td><td>'+(p.City||'—')+'</td><td>'+(p.Type||'—')+'</td>' +
-        '<td style="color:var(--accent);font-weight:bold">'+(p.Lockbox_Code||'—')+'</td>' +
-        '<td style="font-size:11px;color:var(--muted);max-width:200px">'+(p.Access_Notes?'<span style="color:var(--accent2)">'+p.Access_Notes.substring(0,50)+(p.Access_Notes.length>50?'…':'')+'</span>':'—')+'</td>' +
-        '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
-        '<td><button class="btn small secondary" onclick="openEditPropertyModal(\''+p.ID+'\')">Edit</button></td></tr>';
+      // String comparison — IDs can be numbers or strings depending on source
+      var open = safeArray(state.workorders).filter(function(w){
+        return String(w.Property_ID)===String(p.ID) && !['Complete','Paid','Invoiced','Cancelled','Declined'].includes(w.Status);
+      }).length;
+      var owner = safeArray(state.owners).find(function(o){return String(o.ID)===String(p.Owner_ID);});
+      return '<tr>' +
+        '<td style="font-weight:bold;color:var(--accent)">'+(p.Address||'—')+'</td>' +
+        '<td>'+(p.City||'—')+'</td>' +
+        '<td style="color:var(--muted);font-size:11px">'+(p.Type||'—')+'</td>' +
+        '<td style="font-size:11px">'+(p.Access_Notes?'<span style="color:var(--accent2)">'+esc(p.Access_Notes.substring(0,60))+(p.Access_Notes.length>60?'…':'')+'</span>':'<span style="color:var(--border)">—</span>')+'</td>' +
+        '<td>'+(open>0?'<span style="color:var(--warn);font-weight:bold">'+open+'</span>':'<span style="color:var(--muted)">0</span>')+'</td>' +
+        '<td style="display:flex;gap:4px">' +
+          '<button class="btn small secondary" onclick="openEditPropertyModal(\''+p.ID+'\')">Edit</button>' +
+          (open>0?'<button class="btn small secondary" onclick="showPage(\'workorders\',document.querySelector(\'[onclick*=workorders]\'));setTimeout(function(){document.getElementById(\'f-property\').value=\''+p.ID+'\';renderWOPage();},200)" title="View open WOs">'+open+' WOs</button>':'') +
+        '</td></tr>';
     }).join('') + '</tbody></table>';
 }
 
@@ -2892,18 +2943,29 @@ function injectMasterKeyInfo(wo) {
       </div>
       <div class="form-group">
         <label>Key Type *</label>
-        <select id="ak-type" style="width:100%">
-          <option value="Lockbox">🔒 Lockbox (physical box)</option>
-          <option value="Electronic">📱 Electronic / Keypad (code on door)</option>
-          <option value="Physical_Key">🗝️ Physical Key (traditional key)</option>
-          <option value="Gate_Code">🚪 Gate Code</option>
-          <option value="Building_Code">🏢 Building Entry Code</option>
+        <select id="ak-type" onchange="onKeyTypeChange()" style="width:100%">
+          <optgroup label="Lockboxes">
+            <option value="Lockbox">🔒 Lockbox — physical box, code opens box to get key</option>
+          </optgroup>
+          <optgroup label="Door Codes">
+            <option value="Electronic">📱 Electronic / Keypad — type code directly on door lock</option>
+            <option value="Door Code">🔑 Physical Key Code — stamped code on lock (used with master key system)</option>
+          </optgroup>
+          <optgroup label="Keys">
+            <option value="Unit Key">🗝️ Unit Key — physical key for this unit</option>
+            <option value="Front Door">🚪 Front Door — physical key for building entry</option>
+          </optgroup>
+          <optgroup label="Entry Codes">
+            <option value="Gate Code">🚧 Gate Code — parking or site gate</option>
+            <option value="Building Code">🏢 Building Entry Code</option>
+          </optgroup>
           <option value="Other">Other</option>
         </select>
       </div>
       <div class="form-group">
-        <label>Code / Number</label>
-        <input type="text" id="ak-code" placeholder="e.g. 1234 or #5678*">
+        <label id="ak-code-label">Code / Number</label>
+        <input type="text" id="ak-code" placeholder="e.g. 1234">
+        <div id="ak-code-hint" style="color:var(--muted);font-size:11px;margin-top:4px"></div>
       </div>
       <div class="form-group full">
         <label>Location / Description</label>
@@ -3023,6 +3085,75 @@ async function submitMoveOut() {
     msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message||'Error') + '</div>';
     btn.disabled = false; btn.textContent = 'CONFIRM MOVE OUT';
   }
+}
+
+
+// ── Quick status change ────────────────────────────────────────
+function quickStatusChange(woId, newStatus) {
+  if (!newStatus) return;
+  api('POST','/status',{ wo_id:woId, status:newStatus, updated_by:'Admin', updated_by_role:'admin' })
+    .then(function(res){
+      if (res.success||res.id) { toast('Status → '+newStatus,'success'); loadAll().then(function(){ openWODetail(woId); }); }
+      else toast('Error: '+(res.error||'unknown'),'error');
+    });
+}
+
+// ── Bulk WO status change ──────────────────────────────────────
+var _bulkWOMode = false;
+
+function toggleBulkMode() {
+  _bulkWOMode = !_bulkWOMode;
+  var bar = document.getElementById('bulk-wo-bar');
+  var btn = document.getElementById('btn-bulk-mode');
+  if (bar) bar.style.display = _bulkWOMode ? 'flex' : 'none';
+  if (btn) btn.textContent = _bulkWOMode ? '✕ Cancel Bulk' : '☑ Bulk Edit';
+  if (!_bulkWOMode) renderWOPage();
+  else renderWOPage(); // re-render with checkboxes
+}
+
+function applyBulkStatus() {
+  var status = document.getElementById('bulk-status-sel').value;
+  if (!status) { toast('Select a status','error'); return; }
+  var checked = Array.from(document.querySelectorAll('.wo-bulk-check:checked'));
+  if (!checked.length) { toast('Select at least one WO','error'); return; }
+  if (!confirm('Change '+checked.length+' work order'+(checked.length>1?'s':'')+" to '"+status+"'?")) return;
+  var ids = checked.map(function(cb){ return cb.dataset.woid; });
+  var btn = document.getElementById('bulk-apply-btn');
+  btn.disabled = true; btn.textContent = 'Applying…';
+  Promise.all(ids.map(function(id){
+    return api('POST','/status',{ wo_id:id, status:status, updated_by:'Admin', updated_by_role:'admin' });
+  })).then(function(){
+    toast('Updated '+ids.length+' work order'+(ids.length>1?'s':''),'success');
+    toggleBulkMode();
+    loadAll();
+  }).finally(function(){ btn.disabled=false; btn.textContent='Apply'; });
+}
+
+
+function onKeyTypeChange() {
+  var type = (document.getElementById('ak-type')||{}).value || '';
+  var label = document.getElementById('ak-code-label');
+  var hint  = document.getElementById('ak-code-hint');
+  var lbl = 'Code / Number';
+  var tip = '';
+  if (type === 'Lockbox') {
+    lbl = 'Lockbox Code';
+    tip = 'The 4–6 digit code to open the physical lockbox.';
+  } else if (type === 'Electronic') {
+    lbl = 'Keypad Code';
+    tip = 'The code you type on the electronic keypad to unlock the door (e.g. 1234#).';
+  } else if (type === 'Door Code') {
+    lbl = 'Physical Key Code';
+    tip = 'The stamped code on the lock cylinder. Used with a master key system (e.g. A131).';
+  } else if (type === 'Unit Key' || type === 'Front Door') {
+    lbl = 'Key Tag / Code';
+    tip = 'Key tag number or identifier (e.g. A220). Leave blank if unlabeled.';
+  } else if (type === 'Gate Code') {
+    lbl = 'Gate Code';
+    tip = 'Enter the gate entry code.';
+  }
+  if (label) label.textContent = lbl;
+  if (hint)  hint.textContent  = tip;
 }
 
 </script>
