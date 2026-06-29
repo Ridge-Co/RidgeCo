@@ -3302,6 +3302,7 @@ function uploadWOFiles(input, woId, property, fileType) {
       file_name: file.name,
       file_type: fileType || 'photo',
       mime_type: file.type || 'application/octet-stream',
+      origin:    window.location.origin,
     }).then(function(res) {
       if (!res.success || !res.upload_url) {
         card.style.borderColor = 'var(--danger)';
