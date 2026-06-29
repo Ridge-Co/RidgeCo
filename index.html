@@ -6,8 +6,8 @@
 <title>Ridge Co — Maintenance Hub</title>
 <style>
   :root {
-    --bg: #06091a; --surface: #0d1835; --surface2: #142040; --border: #1e2d55;
-    --text: #f8faff; --muted: #94a8c8; --accent: #4575d4; --accent2: #4ade80;
+    --bg: #040810; --surface: #0d1c38; --surface2: #172d4e; --border: #2e4578;
+    --text: #edf2ff; --muted: #8aaed4; --accent: #4d7de8; --accent2: #4ade80;
     --danger: #f87171; --warn: #f59e0b; --info: #7ab4f0; --radius: 6px;
     --font: 'Courier New', monospace;
   }
@@ -511,8 +511,9 @@
       <div class="form-group"><label>Company (optional)</label><input type="text" id="v-company" placeholder="Smith Plumbing LLC"></div>
       <div class="form-group"><label>Phone (SMS)</label><input type="tel" id="v-phone" placeholder="+14435551234"></div>
       <div class="form-group"><label>Email (optional)</label><input type="email" id="v-email" placeholder="mike@example.com"></div>
-      <div class="form-group"><label>Trade</label><select id="v-trade"><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
+      <div class="form-group"><label>Hourly Rate ($)</label><input type="number" id="v-rate" placeholder="40" min="0" step="0.01"></div>
       <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
+      <div class="form-group full"><label>Trades — check all that apply</label><div id="v-trades-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;margin-top:4px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Plumbing" style="width:auto;padding:0"> Plumbing</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="HVAC" style="width:auto;padding:0"> HVAC</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Electric" style="width:auto;padding:0"> Electric</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="General" style="width:auto;padding:0"> General</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Appliance" style="width:auto;padding:0"> Appliance</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Landscaping" style="width:auto;padding:0"> Landscaping</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Roofing" style="width:auto;padding:0"> Roofing</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Pest Control" style="width:auto;padding:0"> Pest Control</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Painting" style="width:auto;padding:0"> Painting</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Carpentry" style="width:auto;padding:0"> Carpentry</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Other" style="width:auto;padding:0"> Other</label></div></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="v-rates" placeholder="Hourly rate, trip charge, etc..."></textarea></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-add-vendor')">Cancel</button><button class="btn" onclick="submitAddVendor()">Add Vendor</button></div>
@@ -1139,6 +1140,70 @@ function openWODetail(woId) {
     '<tr><td style="color:var(--muted)">Owner Ref #</td><td style="color:var(--info);font-weight:bold;letter-spacing:0.05em">'+(wo.Owner_WO_Ref||'<span style="color:var(--muted)">—</span>')+'</td></tr>' +
     '<tr><td style="color:var(--muted);font-size:10px">Property ID (raw)</td><td style="color:var(--muted);font-size:11px">'+(wo.Property_ID||'—')+'</td></tr>' +
     '</table>';
+  // ── C: Drive folder + QBO status ────────────────────────
+  var driveUrl  = wo.Drive_Folder_URL || '';
+  var qboInv    = wo.QBO_Invoice_Number || '';
+  var qboStatus = wo.Invoice_Status || '';
+  var statusHtml = driveUrl || qboInv ? (
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;padding:8px 0;border-top:1px solid var(--border)">' +
+    (driveUrl ? '<a href="'+esc(driveUrl)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--info);font-size:11px;text-decoration:none">📁 Drive Folder</a>' : '') +
+    (qboInv  ? '<span style="background:var(--surface2);border:1px solid var(--accent2);border-radius:4px;padding:4px 10px;color:var(--accent2);font-size:11px">QBO Inv# '+esc(qboInv)+'</span>' : '') +
+    (qboStatus ? '<span style="color:var(--muted);font-size:11px;padding:4px 0">'+esc(qboStatus)+'</span>' : '') +
+    '</div>'
+  ) : '';
+  document.getElementById('detail-body').innerHTML += statusHtml;
+
+  // ── B: Photo upload section ────────────────────────────
+  var propForUpload = prop ? (prop.Address||'') : '';
+  var photoHtml = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+    '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase">📷 PHOTOS & FILES</div>' +
+    '<div style="display:flex;gap:6px">' +
+    '<label style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:5px 10px;font-family:var(--font);font-size:11px;cursor:pointer">' +
+    '+ Photo/Video<input type="file" accept="image/*,video/*" multiple onchange="uploadWOFiles(this,\''+woId+'\',\''+esc(propForUpload)+'\',\'photo\')" style="display:none"></label>' +
+    '<label style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:5px 10px;font-family:var(--font);font-size:11px;cursor:pointer">' +
+    '+ Receipt<input type="file" accept="image/*,application/pdf" multiple onchange="uploadWOFiles(this,\''+woId+'\',\''+esc(propForUpload)+'\',\'receipt\')" style="display:none"></label>' +
+    '</div></div>' +
+    '<div id="wo-uploads-'+woId+'" style="display:flex;flex-wrap:wrap;gap:6px;min-height:24px">' +
+    '<span style="color:var(--muted);font-size:11px">Loading files…</span></div>' +
+  '</div>';
+  document.getElementById('detail-body').innerHTML += photoHtml;
+  loadWOAttachments(woId);
+
+  // ── B: Invoice builder ─────────────────────────────────
+  var invoiceHtml = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px" id="invoice-builder-'+woId+'">' +
+    '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:12px">🧾 INVOICE BUILDER</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">' +
+    '<div style="background:var(--surface);border-radius:6px;padding:10px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.06em;margin-bottom:6px">VENDOR COST (what you owe)</div>' +
+    '<div id="inv-vendor-breakdown-'+woId+'" style="font-size:12px;color:var(--muted)">Loading…</div>' +
+    '</div>' +
+    '<div style="background:var(--surface);border-radius:6px;padding:10px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.06em;margin-bottom:6px">YOUR CHARGE TO CUSTOMER</div>' +
+    '<div style="display:flex;align-items:center;gap:6px">' +
+    '<span style="color:var(--muted);font-size:18px">$</span>' +
+    '<input type="number" id="inv-charge-'+woId+'" placeholder="0.00" min="0" step="0.01"' +
+    ' value="'+(wo.Customer_Charge||'')+'"' +
+    ' oninput="calcInvoiceMarkup(\''+woId+'\')"' +
+    ' style="flex:1;background:var(--surface2);border:1px solid var(--accent);color:var(--text);font-family:var(--font);font-size:18px;padding:8px;border-radius:6px">' +
+    '</div>' +
+    '<div id="inv-markup-'+woId+'" style="color:var(--accent2);font-size:11px;margin-top:4px"></div>' +
+    '</div>' +
+    '</div>' +
+    '<div style="margin-bottom:10px">' +
+    '<label style="color:var(--muted);font-size:11px;letter-spacing:.06em">MEMO FOR CUSTOMER INVOICE</label>' +
+    '<textarea id="inv-memo-'+woId+'" placeholder="What was done (visible on customer invoice)…"' +
+    ' style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:60px;resize:vertical;margin-top:4px">'+esc(wo.Invoice_Memo||wo.Description||'')+'</textarea>' +
+    '</div>' +
+    '<div style="display:flex;gap:8px">' +
+    '<button onclick="fireInvoiceWebhook(\''+woId+'\')" style="background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 16px;cursor:pointer">🚀 Send to Make → QBO</button>' +
+    '<button onclick="saveDraftInvoice(\''+woId+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;font-family:var(--font);font-size:12px;padding:8px 14px;cursor:pointer">💾 Save Draft</button>' +
+    '<div id="inv-msg-'+woId+'" style="font-size:11px;color:var(--muted);padding:8px 0"></div>' +
+    '</div>' +
+  '</div>';
+  document.getElementById('detail-body').innerHTML += invoiceHtml;
+  loadVendorBillForInvoice(woId);
+
   // Materials section for this WO
   var matHtml = '<div style="margin-top:14px">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
@@ -1152,6 +1217,29 @@ function openWODetail(woId) {
   // Append audit section after the detail body builds
   document.getElementById('detail-body').innerHTML += auditHtml;
   // Load audit trail
+  // Load vendor bill if exists
+  api('GET','/vendor-bills?wo_id='+woId).then(function(bills){
+    if (!Array.isArray(bills)||!bills.length) return;
+    var bill = bills[bills.length-1]; // most recent
+    var items = [];
+    try { items = JSON.parse(bill.Receipt_Items||'[]'); } catch(e){}
+    var billHtml = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+      '<div style="color:var(--accent2);font-size:11px;letter-spacing:.1em;text-transform:uppercase">💰 VENDOR BILL — ' + esc(bill.Bill_Status||'submitted') + '</div>' +
+      '<div style="color:var(--accent2);font-size:1.4rem;font-weight:bold">$' + parseFloat(bill.Grand_Total||0).toFixed(2) + '</div></div>' +
+      '<div style="font-size:12px;line-height:1.8;color:var(--muted)">' +
+      (parseFloat(bill.Labor_Total)>0 ? '<div>⏱ Labor: ' + bill.Labor_Hours + ' hrs × $' + bill.Labor_Rate + '/hr = <span style="color:var(--text)">$' + parseFloat(bill.Labor_Total).toFixed(2) + '</span></div>' : '') +
+      (parseFloat(bill.Flat_Amount)>0 ? '<div>📋 Flat rate: <span style="color:var(--text)">$' + parseFloat(bill.Flat_Amount).toFixed(2) + '</span></div>' : '') +
+      (parseFloat(bill.Truck_Amount)>0 ? '<div>🚚 Truck stock' + (bill.Truck_Desc?' ('+bill.Truck_Desc+')':'') + ': <span style="color:var(--text)">$' + parseFloat(bill.Truck_Amount).toFixed(2) + '</span></div>' : '') +
+      items.map(function(r){ return '<div>🧾 ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(r.url)+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+      (bill.Notes ? '<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">' + esc(bill.Notes) + '</div>' : '') +
+      '</div>' +
+      '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="margin-top:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
+    '</div>';
+    var db = document.getElementById('detail-body');
+    if (db) db.innerHTML += billHtml;
+  });
+
   // Fetch fresh lockbox/keys data every time WO detail opens
   if (wo.Unit_ID || wo.Property_ID) {
     var keysUrl = wo.Unit_ID
@@ -1416,7 +1504,7 @@ function renderVendorsPage() {
   if (!vendors.length) { el.innerHTML='<div class="loading">No vendors yet</div>'; return; }
   el.innerHTML = '<table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
-    '<th>Name</th><th>Trade</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
@@ -1424,7 +1512,7 @@ function renderVendorsPage() {
       return '<tr>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+v.ID+'" data-type="vendor" data-name="'+nm+'" data-phone="'+(v.Phone||'')+'" onchange="updatePinActionBar(\'vendors-action-bar\')"></td>' +
         '<td>'+nm+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
-        '<td>'+(v.Trade||'—')+'</td>' +
+        '<td>'+(v.Trades ? v.Trades.split(',').map(function(t){return '<span style="display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:10px;margin:1px">'+t.trim()+'</span>';}).join(' ') : (v.Trade||'—'))+'</td>' +
         '<td><a href="tel:'+v.Phone+'" style="color:var(--accent);text-decoration:none">'+(v.Phone||'—')+'</a></td>' +
         '<td>'+(v.Markets||'—')+'</td>' +
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
@@ -1553,7 +1641,8 @@ function submitAddProperty() {
 // ── Add Vendor ───────────────────────────────────────────────
 function openAddVendorModal(){openModal('modal-add-vendor');}
 function submitAddVendor(){
-  var body={Name:document.getElementById('v-name').value,Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:document.getElementById('v-trade').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
+  var trades = Array.from(document.querySelectorAll('.v-trade-check:checked')).map(function(c){return c.value;}).join(',');
+  var body={Name:document.getElementById('v-name').value,Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
   if(!body.Name){toast('Name required','error');return;}
   if(!body.Phone){toast('Phone required','error');return;}
   api('POST','/vendor/add',body).then(function(res){
@@ -2383,7 +2472,7 @@ function renderMaterials() {
 
   var STORES = {'Home Depot':'#F96302','Lowes':'#004990','Amazon':'#FF9900','Supplies':'#4ade80','Other':'#888'};
   var STATUS_STYLE = {
-    'needed':    'background:#1e3a5f;color:var(--info)',
+    'needed':    'background:#1a3e72;color:var(--info)',
     'purchased': 'background:#1f2d1f;color:var(--accent2)',
     'on-hand':   'background:#2d2000;color:var(--warn)',
     'return':    'background:#3b0000;color:var(--danger)',
@@ -3154,6 +3243,196 @@ function onKeyTypeChange() {
   }
   if (label) label.textContent = lbl;
   if (hint)  hint.textContent  = tip;
+}
+
+
+function markBillReviewed(billId) {
+  api('POST','/vendor-bill/update',{id:billId,fields:{Bill_Status:'reviewed'}}).then(function(res){
+    if(res.success||res.id) toast('Bill marked as reviewed','success');
+  });
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  PHOTO UPLOAD / ATTACHMENTS
+// ══════════════════════════════════════════════════════════════
+
+function uploadWOFiles(input, woId, property, fileType) {
+  var files = Array.from(input.files);
+  if (!files.length) return;
+  var container = document.getElementById('wo-uploads-' + woId);
+  if (container) {
+    var existingSpan = container.querySelector('span');
+    if (existingSpan && existingSpan.textContent === 'Loading files…') existingSpan.remove();
+  }
+
+  files.forEach(function(file) {
+    // Show uploading indicator
+    var indicator = document.createElement('div');
+    indicator.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--muted)';
+    indicator.textContent = '⏳ ' + file.name.substring(0, 20) + (file.name.length > 20 ? '…' : '');
+    if (container) container.appendChild(indicator);
+
+    var fd = new FormData();
+    fd.append('file', file);
+    fd.append('wo_id', woId);
+    fd.append('property', property);
+    fd.append('file_type', fileType);
+
+    fetch(WORKER + '/upload-photo', {
+      method: 'POST',
+      headers: { 'X-Auth-Token': AUTH_TOKEN },
+      body: fd,
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (res.success) {
+        var isVideo = file.type.startsWith('video/');
+        indicator.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--accent2);border-radius:4px;padding:4px 8px;font-size:11px';
+        indicator.innerHTML = (isVideo ? '🎥' : fileType === 'receipt' ? '🧾' : '📷') +
+          ' <a href="' + esc(res.url) + '" target="_blank" style="color:var(--info);text-decoration:none">' +
+          esc(file.name.substring(0, 18)) + '</a>';
+        toast('Uploaded: ' + file.name, 'success');
+      } else {
+        indicator.style.border = '1px solid var(--danger)';
+        indicator.style.color  = 'var(--danger)';
+        indicator.textContent = '⚠ Failed: ' + (res.error || 'unknown');
+      }
+    })
+    .catch(function(e) {
+      indicator.style.color = 'var(--danger)';
+      indicator.textContent = '⚠ Error: ' + e.message;
+    });
+  });
+
+  // Reset input so same file can be re-selected if needed
+  input.value = '';
+}
+
+function loadWOAttachments(woId) {
+  var container = document.getElementById('wo-uploads-' + woId);
+  if (!container) return;
+  api('GET', '/attachments?wo_id=' + woId).then(function(items) {
+    if (!Array.isArray(items) || !items.length) {
+      container.innerHTML = '<span style="color:var(--muted);font-size:11px">No files yet — use the buttons above to upload</span>';
+      return;
+    }
+    var TYPE_ICON = { photo: '📷', receipt: '🧾', video: '🎥', bill: '📄' };
+    container.innerHTML = items.map(function(f) {
+      var icon = TYPE_ICON[f.File_Type] || '📎';
+      return '<a href="' + esc(f.Drive_URL) + '" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--info);text-decoration:none;max-width:150px;overflow:hidden">' +
+        icon + ' <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(f.File_Name || 'file') + '</span></a>';
+    }).join('');
+  }).catch(function() {
+    container.innerHTML = '<span style="color:var(--muted);font-size:11px">Could not load files</span>';
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  INVOICE BUILDER
+// ══════════════════════════════════════════════════════════════
+
+function loadVendorBillForInvoice(woId) {
+  var el = document.getElementById('inv-vendor-breakdown-' + woId);
+  if (!el) return;
+  api('GET', '/vendor-bills?wo_id=' + woId).then(function(bills) {
+    if (!Array.isArray(bills) || !bills.length) {
+      el.innerHTML = '<span style="color:var(--muted)">No vendor bill submitted yet</span>';
+      return;
+    }
+    var b = bills[bills.length - 1];
+    var lines = [];
+    if (parseFloat(b.Labor_Total)   > 0) lines.push('⏱ Labor: ' + b.Labor_Hours + 'hrs × $' + b.Labor_Rate + ' = <b>$' + parseFloat(b.Labor_Total).toFixed(2) + '</b>');
+    if (parseFloat(b.Flat_Amount)   > 0) lines.push('📋 Flat: <b>$' + parseFloat(b.Flat_Amount).toFixed(2) + '</b>');
+    if (parseFloat(b.Truck_Amount)  > 0) lines.push('🚚 Truck: ' + esc(b.Truck_Desc || '') + ' <b>$' + parseFloat(b.Truck_Amount).toFixed(2) + '</b>');
+    if (parseFloat(b.Receipts_Total)> 0) lines.push('🧾 Receipts: <b>$' + parseFloat(b.Receipts_Total).toFixed(2) + '</b>');
+    var total = parseFloat(b.Grand_Total || 0);
+    lines.push('<span style="border-top:1px solid var(--border);padding-top:4px;display:block;margin-top:4px">TOTAL COST: <b style="color:var(--danger)">$' + total.toFixed(2) + '</b></span>');
+    el.innerHTML = lines.join('<br>');
+
+    // Pre-fill customer charge with vendor total (user adjusts from here)
+    var chargeEl = document.getElementById('inv-charge-' + woId);
+    if (chargeEl && !chargeEl.value) chargeEl.value = total.toFixed(2);
+    calcInvoiceMarkup(woId);
+  }).catch(function() {
+    el.innerHTML = '<span style="color:var(--muted)">Could not load vendor bill</span>';
+  });
+}
+
+function calcInvoiceMarkup(woId) {
+  var chargeEl   = document.getElementById('inv-charge-' + woId);
+  var markupEl   = document.getElementById('inv-markup-' + woId);
+  var vendorEl   = document.getElementById('inv-vendor-breakdown-' + woId);
+  if (!chargeEl || !markupEl) return;
+
+  var charge = parseFloat(chargeEl.value) || 0;
+  // Extract vendor total from the breakdown element
+  var costMatch = vendorEl ? vendorEl.textContent.match(/TOTAL COST:.*?\$([0-9.]+)/) : null;
+  var cost = costMatch ? parseFloat(costMatch[1]) : 0;
+
+  if (charge > 0 && cost > 0) {
+    var markup = charge - cost;
+    var pct    = ((markup / cost) * 100).toFixed(0);
+    var color  = markup >= 0 ? 'var(--accent2)' : 'var(--danger)';
+    markupEl.innerHTML = '<span style="color:' + color + '">Markup: $' + markup.toFixed(2) + ' (' + pct + '%)</span>';
+  } else {
+    markupEl.innerHTML = '';
+  }
+}
+
+function saveDraftInvoice(woId) {
+  var charge = (document.getElementById('inv-charge-' + woId)||{}).value || '';
+  var memo   = (document.getElementById('inv-memo-'   + woId)||{}).value || '';
+  var msgEl  = document.getElementById('inv-msg-' + woId);
+  api('POST', '/wo/set-qbo-info', { id: woId, fields: { Customer_Charge: charge, Invoice_Memo: memo, Invoice_Status: 'Draft' } })
+    .then(function(res) {
+      if (msgEl) msgEl.textContent = '✓ Saved draft';
+      setTimeout(function(){ if(msgEl) msgEl.textContent=''; }, 2000);
+    });
+}
+
+function fireInvoiceWebhook(woId) {
+  var charge = parseFloat((document.getElementById('inv-charge-' + woId)||{}).value) || 0;
+  var memo   = ((document.getElementById('inv-memo-'   + woId)||{}).value || '').trim();
+  var msgEl  = document.getElementById('inv-msg-' + woId);
+  if (charge <= 0) { if(msgEl) msgEl.textContent = '⚠ Enter customer charge first'; return; }
+  if (!confirm('Send WO-' + woId + ' to Make → QuickBooks?\n\nCustomer charge: $' + charge.toFixed(2))) return;
+
+  if(msgEl) msgEl.textContent = '⏳ Sending to Make…';
+
+  var wo   = safeArray(state.workorders).find(function(w){return w.ID===woId;}) || {};
+  var prop = safeArray(state.properties).find(function(p){return String(p.ID)===String(wo.Property_ID);}) || {};
+  var own  = safeArray(state.owners).find(function(o){return String(o.ID)===String(prop.Owner_ID);}) || {};
+  var vend = safeArray(state.vendors).find(function(v){return String(v.ID)===String(wo.Vendor_ID);}) || {};
+
+  var payload = {
+    wo_id:            woId,
+    property_address: prop.Address || '',
+    property_id:      wo.Property_ID || '',
+    unit:             wo.Unit_ID || '',
+    description:      wo.Description || '',
+    owner_name:       own.First_Name + ' ' + (own.Last_Name||''),
+    owner_email:      own.Email || '',
+    vendor_name:      vend.Name || '',
+    vendor_id:        wo.Vendor_ID || '',
+    customer_charge:  charge,
+    invoice_memo:     memo,
+    drive_folder_url: wo.Drive_Folder_URL || '',
+    drive_folder_id:  wo.Drive_Folder_ID  || '',
+    wo_status:        wo.Status || '',
+  };
+
+  api('POST', '/fire-make-webhook', payload).then(function(res) {
+    if (res.success || res.status === 200) {
+      api('POST', '/wo/set-qbo-info', { id: woId, fields: { Customer_Charge: String(charge), Invoice_Memo: memo, Invoice_Status: 'Sent to QBO' } });
+      if(msgEl) msgEl.innerHTML = '<span style="color:var(--accent2)">✓ Sent to Make</span>';
+      toast('Invoice pipeline triggered for ' + woId, 'success');
+    } else {
+      if(msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(res.error || res.response || 'Error') + '</span>';
+    }
+  }).catch(function(e) {
+    if(msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>';
+  });
 }
 
 </script>
