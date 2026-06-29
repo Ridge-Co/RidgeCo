@@ -736,6 +736,7 @@ var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
 var SECRET_KEY = 'mh_auth';
 var AUTH_TOKEN = '';
 var state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };
+function esc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function safeArray(v) { return Array.isArray(v) ? v : []; }
 var assignWOId = null;
 var invoiceWOId = null;
