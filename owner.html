@@ -1039,9 +1039,9 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
       }).catch(function(){});
 
       var isVideo = file.type.startsWith('video/');
-      var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '\U0001f4f7' :
-                 fileType === 'receipt' ? '\U0001f9fe' : fileType === 'report' ? '\u26a0\ufe0f' :
-                 isVideo ? '\U0001f3a5' : '\U0001f4f7';
+      var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
+                 fileType === 'receipt' ? '🧾' : fileType === 'report' ? '\u26a0\ufe0f' :
+                 isVideo ? '🎥' : '📷';
       card.style.borderColor = 'var(--accent2)'; card.style.color = 'var(--text)';
       card.innerHTML = icon + ' <a href="' + esc(fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,16)) + '</a>';
       return nextFolder;
@@ -1098,8 +1098,8 @@ function loadPortalAttachments(woId, opts) {
       var ph = el.querySelector('.upload-ph');
       if (ph) ph.remove();
       byType[type].forEach(function(f) {
-        var icon = type === 'after' ? '\u2705' : type === 'before' ? '\U0001f4f7' :
-                   type === 'receipt' ? '\U0001f9fe' : type === 'report' ? '\u26a0\ufe0f' : '\U0001f4ce';
+        var icon = type === 'after' ? '\u2705' : type === 'before' ? '📷' :
+                   type === 'receipt' ? '🧾' : type === 'report' ? '\u26a0\ufe0f' : '📎';
         var a = document.createElement('a');
         a.href = f.Drive_URL || '#'; a.target = '_blank';
         a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
@@ -1114,10 +1114,10 @@ function loadPortalAttachments(woId, opts) {
 function buildPhotoSection(woId, propAddr, opts) {
   opts = opts || { canBefore: true, canAfter: true, canReport: false, canReceipt: true, viewAll: true };
   var TYPE_CONFIG = {
-    before:  { label: 'BEFORE',  icon: '\U0001f4f7', color: 'var(--warn)',     accept: 'image/*,video/*', cap: 'environment' },
+    before:  { label: 'BEFORE',  icon: '📷', color: 'var(--warn)',     accept: 'image/*,video/*', cap: 'environment' },
     after:   { label: 'AFTER',   icon: '\u2705',    color: 'var(--accent2)', accept: 'image/*,video/*', cap: 'environment' },
     report:  { label: 'REPORT ISSUE', icon: '\u26a0\ufe0f', color: 'var(--danger)', accept: 'image/*,video/*', cap: 'environment' },
-    receipt: { label: 'RECEIPT', icon: '\U0001f9fe', color: 'var(--muted)',    accept: 'image/*,application/pdf', cap: '' },
+    receipt: { label: 'RECEIPT', icon: '🧾', color: 'var(--muted)',    accept: 'image/*,application/pdf', cap: '' },
   };
 
   var uploadBtns = '';
@@ -1147,7 +1147,7 @@ function buildPhotoSection(woId, propAddr, opts) {
 
   return '<div style="margin-top:12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
-    '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">\U0001f4f7 PHOTOS & FILES</span>' +
+    '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">📷 PHOTOS & FILES</span>' +
     '<div style="display:flex;gap:5px;flex-wrap:wrap">' + uploadBtns + '</div></div>' +
     sections + '</div>';
 }
