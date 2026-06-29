@@ -399,6 +399,12 @@
   </div>
 
   <div class="page" id="page-devlog">
+    <div class="section-title" style="margin-bottom:10px">DATA TOOLS</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <button class="btn small" onclick="runAdminTool('fix-pins')" style="background:var(--accent2);color:#000">🔑 Fix PINs + Phones</button>
+      <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
+    </div>
+    <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <button class="btn danger small" onclick="clearErrorLog()">Clear Errors</button>
       <button class="btn secondary small" onclick="clearWishlist()">Clear Wishlist</button>
@@ -3278,52 +3284,82 @@ function uploadWOFiles(input, woId, property, fileType) {
   if (!files.length) return;
   var container = document.getElementById('wo-uploads-' + woId);
   if (container) {
-    var existingSpan = container.querySelector('span');
-    if (existingSpan && existingSpan.textContent === 'Loading files…') existingSpan.remove();
+    var stale = container.querySelector('span');
+    if (stale && stale.textContent === 'Loading files…') stale.remove();
   }
 
   files.forEach(function(file) {
     // Show uploading indicator
-    var indicator = document.createElement('div');
-    indicator.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--muted)';
-    indicator.textContent = '⏳ ' + file.name.substring(0, 20) + (file.name.length > 20 ? '…' : '');
-    if (container) container.appendChild(indicator);
+    var card = document.createElement('div');
+    card.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--muted)';
+    card.textContent = '⏳ ' + file.name.substring(0, 20);
+    if (container) container.appendChild(card);
 
-    var fd = new FormData();
-    fd.append('file', file);
-    fd.append('wo_id', woId);
-    fd.append('property', property);
-    fd.append('file_type', fileType);
-
-    fetch(WORKER + '/upload-photo', {
-      method: 'POST',
-      headers: { 'X-Auth-Token': AUTH_TOKEN },
-      body: fd,
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(res) {
-      if (res.success) {
-        var isVideo = file.type.startsWith('video/');
-        indicator.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--accent2);border-radius:4px;padding:4px 8px;font-size:11px';
-        indicator.innerHTML = (isVideo ? '🎥' : fileType === 'receipt' ? '🧾' : '📷') +
-          ' <a href="' + esc(res.url) + '" target="_blank" style="color:var(--info);text-decoration:none">' +
-          esc(file.name.substring(0, 18)) + '</a>';
-        toast('Uploaded: ' + file.name, 'success');
-      } else {
-        indicator.style.border = '1px solid var(--danger)';
-        indicator.style.color  = 'var(--danger)';
-        indicator.textContent = '⚠ Failed: ' + (res.error || 'unknown');
+    // Step 1: ask worker to create a Drive upload session
+    api('POST', '/create-upload-session', {
+      wo_id:     woId,
+      property:  property || 'Unknown Property',
+      file_name: file.name,
+      file_type: fileType || 'photo',
+      mime_type: file.type || 'application/octet-stream',
+    }).then(function(res) {
+      if (!res.success || !res.upload_url) {
+        card.style.borderColor = 'var(--danger)';
+        card.style.color = 'var(--danger)';
+        card.textContent = '⚠ Session error: ' + (res.error || 'unknown');
+        return;
       }
-    })
-    .catch(function(e) {
-      indicator.style.color = 'var(--danger)';
-      indicator.textContent = '⚠ Error: ' + e.message;
+
+      card.textContent = '↑ Uploading…';
+
+      // Step 2: browser uploads file DIRECTLY to Drive (worker never touches binary)
+      fetch(res.upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(fileData) {
+        if (!fileData || !fileData.id) {
+          card.style.borderColor = 'var(--danger)';
+          card.style.color = 'var(--danger)';
+          card.textContent = '⚠ Upload failed';
+          return;
+        }
+
+        // Step 3: log to Sheets (non-blocking)
+        api('POST', '/log-attachment', {
+          wo_id:        woId,
+          file_id:      fileData.id,
+          file_url:     fileData.webViewLink || '',
+          file_name:    file.name,
+          file_type:    fileType || 'photo',
+          mime_type:    file.type || '',
+          wo_folder_id:  res.wo_folder_id || '',
+          wo_folder_url: res.wo_folder_url || '',
+        }).catch(function(){});
+
+        // Show success link
+        var icon = file.type.startsWith('video/') ? '🎥' : fileType === 'receipt' ? '🧾' : '📷';
+        card.style.borderColor = 'var(--accent2)';
+        card.style.color = 'var(--text)';
+        card.innerHTML = icon + ' <a href="' + (fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,18)) + '</a>';
+        toast('Uploaded: ' + file.name, 'success');
+      })
+      .catch(function(e) {
+        card.style.borderColor = 'var(--danger)';
+        card.style.color = 'var(--danger)';
+        card.textContent = '⚠ Upload error: ' + e.message;
+      });
+    }).catch(function(e) {
+      card.style.borderColor = 'var(--danger)';
+      card.style.color = 'var(--danger)';
+      card.textContent = '⚠ ' + e.message;
     });
   });
-
-  // Reset input so same file can be re-selected if needed
   input.value = '';
 }
+
 
 function loadWOAttachments(woId) {
   var container = document.getElementById('wo-uploads-' + woId);
@@ -3529,6 +3565,28 @@ function bulkSendPins(type) {
         refreshState();
       }
     });
+  });
+}
+
+
+function runAdminTool(tool) {
+  var resultEl = document.getElementById('admin-tool-result');
+  if (resultEl) resultEl.textContent = '⏳ Running ' + tool + '…';
+  api('POST', '/admin/' + tool, {}).then(function(res) {
+    if (res.success) {
+      var msg = '✓ Done — ' + (res.fixes || res.changes || 0) + ' fixes applied';
+      if (res.api_calls) msg += ' (' + res.api_calls + ' API calls)';
+      if (resultEl) resultEl.innerHTML = '<span style="color:var(--accent2)">' + msg + '</span>';
+      toast(msg, 'success');
+      refreshState();
+    } else {
+      var err = '⚠ Error: ' + (res.error || JSON.stringify(res));
+      if (resultEl) resultEl.innerHTML = '<span style="color:var(--danger)">' + err + '</span>';
+      toast(err, 'error');
+    }
+  }).catch(function(e) {
+    var err = '⚠ ' + e.message;
+    if (resultEl) resultEl.innerHTML = '<span style="color:var(--danger)">' + err + '</span>';
   });
 }
 
