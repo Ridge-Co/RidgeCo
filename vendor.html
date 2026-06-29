@@ -144,7 +144,7 @@ input[type=file]{display:none;}
     <div class="login-card">
       <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:0 auto 12px"><rect x="2" y="2" width="44" height="44" rx="8" fill="#142040" stroke="#4575d4" stroke-width="2"/><polygon points="24,8 40,38 8,38" fill="none" stroke="#4575d4" stroke-width="2" stroke-linejoin="round"/><polygon points="24,18 33,38 15,38" fill="#4575d4" fill-opacity="0.4"/></svg>
       <div class="logo">RIDGE CO</div>
-      <div class="logo-sub">VENDOR PORTAL</div>
+      <div class="logo-sub" data-i18n="VENDOR PORTAL">VENDOR PORTAL</div>
       <div style="margin-bottom:16px;">
         <label>FIRST NAME <span style="font-weight:normal;color:var(--muted)">(e.g. Alex, Janice)</span></label>
         <input type="text" id="nameInput" placeholder="Your first name" style="margin-bottom:10px" autocorrect="off" spellcheck="false">
@@ -173,7 +173,7 @@ input[type=file]{display:none;}
       <div class="name" id="vendorName">—</div>
       <div class="role">VENDOR PORTAL</div>
     </div>
-    <button class="btn btn-sm btn-outline" onclick="doLogout()">LOG OUT</button>
+    <button class="btn btn-sm btn-outline" onclick="doLogout()" data-i18n="LOG OUT">LOG OUT</button>
   <button class="btn btn-sm btn-muted" onclick="openFeedback()" style="font-size:10px;padding:4px 8px">💬 FEEDBACK</button>
   </div>
 
@@ -246,11 +246,13 @@ function doLogin() {
       }
       // Success
       session = data;
+      LANG = (data.language === 'es') ? 'es' : 'en';
       failCount = 0;
       updateDots();
       document.getElementById('vendorName').textContent = data.vendor_name;
       show('screenLogin', false);
       show('screenDash', true);
+      applyTranslations();
       loadWorkOrders();
     })
     .catch(function(err) {
@@ -414,7 +416,7 @@ function renderWOs(wos) {
         '<div style="color:var(--text);font-size:12px;white-space:pre-wrap">' + esc(wo.access_notes) + '</div></div>' : '') +
         '<div style="margin-bottom:8px;"><div class="detail-label" style="margin-bottom:6px;">ACCESS KEYS</div>' + lbHtml + '</div>' +
         '<div class="action-section">' +
-          '<div class="action-title">UPDATE STATUS</div>' +
+          '<div class="action-title">UPDATE STATUS</div><!-- i18n:UPDATE STATUS -->' +
           '<div class="status-btns">' + statusBtns + '</div>' +
           '<textarea id="notes-' + idx + '" placeholder="Add notes (optional)…"></textarea>' +
           '<div class="btn-row">' +
@@ -468,7 +470,7 @@ function submitStatus(woId, idx) {
   api('/status', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ wo_id: woId, status: status, notes: notes, updated_by: session.vendor_name, updated_by_role: 'vendor' }),
+    body: JSON.stringify({ wo_id: woId, status: status, notes: notes, updated_by: session.vendor_name, updated_by_role: 'vendor', vendor_id: session.vendor_id }),
   }).then(function(data) {
     if (data.success) {
       showActionMsg(idx, '✓ Status updated to ' + status, 'success');
@@ -1217,6 +1219,75 @@ async function submitVendorBill() {
     }
   }).catch(function(e){ btn.disabled=false; btn.textContent='SUBMIT BILL'; msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Connection error</div>'; });
 }
+
+// ══════════════════════════════════════════════════════════════
+//  SPANISH / ESPAÑOL SUPPORT
+// ══════════════════════════════════════════════════════════════
+var LANG = 'en';
+
+var ES = {
+  'VENDOR PORTAL':'PORTAL DE CONTRATISTAS',
+  'FIRST NAME':'NOMBRE',
+  'Your first name':'Su nombre',
+  'YOUR ACCESS PIN':'SU PIN DE ACCESO',
+  'SIGN IN':'INICIAR SESIÓN',
+  'LOG OUT':'CERRAR SESIÓN',
+  'Please enter your first name.':'Por favor ingrese su nombre.',
+  'PIN must be 8 characters (3 letters + 5 digits)':'El PIN debe tener 8 caracteres (3 letras + 5 dígitos)',
+  'Connection error.':'Error de conexión. Intente de nuevo.',
+  'MY WORK ORDERS':'MIS ÓRDENES DE TRABAJO',
+  'No work orders assigned.':'No tiene órdenes de trabajo asignadas.',
+  'New':'Nuevo','Assigned':'Asignado','Accepted':'Aceptado',
+  'In Progress':'En Progreso','On Hold':'En Espera','Complete':'Completado',
+  'Pending Invoice':'Factura Pendiente','Invoiced':'Facturado',
+  'Paid':'Pagado','Declined':'Rechazado','Cancelled':'Cancelado',
+  'Urgent':'Urgente','High':'Alto','Normal':'Normal','Low':'Bajo',
+  'ACCESS KEYS':'LLAVES DE ACCESO',
+  'ACCESS INSTRUCTIONS':'INSTRUCCIONES DE ACCESO',
+  'MASTER KEY REQUIRED':'SE REQUIERE LLAVE MAESTRA',
+  'Building Lockbox':'Caja del Edificio',
+  'Unit Lockbox':'Caja de la Unidad',
+  'Door Code':'Código de Puerta',
+  'Electronic Code':'Código Electrónico',
+  'Front Door':'Puerta Principal',
+  'Unit Key':'Llave de Unidad',
+  'Gate Code':'Código de Reja',
+  'UPDATE STATUS':'ACTUALIZAR ESTADO',
+  'SAVE STATUS':'GUARDAR ESTADO',
+  'MATERIALS NEEDED':'MATERIALES NECESARIOS',
+  'SUBMIT BILL':'ENVIAR FACTURA',
+  '💰 Bill':'💰 Facturar',
+  'By the Hour':'Por Hora',
+  'Flat Price':'Precio Fijo',
+  'LABOR':'MANO DE OBRA',
+  'Hours worked':'Horas trabajadas',
+  'Rate/hr':'Tarifa/hr',
+  'Labor total':'Total labor',
+  'FLAT PRICE':'PRECIO FIJO',
+  'TRUCK STOCK USED':'MATERIALES DEL CAMIÓN',
+  'Used truck stock':'Usé materiales del camión',
+  'estimated value':'valor estimado',
+  'RECEIPTS & PURCHASES':'RECIBOS Y COMPRAS',
+  '+ Add':'+ Agregar',
+  'NOTES (optional)':'NOTAS (opcional)',
+  'TOTAL':'TOTAL',
+  'Cancel':'Cancelar',
+  'Enter at least one billable item.':'Ingrese al menos un artículo facturable.',
+};
+
+function t(key) {
+  if (LANG !== 'es') return key;
+  return ES[key] !== undefined ? ES[key] : key;
+}
+
+function applyTranslations() {
+  if (LANG !== 'es') return;
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {
+    el.textContent = t(el.getAttribute('data-i18n'));
+  });
+  document.title = 'Ridge Co — Portal de Contratistas';
+}
+
 </script>
 </body>
 </html>

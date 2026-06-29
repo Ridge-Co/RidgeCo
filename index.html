@@ -1088,7 +1088,12 @@ function openWODetail(woId) {
   var prop = state.properties.find(function(p){return String(p.ID)===String(wo.Property_ID);});
   var unit = state.units.find(function(u){return u.ID===wo.Unit_ID;});
   var vendor = state.vendors.find(function(v){return v.ID===wo.Vendor_ID;});
-  var tenant = state.tenants.find(function(t){return t.ID===wo.Tenant_ID||(unit&&t.ID===unit.Tenant_ID);});
+  // Tenant lookup: stored WO ID → unit's current Tenant_ID → active tenant in unit → active tenant in property
+  var tenant = null;
+  if (wo.Tenant_ID) tenant = state.tenants.find(function(t){return t.ID===wo.Tenant_ID && t.Active!=='FALSE';});
+  if (!tenant && unit && unit.Tenant_ID) tenant = state.tenants.find(function(t){return t.ID===unit.Tenant_ID;});
+  if (!tenant && wo.Unit_ID) tenant = state.tenants.find(function(t){return t.Unit_ID===wo.Unit_ID && t.Active!=='FALSE';});
+  if (!tenant && wo.Property_ID && !wo.Unit_ID) tenant = state.tenants.find(function(t){return String(t.Property_ID)===String(wo.Property_ID) && !t.Unit_ID && t.Active!=='FALSE';});
   document.getElementById('detail-wo-id').textContent = woId;
   var sc = 'badge-'+(wo.Status||'new').toLowerCase().replace(/\s+/g,'');
   var propHtml = '';
@@ -3433,6 +3438,28 @@ function fireInvoiceWebhook(woId) {
   }).catch(function(e) {
     if(msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>';
   });
+}
+
+
+// ── Render notes with [ES]/[EN] translation tags ──────────────
+function renderNoteLines(notesText) {
+  if (!notesText) return '';
+  return notesText.split('\n').map(function(line) {
+    // Attribution lines like [Jun 29 — Alex (vendor)]
+    if (line.match(/^\[\w{3}\s+\d+/)) {
+      return '<div style="color:var(--muted);font-size:10px;margin-top:8px;margin-bottom:2px">' + esc(line) + '</div>';
+    }
+    // Spanish original
+    if (line.startsWith('[ES] ')) {
+      return '<div style="color:var(--text);font-size:12px;padding:4px 8px;background:var(--surface);border-left:2px solid var(--muted);border-radius:0 4px 4px 0;margin-bottom:2px"><span style="color:var(--muted);font-size:10px">ES</span> ' + esc(line.substring(5)) + '</div>';
+    }
+    // English translation
+    if (line.startsWith('[EN] ')) {
+      return '<div style="color:var(--accent2);font-size:12px;padding:4px 8px;background:var(--surface);border-left:2px solid var(--accent2);border-radius:0 4px 4px 0;margin-bottom:4px"><span style="color:var(--accent2);font-size:10px">EN</span> ' + esc(line.substring(5)) + '</div>';
+    }
+    // Regular note line
+    return line ? '<div style="font-size:12px;color:var(--text)">' + esc(line) + '</div>' : '';
+  }).join('');
 }
 
 </script>

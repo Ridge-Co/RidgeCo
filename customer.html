@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ridge Co — Billing Information</title>
+<style>
+:root{
+  --bg:#040810;--surface:#0d1c38;--surface2:#172d4e;--border:#2e4578;
+  --text:#edf2ff;--muted:#8aaed4;--accent:#4d7de8;--accent2:#4ade80;
+  --danger:#f87171;--warn:#f59e0b;--info:#7ab4f0;
+  --radius:8px;--font:'Courier New',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh;}
+.login-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:400px;padding:28px;}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:20px;}
+.logo svg{flex-shrink:0;}
+.logo-text{color:var(--accent);font-size:1rem;letter-spacing:.15em;font-weight:bold;}
+.logo-sub{color:var(--muted);font-size:11px;letter-spacing:.1em;}
+label{display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:5px;margin-top:12px;}
+input,select{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px 12px;border-radius:6px;}
+input:focus,select:focus{outline:none;border-color:var(--accent);}
+.pin-input{font-size:1.4rem;letter-spacing:.15em;text-align:center;padding:12px;text-transform:uppercase;}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.06em;padding:10px 16px;cursor:pointer;width:100%;margin-top:14px;}
+.btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn-secondary{background:var(--surface2);border:1px solid var(--border);color:var(--text);}
+.btn-green{background:var(--accent2);color:#000;}
+.msg{margin-top:10px;padding:9px 12px;border-radius:6px;font-size:12px;}
+.msg.error{background:#2d0000;border:1px solid var(--danger);color:var(--danger);}
+.msg.success{background:#002d10;border:1px solid var(--accent2);color:var(--accent2);}
+.msg.info{background:#001d40;border:1px solid var(--info);color:var(--info);}
+.screen{display:none;}
+.screen.active{display:block;}
+.app-header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
+.main{padding:20px;max-width:560px;margin:0 auto;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;}
+.card-title{color:var(--muted);font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border);}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.form-grid .full{grid-column:1/-1;}
+.qbo-notice{background:#001d40;border:1px solid var(--info);border-radius:6px;padding:12px;font-size:11px;color:var(--info);margin-top:12px;line-height:1.6;}
+.qbo-notice strong{color:var(--text);}
+.field-status{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11px;}
+.field-status .dot{width:6px;height:6px;border-radius:50%;background:var(--accent2);}
+.field-status .dot.empty{background:var(--border);}
+.saved-indicator{color:var(--accent2);font-size:11px;margin-left:8px;opacity:0;transition:opacity .5s;}
+.saved-indicator.show{opacity:1;}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="screenLogin" class="screen active">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="logo">
+        <svg width="28" height="28" viewBox="0 0 40 40" fill="none">
+          <path d="M20 4L36 32H4L20 4Z" fill="none" stroke="#4d7de8" stroke-width="2.5"/>
+          <path d="M20 14L28 28H12L20 14Z" fill="#4d7de8" opacity=".4"/>
+        </svg>
+        <div><div class="logo-text">RIDGE CO</div><div class="logo-sub">BILLING INFORMATION</div></div>
+      </div>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:16px;line-height:1.6">Please provide your billing details so we can correctly invoice you. Use your owner portal PIN to access this form.</p>
+      <div>
+        <label>First Name</label>
+        <input type="text" id="nameInput" placeholder="Your first name" autocorrect="off" spellcheck="false">
+        <label style="margin-top:10px">Owner PIN</label>
+        <input type="text" class="pin-input" id="pinInput" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
+      </div>
+      <button class="btn" id="loginBtn" onclick="doLogin()">ACCESS BILLING FORM</button>
+      <div id="loginMsg"></div>
+    </div>
+  </div>
+</div>
+
+<!-- BILLING FORM -->
+<div id="screenForm" class="screen">
+  <div class="app-header">
+    <div>
+      <div style="color:var(--accent);font-weight:bold;letter-spacing:.08em" id="ownerGreeting">—</div>
+      <div style="color:var(--muted);font-size:11px">Billing Information</div>
+    </div>
+    <button class="btn btn-secondary" style="width:auto;margin:0;padding:6px 12px;font-size:11px" onclick="doLogout()">LOG OUT</button>
+  </div>
+
+  <div class="main">
+
+    <div class="card">
+      <div class="card-title">BILLING CONTACT</div>
+      <div class="form-grid">
+        <div class="full">
+          <label>Full Legal / Company Name <span style="color:var(--danger)">*</span></label>
+          <input type="text" id="f-billing-name" placeholder="e.g. Phoenix Estates LLC">
+          <div style="color:var(--muted);font-size:11px;margin-top:4px">This is how your name will appear on invoices</div>
+        </div>
+        <div class="full">
+          <label>Billing Email <span style="color:var(--danger)">*</span></label>
+          <input type="email" id="f-billing-email" placeholder="billing@yourcompany.com">
+        </div>
+        <div>
+          <label>Billing Phone</label>
+          <input type="tel" id="f-billing-phone" placeholder="(443) 555-1234">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">BILLING ADDRESS</div>
+      <div class="form-grid">
+        <div class="full">
+          <label>Street Address <span style="color:var(--danger)">*</span></label>
+          <input type="text" id="f-billing-addr" placeholder="123 Main St">
+        </div>
+        <div>
+          <label>City</label>
+          <input type="text" id="f-billing-city" placeholder="Baltimore">
+        </div>
+        <div style="display:grid;grid-template-columns:80px 1fr;gap:8px;align-items:end">
+          <div>
+            <label>State</label>
+            <input type="text" id="f-billing-state" placeholder="MD" maxlength="2" style="text-transform:uppercase">
+          </div>
+          <div>
+            <label>ZIP</label>
+            <input type="text" id="f-billing-zip" placeholder="21201" maxlength="10">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="qbo-notice">
+      <strong>QuickBooks Integration</strong><br>
+      These details will be used to create and maintain your customer record in QuickBooks Online, ensuring invoices are sent to the correct address and contact. A <strong>QBO Customer ID</strong> will be assigned once your account is synced.<br>
+      <span id="qbo-status-line" style="margin-top:6px;display:block"></span>
+    </div>
+
+    <div id="formMsg" style="margin-top:12px"></div>
+
+    <button class="btn btn-green" id="saveBtn" onclick="saveBilling()" style="margin-top:12px">SAVE BILLING INFORMATION</button>
+    <div style="text-align:center;color:var(--muted);font-size:11px;margin-top:8px">Your information is stored securely and only used for billing purposes.</div>
+  </div>
+</div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET = 'mh-secret-2026-brett';
+var session = null;
+
+document.getElementById('pinInput').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
+document.getElementById('pinInput').addEventListener('input', function(){ this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,''); });
+document.getElementById('nameInput').addEventListener('keydown', function(e){ if(e.key==='Enter') document.getElementById('pinInput').focus(); });
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  opts.headers['X-Auth-Token'] = SECRET;
+  if (opts.body && typeof opts.body === 'object') {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+}
+
+function doLogin() {
+  var name = document.getElementById('nameInput').value.trim();
+  var pin  = document.getElementById('pinInput').value.trim();
+  if (!name) { showMsg('loginMsg','Please enter your first name.','error'); return; }
+  if (pin.length < 8) { showMsg('loginMsg','PIN must be 8 characters.','error'); return; }
+  var btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = 'VERIFYING…';
+  api('/owner-by-pin?pin=' + encodeURIComponent(pin) + '&name=' + encodeURIComponent(name))
+    .then(function(data) {
+      btn.disabled = false; btn.textContent = 'ACCESS BILLING FORM';
+      if (data.error) { showMsg('loginMsg', data.error, 'error'); return; }
+      session = data;
+      document.getElementById('ownerGreeting').textContent = data.owner_name + (data.owner_company ? ' · ' + data.owner_company : '');
+      show('screenLogin', false);
+      show('screenForm', true);
+      loadBillingInfo();
+    })
+    .catch(function(){ btn.disabled=false; btn.textContent='ACCESS BILLING FORM'; showMsg('loginMsg','Connection error.','error'); });
+}
+
+function doLogout() {
+  session = null;
+  document.getElementById('pinInput').value = '';
+  document.getElementById('nameInput').value = '';
+  ['f-billing-name','f-billing-email','f-billing-phone','f-billing-addr','f-billing-city','f-billing-state','f-billing-zip']
+    .forEach(function(id){ document.getElementById(id).value = ''; });
+  show('screenForm', false);
+  show('screenLogin', true);
+}
+
+function loadBillingInfo() {
+  api('/owner/get-billing?owner_id=' + session.owner_id)
+    .then(function(data) {
+      if (data.error) return;
+      var fields = {
+        'f-billing-name':  data.billing_name  || data.company || '',
+        'f-billing-email': data.billing_email || '',
+        'f-billing-phone': data.billing_phone || '',
+        'f-billing-addr':  data.billing_address || '',
+        'f-billing-city':  data.billing_city  || '',
+        'f-billing-state': data.billing_state || '',
+        'f-billing-zip':   data.billing_zip   || '',
+      };
+      Object.keys(fields).forEach(function(id){ document.getElementById(id).value = fields[id]; });
+      // QBO status
+      var qboLine = document.getElementById('qbo-status-line');
+      if (data.qbo_customer_id) {
+        qboLine.innerHTML = '✓ <strong style="color:var(--accent2)">Synced to QuickBooks</strong> · Customer ID: ' + esc(data.qbo_customer_id);
+      } else {
+        qboLine.innerHTML = '⏳ Not yet synced to QuickBooks — save your info and we will sync shortly.';
+      }
+    });
+}
+
+function saveBilling() {
+  var name  = document.getElementById('f-billing-name').value.trim();
+  var email = document.getElementById('f-billing-email').value.trim();
+  var addr  = document.getElementById('f-billing-addr').value.trim();
+  if (!name)  { showMsg('formMsg','Company/entity name is required.','error'); return; }
+  if (!email) { showMsg('formMsg','Billing email is required.','error'); return; }
+  if (!addr)  { showMsg('formMsg','Billing address is required.','error'); return; }
+
+  var btn = document.getElementById('saveBtn');
+  btn.disabled = true; btn.textContent = 'SAVING…';
+
+  api('/owner/billing', {
+    method: 'POST',
+    body: {
+      owner_id:       session.owner_id,
+      Billing_Name:   name,
+      Billing_Email:  email,
+      Billing_Phone:  document.getElementById('f-billing-phone').value.trim(),
+      Billing_Address:addr,
+      Billing_City:   document.getElementById('f-billing-city').value.trim(),
+      Billing_State:  document.getElementById('f-billing-state').value.trim().toUpperCase(),
+      Billing_Zip:    document.getElementById('f-billing-zip').value.trim(),
+    }
+  }).then(function(res) {
+    btn.disabled = false; btn.textContent = 'SAVE BILLING INFORMATION';
+    if (res.success) {
+      showMsg('formMsg', '✓ Billing information saved. Thank you, ' + esc(session.owner_name) + '!', 'success');
+    } else {
+      showMsg('formMsg', 'Error: ' + (res.error||'Could not save. Please try again.'), 'error');
+    }
+  }).catch(function(){
+    btn.disabled = false; btn.textContent = 'SAVE BILLING INFORMATION';
+    showMsg('formMsg','Connection error. Please try again.','error');
+  });
+}
+
+function show(id, visible) { document.getElementById(id).className = 'screen' + (visible?' active':''); }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function showMsg(id, msg, type) {
+  document.getElementById(id).innerHTML = msg ? '<div class="msg ' + type + '">' + msg + '</div>' : '';
+}
+</script>
+</body>
+</html>
