@@ -509,7 +509,7 @@
     <div class="form-grid">
       <div class="form-group"><label>Name</label><input type="text" id="v-name" placeholder="Mike Smith"></div>
       <div class="form-group"><label>Company (optional)</label><input type="text" id="v-company" placeholder="Smith Plumbing LLC"></div>
-      <div class="form-group"><label>Phone (SMS)</label><input type="tel" id="v-phone" placeholder="+14435551234"></div>
+      <div class="form-group"><label>Phone (SMS)</label><input type="tel" id="v-phone" placeholder="+14435551234" oninput="updateVendorPinPreview()"><div id="v-pin-preview" style="color:var(--muted);font-size:11px;margin-top:4px;height:16px"></div></div>
       <div class="form-group"><label>Email (optional)</label><input type="email" id="v-email" placeholder="mike@example.com"></div>
       <div class="form-group"><label>Hourly Rate ($)</label><input type="number" id="v-rate" placeholder="40" min="0" step="0.01"></div>
       <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
@@ -1525,6 +1525,7 @@ function renderVendorsPage() {
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
         '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+        '<button class="btn small secondary" style="font-size:10px" onclick="regenerateAndShowPIN(\'vendor\',\''+v.ID+'\',\''+nm+'\')" title="Regenerate PIN">🔄</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table>';
 }
@@ -1652,7 +1653,16 @@ function submitAddVendor(){
   if(!body.Phone){toast('Phone required','error');return;}
   api('POST','/vendor/add',body).then(function(res){
     if(res.error){logError('Add vendor',res.error);toast('Error: '+res.error,'error');return;}
-    toast('Vendor added (ID: '+res.id+')','success');closeModal('modal-add-vendor');loadAll();
+    var pinMsg = res.pin ? ' PIN: '+res.pin : '';
+    toast('Vendor added'+pinMsg,'success');
+    if (res.pin && res.id) {
+      if (confirm('Vendor added!\nPIN: '+res.pin+'\n\nSend login credentials via SMS now?')) {
+        api('POST','/send-pin',{type:'vendor',id:String(res.id)}).then(function(s){
+          toast(s.success?'PIN sent via SMS':'SMS failed: '+(s.error||'?'), s.success?'success':'error');
+        });
+      }
+    }
+    closeModal('modal-add-vendor');loadAll();
   }).catch(function(e){logError('Add vendor',e.message);toast('Error: '+e.message,'error');});
 }
 
@@ -3460,6 +3470,65 @@ function renderNoteLines(notesText) {
     // Regular note line
     return line ? '<div style="font-size:12px;color:var(--text)">' + esc(line) + '</div>' : '';
   }).join('');
+}
+
+
+// ── PIN preview in add modals ──────────────────────────────────
+var PIN_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+function clientGenPIN(phone) {
+  // Generate preview — server will assign final random letters on save
+  var digits = (phone||'').replace(/\D/g,'').slice(-5);
+  if (digits.length < 5) return null;
+  // Use fixed preview letters so user can see the format
+  return 'ABC' + digits;
+}
+function updateVendorPinPreview() {
+  var phone = (document.getElementById('v-phone')||{}).value || '';
+  var el = document.getElementById('v-pin-preview');
+  if (!el) return;
+  var digits = phone.replace(/\D/g,'').slice(-5);
+  if (digits.length === 5) {
+    el.innerHTML = '🔑 PIN will be auto-generated: <span style="color:var(--accent2);font-weight:bold;letter-spacing:.1em">___' + digits + '</span> (letters assigned on save)';
+  } else {
+    el.textContent = digits.length > 0 ? 'Need ' + (5-digits.length) + ' more digits for PIN' : '';
+  }
+}
+
+
+// ── Regenerate PIN for vendor/tenant/owner_user ───────────────
+function regenerateAndShowPIN(type, id, name) {
+  if (!confirm('Regenerate PIN for ' + name + '?\nThis will replace their current PIN. They will need to be notified.')) return;
+  api('POST', '/regenerate-pin', { type: type, id: String(id) }).then(function(res) {
+    if (res.error) { toast('Error: ' + res.error, 'error'); return; }
+    toast(name + ' new PIN: ' + res.pin, 'success');
+    refreshState();
+    if (confirm('New PIN: ' + res.pin + '\n\nSend via SMS now?')) {
+      api('POST', '/send-pin', { type: type, id: String(id) }).then(function(s) {
+        toast(s.success ? 'PIN SMS sent to ' + name : 'SMS failed: ' + (s.error||'check Twilio'), s.success ? 'success' : 'error');
+      });
+    }
+  });
+}
+
+// ── Bulk send PINs from action bar ─────────────────────────────
+function bulkSendPins(type) {
+  var checks = Array.from(document.querySelectorAll('.pin-check:checked'));
+  if (!checks.length) { toast('Select at least one row','error'); return; }
+  var readyToSend = checks.filter(function(cb){ return cb.dataset.phone && cb.dataset.pin; });
+  var missing = checks.length - readyToSend.length;
+  var msg = 'Send PIN SMS to ' + readyToSend.length + ' ' + type + (readyToSend.length!==1?'s':'') + '?';
+  if (missing > 0) msg += '\n(' + missing + ' skipped — no phone or PIN)';
+  if (!confirm(msg)) return;
+  var sent = 0;
+  readyToSend.forEach(function(cb) {
+    api('POST', '/send-pin', { type: type, id: cb.dataset.id }).then(function(res) {
+      sent++;
+      if (sent === readyToSend.length) {
+        toast('Sent ' + sent + ' PIN SMS messages', 'success');
+        refreshState();
+      }
+    });
+  });
 }
 
 </script>
