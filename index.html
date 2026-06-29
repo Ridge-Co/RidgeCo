@@ -957,7 +957,7 @@ function woCard(w) {
     if (daysOpen >= 14) agingBadge = '<span class="badge" style="background:#3b0000;border:1px solid var(--danger);color:var(--danger);margin-left:4px">'+daysOpen+'d OVERDUE</span>';
     else if (daysOpen >= 7) agingBadge = '<span class="badge" style="background:#2d2000;border:1px solid var(--warn);color:var(--warn);margin-left:4px">'+daysOpen+'d AGING</span>';
   }
-  return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid='"+w.ID+"'>' +
+  return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'">' +
     '<div class="wo-id">'+w.ID+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+'</div></div>' +
