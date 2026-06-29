@@ -401,6 +401,8 @@ function buildDetail(wo, idx) {
   html += '<p style="color:var(--muted);font-size:11px;margin-top:8px">Provide additional details, availability, or updates to your property manager.</p>';
   html += '</div>';
 
+  html += buildPhotoSection(wo.ID, wo.property_address||wo.Address||'');
+
   return html;
 }
 
@@ -485,6 +487,73 @@ document.querySelectorAll('.modal-overlay').forEach(function(m){
 });
 function show(id,visible){ document.getElementById(id).className='screen'+(visible?' active':''); }
 function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ══════════════════════════════════════════════════════════════
+//  PHOTO UPLOAD (tenant portal)
+// ══════════════════════════════════════════════════════════════
+function portalUploadFiles(input, woId, propAddress, fileType) {
+  var files = Array.from(input.files);
+  if (!files.length) return;
+  var container = document.getElementById('portal-uploads-' + woId);
+  files.forEach(function(file) {
+    var card = document.createElement('div');
+    card.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:4px 9px;font-size:11px;color:var(--muted)';
+    card.textContent = '⏳ ' + file.name.substring(0,20);
+    if (container) container.appendChild(card);
+    var fd = new FormData();
+    fd.append('file', file);
+    fd.append('wo_id', woId);
+    fd.append('property', propAddress || '');
+    fd.append('file_type', fileType || 'photo');
+    fetch(WORKER + '/upload-photo', {
+      method: 'POST',
+      headers: { 'X-Auth-Token': SECRET },
+      body: fd
+    }).then(function(r){ return r.json(); }).then(function(res) {
+      if (res.success) {
+        var icon = file.type.startsWith('video/') ? '🎥' : '📷';
+        card.style.borderColor = 'var(--accent2)';
+        card.style.color = 'var(--text)';
+        card.innerHTML = icon + ' <a href="' + res.url + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,18)) + '</a>';
+      } else {
+        card.style.borderColor = 'var(--danger)';
+        card.style.color = 'var(--danger)';
+        card.textContent = '⚠ ' + (res.error || 'Upload failed');
+      }
+    }).catch(function(){ card.textContent = '⚠ Error'; });
+  });
+  input.value = '';
+}
+
+function loadPortalAttachments(woId) {
+  var container = document.getElementById('portal-uploads-' + woId);
+  if (!container) return;
+  api('/attachments?wo_id=' + woId).then(function(items) {
+    if (!Array.isArray(items) || !items.length) return;
+    items.forEach(function(f) {
+      var icon = {'photo':'📷','receipt':'🧾','video':'🎥'}[f.File_Type] || '📎';
+      var el = document.createElement('a');
+      el.href = f.Drive_URL || '#'; el.target = '_blank';
+      el.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:4px 9px;font-size:11px;color:var(--info);text-decoration:none';
+      el.textContent = icon + ' ' + (f.File_Name||'file').substring(0,18);
+      container.prepend(el);
+    });
+  }).catch(function(){});
+}
+
+function buildPhotoSection(woId, propAddress) {
+  return '<div style="margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:12px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+    '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">📷 PHOTOS</span>' +
+    '<label style="background:var(--accent);color:#fff;border-radius:4px;padding:4px 10px;font-size:11px;cursor:pointer;font-family:var(--font)">' +
+    '+ Add Photo<input type="file" accept="image/*,video/*" multiple capture="environment"' +
+    ' onchange="portalUploadFiles(this,\'' + woId + '\',\'' + propAddress + '\',\'photo\')" style="display:none"></label>' +
+    '</div>' +
+    '<div id="portal-uploads-' + woId + '" style="display:flex;flex-wrap:wrap;gap:5px;min-height:20px">' +
+    '<span style="color:var(--muted);font-size:11px">Loading…</span></div>' +
+    '</div>';
+}
+
 </script>
 </body>
 </html>
