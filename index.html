@@ -957,8 +957,8 @@ function woCard(w) {
     if (daysOpen >= 14) agingBadge = '<span class="badge" style="background:#3b0000;border:1px solid var(--danger);color:var(--danger);margin-left:4px">'+daysOpen+'d OVERDUE</span>';
     else if (daysOpen >= 7) agingBadge = '<span class="badge" style="background:#2d2000;border:1px solid var(--warn);color:var(--warn);margin-left:4px">'+daysOpen+'d AGING</span>';
   }
-  return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'">' +
-    '<div class="wo-id">'+w.ID+'</div>' +
+  return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
+    '<div class="wo-id">'+w.ID+(w.Priority==='urgent'?' <span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#451a03;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#450a0a;color:#f87171;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+'</div></div>' +
     (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
@@ -3550,6 +3550,13 @@ function buildPhotoSection(woId, propAddr, opts) {
 
 
 
+
+// Simplest possible WO click handler — reads from data attribute
+function woCk(el) {
+  var id = el && (el.dataset.woid || el.getAttribute('data-woid'));
+  if (id) openWODetail(id);
+}
+
 // ── WO click delegation (safer than inline onclick) ───────────
 function initWOClicks() {
   var list = document.getElementById('wo-list-full');
@@ -3598,6 +3605,11 @@ function initStatClicks() {
 function goToPropertyWOs(propId) {
   showPage('workorders', null);
   setTimeout(function() {
+    // Clear all other filters first
+    ['f-owner','f-unit','f-vendor','f-trade','f-priority'].forEach(function(id){
+      var el = document.getElementById(id); if (el) el.value = '';
+    });
+    var wf = document.getElementById('wo-filter'); if (wf) wf.value = 'open';
     var propSel = document.getElementById('f-property');
     if (propSel) {
       // Add option if missing
