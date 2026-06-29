@@ -1168,11 +1168,9 @@ function openWODetail(woId) {
   // ── B: Photo upload section ────────────────────────────
   var propForUpload = prop ? (prop.Address||'') : '';
   // ── Photo section with categorized upload buttons ────────────
-  try {
-    var _ps = buildPhotoSection(woId, propForUpload, { canBefore:true, canAfter:true, canReport:false, canReceipt:true, viewAll:true });
-    document.getElementById('detail-body').innerHTML += _ps;
-    loadPortalAttachments(woId);
-  } catch(e) { logError('Photo section', e.message); }
+  // ── Photo section ── injected after modal opens so it never blocks ────
+  var _woIdForPhoto = woId;
+  var _propForPhoto = propForUpload;
 
   // ── B: Invoice builder ─────────────────────────────────
   var invoiceHtml = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px" id="invoice-builder-'+woId+'">' +
@@ -1330,6 +1328,21 @@ function openWODetail(woId) {
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   openModal('modal-wo-detail');
+  // Inject photo section after modal opens (deferred so modal always shows)
+  setTimeout(function(){
+    try {
+      var _db = document.getElementById('detail-body');
+      if (_db && typeof buildPhotoSection === 'function') {
+        var _ph = document.createElement('div');
+        _ph.innerHTML = buildPhotoSection(_woIdForPhoto, _propForPhoto, { canBefore:true, canAfter:true, canReport:false, canReceipt:true, viewAll:true });
+        // Insert photo section before invoice builder
+        var _inv = document.getElementById('invoice-builder-' + _woIdForPhoto);
+        if (_inv) _db.insertBefore(_ph.firstChild, _inv);
+        else _db.appendChild(_ph.firstChild);
+        loadPortalAttachments(_woIdForPhoto);
+      }
+    } catch(e2) { /* photo section is non-critical */ }
+  }, 50);
   // Post-render: make property name clickable after detail modal opens
   setTimeout(function(){
     document.querySelectorAll('#modal-wo-detail .prop-name').forEach(function(el){
@@ -1493,10 +1506,10 @@ function renderPropertiesPage() {
         '<td>'+(p.City||'—')+'</td>' +
         '<td style="color:var(--muted);font-size:11px">'+(p.Type||'—')+'</td>' +
         '<td style="font-size:11px">'+(p.Access_Notes?'<span style="color:var(--accent2)">'+esc(p.Access_Notes.substring(0,60))+(p.Access_Notes.length>60?'…':'')+'</span>':'<span style="color:var(--border)">—</span>')+'</td>' +
-        '<td>'+(open>0?'<span style="color:var(--warn);font-weight:bold">'+open+'</span>':'<span style="color:var(--muted)">0</span>')+'</td>' +
+        '<td>'+(open>0?'<span style="color:var(--warn);font-weight:bold;cursor:pointer" onclick="goToPropertyWOs(\''+p.ID+'\')" title="View open WOs">'+open+'</span>':'<span style="color:var(--muted)">0</span>')+'</td>' +
         '<td style="display:flex;gap:4px">' +
           '<button class="btn small secondary" onclick="openEditPropertyModal(\''+p.ID+'\')">Edit</button>' +
-          (open>0?'<button class="btn small secondary" onclick="showPage(\'workorders\',document.querySelector(\'[onclick*=workorders]\'));setTimeout(function(){document.getElementById(\'f-property\').value=\''+p.ID+'\';renderWOPage();},200)" title="View open WOs">'+open+' WOs</button>':'') +
+          (open>0?'<button class="btn small secondary" onclick="goToPropertyWOs(\''+p.ID+'\')" title="View open WOs for this property">'+open+' WOs →</button>':'') +
         '</td></tr>';
     }).join('') + '</tbody></table>';
 }
@@ -3529,6 +3542,28 @@ function buildPhotoSection(woId, propAddr, opts) {
     '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">📷 PHOTOS & FILES</span>' +
     '<div style="display:flex;gap:5px;flex-wrap:wrap">' + uploadBtns + '</div></div>' +
     sections + '</div>';
+}
+
+
+// Navigate to WO page filtered to a specific property
+function goToPropertyWOs(propId) {
+  var navBtn = document.querySelector('[onclick*="showPage(\'workorders\'"]') ||
+               document.querySelector('[data-page="workorders"]');
+  showPage('workorders', navBtn);
+  // Wait for page to render then apply filter
+  setTimeout(function() {
+    var sel = document.getElementById('f-property');
+    if (sel) {
+      sel.value = String(propId);
+      // If value didn't stick (option not found), rebuild options then set
+      if (sel.value !== String(propId)) {
+        // Options may not be populated yet — store and apply after render
+        window._pendingPropFilter = String(propId);
+      }
+      onPropertyFilterChange();
+      renderWOPage();
+    }
+  }, 300);
 }
 
 </script>
