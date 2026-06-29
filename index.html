@@ -913,6 +913,7 @@ function loadAll() {
     renderDashboard(); renderWOPage(); renderPropertiesPage();
     renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
     loadWishlist();
+    setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
     processNotificationsBackground();
     var loaded = results.filter(function(r){return r.status==='fulfilled';}).length;
     toast('Loaded '+loaded+'/7 data sets','success');
@@ -3546,113 +3547,81 @@ function buildPhotoSection(woId, propAddr, opts) {
 
 
 // Navigate to WO page filtered to a specific property
-function goToPropertyWOs(propId) {
-  var navBtn = document.querySelector('[onclick*="showPage(\'workorders\'"]') ||
-               document.querySelector('[data-page="workorders"]');
-  showPage('workorders', navBtn);
-  // Wait for page to render then apply filter
-  setTimeout(function() {
-    var sel = document.getElementById('f-property');
-    if (sel) {
-      sel.value = String(propId);
-      // If value didn't stick (option not found), rebuild options then set
-      if (sel.value !== String(propId)) {
-        // Options may not be populated yet — store and apply after render
-        window._pendingPropFilter = String(propId);
-      }
-      onPropertyFilterChange();
-      renderWOPage();
+
+
+
+// ── WO click delegation (safer than inline onclick) ───────────
+function initWOClicks() {
+  var list = document.getElementById('wo-list-full');
+  if (!list || list._hasClickDelegation) return;
+  list._hasClickDelegation = true;
+  list.addEventListener('click', function(e) {
+    var card = e.target;
+    while (card && card !== list) {
+      if (card.dataset && card.dataset.woid) { openWODetail(card.dataset.woid); return; }
+      card = card.parentElement;
     }
-  }, 300);
+  });
 }
 
-
-// ── Event Delegation — handles WO card clicks & dashboard stat filters ──
-(function() {
-  function setupClicks() {
-    // WO card clicks via data-woid
-    var woList = document.getElementById('wo-list-full');
-    if (woList) {
-      woList.addEventListener('click', function(e) {
-        var card = e.target.closest('[data-woid]');
-        if (card && card.dataset.woid) {
-          openWODetail(card.dataset.woid);
+// ── Dashboard stat click filtering ────────────────────────────
+function initStatClicks() {
+  var stats = document.querySelectorAll('.stat-card');
+  var STAT_FILTERS = [
+    {page:'workorders', filter:'open', priority:''},
+    {page:'workorders', filter:'open', priority:'urgent'},
+    {page:'workorders', filter:'Invoiced', priority:''},
+    {page:'properties', filter:'', priority:''},
+  ];
+  stats.forEach(function(card, i) {
+    if (!STAT_FILTERS[i] || card._statInit) return;
+    card._statInit = true;
+    card.style.cursor = 'pointer';
+    (function(sf) {
+      card.addEventListener('click', function() {
+        showPage(sf.page, null);
+        if (sf.filter) {
+          setTimeout(function() {
+            var f = document.getElementById('wo-filter');
+            var p = document.getElementById('f-priority');
+            if (f) f.value = sf.filter;
+            if (p) p.value = sf.priority;
+            if (typeof renderWOPage === 'function') renderWOPage();
+          }, 150);
         }
       });
-    }
+    })(STAT_FILTERS[i]);
+  });
+}
 
-    // Dashboard stat cards → filter WOs
-    var statCards = document.querySelectorAll('.stat-card');
-    var statActions = [
-      function(){ showPage('workorders', null); setTimeout(function(){ setWOFilter('open'); }, 100); },
-      function(){ showPage('workorders', null); setTimeout(function(){ setWOFilter('urgent'); }, 100); },
-      function(){ showPage('workorders', null); setTimeout(function(){ setWOFilter('invoiced'); }, 100); },
-      function(){ showPage('properties', null); },
-    ];
-    statCards.forEach(function(card, i) {
-      if (statActions[i]) {
-        card.style.cursor = 'pointer';
-        card.title = ['Open WOs', 'Urgent WOs', 'Awaiting Payment', 'Properties'][i] || '';
-        card.addEventListener('click', statActions[i]);
-      }
-    });
-  }
-
-  function setWOFilter(val) {
-    var filterSel = document.getElementById('wo-filter');
-    var prioritySel = document.getElementById('f-priority');
-    if (val === 'urgent') {
-      if (filterSel) filterSel.value = 'open';
-      if (prioritySel) prioritySel.value = 'urgent';
-    } else if (val === 'invoiced') {
-      if (filterSel) filterSel.value = 'Invoiced';
-      if (prioritySel) prioritySel.value = '';
-    } else {
-      if (filterSel) filterSel.value = 'open';
-      if (prioritySel) prioritySel.value = '';
-    }
-    if (typeof renderWOPage === 'function') renderWOPage();
-  }
-
-  // Run after page ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupClicks);
-  } else {
-    setupClicks();
-  }
-  // Also run after state loads (stat cards may appear later)
-  window._origRefreshState = window.refreshState;
-  // Hook into showPage to set up delegation after nav
-  var _origShowPage = window.showPage;
-  if (typeof _origShowPage === 'function') {
-    window.showPage = function(page, btn) {
-      _origShowPage.call(this, page, btn);
-      setTimeout(setupClicks, 200);
-    };
-  }
-})();
-
-// goToPropertyWOs — navigate to WO page with property pre-filtered
+// ── Property page WO count → navigate + filter ─────────────────
 function goToPropertyWOs(propId) {
   showPage('workorders', null);
   setTimeout(function() {
-    var sel = document.getElementById('f-property');
-    if (sel) {
-      // Rebuild options if needed
-      if (!sel.querySelector('option[value="' + propId + '"]')) {
-        var opt = document.createElement('option');
-        opt.value = String(propId);
-        opt.selected = true;
-        // Get property name
-        var prop = safeArray(state.properties).find(function(p){ return String(p.ID) === String(propId); });
-        opt.textContent = prop ? prop.Address : 'Property ' + propId;
-        sel.appendChild(opt);
+    var propSel = document.getElementById('f-property');
+    if (propSel) {
+      // Add option if missing
+      if (!propSel.querySelector('option[value="'+propId+'"]')) {
+        var prop = safeArray(state.properties).find(function(p){ return String(p.ID)===String(propId); });
+        var o = document.createElement('option');
+        o.value = String(propId);
+        o.textContent = prop ? prop.Address : 'Property '+propId;
+        propSel.appendChild(o);
       }
-      sel.value = String(propId);
+      propSel.value = String(propId);
     }
-    if (typeof onPropertyFilterChange === 'function') onPropertyFilterChange();
-    if (typeof renderWOPage === 'function') renderWOPage();
+    if (typeof onPropertyFilterChange==='function') onPropertyFilterChange();
+    if (typeof renderWOPage==='function') renderWOPage();
   }, 300);
+}
+
+// ── setWOFilter helper ─────────────────────────────────────────
+function setWOFilter(filterVal, priorityVal) {
+  var f = document.getElementById('wo-filter');
+  var p = document.getElementById('f-priority');
+  if (f) f.value = filterVal || 'open';
+  if (p) p.value = priorityVal || '';
+  if (typeof renderWOPage === 'function') renderWOPage();
 }
 
 </script>
