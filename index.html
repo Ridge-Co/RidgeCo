@@ -3285,35 +3285,44 @@ function uploadWOFiles(input, woId, property, fileType) {
   var container = document.getElementById('wo-uploads-' + woId);
   if (container) {
     var stale = container.querySelector('span');
-    if (stale && stale.textContent === 'Loading files…') stale.remove();
+    if (stale) stale.remove();
   }
 
-  files.forEach(function(file) {
-    // Show uploading indicator
+  // Create placeholder cards for all files immediately
+  var cards = files.map(function(file) {
     var card = document.createElement('div');
     card.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:var(--muted)';
-    card.textContent = '⏳ ' + file.name.substring(0, 20);
+    card.textContent = '⏳ ' + file.name.substring(0,20);
     if (container) container.appendChild(card);
+    return card;
+  });
 
-    // Step 1: ask worker to create a Drive upload session
-    api('POST', '/create-upload-session', {
+  function uploadOne(file, card, folderInfo) {
+    // Get upload session — pass folderInfo if we already have the WO folder
+    var reqBody = {
       wo_id:     woId,
       property:  property || 'Unknown Property',
       file_name: file.name,
       file_type: fileType || 'photo',
       mime_type: file.type || 'application/octet-stream',
       origin:    window.location.origin,
-    }).then(function(res) {
+    };
+    if (folderInfo) {
+      reqBody.folder_id  = folderInfo.folder_id;
+      reqBody.folder_url = folderInfo.folder_url;
+    }
+
+    return api('POST', '/create-upload-session', reqBody).then(function(res) {
       if (!res.success || !res.upload_url) {
-        card.style.borderColor = 'var(--danger)';
-        card.style.color = 'var(--danger)';
+        card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
         card.textContent = '⚠ Session error: ' + (res.error || 'unknown');
-        return;
+        return folderInfo; // keep using same folder for remaining files
       }
 
+      // Cache folder info for subsequent files
+      var thisFolderInfo = { folder_id: res.wo_folder_id, folder_url: res.wo_folder_url };
       card.textContent = '↑ Uploading…';
 
-      // Step 2: browser uploads file DIRECTLY to Drive (worker never touches binary)
       fetch(res.upload_url, {
         method: 'PUT',
         headers: { 'Content-Type': file.type || 'application/octet-stream' },
@@ -3322,40 +3331,35 @@ function uploadWOFiles(input, woId, property, fileType) {
       .then(function(r) { return r.json(); })
       .then(function(fileData) {
         if (!fileData || !fileData.id) {
-          card.style.borderColor = 'var(--danger)';
-          card.style.color = 'var(--danger)';
+          card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
           card.textContent = '⚠ Upload failed';
           return;
         }
-
-        // Step 3: log to Sheets (non-blocking)
         api('POST', '/log-attachment', {
-          wo_id:        woId,
-          file_id:      fileData.id,
-          file_url:     fileData.webViewLink || '',
-          file_name:    file.name,
-          file_type:    fileType || 'photo',
-          mime_type:    file.type || '',
-          wo_folder_id:  res.wo_folder_id || '',
-          wo_folder_url: res.wo_folder_url || '',
+          wo_id: woId, file_id: fileData.id,
+          file_url: fileData.webViewLink || '', file_name: file.name,
+          file_type: fileType || 'photo', mime_type: file.type || '',
+          wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
         }).catch(function(){});
 
-        // Show success link
         var icon = file.type.startsWith('video/') ? '🎥' : fileType === 'receipt' ? '🧾' : '📷';
-        card.style.borderColor = 'var(--accent2)';
-        card.style.color = 'var(--text)';
+        card.style.borderColor = 'var(--accent2)'; card.style.color = 'var(--text)';
         card.innerHTML = icon + ' <a href="' + (fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,18)) + '</a>';
-        toast('Uploaded: ' + file.name, 'success');
       })
       .catch(function(e) {
-        card.style.borderColor = 'var(--danger)';
-        card.style.color = 'var(--danger)';
-        card.textContent = '⚠ Upload error: ' + e.message;
+        card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
+        card.textContent = '⚠ ' + e.message;
       });
-    }).catch(function(e) {
-      card.style.borderColor = 'var(--danger)';
-      card.style.color = 'var(--danger)';
-      card.textContent = '⚠ ' + e.message;
+
+      return thisFolderInfo;
+    });
+  }
+
+  // Chain uploads sequentially — first call creates folder, rest reuse it
+  var chain = Promise.resolve(null);
+  files.forEach(function(file, i) {
+    chain = chain.then(function(folderInfo) {
+      return uploadOne(file, cards[i], folderInfo);
     });
   });
   input.value = '';
