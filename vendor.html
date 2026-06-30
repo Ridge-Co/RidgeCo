@@ -332,8 +332,9 @@ function loadWorkOrders() {
     .then(function(wos) {
       renderWOs(wos);
     })
-    .catch(function() {
-      list.innerHTML = '<div class="msg error">Failed to load work orders.</div>';
+    .catch(function(e) {
+      console.error('[loadWorkOrders]', e);
+      list.innerHTML = '<div class="msg error">Failed to load work orders. (' + (e && e.message ? e.message : 'see console') + ')</div>';
     });
 }
 
@@ -351,7 +352,7 @@ function renderWOs(wos) {
       'accepted': 'badge-accepted',
       'in progress': 'badge-inprogress',
       'on hold': 'badge-onhold',
-    }[wo.Status.toLowerCase()] || 'badge-status';
+    }[(wo.Status || '').toLowerCase()] || 'badge-status';
 
     var addrLine = wo.property_address + (wo.unit_label ? ' — Unit ' + wo.unit_label : '');
     var descShort = (wo.Description || '').substring(0, 80) + (wo.Description && wo.Description.length > 80 ? '…' : '');
@@ -884,7 +885,7 @@ function submitFeedback() {
 </script>
 
 <!-- SCHEDULING MODAL -->
-<div class="modal-overlay" id="modalSched">
+<div class="modal-overlay" id="modalSched" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
   <div class="modal" style="max-width:440px">
     <div class="modal-title">📅 SCHEDULE / DISPATCH</div>
     <div class="sched-urgent-banner" id="modalSched-banner">
