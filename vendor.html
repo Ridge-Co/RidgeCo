@@ -416,18 +416,21 @@ function renderWOs(wos) {
         '<div style="color:var(--text);font-size:12px;white-space:pre-wrap">' + esc(wo.access_notes) + '</div></div>' : '') +
         '<div style="margin-bottom:8px;"><div class="detail-label" style="margin-bottom:6px;">ACCESS KEYS</div>' + lbHtml + '</div>' +
         '<div class="action-section">' +
+          '<div class="action-title">PHOTOS</div>' +
+          buildPhotoSection(wo.ID, wo.property_address || '', { canBefore: true, canAfter: true, canReport: false, canReceipt: false, viewAll: true }) +
+        '</div>' +
+        '<div class="action-section">' +
+          '<div class="action-title">ESTIMATE</div>' +
+          '<div id="est-wrap-' + idx + '"><span style="color:var(--muted);font-size:11px">Loading…</span></div>' +
+        '</div>' +
+        '<div class="action-section">' +
           '<div class="action-title">UPDATE STATUS</div><!-- i18n:UPDATE STATUS -->' +
           '<div class="status-btns">' + statusBtns + '</div>' +
           '<textarea id="notes-' + idx + '" placeholder="Add notes (optional)…"></textarea>' +
           '<div class="btn-row">' +
             '<button class="btn btn-sm btn-green" onclick="submitStatus(\'' + wo.ID + '\',' + idx + ')">SAVE STATUS</button>' +
             '<button class="btn btn-sm" style="background:var(--accent2);color:#000" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
-            '<label class="btn btn-sm btn-blue" style="display:inline-block;cursor:pointer;">' +
-              '📷 PHOTO' +
-              '<input type="file" accept="image/*" onchange="uploadPhoto(\'' + wo.ID + '\',this)">' +
-            '</label>' +
           '</div>' +
-          '<div id="photo-preview-' + idx + '" class="photo-preview" style="margin-top:8px;"></div>' +
           '<div id="action-msg-' + idx + '"></div>' +
         '</div>' +
       '</div>' +
@@ -439,7 +442,135 @@ function renderWOs(wos) {
   // Store WOs for status tracking
   window._wos = wos;
   window._pendingStatus = {};
+  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); });
 }
+
+// ── Estimate widget: load history, show current total, allow revisions ──
+function loadEstimateWidget(woId, idx) {
+  var wrap = document.getElementById('est-wrap-' + idx);
+  if (!wrap) return;
+  api('GET', '/estimates?wo_id=' + woId).then(function(estimates) {
+    window._estimates = window._estimates || {};
+    window._estimates[woId] = estimates;
+    renderEstimateWidget(woId, idx);
+  }).catch(function() { wrap.innerHTML = '<span style="color:var(--muted);font-size:11px">Could not load estimate</span>'; });
+}
+
+function renderEstimateWidget(woId, idx) {
+  var wrap = document.getElementById('est-wrap-' + idx);
+  if (!wrap) return;
+  var estimates = (window._estimates && window._estimates[woId]) || [];
+
+  if (!estimates.length) {
+    wrap.innerHTML =
+      '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No estimate submitted yet.</div>' +
+      '<button class="btn btn-sm btn-blue" onclick="openEstimateEditor(\'' + woId + '\',' + idx + ')">+ Create Estimate</button>';
+    return;
+  }
+
+  var current = estimates[estimates.length - 1];
+  var items = current.Line_Items || [];
+  var rows = items.map(function(li) {
+    return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">' +
+      '<span>' + esc(li.desc) + '</span><span>$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
+  }).join('');
+
+  var historyToggle = estimates.length > 1
+    ? '<div style="cursor:pointer;color:var(--info);font-size:10px;margin-top:6px" onclick="toggleEstimateHistory(\'' + woId + '\',' + idx + ')">▾ View ' + (estimates.length - 1) + ' prior version' + (estimates.length > 2 ? 's' : '') + '</div>'
+    : '';
+
+  wrap.innerHTML =
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px">' +
+    '<div style="font-size:10px;color:var(--muted);letter-spacing:.06em;margin-bottom:6px">VERSION ' + current.Version + (estimates.length > 1 ? ' (revised)' : '') + '</div>' +
+    rows +
+    '<div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
+    '<span>Total</span><span style="color:var(--accent2)">$' + parseFloat(current.Subtotal).toFixed(2) + '</span></div>' +
+    (current.Change_Reason && current.Version > 1 ? '<div style="font-size:10px;color:var(--muted);margin-top:4px">Reason: ' + esc(current.Change_Reason) + '</div>' : '') +
+    '<div id="est-history-' + woId + '" style="display:none;margin-top:8px;border-top:1px dashed var(--border);padding-top:8px"></div>' +
+    historyToggle +
+    '</div>' +
+    '<button class="btn btn-sm btn-blue" onclick="openEstimateEditor(\'' + woId + '\',' + idx + ')">✎ Revise Estimate</button>';
+}
+
+function toggleEstimateHistory(woId, idx) {
+  var el = document.getElementById('est-history-' + woId);
+  if (!el) return;
+  if (el.style.display === 'block') { el.style.display = 'none'; return; }
+  var estimates = (window._estimates && window._estimates[woId]) || [];
+  var prior = estimates.slice(0, -1).reverse();
+  el.innerHTML = prior.map(function(e) {
+    var items = (e.Line_Items || []).map(function(li) { return esc(li.desc) + ': $' + parseFloat(li.amount || 0).toFixed(2); }).join(', ');
+    return '<div style="font-size:10px;color:var(--muted);margin-bottom:6px">' +
+      '<b>v' + e.Version + '</b> — $' + parseFloat(e.Subtotal).toFixed(2) + ' — ' + items +
+      (e.Change_Reason ? '<br>Reason: ' + esc(e.Change_Reason) : '') + '</div>';
+  }).join('');
+  el.style.display = 'block';
+}
+
+// Simple inline editor — add/remove line items, submit as new version with reason
+function openEstimateEditor(woId, idx) {
+  var estimates = (window._estimates && window._estimates[woId]) || [];
+  var current = estimates.length ? estimates[estimates.length - 1] : null;
+  var items = current ? JSON.parse(JSON.stringify(current.Line_Items)) : [{ desc: '', amount: '' }];
+
+  var wrap = document.getElementById('est-wrap-' + idx);
+  function renderEditor() {
+    var rows = items.map(function(li, i) {
+      return '<div style="display:flex;gap:6px;margin-bottom:4px">' +
+        '<input type="text" placeholder="Description" value="' + esc(li.desc) + '" oninput="window._estEditItems[' + i + '].desc=this.value" style="flex:1;font-size:12px;padding:5px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text)">' +
+        '<input type="number" step="0.01" placeholder="$" value="' + li.amount + '" oninput="window._estEditItems[' + i + '].amount=this.value;updateEstTotal(' + idx + ')" style="width:80px;font-size:12px;padding:5px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text)">' +
+        '<button onclick="removeEstItem(' + i + ',\'' + woId + '\',' + idx + ')" style="background:none;border:none;color:var(--danger);cursor:pointer">✕</button>' +
+        '</div>';
+    }).join('');
+    wrap.innerHTML =
+      '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px">' +
+      rows +
+      '<button class="btn btn-sm" style="margin-top:4px" onclick="addEstItem(\'' + woId + '\',' + idx + ')">+ Line Item</button>' +
+      (current ? '<input type="text" id="est-reason-' + idx + '" placeholder="Reason for change (required if revising)…" style="width:100%;margin-top:8px;font-size:12px;padding:6px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text)">' : '') +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">' +
+      '<span style="font-weight:bold">Total: $<span id="est-total-' + idx + '">0.00</span></span>' +
+      '<div><button class="btn btn-sm" onclick="loadEstimateWidget(\'' + woId + '\',' + idx + ')">Cancel</button> ' +
+      '<button class="btn btn-sm btn-green" onclick="submitEstimate(\'' + woId + '\',' + idx + ')">Submit</button></div></div>' +
+      '</div>';
+    updateEstTotal(idx);
+  }
+  window._estEditItems = items;
+  window._renderEstEditor = renderEditor;
+  renderEditor();
+}
+
+function addEstItem(woId, idx) {
+  window._estEditItems.push({ desc: '', amount: '' });
+  window._renderEstEditor();
+}
+function removeEstItem(i, woId, idx) {
+  window._estEditItems.splice(i, 1);
+  window._renderEstEditor();
+}
+function updateEstTotal(idx) {
+  var total = (window._estEditItems || []).reduce(function(s, li) { return s + (parseFloat(li.amount) || 0); }, 0);
+  var el = document.getElementById('est-total-' + idx);
+  if (el) el.textContent = total.toFixed(2);
+}
+
+function submitEstimate(woId, idx) {
+  var items = (window._estEditItems || []).filter(function(li) { return li.desc && parseFloat(li.amount) >= 0; });
+  if (!items.length) { toast('Add at least one line item', 'error'); return; }
+  var reasonEl = document.getElementById('est-reason-' + idx);
+  var reason = reasonEl ? reasonEl.value.trim() : '';
+  var estimates = (window._estimates && window._estimates[woId]) || [];
+  if (estimates.length && !reason) { toast('Reason for change is required when revising', 'error'); return; }
+
+  api('POST', '/estimate', {
+    wo_id: woId, vendor_id: window.session ? session.vendorId : '',
+    line_items: items.map(function(li) { return { desc: li.desc, amount: parseFloat(li.amount) }; }),
+    change_reason: reason, created_by: window.session ? session.name : 'vendor',
+  }).then(function(res) {
+    if (res.success) { toast('Estimate saved', 'success'); loadEstimateWidget(woId, idx); }
+    else toast(res.error || 'Failed to save', 'error');
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
 
 function toggleCard(idx) {
   var card = document.getElementById('card-' + idx);

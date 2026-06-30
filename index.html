@@ -743,6 +743,25 @@ var SECRET_KEY = 'mh_auth';
 var AUTH_TOKEN = '';
 var state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };
 function esc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+// Mirrors worker's calcTieredEstimate — micro-tier markup → $75 admin fee →
+// 5% processing → round up to nearest $5. Used to auto-suggest invoice charges.
+function calcTieredEstimate(rawCost) {
+  var cost = parseFloat(rawCost) || 0;
+  var pct;
+  if (cost <= 250) pct = 0.35;
+  else if (cost <= 500) pct = 0.33;
+  else if (cost <= 750) pct = 0.31;
+  else if (cost <= 1000) pct = 0.29;
+  else if (cost <= 1250) pct = 0.27;
+  else if (cost <= 1500) pct = 0.26;
+  else pct = 0.25;
+  var stepA = cost * (1 + pct);
+  var stepB = stepA + 75;
+  var stepC = stepB * 1.05;
+  var finalPrice = Math.ceil(stepC / 5) * 5;
+  return { finalPrice: finalPrice, deposit: finalPrice / 2, markupPct: pct };
+}
 function safeArray(v) { return Array.isArray(v) ? v : []; }
 var assignWOId = null;
 var invoiceWOId = null;
@@ -1344,6 +1363,7 @@ function openWODetail(woId) {
         if (_inv) _db.insertBefore(_ph.firstChild, _inv);
         else _db.appendChild(_ph.firstChild);
         loadPortalAttachments(_woIdForPhoto);
+        loadHubEstimateView(_woIdForPhoto, _db, _inv);
       }
     } catch(e2) { /* photo section is non-critical */ }
   }, 50);
@@ -2864,7 +2884,7 @@ function loadVendorBillForInvoice(woId) {
     el.innerHTML = rows;
     // Auto-suggest charge = bill total if not set
     var chargeEl = document.getElementById('inv-charge-' + woId);
-    if (chargeEl && !chargeEl.value && total > 0) chargeEl.value = (total * 1.15).toFixed(2);
+    if (chargeEl && !chargeEl.value && total > 0) chargeEl.value = calcTieredEstimate(total).finalPrice.toFixed(2);
     calcInvoiceMarkup(woId);
   }).catch(function() {
     el.innerHTML = '<span style="color:var(--muted)">No bill submitted yet</span>';
@@ -2931,6 +2951,92 @@ function fireInvoiceWebhook(woId) {
     }
   }).catch(function(e) {
     if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Error: ' + e.message + '</span>';
+  });
+}
+
+// ── Hub-side estimate viewer — shows vendor's submitted estimate, version
+//    history, and a "Generate Estimate Text (AI)" button that produces a
+//    client-ready document mirroring Brett's Gemini estimate gem ──────────
+function loadHubEstimateView(woId, detailBody, beforeEl) {
+  var holder = document.createElement('div');
+  holder.id = 'est-view-' + woId;
+  holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading estimate…</span>';
+  if (beforeEl) detailBody.insertBefore(holder, beforeEl); else detailBody.appendChild(holder);
+
+  api('GET', '/estimates?wo_id=' + woId).then(function(estimates) {
+    if (!Array.isArray(estimates) || !estimates.length) {
+      holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
+        '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">💲 ESTIMATE</div>' +
+        '<div style="color:var(--muted);font-size:12px">No estimate submitted by vendor yet.</div></div>';
+      return;
+    }
+    var current = estimates[estimates.length - 1];
+    var rows = current.Line_Items.map(function(li) {
+      return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">' +
+        '<span>' + esc(li.desc) + '</span><span>$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
+    }).join('');
+    var histRows = estimates.length > 1 ? estimates.slice(0, -1).reverse().map(function(e) {
+      return '<div style="font-size:10px;color:var(--muted);margin-top:4px;border-top:1px dashed var(--border);padding-top:4px">' +
+        'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) : '') + '</div>';
+    }).join('') : '';
+
+    holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<span style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase">💲 VENDOR ESTIMATE — v' + current.Version + '</span>' +
+      '<button class="btn small secondary" onclick="generateEstimateDoc(\'' + woId + '\')">✨ Generate Estimate Text</button>' +
+      '</div>' +
+      rows +
+      '<div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
+      '<span>Vendor Total</span><span style="color:var(--accent2)">$' + parseFloat(current.Subtotal).toFixed(2) + '</span></div>' +
+      histRows +
+      '<div id="est-doc-' + woId + '" style="margin-top:10px"></div>' +
+      '</div>';
+
+    // Auto-suggest a 15% marked-up customer charge if invoice charge field is empty
+    var chargeEl = document.getElementById('inv-charge-' + woId);
+    if (chargeEl && !chargeEl.value) {
+      chargeEl.value = calcTieredEstimate(parseFloat(current.Subtotal)).finalPrice.toFixed(2);
+      if (typeof calcInvoiceMarkup === 'function') calcInvoiceMarkup(woId);
+    }
+  }).catch(function() {
+    holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Could not load estimate</span>';
+  });
+}
+
+// Calls Claude API (via worker) to produce a formatted client-ready estimate document
+function copyEstDoc(btn) {
+  var woId = btn.dataset.woid;
+  var text = window._estDocText && window._estDocText[woId];
+  if (text) { navigator.clipboard.writeText(text); toast('Copied', 'success'); }
+}
+
+function generateEstimateDoc(woId) {
+  var wo = safeArray(state.workorders).find(function(w) { return w.ID === woId; });
+  var prop = safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo && wo.Property_ID); });
+  var estimates = window._hubEstimateCache && window._hubEstimateCache[woId];
+  var docEl = document.getElementById('est-doc-' + woId);
+  if (docEl) docEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Generating…</span>';
+
+  api('GET', '/estimates?wo_id=' + woId).then(function(ests) {
+    var current = ests[ests.length - 1];
+    return api('POST', '/generate-estimate-text', {
+      property_address: prop ? prop.Address : (wo ? wo.Property_ID : ''),
+      issues: wo ? wo.Description : '',
+      line_items: current.Line_Items,
+      wo_id: woId,
+    });
+  }).then(function(res) {
+    if (!docEl) return;
+    if (res.success) {
+      window._estDocText = window._estDocText || {};
+      window._estDocText[woId] = res.text;
+      docEl.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;white-space:pre-wrap;font-size:12px;line-height:1.5;max-height:300px;overflow-y:auto">' + esc(res.text) + '</div>' +
+        '<button class="btn small secondary" style="margin-top:6px" data-woid="' + woId + '" onclick="copyEstDoc(this)">📋 Copy</button>';
+    } else {
+      docEl.innerHTML = '<span style="color:var(--danger);font-size:11px">' + esc(res.error || 'Generation failed') + '</span>';
+    }
+  }).catch(function(e) {
+    if (docEl) docEl.innerHTML = '<span style="color:var(--danger);font-size:11px">' + esc(e.message) + '</span>';
   });
 }
 
@@ -3443,7 +3549,7 @@ function regenerateAndShowPIN(type, id, name) {
   api('POST', '/regenerate-pin', { type: type, id: String(id) }).then(function(res) {
     if (res.error) { toast('Error: ' + res.error, 'error'); return; }
     toast(name + ' new PIN: ' + res.pin, 'success');
-    refreshState();
+    loadAll();
     if (confirm('New PIN: ' + res.pin + '\n\nSend via SMS now?')) {
       api('POST', '/send-pin', { type: type, id: String(id) }).then(function(s) {
         toast(s.success ? 'PIN SMS sent to ' + name : 'SMS failed: ' + (s.error||'check Twilio'), s.success ? 'success' : 'error');
@@ -3467,7 +3573,7 @@ function bulkSendPins(type) {
       sent++;
       if (sent === readyToSend.length) {
         toast('Sent ' + sent + ' PIN SMS messages', 'success');
-        refreshState();
+        loadAll();
       }
     });
   });
@@ -3483,7 +3589,7 @@ function runAdminTool(tool) {
       if (res.api_calls) msg += ' (' + res.api_calls + ' API calls)';
       if (resultEl) resultEl.innerHTML = '<span style="color:var(--accent2)">' + msg + '</span>';
       toast(msg, 'success');
-      refreshState();
+      loadAll();
     } else {
       var err = '⚠ Error: ' + (res.error || JSON.stringify(res));
       if (resultEl) resultEl.innerHTML = '<span style="color:var(--danger)">' + err + '</span>';
