@@ -2962,48 +2962,150 @@ function loadHubEstimateView(woId, detailBody, beforeEl) {
   holder.id = 'est-view-' + woId;
   holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading estimate…</span>';
   if (beforeEl) detailBody.insertBefore(holder, beforeEl); else detailBody.appendChild(holder);
+  window._hubEstimates = window._hubEstimates || {};
+  refreshHubEstimateView(woId);
+}
 
+function refreshHubEstimateView(woId) {
+  var holder = document.getElementById('est-view-' + woId);
+  if (!holder) return;
   api('GET', '/estimates?wo_id=' + woId).then(function(estimates) {
-    if (!Array.isArray(estimates) || !estimates.length) {
+    if (!Array.isArray(estimates)) throw new Error(estimates && estimates.error ? estimates.error : 'Unexpected response');
+    window._hubEstimates[woId] = estimates;
+
+    if (!estimates.length) {
       holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
         '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">💲 ESTIMATE</div>' +
-        '<div style="color:var(--muted);font-size:12px">No estimate submitted by vendor yet.</div></div>';
+        '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">No estimate submitted yet.</div>' +
+        '<button class="btn small secondary" onclick="openHubEstimateEditor(\'' + woId + '\')">+ Create Estimate</button>' +
+        '</div>';
       return;
     }
+
     var current = estimates[estimates.length - 1];
+    var isApproved = current.Status === 'Approved';
     var rows = current.Line_Items.map(function(li) {
-      return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">' +
-        '<span>' + esc(li.desc) + '</span><span>$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
+      return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0">' +
+        '<span style="white-space:pre-wrap">' + esc(li.desc) + '</span><span style="white-space:nowrap">$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
     }).join('');
     var histRows = estimates.length > 1 ? estimates.slice(0, -1).reverse().map(function(e) {
       return '<div style="font-size:10px;color:var(--muted);margin-top:4px;border-top:1px dashed var(--border);padding-top:4px">' +
-        'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) : '') + '</div>';
+        'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) : '') + ' — ' + esc(e.Created_By || '') + '</div>';
     }).join('') : '';
 
+    var approvalBlock = isApproved
+      ? '<div style="margin-top:10px;background:#14532d;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
+        '<span style="color:var(--accent2);font-weight:bold;font-size:11px">✓ APPROVED</span>' +
+        (current.Approved_By ? '<span style="color:var(--muted);font-size:10px;margin-left:6px">by ' + esc(current.Approved_By) + (current.Approval_Note ? ' — ' + esc(current.Approval_Note) : '') + '</span>' : '') +
+        '</div>'
+      : '<div style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px">' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
+        '<input type="checkbox" id="est-deposit-' + woId + '"> Request deposit from customer (skip for small/known-customer jobs — owner approval alone is enough)' +
+        '</label>' +
+        '<button class="btn small" style="background:var(--accent2);color:#000" onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve Estimate</button>' +
+        '</div>';
+
     holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
-      '<span style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase">💲 VENDOR ESTIMATE — v' + current.Version + '</span>' +
-      '<button class="btn small secondary" onclick="generateEstimateDoc(\'' + woId + '\')">✨ Generate Estimate Text</button>' +
-      '</div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">' +
+      '<span style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase">💲 ESTIMATE — v' + current.Version + '</span>' +
+      '<div style="display:flex;gap:6px">' +
+      '<button class="btn small secondary" onclick="openHubEstimateEditor(\'' + woId + '\')">✎ Edit / Revise</button>' +
+      '<button class="btn small secondary" onclick="generateEstimateDoc(\'' + woId + '\')">✨ Generate Text</button>' +
+      '</div></div>' +
       rows +
       '<div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
-      '<span>Vendor Total</span><span style="color:var(--accent2)">$' + parseFloat(current.Subtotal).toFixed(2) + '</span></div>' +
+      '<span>Total</span><span style="color:var(--accent2)">$' + parseFloat(current.Subtotal).toFixed(2) + '</span></div>' +
+      approvalBlock +
       histRows +
       '<div id="est-doc-' + woId + '" style="margin-top:10px"></div>' +
       '</div>';
 
-    // Auto-suggest a 15% marked-up customer charge if invoice charge field is empty
     var chargeEl = document.getElementById('inv-charge-' + woId);
     if (chargeEl && !chargeEl.value) {
       chargeEl.value = calcTieredEstimate(parseFloat(current.Subtotal)).finalPrice.toFixed(2);
       if (typeof calcInvoiceMarkup === 'function') calcInvoiceMarkup(woId);
     }
-  }).catch(function() {
-    holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Could not load estimate</span>';
+  }).catch(function(e) {
+    holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--danger);border-radius:8px;padding:14px;color:var(--danger);font-size:11px">Could not load estimate: ' + esc(e.message) + '</div>';
   });
 }
 
-// Calls Claude API (via worker) to produce a formatted client-ready estimate document
+// Inline line-item editor — mirrors vendor's editor exactly, hub can create or revise any estimate
+function openHubEstimateEditor(woId) {
+  var holder = document.getElementById('est-view-' + woId);
+  if (!holder) return;
+  var estimates = window._hubEstimates[woId] || [];
+  var current = estimates.length ? estimates[estimates.length - 1] : null;
+  var items = current ? JSON.parse(JSON.stringify(current.Line_Items)) : [{ desc: '', amount: '' }];
+  window._hubEstEditItems = items;
+
+  function renderEditor() {
+    var rows = items.map(function(li, i) {
+      return '<div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-start">' +
+        '<textarea placeholder="Description (any length)" rows="2" oninput="window._hubEstEditItems[' + i + '].desc=this.value;this.style.height=\'auto\';this.style.height=this.scrollHeight+\'px\'" style="flex:1;font-size:12px;padding:7px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);resize:vertical;min-height:38px;font-family:var(--font)">' + esc(li.desc) + '</textarea>' +
+        '<input type="number" step="0.01" placeholder="$" value="' + li.amount + '" oninput="window._hubEstEditItems[' + i + '].amount=this.value;updateHubEstTotal(\'' + woId + '\')" style="width:110px;font-size:13px;padding:7px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text)">' +
+        '<button onclick="removeHubEstItem(' + i + ',\'' + woId + '\')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:16px;padding:4px">✕</button>' +
+        '</div>';
+    }).join('');
+    holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
+      '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">💲 ' + (current ? 'REVISE ESTIMATE' : 'NEW ESTIMATE') + '</div>' +
+      rows +
+      '<button class="btn small secondary" onclick="addHubEstItem(\'' + woId + '\')">+ Line Item</button>' +
+      (current ? '<textarea id="hub-est-reason-' + woId + '" rows="2" placeholder="Reason for change (required if revising)…" style="width:100%;margin-top:8px;font-size:12px;padding:7px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);resize:vertical;font-family:var(--font)"></textarea>' : '') +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">' +
+      '<span style="font-weight:bold">Total: $<span id="hub-est-total-' + woId + '">0.00</span></span>' +
+      '<div><button class="btn small" onclick="refreshHubEstimateView(\'' + woId + '\')">Cancel</button> ' +
+      '<button class="btn small" style="background:var(--accent2);color:#000" onclick="submitHubEstimate(\'' + woId + '\')">Submit</button></div></div>' +
+      '</div>';
+    updateHubEstTotal(woId);
+    holder.querySelectorAll('textarea').forEach(function(t) { if (t.id.indexOf('reason') === -1) { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; } });
+  }
+  window._renderHubEstEditor = renderEditor;
+  renderEditor();
+}
+
+function addHubEstItem(woId) { window._hubEstEditItems.push({ desc: '', amount: '' }); window._renderHubEstEditor(); }
+function removeHubEstItem(i, woId) { window._hubEstEditItems.splice(i, 1); window._renderHubEstEditor(); }
+function updateHubEstTotal(woId) {
+  var total = (window._hubEstEditItems || []).reduce(function(s, li) { return s + (parseFloat(li.amount) || 0); }, 0);
+  var el = document.getElementById('hub-est-total-' + woId);
+  if (el) el.textContent = total.toFixed(2);
+}
+
+function submitHubEstimate(woId) {
+  var items = (window._hubEstEditItems || []).filter(function(li) { return li.desc && parseFloat(li.amount) >= 0; });
+  if (!items.length) { toast('Add at least one line item', 'error'); return; }
+  var reasonEl = document.getElementById('hub-est-reason-' + woId);
+  var reason = reasonEl ? reasonEl.value.trim() : '';
+  var estimates = window._hubEstimates[woId] || [];
+  if (estimates.length && !reason) { toast('Reason for change is required when revising', 'error'); return; }
+  var wo = safeArray(state.workorders).find(function(w) { return w.ID === woId; });
+
+  api('POST', '/estimate', {
+    wo_id: woId, vendor_id: wo ? wo.Vendor_ID : '',
+    line_items: items.map(function(li) { return { desc: li.desc, amount: parseFloat(li.amount) }; }),
+    change_reason: reason, created_by: 'admin',
+  }).then(function(res) {
+    if (res.success) { refreshHubEstimateView(woId); toast('Estimate saved', 'success'); }
+    else toast(res.error || 'Failed to save', 'error');
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+// Approve flow — hub-only action. Vendors have no approve button in their portal.
+function approveEstimateUI(woId) {
+  var depositEl = document.getElementById('est-deposit-' + woId);
+  var requestDeposit = !!(depositEl && depositEl.checked);
+  api('POST', '/estimate/approve', { wo_id: woId, approved_by: 'admin', request_deposit: requestDeposit })
+    .then(function(res) {
+      if (res.success) {
+        toast(requestDeposit ? 'Approved — deposit request will follow' : 'Approved — no deposit needed', 'success');
+        refreshHubEstimateView(woId);
+      } else {
+        toast(res.error || 'Approval failed', 'error');
+      }
+    }).catch(function(e) { toast(e.message, 'error'); });
+}
+
 function copyEstDoc(btn) {
   var woId = btn.dataset.woid;
   var text = window._estDocText && window._estDocText[woId];
