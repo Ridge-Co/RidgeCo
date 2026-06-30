@@ -194,6 +194,16 @@ var currentTab = 'open';
 var failCount = 0;
 
 function api(path, opts) {
+  // Accept hub-style calls too: api('GET'|'POST', path, body)
+  if (path === 'GET' || path === 'POST') {
+    var method = path, realPath = opts, body = arguments[2];
+    path = realPath;
+    opts = { method: method };
+    if (body !== undefined) {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(body);
+    }
+  }
   opts = opts || {};
   opts.headers = opts.headers || {};
   opts.headers['X-Auth-Token'] = SECRET;
