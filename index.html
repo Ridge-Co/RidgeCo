@@ -1092,7 +1092,10 @@ function renderWOPage() {
 
 // ── WO Detail ────────────────────────────────────────────────
 function openWODetail(woId) {
-  var wo = state.workorders.find(function(w){return w.ID===woId;}); if(!wo) return;
+  console.log('[openWODetail] called woId=', woId, 'workorders count=', state.workorders && state.workorders.length);
+  var wo = state.workorders.find(function(w){return w.ID===woId;});
+  console.log('[openWODetail] wo found=', !!wo);
+  if(!wo) { console.warn('[openWODetail] WO not found in state for id:', woId); return; }
   var prop = state.properties.find(function(p){return String(p.ID)===String(wo.Property_ID);});
   var unit = state.units.find(function(u){return u.ID===wo.Unit_ID;});
   var vendor = state.vendors.find(function(v){return v.ID===wo.Vendor_ID;});
@@ -2828,6 +2831,109 @@ function injectMasterKeyInfo(wo) {
   detail.insertBefore(mk_banner, detail.firstChild);
 }
 
+
+// ══════════════════════════════════════════════════════════
+//  INVOICE BUILDER FUNCTIONS
+// ══════════════════════════════════════════════════════════
+
+// Load vendor bill breakdown into the invoice builder panel
+function loadVendorBillForInvoice(woId) {
+  var el = document.getElementById('inv-vendor-breakdown-' + woId);
+  if (!el) return;
+  api('GET', '/vendor-bills?wo_id=' + woId).then(function(bills) {
+    if (!Array.isArray(bills) || !bills.length) {
+      el.innerHTML = '<span style="color:var(--muted)">No bill submitted yet</span>';
+      return;
+    }
+    var bill = bills[bills.length - 1];
+    var rows = '';
+    if (parseFloat(bill.Labor_Total) > 0)
+      rows += '<div>⏱ Labor: ' + bill.Labor_Hours + 'h × $' + bill.Labor_Rate + '/h = <b>$' + parseFloat(bill.Labor_Total).toFixed(2) + '</b></div>';
+    if (parseFloat(bill.Flat_Amount) > 0)
+      rows += '<div>📋 Flat rate: <b>$' + parseFloat(bill.Flat_Amount).toFixed(2) + '</b></div>';
+    if (parseFloat(bill.Truck_Amount) > 0)
+      rows += '<div>🚚 Truck stock: <b>$' + parseFloat(bill.Truck_Amount).toFixed(2) + '</b></div>';
+    try {
+      var items = JSON.parse(bill.Receipt_Items || '[]');
+      items.forEach(function(r) {
+        rows += '<div>🧾 ' + esc(r.desc || 'Receipt') + ': <b>$' + parseFloat(r.amount || 0).toFixed(2) + '</b></div>';
+      });
+    } catch(e) {}
+    var total = parseFloat(bill.Grand_Total || 0);
+    rows += '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;color:var(--accent2)">Total owed: <b>$' + total.toFixed(2) + '</b></div>';
+    el.innerHTML = rows;
+    // Auto-suggest charge = bill total if not set
+    var chargeEl = document.getElementById('inv-charge-' + woId);
+    if (chargeEl && !chargeEl.value && total > 0) chargeEl.value = (total * 1.15).toFixed(2);
+    calcInvoiceMarkup(woId);
+  }).catch(function() {
+    el.innerHTML = '<span style="color:var(--muted)">No bill submitted yet</span>';
+  });
+}
+
+// Calculate markup % between vendor cost and customer charge
+function calcInvoiceMarkup(woId) {
+  var markupEl = document.getElementById('inv-markup-' + woId);
+  if (!markupEl) return;
+  var chargeEl = document.getElementById('inv-charge-' + woId);
+  var charge = parseFloat((chargeEl && chargeEl.value) || 0);
+  if (!charge) { markupEl.textContent = ''; return; }
+  var breakdownEl = document.getElementById('inv-vendor-breakdown-' + woId);
+  // Try to extract vendor total from breakdown text
+  var totalMatch = breakdownEl && breakdownEl.textContent.match(/Total owed: \$([\d.]+)/);
+  var cost = totalMatch ? parseFloat(totalMatch[1]) : 0;
+  if (cost > 0) {
+    var profit = charge - cost;
+    var pct = ((profit / cost) * 100).toFixed(0);
+    markupEl.innerHTML = profit >= 0
+      ? '<span style="color:var(--accent2)">Profit: $' + profit.toFixed(2) + ' (' + pct + '% markup)</span>'
+      : '<span style="color:var(--danger)">Below cost by $' + Math.abs(profit).toFixed(2) + '</span>';
+  } else {
+    markupEl.innerHTML = '<span style="color:var(--muted)">$' + charge.toFixed(2) + ' charge</span>';
+  }
+}
+
+// Save invoice draft (charge + memo) to the WO record
+function saveDraftInvoice(woId) {
+  var charge = (document.getElementById('inv-charge-' + woId) || {}).value || '';
+  var memo   = (document.getElementById('inv-memo-'   + woId) || {}).value || '';
+  var msgEl  = document.getElementById('inv-msg-' + woId);
+  if (msgEl) msgEl.textContent = 'Saving…';
+  api('POST', '/update-wo', { id: woId, fields: { Customer_Charge: charge, Invoice_Memo: memo } })
+    .then(function() {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--accent2)">✓ Saved</span>';
+      setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 2000);
+    }).catch(function() {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Save failed</span>';
+    });
+}
+
+// Fire Make webhook → QuickBooks invoice + bill creation
+function fireInvoiceWebhook(woId) {
+  var charge = (document.getElementById('inv-charge-' + woId) || {}).value || '';
+  var memo   = (document.getElementById('inv-memo-'   + woId) || {}).value || '';
+  var msgEl  = document.getElementById('inv-msg-' + woId);
+  if (!charge) { toast('Enter a customer charge amount first', 'error'); return; }
+  if (msgEl) msgEl.textContent = 'Sending to Make…';
+  var wo = safeArray(state.workorders).find(function(w) { return w.ID === woId; });
+  api('POST', '/invoice-webhook', {
+    wo_id: woId, charge: charge, memo: memo,
+    property: wo ? (wo.Property_Address || wo.property_address || '') : '',
+    vendor_id: wo ? wo.Vendor_ID : '',
+    owner_wo_ref: wo ? wo.Owner_WO_Ref : '',
+  }).then(function(res) {
+    if (res.success || res.ok) {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--accent2)">✓ Sent to Make → QBO</span>';
+      toast('Invoice sent to QuickBooks', 'success');
+      updateWOStatus(woId, 'Invoiced');
+    } else {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">' + (res.error || 'Webhook failed') + '</span>';
+    }
+  }).catch(function(e) {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Error: ' + e.message + '</span>';
+  });
+}
+
 </script>
 
 <!-- SEND PIN PREVIEW MODAL -->
@@ -3553,8 +3659,11 @@ function buildPhotoSection(woId, propAddr, opts) {
 
 // Simplest possible WO click handler — reads from data attribute
 function woCk(el) {
+  console.log('[woCk] called, el=', el, 'woid=', el && el.dataset && el.dataset.woid);
   var id = el && (el.dataset.woid || el.getAttribute('data-woid'));
+  console.log('[woCk] id=', id);
   if (id) openWODetail(id);
+  else console.warn('[woCk] no id found on element');
 }
 
 // ── WO click delegation (safer than inline onclick) ───────────
