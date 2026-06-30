@@ -683,6 +683,163 @@ function show(id, visible) {
 function esc(str) {
   return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ══════════════════════════════════════════════════════════════
+//  UNIFIED PHOTO UPLOAD (works in all portals)
+// ══════════════════════════════════════════════════════════════
+
+// Core upload: get Drive session from worker → PUT file directly to Drive
+function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
+  var reqBody = {
+    wo_id: woId, property: propAddr || 'Unknown Property',
+    file_name: file.name, file_type: fileType || 'photo',
+    mime_type: file.type || 'application/octet-stream',
+    origin: window.location.origin,
+  };
+  if (folderInfo) { reqBody.folder_id = folderInfo.id; reqBody.folder_url = folderInfo.url; }
+
+  return api('POST', '/create-upload-session', reqBody).then(function(res) {
+    if (!res.success || !res.upload_url) {
+      card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
+      card.textContent = '\u26a0 ' + (res.error || 'Session failed');
+      return folderInfo;
+    }
+    var nextFolder = { id: res.wo_folder_id, url: res.wo_folder_url };
+    card.textContent = '\u2191 Uploading\u2026';
+
+    return fetch(res.upload_url, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(fileData) {
+      if (!fileData || !fileData.id) {
+        card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
+        card.textContent = '\u26a0 Upload failed';
+        return nextFolder;
+      }
+      api('POST', '/log-attachment', {
+        wo_id: woId, file_id: fileData.id, file_url: fileData.webViewLink || '',
+        file_name: file.name, file_type: fileType || 'photo',
+        mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
+      }).catch(function(){});
+
+      var isVideo = file.type.startsWith('video/');
+      var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
+                 fileType === 'receipt' ? '🧾' : fileType === 'report' ? '\u26a0\ufe0f' :
+                 isVideo ? '🎥' : '📷';
+      card.style.borderColor = 'var(--accent2)'; card.style.color = 'var(--text)';
+      card.innerHTML = icon + ' <a href="' + esc(fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,16)) + '</a>';
+      return nextFolder;
+    })
+    .catch(function(e) {
+      card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
+      card.textContent = '\u26a0 ' + e.message;
+      return nextFolder;
+    });
+  });
+}
+
+// Main entry — called by all portal file inputs
+function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
+  var files = Array.from(input.files);
+  if (!files.length) return;
+  var container = document.getElementById(containerId || ('uploads-' + fileType + '-' + woId));
+  if (!container) container = document.getElementById('wo-uploads-' + woId);
+
+  // Create placeholder cards
+  var cards = files.map(function(file) {
+    var c = document.createElement('div');
+    c.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--muted)';
+    c.textContent = '\u23f3 ' + file.name.substring(0,18);
+    if (container) container.appendChild(c);
+    return c;
+  });
+
+  // Chain sequentially — first call creates folder, rest reuse it
+  var chain = Promise.resolve(null);
+  files.forEach(function(file, i) {
+    chain = chain.then(function(folderInfo) {
+      return _uploadOneFile(file, cards[i], woId, propAddr, fileType, folderInfo);
+    });
+  });
+  input.value = '';
+}
+
+// Load and display attachments grouped by type
+function loadPortalAttachments(woId, opts) {
+  opts = opts || { before: true, after: true, report: true, receipt: false };
+  api('GET', '/attachments?wo_id=' + woId).then(function(items) {
+    if (!Array.isArray(items)) return;
+    var byType = {};
+    items.filter(function(f){ return f.Active !== 'FALSE'; }).forEach(function(f) {
+      var t = (f.File_Type || 'other').toLowerCase();
+      if (!byType[t]) byType[t] = [];
+      byType[t].push(f);
+    });
+    ['before','after','report','receipt','other'].forEach(function(type) {
+      var el = document.getElementById('uploads-' + type + '-' + woId);
+      if (!el || !byType[type] || !byType[type].length) return;
+      // Remove loading placeholder
+      var ph = el.querySelector('.upload-ph');
+      if (ph) ph.remove();
+      byType[type].forEach(function(f) {
+        var icon = type === 'after' ? '\u2705' : type === 'before' ? '📷' :
+                   type === 'receipt' ? '🧾' : type === 'report' ? '\u26a0\ufe0f' : '📎';
+        var a = document.createElement('a');
+        a.href = f.Drive_URL || '#'; a.target = '_blank';
+        a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
+        a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
+        el.appendChild(a);
+      });
+    });
+  }).catch(function(){});
+}
+
+// Build a full categorized photo section for a WO
+function buildPhotoSection(woId, propAddr, opts) {
+  opts = opts || { canBefore: true, canAfter: true, canReport: false, canReceipt: true, viewAll: true };
+  var TYPE_CONFIG = {
+    before:  { label: 'BEFORE',  icon: '📷', color: 'var(--warn)',     accept: 'image/*,video/*', cap: 'environment' },
+    after:   { label: 'AFTER',   icon: '\u2705',    color: 'var(--accent2)', accept: 'image/*,video/*', cap: 'environment' },
+    report:  { label: 'REPORT ISSUE', icon: '\u26a0\ufe0f', color: 'var(--danger)', accept: 'image/*,video/*', cap: 'environment' },
+    receipt: { label: 'RECEIPT', icon: '🧾', color: 'var(--muted)',    accept: 'image/*,application/pdf', cap: '' },
+  };
+
+  var uploadBtns = '';
+  Object.keys(TYPE_CONFIG).forEach(function(type) {
+    if (!opts['can' + type.charAt(0).toUpperCase() + type.slice(1)]) return;
+    var cfg = TYPE_CONFIG[type];
+    var inputAttrs = 'type="file" multiple accept="' + cfg.accept + '"' +
+      (cfg.cap ? ' capture="' + cfg.cap + '"' : '') +
+      ' onchange="portalUploadFiles(this,\'' + woId + '\',\'' + esc(propAddr) + '\',\'' + type + '\',\'uploads-' + type + '-' + woId + '\')" style="display:none"';
+    uploadBtns += '<label style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:5px 9px;font-size:11px;cursor:pointer;color:var(--text)">' +
+      cfg.icon + ' ' + cfg.label + '<input ' + inputAttrs + '></label>';
+  });
+
+  var sections = '';
+  var viewTypes = opts.viewAll ? ['before','after','report','receipt'] :
+                  (opts.canBefore ? ['before'] : []).concat(opts.canAfter ? ['after'] : [])
+                  .concat(opts.canReport ? ['report'] : []).concat(opts.canReceipt ? ['receipt'] : []);
+
+  viewTypes.forEach(function(type) {
+    var cfg = TYPE_CONFIG[type];
+    if (!cfg) return;
+    sections += '<div style="margin-top:8px">' +
+      '<div style="color:' + cfg.color + ';font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">' + cfg.icon + ' ' + cfg.label + '</div>' +
+      '<div id="uploads-' + type + '-' + woId + '" style="display:flex;flex-wrap:wrap;gap:4px;min-height:20px"><span class="upload-ph" style="color:var(--muted);font-size:11px">None yet</span></div>' +
+      '</div>';
+  });
+
+  return '<div style="margin-top:12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+    '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">📷 PHOTOS & FILES</span>' +
+    '<div style="display:flex;gap:5px;flex-wrap:wrap">' + uploadBtns + '</div></div>' +
+    sections + '</div>';
+}
+
+
 </script>
 
 <!-- FEEDBACK MODAL -->
@@ -885,167 +1042,6 @@ function submitVendorSched(modalId) {
 }
 </script>
 
-<!-- SCHEDULING MODAL -->
-<div class="modal-overlay" id="modalSched">
-  <div class="modal" style="max-width:440px">
-    <div class="modal-title">📅 SCHEDULE / DISPATCH</div>
-    <div class="sched-urgent-banner" id="modalSched-banner">
-      ⚡ <b>Within 1 hour</b> selected — tenant SMS will be sent immediately on save.
-    </div>
-    <div class="sched-date-row">
-      <div>
-        <label>DATE</label>
-        <input type="date" id="modalSched-date">
-      </div>
-      <div style="display:flex;align-items:flex-end;padding-bottom:1px">
-        <button class="sched-today-btn" onclick="document.getElementById('modalSched-date').value=todayStr()">Today</button>
-      </div>
-    </div>
-    <div style="margin-bottom:10px">
-      <label>TIME WINDOW</label>
-      <select id="modalSched-window" onchange="schedWindowChanged('modalSched')" style="width:100%">
-        <option value="">— Select time window —</option>
-                <optgroup label="⚡ Urgent">
-                <option value="Within 1 hour">⚡ Within 1 hour — sends immediate tenant SMS</option>
-                </optgroup>
-                <optgroup label="2-Hour Windows">
-                <option value="7:00 AM – 9:00 AM">7:00 AM – 9:00 AM</option>
-                <option value="8:00 AM – 10:00 AM">8:00 AM – 10:00 AM</option>
-                <option value="9:00 AM – 11:00 AM">9:00 AM – 11:00 AM</option>
-                <option value="10:00 AM – 12:00 PM">10:00 AM – 12:00 PM</option>
-                <option value="11:00 AM – 1:00 PM">11:00 AM – 1:00 PM</option>
-                <option value="12:00 PM – 2:00 PM">12:00 PM – 2:00 PM</option>
-                <option value="1:00 PM – 3:00 PM">1:00 PM – 3:00 PM</option>
-                <option value="2:00 PM – 4:00 PM">2:00 PM – 4:00 PM</option>
-                <option value="3:00 PM – 5:00 PM">3:00 PM – 5:00 PM</option>
-                <option value="4:00 PM – 6:00 PM">4:00 PM – 6:00 PM</option>
-                <option value="5:00 PM – 7:00 PM">5:00 PM – 7:00 PM</option>
-                <option value="6:00 PM – 8:00 PM">6:00 PM – 8:00 PM</option>
-                </optgroup>
-                <optgroup label="3-Hour Windows">
-                <option value="8:00 AM – 11:00 AM">8:00 AM – 11:00 AM</option>
-                <option value="9:00 AM – 12:00 PM">9:00 AM – 12:00 PM</option>
-                <option value="10:00 AM – 1:00 PM">10:00 AM – 1:00 PM</option>
-                <option value="11:00 AM – 2:00 PM">11:00 AM – 2:00 PM</option>
-                <option value="12:00 PM – 3:00 PM">12:00 PM – 3:00 PM</option>
-                <option value="1:00 PM – 4:00 PM">1:00 PM – 4:00 PM</option>
-                <option value="2:00 PM – 5:00 PM">2:00 PM – 5:00 PM</option>
-                <option value="3:00 PM – 6:00 PM">3:00 PM – 6:00 PM</option>
-                <option value="4:00 PM – 7:00 PM">4:00 PM – 7:00 PM</option>
-                <option value="5:00 PM – 8:00 PM">5:00 PM – 8:00 PM</option>
-                </optgroup>
-                <optgroup label="4-Hour Windows">
-                <option value="8:00 AM – 12:00 PM">8:00 AM – 12:00 PM</option>
-                <option value="9:00 AM – 1:00 PM">9:00 AM – 1:00 PM</option>
-                <option value="10:00 AM – 2:00 PM">10:00 AM – 2:00 PM</option>
-                <option value="11:00 AM – 3:00 PM">11:00 AM – 3:00 PM</option>
-                <option value="12:00 PM – 4:00 PM">12:00 PM – 4:00 PM</option>
-                <option value="1:00 PM – 5:00 PM">1:00 PM – 5:00 PM</option>
-                <option value="2:00 PM – 6:00 PM">2:00 PM – 6:00 PM</option>
-                <option value="3:00 PM – 7:00 PM">3:00 PM – 7:00 PM</option>
-                <option value="4:00 PM – 8:00 PM">4:00 PM – 8:00 PM</option>
-                </optgroup>
-                <optgroup label="Half-Day Blocks">
-                <option value="Morning (8:00 AM – 12:00 PM)">Morning (8:00 AM – 12:00 PM)</option>
-                <option value="Afternoon (12:00 PM – 5:00 PM)">Afternoon (12:00 PM – 5:00 PM)</option>
-                <option value="Evening (5:00 PM – 8:00 PM)">Evening (5:00 PM – 8:00 PM)</option>
-                <option value="All Day">All Day</option>
-                </optgroup>
-                <optgroup label="Custom">
-                <option value="custom">Custom — enter time below</option>
-                </optgroup>
-      </select>
-    </div>
-    <div class="sched-custom" id="modalSched-custom">
-      <label>CUSTOM TIME</label>
-      <input type="text" id="modalSched-custom-val" placeholder="e.g. 2:30 PM – 4:30 PM">
-    </div>
-    <div class="sched-notify-row">
-      <input type="checkbox" id="modalSched-notify" checked>
-      <label style="margin:0;text-transform:none;letter-spacing:0;cursor:pointer" for="modalSched-notify">
-        Notify tenant by SMS
-      </label>
-    </div>
-    <div id="modalSched-msg" style="margin-top:8px"></div>
-    <div class="modal-actions" style="margin-top:14px">
-      <button class="btn-sm btn-muted btn" onclick="closeSchedModal('modalSched')">Cancel</button>
-      <button class="btn-sm btn-green btn" id="modalSched-save" onclick="submitVendorSched('modalSched')">SAVE SCHEDULE</button>
-    </div>
-  </div>
-</div>
-<script>
-
-var _schedWOId = null;
-function todayStr() {
-  return new Date().toISOString().split('T')[0];
-}
-function openSchedModal(modalId, woId) {
-  _schedWOId = woId;
-  document.getElementById(modalId+'-date').value = todayStr();
-  document.getElementById(modalId+'-window').value = '';
-  var custom = document.getElementById(modalId+'-custom');
-  if (custom) custom.style.display = 'none';
-  var banner = document.getElementById(modalId+'-banner');
-  if (banner) banner.style.display = 'none';
-  document.getElementById(modalId+'-msg').innerHTML = '';
-  openModal(modalId);
-}
-function closeSchedModal(id) { closeModal(id); }
-function schedWindowChanged(modalId) {
-  var val = document.getElementById(modalId+'-window').value;
-  var custom = document.getElementById(modalId+'-custom');
-  var banner = document.getElementById(modalId+'-banner');
-  if (custom) custom.style.display = val === 'custom' ? '' : 'none';
-  if (banner) banner.style.display = val === 'Within 1 hour' ? '' : 'none';
-  if (val === 'Within 1 hour') document.getElementById(modalId+'-date').value = todayStr();
-}
-function submitSchedModal(modalId, updatedBy, updatedByRole, apiFn) {
-  var date   = document.getElementById(modalId+'-date').value;
-  var window_ = document.getElementById(modalId+'-window').value;
-  var custom = document.getElementById(modalId+'-custom-val');
-  var notify = document.getElementById(modalId+'-notify').checked;
-  var msgEl  = document.getElementById(modalId+'-msg');
-  if (window_ === 'custom') window_ = (custom ? custom.value.trim() : '');
-  if (!date)    { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Select a date.</div>'; return; }
-  if (!window_) { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Select a time window.</div>'; return; }
-  document.getElementById(modalId+'-save').disabled = true;
-  apiFn(_schedWOId, date, window_, notify, updatedBy, updatedByRole, msgEl, function(res) {
-    document.getElementById(modalId+'-save').disabled = false;
-    if (res && res.success) {
-      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:12px">✓ Scheduled' + (res.tenant_sms ? ' — tenant notified.' : '.') + '</div>';
-      setTimeout(function(){ closeModal(modalId); }, 1200);
-    } else {
-      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">' + (res ? res.error : 'Error') + '</div>';
-    }
-  });
-}
-function submitVendorSched(modalId) {
-  var date    = document.getElementById(modalId+'-date').value;
-  var winEl   = document.getElementById(modalId+'-window');
-  var window_ = winEl.value === 'custom'
-    ? ((document.getElementById(modalId+'-custom-val')||{}).value||'').trim()
-    : winEl.value;
-  var notify  = document.getElementById(modalId+'-notify').checked;
-  var msgEl   = document.getElementById(modalId+'-msg');
-  if (!date)    { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Please select a date.</div>'; return; }
-  if (!window_) { msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Please select a time window.</div>'; return; }
-  document.getElementById(modalId+'-save').disabled = true;
-  fetch(WORKER + '/schedule', {
-    method:'POST', headers:{'X-Auth-Token':SECRET,'Content-Type':'application/json'},
-    body:JSON.stringify({wo_id:_schedWOId, date:date, window:window_, notify_tenant:notify,
-                         updated_by:session.vendor_name, updated_by_role:'vendor'})
-  }).then(function(r){return r.json();}).then(function(res){
-    document.getElementById(modalId+'-save').disabled = false;
-    if (res&&res.success) {
-      msgEl.innerHTML='<div style="color:var(--accent2);font-size:12px">✓ Scheduled'+(res.tenant_sms?' — tenant notified.':' — no tenant SMS.')+'</div>';
-      setTimeout(function(){ closeModal(modalId); loadWorkOrders(); }, 1400);
-    } else {
-      msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">'+((res&&res.error)||'Error')+'</div>';
-    }
-  }).catch(function(){ document.getElementById(modalId+'-save').disabled=false; });
-}
-
-</script>
 
 <!-- VENDOR BILLING MODAL -->
 <div class="modal-overlay" id="modal-vendor-bill" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
@@ -1418,163 +1414,6 @@ function applyTranslations() {
   });
   document.title = 'Ridge Co — Portal de Contratistas';
 }
-
-
-// ══════════════════════════════════════════════════════════════
-//  UNIFIED PHOTO UPLOAD (works in all portals)
-// ══════════════════════════════════════════════════════════════
-
-// Core upload: get Drive session from worker → PUT file directly to Drive
-function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
-  var reqBody = {
-    wo_id: woId, property: propAddr || 'Unknown Property',
-    file_name: file.name, file_type: fileType || 'photo',
-    mime_type: file.type || 'application/octet-stream',
-    origin: window.location.origin,
-  };
-  if (folderInfo) { reqBody.folder_id = folderInfo.id; reqBody.folder_url = folderInfo.url; }
-
-  return api('POST', '/create-upload-session', reqBody).then(function(res) {
-    if (!res.success || !res.upload_url) {
-      card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-      card.textContent = '\u26a0 ' + (res.error || 'Session failed');
-      return folderInfo;
-    }
-    var nextFolder = { id: res.wo_folder_id, url: res.wo_folder_url };
-    card.textContent = '\u2191 Uploading\u2026';
-
-    return fetch(res.upload_url, {
-      method: 'PUT',
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
-      body: file,
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(fileData) {
-      if (!fileData || !fileData.id) {
-        card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-        card.textContent = '\u26a0 Upload failed';
-        return nextFolder;
-      }
-      api('POST', '/log-attachment', {
-        wo_id: woId, file_id: fileData.id, file_url: fileData.webViewLink || '',
-        file_name: file.name, file_type: fileType || 'photo',
-        mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
-      }).catch(function(){});
-
-      var isVideo = file.type.startsWith('video/');
-      var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
-                 fileType === 'receipt' ? '🧾' : fileType === 'report' ? '\u26a0\ufe0f' :
-                 isVideo ? '🎥' : '📷';
-      card.style.borderColor = 'var(--accent2)'; card.style.color = 'var(--text)';
-      card.innerHTML = icon + ' <a href="' + esc(fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,16)) + '</a>';
-      return nextFolder;
-    })
-    .catch(function(e) {
-      card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-      card.textContent = '\u26a0 ' + e.message;
-      return nextFolder;
-    });
-  });
-}
-
-// Main entry — called by all portal file inputs
-function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
-  var files = Array.from(input.files);
-  if (!files.length) return;
-  var container = document.getElementById(containerId || ('uploads-' + fileType + '-' + woId));
-  if (!container) container = document.getElementById('wo-uploads-' + woId);
-
-  // Create placeholder cards
-  var cards = files.map(function(file) {
-    var c = document.createElement('div');
-    c.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--muted)';
-    c.textContent = '\u23f3 ' + file.name.substring(0,18);
-    if (container) container.appendChild(c);
-    return c;
-  });
-
-  // Chain sequentially — first call creates folder, rest reuse it
-  var chain = Promise.resolve(null);
-  files.forEach(function(file, i) {
-    chain = chain.then(function(folderInfo) {
-      return _uploadOneFile(file, cards[i], woId, propAddr, fileType, folderInfo);
-    });
-  });
-  input.value = '';
-}
-
-// Load and display attachments grouped by type
-function loadPortalAttachments(woId, opts) {
-  opts = opts || { before: true, after: true, report: true, receipt: false };
-  api('GET', '/attachments?wo_id=' + woId).then(function(items) {
-    if (!Array.isArray(items)) return;
-    var byType = {};
-    items.filter(function(f){ return f.Active !== 'FALSE'; }).forEach(function(f) {
-      var t = (f.File_Type || 'other').toLowerCase();
-      if (!byType[t]) byType[t] = [];
-      byType[t].push(f);
-    });
-    ['before','after','report','receipt','other'].forEach(function(type) {
-      var el = document.getElementById('uploads-' + type + '-' + woId);
-      if (!el || !byType[type] || !byType[type].length) return;
-      // Remove loading placeholder
-      var ph = el.querySelector('.upload-ph');
-      if (ph) ph.remove();
-      byType[type].forEach(function(f) {
-        var icon = type === 'after' ? '\u2705' : type === 'before' ? '📷' :
-                   type === 'receipt' ? '🧾' : type === 'report' ? '\u26a0\ufe0f' : '📎';
-        var a = document.createElement('a');
-        a.href = f.Drive_URL || '#'; a.target = '_blank';
-        a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
-        a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
-        el.appendChild(a);
-      });
-    });
-  }).catch(function(){});
-}
-
-// Build a full categorized photo section for a WO
-function buildPhotoSection(woId, propAddr, opts) {
-  opts = opts || { canBefore: true, canAfter: true, canReport: false, canReceipt: true, viewAll: true };
-  var TYPE_CONFIG = {
-    before:  { label: 'BEFORE',  icon: '📷', color: 'var(--warn)',     accept: 'image/*,video/*', cap: 'environment' },
-    after:   { label: 'AFTER',   icon: '\u2705',    color: 'var(--accent2)', accept: 'image/*,video/*', cap: 'environment' },
-    report:  { label: 'REPORT ISSUE', icon: '\u26a0\ufe0f', color: 'var(--danger)', accept: 'image/*,video/*', cap: 'environment' },
-    receipt: { label: 'RECEIPT', icon: '🧾', color: 'var(--muted)',    accept: 'image/*,application/pdf', cap: '' },
-  };
-
-  var uploadBtns = '';
-  Object.keys(TYPE_CONFIG).forEach(function(type) {
-    if (!opts['can' + type.charAt(0).toUpperCase() + type.slice(1)]) return;
-    var cfg = TYPE_CONFIG[type];
-    var inputAttrs = 'type="file" multiple accept="' + cfg.accept + '"' +
-      (cfg.cap ? ' capture="' + cfg.cap + '"' : '') +
-      ' onchange="portalUploadFiles(this,\'' + woId + '\',\'' + esc(propAddr) + '\',\'' + type + '\',\'uploads-' + type + '-' + woId + '\')" style="display:none"';
-    uploadBtns += '<label style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:5px 9px;font-size:11px;cursor:pointer;color:var(--text)">' +
-      cfg.icon + ' ' + cfg.label + '<input ' + inputAttrs + '></label>';
-  });
-
-  var sections = '';
-  var viewTypes = opts.viewAll ? ['before','after','report','receipt'] :
-                  (opts.canBefore ? ['before'] : []).concat(opts.canAfter ? ['after'] : [])
-                  .concat(opts.canReport ? ['report'] : []).concat(opts.canReceipt ? ['receipt'] : []);
-
-  viewTypes.forEach(function(type) {
-    var cfg = TYPE_CONFIG[type];
-    if (!cfg) return;
-    sections += '<div style="margin-top:8px">' +
-      '<div style="color:' + cfg.color + ';font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">' + cfg.icon + ' ' + cfg.label + '</div>' +
-      '<div id="uploads-' + type + '-' + woId + '" style="display:flex;flex-wrap:wrap;gap:4px;min-height:20px"><span class="upload-ph" style="color:var(--muted);font-size:11px">None yet</span></div>' +
-      '</div>';
-  });
-
-  return '<div style="margin-top:12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">' +
-    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
-    '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">📷 PHOTOS & FILES</span>' +
-    '<div style="display:flex;gap:5px;flex-wrap:wrap">' + uploadBtns + '</div></div>' +
-    sections + '</div>';
-}
-
 </script>
 </body>
 </html>
