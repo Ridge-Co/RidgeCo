@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ridge Co — Location Cluster Tagger</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
+    --border: #30363d; --text: #e6edf3; --muted: #7d8590;
+    --accent: #58a6ff; --accent2: #3fb950; --danger: #f85149;
+    --warn: #d29922; --font: 'JetBrains Mono', 'Courier New', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 13px; min-height: 100vh; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 14px; letter-spacing: .1em; color: var(--accent); }
+  header span { color: var(--muted); font-size: 11px; }
+  .main { max-width: 960px; margin: 0 auto; padding: 20px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .card-title { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  input, select, textarea { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; font-family: var(--font); font-size: 12px; width: 100%; }
+  input:focus, select:focus { outline: 1px solid var(--accent); }
+  .btn { background: var(--accent); color: #000; border: none; border-radius: 6px; padding: 8px 16px; font-family: var(--font); font-size: 12px; font-weight: bold; cursor: pointer; letter-spacing: .05em; }
+  .btn:hover { opacity: .85; }
+  .btn.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn.green { background: var(--accent2); }
+  .btn.small { padding: 4px 10px; font-size: 11px; }
+  .badge { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 4px; font-weight: bold; }
+  .badge-cluster { background: #1f4e79; color: #90caf9; }
+  .badge-overlap { background: #1b3a29; color: #81c784; }
+  .tag { display: inline-flex; align-items: center; gap: 4px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-size: 11px; margin: 2px; cursor: pointer; }
+  .tag.selected { border-color: var(--accent); background: #1f2d40; color: var(--accent); }
+  .tag.suggested { border-color: var(--accent2); }
+  .dist-bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 3px; }
+  .dist-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+  .row { display: flex; gap: 10px; align-items: flex-start; }
+  .col { flex: 1; }
+  #login-screen { display: flex; align-items: center; justify-content: center; min-height: 80vh; }
+  .login-box { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px; width: 100%; max-width: 360px; text-align: center; }
+  .login-box h2 { color: var(--accent); font-size: 18px; margin-bottom: 6px; }
+  .login-box p { color: var(--muted); font-size: 11px; margin-bottom: 20px; }
+  .login-box input { margin-bottom: 12px; }
+  #app { display: none; }
+  .prop-row { border-bottom: 1px solid var(--border); padding: 10px 0; display: flex; align-items: flex-start; gap: 12px; }
+  .prop-row:last-child { border-bottom: none; }
+  .prop-id { color: var(--muted); font-size: 10px; width: 30px; flex-shrink: 0; }
+  .prop-addr { flex: 1; font-size: 12px; }
+  .prop-clusters { display: flex; gap: 4px; flex-wrap: wrap; }
+  .msg { padding: 8px 12px; border-radius: 6px; font-size: 11px; margin-top: 8px; }
+  .msg.error { background: #2d0a0a; border: 1px solid var(--danger); color: #fca5a5; }
+  .msg.success { background: #0d2818; border: 1px solid var(--accent2); color: #86efac; }
+  .msg.info { background: #0d1f33; border: 1px solid var(--accent); color: #90caf9; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media(max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+  .nearby-item { padding: 8px; background: var(--surface2); border-radius: 5px; margin-bottom: 6px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <span style="font-size:18px">📍</span>
+  <h1>RIDGE CO — LOCATION CLUSTER TAGGER</h1>
+  <span>Tag properties with proximity clusters for bundling suggestions</span>
+  <button class="btn secondary small" id="logout-btn" style="margin-left:auto;display:none" onclick="doLogout()">LOG OUT</button>
+</header>
+
+<div id="login-screen">
+  <div class="login-box">
+    <h2>CLUSTER TAGGER</h2>
+    <p>Admin access required</p>
+    <input type="password" id="login-pw" placeholder="Admin password" autocomplete="current-password">
+    <div id="login-err" style="color:var(--danger);font-size:11px;margin-bottom:8px;display:none">Incorrect password</div>
+    <button class="btn" onclick="doLogin()" style="width:100%">SIGN IN</button>
+  </div>
+</div>
+
+<div id="app">
+  <div class="main">
+
+    <!-- Setup notice -->
+    <div id="setup-notice" class="card" style="border-color:var(--warn);display:none">
+      <div class="card-title" style="color:var(--warn)">⚠ SETUP REQUIRED</div>
+      <div id="setup-msg" style="color:#fde68a;font-size:12px"></div>
+    </div>
+
+    <!-- Tag a property -->
+    <div class="card">
+      <div class="card-title">TAG A PROPERTY</div>
+      <div class="grid">
+        <div>
+          <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:4px">PROPERTY</label>
+          <select id="prop-select" onchange="onPropChange()">
+            <option value="">— Select property —</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:4px">ADDRESS (auto-filled)</label>
+          <input type="text" id="prop-addr-display" placeholder="Select a property above" readonly>
+        </div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+        <button class="btn secondary" onclick="geocodeSelected()" id="geo-btn" style="white-space:nowrap">📍 Geocode + Suggest</button>
+        <span id="geo-status" style="color:var(--muted);font-size:11px"></span>
+      </div>
+
+      <!-- Suggestions area -->
+      <div id="suggestion-area" style="display:none;margin-top:16px">
+        <div class="grid">
+          <div>
+            <div class="card-title">NEARBY TAGGED PROPERTIES</div>
+            <div id="nearby-list"><span style="color:var(--muted);font-size:11px">Run geocoding to see nearby properties</span></div>
+          </div>
+          <div>
+            <div class="card-title">ASSIGN CLUSTERS</div>
+            <div style="margin-bottom:10px">
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:4px">PRIMARY CLUSTER <span style="color:var(--accent2)">(pick one)</span></label>
+              <input type="text" id="primary-input" placeholder="e.g. Calvert-Corridor" oninput="updatePreview()">
+              <div id="primary-suggestions" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px"></div>
+            </div>
+            <div>
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:4px">OVERLAP CLUSTERS <span style="color:var(--muted)">(comma-separated, optional)</span></label>
+              <input type="text" id="overlap-input" placeholder="e.g. East-Baltimore, Downtown" oninput="updatePreview()">
+              <div id="overlap-suggestions" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px"></div>
+            </div>
+            <div id="cluster-preview" style="margin-top:10px;font-size:10px;color:var(--muted)"></div>
+            <button class="btn green" onclick="saveClusters()" style="margin-top:10px;width:100%">SAVE CLUSTERS</button>
+            <div id="save-msg"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- All tagged properties list -->
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="card-title" style="margin-bottom:0">ALL PROPERTIES</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="prop-filter" placeholder="Filter…" oninput="filterPropList()" style="width:160px">
+          <span id="tag-stats" style="color:var(--muted);font-size:10px"></span>
+        </div>
+      </div>
+      <div id="prop-list"><span class="spinner"></span>Loading…</div>
+    </div>
+
+    <!-- Cluster map summary -->
+    <div class="card">
+      <div class="card-title">CLUSTER SUMMARY</div>
+      <div id="cluster-summary"><span style="color:var(--muted);font-size:11px">Load properties to see cluster summary</span></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET = '';
+var _properties = [];
+var _currentLat = null, _currentLng = null;
+
+function api(method, path, body) {
+  var opts = { method: method, headers: { 'Content-Type': 'application/json', 'X-Auth-Token': SECRET } };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(r) { return r.json(); });
+}
+
+// ── Login ────────────────────────────────────────────────────
+function doLogin() {
+  var pw = document.getElementById('login-pw').value.trim();
+  if (!pw) return;
+  SECRET = pw;
+  api('GET', '/config').then(function(r) {
+    if (r.error) { document.getElementById('login-err').style.display = 'block'; SECRET = ''; return; }
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    document.getElementById('logout-btn').style.display = 'block';
+    loadProperties();
+  }).catch(function() { document.getElementById('login-err').style.display = 'block'; SECRET = ''; });
+}
+document.getElementById('login-pw').addEventListener('keydown', function(e) { if (e.key === 'Enter') doLogin(); });
+
+function doLogout() { SECRET = ''; location.reload(); }
+
+// ── Load properties ──────────────────────────────────────────
+function loadProperties() {
+  api('GET', '/properties').then(function(props) {
+    _properties = props.filter(function(p) { return p.Active !== 'FALSE'; });
+    populatePropSelect();
+    renderPropList();
+    renderClusterSummary();
+    checkSetup();
+  });
+}
+
+function checkSetup() {
+  // Check if Location_Cluster column exists by trying to get a property with it
+  var withCluster = _properties.filter(function(p) { return 'Location_Cluster' in p; });
+  if (!withCluster.length && _properties.length) {
+    var notice = document.getElementById('setup-notice');
+    document.getElementById('setup-msg').textContent =
+      'The Properties tab is missing Location_Cluster, Location_Overlap, Lat, and Lng columns. Add these 4 column headers to your Properties tab to start tagging. After saving one cluster, the system will guide you if anything is missing.';
+    notice.style.display = 'block';
+  }
+}
+
+function populatePropSelect() {
+  var sel = document.getElementById('prop-select');
+  sel.innerHTML = '<option value="">— Select property —</option>';
+  _properties.slice().sort(function(a,b){ return (a.Address||'').localeCompare(b.Address||''); }).forEach(function(p) {
+    var tagged = p.Location_Cluster ? ' ✓' : '';
+    var opt = document.createElement('option');
+    opt.value = p.ID;
+    opt.textContent = p.ID + ' · ' + (p.Address||'') + (p.City ? ', '+p.City : '') + tagged;
+    sel.appendChild(opt);
+  });
+}
+
+function onPropChange() {
+  var id = document.getElementById('prop-select').value;
+  var prop = _properties.find(function(p) { return String(p.ID) === String(id); });
+  if (!prop) { document.getElementById('prop-addr-display').value = ''; return; }
+  document.getElementById('prop-addr-display').value = (prop.Address||'') + (prop.City ? ', '+prop.City : '') + ', MD';
+  document.getElementById('suggestion-area').style.display = 'none';
+  _currentLat = prop.Lat ? parseFloat(prop.Lat) : null;
+  _currentLng = prop.Lng ? parseFloat(prop.Lng) : null;
+  if (prop.Location_Cluster) document.getElementById('primary-input').value = prop.Location_Cluster;
+  if (prop.Location_Overlap) document.getElementById('overlap-input').value = prop.Location_Overlap;
+  document.getElementById('geo-status').textContent = prop.Lat ? 'Geocoded ✓ — click again to refresh' : '';
+}
+
+// ── Geocode + suggest ────────────────────────────────────────
+function geocodeSelected() {
+  var id = document.getElementById('prop-select').value;
+  if (!id) { alert('Select a property first'); return; }
+  var prop = _properties.find(function(p) { return String(p.ID) === String(id); });
+  if (!prop) return;
+  var addr = document.getElementById('prop-addr-display').value;
+  document.getElementById('geo-status').innerHTML = '<span class="spinner"></span>Geocoding…';
+  api('POST', '/geocode-property', { address: addr }).then(function(r) {
+    if (!r.success) {
+      document.getElementById('geo-status').textContent = '✗ ' + (r.error || 'Geocoding failed');
+      return;
+    }
+    _currentLat = r.lat; _currentLng = r.lng;
+    document.getElementById('geo-status').textContent = '✓ ' + r.formatted + ' (' + r.lat.toFixed(4) + ', ' + r.lng.toFixed(4) + ')';
+    loadSuggestions(r.lat, r.lng, prop);
+  }).catch(function(e) {
+    document.getElementById('geo-status').textContent = '✗ Error: ' + e.message;
+  });
+}
+
+function loadSuggestions(lat, lng, currentProp) {
+  document.getElementById('suggestion-area').style.display = 'block';
+  document.getElementById('nearby-list').innerHTML = '<span class="spinner"></span>Finding nearby properties…';
+  api('GET', '/cluster-suggestions?lat=' + lat + '&lng=' + lng).then(function(r) {
+    renderNearbyList(r.nearby || [], currentProp);
+    if (r.suggestions && r.suggestions.primary && !document.getElementById('primary-input').value) {
+      document.getElementById('primary-input').value = r.suggestions.primary;
+    }
+    // Show clickable suggestions for overlap
+    var overlapSugg = r.suggestions && r.suggestions.overlap || [];
+    var currOverlap = (document.getElementById('overlap-input').value || '').split(',').map(function(s){return s.trim();}).filter(Boolean);
+    renderSuggestionTags('primary-suggestions', [r.suggestions&&r.suggestions.primary].filter(Boolean), 'primary-input', false);
+    renderSuggestionTags('overlap-suggestions', overlapSugg, 'overlap-input', true);
+    updatePreview();
+  }).catch(function(e) {
+    document.getElementById('nearby-list').innerHTML = '<span style="color:var(--muted);font-size:11px">No suggestions available — ' + e.message + '</span>';
+  });
+}
+
+function renderNearbyList(nearby, currentProp) {
+  if (!nearby.length) {
+    document.getElementById('nearby-list').innerHTML = '<span style="color:var(--muted);font-size:11px">No nearby tagged properties found within 2.5km. This may be a new area — create a new cluster name.</span>';
+    return;
+  }
+  var maxDist = Math.max.apply(null, nearby.map(function(n){return n.dist_km;}));
+  var html = nearby.slice(0, 10).map(function(n) {
+    var fillPct = Math.max(5, Math.round((1 - n.dist_km/maxDist) * 100));
+    return '<div class="nearby-item">' +
+      '<div style="display:flex;justify-content:space-between">' +
+        '<span style="font-size:11px">' + esc(n.address) + '</span>' +
+        '<span style="color:var(--muted);font-size:10px">' + n.dist_km.toFixed(2) + 'km</span>' +
+      '</div>' +
+      '<div style="margin-top:3px">' +
+        '<span class="badge badge-cluster">' + esc(n.cluster) + '</span>' +
+        (n.overlap ? n.overlap.split(',').map(function(o){return '<span class="badge badge-overlap" style="margin-left:3px">'+esc(o.trim())+'</span>';}).join('') : '') +
+      '</div>' +
+      '<div class="dist-bar"><div class="dist-fill" style="width:'+fillPct+'%"></div></div>' +
+    '</div>';
+  }).join('');
+  document.getElementById('nearby-list').innerHTML = html;
+}
+
+function renderSuggestionTags(elId, tags, inputId, isMulti) {
+  var el = document.getElementById(elId);
+  if (!tags.length) { el.innerHTML = ''; return; }
+  el.innerHTML = tags.map(function(t) {
+    return '<span class="tag suggested" onclick="applySuggestion(\'' + esc(t) + '\',\'' + inputId + '\',' + isMulti + ')" title="Click to apply">' + esc(t) + ' ✓</span>';
+  }).join('');
+}
+
+function applySuggestion(tag, inputId, isMulti) {
+  var el = document.getElementById(inputId);
+  if (!isMulti) { el.value = tag; }
+  else {
+    var existing = el.value.split(',').map(function(s){return s.trim();}).filter(Boolean);
+    if (!existing.includes(tag)) existing.push(tag);
+    el.value = existing.join(', ');
+  }
+  updatePreview();
+}
+
+function updatePreview() {
+  var primary = document.getElementById('primary-input').value.trim();
+  var overlap = document.getElementById('overlap-input').value.trim();
+  var prev = document.getElementById('cluster-preview');
+  if (!primary) { prev.textContent = ''; return; }
+  prev.innerHTML = 'Preview: <span class="badge badge-cluster">' + esc(primary) + '</span>' +
+    (overlap ? overlap.split(',').map(function(o){ return o.trim() ? ' <span class="badge badge-overlap">'+esc(o.trim())+'</span>' : ''; }).join('') : '');
+}
+
+// ── Save clusters ────────────────────────────────────────────
+function saveClusters() {
+  var id = document.getElementById('prop-select').value;
+  if (!id) { alert('Select a property first'); return; }
+  var primary = document.getElementById('primary-input').value.trim();
+  if (!primary) { alert('Enter a primary cluster name'); return; }
+  var overlap = document.getElementById('overlap-input').value.trim();
+  var msgEl = document.getElementById('save-msg');
+  msgEl.innerHTML = '<span class="spinner"></span>Saving…';
+
+  api('POST', '/save-property-clusters', {
+    property_id: id,
+    cluster: primary,
+    overlap: overlap,
+    lat: _currentLat ? String(_currentLat) : undefined,
+    lng: _currentLng ? String(_currentLng) : undefined,
+  }).then(function(r) {
+    if (r.error) {
+      msgEl.innerHTML = '<div class="msg error">' + esc(r.error) + (r.missing ? '<br>Add these columns to Properties tab: ' + r.missing.join(', ') : '') + '</div>';
+      return;
+    }
+    msgEl.innerHTML = '<div class="msg success">✓ Saved. Reloading…</div>';
+    setTimeout(function() { loadProperties(); document.getElementById('suggestion-area').style.display = 'none'; msgEl.innerHTML=''; }, 1200);
+  }).catch(function(e) {
+    msgEl.innerHTML = '<div class="msg error">' + esc(e.message) + '</div>';
+  });
+}
+
+// ── Property list ─────────────────────────────────────────────
+function renderPropList(filter) {
+  filter = (filter||'').toLowerCase();
+  var tagged = _properties.filter(function(p){ return p.Location_Cluster; });
+  var untagged = _properties.filter(function(p){ return !p.Location_Cluster; });
+  document.getElementById('tag-stats').textContent = tagged.length + ' / ' + _properties.length + ' tagged';
+
+  var html = '';
+  if (untagged.length) {
+    html += '<div style="font-size:10px;color:var(--warn);margin-bottom:8px">⚠ ' + untagged.length + ' untagged properties</div>';
+  }
+  var filtered = _properties.filter(function(p){
+    return !filter || (p.Address||'').toLowerCase().includes(filter) || (p.Location_Cluster||'').toLowerCase().includes(filter);
+  });
+  html += filtered.map(function(p) {
+    var tagHtml = p.Location_Cluster
+      ? '<span class="badge badge-cluster" style="cursor:pointer" onclick="quickEdit(\''+esc(p.ID)+'\')">' + esc(p.Location_Cluster) + '</span>' +
+        (p.Location_Overlap ? p.Location_Overlap.split(',').map(function(o){ return o.trim() ? '<span class="badge badge-overlap" style="margin-left:3px">'+esc(o.trim())+'</span>' : ''; }).join('') : '') +
+        (p.Lat ? ' <span style="font-size:9px;color:var(--muted)">📍'+parseFloat(p.Lat).toFixed(3)+','+parseFloat(p.Lng).toFixed(3)+'</span>' : '')
+      : '<span style="color:var(--warn);font-size:10px">untagged</span>';
+    return '<div class="prop-row">' +
+      '<div class="prop-id">' + esc(String(p.ID)) + '</div>' +
+      '<div class="prop-addr">' +
+        '<div>' + esc(p.Address||'') + (p.City?', '+esc(p.City):'') + '</div>' +
+        '<div style="margin-top:3px">' + tagHtml + '</div>' +
+      '</div>' +
+      '<button class="btn secondary small" onclick="quickEdit(\''+esc(p.ID)+'\')" style="flex-shrink:0">Tag</button>' +
+    '</div>';
+  }).join('');
+  document.getElementById('prop-list').innerHTML = html || '<span style="color:var(--muted)">No properties match</span>';
+}
+
+function filterPropList() {
+  renderPropList(document.getElementById('prop-filter').value);
+}
+
+function quickEdit(propId) {
+  var sel = document.getElementById('prop-select');
+  sel.value = propId;
+  onPropChange();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  document.getElementById('geo-btn').style.background = '#d29922';
+  setTimeout(function() { document.getElementById('geo-btn').style.background = ''; }, 800);
+}
+
+// ── Cluster summary ───────────────────────────────────────────
+function renderClusterSummary() {
+  var clusters = {};
+  _properties.forEach(function(p) {
+    if (!p.Location_Cluster) return;
+    if (!clusters[p.Location_Cluster]) clusters[p.Location_Cluster] = [];
+    clusters[p.Location_Cluster].push(p);
+  });
+  var keys = Object.keys(clusters).sort();
+  if (!keys.length) {
+    document.getElementById('cluster-summary').innerHTML = '<span style="color:var(--muted);font-size:11px">No properties tagged yet.</span>';
+    return;
+  }
+  var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">';
+  keys.forEach(function(k) {
+    var props = clusters[k];
+    html += '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px">' +
+      '<div class="badge badge-cluster" style="margin-bottom:8px;font-size:11px">' + esc(k) + '</div>' +
+      '<div style="color:var(--muted);font-size:10px;margin-bottom:4px">' + props.length + ' propert' + (props.length===1?'y':'ies') + '</div>' +
+      props.slice(0,4).map(function(p){ return '<div style="font-size:10px;color:var(--text);padding:1px 0">' + esc(p.Address||'') + '</div>'; }).join('') +
+      (props.length>4?'<div style="font-size:10px;color:var(--muted)">+'+( props.length-4)+' more</div>':'') +
+    '</div>';
+  });
+  html += '</div>';
+  document.getElementById('cluster-summary').innerHTML = html;
+}
+
+function esc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+</script>
+</body>
+</html>

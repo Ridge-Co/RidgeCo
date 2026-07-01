@@ -457,6 +457,7 @@ function renderWOs(wos) {
             '<button class="btn btn-sm" style="background:var(--accent2);color:#000" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
           '</div>' +
           '<div id="action-msg-' + idx + '"></div>' +
+          '<div id="nearby-wrap-' + idx + '" style="margin-top:8px"></div>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -467,7 +468,7 @@ function renderWOs(wos) {
   // Store WOs for status tracking
   window._wos = wos;
   window._pendingStatus = {};
-  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); });
+  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); });
 }
 
 // ── Estimate widget: load history, show current total, allow revisions ──
@@ -494,27 +495,49 @@ function renderEstimateWidget(woId, idx) {
   }
 
   var current = estimates[estimates.length - 1];
+  var isApproved = current.Status === 'Approved';
   var items = current.Line_Items || [];
   var rows = items.map(function(li) {
-    return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">' +
-      '<span>' + esc(li.desc) + '</span><span>$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
+    return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0">' +
+      '<span style="white-space:pre-wrap">' + esc(li.desc) + '</span>' +
+      '<span style="white-space:nowrap">$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
   }).join('');
 
   var historyToggle = estimates.length > 1
     ? '<div style="cursor:pointer;color:var(--info);font-size:10px;margin-top:6px" onclick="toggleEstimateHistory(\'' + woId + '\',' + idx + ')">▾ View ' + (estimates.length - 1) + ' prior version' + (estimates.length > 2 ? 's' : '') + '</div>'
     : '';
 
+  // Approval banner — shows vendor exactly what was decided and what it means for them
+  var approvalBanner = '';
+  if (isApproved) {
+    var note = current.Approval_Note || '';
+    var depositRequested = note.toLowerCase().indexOf('deposit') > -1 && note.toLowerCase().indexOf('no deposit') === -1;
+    var bannerMsg = depositRequested
+      ? '✓ Approved — deposit is being requested from the customer. You\'ll be notified to proceed once received.'
+      : '✓ Approved — no deposit required for this job. You\'re cleared to proceed.';
+    approvalBanner = '<div style="margin-top:8px;background:#14532d;border:1px solid #4ade80;border-radius:6px;padding:10px;font-size:12px;color:#bbf7d0">' +
+      bannerMsg +
+      (current.Approved_By ? '<div style="font-size:10px;color:#86efac;margin-top:4px">Approved by ' + esc(current.Approved_By) + '</div>' : '') +
+      '</div>';
+  }
+
+  // If approved, hide the "Revise" button — revision during an active approved estimate should go through hub
+  var reviseBtn = isApproved
+    ? '<div style="font-size:10px;color:var(--muted);margin-top:8px">Contact Ridge Co to request changes to an approved estimate.</div>'
+    : '<button class="btn btn-sm btn-blue" onclick="openEstimateEditor(\'' + woId + '\',' + idx + ')">✎ Revise Estimate</button>';
+
   wrap.innerHTML =
-    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px">' +
+    '<div style="background:var(--surface2);border:1px solid ' + (isApproved ? '#4ade80' : 'var(--border)') + ';border-radius:6px;padding:10px;margin-bottom:8px">' +
     '<div style="font-size:10px;color:var(--muted);letter-spacing:.06em;margin-bottom:6px">VERSION ' + current.Version + (estimates.length > 1 ? ' (revised)' : '') + '</div>' +
     rows +
     '<div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
     '<span>Total</span><span style="color:var(--accent2)">$' + parseFloat(current.Subtotal).toFixed(2) + '</span></div>' +
     (current.Change_Reason && current.Version > 1 ? '<div style="font-size:10px;color:var(--muted);margin-top:4px">Reason: ' + esc(current.Change_Reason) + '</div>' : '') +
+    approvalBanner +
     '<div id="est-history-' + woId + '" style="display:none;margin-top:8px;border-top:1px dashed var(--border);padding-top:8px"></div>' +
     historyToggle +
     '</div>' +
-    '<button class="btn btn-sm btn-blue" onclick="openEstimateEditor(\'' + woId + '\',' + idx + ')">✎ Revise Estimate</button>';
+    reviseBtn;
 }
 
 function toggleEstimateHistory(woId, idx) {
@@ -598,6 +621,59 @@ function submitEstimate(woId, idx) {
   }).catch(function(e) { toast(e.message, 'error'); });
 }
 
+
+// ── "While You're Here" — nearby open WOs for this vendor ─────
+function loadVendorNearbyWOs(woId, idx) {
+  var wrap = document.getElementById('nearby-wrap-' + idx);
+  if (!wrap) return;
+  var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
+  api('GET', '/nearby-wos?wo_id=' + woId + (vendorId ? '&vendor_id=' + vendorId : '')).then(function(res) {
+    if (!res.nearby || !res.nearby.length) return; // Nothing nearby — stay silent
+    var cards = res.nearby.map(function(n) {
+      var pBadge = n.priority === 'urgent'
+        ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 4px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
+      var tenantBlock = (n.tenant_phone || n.tenant_name)
+        ? '<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">' +
+            (n.tenant_name ? '<span style="color:var(--muted);font-size:10px">' + esc(n.tenant_name) + '</span>' : '') +
+            (n.tenant_phone ? '<a href="tel:' + esc(n.tenant_phone) + '" style="color:var(--info);font-size:10px;text-decoration:none">📞 ' + esc(n.tenant_phone) + '</a>' : '') +
+          '</div>'
+        : '';
+      return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px">' +
+          '<div>' +
+            '<span style="color:var(--info);font-weight:bold;font-size:11px">' + esc(n.id) + '</span>' + pBadge +
+            '<div style="color:var(--text);font-size:11px;margin-top:2px">' + esc(n.address) + '</div>' +
+            '<div style="color:var(--muted);font-size:10px;margin-top:1px">' + esc((n.trade||'') + (n.description ? ' · ' + n.description.substring(0, 60) : '')) + '</div>' +
+            tenantBlock +
+          '</div>' +
+          '<button class="btn btn-sm" style="background:var(--info);color:#fff;font-size:10px;padding:4px 8px;white-space:nowrap;flex-shrink:0" ' +
+            'onclick="scrollToCard(\'' + esc(n.id) + '\')">View WO</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    wrap.innerHTML = '<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:6px;padding:10px">' +
+      '<div style="color:var(--accent);font-size:10px;font-weight:bold;letter-spacing:.08em;margin-bottom:6px">📍 WHILE YOU\'RE HERE</div>' +
+      '<div style="color:var(--muted);font-size:10px;margin-bottom:8px">You have other open WOs nearby in the same area:</div>' +
+      cards +
+      '</div>';
+  }).catch(function() { /* non-fatal */ });
+}
+
+function scrollToCard(woId) {
+  // Find the card by its WO ID badge and scroll to it
+  var cards = document.querySelectorAll('.wo-card');
+  for (var i = 0; i < cards.length; i++) {
+    if (cards[i].querySelector && cards[i].querySelector('.wo-badge') &&
+        cards[i].querySelector('.wo-badge').textContent.trim() === woId) {
+      cards[i].scrollIntoView({ behavior: 'smooth', block: 'start' });
+      cards[i].style.outline = '2px solid var(--accent)';
+      setTimeout(function(c){ c.style.outline=''; }, 2000, cards[i]);
+      return;
+    }
+  }
+  // Fallback: just scroll to top
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 
 function toggleCard(idx) {
   var card = document.getElementById('card-' + idx);

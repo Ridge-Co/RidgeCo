@@ -256,6 +256,7 @@
       </div>
     </div>
     <div class="wo-list" id="wo-list-full"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+    <div id="bundling-section" style="display:none;margin-top:16px"></div>
   </div>
 
   <div class="page" id="page-properties">
@@ -1107,6 +1108,7 @@ function renderWOPage() {
   el.innerHTML = wos.length
     ? '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+wos.length+' work order'+(wos.length!==1?'s':'')+' — <span style="cursor:pointer;color:var(--info)" onclick="toggleFilterPanel()">adjust filters</span></div>'+wos.map(woCard).join('')
     : '<div class="loading">No work orders match your filters. <span style="cursor:pointer;color:var(--info)" onclick="clearWOFilters()">Clear filters</span></div>';
+  renderBundlingOpportunities();
 }
 
 // ── WO Detail ────────────────────────────────────────────────
@@ -1364,6 +1366,7 @@ function openWODetail(woId) {
         else _db.appendChild(_ph.firstChild);
         loadPortalAttachments(_woIdForPhoto);
         loadHubEstimateView(_woIdForPhoto, _db, _inv);
+        loadHubNearbyWOs(_woIdForPhoto, _db);
       }
     } catch(e2) { /* photo section is non-critical */ }
   }, 50);
@@ -3140,6 +3143,98 @@ function generateEstimateDoc(woId) {
   }).catch(function(e) {
     if (docEl) docEl.innerHTML = '<span style="color:var(--danger);font-size:11px">' + esc(e.message) + '</span>';
   });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  LOCATION PROXIMITY — HUB SIDE
+// ══════════════════════════════════════════════════════════════
+
+// Load nearby WOs into WO detail panel
+function loadHubNearbyWOs(woId, detailBody) {
+  var holder = document.createElement('div');
+  holder.id = 'nearby-wo-' + woId;
+  if (detailBody) detailBody.appendChild(holder);
+  api('GET', '/nearby-wos?wo_id=' + woId).then(function(res) {
+    if (!res.nearby || !res.nearby.length) {
+      // No nearby WOs or no tags — show silently (don't clutter the modal)
+      return;
+    }
+    var rows = res.nearby.map(function(n) {
+      var priorityBadge = n.priority === 'urgent' ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap">' +
+        '<div>' +
+          '<span style="color:var(--info);font-size:11px;font-weight:bold">' + esc(n.id) + '</span>' + priorityBadge +
+          '<span style="color:var(--muted);font-size:10px;margin-left:6px">' + esc(n.address) + '</span>' +
+          '<div style="color:var(--text);font-size:11px;margin-top:2px">' + esc((n.trade||'') + (n.description ? ' · ' + n.description.substring(0,60) : '')) + '</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;flex-shrink:0">' +
+          '<button class="btn small secondary" data-woid="' + esc(n.id) + '" onclick="closeModal(\'modal-wo-detail\');setTimeout(function(){openWODetail(this.dataset.woid);}.bind(this),100)">Open WO</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    holder.innerHTML = '<div style="margin-top:16px;background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:14px">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+        '<span style="font-size:14px">📍</span>' +
+        '<span style="color:var(--accent);font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:bold">Nearby Open WOs — ' + esc(res.primary_cluster || 'Same Cluster') + '</span>' +
+        '<span style="color:var(--muted);font-size:10px;margin-left:auto">' + res.nearby.length + ' found</span>' +
+      '</div>' +
+      rows +
+      '</div>';
+  }).catch(function() { /* non-fatal, proximity is supplemental */ });
+}
+
+// Bundling opportunities: group open WOs by cluster, highlight clusters with 2+ WOs
+function renderBundlingOpportunities() {
+  var section = document.getElementById('bundling-section');
+  if (!section) return;
+  var props = safeArray(state.properties);
+  var tagged = props.filter(function(p) { return p.Location_Cluster; });
+  if (!tagged.length) { section.style.display = 'none'; return; }
+
+  var OPEN = ['New','Assigned','Accepted','In Progress','On Hold'];
+  var openWOs = safeArray(state.workorders).filter(function(w) { return OPEN.includes(w.Status); });
+
+  // Map each WO to its property's primary cluster
+  var clusterGroups = {};
+  openWOs.forEach(function(wo) {
+    var prop = tagged.find(function(p) { return String(p.ID) === String(wo.Property_ID); });
+    if (!prop) return;
+    var cluster = prop.Location_Cluster;
+    if (!clusterGroups[cluster]) clusterGroups[cluster] = [];
+    clusterGroups[cluster].push({ wo: wo, prop: prop });
+  });
+
+  // Only show clusters with 2+ open WOs (1 = nothing to bundle)
+  var bundleable = Object.entries(clusterGroups).filter(function(e) { return e[1].length >= 2; });
+  if (!bundleable.length) { section.style.display = 'none'; return; }
+
+  var html = '<div style="border:1px solid var(--accent);border-radius:8px;padding:14px;background:var(--surface2)">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+      '<span style="font-size:14px">📍</span>' +
+      '<span style="color:var(--accent);font-size:11px;font-weight:bold;letter-spacing:.1em;text-transform:uppercase;margin-left:6px">BUNDLING OPPORTUNITIES</span>' +
+      '<span style="color:var(--muted);font-size:10px;margin-left:auto">' + bundleable.length + ' cluster' + (bundleable.length!==1?'s':'') + ' with multiple open WOs</span>' +
+    '</div>';
+
+  bundleable.sort(function(a,b) { return b[1].length - a[1].length; }).forEach(function(e) {
+    var cluster = e[0], items = e[1];
+    html += '<div style="margin-bottom:10px;background:var(--surface);border-radius:6px;padding:10px">' +
+      '<div style="font-weight:bold;font-size:12px;margin-bottom:6px;color:var(--text)">' +
+        '<span style="background:var(--accent);color:#000;font-size:10px;padding:2px 7px;border-radius:3px;margin-right:6px">' + esc(cluster) + '</span>' +
+        items.length + ' open WOs — consider scheduling together' +
+      '</div>';
+    items.slice(0, 5).forEach(function(item) {
+      var v = safeArray(state.vendors).find(function(v) { return v.ID === item.wo.Vendor_ID; });
+      html += '<div style="font-size:11px;color:var(--muted);padding:2px 0;display:flex;justify-content:space-between">' +
+        '<span><span style="color:var(--info)">' + esc(item.wo.ID) + '</span> · ' + esc(item.prop.Address) + ' · ' + esc(item.wo.Trade||'General') + '</span>' +
+        '<span>' + (v ? esc(v.Name) : '<em>unassigned</em>') + '</span>' +
+      '</div>';
+    });
+    if (items.length > 5) html += '<div style="font-size:10px;color:var(--muted);margin-top:4px">+' + (items.length-5) + ' more</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  section.innerHTML = html;
+  section.style.display = 'block';
 }
 
 </script>
