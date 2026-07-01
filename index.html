@@ -2316,6 +2316,7 @@ function loadMoveInWOPanel(propId, unitId) {
 }
 
 async function submitMoveIn() {
+  var propId  = document.getElementById('mi-property').value;
   var unitId  = document.getElementById('mi-unit').value;
   var first   = document.getElementById('mi-first').value.trim();
   var last    = document.getElementById('mi-last').value.trim();
@@ -2324,9 +2325,14 @@ async function submitMoveIn() {
   var moveIn  = document.getElementById('mi-date').value;
 
   var msgEl   = document.getElementById('mi-msg');
+  var btn     = document.getElementById('mi-submit-btn');
 
-  if (!propId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
-  if (!first)  { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">First name is required.</div>'; return; }
+  // Validation — scroll msgEl into view so errors are always visible
+  function showMiError(msg) {
+    if (msgEl) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:8px;background:#2d0a0a;border-radius:4px">⚠ '+msg+'</div>'; msgEl.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+  }
+  if (!propId) { showMiError('Select a property.'); return; }
+  if (!first)  { showMiError('First name is required.'); return; }
 
   // Determine action: add alongside existing tenants, or move some out first
   var actionRadio = document.querySelector('input[name="mi-action"]:checked');
@@ -2340,22 +2346,40 @@ async function submitMoveIn() {
     });
   }
 
-  // Build confirmation message
+  // Build confirmation and show inline — never use browser confirm() as it can be
+  // blocked by some browser settings and leaves no visible trace when it is
   var newName = first + (last ? ' ' + last : '');
-  var confirmLines = ['Move in ' + newName + '?'];
+  var summaryLines = [];
   if (toMoveOut.length) {
-    confirmLines.push('');
-    confirmLines.push('The following will be moved out:');
-    toMoveOut.forEach(function(t) { confirmLines.push('  • ' + t.name); });
+    summaryLines.push('<b>Moving out:</b> ' + toMoveOut.map(function(t){return esc(t.name);}).join(', '));
   } else if (action === 'add') {
-    confirmLines.push('');
-    confirmLines.push('This person will be added alongside any existing tenants.');
+    summaryLines.push('Adding alongside existing tenants (no one moved out)');
   }
-  confirmLines.push('');
-  confirmLines.push('This updates records immediately.');
-  if (!confirm(confirmLines.join('\n'))) return;
+  var checkedWOsPreview = [];
+  document.querySelectorAll('.mi-wo-check:checked').forEach(function(cb){ checkedWOsPreview.push(cb.dataset.woid); });
+  if (checkedWOsPreview.length) summaryLines.push('Adding to WOs: ' + checkedWOsPreview.join(', '));
 
-  var btn = document.getElementById('mi-submit-btn');
+  // Show an inline confirm step — user must click "Confirm Move In" to proceed
+  if (!btn.dataset.confirmed) {
+    msgEl.innerHTML = '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:10px;font-size:12px">' +
+      '<div style="font-weight:bold;color:var(--accent2);margin-bottom:6px">Ready to move in ' + esc(newName) + '?</div>' +
+      (summaryLines.length ? '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+summaryLines.join('<br>')+'</div>' : '') +
+      '<button class="btn small" style="background:var(--accent2);color:#000" id="mi-confirm-btn">✓ Confirm Move In</button>' +
+      ' <button class="btn small secondary" onclick="document.getElementById(\'mi-msg\').innerHTML=\'\';document.getElementById(\'mi-submit-btn\').removeAttribute(\'data-confirmed\')">Back</button>' +
+    '</div>';
+    msgEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // Wire confirm button to re-call this function with confirmed flag
+    var confirmBtn = document.getElementById('mi-confirm-btn');
+    if (confirmBtn) {
+      confirmBtn.onclick = function() {
+        btn.dataset.confirmed = '1';
+        submitMoveIn();
+      };
+    }
+    return; // Wait for user to click Confirm
+  }
+  // Second call — confirmed, proceed with move-in
+  btn.removeAttribute('data-confirmed');
   btn.disabled = true; btn.textContent = 'Moving in…';
   var today = new Date().toISOString().split('T')[0];
 
@@ -2364,11 +2388,10 @@ async function submitMoveIn() {
     if (toMoveOut.length) {
       msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Step 1/'+(toMoveOut.length+2)+': Moving out existing tenants…</div>';
       for (var i = 0; i < toMoveOut.length; i++) {
-        var moRes = await apiWithTimeout(api('POST', '/tenant/update', {
-          id: toMoveOut[i].id, fields: { Active: 'FALSE', Move_Out_Date: today }
+        var moRes = await apiWithTimeout(api('POST', '/tenant/move-out', {
+          tenant_id: toMoveOut[i].id, move_out_date: today, move_out_by: 'admin'
         }), 8000);
         if (moRes && moRes.error) throw new Error('Move-out failed for ' + toMoveOut[i].name + ': ' + moRes.error);
-        // Clear unit link if this tenant was the primary
         var moTenant = safeArray(state.tenants).find(function(t){ return t.ID === toMoveOut[i].id; });
         if (moTenant && moTenant.Unit_ID) {
           await apiWithTimeout(api('POST', '/unit/update', { id: moTenant.Unit_ID, fields: { Tenant_ID: '' } }), 6000).catch(function(){});
