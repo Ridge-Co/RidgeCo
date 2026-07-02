@@ -2381,6 +2381,7 @@ async function submitMoveIn() {
   // Second call — confirmed, proceed with move-in
   btn.removeAttribute('data-confirmed');
   btn.disabled = true; btn.textContent = 'Moving in…';
+  console.log('[submitMoveIn] Starting move-in for', first, last, '| propId:', propId, '| unitId:', unitId, '| toMoveOut:', toMoveOut.length);
   var today = new Date().toISOString().split('T')[0];
 
   try {
@@ -2401,6 +2402,7 @@ async function submitMoveIn() {
 
     // Step 2: Create new tenant
     msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Creating tenant record for ' + esc(newName) + '…</div>';
+    console.log('[submitMoveIn] Step 2: calling /tenant/add');
     var newTenantBody = {
       First_Name: first, Last_Name: last, Phone: phone, Email: email,
       Property_ID: propId, Unit_ID: unitId||'',
@@ -2408,6 +2410,7 @@ async function submitMoveIn() {
       Active: 'TRUE',
     };
     var res = await apiWithTimeout(api('POST', '/tenant/add', newTenantBody), 10000);
+    console.log('[submitMoveIn] /tenant/add result:', res);
     if (!res || res.error) throw new Error('Failed to create tenant: ' + (res ? res.error : 'No response'));
     if (!res.id) throw new Error('Tenant created but no ID returned — check Tenants tab');
 
@@ -2436,8 +2439,24 @@ async function submitMoveIn() {
     closeModal('modal-move-in');
     await loadAll();
   } catch(e) {
-    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message||'Unknown error. Check console.') + '</div>';
-    btn.disabled = false; btn.textContent = 'MOVE IN';
+    console.error('[submitMoveIn] error:', e);
+    // Use fresh DOM query in case msgEl reference is stale
+    var errEl = document.getElementById('mi-msg');
+    var errMsg = esc(e.message || 'Unknown error — check console (F12)');
+    if (errEl) {
+      errEl.innerHTML = '<div style="color:#fca5a5;font-size:12px;padding:8px;background:#450a0a;border:1px solid #f87171;border-radius:6px;margin-top:8px">⚠ ' + errMsg + '</div>';
+      errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+      toast('Move-in error: ' + e.message, 'error');
+    }
+  } finally {
+    // Always restore button regardless of success/failure
+    var finalBtn = document.getElementById('mi-submit-btn');
+    if (finalBtn && finalBtn.disabled && finalBtn.textContent === 'Moving in…') {
+      // Only reset if still in "moving in" state — success path closes modal so this won't fire
+      finalBtn.disabled = false;
+      finalBtn.textContent = 'MOVE IN';
+    }
   }
 }
 
