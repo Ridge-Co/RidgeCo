@@ -918,9 +918,9 @@ function processNotificationsBackground() {
 function loadAll() {
   Promise.allSettled([
     api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
-    api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners')
+    api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners'), api('GET','/keys')
   ]).then(function(results) {
-    var names = ['properties','units','tenants','vendors','workorders','invoices','owners'];
+    var names = ['properties','units','tenants','vendors','workorders','invoices','owners','keys'];
     results.forEach(function(r,i) {
       if (r.status === 'fulfilled') {
         state[names[i]] = Array.isArray(r.value) ? r.value : [];
@@ -936,7 +936,7 @@ function loadAll() {
     setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
     processNotificationsBackground();
     var loaded = results.filter(function(r){return r.status==='fulfilled';}).length;
-    toast('Loaded '+loaded+'/7 data sets','success');
+    toast('Loaded '+loaded+'/8 data sets','success');
   });
 }
 
@@ -1520,26 +1520,238 @@ function renderPropertiesPage() {
       : '<div class="loading">No properties loaded — try refreshing the page</div>';
     return;
   }
+
+  var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold'];
+
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+props.length+' propert'+(props.length===1?'y':'ies')+'</div>' +
-    '<table class="data-table"><thead><tr><th>Address</th><th>City</th><th>Type</th><th>Access Notes</th><th>Open WOs</th><th></th></tr></thead><tbody>' +
-    props.map(function(p){
-      // String comparison — IDs can be numbers or strings depending on source
-      var open = safeArray(state.workorders).filter(function(w){
-        return String(w.Property_ID)===String(p.ID) && !['Complete','Paid','Invoiced','Cancelled','Declined'].includes(w.Status);
+    props.map(function(p) {
+      var units = safeArray(state.units).filter(function(u){ return String(u.Property_ID)===String(p.ID); });
+      var openWOs = safeArray(state.workorders).filter(function(w){
+        return String(w.Property_ID)===String(p.ID) && OPEN_STATUSES.includes(w.Status);
+      });
+      var vacantCount = units.filter(function(u){
+        return !safeArray(state.tenants).find(function(t){ return t.Active!=='FALSE' && t.Unit_ID===u.ID; });
       }).length;
       var owner = safeArray(state.owners).find(function(o){return String(o.ID)===String(p.Owner_ID);});
-      return '<tr>' +
-        '<td style="font-weight:bold;color:var(--accent)">'+(p.Address||'—')+'</td>' +
-        '<td>'+(p.City||'—')+'</td>' +
-        '<td style="color:var(--muted);font-size:11px">'+(p.Type||'—')+'</td>' +
-        '<td style="font-size:11px">'+(p.Access_Notes?'<span style="color:var(--accent2)">'+esc(p.Access_Notes.substring(0,60))+(p.Access_Notes.length>60?'…':'')+'</span>':'<span style="color:var(--border)">—</span>')+'</td>' +
-        '<td>'+(open>0?'<span style="color:var(--warn);font-weight:bold;cursor:pointer" onclick="goToPropertyWOs(\''+p.ID+'\')" title="View open WOs">'+open+'</span>':'<span style="color:var(--muted)">0</span>')+'</td>' +
-        '<td style="display:flex;gap:4px">' +
-          '<button class="btn small secondary" onclick="openEditPropertyModal(\''+p.ID+'\')">Edit</button>' +
-          (open>0?'<button class="btn small secondary" onclick="goToPropertyWOs(\''+p.ID+'\')" title="View open WOs for this property">'+open+' WOs →</button>':'') +
-        '</td></tr>';
-    }).join('') + '</tbody></table>';
+      var urgentCount = openWOs.filter(function(w){ return (w.Priority||'').toLowerCase()==='urgent'; }).length;
+
+      return '<div class="prop-expand-card" id="prop-card-'+p.ID+'">' +
+        // ── Main property row ──
+        '<div class="prop-row-main" onclick="togglePropUnits(\''+p.ID+'\')" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+              '<span style="font-weight:bold;color:var(--accent);font-size:13px">'+esc(p.Address)+'</span>' +
+              (p.City ? '<span style="color:var(--muted);font-size:11px">'+esc(p.City)+'</span>' : '') +
+              (p.Type ? '<span style="font-size:10px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(p.Type)+'</span>' : '') +
+              (urgentCount ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 6px;border-radius:3px">'+urgentCount+' URGENT</span>' : '') +
+            '</div>' +
+            '<div style="display:flex;gap:10px;margin-top:4px;font-size:11px;color:var(--muted)">' +
+              (owner ? '<span>👤 '+esc(owner.Name||owner.First_Name||'')+'</span>' : '') +
+              (units.length ? '<span>🚪 '+units.length+' unit'+(units.length!==1?'s':'') + (vacantCount ? ' · <span style="color:var(--accent2)">'+vacantCount+' vacant</span>' : '')+'</span>' : '') +
+              (openWOs.length ? '<span style="color:var(--warn)">📋 '+openWOs.length+' open WO'+(openWOs.length!==1?'s':'')+'</span>' : '') +
+              (p.Access_Notes ? '<span title="'+esc(p.Access_Notes)+'">🔒 '+esc(p.Access_Notes.substring(0,40))+(p.Access_Notes.length>40?'…':'')+'</span>' : '') +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0" onclick="event.stopPropagation()">' +
+            '<button class="btn small secondary" onclick="openEditPropertyModal(\''+p.ID+'\')">Edit</button>' +
+            (openWOs.length ? '<button class="btn small secondary" onclick="goToPropertyWOs(\''+p.ID+'\')">'+openWOs.length+' WOs →</button>' : '') +
+          '</div>' +
+          '<span id="prop-arrow-'+p.ID+'" style="color:var(--muted);font-size:14px;flex-shrink:0">▶</span>' +
+        '</div>' +
+        // ── Expandable units section ──
+        '<div id="prop-units-'+p.ID+'" style="display:none;padding:10px 4px 4px 4px">' +
+          renderUnitCards(p, units, openWOs) +
+        '</div>' +
+      '</div>';
+    }).join('<div style="height:6px"></div>');
 }
+
+function togglePropUnits(propId) {
+  var section = document.getElementById('prop-units-'+propId);
+  var arrow   = document.getElementById('prop-arrow-'+propId);
+  var row     = document.getElementById('prop-card-'+propId);
+  if (!section) return;
+  var open = section.style.display !== 'none';
+  section.style.display = open ? 'none' : 'block';
+  if (arrow) arrow.textContent = open ? '▶' : '▼';
+}
+
+function renderUnitCards(prop, units, openWOs) {
+  // For single-family homes with no units: show a synthetic "whole property" card
+  if (!units.length) {
+    var propTenants = safeArray(state.tenants).filter(function(t){
+      return t.Active !== 'FALSE' && String(t.Property_ID) === String(prop.ID) && !t.Unit_ID;
+    });
+    var propWOs = openWOs.filter(function(w){ return !w.Unit_ID; });
+    return '<div class="unit-card" onclick="openUnitDetail(\''+prop.ID+'\',null)" style="cursor:pointer">' +
+      singleFamilyCard(prop, propTenants, propWOs) +
+    '</div>';
+  }
+
+  return units.map(function(u) {
+    var tenants = safeArray(state.tenants).filter(function(t){ return t.Active!=='FALSE' && t.Unit_ID===u.ID; });
+    var uWOs = openWOs.filter(function(w){ return String(w.Unit_ID)===String(u.ID); });
+    var isVacant = !tenants.length;
+    var urgentWOs = uWOs.filter(function(w){ return (w.Priority||'').toLowerCase()==='urgent'; });
+
+    return '<div class="unit-card" onclick="openUnitDetail(\''+prop.ID+'\',\''+u.ID+'\')" ' +
+      'style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:pointer">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">' +
+          '<span style="font-weight:bold;font-size:12px">Unit '+esc(u.Unit_Label||u.ID)+'</span>' +
+          (isVacant
+            ? '<span style="background:#14532d;color:#4ade80;font-size:9px;padding:1px 7px;border-radius:3px;font-weight:bold">VACANT</span>'
+            : '<span style="background:#1e3a5f;color:#90caf9;font-size:9px;padding:1px 7px;border-radius:3px">OCCUPIED</span>') +
+          (urgentWOs.length ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 5px;border-radius:3px">'+urgentWOs.length+' URGENT</span>' : '') +
+        '</div>' +
+        (tenants.length
+          ? tenants.map(function(t){
+              var nm = (t.First_Name+' '+(t.Last_Name||'')).trim();
+              return '<div style="font-size:12px;color:var(--text)">'+esc(nm)+'</div>' +
+                (t.Phone ? '<div style="font-size:11px;color:var(--muted)">'+esc(t.Phone)+'</div>' : '');
+            }).join('')
+          : '<div style="font-size:11px;color:var(--muted);font-style:italic">No tenant on file</div>') +
+        (uWOs.length ? '<div style="margin-top:4px;font-size:11px;color:var(--warn)">'+uWOs.length+' open WO'+(uWOs.length!==1?'s':'')+'</div>' : '') +
+      '</div>' +
+      '<div style="font-size:18px;color:var(--muted);flex-shrink:0">›</div>' +
+    '</div>';
+  }).join('');
+}
+
+function singleFamilyCard(prop, tenants, wos) {
+  var isVacant = !tenants.length;
+  return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;margin-bottom:6px">' +
+    '<div style="flex:1;min-width:0">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+        '<span style="font-weight:bold;font-size:12px">Single Family</span>' +
+        (isVacant ? '<span style="background:#14532d;color:#4ade80;font-size:9px;padding:1px 7px;border-radius:3px">VACANT</span>' : '<span style="background:#1e3a5f;color:#90caf9;font-size:9px;padding:1px 7px;border-radius:3px">OCCUPIED</span>') +
+      '</div>' +
+      (tenants.map(function(t){ return '<div style="font-size:12px">'+esc((t.First_Name+' '+(t.Last_Name||'')).trim())+'</div>'; }).join('')) +
+      (wos.length ? '<div style="font-size:11px;color:var(--warn);margin-top:4px">'+wos.length+' open WO'+(wos.length!==1?'s':'')+'</div>' : '') +
+    '</div>' +
+    '<div style="font-size:18px;color:var(--muted);flex-shrink:0">›</div>' +
+  '</div>';
+}
+
+// ── Unit Detail Modal ──────────────────────────────────────────────────────
+function openUnitDetail(propId, unitId) {
+  var prop   = safeArray(state.properties).find(function(p){ return String(p.ID)===String(propId); });
+  var unit   = unitId ? safeArray(state.units).find(function(u){ return String(u.ID)===String(unitId); }) : null;
+  var tenants = safeArray(state.tenants).filter(function(t){
+    return t.Active !== 'FALSE' &&
+      (unitId ? t.Unit_ID === unitId : (!t.Unit_ID && String(t.Property_ID)===String(propId)));
+  });
+  var OPEN = ['New','Assigned','Accepted','In Progress','On Hold'];
+  var wos = safeArray(state.workorders).filter(function(w){
+    return OPEN.includes(w.Status) && String(w.Property_ID)===String(propId) &&
+      (unitId ? String(w.Unit_ID)===String(unitId) : !w.Unit_ID);
+  });
+  var isVacant = !tenants.length;
+  var unitLabel = unit ? 'Unit '+esc(unit.Unit_Label) : 'Single Family';
+  var addr = (prop ? esc(prop.Address) : '') + (prop && prop.City ? ', '+esc(prop.City) : '');
+
+  // Header
+  var html = '<div style="margin-bottom:14px">' +
+    '<div style="color:var(--muted);font-size:11px;margin-bottom:2px">'+addr+'</div>' +
+    '<div style="display:flex;align-items:center;gap:8px">' +
+      '<span style="font-size:16px;font-weight:bold">'+unitLabel+'</span>' +
+      (isVacant
+        ? '<span style="background:#14532d;color:#4ade80;font-size:10px;padding:2px 8px;border-radius:4px">VACANT</span>'
+        : '<span style="background:#1e3a5f;color:#90caf9;font-size:10px;padding:2px 8px;border-radius:4px">OCCUPIED</span>') +
+    '</div>' +
+  '</div>';
+
+  // Tenants section
+  html += '<div style="margin-bottom:14px">' +
+    '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">👤 TENANTS</div>';
+  if (isVacant) {
+    html += '<div style="color:var(--muted);font-size:12px;font-style:italic;margin-bottom:6px">No current tenants</div>' +
+      '<button class="btn small" style="background:var(--accent2);color:#000" onclick="closeModal(\'modal-unit-detail\');openMoveInModal()">+ Move In Tenant</button>';
+  } else {
+    html += tenants.map(function(t) {
+      var nm = (t.First_Name+' '+(t.Last_Name||'')).trim();
+      return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+          '<div>' +
+            '<div style="font-weight:bold;font-size:13px">'+esc(nm)+'</div>' +
+            (t.Phone ? '<div><a href="tel:'+esc(t.Phone)+'" style="color:var(--accent);font-size:12px;text-decoration:none">'+esc(t.Phone)+'</a></div>' : '') +
+            (t.Email ? '<div style="color:var(--muted);font-size:11px">'+esc(t.Email)+'</div>' : '') +
+            (t.Move_In_Date ? '<div style="color:var(--muted);font-size:10px">Move-in: '+esc(t.Move_In_Date)+'</div>' : '') +
+            (t.PIN ? '<div style="color:var(--accent2);font-size:10px;letter-spacing:.08em">PIN: '+esc(t.PIN)+'</div>' : '<div style="color:var(--danger);font-size:10px">No PIN set</div>') +
+          '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:4px">' +
+            '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+            '<button class="btn small" style="background:var(--danger)20;border:1px solid var(--danger);color:var(--danger);font-size:10px" onclick="closeModal(\'modal-unit-detail\');openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">Move Out</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    html += '<div style="margin-top:4px"><button class="btn small secondary" onclick="closeModal(\'modal-unit-detail\');openMoveInModal()">+ Add Another Tenant</button></div>';
+  }
+  html += '</div>';
+
+  // Open Work Orders section
+  html += '<div style="margin-bottom:14px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+      '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">📋 OPEN WORK ORDERS</div>' +
+      '<button class="btn small secondary" onclick="closeModal(\'modal-unit-detail\');openNewWOModal()">+ New WO</button>' +
+    '</div>';
+  if (!wos.length) {
+    html += '<div style="color:var(--muted);font-size:12px;font-style:italic">No open work orders</div>';
+  } else {
+    html += wos.map(function(wo) {
+      var priBadge = wo.Priority==='urgent' ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
+      return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:6px;cursor:pointer" onclick="closeModal(\'modal-unit-detail\');openWODetail(\''+wo.ID+'\')">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+          '<div>' +
+            '<span style="color:var(--info);font-weight:bold;font-size:12px">'+esc(wo.ID)+'</span>'+priBadge+
+            '<span style="color:var(--muted);font-size:11px;margin-left:8px">'+esc(wo.Status)+'</span>' +
+            '<div style="font-size:12px;color:var(--text);margin-top:2px">'+esc((wo.Trade||'General')+(wo.Description?' — '+wo.Description.substring(0,60):''))+'</div>' +
+          '</div>' +
+          '<span style="color:var(--muted);font-size:16px">›</span>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+  html += '</div>';
+
+  // Access items section
+  html += '<div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
+      '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">🔒 ACCESS</div>' +
+      '<button class="btn small secondary" onclick="openAddKeyModal(\''+propId+'\')">+ Add Item</button>' +
+    '</div>';
+  var keys = safeArray(state.keys||[]).filter(function(k){
+    return k.Active!=='FALSE' && String(k.Property_ID)===String(propId) &&
+      (!unitId || !k.Unit_ID || String(k.Unit_ID)===String(unitId));
+  });
+  if (!keys.length) {
+    html += '<div style="color:var(--muted);font-size:12px;font-style:italic">No access items on file — <button class="btn small secondary" onclick="openAddKeyModal(\''+propId+'\')">add one</button></div>';
+  } else {
+    var POSS = { 'Have It':'#14532d:#4ade80:✓', 'Need Copy':'#451a03:#fdba74:⚠', "Don't Have It":'#450a0a:#f87171:✗', 'Not Applicable':'#1e293b:#94a3b8:—' };
+    html += keys.map(function(k) {
+      var pBits = (POSS[k.Possession_Status||'Unknown'] || '#1e293b:#64748b:?').split(':');
+      var code = k.Key_Code || k.Lockbox_Code || '';
+      var TYPE_LABELS = {'Building-FrontDoorKey':'Front Door Key','Building-FrontDoorCode':'Front Door Code','Building-Lockbox':'Building Lockbox','Building-Padlock':'Building Padlock','Building-GateCode':'Gate Code','Building-CustomKey':'Custom Key','Building-CustomLockbox':'Custom Lockbox','Building-CustomCode':'Custom Code','Unit-Key':'Unit Key','Unit-DoorCode':'Door Code','Unit-Lockbox':'Unit Lockbox','Unit-MailboxKey':'Mailbox Key','Unit-Padlock':'Padlock'};
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+        '<div style="flex:1;font-size:12px">'+esc(TYPE_LABELS[k.Key_Type]||k.Key_Type||'Key')+(code?' <span style="color:var(--accent);font-weight:bold">'+esc(code)+'</span>':'')+'</div>' +
+        '<span style="background:'+pBits[0]+';color:'+pBits[1]+';font-size:10px;padding:1px 7px;border-radius:4px">'+pBits[2]+' '+esc(k.Possession_Status||'Unknown')+'</span>' +
+        '<button class="btn small secondary" style="font-size:10px;padding:2px 7px" onclick="openEditKeyModal(\''+k.ID+'\')">Edit</button>' +
+      '</div>';
+    }).join('');
+  }
+  html += '</div>';
+
+  // Pre-populate property/unit on move-in if opened from here
+  document.getElementById('unit-detail-body').innerHTML = html;
+  document.getElementById('modal-unit-detail-title').textContent = unitLabel + ' — ' + (prop ? prop.Address : '');
+
+  // Store context so "Move In" and "New WO" buttons pre-fill the right property/unit
+  window._unitDetailContext = { propId: propId, unitId: unitId };
+
+  openModal('modal-unit-detail');
+}
+
 
 // ── Vendors ──────────────────────────────────────────────────
 function renderVendorsPage() {
@@ -2205,7 +2417,13 @@ function renderOwnersPage() {
 
 // ── Move In Tenant ────────────────────────────────────────────
 
-function openMoveInModal() {
+function openMoveInModal(propIdOverride, unitIdOverride) {
+  // Accept overrides from unit detail drill-down, or use _unitDetailContext if set
+  var ctx = window._unitDetailContext || {};
+  var prefillPropId = propIdOverride || ctx.propId || '';
+  var prefillUnitId = unitIdOverride || ctx.unitId || '';
+  window._unitDetailContext = null; // clear after use
+
   document.getElementById('mi-first').value = '';
   document.getElementById('mi-last').value = '';
   document.getElementById('mi-phone').value = '';
@@ -2217,9 +2435,22 @@ function openMoveInModal() {
   var propSel = document.getElementById('mi-property');
   var sorted = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
   propSel.innerHTML = '<option value="">Select property…</option>' +
-    sorted.map(function(p){ return '<option value="'+p.ID+'">'+p.Address+(p.City?', '+p.City:'')+'</option>'; }).join('');
+    sorted.map(function(p){ return '<option value="'+p.ID+'"'+(String(p.ID)===String(prefillPropId)?' selected':'')+'>'+p.Address+(p.City?', '+p.City:'')+'</option>'; }).join('');
   document.getElementById('mi-unit').innerHTML = '<option value="">Whole property / single family</option>';
   document.getElementById('mi-unit-group').style.display = 'none';
+
+  if (prefillPropId) {
+    onMoveInPropertyChange();
+    if (prefillUnitId) {
+      setTimeout(function() {
+        var unitSel = document.getElementById('mi-unit');
+        if (unitSel) unitSel.value = prefillUnitId;
+        onMoveInUnitChange();
+      }, 50);
+    } else {
+      onMoveInUnitChange();
+    }
+  }
 
   openModal('modal-move-in');
 }
@@ -2352,8 +2583,18 @@ async function submitMoveIn() {
   var summaryLines = [];
   if (toMoveOut.length) {
     summaryLines.push('<b>Moving out:</b> ' + toMoveOut.map(function(t){return esc(t.name);}).join(', '));
-  } else if (action === 'add') {
-    summaryLines.push('Adding alongside existing tenants (no one moved out)');
+  } else {
+    // Check if this unit/property is actually vacant or has other tenants we're not moving out
+    var currentTenants = safeArray(state.tenants).filter(function(t) {
+      return t.Active !== 'FALSE' &&
+        (unitId ? t.Unit_ID === unitId : (!t.Unit_ID && String(t.Property_ID) === String(propId)));
+    });
+    if (currentTenants.length === 0) {
+      summaryLines.push('<span style="color:var(--accent2)">✓ Unit is vacant — no one being moved out</span>');
+    } else {
+      // Existing tenants are staying (action = 'add')
+      summaryLines.push('Adding alongside: ' + currentTenants.map(function(t){ return esc((t.First_Name+' '+(t.Last_Name||'')).trim()); }).join(', '));
+    }
   }
   var checkedWOsPreview = [];
   document.querySelectorAll('.mi-wo-check:checked').forEach(function(cb){ checkedWOsPreview.push(cb.dataset.woid); });
@@ -3653,7 +3894,21 @@ function renderBundlingOpportunities() {
   </div>
 </div>
 
-<!-- ADD ACCESS ITEM MODAL -->
+<!-- UNIT DETAIL MODAL -->
+<div class="modal-overlay" id="modal-unit-detail">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-unit-detail-title">UNIT DETAIL</div>
+      <button class="modal-close" onclick="closeModal('modal-unit-detail')">✕</button>
+    </div>
+    <div id="unit-detail-body" style="max-height:70vh;overflow-y:auto;padding-right:4px"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-unit-detail')">Close</button>
+    </div>
+  </div>
+</div>
+
+
 <div class="modal-overlay" id="modal-add-key">
   <div class="modal" style="max-width:500px">
     <div class="modal-header"><div class="modal-title">ADD ACCESS ITEM</div><button class="modal-close" onclick="closeModal('modal-add-key')">✕</button></div>
