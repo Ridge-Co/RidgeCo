@@ -268,10 +268,19 @@
     <div class="search-bar"><input type="text" id="prop-search" placeholder="Search properties..." oninput="renderPropertiesPage()"></div>
     <div id="properties-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
     <div id="keys-view" style="display:none">
-      <div style="display:flex;gap:8px;margin-bottom:10px">
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         <button class="btn" onclick="openAddKeyModal()">+ Add Key / Lockbox</button>
+        <div style="flex:1;min-width:200px;max-width:340px;position:relative">
+          <input type="text" id="key-search" placeholder="🔍 Search by code or number (e.g. A243, 1904)…" oninput="keySearch()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-family:var(--font);font-size:12px">
+        </div>
+        <span style="color:var(--muted);font-size:11px">Search finds active <i>and</i> past entries — useful for unidentified keys</span>
       </div>
-      <div style="color:var(--muted);font-size:12px;margin-bottom:12px">Showing all properties and their Keys/Lockboxes from the Keys tab. To update a lockbox code, go to Google Sheets → Keys tab and edit the row for that property.</div>
+      <!-- Key search results — shown instead of full list when a query is active -->
+      <div id="key-search-results" style="display:none;margin-bottom:16px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px" id="key-search-label"></div>
+        <div id="key-search-table"></div>
+      </div>
+      <div style="color:var(--muted);font-size:12px;margin-bottom:12px" id="keys-view-hint">All properties and their active keys/lockboxes. Search above to find a specific code or identify an unknown key.</div>
       <div id="keys-view-content"><div class="loading">Loading keys…</div></div>
     </div>
   </div>
@@ -1779,12 +1788,12 @@ function openUnitDetail(propId, unitId) {
     if (unitKeysDeduped.length) {
       html += '<div style="font-size:10px;color:var(--muted);margin-bottom:4px;margin-top:4px">🚪 Unit-Specific</div>' +
         unitKeysDeduped.map(renderKeyItem).join('') +
-        (unitHasExtras ? '<div style="font-size:10px;color:var(--muted);margin-top:4px">⚠ '+(unitSpecificKeys.length - unitKeysDeduped.length)+' older key entries hidden — view full history on Keys page</div>' : '');
+        (unitHasExtras ? '<div style="font-size:10px;color:var(--muted);margin-top:4px">⚠ '+(unitSpecificKeys.length - unitKeysDeduped.length)+' older entry/entries hidden — <span style="cursor:pointer;color:var(--info)" onclick="closeModal(\'modal-unit-detail\');showKeysView()">view full history in Keys view</span></div>' : '');
     }
     if (buildingKeysDeduped.length) {
       html += '<div style="font-size:10px;color:var(--muted);margin:'+(unitKeysDeduped.length?'10px':'4px')+' 0 4px 0">🏢 Building Access</div>' +
         buildingKeysDeduped.map(renderKeyItem).join('') +
-        (buildingHasExtras ? '<div style="font-size:10px;color:var(--muted);margin-top:4px">⚠ '+(buildingKeys.length - buildingKeysDeduped.length)+' older entry/entries hidden — view full history on Keys page</div>' : '');
+        (buildingHasExtras ? '<div style="font-size:10px;color:var(--muted);margin-top:4px">⚠ '+(buildingKeys.length - buildingKeysDeduped.length)+' older entry/entries hidden — <span style="cursor:pointer;color:var(--info)" onclick="closeModal(\'modal-unit-detail\');showKeysView()">view full history in Keys view</span></div>' : '');
     }
   }
   html += '</div>';
@@ -2818,6 +2827,10 @@ function showKeysView() {
   document.getElementById('keys-view').style.display = '';
   document.getElementById('btn-keys-view').style.display = 'none';
   document.getElementById('btn-keys-back').style.display = '';
+  document.getElementById('key-search').value = '';
+  document.getElementById('key-search-results').style.display = 'none';
+  document.getElementById('keys-view-hint').style.display = '';
+  document.getElementById('keys-view-content').style.display = '';
   renderKeysView();
 }
 
@@ -2827,6 +2840,114 @@ function hideKeysView() {
   document.getElementById('keys-view').style.display = 'none';
   document.getElementById('btn-keys-view').style.display = '';
   document.getElementById('btn-keys-back').style.display = 'none';
+}
+
+// ── Key search — finds any key across all properties, active or inactive ──
+function keySearch() {
+  var q = (document.getElementById('key-search').value || '').trim().toLowerCase();
+  var resultsDiv = document.getElementById('key-search-results');
+  var label      = document.getElementById('key-search-label');
+  var hint       = document.getElementById('keys-view-hint');
+  var contentDiv = document.getElementById('keys-view-content');
+
+  if (!q) {
+    resultsDiv.style.display = 'none';
+    hint.style.display = '';
+    contentDiv.style.display = '';
+    return;
+  }
+
+  // Search ALL keys — active and inactive — so you can identify unknown historical keys
+  var allKeys = safeArray(state.keys || []);
+  var matches = allKeys.filter(function(k) {
+    var code = (k.Key_Code || k.Lockbox_Code || k.Code || k.code || '').toLowerCase();
+    var notes = (k.Notes || '').toLowerCase();
+    return code.includes(q) || notes.includes(q);
+  });
+
+  resultsDiv.style.display = '';
+  hint.style.display = 'none';
+  contentDiv.style.display = 'none';
+
+  if (!matches.length) {
+    label.textContent = 'No keys found matching "' + q + '" (searched all active and inactive entries)';
+    document.getElementById('key-search-table').innerHTML =
+      '<div style="color:var(--muted);font-size:12px;padding:16px 0">' +
+        'No match found for <b>' + esc(q) + '</b>. ' +
+        'This key is not in the system yet. If you just imported from the Key Registry, try refreshing the page.' +
+      '</div>';
+    return;
+  }
+
+  label.innerHTML = matches.length + ' result' + (matches.length !== 1 ? 's' : '') +
+    ' for <b>"' + esc(q) + '"</b> <span style="color:var(--muted);font-weight:normal">(includes inactive/historical entries)</span>';
+
+  var TYPE_LABELS = {
+    'Building-FrontDoorKey':'Front Door Key','Building-FrontDoorCode':'Front Door Code',
+    'Building-Lockbox':'Building Lockbox','Building-Padlock':'Building Padlock',
+    'Building-GateCode':'Gate Code','Building-CustomKey':'Custom Key',
+    'Building-CustomLockbox':'Custom Lockbox','Building-CustomCode':'Custom Code',
+    'Unit-Key':'Unit Key','Unit-DoorCode':'Door Code','Unit-Lockbox':'Unit Lockbox',
+    'Unit-MailboxKey':'Mailbox Key','Unit-Padlock':'Padlock',
+    'Key':'Key','Lockbox':'Lockbox','Unit Key':'Unit Key','Front Door':'Front Door',
+    'Electronic':'Electronic Lock','Lock Box':'Lockbox'
+  };
+  var POSS = {
+    'Have It':      '#14532d:#4ade80',
+    'Need Copy':    '#451a03:#fdba74',
+    "Don't Have It":'#450a0a:#f87171',
+    'Not Applicable':'#1e293b:#94a3b8'
+  };
+
+  // Exact code match first, then active before inactive
+  matches.sort(function(a, b) {
+    var ac = (a.Key_Code||a.Lockbox_Code||'').toLowerCase();
+    var bc = (b.Key_Code||b.Lockbox_Code||'').toLowerCase();
+    if (ac === q && bc !== q) return -1;
+    if (bc === q && ac !== q) return 1;
+    var aA = a.Active !== 'FALSE' ? 0 : 1;
+    var bA = b.Active !== 'FALSE' ? 0 : 1;
+    return aA - bA;
+  });
+
+  var TH = '<th style="padding:8px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em">';
+  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+    '<thead><tr style="background:var(--surface2)">' +
+    TH+'Code</th>'+TH+'Type</th>'+TH+'Property</th>'+TH+'Unit</th>' +
+    TH+'Location / Notes</th>'+TH+'Possession</th>'+TH+'Status</th>' +
+    '</tr></thead><tbody>';
+
+  matches.forEach(function(k) {
+    var code     = k.Key_Code || k.Lockbox_Code || k.Code || k.code || '—';
+    var prop     = safeArray(state.properties).find(function(p){ return String(p.ID)===String(k.Property_ID); });
+    var unit     = k.Unit_ID ? safeArray(state.units).find(function(u){ return u.ID===k.Unit_ID; }) : null;
+    var label    = TYPE_LABELS[k.Key_Type] || k.Key_Type || '—';
+    var locNote  = [k.Location, k.Lockbox_Location, k.Notes].filter(Boolean).join(' · ').substring(0, 80);
+    var isActive = k.Active !== 'FALSE';
+    var pBits    = (POSS[k.Possession_Status] || '#1e293b:#64748b').split(':');
+
+    html += '<tr style="border-bottom:1px solid var(--border);'+(isActive?'':'opacity:.5')+'">' +
+      '<td style="padding:8px 10px;font-weight:bold;color:'+(isActive?'var(--accent)':'var(--muted)')+';font-size:13px;letter-spacing:.05em">' + esc(code) + '</td>' +
+      '<td style="padding:8px;color:var(--muted);font-size:11px">' + esc(label) + '</td>' +
+      '<td style="padding:8px">' +
+        (prop
+          ? '<span style="color:var(--accent)">' + esc(prop.Address) + '</span>'+(prop.City?'<div style="color:var(--muted);font-size:10px">'+esc(prop.City)+'</div>':'')
+          : '<span style="color:var(--danger);font-size:11px">No property linked</span>') +
+      '</td>' +
+      '<td style="padding:8px;color:var(--muted)">' + (unit ? esc(unit.Unit_Label) : (k.Unit_ID ? '<span title="'+esc(k.Unit_ID)+'">'+esc(k.Unit_ID)+'</span>' : '<span style="color:var(--border)">—</span>')) + '</td>' +
+      '<td style="padding:8px;color:var(--muted);font-size:11px">' + esc(locNote || '—') + '</td>' +
+      '<td style="padding:8px"><span style="background:'+pBits[0]+';color:'+pBits[1]+';font-size:10px;padding:2px 7px;border-radius:4px;white-space:nowrap">' + esc(k.Possession_Status || 'Unknown') + '</span></td>' +
+      '<td style="padding:8px;white-space:nowrap">' +
+        (isActive
+          ? '<span style="color:var(--accent2);font-size:11px">● Active</span>'
+          : '<span style="color:var(--muted);font-size:11px">○ Inactive</span>') +
+        ' <button class="btn small secondary" style="font-size:10px;padding:2px 7px;margin-left:4px" onclick="openEditKeyModal(\''+k.ID+'\')">Edit</button>' +
+      '</td>' +
+    '</tr>';
+  });
+
+  html += '</tbody></table>';
+  document.getElementById('key-search-table').innerHTML = html;
 }
 
 function renderKeysView() {

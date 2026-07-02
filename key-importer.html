@@ -2,81 +2,323 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ridge Co — Key Importer</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ridge Co — Key Registry Importer</title>
 <style>
-  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--radius:6px;--font:"Courier New",monospace;}
-  *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:700px;margin:0 auto;}
-  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.15em;margin-bottom:4px;}
-  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;}
-  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
-  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
-  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
-  .btn.success{background:var(--accent2);color:#000;}
-  input{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
-  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
-  .row label{color:var(--muted);font-size:11px;min-width:100px;}
-  .row input{flex:1;}
-  #log{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:300px;overflow-y:auto;font-size:11px;margin-top:10px;}
-  .ok{color:var(--accent2);} .err{color:var(--danger);} .info{color:var(--muted);}
-  .progress-bar{background:var(--surface2);border-radius:20px;height:6px;margin:8px 0;overflow:hidden;}
-  .progress-fill{background:var(--accent);height:100%;transition:width 0.3s;border-radius:20px;}
-  table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px;}
-  th{text-align:left;padding:5px 8px;color:var(--muted);border-bottom:1px solid var(--border);font-size:10px;}
-  td{padding:5px 8px;border-bottom:1px solid var(--border);}
-  .unknown{color:var(--danger);} .active-status{color:var(--accent2);}
+  :root {
+    --bg:#0d1117;--surface:#161b22;--surface2:#21262d;--border:#30363d;
+    --text:#e6edf3;--muted:#7d8590;--accent:#58a6ff;--accent2:#3fb950;
+    --danger:#f85149;--warn:#d29922;--font:'JetBrains Mono','Courier New',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh}
+  header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:12px}
+  header h1{font-size:14px;letter-spacing:.1em;color:var(--accent)}
+  .main{max-width:1100px;margin:0 auto;padding:20px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}
+  .card-title{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+  input,select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-family:var(--font);font-size:12px;width:100%}
+  .btn{background:var(--accent);color:#000;border:none;border-radius:6px;padding:8px 16px;font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;letter-spacing:.05em}
+  .btn:hover{opacity:.85} .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+  .btn.danger{background:var(--danger);color:#fff} .btn.green{background:var(--accent2);color:#000}
+  .badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold}
+  .badge-ok{background:#14532d;color:#4ade80} .badge-warn{background:#451a03;color:#fdba74}
+  .badge-err{background:#450a0a;color:#f87171} .badge-info{background:#1e3a5f;color:#90caf9}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th{text-align:left;padding:6px 8px;background:var(--surface2);color:var(--muted);border-bottom:1px solid var(--border);font-weight:normal;letter-spacing:.06em;text-transform:uppercase}
+  td{padding:6px 8px;border-bottom:1px solid var(--border)20;vertical-align:top}
+  tr:hover td{background:var(--surface2)30}
+  .msg{padding:10px 12px;border-radius:6px;font-size:12px;margin:8px 0}
+  .msg.error{background:#2d0a0a;border:1px solid var(--danger);color:#fca5a5}
+  .msg.success{background:#0d2818;border:1px solid var(--accent2);color:#86efac}
+  .msg.info{background:#0d1f33;border:1px solid var(--accent);color:#90caf9}
+  .msg.warn{background:#1f1000;border:1px solid var(--warn);color:#fde68a}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #login-screen{display:flex;align-items:center;justify-content:center;min-height:80vh}
+  .login-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;width:100%;max-width:360px;text-align:center}
+  .login-box h2{color:var(--accent);font-size:16px;margin-bottom:6px}
+  .login-box p{color:var(--muted);font-size:11px;margin-bottom:20px}
+  .login-box input{margin-bottom:12px}
+  #app{display:none}
+  .stats-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .stat-box{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px 16px;flex:1;min-width:120px;text-align:center}
+  .stat-num{font-size:22px;font-weight:bold;color:var(--accent)}
+  .stat-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+  .filter-bar{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .filter-bar input,.filter-bar select{max-width:220px}
+  .section-title{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:16px 0 8px}
+  .KEY_TYPE{color:var(--info);font-size:10px}
 </style>
 </head>
 <body>
-<h1>RIDGE CO — KEY IMPORTER</h1>
-<p class="sub">Imports 64 Goldszmidt key records. Run once.</p>
-<div class="section">
-  <div class="section-title">CONNECTION</div>
-  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
-  <div class="row"><label>Access Token</label><input id="auth-token" type="password" value="mh-secret-2026-brett" style="flex:1"></div>
-  <button class="btn" onclick="connect()">Connect</button>
-  <span id="conn-status" style="margin-left:10px;font-size:11px;color:var(--muted)"></span>
+<header>
+  <span style="font-size:18px">🔑</span>
+  <h1>RIDGE CO — KEY REGISTRY IMPORTER</h1>
+  <span style="color:var(--muted);font-size:11px">Preview → approve → import into hub Keys tab</span>
+  <button class="btn secondary" id="logout-btn" style="margin-left:auto;display:none" onclick="location.reload()">LOG OUT</button>
+</header>
+
+<div id="login-screen">
+  <div class="login-box">
+    <h2>🔑 KEY IMPORTER</h2>
+    <p>Admin access required</p>
+    <input type="password" id="login-pw" placeholder="Admin password">
+    <div id="login-err" style="color:var(--danger);font-size:11px;margin-bottom:8px;display:none">Incorrect password</div>
+    <button class="btn" onclick="doLogin()" style="width:100%">SIGN IN</button>
+  </div>
 </div>
-<div class="section">
-  <div class="section-title">PREVIEW — 64 RECORDS</div>
-  <table><thead><tr><th>Address</th><th>Unit</th><th>Type</th><th>Key</th><th>Lockbox</th><th>Status</th></tr></thead>
-  <tbody id="preview-body"></tbody></table>
-  <button class="btn success" onclick="runImport()">Import All 64 Keys</button>
-  <div class="progress-bar" id="progress-bar" style="display:none"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
-  <div id="log"><div class="info">Connect first.</div></div>
+
+<div id="app">
+  <div class="main">
+
+    <!-- Step 1: Check current Keys -->
+    <div class="card">
+      <div class="card-title">Step 1 — Review Current Keys in Hub</div>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:10px">See what's already in the hub's Keys tab. Any rows without Property_ID or Unit_ID are from the old import and need to be cleaned up.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="btn secondary" onclick="loadCurrentKeys()">Load Current Keys</button>
+        <button class="btn danger" id="deactivate-old-btn" style="display:none" onclick="deactivateOldKeys()">⚠ Deactivate Rows Without Property_ID</button>
+      </div>
+      <div id="current-keys-msg"></div>
+      <div id="current-keys-table"></div>
+    </div>
+
+    <!-- Step 2: Preview Import -->
+    <div class="card">
+      <div class="card-title">Step 2 — Preview Import from Key Code Registry</div>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:10px">
+        Reads the Key Code Registry spreadsheet, maps each row to the hub's format (with Property_ID and Unit_ID), and shows you what will be imported.
+        <b style="color:var(--warn)"> No data is written yet.</b>
+      </p>
+      <button class="btn secondary" onclick="runPreview()">Preview Import</button>
+      <div id="preview-msg"></div>
+      <div id="stats-area" style="display:none">
+        <div class="stats-row" id="stats-boxes"></div>
+        <div class="filter-bar">
+          <input type="text" id="filter-addr" placeholder="Filter by address…" oninput="filterRows()">
+          <select id="filter-status" onchange="filterRows()">
+            <option value="">All rows</option>
+            <option value="ok">Ready to import</option>
+            <option value="warn">Unit not matched</option>
+            <option value="skip">Skipped (no property)</option>
+          </select>
+        </div>
+        <div id="preview-table"></div>
+        <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
+          <button class="btn green" onclick="runImport()" id="import-btn">✓ Import Ready Rows</button>
+          <span style="color:var(--muted);font-size:11px">Imports rows with a matched Property_ID. Skipped rows (no property match) are not written.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Result -->
+    <div class="card" id="result-card" style="display:none">
+      <div class="card-title">Import Result</div>
+      <div id="result-body"></div>
+    </div>
+
+  </div>
 </div>
+
 <script>
-const IMPORT_KEYS = [{"prop_id": "3", "prop_addr": "115 W 29th St", "unit_label": "", "key_type": "Front Door", "key_code": "A21", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "3", "prop_addr": "115 W 29th St", "unit_label": "Apt 1", "key_type": "Unit Key", "key_code": "A166", "lockbox_code": "", "lockbox_location": "", "last_changed": "5/31/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "3", "prop_addr": "115 W 29th St", "unit_label": "Apt 2", "key_type": "Unit Key", "key_code": "A69", "lockbox_code": "", "lockbox_location": "", "last_changed": "2/24/2026", "notes": "previously A16", "owner_id": "3", "status": "Active"}, {"prop_id": "3", "prop_addr": "115 W 29th St", "unit_label": "Apt 3", "key_type": "Unit Key", "key_code": "A180", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "3", "prop_addr": "115 W 29th St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "7080", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "3", "prop_addr": "115 W 29th St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "1287", "lockbox_location": "security grate at ground level", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "4", "prop_addr": "1214 N Calvert St", "unit_label": "", "key_type": "Front Door", "key_code": "A17", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "4", "prop_addr": "1214 N Calvert St", "unit_label": "Apt 1", "key_type": "Unit Key", "key_code": "A19??", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "4", "prop_addr": "1214 N Calvert St", "unit_label": "Apt 2", "key_type": "Unit Key", "key_code": "A195", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "4", "prop_addr": "1214 N Calvert St", "unit_label": "Apt 3", "key_type": "Unit Key", "key_code": "A137", "lockbox_code": "", "lockbox_location": "", "last_changed": "5/31/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "4", "prop_addr": "1214 N Calvert St", "unit_label": "Apt 4", "key_type": "Unit Key", "key_code": "?", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "5", "prop_addr": "151 W Lanvale St", "unit_label": "", "key_type": "Front Door", "key_code": "A90", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "5", "prop_addr": "151 W Lanvale St", "unit_label": "Apt 1", "key_type": "Unit Key", "key_code": "A224", "lockbox_code": "", "lockbox_location": "", "last_changed": "1/16/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "5", "prop_addr": "151 W Lanvale St", "unit_label": "Apt 2", "key_type": "Unit Key", "key_code": "Emily", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "5", "prop_addr": "151 W Lanvale St", "unit_label": "Apt 3", "key_type": "Unit Key", "key_code": "A27", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "5", "prop_addr": "151 W Lanvale St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "3672", "lockbox_location": "window grate beside door", "last_changed": "5/6/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "6", "prop_addr": "153 W Lanvale St", "unit_label": "", "key_type": "Front Door", "key_code": "A135", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "6", "prop_addr": "153 W Lanvale St", "unit_label": "Apt 1", "key_type": "Unit Key", "key_code": "A103", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "6", "prop_addr": "153 W Lanvale St", "unit_label": "Apt 2", "key_type": "Unit Key", "key_code": "A97", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "6", "prop_addr": "153 W Lanvale St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "3672", "lockbox_location": "handrail near door", "last_changed": "5/6/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "", "key_type": "Front Door", "key_code": "A57", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "", "key_type": "Front Door", "key_code": "2401", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "11", "prop_addr": "928 N Calvert St", "unit_label": "", "key_type": "Front Door", "key_code": "A30", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "11", "prop_addr": "928 N Calvert St", "unit_label": "Apt B", "key_type": "Unit Key", "key_code": "A308", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "11", "prop_addr": "928 N Calvert St", "unit_label": "Carriage House", "key_type": "Unit Key", "key_code": "A211", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "11", "prop_addr": "928 N Calvert St", "unit_label": "Apt 1F", "key_type": "Unit Key", "key_code": "A112", "lockbox_code": "", "lockbox_location": "", "last_changed": "7/30/2025", "notes": "HL1 Key Apt Blank https://easykeys.com/59_ESP_HL1_Key_Apt Blank.aspx", "owner_id": "3", "status": "Active"}, {"prop_id": "11", "prop_addr": "928 N Calvert St", "unit_label": "Apt 2F", "key_type": "Unit Key", "key_code": "A49", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "11", "prop_addr": "928 N Calvert St", "unit_label": "Apt 3F", "key_type": "Unit Key", "key_code": "A126", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "11", "prop_addr": "928 N Calvert St", "unit_label": "Apt 2R", "key_type": "Unit Key", "key_code": "A163", "lockbox_code": "", "lockbox_location": "", "last_changed": "8/27/2025", "notes": "previous lock code unknown", "owner_id": "3", "status": "Active"}, {"prop_id": "11", "prop_addr": "928 N Calvert St", "unit_label": "Apt 3R", "key_type": "Unit Key", "key_code": "A32", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "", "prop_addr": "928 N CalvertSt", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "3672", "lockbox_location": "", "last_changed": "9/29/2025", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "8", "prop_addr": "3014 N Calvert St", "unit_label": "", "key_type": "Front Door", "key_code": "A131", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "8", "prop_addr": "3014 N Calvert St", "unit_label": "Apt 1", "key_type": "Unit Key", "key_code": "A141", "lockbox_code": "", "lockbox_location": "", "last_changed": "7/30/2025", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "8", "prop_addr": "3014 N Calvert St", "unit_label": "Apt 2", "key_type": "Unit Key", "key_code": "A220", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "8", "prop_addr": "3014 N Calvert St", "unit_label": "Apt 3", "key_type": "Unit Key", "key_code": "Apt Brian + Kevin no Apt", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "8", "prop_addr": "3014 N Calvert St", "unit_label": "Apt B", "key_type": "Unit Key", "key_code": "A298", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "8", "prop_addr": "3014 N Calvert St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "3672", "lockbox_location": "inside vestibule mounted to door", "last_changed": "5/6/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "7", "prop_addr": "2930 St Paul St", "unit_label": "", "key_type": "Front Door", "key_code": "A60", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "owner lockApt Box 2007 as of 8/29/25 | my lockApt Box 3672 as of 08/29/25", "owner_id": "3", "status": "Active"}, {"prop_id": "7", "prop_addr": "2930 St Paul St", "unit_label": "Apt 1R", "key_type": "Unit Key", "key_code": "A150", "lockbox_code": "", "lockbox_location": "", "last_changed": "5/31/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "7", "prop_addr": "2930 St Paul St", "unit_label": "Apt 1F", "key_type": "Unit Key", "key_code": "A75", "lockbox_code": "", "lockbox_location": "", "last_changed": "8/26/2025", "notes": "20x20x1 filter", "owner_id": "3", "status": "Active"}, {"prop_id": "7", "prop_addr": "2930 St Paul St", "unit_label": "Apt 2R", "key_type": "Unit Key", "key_code": "A110", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "7", "prop_addr": "2930 St Paul St", "unit_label": "Apt 2F", "key_type": "Unit Key", "key_code": "A227", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "7", "prop_addr": "2930 St Paul St", "unit_label": "Apt 3", "key_type": "Unit Key", "key_code": "A245", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "7", "prop_addr": "2930 St Paul St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "2007", "lockbox_location": "", "last_changed": "", "notes": "Owner Apt Box as of 08/29/2025", "owner_id": "3", "status": "Active"}, {"prop_id": "7", "prop_addr": "2930 St Paul St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "1984", "lockbox_location": "right handrail", "last_changed": "5/6/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "13", "prop_addr": "20 E Eager St", "unit_label": "", "key_type": "Front Door", "key_code": "A16", "lockbox_code": "", "lockbox_location": "", "last_changed": "5/6/2026", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "13", "prop_addr": "20 E Eager St", "unit_label": "Apt 2", "key_type": "Unit Key", "key_code": "A243", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "13", "prop_addr": "20 E Eager St", "unit_label": "Apt 1", "key_type": "Unit Key", "key_code": "A62", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "13", "prop_addr": "20 E Eager St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "3672", "lockbox_location": "interior front door", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "13", "prop_addr": "20 E Eager St", "unit_label": "Apt 3", "key_type": "Unit Key", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "13", "prop_addr": "20 E Eager St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "1904", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "Apt Bsmt", "key_type": "Unit Key", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "BAKERY", "key_type": "Unit Key", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "Apt 2A", "key_type": "Unit Key", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "Apt 2B", "key_type": "Unit Key", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "Apt 3A", "key_type": "Unit Key", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "Apt 3B", "key_type": "Unit Key", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "10", "prop_addr": "828 S Charles St", "unit_label": "Cafe", "key_type": "Unit Key", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "12", "prop_addr": "926 N Calvert St", "unit_label": "", "key_type": "Front Door", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "12", "prop_addr": "926 N Calvert St", "unit_label": "", "key_type": "Lockbox", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "", "key_type": "Front Door", "key_code": "", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Unknown"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "", "key_type": "Front Door", "key_code": "2401", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "", "key_type": "Gate Code", "key_code": "123", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "", "owner_id": "3", "status": "Active"}, {"prop_id": "9", "prop_addr": "807 N Calvert St", "unit_label": "", "key_type": "Garage Code", "key_code": "1224", "lockbox_code": "", "lockbox_location": "", "last_changed": "", "notes": "Internal Use Only, Do NOT share with vendors or tenants ever", "owner_id": "3", "status": "Active"}];
-let connected=false;
-function getWorker(){return document.getElementById("worker-url").value.trim();}
-function getToken(){return document.getElementById("auth-token").value.trim();}
-async function apiPost(path,body){const r=await fetch(getWorker()+path,{method:"POST",headers:{"X-Auth-Token":getToken(),"Content-Type":"application/json"},body:JSON.stringify(body)});return r.json();}
-async function connect(){
-  document.getElementById("conn-status").textContent="Connecting...";
-  try{const r=await fetch(getWorker()+"/config",{headers:{"X-Auth-Token":getToken(),"Content-Type":"application/json"}});const d=await r.json();if(d.error)throw new Error(d.error);connected=true;document.getElementById("conn-status").textContent="Connected";}
-  catch(e){document.getElementById("conn-status").textContent="Error: "+e.message;}
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET = '';
+var _previewRows = [];
+var _currentKeys = [];
+
+function api(method, path, body) {
+  var opts = { method: method, headers: { 'Content-Type': 'application/json', 'X-Auth-Token': SECRET } };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(r) { return r.json(); });
 }
-document.getElementById("preview-body").innerHTML=IMPORT_KEYS.map(k=>`<tr><td>${k.prop_addr}</td><td>${k.unit_label||"—"}</td><td>${k.key_type}</td><td>${k.key_code||"—"}</td><td>${k.lockbox_code||"—"}</td><td class="${k.status==="Unknown"?"unknown":"active-status"}">${k.status}</td></tr>`).join("");
-async function runImport(){
-  if(!connected){alert("Connect first");return;}
-  const logEl=document.getElementById("log"),bar=document.getElementById("progress-bar"),fill=document.getElementById("progress-fill");
-  logEl.innerHTML="";bar.style.display="block";
-  let ok=0,fail=0;const today=new Date().toISOString().split("T")[0];
-  for(let i=0;i<IMPORT_KEYS.length;i++){
-    const k=IMPORT_KEYS[i];
-    fill.style.width=Math.round((i/IMPORT_KEYS.length)*100)+"%";
-    try{
-      const res=await apiPost("/key/add",{Property_ID:k.prop_id,Unit_ID:"",Unit_Label:k.unit_label,Owner_ID:k.owner_id,Key_Type:k.key_type,Key_Code:k.key_code,Lockbox_Code:k.lockbox_code,Lockbox_Location:k.lockbox_location,Notes:k.notes,Status:k.status,Last_Changed:k.last_changed||today,Active:"TRUE"});
-      if(res.id){ok++;logEl.innerHTML+=`<div class="ok">✅ ${k.prop_addr} ${k.unit_label||""} ${k.key_type} ${k.key_code||k.lockbox_code||"(unknown)"}</div>`;}
-      else{fail++;logEl.innerHTML+=`<div class="err">❌ ${k.prop_addr}: ${JSON.stringify(res)}</div>`;}
-    }catch(e){fail++;logEl.innerHTML+=`<div class="err">❌ ${k.prop_addr}: ${e.message}</div>`;}
-    logEl.scrollTop=logEl.scrollHeight;
-    await new Promise(r=>setTimeout(r,200));
+
+// ── Login ─────────────────────────────────────────────────────
+function doLogin() {
+  var pw = document.getElementById('login-pw').value.trim();
+  SECRET = pw;
+  api('GET', '/config').then(function(r) {
+    if (r.error) { document.getElementById('login-err').style.display='block'; SECRET=''; return; }
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    document.getElementById('logout-btn').style.display = 'block';
+  }).catch(function() { document.getElementById('login-err').style.display='block'; SECRET=''; });
+}
+document.getElementById('login-pw').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
+
+// ── Step 1: Current Keys ──────────────────────────────────────
+function loadCurrentKeys() {
+  var msgEl = document.getElementById('current-keys-msg');
+  var tableEl = document.getElementById('current-keys-table');
+  msgEl.innerHTML = '<div class="msg info"><span class="spinner"></span>Loading Keys tab…</div>';
+  tableEl.innerHTML = '';
+  api('GET', '/keys').then(function(keys) {
+    _currentKeys = Array.isArray(keys) ? keys : [];
+    var withPropId  = _currentKeys.filter(function(k){ return k.Property_ID && k.Active !== 'FALSE'; });
+    var withoutPropId = _currentKeys.filter(function(k){ return !k.Property_ID && k.Active !== 'FALSE'; });
+    var inactive = _currentKeys.filter(function(k){ return k.Active === 'FALSE'; });
+
+    msgEl.innerHTML = '';
+
+    if (withoutPropId.length) {
+      msgEl.innerHTML += '<div class="msg warn">⚠ '+withoutPropId.length+' active key rows have no Property_ID — these are likely from the old import and need cleanup before re-importing.</div>';
+      document.getElementById('deactivate-old-btn').style.display = 'inline-block';
+    } else {
+      msgEl.innerHTML += '<div class="msg success">✓ All active key rows have Property_ID assigned. You can proceed to Step 2.</div>';
+    }
+
+    // Table
+    var html = '<div class="section-title">Active keys ('+withPropId.length+' with Property_ID, '+withoutPropId.length+' without, '+inactive.length+' inactive)</div>' +
+      '<table><thead><tr><th>ID</th><th>Property_ID</th><th>Unit_ID</th><th>Key_Type</th><th>Key_Code</th><th>Possession</th><th>Active</th></tr></thead><tbody>';
+    var displayKeys = _currentKeys.filter(function(k){ return k.Active !== 'FALSE'; }).slice(0, 200);
+    displayKeys.forEach(function(k) {
+      var noProp = !k.Property_ID;
+      html += '<tr style="'+(noProp?'background:#1f0a00':'')+'">'+
+        '<td>'+esc(k.ID||'')+'</td>'+
+        '<td>'+(noProp?'<span style="color:var(--danger)">—</span>':esc(k.Property_ID))+'</td>'+
+        '<td>'+(k.Unit_ID||'<span style="color:var(--muted)">—</span>')+'</td>'+
+        '<td>'+esc(k.Key_Type||k['Key Type']||'')+'</td>'+
+        '<td style="color:var(--accent)">'+esc(k.Key_Code||k['Key Code']||k.Lockbox_Code||k.Code||'')+'</td>'+
+        '<td>'+esc(k.Possession_Status||'')+'</td>'+
+        '<td>'+esc(k.Active||'')+'</td>'+
+      '</tr>';
+    });
+    html += '</tbody></table>';
+    if (_currentKeys.length > 200) html += '<div style="color:var(--muted);font-size:10px;margin-top:6px">Showing first 200 of '+_currentKeys.length+' rows</div>';
+    tableEl.innerHTML = html;
+  }).catch(function(e) {
+    msgEl.innerHTML = '<div class="msg error">Failed to load keys: '+esc(e.message)+'</div>';
+  });
+}
+
+function deactivateOldKeys() {
+  if (!confirm('Mark all active Keys rows WITHOUT a Property_ID as inactive (Active=FALSE)?\n\nThis cleans up the old import. The rows will remain in the sheet but will be hidden from the hub UI.')) return;
+  var toDeactivate = _currentKeys.filter(function(k){ return !k.Property_ID && k.Active !== 'FALSE'; });
+  var msgEl = document.getElementById('current-keys-msg');
+  msgEl.innerHTML = '<div class="msg info"><span class="spinner"></span>Deactivating '+toDeactivate.length+' rows…</div>';
+  var count = 0;
+  function next() {
+    if (count >= toDeactivate.length) {
+      msgEl.innerHTML = '<div class="msg success">✓ Deactivated '+count+' old rows. Reload to confirm.</div>';
+      document.getElementById('deactivate-old-btn').style.display = 'none';
+      return;
+    }
+    var k = toDeactivate[count++];
+    api('POST', '/key/update', { id: k.ID, fields: { Active: 'FALSE' } }).then(next).catch(function(e) {
+      msgEl.innerHTML = '<div class="msg error">Error on row '+k.ID+': '+esc(e.message)+'</div>';
+    });
   }
-  fill.style.width="100%";
-  logEl.innerHTML+=`<div class="info" style="font-weight:bold;margin-top:6px">Done: ${ok} imported, ${fail} failed.</div>`;
+  next();
 }
+
+// ── Step 2: Preview ───────────────────────────────────────────
+var _allPreviewRows = [];
+function runPreview() {
+  var msgEl = document.getElementById('preview-msg');
+  document.getElementById('stats-area').style.display = 'none';
+  msgEl.innerHTML = '<div class="msg info"><span class="spinner"></span>Reading Key Code Registry and matching to hub properties/units…</div>';
+  api('POST', '/import-key-registry', { preview: true }).then(function(res) {
+    if (res.error) { msgEl.innerHTML = '<div class="msg error">'+esc(res.error)+'</div>'; return; }
+    _allPreviewRows = (res.rows||[]).concat((res.skippedRows||[]).map(function(s){ s._skipped=true; return s; }));
+    msgEl.innerHTML = '';
+    document.getElementById('stats-area').style.display = 'block';
+
+    var ready = res.rows||[];
+    var skipped = res.skippedRows||[];
+    var noUnit = ready.filter(function(r){ return !r.unit_id && r.unit_label; });
+
+    document.getElementById('stats-boxes').innerHTML =
+      statBox(ready.length, 'Ready to Import', 'var(--accent2)') +
+      statBox(noUnit.length, 'Unit Not Matched', 'var(--warn)') +
+      statBox(skipped.length, 'Skipped (no property)', 'var(--danger)') +
+      statBox(ready.length + skipped.length, 'Total Registry Rows', 'var(--muted)');
+
+    if (noUnit.length) {
+      document.getElementById('preview-msg').innerHTML += '<div class="msg warn" style="margin-top:8px">'+noUnit.length+' rows have a unit label but no matching Unit_ID in the hub. These will import at property level. You can manually assign them to units after importing via the hub\'s Keys view.</div>';
+    }
+
+    filterRows();
+  }).catch(function(e) {
+    msgEl.innerHTML = '<div class="msg error">'+esc(e.message)+'</div>';
+  });
+}
+
+function statBox(n, label, color) {
+  return '<div class="stat-box"><div class="stat-num" style="color:'+color+'">'+n+'</div><div class="stat-label">'+label+'</div></div>';
+}
+
+function filterRows() {
+  var filterAddr = (document.getElementById('filter-addr').value||'').toLowerCase();
+  var filterStatus = document.getElementById('filter-status').value;
+  var rows = _allPreviewRows.filter(function(r) {
+    var addr = (r.property_address||r.addr||'').toLowerCase();
+    if (filterAddr && !addr.includes(filterAddr)) return false;
+    if (filterStatus === 'ok') return !r._skipped && r.unit_id;
+    if (filterStatus === 'warn') return !r._skipped && !r.unit_id && r.unit_label;
+    if (filterStatus === 'skip') return !!r._skipped;
+    return true;
+  });
+
+  var html = '<table><thead><tr>' +
+    '<th>Row</th><th>Property</th><th>Unit Label</th><th>Unit_ID</th>' +
+    '<th>Key Type</th><th>Code</th><th>Location</th><th>Notes</th><th>Status</th>' +
+    '</tr></thead><tbody>';
+
+  rows.slice(0, 300).forEach(function(r) {
+    var statusBadge, rowStyle = '';
+    if (r._skipped) {
+      statusBadge = '<span class="badge badge-err">Skip: '+esc(r.reason||'no match')+'</span>';
+      rowStyle = 'opacity:.6';
+    } else if (!r.unit_id && r.unit_label) {
+      statusBadge = '<span class="badge badge-warn">⚠ No Unit_ID</span>';
+      rowStyle = '';
+    } else {
+      statusBadge = '<span class="badge badge-ok">✓ Ready</span>';
+    }
+    html += '<tr style="'+rowStyle+'">' +
+      '<td style="color:var(--muted)">'+esc(String(r.source_row||''))+'</td>' +
+      '<td style="color:var(--accent)">'+esc(r.property_address||r.addr||'')+'</td>' +
+      '<td>'+esc(r.unit_label||'')+'</td>' +
+      '<td style="color:var(--muted)">'+esc(r.unit_id||'')+'</td>' +
+      '<td style="color:var(--info);font-size:10px">'+esc(r.key_type||'')+'</td>' +
+      '<td style="color:var(--accent);font-weight:bold">'+esc(r.key_code||'')+'</td>' +
+      '<td style="font-size:10px;color:var(--muted)">'+esc(r.location||'')+'</td>' +
+      '<td style="font-size:10px;color:var(--muted)">'+esc((r.notes||'').substring(0,60))+'</td>' +
+      '<td>'+statusBadge+'</td>' +
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  if (rows.length > 300) html += '<div style="color:var(--muted);font-size:10px;margin-top:6px">Showing 300 of '+rows.length+' rows</div>';
+  document.getElementById('preview-table').innerHTML = html;
+}
+
+// ── Step 3: Import ────────────────────────────────────────────
+function runImport() {
+  if (!confirm('Import all ready rows from the Key Code Registry into the hub\'s Keys tab?\n\nThis writes new rows — it does not delete anything.')) return;
+  var btn = document.getElementById('import-btn');
+  btn.disabled = true; btn.textContent = 'Importing…';
+  api('POST', '/import-key-registry', { preview: false }).then(function(res) {
+    btn.disabled = false; btn.textContent = '✓ Import Ready Rows';
+    var card = document.getElementById('result-card');
+    var body = document.getElementById('result-body');
+    card.style.display = 'block';
+    card.scrollIntoView({ behavior: 'smooth' });
+    if (res.error) {
+      body.innerHTML = '<div class="msg error">'+esc(res.error)+'</div>';
+    } else {
+      body.innerHTML = '<div class="msg success">✓ Import complete: <b>'+res.imported+'</b> rows written to Keys tab.</div>' +
+        (res.skipped ? '<div class="msg warn" style="margin-top:6px">'+res.skipped+' rows skipped (no property match).</div>' : '') +
+        (res.errors && res.errors.length ? '<div class="msg error" style="margin-top:6px">'+res.errors.length+' errors: '+res.errors.map(function(e){return 'Row '+e.row+': '+e.error;}).join(', ')+'</div>' : '') +
+        '<div style="margin-top:12px;color:var(--muted);font-size:12px">Go to the hub Properties page → click a property → click a unit → check the ACCESS section to verify the keys are showing correctly.</div>';
+    }
+  }).catch(function(e) {
+    btn.disabled = false; btn.textContent = '✓ Import Ready Rows';
+    document.getElementById('result-body').innerHTML = '<div class="msg error">'+esc(e.message)+'</div>';
+    document.getElementById('result-card').style.display = 'block';
+  });
+}
+
+function esc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 </script>
 </body>
 </html>
