@@ -1540,12 +1540,12 @@ function renderPropertiesPage() {
         '<div class="prop-row-main" onclick="togglePropUnits(\''+p.ID+'\')" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s">' +
           '<div style="flex:1;min-width:0">' +
             '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
-              '<span style="font-weight:bold;color:var(--accent);font-size:13px">'+esc(p.Address)+'</span>' +
-              (p.City ? '<span style="color:var(--muted);font-size:11px">'+esc(p.City)+'</span>' : '') +
-              (p.Type ? '<span style="font-size:10px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(p.Type)+'</span>' : '') +
-              (urgentCount ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 6px;border-radius:3px">'+urgentCount+' URGENT</span>' : '') +
+              '<span style="font-weight:bold;color:var(--accent);font-size:clamp(12px,1.2vw,15px)">'+esc(p.Address)+'</span>' +
+              (p.City ? '<span style="color:var(--muted);font-size:clamp(11px,1vw,13px)">'+esc(p.City)+'</span>' : '') +
+              (p.Type ? '<span style="font-size:clamp(9px,0.8vw,11px);background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(p.Type)+'</span>' : '') +
+              (urgentCount ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:clamp(9px,0.8vw,11px);padding:2px 7px;border-radius:3px">'+urgentCount+' URGENT</span>' : '') +
             '</div>' +
-            '<div style="display:flex;gap:10px;margin-top:4px;font-size:11px;color:var(--muted)">' +
+            '<div style="display:flex;gap:10px;margin-top:5px;font-size:clamp(10px,0.9vw,12px);color:var(--muted);flex-wrap:wrap">' +
               (owner ? '<span>👤 '+esc(owner.Name||owner.First_Name||'')+'</span>' : '') +
               (units.length ? '<span>🚪 '+units.length+' unit'+(units.length!==1?'s':'') + (vacantCount ? ' · <span style="color:var(--accent2)">'+vacantCount+' vacant</span>' : '')+'</span>' : '') +
               (openWOs.length ? '<span style="color:var(--warn)">📋 '+openWOs.length+' open WO'+(openWOs.length!==1?'s':'')+'</span>' : '') +
@@ -1588,34 +1588,42 @@ function renderUnitCards(prop, units, openWOs) {
     '</div>';
   }
 
-  return units.map(function(u) {
+  return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:4px">' +
+    units.map(function(u) {
     var tenants = safeArray(state.tenants).filter(function(t){ return t.Active!=='FALSE' && t.Unit_ID===u.ID; });
     var uWOs = openWOs.filter(function(w){ return String(w.Unit_ID)===String(u.ID); });
     var isVacant = !tenants.length;
     var urgentWOs = uWOs.filter(function(w){ return (w.Priority||'').toLowerCase()==='urgent'; });
 
-    return '<div class="unit-card" onclick="openUnitDetail(\''+prop.ID+'\',\''+u.ID+'\')" ' +
-      'style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:pointer">' +
-      '<div style="flex:1;min-width:0">' +
-        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">' +
-          '<span style="font-weight:bold;font-size:12px">Unit '+esc(u.Unit_Label||u.ID)+'</span>' +
-          (isVacant
-            ? '<span style="background:#14532d;color:#4ade80;font-size:9px;padding:1px 7px;border-radius:3px;font-weight:bold">VACANT</span>'
-            : '<span style="background:#1e3a5f;color:#90caf9;font-size:9px;padding:1px 7px;border-radius:3px">OCCUPIED</span>') +
-          (urgentWOs.length ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 5px;border-radius:3px">'+urgentWOs.length+' URGENT</span>' : '') +
-        '</div>' +
-        (tenants.length
-          ? tenants.map(function(t){
-              var nm = (t.First_Name+' '+(t.Last_Name||'')).trim();
-              return '<div style="font-size:12px;color:var(--text)">'+esc(nm)+'</div>' +
-                (t.Phone ? '<div style="font-size:11px;color:var(--muted)">'+esc(t.Phone)+'</div>' : '');
-            }).join('')
-          : '<div style="font-size:11px;color:var(--muted);font-style:italic">No tenant on file</div>') +
-        (uWOs.length ? '<div style="margin-top:4px;font-size:11px;color:var(--warn)">'+uWOs.length+' open WO'+(uWOs.length!==1?'s':'')+'</div>' : '') +
+    return '<div onclick="openUnitDetail(\''+prop.ID+'\',\''+u.ID+'\')" ' +
+      'style="display:flex;flex-direction:column;gap:6px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;cursor:pointer;min-height:80px;transition:border-color .15s" ' +
+      'onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--border)\'">' +
+      // Header row: label + status badge
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px">' +
+        '<span style="font-weight:bold;font-size:clamp(12px,1.2vw,14px)">Unit '+esc(u.Unit_Label||u.ID)+'</span>' +
+        '<span style="font-size:clamp(9px,0.8vw,11px);padding:2px 8px;border-radius:4px;font-weight:bold;white-space:nowrap;'+(isVacant
+          ? 'background:#14532d;color:#4ade80'
+          : 'background:#1e3a5f;color:#90caf9')+'">'+(isVacant?'VACANT':'OCCUPIED')+'</span>' +
       '</div>' +
-      '<div style="font-size:18px;color:var(--muted);flex-shrink:0">›</div>' +
+      // Tenant info or vacant note
+      (tenants.length
+        ? '<div style="display:flex;flex-direction:column;gap:2px">' +
+          tenants.map(function(t){
+            var nm = (t.First_Name+' '+(t.Last_Name||'')).trim();
+            return '<span style="font-size:clamp(11px,1.1vw,13px);color:var(--text)">'+esc(nm)+'</span>' +
+              (t.Phone ? '<span style="font-size:clamp(10px,0.9vw,11px);color:var(--muted)">'+esc(t.Phone)+'</span>' : '');
+          }).join('') +
+          '</div>'
+        : '<span style="font-size:clamp(10px,1vw,12px);color:var(--muted);font-style:italic">No tenant on file</span>') +
+      // Footer: WO count + urgent badge
+      (uWOs.length || urgentWOs.length
+        ? '<div style="display:flex;align-items:center;gap:6px;margin-top:2px">' +
+          (uWOs.length ? '<span style="font-size:clamp(10px,0.9vw,11px);color:var(--warn)">'+uWOs.length+' open WO'+(uWOs.length!==1?'s':'')+'</span>' : '') +
+          (urgentWOs.length ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:clamp(9px,0.8vw,10px);padding:1px 5px;border-radius:3px">'+urgentWOs.length+' URGENT</span>' : '') +
+          '</div>'
+        : '') +
     '</div>';
-  }).join('');
+  }).join('') + '</div>';
 }
 
 function singleFamilyCard(prop, tenants, wos) {
@@ -1715,30 +1723,69 @@ function openUnitDetail(propId, unitId) {
   }
   html += '</div>';
 
-  // Access items section
+  // Access items section — split into building-level (no Unit_ID) and unit-specific
+  var allPropKeys = safeArray(state.keys||[]).filter(function(k){
+    return k.Active !== 'FALSE' && String(k.Property_ID) === String(propId);
+  });
+  // Building-level: no unit assigned (front door, lockbox, gate, etc.)
+  var buildingKeys = allPropKeys.filter(function(k){ return !k.Unit_ID; });
+  // Unit-specific: only keys for THIS unit (if viewing a specific unit)
+  var unitSpecificKeys = unitId
+    ? allPropKeys.filter(function(k){ return String(k.Unit_ID) === String(unitId); })
+    : [];
+
+  // Deduplicate each group by Key_Type — show only the most recent (highest numeric ID)
+  // to handle cases where old keys weren't deactivated when lock was changed
+  function dedupeByType(keyList) {
+    var byType = {};
+    keyList.forEach(function(k) {
+      var t = k.Key_Type || 'Other';
+      if (!byType[t] || parseInt(k.ID) > parseInt(byType[t].ID)) byType[t] = k;
+    });
+    return Object.values(byType);
+  }
+  var buildingKeysDeduped   = dedupeByType(buildingKeys);
+  var unitKeysDeduped       = dedupeByType(unitSpecificKeys);
+  var buildingHasExtras     = buildingKeys.length > buildingKeysDeduped.length;
+  var unitHasExtras         = unitSpecificKeys.length > unitKeysDeduped.length;
+
   html += '<div>' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
       '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">🔒 ACCESS</div>' +
       '<button class="btn small secondary" onclick="openAddKeyModal(\''+propId+'\')">+ Add Item</button>' +
     '</div>';
-  var keys = safeArray(state.keys||[]).filter(function(k){
-    return k.Active!=='FALSE' && String(k.Property_ID)===String(propId) &&
-      (!unitId || !k.Unit_ID || String(k.Unit_ID)===String(unitId));
-  });
-  if (!keys.length) {
-    html += '<div style="color:var(--muted);font-size:12px;font-style:italic">No access items on file — <button class="btn small secondary" onclick="openAddKeyModal(\''+propId+'\')">add one</button></div>';
-  } else {
+
+  function renderKeyItem(k) {
     var POSS = { 'Have It':'#14532d:#4ade80:✓', 'Need Copy':'#451a03:#fdba74:⚠', "Don't Have It":'#450a0a:#f87171:✗', 'Not Applicable':'#1e293b:#94a3b8:—' };
-    html += keys.map(function(k) {
-      var pBits = (POSS[k.Possession_Status||'Unknown'] || '#1e293b:#64748b:?').split(':');
-      var code = k.Key_Code || k.Lockbox_Code || '';
-      var TYPE_LABELS = {'Building-FrontDoorKey':'Front Door Key','Building-FrontDoorCode':'Front Door Code','Building-Lockbox':'Building Lockbox','Building-Padlock':'Building Padlock','Building-GateCode':'Gate Code','Building-CustomKey':'Custom Key','Building-CustomLockbox':'Custom Lockbox','Building-CustomCode':'Custom Code','Unit-Key':'Unit Key','Unit-DoorCode':'Door Code','Unit-Lockbox':'Unit Lockbox','Unit-MailboxKey':'Mailbox Key','Unit-Padlock':'Padlock'};
-      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
-        '<div style="flex:1;font-size:12px">'+esc(TYPE_LABELS[k.Key_Type]||k.Key_Type||'Key')+(code?' <span style="color:var(--accent);font-weight:bold">'+esc(code)+'</span>':'')+'</div>' +
-        '<span style="background:'+pBits[0]+';color:'+pBits[1]+';font-size:10px;padding:1px 7px;border-radius:4px">'+pBits[2]+' '+esc(k.Possession_Status||'Unknown')+'</span>' +
-        '<button class="btn small secondary" style="font-size:10px;padding:2px 7px" onclick="openEditKeyModal(\''+k.ID+'\')">Edit</button>' +
-      '</div>';
-    }).join('');
+    var pBits = (POSS[k.Possession_Status||''] || '#1e293b:#64748b:?').split(':');
+    var code = k.Key_Code || k.Lockbox_Code || '';
+    var TYPE_LABELS = {'Building-FrontDoorKey':'Front Door Key','Building-FrontDoorCode':'Front Door Code','Building-Lockbox':'Building Lockbox','Building-Padlock':'Building Padlock','Building-GateCode':'Gate Code','Building-CustomKey':'Custom Key','Building-CustomLockbox':'Custom Lockbox','Building-CustomCode':'Custom Code','Unit-Key':'Unit Key','Unit-DoorCode':'Door Code','Unit-Lockbox':'Unit Lockbox','Unit-MailboxKey':'Mailbox Key','Unit-Padlock':'Padlock','Key':'Key','Lockbox':'Lockbox','Electronic':'Electronic Lock','Unit Key':'Unit Key','Front Door':'Front Door'};
+    return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="flex:1;font-size:12px">'+esc(TYPE_LABELS[k.Key_Type]||k.Key_Type||'Key') +
+        (code ? ' <span style="color:var(--accent);font-weight:bold;font-size:13px;letter-spacing:.05em">'+esc(code)+'</span>' : '') +
+        (k.Location||k.Lockbox_Location ? '<span style="color:var(--muted);font-size:10px;margin-left:6px">📍 '+esc(k.Location||k.Lockbox_Location)+'</span>' : '') +
+      '</div>' +
+      '<span style="background:'+pBits[0]+';color:'+pBits[1]+';font-size:10px;padding:1px 7px;border-radius:4px;white-space:nowrap">'+pBits[2]+' '+esc(k.Possession_Status||'Unknown')+'</span>' +
+      '<button class="btn small secondary" style="font-size:10px;padding:2px 7px" onclick="openEditKeyModal(\''+k.ID+'\')">Edit</button>' +
+    '</div>';
+  }
+
+  var hasAny = buildingKeysDeduped.length || unitKeysDeduped.length;
+
+  if (!hasAny) {
+    html += '<div style="color:var(--muted);font-size:12px;font-style:italic">No access items on file — ' +
+      '<button class="btn small secondary" onclick="openAddKeyModal(\''+propId+'\')">add one</button></div>';
+  } else {
+    if (unitKeysDeduped.length) {
+      html += '<div style="font-size:10px;color:var(--muted);margin-bottom:4px;margin-top:4px">🚪 Unit-Specific</div>' +
+        unitKeysDeduped.map(renderKeyItem).join('') +
+        (unitHasExtras ? '<div style="font-size:10px;color:var(--muted);margin-top:4px">⚠ '+(unitSpecificKeys.length - unitKeysDeduped.length)+' older key entries hidden — view full history on Keys page</div>' : '');
+    }
+    if (buildingKeysDeduped.length) {
+      html += '<div style="font-size:10px;color:var(--muted);margin:'+(unitKeysDeduped.length?'10px':'4px')+' 0 4px 0">🏢 Building Access</div>' +
+        buildingKeysDeduped.map(renderKeyItem).join('') +
+        (buildingHasExtras ? '<div style="font-size:10px;color:var(--muted);margin-top:4px">⚠ '+(buildingKeys.length - buildingKeysDeduped.length)+' older entry/entries hidden — view full history on Keys page</div>' : '');
+    }
   }
   html += '</div>';
 
