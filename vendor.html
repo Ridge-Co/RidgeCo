@@ -458,6 +458,7 @@ function renderWOs(wos) {
           '</div>' +
           '<div id="action-msg-' + idx + '"></div>' +
           '<div id="nearby-wrap-' + idx + '" style="margin-top:8px"></div>' +
+          '<div id="time-wrap-' + idx + '" style="margin-top:8px"></div>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -468,7 +469,7 @@ function renderWOs(wos) {
   // Store WOs for status tracking
   window._wos = wos;
   window._pendingStatus = {};
-  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); });
+  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); loadVendorTimeTracking(wo.ID, idx); });
 }
 
 // ── Estimate widget: load history, show current total, allow revisions ──
@@ -673,6 +674,126 @@ function scrollToCard(woId) {
   }
   // Fallback: just scroll to top
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ── Vendor Time Tracking ───────────────────────────────────
+function loadVendorTimeTracking(woId, idx) {
+  var wrap = document.getElementById('time-wrap-' + idx);
+  if (!wrap) return;
+  var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
+  api('/time-entries?wo_id=' + woId + '&vendor_id=' + vendorId).then(function(entries) {
+    if (!Array.isArray(entries)) entries = [];
+    renderVendorTimeSection(woId, idx, entries);
+  }).catch(function() { renderVendorTimeSection(woId, idx, []); });
+}
+
+function renderVendorTimeSection(woId, idx, entries) {
+  var wrap = document.getElementById('time-wrap-' + idx);
+  if (!wrap) return;
+  var today = new Date().toISOString().split('T')[0];
+
+  function minToStr(m) {
+    m = parseInt(m)||0;
+    var h = Math.floor(m/60), mn = m%60;
+    return h>0 ? h+'h'+(mn>0?' '+mn+'m':'') : mn+'m';
+  }
+  var total = entries.reduce(function(s,e){return s+(parseInt(e.Duration_Minutes)||0);},0);
+
+  var rows = entries.map(function(e) {
+    var dateStr = (e.Start_DateTime||e.Created_Date||'').split('T')[0];
+    return '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
+      '<span style="font-weight:bold;color:var(--accent2);white-space:nowrap">'+minToStr(e.Duration_Minutes)+'</span>' +
+      '<span style="color:var(--muted);font-size:10px;white-space:nowrap">'+esc(dateStr)+'</span>' +
+      '<span style="color:var(--muted)">'+esc(e.Entry_Type||'')+'</span>' +
+      (e.Notes?'<span style="color:var(--text);font-size:10px;font-style:italic">'+esc(e.Notes)+'</span>':'') +
+      '<button onclick="deleteVendorTime(\''+e.ID+'\',\''+woId+'\','+idx+')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:12px;margin-left:auto;padding:0">✕</button>' +
+    '</div>';
+  }).join('');
+
+  var typeOpts = ['Labor','Travel','Materials Run','Measurement / Quote','Other'].map(function(t){
+    return '<option value="'+esc(t)+'"'+( t==='Labor'?' selected':'')+'>'+esc(t)+'</option>';
+  }).join('');
+
+  wrap.innerHTML =
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;margin-top:4px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">⏱ MY TIME</span>' +
+        (total ? '<span style="font-weight:bold;color:var(--accent2);font-size:12px">'+minToStr(total)+'</span>' : '') +
+      '</div>' +
+      (rows || '<div style="color:var(--muted);font-size:11px;margin-bottom:6px">No time logged yet.</div>') +
+      '<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px">' +
+        '<select id="vt-type-'+idx+'" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">'+typeOpts+'</select>' +
+        '<input type="date" id="vt-date-'+idx+'" value="'+today+'" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
+        '<input type="time" id="vt-start-'+idx+'" placeholder="Start" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
+        '<input type="time" id="vt-end-'+idx+'" placeholder="End" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
+      '</div>' +
+      '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:6px 0">' +
+        ['15m','30m','1h','2h','4h','8h'].map(function(q){
+          return '<button onclick="setVendorTimeQuick('+idx+',\''+q+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">'+q+'</button>';
+        }).join('') +
+      '</div>' +
+      '<textarea id="vt-notes-'+idx+'" rows="2" placeholder="Notes: picked up materials, took measurements, repaired faucet…" style="width:100%;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
+      '<div style="display:flex;justify-content:flex-end">' +
+        '<button class="btn btn-sm btn-green" onclick="submitVendorTime(\''+woId+'\','+idx+')">Log Time</button>' +
+      '</div>' +
+      '<div id="vt-msg-'+idx+'" style="margin-top:4px"></div>' +
+    '</div>';
+}
+
+function setVendorTimeQuick(idx, q) {
+  var s = document.getElementById('vt-start-'+idx);
+  var e = document.getElementById('vt-end-'+idx);
+  if (s) s.value = ''; if (e) e.value = '';
+  // Store in a hidden attr on the type selector for now
+  var sel = document.getElementById('vt-type-'+idx);
+  if (sel) sel.dataset.quickDur = q;
+}
+
+function submitVendorTime(woId, idx) {
+  var date  = (document.getElementById('vt-date-'+idx)||{}).value || new Date().toISOString().split('T')[0];
+  var start = (document.getElementById('vt-start-'+idx)||{}).value;
+  var end   = (document.getElementById('vt-end-'+idx)||{}).value;
+  var type  = (document.getElementById('vt-type-'+idx)||{}).value || 'Labor';
+  var notes = (document.getElementById('vt-notes-'+idx)||{}).value;
+  var sel   = document.getElementById('vt-type-'+idx);
+  var quickDur = sel && sel.dataset.quickDur;
+  var msgEl = document.getElementById('vt-msg-'+idx);
+  var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
+
+  var durMinRaw = null, startDT = null, endDT = null;
+  if (start && end) {
+    startDT = date+'T'+start; endDT = date+'T'+end;
+  } else if (quickDur) {
+    var h = quickDur==='15m'?0.25:quickDur==='30m'?0.5:parseFloat(quickDur);
+    durMinRaw = h * 60;
+    if (sel) delete sel.dataset.quickDur;
+  } else {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">Enter start+end times or tap a quick duration first.</span>';
+    return;
+  }
+
+  if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Saving…</span>';
+  api('/time-entry/add', { method: 'POST', body: {
+    wo_id: woId, entered_by: session.vendor_name||'Vendor', entered_by_id: vendorId,
+    role: 'vendor', entry_type: type,
+    start_datetime: startDT, end_datetime: endDT,
+    duration_minutes_raw: durMinRaw,
+    notes: notes, billable: 'TRUE', hourly_rate: session.vendor_rate||'0',
+  }}).then(function(res) {
+    if (res.success) {
+      toast('Time logged', 'success');
+      loadVendorTimeTracking(woId, idx);
+    } else if (msgEl) {
+      msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
+    }
+  }).catch(function(e){ if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>'; });
+}
+
+function deleteVendorTime(entryId, woId, idx) {
+  if (!confirm('Delete this time entry?')) return;
+  api('/time-entry/delete', { method: 'POST', body: { id: entryId } }).then(function() {
+    loadVendorTimeTracking(woId, idx);
+  });
 }
 
 function toggleCard(idx) {

@@ -523,7 +523,8 @@
   <div class="modal">
     <div class="modal-header"><div class="modal-title">ADD VENDOR</div><button class="modal-close" onclick="closeModal('modal-add-vendor')">✕</button></div>
     <div class="form-grid">
-      <div class="form-group"><label>Name</label><input type="text" id="v-name" placeholder="Mike Smith"></div>
+      <div class="form-group"><label>Name</label><input type="text" id="v-name" placeholder="Mike Smith or Ace Plumbing LLC"></div>
+      <div class="form-group"><label>Login Name <span style="color:var(--muted);font-weight:normal;font-size:10px">What they type at sign-in</span></label><input type="text" id="v-first-name" placeholder="Mike (or 'Ace' for companies)"></div>
       <div class="form-group"><label>Company (optional)</label><input type="text" id="v-company" placeholder="Smith Plumbing LLC"></div>
       <div class="form-group"><label>Phone (SMS)</label><input type="tel" id="v-phone" placeholder="+14435551234" oninput="updateVendorPinPreview()"><div id="v-pin-preview" style="color:var(--muted);font-size:11px;margin-top:4px;height:16px"></div></div>
       <div class="form-group"><label>Email (optional)</label><input type="email" id="v-email" placeholder="mike@example.com"></div>
@@ -603,6 +604,7 @@
     <input type="hidden" id="ev-id">
     <div class="form-grid">
       <div class="form-group"><label>Name</label><input type="text" id="ev-name"></div>
+      <div class="form-group"><label>Login Name <span style="color:var(--muted);font-weight:normal;font-size:10px">What they type at sign-in</span></label><input type="text" id="ev-first-name" placeholder="e.g. Mike or Ace Plumbing"></div>
       <div class="form-group"><label>Company</label><input type="text" id="ev-company"></div>
       <div class="form-group"><label>Phone</label><input type="tel" id="ev-phone"></div>
       <div class="form-group"><label>Email</label><input type="email" id="ev-email"></div>
@@ -1376,6 +1378,7 @@ function openWODetail(woId) {
         loadPortalAttachments(_woIdForPhoto);
         loadHubEstimateView(_woIdForPhoto, _db, _inv);
         loadHubNearbyWOs(_woIdForPhoto, _db);
+        loadHubTimeTracking(_woIdForPhoto, _db);
       }
     } catch(e2) { /* photo section is non-critical */ }
   }, 50);
@@ -1955,7 +1958,7 @@ function submitAddProperty() {
 function openAddVendorModal(){openModal('modal-add-vendor');}
 function submitAddVendor(){
   var trades = Array.from(document.querySelectorAll('.v-trade-check:checked')).map(function(c){return c.value;}).join(',');
-  var body={Name:document.getElementById('v-name').value,Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
+  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
   if(!body.Name){toast('Name required','error');return;}
   if(!body.Phone){toast('Phone required','error');return;}
   api('POST','/vendor/add',body).then(function(res){
@@ -2069,6 +2072,7 @@ function submitEditWO() {
 function openEditVendorModal(id) {
   var v = safeArray(state.vendors).find(function(x){return x.ID===id;}); if(!v) return;
   document.getElementById('ev-id').value=v.ID; document.getElementById('ev-name').value=v.Name||'';
+  document.getElementById('ev-first-name').value=v.First_Name||'';
   document.getElementById('ev-company').value=v.Company||''; document.getElementById('ev-phone').value=v.Phone||'';
   document.getElementById('ev-email').value=v.Email||''; document.getElementById('ev-trade').value=v.Trade||'General';
   document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
@@ -2076,7 +2080,7 @@ function openEditVendorModal(id) {
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
-  var fields={Name:document.getElementById('ev-name').value,Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Rate_Notes:document.getElementById('ev-rates').value};
+  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Rate_Notes:document.getElementById('ev-rates').value};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
     toast('Vendor updated','success');closeModal('modal-edit-vendor');loadAll();
@@ -3709,6 +3713,189 @@ function approveEstimateUI(woId) {
         toast(res.error || 'Approval failed', 'error');
       }
     }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  HUB TIME TRACKING
+// ══════════════════════════════════════════════════════════════
+
+var HUB_ENTRY_TYPES = ['Admin / Coordination', 'Site Visit / Inspection', 'Material Drop', 'Active Labor'];
+var HUB_BILLABLE_DEFAULT = { 'Admin / Coordination': false, 'Site Visit / Inspection': false, 'Material Drop': true, 'Active Labor': true };
+var HUB_HOURLY_RATE = 0; // loaded from Config if set
+
+function loadHubTimeTracking(woId, detailBody) {
+  var holder = document.createElement('div');
+  holder.id = 'time-track-' + woId;
+  holder.innerHTML = '';
+  if (detailBody) detailBody.appendChild(holder);
+
+  api('GET', '/time-entries?wo_id=' + woId).then(function(entries) {
+    if (!Array.isArray(entries)) entries = [];
+    renderHubTimeSection(woId, entries, holder);
+  }).catch(function() { renderHubTimeSection(woId, [], holder); });
+}
+
+function renderHubTimeSection(woId, entries, holder) {
+  var hubEntries    = entries.filter(function(e){ return e.Role === 'hub'; });
+  var vendorEntries = entries.filter(function(e){ return e.Role === 'vendor'; });
+
+  function minToStr(m) {
+    m = parseInt(m) || 0;
+    var h = Math.floor(m / 60), mn = m % 60;
+    return h > 0 ? h + 'h' + (mn > 0 ? ' ' + mn + 'm' : '') : mn + 'm';
+  }
+  function totalMin(list) { return list.reduce(function(s,e){ return s + (parseInt(e.Duration_Minutes)||0); }, 0); }
+  function billableAmt(list) { return list.filter(function(e){ return e.Billable==='TRUE'||e.Billable===true; }).reduce(function(s,e){ return s + (parseFloat(e.Billable_Amount)||0); }, 0); }
+
+  var hubTotal    = totalMin(hubEntries);
+  var vendorTotal = totalMin(vendorEntries);
+  var billable    = billableAmt(hubEntries);
+
+  var entryRows = entries.map(function(e) {
+    var isHub = e.Role === 'hub';
+    var label = esc(e.Entered_By || (isHub ? 'Hub' : 'Vendor'));
+    var type  = esc(e.Entry_Type || '');
+    var dur   = minToStr(e.Duration_Minutes);
+    var note  = esc(e.Notes || '');
+    var billBadge = (e.Billable==='TRUE'||e.Billable===true)
+      ? '<span style="background:#14532d;color:#4ade80;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
+      : '';
+    var dateStr = e.Start_DateTime ? esc(e.Start_DateTime.split('T')[0]) : (e.Created_Date||'').split('T')[0];
+    return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
+      '<div style="flex:1">' +
+        '<span style="color:'+(isHub?'var(--accent)':'var(--info)')+';font-weight:bold">'+label+'</span>' +
+        ' <span style="color:var(--muted)">'+type+'</span>'+billBadge +
+        (note ? '<div style="color:var(--muted);margin-top:2px;font-style:italic">'+note+'</div>' : '') +
+      '</div>' +
+      '<span style="font-weight:bold;color:var(--text);white-space:nowrap">'+dur+'</span>' +
+      '<span style="color:var(--muted);font-size:10px;white-space:nowrap">'+dateStr+'</span>' +
+      '<button onclick="deleteTimeEntry(\''+e.ID+'\',\''+woId+'\')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:13px;padding:0 2px" title="Delete">✕</button>' +
+    '</div>';
+  }).join('');
+
+  holder.innerHTML =
+    '<div style="margin-top:16px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+        '<span style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">⏱ TIME TRACKING</span>' +
+        '<div style="display:flex;gap:12px;font-size:11px">' +
+          (hubTotal    ? '<span>Hub: <b style="color:var(--accent)">'+minToStr(hubTotal)+'</b>'+(billable>0?' · <span style="color:var(--accent2)">$'+billable.toFixed(2)+' billable</span>':'')+' </span>' : '') +
+          (vendorTotal ? '<span>Vendor: <b style="color:var(--info)">'+minToStr(vendorTotal)+'</b></span>' : '') +
+        '</div>' +
+      '</div>' +
+      (entries.length ? entryRows : '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No time logged yet.</div>') +
+      buildHubTimeForm(woId) +
+    '</div>';
+}
+
+function buildHubTimeForm(woId) {
+  var today = new Date().toISOString().split('T')[0];
+  var typeOpts = HUB_ENTRY_TYPES.map(function(t){
+    return '<option value="'+esc(t)+'"'+(t==='Site Visit / Inspection'?' selected':'')+'>'+esc(t)+'</option>';
+  }).join('');
+  return '<div style="margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px" id="hub-time-form-'+woId+'">' +
+    '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Log Time</div>' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">' +
+      '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">TYPE</label>' +
+        '<select id="ht-type-'+woId+'" onchange="updateHubTimeBillable(\''+woId+'\')" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">'+typeOpts+'</select></div>' +
+      '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">DATE</label>' +
+        '<input type="date" id="ht-date-'+woId+'" value="'+today+'" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px"></div>' +
+    '</div>' +
+    '<div style="margin-bottom:6px">' +
+      '<div style="font-size:10px;color:var(--muted);margin-bottom:4px">TIME — pick one method:</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px">' +
+        '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">START</label><input type="time" id="ht-start-'+woId+'" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px"></div>' +
+        '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">END</label><input type="time" id="ht-end-'+woId+'" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px"></div>' +
+      '</div>' +
+      '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px">' +
+        ['15m','30m','1h','1.5h','2h','3h','4h','8h'].map(function(q){
+          return '<button onclick="setHubTimeQuick(\''+woId+'\',\''+q+'\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">'+q+'</button>';
+        }).join('') +
+      '</div>' +
+      '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">OR ENTER DURATION (e.g. "2.5" for 2h30m)</label>' +
+        '<input type="text" id="ht-dur-'+woId+'" placeholder="hours e.g. 1.5" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px"></div>' +
+    '</div>' +
+    '<textarea id="ht-notes-'+woId+'" placeholder="Notes: picking up materials, site check, installed new valve…" style="width:100%;min-height:50px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between">' +
+      '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px">' +
+        '<input type="checkbox" id="ht-bill-'+woId+'" style="cursor:pointer"> Billable' +
+      '</label>' +
+      '<button class="btn small" style="background:var(--accent2);color:#000" onclick="submitHubTimeEntry(\''+woId+'\')">Log Time</button>' +
+    '</div>' +
+    '<div id="ht-msg-'+woId+'" style="margin-top:6px"></div>' +
+  '</div>';
+}
+
+function updateHubTimeBillable(woId) {
+  var type = document.getElementById('ht-type-'+woId);
+  var bill = document.getElementById('ht-bill-'+woId);
+  if (type && bill) bill.checked = !!HUB_BILLABLE_DEFAULT[type.value];
+}
+
+function setHubTimeQuick(woId, q) {
+  // Clear start/end and set duration
+  var s = document.getElementById('ht-start-'+woId);
+  var e = document.getElementById('ht-end-'+woId);
+  var d = document.getElementById('ht-dur-'+woId);
+  if (s) s.value = ''; if (e) e.value = '';
+  var hours = q === '15m' ? 0.25 : q === '30m' ? 0.5 : q === '1.5h' ? 1.5 : parseFloat(q);
+  if (d) d.value = hours;
+}
+
+function submitHubTimeEntry(woId) {
+  var date   = (document.getElementById('ht-date-'+woId)||{}).value || new Date().toISOString().split('T')[0];
+  var start  = (document.getElementById('ht-start-'+woId)||{}).value;
+  var end    = (document.getElementById('ht-end-'+woId)||{}).value;
+  var dur    = (document.getElementById('ht-dur-'+woId)||{}).value;
+  var type   = (document.getElementById('ht-type-'+woId)||{}).value || 'Site Visit / Inspection';
+  var notes  = (document.getElementById('ht-notes-'+woId)||{}).value;
+  var bill   = (document.getElementById('ht-bill-'+woId)||{}).checked;
+  var msgEl  = document.getElementById('ht-msg-'+woId);
+
+  // Determine duration source
+  var durMinRaw = null;
+  var startDT = null, endDT = null;
+  if (start && end) {
+    startDT = date + 'T' + start; endDT = date + 'T' + end;
+  } else if (dur) {
+    durMinRaw = parseFloat(dur) * 60; // hours → minutes
+  } else {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">Enter start+end times, a quick duration, or hours.</span>';
+    return;
+  }
+
+  if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Saving…</span>';
+  api('POST', '/time-entry/add', {
+    wo_id: woId, entered_by: 'Admin', entered_by_id: 'hub',
+    role: 'hub', entry_type: type,
+    start_datetime: startDT, end_datetime: endDT,
+    duration_minutes_raw: durMinRaw,
+    notes: notes, billable: bill ? 'TRUE' : 'FALSE',
+    hourly_rate: String(HUB_HOURLY_RATE),
+  }).then(function(res) {
+    if (res.success) {
+      toast('Time logged: ' + (res.duration_minutes >= 60
+        ? Math.floor(res.duration_minutes/60)+'h'+(res.duration_minutes%60?res.duration_minutes%60+'m':'')
+        : res.duration_minutes+'m'), 'success');
+      // Reload time section
+      api('GET', '/time-entries?wo_id=' + woId).then(function(entries) {
+        var holder = document.getElementById('time-track-' + woId);
+        if (holder) renderHubTimeSection(woId, Array.isArray(entries)?entries:[], holder);
+      });
+    } else {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
+    }
+  }).catch(function(e) { if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>'; });
+}
+
+function deleteTimeEntry(entryId, woId) {
+  if (!confirm('Delete this time entry?')) return;
+  api('POST', '/time-entry/delete', { id: entryId }).then(function() {
+    toast('Entry deleted', 'success');
+    api('GET', '/time-entries?wo_id=' + woId).then(function(entries) {
+      var holder = document.getElementById('time-track-' + woId);
+      if (holder) renderHubTimeSection(woId, Array.isArray(entries)?entries:[], holder);
+    });
+  });
 }
 
 function copyEstDoc(btn) {
