@@ -1378,6 +1378,7 @@ function openWODetail(woId) {
         loadPortalAttachments(_woIdForPhoto);
         loadHubEstimateView(_woIdForPhoto, _db, _inv);
         loadHubNearbyWOs(_woIdForPhoto, _db);
+        loadHubReceiptTracking(_woIdForPhoto, _db);
         loadHubTimeTracking(_woIdForPhoto, _db);
       }
     } catch(e2) { /* photo section is non-critical */ }
@@ -3567,10 +3568,13 @@ function fireInvoiceWebhook(woId) {
 //    history, and a "Generate Estimate Text (AI)" button that produces a
 //    client-ready document mirroring Brett's Gemini estimate gem ──────────
 function loadHubEstimateView(woId, detailBody, beforeEl) {
-  var holder = document.createElement('div');
-  holder.id = 'est-view-' + woId;
+  var holder = document.getElementById('est-view-' + woId);
+  if (!holder) {
+    holder = document.createElement('div');
+    holder.id = 'est-view-' + woId;
+    if (beforeEl) detailBody.insertBefore(holder, beforeEl); else detailBody.appendChild(holder);
+  }
   holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading estimate…</span>';
-  if (beforeEl) detailBody.insertBefore(holder, beforeEl); else detailBody.appendChild(holder);
   window._hubEstimates = window._hubEstimates || {};
   refreshHubEstimateView(woId);
 }
@@ -3715,19 +3719,115 @@ function approveEstimateUI(woId) {
     }).catch(function(e) { toast(e.message, 'error'); });
 }
 
-// ══════════════════════════════════════════════════════════════
-//  HUB TIME TRACKING
-// ══════════════════════════════════════════════════════════════
+// ── Hub Receipt Tracking ──────────────────────────────────────
+function loadHubReceiptTracking(woId, detailBody) {
+  var holder = document.getElementById('receipts-' + woId);
+  if (!holder) {
+    holder = document.createElement('div');
+    holder.id = 'receipts-' + woId;
+    if (detailBody) detailBody.appendChild(holder);
+  }
+  api('GET', '/receipts?wo_id=' + woId).then(function(receipts) {
+    renderHubReceipts(woId, Array.isArray(receipts) ? receipts : [], holder);
+  }).catch(function() { renderHubReceipts(woId, [], holder); });
+}
+
+function renderHubReceipts(woId, receipts, holder) {
+  var total = receipts.reduce(function(s,r){ return s + (parseFloat(r.Amount)||0); }, 0);
+  var today = new Date().toISOString().split('T')[0];
+
+  var rows = receipts.map(function(r) {
+    var label = esc(r.Role === 'vendor' ? 'Vendor' : 'Hub');
+    var color = r.Role === 'vendor' ? 'var(--info)' : 'var(--accent)';
+    return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
+      '<span style="color:'+color+';font-weight:bold">'+label+'</span>' +
+      '<div style="flex:1">' +
+        '<span style="color:var(--accent2);font-weight:bold">$'+parseFloat(r.Amount).toFixed(2)+'</span>' +
+        (r.Store ? ' <span style="color:var(--muted)">@ '+esc(r.Store)+'</span>' : '') +
+        (r.Description ? '<div style="color:var(--text);font-size:11px">'+esc(r.Description)+'</div>' : '') +
+      '</div>' +
+      '<span style="color:var(--muted);font-size:10px;white-space:nowrap">'+esc((r.Date||r.Created_Date||'').split('T')[0])+'</span>' +
+      '<button onclick="deleteHubReceipt(\''+r.ID+'\',\''+woId+'\')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:13px;padding:0 2px" title="Delete">✕</button>' +
+    '</div>';
+  }).join('');
+
+  holder.innerHTML =
+    '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+        '<span style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)">🧾 RECEIPTS / MATERIALS</span>' +
+        (total > 0 ? '<span style="font-weight:bold;color:var(--accent2)">$'+total.toFixed(2)+' total</span>' : '') +
+      '</div>' +
+      (receipts.length ? rows : '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No receipts logged yet.</div>') +
+      '<div style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px">' +
+        '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">Log Receipt / Material Cost</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">' +
+          '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">AMOUNT ($) *</label>' +
+            '<input type="number" step="0.01" id="rc-amt-'+woId+'" placeholder="0.00" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px"></div>' +
+          '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">DATE</label>' +
+            '<input type="date" id="rc-date-'+woId+'" value="'+today+'" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px"></div>' +
+          '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">STORE / SUPPLIER</label>' +
+            '<input type="text" id="rc-store-'+woId+'" placeholder="Home Depot, Amazon…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px"></div>' +
+          '<div style="display:flex;align-items:flex-end"><button class="btn small" style="background:var(--accent2);color:#000;width:100%" onclick="submitHubReceipt(\''+woId+'\')">Add Receipt</button></div>' +
+        '</div>' +
+        '<textarea id="rc-desc-'+woId+'" placeholder="Description: 3/4 inch copper fittings, HVAC filter, door hardware…" style="width:100%;min-height:50px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px"></textarea>' +
+        '<div id="rc-msg-'+woId+'" style="margin-top:4px"></div>' +
+      '</div>' +
+    '</div>';
+}
+
+function submitHubReceipt(woId) {
+  var amt  = (document.getElementById('rc-amt-'+woId)||{}).value;
+  var date = (document.getElementById('rc-date-'+woId)||{}).value;
+  var store = (document.getElementById('rc-store-'+woId)||{}).value;
+  var desc = (document.getElementById('rc-desc-'+woId)||{}).value;
+  var msgEl = document.getElementById('rc-msg-'+woId);
+  if (!amt || parseFloat(amt) <= 0) {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">Enter an amount.</span>';
+    return;
+  }
+  if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Saving…</span>';
+  api('POST', '/receipt/add', {
+    wo_id: woId, amount: amt, description: desc, store: store, date: date,
+    added_by: 'Admin', added_by_id: 'hub', role: 'hub',
+  }).then(function(res) {
+    if (res.success) {
+      toast('Receipt logged: $' + parseFloat(amt).toFixed(2), 'success');
+      api('GET', '/receipts?wo_id=' + woId).then(function(receipts) {
+        var holder = document.getElementById('receipts-' + woId);
+        if (holder) renderHubReceipts(woId, Array.isArray(receipts)?receipts:[], holder);
+      });
+    } else if (msgEl) {
+      msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
+    }
+  }).catch(function(e) { if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>'; });
+}
+
+function deleteHubReceipt(id, woId) {
+  if (!confirm('Delete this receipt entry?')) return;
+  api('POST', '/receipt/delete', { id: id }).then(function() {
+    toast('Receipt deleted', 'success');
+    api('GET', '/receipts?wo_id=' + woId).then(function(receipts) {
+      var holder = document.getElementById('receipts-' + woId);
+      if (holder) renderHubReceipts(woId, Array.isArray(receipts)?receipts:[], holder);
+    });
+  });
+}
+
+// ── Hub Time Tracking ──────────────────────────────────────
 
 var HUB_ENTRY_TYPES = ['Admin / Coordination', 'Site Visit / Inspection', 'Material Drop', 'Active Labor'];
 var HUB_BILLABLE_DEFAULT = { 'Admin / Coordination': false, 'Site Visit / Inspection': false, 'Material Drop': true, 'Active Labor': true };
 var HUB_HOURLY_RATE = 0; // loaded from Config if set
 
 function loadHubTimeTracking(woId, detailBody) {
-  var holder = document.createElement('div');
-  holder.id = 'time-track-' + woId;
+  // Idempotent: reuse existing holder if already appended
+  var holder = document.getElementById('time-track-' + woId);
+  if (!holder) {
+    holder = document.createElement('div');
+    holder.id = 'time-track-' + woId;
+    if (detailBody) detailBody.appendChild(holder);
+  }
   holder.innerHTML = '';
-  if (detailBody) detailBody.appendChild(holder);
 
   api('GET', '/time-entries?wo_id=' + woId).then(function(entries) {
     if (!Array.isArray(entries)) entries = [];
@@ -3940,9 +4040,12 @@ function generateEstimateDoc(woId) {
 
 // Load nearby WOs into WO detail panel
 function loadHubNearbyWOs(woId, detailBody) {
-  var holder = document.createElement('div');
-  holder.id = 'nearby-wo-' + woId;
-  if (detailBody) detailBody.appendChild(holder);
+  var holder = document.getElementById('nearby-wo-' + woId);
+  if (!holder) {
+    holder = document.createElement('div');
+    holder.id = 'nearby-wo-' + woId;
+    if (detailBody) detailBody.appendChild(holder);
+  }
   api('GET', '/nearby-wos?wo_id=' + woId).then(function(res) {
     if (!res.nearby || !res.nearby.length) {
       // No nearby WOs or no tags — show silently (don't clutter the modal)
