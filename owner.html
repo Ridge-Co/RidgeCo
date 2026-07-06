@@ -411,6 +411,16 @@ var activeEditField = null;
 var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
 
 function api(path, opts) {
+  // Accept hub-style calls too: api('GET'|'POST', path, body)
+  if (path === 'GET' || path === 'POST') {
+    var method = path, realPath = opts, body = arguments[2];
+    path = realPath;
+    opts = { method: method };
+    if (body !== undefined) {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(body);
+    }
+  }
   opts = opts || {};
   opts.headers = opts.headers || {};
   opts.headers['X-Auth-Token'] = SECRET;
@@ -514,6 +524,12 @@ function loadDashboard() {
     // Submit form property dropdown
     buildSubmitDD(ownerProps);
     renderWOs();
+  }).catch(function(e) {
+    console.error('[loadDashboard]', e);
+    document.getElementById('woList').innerHTML =
+      '<div class="msg error" style="padding:16px">Failed to load data: ' +
+      (e && e.message ? e.message : 'Connection error — check console') +
+      '. Try refreshing the page.</div>';
   });
 }
 
@@ -565,6 +581,7 @@ function renderWOs() {
     wos.map(function(wo, idx) {
       var pri = (wo.Priority||'normal').toLowerCase();
       var sc = 'badge-' + (wo.Status||'new').toLowerCase().replace(/\s+/g,'');
+      var displayStatus = wo.Status || 'New';
       var descShort = (wo.Description||'').split('\n')[0].substring(0,70);
       return '<div class="wo-card ' + pri + '" id="wocard-' + idx + '">' +
         '<div class="wo-head" onclick="toggleWO(' + idx + ',\'' + wo.ID + '\')">' +
@@ -903,7 +920,7 @@ function submitRequest() {
     document.getElementById('sPropSearch').value = '';
     document.getElementById('sPropId').value = '';
     loadDashboard();
-    setTimeout(function(){ switchTab('wos'); }, 2000);
+    setTimeout(function(){ switchTab('wos'); msgEl.innerHTML = ''; }, 4000);
   }).catch(function(){ document.getElementById('sSubmitBtn').disabled = false; msgEl.innerHTML = '<div class="msg error">Connection error.</div>'; });
 }
 
