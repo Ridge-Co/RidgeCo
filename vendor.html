@@ -146,8 +146,8 @@ input[type=file]{display:none;}
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub" data-i18n="VENDOR PORTAL">VENDOR PORTAL</div>
       <div style="margin-bottom:16px;">
-        <label>FIRST NAME <span style="font-weight:normal;color:var(--muted)">(e.g. Alex, Janice)</span></label>
-        <input type="text" id="nameInput" placeholder="Your first name" style="margin-bottom:10px" autocorrect="off" spellcheck="false">
+        <label>YOUR NAME <span style="font-weight:normal;color:var(--muted)">(first name, or company login name)</span></label>
+        <input type="text" id="nameInput" placeholder="e.g. Alex, or Ace Plumbing" style="margin-bottom:10px" autocorrect="off" spellcheck="false">
         <label for="pinInput">YOUR ACCESS PIN</label>
         <input type="text" id="pinInput" maxlength="8" placeholder="ABC12345" autocomplete="off" autocorrect="off" spellcheck="false">
       </div>
@@ -223,7 +223,7 @@ document.getElementById('pinInput').addEventListener('input', function(){
 function doLogin() {
   var pin = document.getElementById('pinInput').value.trim();
   var firstName = ((document.getElementById('nameInput')||{}).value||'').trim();
-  if (!firstName) { showLoginMsg('Please enter your first name.', 'error'); return; }
+  if (!firstName) { showLoginMsg('Please enter your name.', 'error'); return; }
   if (pin.length < 8) {
     showLoginMsg('PIN must be 8 characters (3 letters + 5 digits)', 'error');
     return;
@@ -238,7 +238,7 @@ function doLogin() {
       btn.disabled = false;
       btn.textContent = 'SIGN IN';
       if (data.name_required) {
-        showLoginMsg('Please enter your first name.', 'error');
+        showLoginMsg('Please enter your name.', 'error');
         return;
       }
       if (data.error) {
@@ -1458,10 +1458,14 @@ var LANG = 'en';
 var ES = {
   'VENDOR PORTAL':'PORTAL DE CONTRATISTAS',
   'FIRST NAME':'NOMBRE',
+  'YOUR NAME':'SU NOMBRE',
   'Your first name':'Su nombre',
+  'first name, or company login name':'nombre o nombre de empresa para iniciar sesión',
+  'e.g. Alex, or Ace Plumbing':'ej. Alex o Ace Plumbing',
   'YOUR ACCESS PIN':'SU PIN DE ACCESO',
   'SIGN IN':'INICIAR SESIÓN',
   'LOG OUT':'CERRAR SESIÓN',
+  'Please enter your name.':'Por favor ingrese su nombre.',
   'Please enter your first name.':'Por favor ingrese su nombre.',
   'PIN must be 8 characters (3 letters + 5 digits)':'El PIN debe tener 8 caracteres (3 letras + 5 dígitos)',
   'Connection error.':'Error de conexión. Intente de nuevo.',
