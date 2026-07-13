@@ -436,10 +436,13 @@ function renderWOs(wos) {
         (wo.Notes ? '<div class="detail-row"><span class="detail-label">Notes</span><span class="detail-val">' + esc(wo.Notes) + '</span></div>' : '') +
         (wo.Scheduled_Date ? '<div class="detail-row"><span class="detail-label">Scheduled</span><span class="detail-val">' + esc(wo.Scheduled_Date) + '</span></div>' : '') +
         (wo.master_key ? '<div style="background:#1a2540;border:1px solid var(--info);border-radius:6px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px">' + '<span style="font-size:1.1rem">🔑</span>' + '<div><div style="color:var(--info);font-weight:bold;font-size:10px;letter-spacing:.06em">MASTER KEY REQUIRED</div>' + '<div style="color:var(--text);font-size:12px">' + esc(wo.master_key) + '</div></div></div>' : '') +
-        (wo.access_notes ? '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:10px 12px;margin-bottom:10px">' +
-        '<div style="color:var(--accent2);font-size:10px;letter-spacing:.08em;font-weight:bold;margin-bottom:4px">⚠ ACCESS INSTRUCTIONS</div>' +
-        '<div style="color:var(--text);font-size:12px;white-space:pre-wrap">' + esc(wo.access_notes) + '</div></div>' : '') +
-        '<div style="margin-bottom:8px;"><div class="detail-label" style="margin-bottom:6px;">ACCESS KEYS</div>' + lbHtml + '</div>' +
+        (wo.vendor_has_access === false ? '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px">' +
+          '<span style="font-size:1.1rem">🔒</span><div><div style="color:var(--muted);font-size:10px;font-weight:bold;letter-spacing:.06em">NO PROPERTY ACCESS NEEDED</div>' +
+          '<div style="color:var(--muted);font-size:11px">Access codes are not shared for this work order.</div></div></div>' :
+          ((wo.access_notes ? '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:10px 12px;margin-bottom:10px">' +
+            '<div style="color:var(--accent2);font-size:10px;letter-spacing:.08em;font-weight:bold;margin-bottom:4px">⚠ ACCESS INSTRUCTIONS</div>' +
+            '<div style="color:var(--text);font-size:12px;white-space:pre-wrap">' + esc(wo.access_notes) + '</div></div>' : '') +
+            '<div style="margin-bottom:8px;"><div class="detail-label" style="margin-bottom:6px;">ACCESS KEYS</div>' + lbHtml + '</div>')) +
         '<div class="action-section">' +
           '<div class="action-title">PHOTOS</div>' +
           buildPhotoSection(wo.ID, wo.property_address || '', { canBefore: true, canAfter: true, canReport: false, canReceipt: false, viewAll: true }) +
@@ -1477,6 +1480,7 @@ function submitVendorSched(modalId) {
 <script>
 var _billWOId = null;
 var _billType = 'hourly';
+var _billSubmitting = false; // guard against double-tap
 var _vendorRate = 40;
 var _receiptCount = 0;
 var _uploadedPhotos = {};
@@ -1484,6 +1488,7 @@ var _uploadedPhotos = {};
 function openBillModal(woId, vendorName) {
   _billWOId = woId;
   _billType = 'hourly';
+  _billSubmitting = false; // reset on every open
   _receiptCount = 0;
   _uploadedPhotos = {};
 
@@ -1621,10 +1626,12 @@ function calcBillTotal() {
 }
 
 async function submitVendorBill() {
+  if (_billSubmitting) return; // guard: ignore double-tap
   var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
   var msgEl = document.getElementById('bill-msg');
   if (total <= 0) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Enter at least one billable item.</div>'; return; }
 
+  _billSubmitting = true;
   var btn = document.getElementById('bill-submit-btn');
   btn.disabled = true; btn.textContent = 'Submitting…';
 
@@ -1673,6 +1680,7 @@ async function submitVendorBill() {
     headers: {'X-Auth-Token': SECRET, 'Content-Type': 'application/json'},
     body: JSON.stringify(body)
   }).then(function(r){return r.json();}).then(function(res){
+    _billSubmitting = false;
     btn.disabled = false; btn.textContent = 'SUBMIT BILL';
     if (res.id || res.success) {
       msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#002d0f;border-radius:6px">✓ Bill submitted! Total: $' + total.toFixed(2) + '</div>';
@@ -1680,7 +1688,7 @@ async function submitVendorBill() {
     } else {
       msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + (res.error||'Error submitting') + '</div>';
     }
-  }).catch(function(e){ btn.disabled=false; btn.textContent='SUBMIT BILL'; msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Connection error</div>'; });
+  }).catch(function(e){ _billSubmitting=false; btn.disabled=false; btn.textContent='SUBMIT BILL'; msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Connection error</div>'; });
 }
 
 // ══════════════════════════════════════════════════════════════

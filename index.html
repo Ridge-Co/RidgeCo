@@ -415,6 +415,23 @@
       <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
     </div>
     <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
+
+    <div class="section-title" style="margin-bottom:8px">🔑 VENDOR ACCESS DEFAULTS BY TRADE</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Controls whether vendors see lockbox/access codes on work orders when set to "Auto". Trades marked NO will never receive access codes unless explicitly overridden on a specific WO. Trades not listed default to YES.</div>
+    <div id="trade-access-list" style="margin-bottom:10px"><span style="color:var(--muted);font-size:11px">Loading…</span></div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <select id="trade-access-trade" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px">
+        <option value="">Select trade…</option>
+        <option>Plumbing</option><option>HVAC</option><option>Electric</option>
+        <option>General</option><option>Landscaping</option><option>Appliance</option>
+        <option>Roofing</option><option>Pest Control</option><option>Other</option>
+      </select>
+      <select id="trade-access-val" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px">
+        <option value="TRUE">YES — needs access</option>
+        <option value="FALSE">NO — no access needed</option>
+      </select>
+      <button class="btn small" onclick="saveTradeAccessDefault()">Save</button>
+    </div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <button class="btn danger small" onclick="clearErrorLog()">Clear Errors</button>
       <button class="btn secondary small" onclick="clearWishlist()">Clear Wishlist</button>
@@ -456,6 +473,14 @@
       <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
       <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
+      <div class="form-group full">
+        <label>Vendor Access to Property <span style="font-weight:normal;color:var(--muted)">— share lockbox/entry codes with vendor?</span></label>
+        <select id="wo-vendor-access" style="width:100%">
+          <option value="auto">Auto (use trade default)</option>
+          <option value="TRUE">Yes — share access info</option>
+          <option value="FALSE">No — vendor doesn't need access</option>
+        </select>
+      </div>
     </div>
     <div id="wo-prop-preview" style="display:none;margin-top:12px"></div>
     <div class="modal-actions"><button class="btn secondary" onclick="openTemplateModal()" style="margin-right:auto">📋 From Template</button><button class="btn secondary" onclick="closeModal('modal-new-wo')">Cancel</button><button class="btn" onclick="openTenantSafetyScreen()">Create Work Order →</button></div>
@@ -956,7 +981,7 @@ function showPage(name, btn) {
   document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('page-'+name).classList.add('active');
   if (btn) btn.classList.add('active');
-  if (name === 'devlog') { renderErrorLog(); loadWishlist(); }
+  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); }
 }
 
 // ── Dashboard ────────────────────────────────────────────────
@@ -1346,7 +1371,25 @@ function openWODetail(woId) {
     tenantToggle('Tenant_Notify_Created',wo.Tenant_Notify_Created,'Notify on Creation',woId) +
     tenantToggle('Tenant_Notify_Updates',wo.Tenant_Notify_Updates,'Notify on Updates',woId) +
     '</div></div>';
-  document.getElementById('detail-body').innerHTML += tvSection;
+
+  // Vendor access control — show/hide lockbox codes from vendor portal
+  var vendorAccessVal = wo.Vendor_Needs_Access || 'auto';
+  var accessLabel = vendorAccessVal === 'TRUE' ? '🔓 Access: ON' : vendorAccessVal === 'FALSE' ? '🔒 Access: OFF' : '🔑 Access: Auto (trade default)';
+  var accessColor = vendorAccessVal === 'TRUE' ? 'var(--accent2)' : vendorAccessVal === 'FALSE' ? 'var(--muted)' : 'var(--info)';
+  var vaSection = '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">VENDOR ACCESS TO PROPERTY</div>' +
+    '<div style="font-size:12px;color:' + accessColor + ';margin-bottom:10px;font-weight:bold">' + accessLabel + '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    ['auto','TRUE','FALSE'].map(function(v) {
+      var lbl = v === 'TRUE' ? 'Yes — share codes' : v === 'FALSE' ? 'No — hide codes' : 'Auto (trade default)';
+      var active = vendorAccessVal === v;
+      return '<button onclick="setVendorAccess(\'' + woId + '\',\'' + v + '\')" style="font-size:11px;padding:5px 10px;border-radius:4px;border:1px solid var(--border);cursor:pointer;font-family:var(--font);background:' + (active?'var(--accent)':'var(--surface)') + ';color:' + (active?'#fff':'var(--text)') + '">' + lbl + '</button>';
+    }).join('') +
+    '</div>' +
+    '<div style="font-size:10px;color:var(--muted);margin-top:8px">Trade defaults are set in Config → Access_Trade_Defaults. Trades not listed default to YES.</div>' +
+    '</div>';
+
+  document.getElementById('detail-body').innerHTML += tvSection + vaSection;
 
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
@@ -1507,6 +1550,7 @@ function submitNewWO() {
     description:document.getElementById('wo-desc').value,
     notes:document.getElementById('wo-notes').value,
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
+    vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
     created_by:'admin'
   }).then(function(res){
@@ -2166,6 +2210,17 @@ function toggleTenantField(woId, field, newVal) {
   });
 }
 
+function setVendorAccess(woId, value) {
+  // value: 'TRUE' | 'FALSE' | 'auto'
+  api('POST','/workorder/update',{id:woId, fields:{Vendor_Needs_Access:value}}).then(function(res){
+    if (res.success) {
+      var label = value==='TRUE'?'Access ON (codes shared)':value==='FALSE'?'Access OFF (codes hidden)':'Access set to trade default';
+      toast(label,'success');
+      loadAll().then(function(){ openWODetail(woId); });
+    } else toast('Error: '+(res.error||''),'error');
+  });
+}
+
 function copyLink(el) {
   var text = "https://" + el.textContent;
   navigator.clipboard.writeText(text).then(function(){
@@ -2259,6 +2314,58 @@ function logError(context,message){
   localStorage.setItem('mh_errors',JSON.stringify(logs));
   renderErrorLog();
 }
+function loadTradeAccessDefaults() {
+  var el = document.getElementById('trade-access-list');
+  if (!el) return;
+  api('GET', '/config').then(function(cfg) {
+    var defaults = {};
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    var trades = Object.keys(defaults);
+    if (!trades.length) {
+      el.innerHTML = '<div style="color:var(--muted);font-size:12px">No trade defaults set — all trades currently default to YES (needs access).</div>';
+      return;
+    }
+    el.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+      trades.map(function(t) {
+        var val = defaults[t];
+        var color = val === 'FALSE' ? 'var(--danger)' : 'var(--accent2)';
+        var icon = val === 'FALSE' ? '🔒' : '🔓';
+        return '<div style="display:flex;align-items:center;gap:6px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px">' +
+          '<span style="font-size:12px;color:' + color + '">' + icon + ' ' + esc(t) + ' — ' + (val==='FALSE'?'NO ACCESS':'NEEDS ACCESS') + '</span>' +
+          '<button onclick="removeTradeAccessDefault(\'' + esc(t) + '\')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 2px" title="Remove">×</button>' +
+          '</div>';
+      }).join('') +
+    '</div>';
+  }).catch(function() { el.innerHTML = '<span style="color:var(--danger);font-size:11px">Could not load config</span>'; });
+}
+
+function saveTradeAccessDefault() {
+  var trade = (document.getElementById('trade-access-trade')||{}).value;
+  var val   = (document.getElementById('trade-access-val')||{}).value;
+  if (!trade) { toast('Select a trade first', 'error'); return; }
+  api('GET', '/config').then(function(cfg) {
+    var defaults = {};
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    defaults[trade] = val;
+    return api('POST', '/config/set', { key: 'Access_Trade_Defaults', value: JSON.stringify(defaults) });
+  }).then(function(res) {
+    if (res && res.success) { toast('Saved: ' + trade + ' → ' + (val==='FALSE'?'No access':'Needs access'), 'success'); loadTradeAccessDefaults(); }
+    else toast('Error saving config: ' + ((res&&res.error)||''), 'error');
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); });
+}
+
+function removeTradeAccessDefault(trade) {
+  api('GET', '/config').then(function(cfg) {
+    var defaults = {};
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    delete defaults[trade];
+    return api('POST', '/config/set', { key: 'Access_Trade_Defaults', value: JSON.stringify(defaults) });
+  }).then(function(res) {
+    if (res && res.success) { toast('Removed default for ' + trade, 'success'); loadTradeAccessDefaults(); }
+    else toast('Error: ' + ((res&&res.error)||''), 'error');
+  });
+}
+
 function renderErrorLog(){
   var logs=JSON.parse(localStorage.getItem('mh_errors')||'[]');
   var el=document.getElementById('error-log-list'); if(!el) return;
@@ -4890,6 +4997,33 @@ function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
 }
 
 // Load and display attachments grouped by type
+function deleteAttachment(attachId, woId, wrapEl) {
+  // Inline confirmation — no browser dialogs
+  if (wrapEl.dataset.confirmPending) {
+    // Second click = confirmed
+    wrapEl.style.opacity = '0.4';
+    api('POST', '/attachment/delete', { id: attachId }).then(function(res) {
+      if (res.success) {
+        wrapEl.remove();
+        toast('Attachment removed', 'success');
+      } else {
+        wrapEl.style.opacity = '1';
+        wrapEl.dataset.confirmPending = '';
+        toast('Could not remove: ' + (res.error||'error'), 'error');
+      }
+    }).catch(function() { wrapEl.style.opacity = '1'; wrapEl.dataset.confirmPending = ''; });
+  } else {
+    // First click = ask
+    wrapEl.dataset.confirmPending = '1';
+    var del = wrapEl.querySelector('button');
+    if (del) { del.textContent = '✓ confirm'; del.style.color = 'var(--danger)'; }
+    setTimeout(function() {
+      wrapEl.dataset.confirmPending = '';
+      if (del) { del.textContent = '×'; del.style.color = 'var(--muted)'; }
+    }, 3000);
+  }
+}
+
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
   api('GET', '/attachments?wo_id=' + woId).then(function(items) {
@@ -4909,11 +5043,20 @@ function loadPortalAttachments(woId, opts) {
       byType[type].forEach(function(f) {
         var icon = type === 'after' ? '\u2705' : type === 'before' ? '📷' :
                    type === 'receipt' ? '🧾' : type === 'report' ? '\u26a0\ufe0f' : '📎';
+        // Wrapper: link + delete button side by side
+        var wrap = document.createElement('span');
+        wrap.style.cssText = 'display:inline-flex;align-items:center;gap:0;margin:2px 4px 2px 0';
         var a = document.createElement('a');
         a.href = f.Drive_URL || '#'; a.target = '_blank';
-        a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
+        a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px 0 0 4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
         a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
-        el.appendChild(a);
+        var del = document.createElement('button');
+        del.textContent = '×';
+        del.title = 'Remove from work order';
+        del.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-left:none;border-radius:0 4px 4px 0;color:var(--muted);cursor:pointer;font-size:13px;padding:2px 6px;line-height:1';
+        del.onclick = function() { deleteAttachment(f.ID, woId, wrap); };
+        wrap.appendChild(a); wrap.appendChild(del);
+        el.appendChild(wrap);
       });
     });
   }).catch(function(){});
