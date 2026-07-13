@@ -457,6 +457,7 @@ function renderWOs(wos) {
             '<button class="btn btn-sm" style="background:var(--accent2);color:#000" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
           '</div>' +
           '<div id="action-msg-' + idx + '"></div>' +
+          '<div id="bill-summary-' + idx + '" style="margin-top:8px"></div>' +
           '<div id="nearby-wrap-' + idx + '" style="margin-top:8px"></div>' +
           '<div id="time-wrap-' + idx + '" style="margin-top:8px"></div>' +
           '<div id="receipt-wrap-' + idx + '" style="margin-top:8px"></div>' +
@@ -470,7 +471,7 @@ function renderWOs(wos) {
   // Store WOs for status tracking
   window._wos = wos;
   window._pendingStatus = {};
-  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID, { before:true, after:true, report:true, receipt:true }); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); loadVendorTimeTracking(wo.ID, idx); loadVendorReceipts(wo.ID, idx); });
+  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); loadVendorTimeTracking(wo.ID, idx); loadVendorReceipts(wo.ID, idx); loadVendorBillSummary(wo.ID, idx); });
 }
 
 // ── Estimate widget: load history, show current total, allow revisions ──
@@ -746,6 +747,45 @@ function deleteVendorReceipt(id, woId, idx) {
   api('/receipt/delete', { method:'POST', body: { id: id } }).then(function() { loadVendorReceipts(woId, idx); });
 }
 
+// ── Vendor bill summary — shows what was submitted so vendor knows it landed ──
+function loadVendorBillSummary(woId, idx) {
+  var wrap = document.getElementById('bill-summary-' + idx);
+  if (!wrap) return;
+  var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
+  api('/vendor-bills?wo_id=' + woId + '&vendor_id=' + vendorId).then(function(bills) {
+    if (!Array.isArray(bills) || !bills.length) { wrap.innerHTML = ''; return; }
+    var html = bills.map(function(bill) {
+      var typeLabel = bill.Bill_Type === 'hourly'
+        ? (parseFloat(bill.Hours||0) + ' hrs × $' + parseFloat(bill.Rate||0).toFixed(0) + '/hr')
+        : (parseFloat(bill.Flat_Rate||0) > 0 ? 'Flat rate' : '');
+      var truckLine = parseFloat(bill.Truck_Stock||0) > 0
+        ? '<div>🚚 Truck stock' + (bill.Truck_Desc ? ' – ' + esc(bill.Truck_Desc) : '') + ': $' + parseFloat(bill.Truck_Stock).toFixed(2) + '</div>' : '';
+      var receipts = [];
+      try { receipts = JSON.parse(bill.Receipts_JSON || '[]'); } catch(e) {}
+      var receiptLines = receipts.map(function(r) {
+        return '<div>🧾 ' + esc(r.desc||'Receipt') + ': $' + parseFloat(r.amount||0).toFixed(2) + (r.url ? ' <a href="'+esc(r.url)+'" target="_blank" style="color:var(--info);font-size:10px">View</a>' : '') + '</div>';
+      }).join('');
+      var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--muted)';
+      return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:6px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<div style="font-size:10px;letter-spacing:.08em;color:var(--accent2);font-weight:bold">💰 BILL SUBMITTED</div>' +
+          '<div style="font-size:18px;font-weight:bold;color:var(--accent2)">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--muted);line-height:1.8">' +
+          (typeLabel ? '<div>⏱ ' + typeLabel + ' = $' + parseFloat(bill.Labor_Total||0).toFixed(2) + '</div>' : '') +
+          (parseFloat(bill.Flat_Rate||0) > 0 && bill.Bill_Type === 'flat' ? '<div>📋 Flat: $' + parseFloat(bill.Flat_Rate).toFixed(2) + '</div>' : '') +
+          truckLine + receiptLines +
+          (bill.Notes ? '<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--border)">' + esc(bill.Notes) + '</div>' : '') +
+        '</div>' +
+        '<div style="font-size:10px;color:' + statusColor + ';margin-top:6px;text-transform:uppercase;letter-spacing:.06em">' +
+          (bill.Status === 'reviewed' ? '✓ Reviewed by Ridge Co' : '⏳ Pending review') +
+        '</div>' +
+      '</div>';
+    }).join('');
+    wrap.innerHTML = html;
+  }).catch(function() { wrap.innerHTML = ''; });
+}
+
 function loadVendorTimeTracking(woId, idx) {
   var wrap = document.getElementById('time-wrap-' + idx);
   if (!wrap) return;
@@ -922,7 +962,43 @@ function submitStatus(woId, idx) {
 }
 
 // ── Photo Upload ─────────────────────────────────────────────
-// (handled by portalUploadFiles + _uploadOneFile below)
+
+function uploadPhoto(woId, input) {
+  if (!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  // Find the idx from the input's ancestor card
+  var card = input.closest('.wo-card');
+  var idx = card ? card.id.replace('card-','') : '0';
+
+  showActionMsg(idx, 'Uploading photo…', '');
+  var form = new FormData();
+  form.append('file', file);
+  form.append('wo_id', woId);
+
+  fetch(WORKER + '/upload-photo', {
+    method: 'POST',
+    headers: {'X-Auth-Token': SECRET},
+    body: form,
+  }).then(function(r){ return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        showActionMsg(idx, '✓ Photo uploaded', 'success');
+        var preview = document.getElementById('photo-preview-' + idx);
+        if (preview && data.view_url) {
+          var img = document.createElement('img');
+          img.src = data.view_url.replace('/view','');
+          img.className = 'photo-thumb';
+          img.onclick = function(){ window.open(data.view_url,'_blank'); };
+          preview.appendChild(img);
+        }
+      } else {
+        showActionMsg(idx, 'Upload failed: ' + (data.error||'unknown'), 'error');
+      }
+    }).catch(function() {
+      showActionMsg(idx, 'Upload failed.', 'error');
+    });
+  input.value = '';
+}
 
 function showActionMsg(idx, msg, type) {
   var el = document.getElementById('action-msg-' + idx);
@@ -969,24 +1045,11 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
       headers: { 'Content-Type': file.type || 'application/octet-stream' },
       body: file,
     })
-    .then(function(r) {
-      // Drive returns 200 with JSON on success; anything else is a failure.
-      // Safely parse — non-JSON body (or empty body) must not crash here.
-      if (!r.ok) {
-        card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-        card.textContent = '\u26a0 Drive error ' + r.status;
-        return Promise.resolve(null);
-      }
-      return r.text().then(function(txt) {
-        try { return txt ? JSON.parse(txt) : null; } catch(e) { return null; }
-      });
-    })
+    .then(function(r) { return r.json(); })
     .then(function(fileData) {
       if (!fileData || !fileData.id) {
-        if (card.textContent !== '\u26a0 Upload failed') { // don't overwrite a status error already set
-          card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-          card.textContent = '\u26a0 Upload failed';
-        }
+        card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
+        card.textContent = '\u26a0 Upload failed';
         return nextFolder;
       }
       api('POST', '/log-attachment', {
@@ -1503,7 +1566,7 @@ function uploadReceiptPhoto(n, input) {
   statusEl.textContent = 'Uploading…';
   statusEl.style.color = 'var(--muted)';
   var fd = new FormData();
-  fd.append('file', file);        // worker expects 'file', not 'photo'
+  fd.append('file', file);
   fd.append('wo_id', _billWOId);
   fd.append('file_type', 'receipt');
   fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body:fd })
@@ -1584,21 +1647,23 @@ async function submitVendorBill() {
   var truckDesc = truckUsed ? document.getElementById('bill-truck-desc').value : '';
   var receiptsTotal = receiptItems.reduce(function(s,r){return s+r.amount;},0);
 
+  // FIX: field names must match Vendor_Bills Sheet column headers exactly
   var body = {
     WO_ID: _billWOId,
     Vendor_ID: session.vendor_id,
     Vendor_Name: session.vendor_name,
     Bill_Type: _billType,
-    Labor_Hours: String(hrs),
-    Labor_Rate: String(_vendorRate),
+    Hours: String(hrs),
+    Rate: String(_vendorRate),
     Labor_Total: String((hrs * _vendorRate).toFixed(2)),
     Truck_Desc: truckDesc,
-    Truck_Amount: String(truckAmt.toFixed(2)),
-    Receipt_Items: JSON.stringify(receiptItems),
+    Truck_Stock: String(truckAmt.toFixed(2)),
+    Receipts_JSON: JSON.stringify(receiptItems),
     Receipts_Total: String(receiptsTotal.toFixed(2)),
-    Flat_Amount: String(flat.toFixed(2)),
-    Grand_Total: String(total.toFixed(2)),
-    Bill_Status: 'submitted',
+    Flat_Rate: String(flat.toFixed(2)),
+    Total: String(total.toFixed(2)),
+    Status: 'submitted',
+    Created_Date: new Date().toISOString().split('T')[0],
     Notes: document.getElementById('bill-notes').value,
     Active: 'TRUE',
   };

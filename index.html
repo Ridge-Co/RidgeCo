@@ -1255,27 +1255,36 @@ function openWODetail(woId) {
   // Append audit section after the detail body builds
   document.getElementById('detail-body').innerHTML += auditHtml;
   // Load audit trail
-  // Load vendor bill if exists
+  // Load vendor bills — show ALL bills for this WO, not just most recent
   api('GET','/vendor-bills?wo_id='+woId).then(function(bills){
     if (!Array.isArray(bills)||!bills.length) return;
-    var bill = bills[bills.length-1]; // most recent
-    var items = [];
-    try { items = JSON.parse(bill.Receipt_Items||'[]'); } catch(e){}
-    var billHtml = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
-      '<div style="color:var(--accent2);font-size:11px;letter-spacing:.1em;text-transform:uppercase">💰 VENDOR BILL — ' + esc(bill.Bill_Status||'submitted') + '</div>' +
-      '<div style="color:var(--accent2);font-size:1.4rem;font-weight:bold">$' + parseFloat(bill.Grand_Total||0).toFixed(2) + '</div></div>' +
-      '<div style="font-size:12px;line-height:1.8;color:var(--muted)">' +
-      (parseFloat(bill.Labor_Total)>0 ? '<div>⏱ Labor: ' + bill.Labor_Hours + ' hrs × $' + bill.Labor_Rate + '/hr = <span style="color:var(--text)">$' + parseFloat(bill.Labor_Total).toFixed(2) + '</span></div>' : '') +
-      (parseFloat(bill.Flat_Amount)>0 ? '<div>📋 Flat rate: <span style="color:var(--text)">$' + parseFloat(bill.Flat_Amount).toFixed(2) + '</span></div>' : '') +
-      (parseFloat(bill.Truck_Amount)>0 ? '<div>🚚 Truck stock' + (bill.Truck_Desc?' ('+bill.Truck_Desc+')':'') + ': <span style="color:var(--text)">$' + parseFloat(bill.Truck_Amount).toFixed(2) + '</span></div>' : '') +
-      items.map(function(r){ return '<div>🧾 ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(r.url)+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
-      (bill.Notes ? '<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">' + esc(bill.Notes) + '</div>' : '') +
-      '</div>' +
-      '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="margin-top:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
-    '</div>';
+    var billsHtml = bills.map(function(bill) {
+      var items = [];
+      try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+      var statusLabel = (bill.Status||'submitted').toUpperCase();
+      var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#f59e0b)';
+      var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
+      var typeLabel = bill.Bill_Type === 'hourly' ? '⏱ By the hour' : '📋 Flat rate';
+      return '<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<div style="color:var(--accent2);font-size:11px;letter-spacing:.1em;font-weight:bold">💰 VENDOR BILL — <span style="color:' + statusColor + '">' + statusLabel + '</span></div>' +
+          '<div style="color:var(--accent2);font-size:1.5rem;font-weight:bold">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
+        '</div>' +
+        vendorLine +
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">' + typeLabel + '</div>' +
+        '<div style="font-size:12px;line-height:1.9;color:var(--muted)">' +
+          (parseFloat(bill.Labor_Total||0)>0 ? '<div>⏱ Labor: ' + esc(bill.Hours||'0') + ' hrs × $' + esc(bill.Rate||'0') + '/hr = <span style="color:var(--text)">$' + parseFloat(bill.Labor_Total).toFixed(2) + '</span></div>' : '') +
+          (parseFloat(bill.Flat_Rate||0)>0 && bill.Bill_Type==='flat' ? '<div>📋 Flat: <span style="color:var(--text)">$' + parseFloat(bill.Flat_Rate).toFixed(2) + '</span></div>' : '') +
+          (parseFloat(bill.Truck_Stock||0)>0 ? '<div>🚚 Truck stock' + (bill.Truck_Desc?' ('+esc(bill.Truck_Desc)+')':'') + ': <span style="color:var(--text)">$' + parseFloat(bill.Truck_Stock).toFixed(2) + '</span></div>' : '') +
+          (parseFloat(bill.Receipts_Total||0)>0 ? '<div>🧾 Receipts subtotal: <span style="color:var(--text)">$' + parseFloat(bill.Receipts_Total).toFixed(2) + '</span></div>' : '') +
+          items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(r.url)+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+          (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + esc(bill.Notes) + '</div>' : '') +
+        '</div>' +
+        '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="margin-top:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
+      '</div>';
+    }).join('');
     var db = document.getElementById('detail-body');
-    if (db) db.innerHTML += billHtml;
+    if (db) db.innerHTML += billsHtml;
   });
 
   // Fetch fresh lockbox/keys data every time WO detail opens
@@ -3477,19 +3486,21 @@ function loadVendorBillForInvoice(woId) {
     }
     var bill = bills[bills.length - 1];
     var rows = '';
-    if (parseFloat(bill.Labor_Total) > 0)
-      rows += '<div>⏱ Labor: ' + bill.Labor_Hours + 'h × $' + bill.Labor_Rate + '/h = <b>$' + parseFloat(bill.Labor_Total).toFixed(2) + '</b></div>';
-    if (parseFloat(bill.Flat_Amount) > 0)
-      rows += '<div>📋 Flat rate: <b>$' + parseFloat(bill.Flat_Amount).toFixed(2) + '</b></div>';
-    if (parseFloat(bill.Truck_Amount) > 0)
-      rows += '<div>🚚 Truck stock: <b>$' + parseFloat(bill.Truck_Amount).toFixed(2) + '</b></div>';
+    if (bill.Vendor_Name)
+      rows += '<div style="color:var(--muted);font-size:11px;margin-bottom:6px">From: ' + esc(bill.Vendor_Name) + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>';
+    if (parseFloat(bill.Labor_Total||0) > 0)
+      rows += '<div>⏱ Labor: ' + esc(bill.Hours||'0') + 'h × $' + esc(bill.Rate||'0') + '/h = <b>$' + parseFloat(bill.Labor_Total).toFixed(2) + '</b></div>';
+    if (parseFloat(bill.Flat_Rate||0) > 0 && bill.Bill_Type === 'flat')
+      rows += '<div>📋 Flat rate: <b>$' + parseFloat(bill.Flat_Rate).toFixed(2) + '</b></div>';
+    if (parseFloat(bill.Truck_Stock||0) > 0)
+      rows += '<div>🚚 Truck stock' + (bill.Truck_Desc ? ' (' + esc(bill.Truck_Desc) + ')' : '') + ': <b>$' + parseFloat(bill.Truck_Stock).toFixed(2) + '</b></div>';
     try {
-      var items = JSON.parse(bill.Receipt_Items || '[]');
+      var items = JSON.parse(bill.Receipts_JSON || '[]');
       items.forEach(function(r) {
         rows += '<div>🧾 ' + esc(r.desc || 'Receipt') + ': <b>$' + parseFloat(r.amount || 0).toFixed(2) + '</b></div>';
       });
     } catch(e) {}
-    var total = parseFloat(bill.Grand_Total || 0);
+    var total = parseFloat(bill.Total || 0);
     rows += '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;color:var(--accent2)">Total owed: <b>$' + total.toFixed(2) + '</b></div>';
     el.innerHTML = rows;
     // Auto-suggest charge = bill total if not set
@@ -4680,7 +4691,7 @@ function onKeyTypeChange() {
 
 
 function markBillReviewed(billId) {
-  api('POST','/vendor-bill/update',{id:billId,fields:{Bill_Status:'reviewed'}}).then(function(res){
+  api('POST','/vendor-bill/update',{id:billId,fields:{Status:'reviewed'}}).then(function(res){
     if(res.success||res.id) toast('Bill marked as reviewed','success');
   });
 }
