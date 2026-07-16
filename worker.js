@@ -13,6 +13,10 @@
 //   8. processPendingNotifications — try/catch
 //   9. fetchConfig — try/catch
 //  10. NEW: /public/entities-feed — cross-hub integration contract for BrettOS
+// SESSION 1 CHANGES (July 2026):
+//  11. listVendorBills — status-only filter for Invoice Review admin view
+//  12. NEW: /invoice-review/approve POST endpoint — marks bill reviewed, logs to Invoice_Review sheet
+//  13. vendorByPin — vendor_rate already present (confirmed, no change needed)
 // ============================================================
 
 const CORS = {
@@ -158,6 +162,7 @@ export default {
         if (path === '/wishlist/add')             return await addWishlistItem(env, body);
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
         if (path === '/config/set')               return await setConfigKey(env, body);
+        if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -942,14 +947,66 @@ async function sendPinMessage(env, body) {
 // ── VENDOR BILLING ───────────────────────────────────────────
 
 async function listVendorBills(env, url) {
-  const woId = url.searchParams.get('wo_id') || '', vendorId = url.searchParams.get('vendor_id') || '';
+  const woId = url.searchParams.get('wo_id') || '', vendorId = url.searchParams.get('vendor_id') || '', statusFilter = url.searchParams.get('status') || '';
   try {
     const bills = await fetchTab(env, 'Vendor_Bills');
     let results = bills.filter(b => b.Active !== 'FALSE');
+    if (statusFilter && !woId) {
+      // Admin view: Invoice Review screen — return all bills matching this status
+      return json(results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase()));
+    }
     if (woId)     results = results.filter(b => b.WO_ID     === woId);
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
     return json(results);
   } catch(e) { return json([]); }
+}
+
+async function approveInvoiceReview(env, body) {
+  const {
+    bill_id, wo_id, vendor_id, vendor_name,
+    job_type, vendor_cost, brett_time, brett_hrs, travel,
+    markup, processing_fee, customer_total, brett_net, approved_by,
+  } = body;
+  if (!bill_id || !customer_total) return json({ error: 'bill_id and customer_total required' }, 400);
+  const today = new Date().toISOString().split('T')[0];
+  // 1. Update Vendor_Bills row: mark reviewed, save markup fields
+  await updateRow(env, 'Vendor_Bills', bill_id, {
+    Status:         'reviewed',
+    Job_Type:       job_type        || 'standard',
+    Brett_Time:     brett_time      || '0',
+    Brett_Hrs:      brett_hrs       || '0',
+    Travel:         travel          || '0',
+    Markup:         markup          || '0',
+    Processing_Fee: processing_fee  || '0',
+    Customer_Total: customer_total,
+    Brett_Net:      brett_net       || '0',
+    Approved_By:    approved_by     || 'Brett',
+    Reviewed_Date:  today,
+  });
+  // 2. Append to Invoice_Review log (bridge to Session 2 QuickBooks integration)
+  const reviewRow = {
+    ID:                 'IR-' + Date.now(),
+    Bill_ID:            bill_id,
+    WO_ID:              wo_id,
+    Vendor_ID:          vendor_id,
+    Vendor_Name:        vendor_name,
+    Job_Type:           job_type,
+    Vendor_Cost:        vendor_cost,
+    Brett_Time:         brett_time,
+    Travel:             travel,
+    Markup:             markup,
+    Processing_Fee:     processing_fee,
+    Customer_Total:     customer_total,
+    Brett_Net:          brett_net,
+    QB_Invoice_Status:  'pending',
+    QB_Invoice_ID:      '',
+    QB_Bill_ID:         '',
+    Approved_By:        approved_by,
+    Approved_Date:      today,
+    Active:             'TRUE',
+  };
+  await addRow(env, 'Invoice_Review', reviewRow);
+  return json({ success: true, id: reviewRow.ID });
 }
 
 // ── ESTIMATES ────────────────────────────────────────────────
