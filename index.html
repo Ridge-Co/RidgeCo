@@ -164,6 +164,7 @@
       <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
       <button class="nav-btn" onclick="showPage('owners',this)">OWNERS</button>
       <button class="nav-btn" onclick="showPage('shopping',this)">🛒 SHOPPING</button>
+      <button class="nav-btn" onclick="showPage('invoice-review',this)">💰 REVIEW BILLS</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
     </nav>
@@ -314,6 +315,18 @@
   <div class="page" id="page-invoices">
     <div class="section-title">OUTSTANDING INVOICES</div>
     <div id="invoices-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       INVOICE REVIEW PAGE — Vendor bills awaiting markup review
+       ══════════════════════════════════════════════════════ -->
+  <div class="page" id="page-invoice-review">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div class="section-title" style="margin:0">💰 VENDOR BILL REVIEW</div>
+      <button class="btn secondary" onclick="loadInvoiceReview()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
+    </div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Review each vendor bill, set markup, and approve to create a customer invoice.</p>
+    <div id="ir-list"><div class="loading"><span class="spinner"></span>Loading bills…</div></div>
   </div>
 
   <div class="page" id="page-owners">
@@ -496,15 +509,20 @@
   </div>
 </div>
 
-<!-- ASSIGN VENDOR MODAL -->
+<!-- ASSIGN / REASSIGN VENDOR MODAL -->
 <div class="modal-overlay" id="modal-assign">
   <div class="modal">
-    <div class="modal-header"><div class="modal-title">ASSIGN VENDOR</div><button class="modal-close" onclick="closeModal('modal-assign')">✕</button></div>
+    <div class="modal-header"><div class="modal-title" id="assign-modal-title">ASSIGN VENDOR</div><button class="modal-close" onclick="closeModal('modal-assign')">✕</button></div>
+    <div id="assign-current-vendor" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:var(--muted)"></div>
     <div class="form-grid">
-      <div class="form-group full"><label>Select Vendor</label><select id="assign-vendor-select" onchange="updateAssignPreview()"><option value="">Select vendor...</option></select></div>
+      <div class="form-group full">
+        <label>Search Vendor</label>
+        <input type="text" id="assign-vendor-search" placeholder="Type name or trade to filter…" oninput="filterAssignVendors()" autocomplete="off" style="margin-bottom:6px">
+        <select id="assign-vendor-select" onchange="updateAssignPreview()" size="6" style="height:auto;min-height:120px;font-size:13px;cursor:pointer;width:100%"><option value="">Select vendor...</option></select>
+      </div>
     </div>
     <div id="assign-preview" style="margin-top:12px;color:var(--muted);font-size:12px"></div>
-    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-assign')">Cancel</button><button class="btn success" onclick="submitAssign()">Assign + Send SMS</button></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-assign')">Cancel</button><button class="btn success" id="assign-submit-btn" onclick="submitAssign()">Assign + Send SMS</button></div>
   </div>
 </div>
 
@@ -598,7 +616,11 @@
       </div>
       <div class="form-group" id="ewo-unit-group"><label>Unit</label><select id="ewo-unit" onchange="ewoUnitChanged()"><option value="">Whole property</option></select></div>
       <div class="form-group"><label>Tenant (auto from unit)</label><select id="ewo-tenant"><option value="">None</option></select></div>
-      <div class="form-group"><label>Vendor</label><select id="ewo-vendor"><option value="">Unassigned</option></select></div>
+      <div class="form-group full">
+        <label>Vendor</label>
+        <input type="text" id="ewo-vendor-filter" placeholder="Type name or trade to filter…" oninput="filterEWOVendors()" autocomplete="off" style="margin-bottom:6px">
+        <select id="ewo-vendor" size="4" style="height:auto;min-height:80px;font-size:13px;cursor:pointer;width:100%"><option value="">— Unassigned —</option></select>
+      </div>
       <div class="form-group"><label>Trade</label><select id="ewo-trade"><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
       <div class="form-group"><label>Priority</label><select id="ewo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Status</label>
@@ -982,6 +1004,7 @@ function showPage(name, btn) {
   document.getElementById('page-'+name).classList.add('active');
   if (btn) btn.classList.add('active');
   if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); }
+  if (name === 'invoice-review') { loadInvoiceReview(); }
 }
 
 // ── Dashboard ────────────────────────────────────────────────
@@ -1408,7 +1431,7 @@ function openWODetail(woId) {
     }).join('') +
     '</select>';
   actions.appendChild(qsDiv);
-  if (!wo.Vendor_ID||wo.Status==='Declined') addBtn('Assign Vendor','',function(){openAssignModal(woId);});
+  addBtn(wo.Vendor_ID ? '🔄 Change Vendor' : 'Assign Vendor', wo.Vendor_ID ? 'secondary' : '', function(){openAssignModal(woId);});
   if (['Assigned','Accepted'].includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
   if (['In Progress','Accepted','On Hold'].includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
   if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
@@ -1445,13 +1468,67 @@ function openWODetail(woId) {
   }, 80);
 }
 
+// Store all active vendors for filtering
+var _assignVendorList = [];
+
 function openAssignModal(woId) {
   assignWOId = woId;
-  document.getElementById('assign-vendor-select').innerHTML = '<option value="">Select vendor...</option>' +
-    state.vendors.filter(function(v){return v.Active!=='FALSE';}).map(function(v){return '<option value="'+v.ID+'">'+v.Name+' — '+v.Trade+' — '+v.Phone+'</option>';}).join('');
+  var wo = safeArray(state.workorders).find(function(w){return w.ID===woId;});
+  var currentVendor = wo && wo.Vendor_ID ? safeArray(state.vendors).find(function(v){return v.ID===wo.Vendor_ID;}) : null;
+
+  // Show current vendor banner if reassigning
+  var cvEl = document.getElementById('assign-current-vendor');
+  var titleEl = document.getElementById('assign-modal-title');
+  var btnEl = document.getElementById('assign-submit-btn');
+  if (currentVendor) {
+    cvEl.style.display = '';
+    cvEl.textContent = 'Currently assigned: ' + currentVendor.Name + ' (' + (currentVendor.Trade||'') + ')';
+    if (titleEl) titleEl.textContent = 'CHANGE VENDOR — ' + woId;
+    if (btnEl) btnEl.textContent = 'Reassign + Send SMS';
+  } else {
+    cvEl.style.display = 'none';
+    if (titleEl) titleEl.textContent = 'ASSIGN VENDOR — ' + woId;
+    if (btnEl) btnEl.textContent = 'Assign + Send SMS';
+  }
+
+  _assignVendorList = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
+  document.getElementById('assign-vendor-search').value = '';
+  renderAssignVendorOptions('');
   document.getElementById('assign-preview').textContent = '';
   closeModal('modal-wo-detail');
   openModal('modal-assign');
+  // Focus search box after modal opens
+  setTimeout(function(){ var el = document.getElementById('assign-vendor-search'); if(el) el.focus(); }, 100);
+}
+
+function renderAssignVendorOptions(query) {
+  var q = query.toLowerCase().trim();
+  var filtered = q
+    ? _assignVendorList.filter(function(v){ return (v.Name||'').toLowerCase().includes(q) || (v.Trade||'').toLowerCase().includes(q) || (v.Phone||'').includes(q); })
+    : _assignVendorList;
+  document.getElementById('assign-vendor-select').innerHTML =
+    '<option value="">— Select vendor —</option>' +
+    filtered.map(function(v){ return '<option value="'+v.ID+'">'+v.Name+' — '+v.Trade+(v.Phone?' — '+v.Phone:'')+'</option>'; }).join('');
+}
+
+function filterAssignVendors() {
+  var q = document.getElementById('assign-vendor-search').value;
+  renderAssignVendorOptions(q);
+  document.getElementById('assign-vendor-select').value = '';
+  document.getElementById('assign-preview').textContent = '';
+}
+
+function filterEWOVendors() {
+  var q = (document.getElementById('ewo-vendor-filter').value||'').toLowerCase().trim();
+  var currentVal = document.getElementById('ewo-vendor').value;
+  var vendors = safeArray(state.vendors).filter(function(v){
+    if (v.Active==='FALSE') return false;
+    if (!q) return true;
+    return (v.Name||'').toLowerCase().includes(q)||(v.Trade||'').toLowerCase().includes(q)||(v.Phone||'').includes(q);
+  });
+  document.getElementById('ewo-vendor').innerHTML =
+    '<option value="">— Unassigned —</option>' +
+    vendors.map(function(v){ return '<option value="'+v.ID+'"'+(v.ID===currentVal?' selected':'')+'>'+v.Name+' — '+v.Trade+'</option>'; }).join('');
 }
 function updateAssignPreview() {
   var v = state.vendors.find(function(x){return x.ID===document.getElementById('assign-vendor-select').value;});
@@ -2042,7 +2119,8 @@ function openEditWOModal(woId) {
   // Units / tenants / vendors
   ewoPopulateUnits(wo.Property_ID, wo.Unit_ID);
   ewoPopulateTenants(wo.Unit_ID, wo.Tenant_ID);
-  document.getElementById('ewo-vendor').innerHTML = '<option value="">Unassigned</option>' +
+  document.getElementById('ewo-vendor-filter').value = '';
+  document.getElementById('ewo-vendor').innerHTML = '<option value="">— Unassigned —</option>' +
     safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){return '<option value="'+v.ID+'"'+(v.ID===wo.Vendor_ID?' selected':'')+'>'+v.Name+' — '+v.Trade+'</option>';}).join('');
   document.getElementById('ewo-trade').value = wo.Trade||'General';
   document.getElementById('ewo-priority').value = wo.Priority||'normal';
@@ -4245,6 +4323,301 @@ function renderBundlingOpportunities() {
   html += '</div>';
   section.innerHTML = html;
   section.style.display = 'block';
+}
+
+// ══════════════════════════════════════════════════════════════
+//  INVOICE REVIEW — Vendor bill markup calculator
+// ══════════════════════════════════════════════════════════════
+
+var _irBills = [];
+
+function loadInvoiceReview() {
+  var el = document.getElementById('ir-list');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading bills…</div>';
+
+  api('GET', '/vendor-bills?status=submitted').then(function(bills) {
+    _irBills = Array.isArray(bills) ? bills : [];
+    if (!_irBills.length) {
+      el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ No vendor bills pending review.</div>';
+      return;
+    }
+    el.innerHTML = _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
+    _irBills.forEach(function(b, i) { irCalc(i); });
+  }).catch(function(e) {
+    el.innerHTML = '<div style="color:var(--danger);font-size:12px">Error loading bills: ' + esc(e.message||'?') + '</div>';
+  });
+}
+
+function renderIRCard(b, i) {
+  var woId = b.WO_ID || '—';
+  var vendorName = b.Vendor_Name || '—';
+  var billType = b.Bill_Type || 'hourly';
+  var hrs = parseFloat(b.Hours) || 0;
+  var rate = parseFloat(b.Rate) || 0;
+  var laborTotal = parseFloat(b.Labor_Total) || 0;
+  var flatRate = parseFloat(b.Flat_Rate) || 0;
+  var truckStock = parseFloat(b.Truck_Stock) || 0;
+  var receiptsTotal = parseFloat(b.Receipts_Total) || 0;
+  var materials = truckStock + receiptsTotal;
+  var vendorTotal = parseFloat(b.Total) || 0;
+  var notes = b.Notes || '';
+  var dateStr = (b.Created_Date || '').split('T')[0];
+
+  // Flat rate flag: vendor hours > 3
+  var flagHtml = '';
+  if (billType === 'hourly' && hrs > 3) {
+    flagHtml = '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:var(--warn)">⚠ ' + hrs + ' hrs billed — consider flat rate override. Check job type below.</div>';
+  }
+
+  var laborLine = billType === 'hourly'
+    ? hrs + ' hrs × $' + rate.toFixed(0) + '/hr = <b>$' + laborTotal.toFixed(2) + '</b>'
+    : 'Flat rate: <b>$' + flatRate.toFixed(2) + '</b>';
+  var materialLine = materials > 0
+    ? '<div>Materials/receipts: <b>$' + materials.toFixed(2) + '</b></div>' : '';
+  var noteLine = notes ? '<div style="color:var(--muted);font-style:italic;margin-top:4px">"' + esc(notes) + '"</div>' : '';
+
+  // Work order info from state
+  var wo = safeArray(state.workorders).find(function(w) { return w.ID === woId; });
+  var prop = wo ? safeArray(state.properties).find(function(p) { return p.ID === wo.Property_ID; }) : null;
+  var addr = prop ? prop.Address : (wo ? wo.Property_ID : '—');
+  var ownerRow = wo
+    ? '<div style="color:var(--muted);font-size:11px">Owner WO Ref: ' + esc(wo.Owner_WO_Ref || '—') + '</div>' : '';
+
+  return '<div id="ir-card-'+i+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">' +
+
+    // Header
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">' +
+      '<div>' +
+        '<div style="color:var(--accent);font-weight:bold;font-size:.95rem">' + esc(vendorName) + '</div>' +
+        '<div style="color:var(--muted);font-size:11px">' + esc(woId) + ' · ' + esc(addr) + '</div>' +
+        ownerRow +
+        '<div style="color:var(--muted);font-size:11px">Submitted: ' + esc(dateStr) + '</div>' +
+      '</div>' +
+      '<div style="text-align:right">' +
+        '<div style="font-size:10px;color:var(--muted);letter-spacing:.06em">VENDOR BILL</div>' +
+        '<div style="font-size:1.4rem;font-weight:bold;color:var(--warn)">$' + vendorTotal.toFixed(2) + '</div>' +
+      '</div>' +
+    '</div>' +
+
+    // Vendor bill breakdown
+    '<div style="background:var(--surface2);border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.8">' +
+      '<div>' + laborLine + '</div>' +
+      materialLine +
+      noteLine +
+    '</div>' +
+
+    flagHtml +
+
+    // Markup controls
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px">' +
+      '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">MARKUP CONTROLS</div>' +
+
+      // Job type
+      '<div style="margin-bottom:10px">' +
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Job Type</div>' +
+        '<div style="display:flex;gap:4px">' +
+          ['standard','flat','pass-through'].map(function(t) {
+            return '<button onclick="irSetJobType('+i+',\''+t+'\')" id="ir-jt-'+i+'-'+t+'" style="flex:1;padding:7px 4px;border-radius:4px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--border);background:'+(t==='standard'?'var(--accent)':'var(--surface)')+';color:'+(t==='standard'?'#fff':'var(--muted)')+'">'+t.toUpperCase()+'</button>';
+          }).join('') +
+        '</div>' +
+      '</div>' +
+
+      // Flat rate override (only for flat job type)
+      '<div id="ir-flat-override-'+i+'" style="display:none;margin-bottom:10px">' +
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Customer Flat Price (what you charge)</div>' +
+        '<div style="display:flex;align-items:center;gap:6px">' +
+          '<span style="color:var(--muted)">$</span>' +
+          '<input type="number" id="ir-flat-price-'+i+'" min="0" step="1" placeholder="0" oninput="irCalc('+i+')" style="width:120px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:8px;border-radius:6px">' +
+        '</div>' +
+      '</div>' +
+
+      // On-site coordination
+      '<div style="margin-bottom:10px">' +
+        '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)">' +
+          '<input type="checkbox" id="ir-onsite-'+i+'" onchange="irCalc('+i+')" style="width:auto;padding:0"> On-site coordination (Brett time)' +
+        '</label>' +
+        '<div id="ir-onsite-wrap-'+i+'" style="display:none;margin-top:8px;display:flex;align-items:center;gap:8px">' +
+          '<input type="number" id="ir-brett-hrs-'+i+'" min="0.5" step="0.5" placeholder="hrs" oninput="irCalc('+i+')" style="width:80px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:7px;border-radius:6px;text-align:center">' +
+          '<span style="color:var(--muted);font-size:12px">hrs × $75/hr (min $75)</span>' +
+        '</div>' +
+      '</div>' +
+
+      // Travel surcharge
+      '<div style="margin-bottom:10px">' +
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Out-of-area travel surcharge</div>' +
+        '<div style="display:flex;align-items:center;gap:6px">' +
+          '<span style="color:var(--muted)">$</span>' +
+          '<input type="number" id="ir-travel-'+i+'" min="0" step="5" placeholder="0" oninput="irCalc('+i+')" style="width:100px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:7px;border-radius:6px">' +
+          '<span style="color:var(--muted);font-size:11px">(0 = local, included in labor)</span>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+
+    // Calculated summary
+    '<div id="ir-summary-'+i+'" style="background:var(--surface2);border:1px solid var(--accent2);border-radius:6px;padding:12px;margin-bottom:12px"></div>' +
+
+    // Approve / skip buttons
+    '<div style="display:flex;gap:8px">' +
+      '<button onclick="irApprove('+i+')" id="ir-approve-btn-'+i+'" style="flex:1;background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:11px;cursor:pointer">✓ APPROVE — READY TO INVOICE</button>' +
+      '<button onclick="irSkip('+i+')" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:11px 16px;cursor:pointer">Skip</button>' +
+    '</div>' +
+    '<div id="ir-msg-'+i+'" style="margin-top:8px"></div>' +
+
+  '</div>';
+}
+
+// Per-card job type state
+var _irJobType = {};
+
+function irSetJobType(i, type) {
+  _irJobType[i] = type;
+  ['standard','flat','pass-through'].forEach(function(t) {
+    var btn = document.getElementById('ir-jt-'+i+'-'+t);
+    if (!btn) return;
+    btn.style.background = t === type ? 'var(--accent)' : 'var(--surface)';
+    btn.style.color = t === type ? '#fff' : 'var(--muted)';
+    btn.style.borderColor = t === type ? 'var(--accent)' : 'var(--border)';
+  });
+  var flatWrap = document.getElementById('ir-flat-override-'+i);
+  if (flatWrap) flatWrap.style.display = type === 'flat' ? '' : 'none';
+  irCalc(i);
+}
+
+function irCalc(i) {
+  var b = _irBills[i];
+  if (!b) return;
+  var el = document.getElementById('ir-summary-'+i);
+  if (!el) return;
+
+  var jobType = _irJobType[i] || 'standard';
+  var billType = b.Bill_Type || 'hourly';
+  var hrs = parseFloat(b.Hours) || 0;
+  var rate = parseFloat(b.Rate) || 0;
+  var laborTotal = parseFloat(b.Labor_Total) || 0;
+  if (billType === 'flat') laborTotal = parseFloat(b.Flat_Rate) || 0;
+  var truckStock = parseFloat(b.Truck_Stock) || 0;
+  var receiptsTotal = parseFloat(b.Receipts_Total) || 0;
+  var materials = truckStock + receiptsTotal;
+  var vendorCost = laborTotal + materials; // what Brett pays vendor
+
+  // Brett time (on-site coordination)
+  var onsiteChecked = (document.getElementById('ir-onsite-'+i)||{}).checked;
+  var onsiteWrap = document.getElementById('ir-onsite-wrap-'+i);
+  if (onsiteWrap) onsiteWrap.style.display = onsiteChecked ? 'flex' : 'none';
+  var brettHrs = onsiteChecked ? (parseFloat((document.getElementById('ir-brett-hrs-'+i)||{}).value)||1) : 0;
+  var brettTime = onsiteChecked ? Math.max(75, brettHrs * 75) : 0;
+
+  // Travel
+  var travel = parseFloat((document.getElementById('ir-travel-'+i)||{}).value)||0;
+
+  // Markup
+  var markup = 0;
+  var markupLabel = '';
+  if (jobType === 'standard') {
+    markup = Math.max(75, 35 * hrs);
+    markupLabel = 'MAX($75, $35 × ' + hrs + ' hrs) = $' + markup.toFixed(2);
+  } else if (jobType === 'flat') {
+    var custFlat = parseFloat((document.getElementById('ir-flat-price-'+i)||{}).value)||0;
+    markup = custFlat - vendorCost;
+    markupLabel = 'Flat: $' + custFlat.toFixed(2) + ' − $' + vendorCost.toFixed(2) + ' vendor = $' + markup.toFixed(2);
+  } else {
+    // pass-through: small fixed markup $25-35
+    markup = 30;
+    markupLabel = 'Pass-through: $30 flat';
+  }
+
+  // Processing fee on pre-fee subtotal
+  var subtotal = vendorCost + brettTime + travel + markup;
+  var processingFee = subtotal * 0.05;
+  var customerTotal = subtotal + processingFee;
+  var brettNet = brettTime + travel + markup + processingFee;
+
+  // Markup flag
+  var markupWarn = markup < 0
+    ? '<div style="color:var(--danger);font-size:11px;margin-top:6px">⚠ Markup is negative — customer flat price is below vendor cost. Adjust flat price.</div>' : '';
+
+  el.innerHTML =
+    '<div style="font-size:11px;color:var(--muted);line-height:2;margin-bottom:8px">' +
+      '<div>Vendor labor+materials: <span style="color:var(--text)">$' + vendorCost.toFixed(2) + '</span></div>' +
+      (brettTime > 0 ? '<div>On-site coordination: <span style="color:var(--text)">$' + brettTime.toFixed(2) + '</span> (' + brettHrs + ' hrs × $75, min $75)</div>' : '') +
+      (travel > 0 ? '<div>Travel surcharge: <span style="color:var(--text)">$' + travel.toFixed(2) + '</span></div>' : '') +
+      '<div>Markup (' + jobType + '): <span style="color:var(--warn)">$' + markup.toFixed(2) + '</span> <span style="font-size:10px">' + esc(markupLabel) + '</span></div>' +
+      '<div>Processing fee (5%): <span style="color:var(--text)">$' + processingFee.toFixed(2) + '</span></div>' +
+      markupWarn +
+    '</div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);padding-top:8px">' +
+      '<div>' +
+        '<div style="font-size:11px;color:var(--muted)">Customer Invoice Total</div>' +
+        '<div style="font-size:1.6rem;font-weight:bold;color:var(--accent2)">$' + customerTotal.toFixed(2) + '</div>' +
+      '</div>' +
+      '<div style="text-align:right">' +
+        '<div style="font-size:11px;color:var(--muted)">Brett Net</div>' +
+        '<div style="font-size:1.3rem;font-weight:bold;color:var(--accent)">$' + brettNet.toFixed(2) + '</div>' +
+      '</div>' +
+    '</div>';
+
+  // Store calculated values on the bill object for approve
+  _irBills[i]._calc = {
+    jobType: jobType,
+    brettHrs: brettHrs,
+    brettTime: brettTime,
+    travel: travel,
+    markup: markup,
+    processingFee: processingFee,
+    customerTotal: customerTotal,
+    brettNet: brettNet,
+    vendorCost: vendorCost,
+  };
+}
+
+function irApprove(i) {
+  var b = _irBills[i];
+  if (!b || !b._calc) { toast('Calculate first', 'error'); return; }
+  var c = b._calc;
+  if (c.customerTotal <= 0) { toast('Customer total must be > 0', 'error'); return; }
+  if (c.jobType === 'flat' && c.markup < 0) { toast('Markup is negative — adjust flat price', 'error'); return; }
+
+  var btn = document.getElementById('ir-approve-btn-'+i);
+  var msg = document.getElementById('ir-msg-'+i);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  api('POST', '/invoice-review/approve', {
+    bill_id: b.ID,
+    wo_id: b.WO_ID,
+    vendor_id: b.Vendor_ID,
+    vendor_name: b.Vendor_Name,
+    job_type: c.jobType,
+    vendor_cost: c.vendorCost.toFixed(2),
+    brett_time: c.brettTime.toFixed(2),
+    brett_hrs: String(c.brettHrs),
+    travel: c.travel.toFixed(2),
+    markup: c.markup.toFixed(2),
+    processing_fee: c.processingFee.toFixed(2),
+    customer_total: c.customerTotal.toFixed(2),
+    brett_net: c.brettNet.toFixed(2),
+    approved_by: 'Brett',
+  }).then(function(res) {
+    if (btn) { btn.disabled = false; btn.textContent = '✓ APPROVE — READY TO INVOICE'; }
+    if (res.success || res.id) {
+      if (msg) msg.innerHTML = '<div style="color:var(--accent2);font-size:12px;padding:8px;background:#002d0f;border-radius:6px">✓ Approved! Customer total: $' + c.customerTotal.toFixed(2) + ' · Brett net: $' + c.brettNet.toFixed(2) + '</div>';
+      // Remove card after delay
+      setTimeout(function() {
+        var card = document.getElementById('ir-card-'+i);
+        if (card) { card.style.opacity='0.4'; card.style.pointerEvents='none'; }
+      }, 2000);
+    } else {
+      if (msg) msg.innerHTML = '<div style="color:var(--danger);font-size:12px">Error: ' + esc(res.error||'?') + '</div>';
+    }
+  }).catch(function(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '✓ APPROVE — READY TO INVOICE'; }
+    if (msg) msg.innerHTML = '<div style="color:var(--danger);font-size:12px">Connection error: ' + esc(e.message||'?') + '</div>';
+  });
+}
+
+function irSkip(i) {
+  var card = document.getElementById('ir-card-'+i);
+  if (card) { card.style.display = 'none'; }
 }
 
 </script>

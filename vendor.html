@@ -1405,7 +1405,7 @@ function submitVendorSched(modalId) {
           <div style="color:var(--muted);font-size:18px">×</div>
           <div>
             <div style="color:var(--muted);font-size:11px;margin-bottom:4px">Rate/hr</div>
-            <div id="bill-rate-display" style="font-size:16px;color:var(--accent);font-weight:bold;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;min-width:70px;text-align:center">$40</div>
+            <div id="bill-rate-display" style="font-size:16px;color:var(--accent);font-weight:bold;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;min-width:70px;text-align:center">—</div>
           </div>
           <div style="color:var(--muted);font-size:18px">=</div>
           <div>
@@ -1481,7 +1481,7 @@ function submitVendorSched(modalId) {
 var _billWOId = null;
 var _billType = 'hourly';
 var _billSubmitting = false; // guard against double-tap
-var _vendorRate = 40;
+var _vendorRate = 0;
 var _receiptCount = 0;
 var _uploadedPhotos = {};
 
@@ -1503,9 +1503,16 @@ function openBillModal(woId, vendorName) {
   document.getElementById('bill-receipts-list').innerHTML = '';
   document.getElementById('bill-msg').innerHTML = '';
 
-  // Load vendor rate from session
-  _vendorRate = parseFloat(session.vendor_rate || 40) || 40;
-  document.getElementById('bill-rate-display').textContent = '$' + _vendorRate.toFixed(0);
+  // Load vendor rate from session — no fallback; rate must be set in vendor profile
+  _vendorRate = parseFloat(session.vendor_rate) || 0;
+  if (_vendorRate > 0) {
+    document.getElementById('bill-rate-display').textContent = '$' + _vendorRate.toFixed(0);
+    document.getElementById('bill-rate-display').style.color = 'var(--accent)';
+  } else {
+    document.getElementById('bill-rate-display').textContent = '⚠ Rate not set';
+    document.getElementById('bill-rate-display').style.color = 'var(--danger)';
+    document.getElementById('bill-rate-display').style.fontSize = '11px';
+  }
 
   setBillType('hourly');
   calcBillTotal();
