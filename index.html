@@ -1328,7 +1328,10 @@ function openWODetail(woId) {
           items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(r.url)+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
           (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + esc(bill.Notes) + '</div>' : '') +
         '</div>' +
-        '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="margin-top:10px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
+        '<div style="display:flex;gap:8px;margin-top:10px">' +
+        '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
+        '<button onclick="voidVendorBill(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✕ Void</button>' +
+        '</div>' +
       '</div>';
     }).join('');
     var db = document.getElementById('detail-body');
@@ -1443,7 +1446,7 @@ function openWODetail(woId) {
   setTimeout(function(){
     try {
       var _db = document.getElementById('detail-body');
-      if (_db && typeof buildPhotoSection === 'function') {
+      if (_db && typeof buildPhotoSection === 'function' && !document.getElementById('photo-section-' + _woIdForPhoto)) {
         var _ph = document.createElement('div');
         _ph.innerHTML = buildPhotoSection(_woIdForPhoto, _propForPhoto, { canBefore:true, canAfter:true, canReport:false, canReceipt:true, viewAll:true });
         // Insert photo section before invoice builder
@@ -1538,7 +1541,15 @@ function submitAssign() {
   var vendorId = document.getElementById('assign-vendor-select').value;
   if (!vendorId) { toast('Select a vendor','error'); return; }
   api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId}).then(function(res){
-    if (res.success) { toast('Assigned. Vendor SMS: '+(res.vendor_sms?'✅':'❌')+' | Tenant SMS: '+(res.tenant_sms?'✅':'—'),'success'); closeModal('modal-assign'); loadAll(); }
+    if (res.success) {
+      toast('Assigned. Vendor SMS: '+(res.vendor_sms?'✅':'❌')+' | Tenant SMS: '+(res.tenant_sms?'✅':'—'),'success');
+      closeModal('modal-assign');
+      // Optimistically update state so vendor shows immediately even if loadAll hits quota
+      var wo = safeArray(state.workorders).find(function(w){return w.ID===assignWOId;});
+      if (wo) { wo.Vendor_ID = vendorId; if (wo.Status === 'New') wo.Status = 'Assigned'; }
+      renderWOPage();
+      loadAll();
+    }
   }).catch(function(e){logError('Assign vendor',e.message);toast('Error: '+e.message,'error');});
 }
 
@@ -3763,6 +3774,9 @@ function fireInvoiceWebhook(woId) {
 // ── Hub-side estimate viewer — shows vendor's submitted estimate, version
 //    history, and a "Generate Estimate Text (AI)" button that produces a
 //    client-ready document mirroring Brett's Gemini estimate gem ──────────
+var _estimateCache = {};  // { woId: { data: [...], ts: Date.now() } }
+var ESTIMATE_CACHE_TTL_MS = 60000; // 60 seconds
+
 function loadHubEstimateView(woId, detailBody, beforeEl) {
   var holder = document.getElementById('est-view-' + woId);
   if (!holder) {
@@ -3770,19 +3784,21 @@ function loadHubEstimateView(woId, detailBody, beforeEl) {
     holder.id = 'est-view-' + woId;
     if (beforeEl) detailBody.insertBefore(holder, beforeEl); else detailBody.appendChild(holder);
   }
-  holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading estimate…</span>';
   window._hubEstimates = window._hubEstimates || {};
+  // Use cached data if fresh (avoids Sheets API quota hits on every WO open)
+  var cached = _estimateCache[woId];
+  if (cached && (Date.now() - cached.ts) < ESTIMATE_CACHE_TTL_MS) {
+    window._hubEstimates[woId] = cached.data;
+    renderHubEstimateView(woId, cached.data, holder);
+    return;
+  }
+  holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading estimate…</span>';
   refreshHubEstimateView(woId);
 }
 
-function refreshHubEstimateView(woId) {
-  var holder = document.getElementById('est-view-' + woId);
+function renderHubEstimateView(woId, estimates, holder) {
   if (!holder) return;
-  api('GET', '/estimates?wo_id=' + woId).then(function(estimates) {
-    if (!Array.isArray(estimates)) throw new Error(estimates && estimates.error ? estimates.error : 'Unexpected response');
-    window._hubEstimates[woId] = estimates;
-
-    if (!estimates.length) {
+  if (!estimates.length) {
       holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
         '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">💲 ESTIMATE</div>' +
         '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">No estimate submitted yet.</div>' +
@@ -3834,7 +3850,20 @@ function refreshHubEstimateView(woId) {
       chargeEl.value = calcTieredEstimate(parseFloat(current.Subtotal)).finalPrice.toFixed(2);
       if (typeof calcInvoiceMarkup === 'function') calcInvoiceMarkup(woId);
     }
+}
+
+function refreshHubEstimateView(woId) {
+  var holder = document.getElementById('est-view-' + woId);
+  if (!holder) return;
+  holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading estimate…</span>';
+  api('GET', '/estimates?wo_id=' + woId).then(function(estimates) {
+    if (!Array.isArray(estimates)) throw new Error(estimates && estimates.error ? estimates.error : 'Unexpected response');
+    window._hubEstimates[woId] = estimates;
+    // Store in TTL cache
+    _estimateCache[woId] = { data: estimates, ts: Date.now() };
+    renderHubEstimateView(woId, estimates, holder);
   }).catch(function(e) {
+    if (!holder) return;
     holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--danger);border-radius:8px;padding:14px;color:var(--danger);font-size:11px">Could not load estimate: ' + esc(e.message) + '</div>';
   });
 }
@@ -5176,6 +5205,55 @@ function markBillReviewed(billId) {
   });
 }
 
+function voidVendorBill(billId, woId) {
+  if (!confirm('Void this vendor bill? It will be hidden from the work order.')) return;
+  api('POST','/vendor-bill/update',{id:billId,fields:{Active:'FALSE'}}).then(function(res){
+    if (res.success||res.id) {
+      toast('Bill voided','success');
+      // Re-fetch and re-render bills for this WO
+      api('GET','/vendor-bills?wo_id='+woId).then(function(bills){
+        var db = document.getElementById('detail-body');
+        if (!db) return;
+        // Remove old bill cards (they have the teal accent border)
+        var oldCards = db.querySelectorAll('[style*="border:1px solid var(--accent2)"]');
+        oldCards.forEach(function(el){ el.remove(); });
+        if (!Array.isArray(bills)||!bills.length) return;
+        var billsHtml = bills.filter(function(b){ return b.Active !== 'FALSE'; }).map(function(bill) {
+          var items = [];
+          try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+          var statusLabel = (bill.Status||'submitted').toUpperCase();
+          var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#f59e0b)';
+          var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
+          var typeLabel = bill.Bill_Type === 'hourly' ? '⏱ By the hour' : '📋 Flat rate';
+          return '<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+              '<div style="color:var(--accent2);font-size:11px;letter-spacing:.1em;font-weight:bold">💰 VENDOR BILL — <span style="color:' + statusColor + '">' + statusLabel + '</span></div>' +
+              '<div style="color:var(--accent2);font-size:1.5rem;font-weight:bold">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
+            '</div>' +
+            vendorLine +
+            '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">' + typeLabel + '</div>' +
+            '<div style="font-size:12px;line-height:1.9;color:var(--muted)">' +
+              (parseFloat(bill.Labor_Total||0)>0 ? '<div>⏱ Labor: ' + esc(bill.Hours||'0') + ' hrs × $' + esc(bill.Rate||'0') + '/hr = <span style="color:var(--text)">$' + parseFloat(bill.Labor_Total).toFixed(2) + '</span></div>' : '') +
+              (parseFloat(bill.Flat_Rate||0)>0 && bill.Bill_Type==='flat' ? '<div>📋 Flat: <span style="color:var(--text)">$' + parseFloat(bill.Flat_Rate).toFixed(2) + '</span></div>' : '') +
+              (parseFloat(bill.Truck_Stock||0)>0 ? '<div>🚚 Truck stock' + (bill.Truck_Desc?' ('+esc(bill.Truck_Desc)+')':'') + ': <span style="color:var(--text)">$' + parseFloat(bill.Truck_Stock).toFixed(2) + '</span></div>' : '') +
+              (parseFloat(bill.Receipts_Total||0)>0 ? '<div>🧾 Receipts subtotal: <span style="color:var(--text)">$' + parseFloat(bill.Receipts_Total).toFixed(2) + '</span></div>' : '') +
+              items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(r.url)+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+              (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + esc(bill.Notes) + '</div>' : '') +
+            '</div>' +
+            '<div style="display:flex;gap:8px;margin-top:10px">' +
+            '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
+            '<button onclick="voidVendorBill(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✕ Void</button>' +
+            '</div>' +
+          '</div>';
+        }).join('');
+        if (billsHtml) db.insertAdjacentHTML('beforeend', billsHtml);
+      }).catch(function(){});
+    } else {
+      toast('Could not void bill','error');
+    }
+  }).catch(function(e){ toast('Error: '+e.message,'error'); });
+}
+
 
 // ══════════════════════════════════════════════════════════════
 //  PHOTO UPLOAD / ATTACHMENTS
@@ -5439,9 +5517,9 @@ function loadPortalAttachments(woId, opts) {
 function buildPhotoSection(woId, propAddr, opts) {
   opts = opts || { canBefore: true, canAfter: true, canReport: false, canReceipt: true, viewAll: true };
   var TYPE_CONFIG = {
-    before:  { label: 'BEFORE',  icon: '📷', color: 'var(--warn)',     accept: 'image/*,video/*', cap: 'environment' },
-    after:   { label: 'AFTER',   icon: '\u2705',    color: 'var(--accent2)', accept: 'image/*,video/*', cap: 'environment' },
-    report:  { label: 'REPORT ISSUE', icon: '\u26a0\ufe0f', color: 'var(--danger)', accept: 'image/*,video/*', cap: 'environment' },
+    before:  { label: 'BEFORE',  icon: '📷', color: 'var(--warn)',     accept: 'image/*,video/*', cap: '' },
+    after:   { label: 'AFTER',   icon: '\u2705',    color: 'var(--accent2)', accept: 'image/*,video/*', cap: '' },
+    report:  { label: 'REPORT ISSUE', icon: '\u26a0\ufe0f', color: 'var(--danger)', accept: 'image/*,video/*', cap: '' },
     receipt: { label: 'RECEIPT', icon: '🧾', color: 'var(--muted)',    accept: 'image/*,application/pdf', cap: '' },
   };
 
@@ -5470,7 +5548,7 @@ function buildPhotoSection(woId, propAddr, opts) {
       '</div>';
   });
 
-  return '<div style="margin-top:12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">' +
+  return '<div id="photo-section-' + woId + '" style="margin-top:12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
     '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">📷 PHOTOS & FILES</span>' +
     '<div style="display:flex;gap:5px;flex-wrap:wrap">' + uploadBtns + '</div></div>' +

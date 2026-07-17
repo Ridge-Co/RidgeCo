@@ -1429,11 +1429,38 @@ async function testDriveAccess(env) {
 async function createUploadSession(env, body) {
   const woId=(body.wo_id||'').trim(), propAddr=(body.property||'Unknown Property').trim()||'Unknown Property';
   const fileName=(body.file_name||`file_${Date.now()}`).trim(), mimeType=(body.mime_type||'application/octet-stream').trim();
+  const fileType=(body.file_type||'other').toLowerCase(); // before | after | receipt | invoice | report | other
   try {
     const token=await getAccessToken(env), propsRoot=env.DRIVE_PROPERTIES_ROOT; if(!propsRoot) return json({error:'DRIVE_PROPERTIES_ROOT not configured'},500);
     const propFolder=await findOrCreateFolder(token,propAddr,propsRoot,propsRoot); if(!propFolder?.id) return json({error:'Cannot create property folder',addr:propAddr},500);
+
+    // Vendor invoices/bills go to a separate internal folder — never inside the customer WO folder
+    if (fileType === 'invoice' || fileType === 'bill') {
+      const internalRoot = await findOrCreateFolder(token,'_Internal — Vendor Bills',propFolder.id);
+      if(!internalRoot?.id) return json({error:'Cannot create internal bills folder'},500);
+      const woLabel = woId||`upload_${Date.now()}`;
+      const billsWOFolder = await findOrCreateFolder(token,woLabel,internalRoot.id);
+      if(!billsWOFolder?.id) return json({error:'Cannot create WO bills folder'},500);
+      const sessionResp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Upload-Content-Type':mimeType,'Origin':body.origin||'https://ridge-co.github.io'},body:JSON.stringify({name:fileName,parents:[billsWOFolder.id]})});
+      const uploadUrl=sessionResp.headers.get('Location'); if(!uploadUrl){const errBody=await sessionResp.text();return json({error:'Drive did not return upload URL',status:sessionResp.status,detail:errBody},500);}
+      return json({success:true,upload_url:uploadUrl,wo_folder_id:billsWOFolder.id,wo_folder_url:billsWOFolder.webViewLink||'',file_name:fileName});
+    }
+
+    // All other file types go into the customer-facing WO folder with subfolders
     let woFolder; if(body.folder_id){woFolder={id:body.folder_id,webViewLink:body.folder_url||''};} else{const woLabel=woId||`upload_${Date.now()}`;woFolder=await findOrCreateFolder(token,woLabel,propFolder.id);if(!woFolder?.id)return json({error:'Cannot create WO folder',wo:woLabel},500);}
-    const sessionResp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Upload-Content-Type':mimeType,'Origin':body.origin||'https://ridge-co.github.io'},body:JSON.stringify({name:fileName,parents:[woFolder.id]})});
+
+    // Route to subfolder by file type
+    let targetFolderId = woFolder.id;
+    if (fileType === 'before') {
+      const sub = await findOrCreateFolder(token,'Before Photos',woFolder.id);
+      if (sub?.id) targetFolderId = sub.id;
+    } else if (fileType === 'after' || fileType === 'receipt') {
+      const sub = await findOrCreateFolder(token,'After + Receipts',woFolder.id);
+      if (sub?.id) targetFolderId = sub.id;
+    }
+    // report and other go flat in WO folder
+
+    const sessionResp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Upload-Content-Type':mimeType,'Origin':body.origin||'https://ridge-co.github.io'},body:JSON.stringify({name:fileName,parents:[targetFolderId]})});
     const uploadUrl=sessionResp.headers.get('Location'); if(!uploadUrl){const errBody=await sessionResp.text();return json({error:'Drive did not return upload URL',status:sessionResp.status,detail:errBody},500);}
     return json({success:true,upload_url:uploadUrl,wo_folder_id:woFolder.id,wo_folder_url:woFolder.webViewLink||'',file_name:fileName});
   } catch(e){return json({error:e.message,step:'create_upload_session'},500);}
