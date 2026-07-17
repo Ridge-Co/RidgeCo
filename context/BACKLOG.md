@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.0 | **Last Updated:** July 2026
+**Version:** v1.1 | **Last Updated:** July 17, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -33,11 +33,21 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 
 ---
 
+## RIDGE CO — ESTIMATING
+
+| ID | Priority | Item | Notes |
+|---|---|---|---|
+| B-030 | 🟠 | Estimating template system — reusable proposal generator | Intake form (Sheet or structured input) → auto-generated HTML proposal. Base design on 4518 Fairfax Rd v1.1 as reference. ~2hr build session. |
+| B-031 | 🟠 | Estimating skill/agent — scope intake, photo review, line item generation | Replace Gemini workflow. Ask questions, stick to provided scope, no invented items, build memory of Brett's pricing patterns. |
+| B-032 | 🟡 | Proposal PDF export — one-click PDF with hyperlinks from HTML proposal | Chromium headless print-to-PDF. Links to Drive photos must survive. |
+
+---
+
 ## BRETTOS INFRASTRUCTURE
 
 | ID | Priority | Item | Notes |
 |---|---|---|---|
-| B-013 | 🟠 | Scheduled context update — auto-push session log after each session | GitHub Actions or Cowork scheduled task |
+| B-013 | 🟠 | Scheduled context update — auto-push session log after each session | GitHub Actions or Cowork scheduled task. Recurring reminder now set. |
 | B-014 | 🟠 | QB refresh token auto-renewal monitoring | Alert Brett 2 weeks before 100-day expiry |
 | B-016 | 🟡 | Multi-venture dashboard — one page, all ventures status | BrettOS homepage |
 | B-017 | 🟡 | Agent builder — create reusable agents for common tasks | Cowork skill |
@@ -62,7 +72,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-022 | 🟡 | Uplisting API connection — booking sync | Check developer.uplisting.io |
 | B-023 | 🟡 | Booking dashboard — occupancy, revenue, upcoming guests | |
 | B-024 | 🟢 | Automated guest messaging via Uplisting | |
-| B-025 | 🟢 | Expense tracking for cabin maintenance | Sheet + QB |
+| B-025 | 🟢 | Expense tracking for cabin maintenance | |
 
 ---
 
@@ -87,12 +97,18 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | — | Ridge Co | worker.js `POST /invoice-review/approve` endpoint | July 16, 2026 |
 | — | Ridge Co | Vendors tab — Hourly_Rate column, Alex=$35, Oscar=$50 | July 17, 2026 |
 | — | Ridge Co | Invoice_Review tab created with 19-column header | July 17, 2026 |
+| — | Ridge Co | Photo upload fix — gallery + bulk + camera all work (removed capture attr) | July 17, 2026 |
+| — | Ridge Co | 4518 Fairfax Rd Apt 1 proposal v1.0 — 45 items, 3 packages, photo links, lead paint compliance | July 17, 2026 |
+| — | Ridge Co | 4518 Fairfax Rd Apt 1 proposal v1.1 — Option 0 Expedited Interior Turn ($3,950), painting -15%, permissive cherry-pick, payment terms | July 17, 2026 |
 | — | BrettOS | GitHub context system (CURRENT.md, CLAUDE.md, context docs) | July 16, 2026 |
 | — | BrettOS | brett-context Cowork skill | July 16, 2026 |
 | — | BrettOS | GitHub Actions sheet-ops pipeline | July 17, 2026 |
-| — | BrettOS | CREDENTIALS_MAP.md + VENTURES.md | July 17, 2026 |
-| — | BrettOS | QB API app created, compliance submitted | July 17, 2026 |
-| — | Ridge Co | Photo upload fix — gallery + bulk + camera all work | July 17, 2026 |
+| — | BrettOS | CREDENTIALS_MAP.md + VENTURES.md + BACKLOG.md + FEATURE_LOG.md | July 17, 2026 |
+| — | BrettOS | QB API app created, compliance submitted (Intuit review pending) | July 17, 2026 |
+| — | BrettOS | PAT-027, PAT-028, PAT-029 added to Brett_Context_Document | July 17, 2026 |
+| — | BrettOS | privacy-policy.html + eula.html created for Intuit compliance | July 17, 2026 |
+| — | BrettOS | GitHub Actions archive step 403 error fixed | July 17, 2026 |
+| — | BrettOS | Estimating workflow: Gemini issues documented, Ridge Co proposal design established | July 17, 2026 |
 
 ---
 
