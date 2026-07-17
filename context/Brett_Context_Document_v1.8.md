@@ -190,6 +190,11 @@ Rules:
 - Never create a Drive doc without a version number in the filename
 - This applies to all sessions and all projects
 
+**PAT-027: NEW GOOGLE SHEET SHARING — MANDATORY REMINDER**
+Any time a new Google Sheet is created for use with the BrettOS system, Claude must immediately remind Brett to share it with the service account:
+`brett-os-sheets@brettos-502323.iam.gserviceaccount.com` (Editor access)
+Without this, GitHub Actions sheet-ops will fail silently. This reminder must appear before any sheet operations are queued.
+
 ---
 
 ## SECTION 7: SESSION LOG

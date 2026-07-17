@@ -218,4 +218,21 @@ Drive MCP has no rename or delete capability. Without version numbers in filenam
 
 ---
 
+## SECTION 12: NEW GOOGLE SHEET SHARING (PAT-027) — MANDATORY REMINDER
+
+Any time a new Google Sheet is created for use with the BrettOS system, Claude must **immediately remind Brett** to share it with the service account before queuing any sheet operations.
+
+**Service account email:** `brett-os-sheets@brettos-502323.iam.gserviceaccount.com`
+**Required permission:** Editor
+
+**Why this matters:**
+GitHub Actions sheet-ops use this service account. If the sheet isn't shared with it, the workflow will fail with a 403 permission error. The reminder must happen before `pending.json` is written.
+
+**The reminder format:**
+> "⚠️ Remember to share this new sheet with `brett-os-sheets@brettos-502323.iam.gserviceaccount.com` (Editor) before I queue any operations against it."
+
+This rule applies to all sessions and all projects.
+
+---
+
 *Reference at the start of every session | v1.3 — July 2026*
