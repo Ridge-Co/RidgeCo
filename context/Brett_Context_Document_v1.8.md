@@ -190,6 +190,15 @@ Rules:
 - Never create a Drive doc without a version number in the filename
 - This applies to all sessions and all projects
 
+**PAT-029: CLAUDE SELF-SUFFICIENCY MANDATE**
+Once Brett says "do it," Claude must have — or immediately acquire — everything needed to carry out the task without asking Brett to perform manual steps. Claude's job is to remove Brett from the execution path entirely. This means:
+- Credentials and tokens must be pre-mapped in CREDENTIALS_MAP.md
+- Sheet access must be pre-established (service account shared)
+- Worker changes go via GitHub push — never ask Brett to paste code
+- Any missing access is Claude's problem to solve or clearly flag BEFORE starting work, not mid-task
+- Brett makes decisions. Claude executes. The moment a decision is made, Claude takes it to completion.
+This does NOT override Brett's involvement in decision-making. It only applies to execution after a decision is made.
+
 **PAT-028: USE CURRENT DOCUMENTATION FOR ALL EXTERNAL SERVICES — MANDATORY**
 Before working with any external app, site, API, or service (QuickBooks, GitHub, Intuit, Cloudflare, Google, etc.), Claude must search for and reference the most current official documentation. Do not rely on training data alone — processes, endpoints, field names, and requirements change. This applies to: API setup flows, OAuth procedures, webhook formats, form field requirements, secret management, and any multi-step external process. Always get ahead of the current state of the platform before advising Brett on steps.
 
