@@ -1,0 +1,32 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Session 1 setup — Vendors Hourly_Rate + Invoice_Review tab",
+  "ops": [
+    {
+      "type": "add_column_header",
+      "tab": "Vendors",
+      "header": "Hourly_Rate"
+    },
+    {
+      "type": "update_cell_by_id",
+      "tab": "Vendors",
+      "id": "2",
+      "fields": { "Hourly_Rate": "35" }
+    },
+    {
+      "type": "update_cell_by_id",
+      "tab": "Vendors",
+      "id": "4",
+      "fields": { "Hourly_Rate": "50" }
+    },
+    {
+      "type": "create_tab",
+      "tab": "Invoice_Review"
+    },
+    {
+      "type": "write_headers",
+      "tab": "Invoice_Review",
+      "headers": ["ID","Bill_ID","WO_ID","Vendor_ID","Vendor_Name","Job_Type","Vendor_Cost","Brett_Time","Travel","Markup","Processing_Fee","Customer_Total","Brett_Net","QB_Invoice_Status","QB_Invoice_ID","QB_Bill_ID","Approved_By","Approved_Date","Active"]
+    }
+  ]
+}

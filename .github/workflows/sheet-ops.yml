@@ -1,0 +1,37 @@
+name: Google Sheets Operations
+
+on:
+  push:
+    paths:
+      - 'context/sheet-ops/pending.json'
+
+jobs:
+  run-sheet-ops:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install google-auth google-auth-httplib2 google-api-python-client
+
+      - name: Run sheet operations
+        env:
+          GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
+        run: python context/sheet-ops/run_ops.py
+
+      - name: Archive completed ops
+        run: |
+          mkdir -p context/sheet-ops/completed
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          cp context/sheet-ops/pending.json context/sheet-ops/completed/ops_${TIMESTAMP}.json
+          rm context/sheet-ops/pending.json
+          git config user.email "claude-cowork@bmoremanagement.com"
+          git config user.name "Claude Cowork"
+          git add context/sheet-ops/
+          git commit -m "Sheet ops complete: ${TIMESTAMP}" || echo "Nothing to commit"
+          git push
