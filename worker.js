@@ -34,6 +34,9 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
+    // TEMPORARY SETUP ENDPOINT — remove after use
+    if (path === '/setup/init-session1') return await runSession1Setup(env, url.searchParams.get('t'));
+
     if (path !== '/sms-inbound') {
       if (request.headers.get('X-Auth-Token') !== env.WORKER_SECRET)
         return json({ error: 'Unauthorized' }, 401);
@@ -1601,6 +1604,68 @@ async function importPrivateKey(pem) {
 async function signRS256(input, key) {
   const sig=await crypto.subtle.sign('RSASSA-PKCS1-v1_5',key,new TextEncoder().encode(input));
   return btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+
+// TEMPORARY — Session 1 sheet setup. Remove after running.
+async function runSession1Setup(env, token) {
+  if (token !== 'RC-SETUP-S1-2026') return json({ error: 'Unauthorized' }, 401);
+  const results = [];
+
+  // 1. Add Hourly_Rate column header to Vendors tab if missing
+  try {
+    const vd = await sheetsRequest(env, 'GET', '/values/Vendors');
+    const headers = (vd.values && vd.values[0]) || [];
+    if (!headers.includes('Hourly_Rate')) {
+      const colLetter = col(headers.length);
+      await sheetsRequest(env, 'POST', '/values:batchUpdate', {
+        valueInputOption: 'RAW',
+        data: [{ range: `Vendors!${colLetter}1`, values: [['Hourly_Rate']] }],
+      });
+      results.push('Added Hourly_Rate header to Vendors tab');
+    } else {
+      results.push('Hourly_Rate header already exists in Vendors');
+    }
+  } catch(e) { results.push('ERROR adding Hourly_Rate header: ' + e.message); }
+
+  // 2. Set Alex Busey (row ID 2) Hourly_Rate = 35
+  try {
+    const r = await updateRow(env, 'Vendors', '2', { Hourly_Rate: '35' });
+    results.push('Set Alex Busey (ID 2) Hourly_Rate = 35');
+  } catch(e) { results.push('ERROR setting Alex rate: ' + e.message); }
+
+  // 3. Set Oscar Padilla (row ID 4) Hourly_Rate = 50
+  try {
+    await updateRow(env, 'Vendors', '4', { Hourly_Rate: '50' });
+    results.push('Set Oscar Padilla (ID 4) Hourly_Rate = 50');
+  } catch(e) { results.push('ERROR setting Oscar rate: ' + e.message); }
+
+  // 4. Create Invoice_Review tab if it doesn't exist
+  try {
+    let tabExists = false;
+    try { const chk = await sheetsRequest(env, 'GET', '/values/Invoice_Review'); if (chk.values) tabExists = true; } catch(_) {}
+    if (!tabExists) {
+      await sheetsRequest(env, 'POST', ':batchUpdate', {
+        requests: [{ addSheet: { properties: { title: 'Invoice_Review' } } }],
+      });
+      results.push('Created Invoice_Review tab');
+    } else {
+      results.push('Invoice_Review tab already exists');
+    }
+  } catch(e) { results.push('ERROR creating Invoice_Review tab: ' + e.message); }
+
+  // 5. Write Invoice_Review header row if tab is empty
+  try {
+    const irHeaders = ['ID','Bill_ID','WO_ID','Vendor_ID','Vendor_Name','Job_Type','Vendor_Cost','Brett_Time','Travel','Markup','Processing_Fee','Customer_Total','Brett_Net','QB_Invoice_Status','QB_Invoice_ID','QB_Bill_ID','Approved_By','Approved_Date','Active'];
+    const irData = await sheetsRequest(env, 'GET', '/values/Invoice_Review');
+    if (!irData.values || irData.values.length === 0) {
+      await sheetsRequest(env, 'POST', '/values/Invoice_Review:append?valueInputOption=RAW', { values: [irHeaders] });
+      results.push('Added Invoice_Review header row');
+    } else {
+      results.push('Invoice_Review already has content — headers not overwritten');
+    }
+  } catch(e) { results.push('ERROR adding Invoice_Review headers: ' + e.message); }
+
+  return json({ success: true, results });
 }
 
 async function sheetsRequest(env, method, path, body) {
