@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.1 | **Last Updated:** July 17, 2026
+**Version:** v1.2 | **Last Updated:** July 17, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -27,7 +27,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-007 | 🟡 | Automated vendor payment via QuickBooks | Once QB API live: schedule vendor payment when customer pays |
 | B-008 | 🟡 | Email/SMS notifications — vendor gets WO assigned | Twilio or similar |
 | B-009 | 🟡 | Email/SMS notifications — Brett gets bill submitted for review | |
-| B-010 | 🟢 | WO completion photos auto-organized in Drive | Already partially working — verify and document |
+| B-010 | 🟢 | WO completion photos auto-organized in Drive | Subfolder structure now live — verify old WOs if needed |
 | B-011 | 🟢 | Invoice PDF generation for customers | QB handles this once API live |
 | B-012 | 🟢 | Vendor performance dashboard | On-time rate, average job cost, photo compliance |
 
@@ -52,6 +52,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-016 | 🟡 | Multi-venture dashboard — one page, all ventures status | BrettOS homepage |
 | B-017 | 🟡 | Agent builder — create reusable agents for common tasks | Cowork skill |
 | B-018 | 🟢 | Automated session log append after every Cowork session | Claude writes session summary to BACKLOG + SESSION_LOG |
+| B-033 | 🟡 | Best Practices doc update — no AI-obvious filenames, no PDF header/footer rule | Add as Section 14 to Brett_Cowork_Best_Practices_v1.3 → v1.4 |
 
 ---
 
@@ -97,9 +98,16 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | — | Ridge Co | worker.js `POST /invoice-review/approve` endpoint | July 16, 2026 |
 | — | Ridge Co | Vendors tab — Hourly_Rate column, Alex=$35, Oscar=$50 | July 17, 2026 |
 | — | Ridge Co | Invoice_Review tab created with 19-column header | July 17, 2026 |
-| — | Ridge Co | Photo upload fix — gallery + bulk + camera all work (removed capture attr) | July 17, 2026 |
+| — | Ridge Co | Photo upload fix — gallery + bulk + camera all work (removed capture attr from vendor.html) | July 17, 2026 |
 | — | Ridge Co | 4518 Fairfax Rd Apt 1 proposal v1.0 — 45 items, 3 packages, photo links, lead paint compliance | July 17, 2026 |
 | — | Ridge Co | 4518 Fairfax Rd Apt 1 proposal v1.1 — Option 0 Expedited Interior Turn ($3,950), painting -15%, permissive cherry-pick, payment terms | July 17, 2026 |
+| — | Ridge Co | Proposal PDF — Ridge_Co_Proposal_4518_Fairfax_Rd.pdf — clean filename, no header/footer, dead links removed | July 17, 2026 |
+| — | Ridge Co | Gallery upload fix in index.html (index.html buildPhotoSection also had capture=environment — now removed) | July 17, 2026 |
+| — | Ridge Co | Duplicate photo section fix — photo-section-WO-ID guard prevents double injection | July 17, 2026 |
+| — | Ridge Co | Void button for vendor bills — Void sets Active=FALSE, re-renders bill list instantly | July 17, 2026 |
+| — | Ridge Co | Sheets API quota fix — 60s TTL cache on loadHubEstimateView, splits render/fetch logic | July 17, 2026 |
+| — | Ridge Co | Vendor change persisting — optimistic state update in submitAssign after successful API response | July 17, 2026 |
+| — | Ridge Co | Drive subfolder structure — Before Photos / After+Receipts / _Internal Vendor Bills (separate from customer view) | July 17, 2026 |
 | — | BrettOS | GitHub context system (CURRENT.md, CLAUDE.md, context docs) | July 16, 2026 |
 | — | BrettOS | brett-context Cowork skill | July 16, 2026 |
 | — | BrettOS | GitHub Actions sheet-ops pipeline | July 17, 2026 |
@@ -109,6 +117,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | — | BrettOS | privacy-policy.html + eula.html created for Intuit compliance | July 17, 2026 |
 | — | BrettOS | GitHub Actions archive step 403 error fixed | July 17, 2026 |
 | — | BrettOS | Estimating workflow: Gemini issues documented, Ridge Co proposal design established | July 17, 2026 |
+| — | BrettOS | Recurring 4-hour backlog check scheduled (trig_01JwivD2P6SEnAwPJqgurEXF) | July 17, 2026 |
 
 ---
 
