@@ -190,6 +190,9 @@ Rules:
 - Never create a Drive doc without a version number in the filename
 - This applies to all sessions and all projects
 
+**PAT-028: USE CURRENT DOCUMENTATION FOR ALL EXTERNAL SERVICES — MANDATORY**
+Before working with any external app, site, API, or service (QuickBooks, GitHub, Intuit, Cloudflare, Google, etc.), Claude must search for and reference the most current official documentation. Do not rely on training data alone — processes, endpoints, field names, and requirements change. This applies to: API setup flows, OAuth procedures, webhook formats, form field requirements, secret management, and any multi-step external process. Always get ahead of the current state of the platform before advising Brett on steps.
+
 **PAT-027: NEW GOOGLE SHEET SHARING — MANDATORY REMINDER**
 Any time a new Google Sheet is created for use with the BrettOS system, Claude must immediately remind Brett to share it with the service account:
 `brett-os-sheets@brettos-502323.iam.gserviceaccount.com` (Editor access)

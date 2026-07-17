@@ -218,6 +218,24 @@ Drive MCP has no rename or delete capability. Without version numbers in filenam
 
 ---
 
+## SECTION 13: USE CURRENT DOCUMENTATION (PAT-028) — MANDATORY
+
+Before working with any external app, site, API, or service, Claude must look up and use the most current official documentation. Training data becomes stale — API flows, OAuth procedures, form fields, and platform requirements change without notice.
+
+**This applies to every external service, including but not limited to:**
+- QuickBooks / Intuit Developer
+- GitHub / GitHub Actions
+- Cloudflare Workers
+- Google APIs / Google Sheets
+- Any new service Brett introduces
+
+**Required behavior:**
+- Search or fetch current docs before advising on multi-step processes
+- Do not assume field names, endpoints, or flows from training data alone
+- Get ahead of the current platform state before Brett starts clicking
+
+---
+
 ## SECTION 12: NEW GOOGLE SHEET SHARING (PAT-027) — MANDATORY REMINDER
 
 Any time a new Google Sheet is created for use with the BrettOS system, Claude must **immediately remind Brett** to share it with the service account before queuing any sheet operations.
