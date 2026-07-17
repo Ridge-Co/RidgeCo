@@ -9,6 +9,8 @@ Read ALL files before doing any work.
 | Brett_Cowork_Best_Practices_v1.3.md | v1.3 | Session workflow, common mistakes, how to work with Brett |
 | CREDENTIALS_MAP.md | v1.0 | Every service, auth method, secret location, access status |
 | VENTURES.md | v1.0 | Every venture — current state, stack, Claude access level, automation gaps |
+| FEATURE_LOG.md | v1.0 | What's working — check before every code change to prevent regressions |
+| BACKLOG.md | v1.0 | Master backlog across all ventures — priorities, in progress, completed |
 
 ## How to update these files
 

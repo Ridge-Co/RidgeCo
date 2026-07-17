@@ -1,0 +1,104 @@
+# BrettOS Master Backlog
+**Version:** v1.0 | **Last Updated:** July 2026
+**Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
+
+Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
+
+---
+
+## IN PROGRESS
+
+| ID | Venture | Item | Blocker |
+|---|---|---|---|
+| B-015 | Ridge Co | QuickBooks Online API integration — create invoices from Invoice_Review rows | ⏳ Waiting on Intuit production approval (submitted July 17, 2026) |
+
+---
+
+## RIDGE CO — WORK ORDER MANAGEMENT
+
+| ID | Priority | Item | Notes |
+|---|---|---|---|
+| B-001 | 🔴 | QB invoice creation from approved Invoice_Review rows | Automated: worker reads Invoice_Review, creates QB invoice via API |
+| B-002 | 🔴 | QB bill recording when vendor bill approved | Record vendor bill in QB simultaneously with invoice |
+| B-003 | 🟠 | Work order creation from index.html | Full form — property, trade, vendor assignment, priority |
+| B-004 | 🟠 | Vendor assignment + reassignment from index.html | Dropdown + history |
+| B-005 | 🟠 | Payment tracking — record when customer pays | Link QB payment status back to sheet |
+| B-006 | 🟡 | Tenant portal — report issues, view WO status | Separate page or section |
+| B-007 | 🟡 | Automated vendor payment via QuickBooks | Once QB API live: schedule vendor payment when customer pays |
+| B-008 | 🟡 | Email/SMS notifications — vendor gets WO assigned | Twilio or similar |
+| B-009 | 🟡 | Email/SMS notifications — Brett gets bill submitted for review | |
+| B-010 | 🟢 | WO completion photos auto-organized in Drive | Already partially working — verify and document |
+| B-011 | 🟢 | Invoice PDF generation for customers | QB handles this once API live |
+| B-012 | 🟢 | Vendor performance dashboard | On-time rate, average job cost, photo compliance |
+
+---
+
+## BRETTOS INFRASTRUCTURE
+
+| ID | Priority | Item | Notes |
+|---|---|---|---|
+| B-013 | 🟠 | Scheduled context update — auto-push session log after each session | GitHub Actions or Cowork scheduled task |
+| B-014 | 🟠 | QB refresh token auto-renewal monitoring | Alert Brett 2 weeks before 100-day expiry |
+| B-016 | 🟡 | Multi-venture dashboard — one page, all ventures status | BrettOS homepage |
+| B-017 | 🟡 | Agent builder — create reusable agents for common tasks | Cowork skill |
+| B-018 | 🟢 | Automated session log append after every Cowork session | Claude writes session summary to BACKLOG + SESSION_LOG |
+
+---
+
+## BARRELCO
+
+| ID | Priority | Item | Notes |
+|---|---|---|---|
+| B-019 | 🟡 | Google Sheet for SKU/inventory tracking | Share with service account when created |
+| B-020 | 🟢 | eBay API integration — auto-list new SKUs | Needs eBay Developer token |
+| B-021 | 🟢 | Pricing tracker — compare sold prices to listed prices | |
+
+---
+
+## CABIN (WV STR)
+
+| ID | Priority | Item | Notes |
+|---|---|---|---|
+| B-022 | 🟡 | Uplisting API connection — booking sync | Check developer.uplisting.io |
+| B-023 | 🟡 | Booking dashboard — occupancy, revenue, upcoming guests | |
+| B-024 | 🟢 | Automated guest messaging via Uplisting | |
+| B-025 | 🟢 | Expense tracking for cabin maintenance | Sheet + QB |
+
+---
+
+## WINCHESTER HAULING
+
+| ID | Priority | Item | Notes |
+|---|---|---|---|
+| B-026 | 🟠 | Clarify current stack — what exists, what's manual | Need session with Brett |
+| B-027 | 🟡 | Driver portal — route assignment, pickup confirmation | |
+| B-028 | 🟡 | Automated driver payment | QB or ACH |
+| B-029 | 🟢 | CHEP/PECO reconciliation — pallets in vs out | |
+
+---
+
+## COMPLETED
+
+| ID | Venture | Item | Completed |
+|---|---|---|---|
+| — | Ridge Co | Vendor portal (vendor.html) — PIN login, WO list, photo upload, bill submission | July 2026 |
+| — | Ridge Co | Invoice Review screen in index.html | July 16, 2026 |
+| — | Ridge Co | worker.js `/vendor-bills` status filter | July 16, 2026 |
+| — | Ridge Co | worker.js `POST /invoice-review/approve` endpoint | July 16, 2026 |
+| — | Ridge Co | Vendors tab — Hourly_Rate column, Alex=$35, Oscar=$50 | July 17, 2026 |
+| — | Ridge Co | Invoice_Review tab created with 19-column header | July 17, 2026 |
+| — | BrettOS | GitHub context system (CURRENT.md, CLAUDE.md, context docs) | July 16, 2026 |
+| — | BrettOS | brett-context Cowork skill | July 16, 2026 |
+| — | BrettOS | GitHub Actions sheet-ops pipeline | July 17, 2026 |
+| — | BrettOS | CREDENTIALS_MAP.md + VENTURES.md | July 17, 2026 |
+| — | BrettOS | QB API app created, compliance submitted | July 17, 2026 |
+| — | Ridge Co | Photo upload fix — gallery + bulk + camera all work | July 17, 2026 |
+
+---
+
+## HOW TO USE THIS BACKLOG
+
+- **Brett says "do it"** → Claude moves item to In Progress, executes, moves to Completed
+- **New idea comes up** → Claude adds it to backlog immediately with a priority
+- **Something breaks** → Claude adds it to FEATURE_LOG regression rules after fixing
+- **Session ends** → Claude updates Completed section with what was done
