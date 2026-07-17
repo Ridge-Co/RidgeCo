@@ -1137,9 +1137,9 @@ function loadPortalAttachments(woId, opts) {
 function buildPhotoSection(woId, propAddr, opts) {
   opts = opts || { canBefore: true, canAfter: true, canReport: false, canReceipt: true, viewAll: true };
   var TYPE_CONFIG = {
-    before:  { label: 'BEFORE',  icon: '📷', color: 'var(--warn)',     accept: 'image/*,video/*', cap: 'environment' },
-    after:   { label: 'AFTER',   icon: '\u2705',    color: 'var(--accent2)', accept: 'image/*,video/*', cap: 'environment' },
-    report:  { label: 'REPORT ISSUE', icon: '\u26a0\ufe0f', color: 'var(--danger)', accept: 'image/*,video/*', cap: 'environment' },
+    before:  { label: 'BEFORE',  icon: '📷', color: 'var(--warn)',     accept: 'image/*,video/*', cap: '' },
+    after:   { label: 'AFTER',   icon: '\u2705',    color: 'var(--accent2)', accept: 'image/*,video/*', cap: '' },
+    report:  { label: 'REPORT ISSUE', icon: '\u26a0\ufe0f', color: 'var(--danger)', accept: 'image/*,video/*', cap: '' },
     receipt: { label: 'RECEIPT', icon: '🧾', color: 'var(--muted)',    accept: 'image/*,application/pdf', cap: '' },
   };
 
