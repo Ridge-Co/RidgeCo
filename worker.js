@@ -143,7 +143,7 @@ export default {
         if (path === '/generate-estimate-text')   return await generateEstimateText(env, body);
         if (path === '/create-upload-session')    return await createUploadSession(env, body);
         if (path === '/log-attachment')           return await logAttachment(env, body);
-        if (path === '/vendor-bill/add')          return await addRow(env, 'Vendor_Bills', body);
+        if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
         if (path === '/fire-make-webhook')        return await fireMakeWebhook(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
@@ -640,7 +640,7 @@ async function createWorkOrder(env, body) {
 
 async function appendWONotes(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
-  const wo = workorders.find(w => w.ID === body.wo_id);
+  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
   const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
   const prefix = body.author ? `[${ts} — ${body.author}] ` : `[${ts}] `;
@@ -652,7 +652,7 @@ async function assignVendor(env, body) {
     fetchTab(env,'Work_Orders'), fetchTab(env,'Vendors'), fetchTab(env,'Tenants'),
     fetchTab(env,'Units'), fetchTab(env,'Properties'), fetchTab(env,'Keys'),
   ]);
-  const wo = workorders.find(w => w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const vendor = vendors.find(v => v.ID === body.vendor_id); if (!vendor) return json({ error: 'Vendor not found' }, 404);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const unit     = units.find(u => u.ID === wo.Unit_ID);
@@ -691,7 +691,7 @@ async function assignVendor(env, body) {
 
 async function updateStatus(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
-  const wo = workorders.find(w => w.ID === body.wo_id);
+  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
   const fields = { Status: body.status };
@@ -945,6 +945,23 @@ async function sendPinMessage(env, body) {
 }
 
 // ── VENDOR BILLING ───────────────────────────────────────────
+
+async function addVendorBill(env, body) {
+  const res = await addRow(env, 'Vendor_Bills', body);
+  // Automation: entering a bill moves the WO to Complete (if still pre-complete).
+  try {
+    const woKey = body.WO_ID || body.wo_id;
+    if (woKey) {
+      const wos = await fetchTab(env, 'Work_Orders');
+      const wo = wos.find(w => w.WO_ID === woKey || w.ID === woKey);
+      const preComplete = ['New','Assigned','Accepted','In Progress','On Hold'];
+      if (wo && preComplete.includes(wo.Status)) {
+        await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
+      }
+    }
+  } catch(e) { /* non-fatal: bill is still saved */ }
+  return res;
+}
 
 async function listVendorBills(env, url) {
   const woId = url.searchParams.get('wo_id') || '', vendorId = url.searchParams.get('vendor_id') || '', statusFilter = url.searchParams.get('status') || '';
@@ -1203,7 +1220,7 @@ async function translateToEnglish(env, text) {
 async function addWONote(env, body) {
   if (!body.wo_id || !body.note) return json({ error: 'Missing wo_id or note' }, 400);
   const workorders = await fetchTab(env, 'Work_Orders');
-  const wo = workorders.find(w => w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   if (body.author_role === 'owner' && body.owner_id) {
     const properties = await fetchTab(env, 'Properties');
     const prop = properties.find(p => p.ID === wo.Property_ID);
@@ -1242,7 +1259,7 @@ async function ownerUpdateWO(env, body) {
   const allowed = {}; for (const [k,v] of Object.entries(body.fields||{})) { if (OWNER_EDITABLE_FIELDS.includes(k)) allowed[k]=v; }
   if (!Object.keys(allowed).length) return json({ error: 'No owner-editable fields provided' }, 400);
   const [workorders, properties] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties')]);
-  const wo = workorders.find(w => w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const prop = properties.find(p => p.ID === wo.Property_ID);
   if (!prop || String(prop.Owner_ID) !== String(body.owner_id)) return json({ error: 'Unauthorized' }, 403);
   await updateRow(env, 'Work_Orders', body.wo_id, allowed);
@@ -1261,7 +1278,7 @@ async function adminUpdateWO(env, body) {
 async function appendDescription(env, body) {
   if (!body.wo_id||!body.text) return json({ error: 'Missing wo_id or text' }, 400);
   const [workorders, properties] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties')]);
-  const wo = workorders.find(w => w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   if (body.author_role === 'owner' && body.owner_id) { const prop = properties.find(p => p.ID === wo.Property_ID); if (!prop || String(prop.Owner_ID) !== String(body.owner_id)) return json({ error: 'Unauthorized' }, 403); }
   const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' });
   const newDesc = (wo.Description||'') + `\n\n[${ts} — ${body.author||'Unknown'} (${body.author_role||'unknown'})] ${body.text.trim()}`;
@@ -1341,7 +1358,7 @@ async function updateWOField(env, woId, fieldName, value) {
   try {
     const data=await sheetsRequest(env,'GET','/values/Work_Orders'); const rows=data.values||[], headers=rows[0]||[];
     const colIdx=headers.indexOf(fieldName); if(colIdx===-1) return;
-    const idCol=headers.indexOf('ID'), rowIdx=rows.findIndex((r,i)=>i>0&&r[idCol]===woId); if(rowIdx===-1) return;
+    const idCol=headers.indexOf('ID'), _wc=headers.indexOf('WO_ID'), rowIdx=rows.findIndex((r,i)=>i>0&&(r[idCol]===woId||(_wc>=0&&r[_wc]===woId))); if(rowIdx===-1) return;
     const colLetter=colIdx<26?String.fromCharCode(65+colIdx):'A'+String.fromCharCode(65+colIdx-26);
     await sheetsRequest(env,'PUT',`/values/Work_Orders!${colLetter}${rowIdx+1}?valueInputOption=RAW`,{values:[[value]]});
   } catch(e) { /* non-fatal */ }
@@ -1701,7 +1718,7 @@ async function addRow(env, tab, body) {
 async function updateRow(env, tab, id, fields) {
   if(fields.Phone) fields.Phone=normalizePhone(fields.Phone);
   const data=await sheetsRequest(env,'GET',`/values/${tab}`); if(!data.values) return json({error:'Tab not found'},404);
-  const [headers,...rows]=data.values; const rowIndex=rows.findIndex(r=>r[0]===String(id));
+  const [headers,...rows]=data.values; const _wc=(tab==='Work_Orders')?headers.indexOf('WO_ID'):-1; const rowIndex=rows.findIndex(r=>r[0]===String(id)||(_wc>=0&&r[_wc]===String(id)));
   if(rowIndex===-1) return json({error:'Row not found'},404);
   const sheetRow=rowIndex+2, updates=[];
   for(const [field,value] of Object.entries(fields)){const colIndex=headers.indexOf(field);if(colIndex!==-1)updates.push({range:`${tab}!${col(colIndex)}${sheetRow}`,values:[[value]]});}
@@ -1712,7 +1729,7 @@ async function updateRow(env, tab, id, fields) {
 
 async function updateWOFields(env, woId, fields) {
   const data=await sheetsRequest(env,'GET',`/values/Work_Orders`); if(!data.values) return;
-  const [headers,...rows]=data.values; const rowIndex=rows.findIndex(r=>r[0]===woId);
+  const [headers,...rows]=data.values; const _wc=headers.indexOf('WO_ID'); const rowIndex=rows.findIndex(r=>r[0]===woId||(_wc>=0&&r[_wc]===woId));
   if(rowIndex===-1) return; const sheetRow=rowIndex+2, updates=[];
   for(const [field,value] of Object.entries(fields)){const ci=headers.indexOf(field);if(ci!==-1)updates.push({range:`Work_Orders!${col(ci)}${sheetRow}`,values:[[value]]});}
   if(updates.length) await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:updates});
