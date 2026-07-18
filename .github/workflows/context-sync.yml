@@ -1,0 +1,44 @@
+name: Context Inbox Sync
+
+# Autonomous, tokenless context writes.
+# Reads capture files Claude dropped into the BrettOS_Inbox_Queue Drive folder
+# (written via account OAuth — no pasted GitHub token) and folds them into
+# context/CAPTURE_INBOX.md, committing with the built-in GITHUB_TOKEN.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # every ~30 min (GitHub may delay scheduled runs; that's fine)
+  workflow_dispatch: {}       # allows manual / API-triggered runs for testing
+
+jobs:
+  sync-inbox:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install google-auth google-api-python-client
+
+      - name: Sync inbox queue from Drive
+        env:
+          GOOGLE_SA_KEY: ${{ secrets.GOOGLE_SA_KEY }}
+        run: python context/inbox-queue/sync_inbox.py
+
+      - name: Commit synced captures
+        run: |
+          git config user.email "claude-cowork@bmoremanagement.com"
+          git config user.name "Claude Cowork (Autopilot)"
+          git add context/CAPTURE_INBOX.md context/inbox-queue/processed.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Autopilot: sync captures from Drive inbox queue"
+            git push
+          fi

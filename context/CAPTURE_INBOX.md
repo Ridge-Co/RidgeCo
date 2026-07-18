@@ -120,6 +120,8 @@
 - Status: new
 - ❓ Confirm the full entity map (Ridge Co = Saint Thomas Ventures LLC? vans/Turo under which entity?).
 
+<!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
+
 ---
 
 ## GRADUATED (moved to BACKLOG or a plan)
