@@ -82,6 +82,8 @@ export default {
         if (path === '/estimates')              return await listEstimates(env, url);
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
+        if (path === '/qb/test')                return await qbTest(env);
+        if (path === '/qb/accounts')            return await qbListAccounts(env);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -1733,6 +1735,50 @@ async function updateWOFields(env, woId, fields) {
   if(rowIndex===-1) return; const sheetRow=rowIndex+2, updates=[];
   for(const [field,value] of Object.entries(fields)){const ci=headers.indexOf(field);if(ci!==-1)updates.push({range:`Work_Orders!${col(ci)}${sheetRow}`,values:[[value]]});}
   if(updates.length) await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:updates});
+}
+
+// ── QUICKBOOKS ONLINE (production) ───────────────────────────
+const QB_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
+const QB_API_BASE  = 'https://quickbooks.api.intuit.com/v3/company';
+
+async function qbAccessToken(env) {
+  if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REFRESH_TOKEN || !env.QB_REALM_ID)
+    throw new Error('QB env vars missing (need QB_CLIENT_ID, QB_CLIENT_SECRET, QB_REFRESH_TOKEN, QB_REALM_ID)');
+  const basic = btoa(`${env.QB_CLIENT_ID}:${env.QB_CLIENT_SECRET}`);
+  const res = await fetch(QB_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(env.QB_REFRESH_TOKEN)}`,
+  });
+  const data = await res.json();
+  if (!data.access_token) throw new Error('QB token refresh failed: ' + JSON.stringify(data).slice(0, 300));
+  // NOTE: data.refresh_token rotates — persistence to a QB_Config tab is added with the write flow.
+  return data.access_token;
+}
+
+async function qbApi(env, path, method = 'GET', body = null) {
+  const token = await qbAccessToken(env);
+  const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } };
+  if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const res = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/${path}`, opts);
+  return await res.json();
+}
+
+async function qbTest(env) {
+  try {
+    const info = await qbApi(env, `companyinfo/${env.QB_REALM_ID}?minorversion=73`);
+    const name = info?.CompanyInfo?.CompanyName || null;
+    return json({ ok: !!name, company: name, detail: name ? undefined : info });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function qbListAccounts(env) {
+  try {
+    const q = encodeURIComponent("select Id,Name,AccountType,AccountSubType,Classification from Account where Active=true maxresults 500");
+    const data = await qbApi(env, `query?query=${q}&minorversion=73`);
+    const accounts = (data?.QueryResponse?.Account || []).map(a => ({ id: a.Id, name: a.Name, type: a.AccountType, sub: a.AccountSubType, cls: a.Classification }));
+    return json({ ok: true, count: accounts.length, accounts });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 // ── UTILITY ──────────────────────────────────────────────────
