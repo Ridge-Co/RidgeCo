@@ -5210,7 +5210,11 @@ function voidVendorBill(billId, woId) {
   api('POST','/vendor-bill/update',{id:billId,fields:{Active:'FALSE'}}).then(function(res){
     if (res.success||res.id) {
       toast('Bill voided','success');
-      // Re-fetch and re-render bills for this WO
+      // Reliable refresh: reload data and re-open the WO detail so the
+      // surviving active bill(s) always render (fixes "void hid all bills").
+      loadAll().then(function(){ openWODetail(woId); });
+      return;
+      // (legacy partial re-render below — now unreachable)
       api('GET','/vendor-bills?wo_id='+woId).then(function(bills){
         var db = document.getElementById('detail-body');
         if (!db) return;

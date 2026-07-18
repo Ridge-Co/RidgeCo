@@ -136,6 +136,20 @@
 - Type: plan (spans Ridge Co + gem redesign)
 - Status: new — Brett to add more detail; gem instruction drafts v1 delivered (Tech + Tenant).
 
+### CAP-011 — RidgeCo Hub "one ring" punch list (WO-1053 session, July 18)
+- Principle (Brett): the Hub is the single control surface — Brett must be able to do everything vendors/tenants/customers can, and more. Fill any gap found.
+- WO-1053 findings (from live sheet): **bill is SAFE** — Vendor_Bills row **ID 5 ($225, Active TRUE)** is the live bill; row ID 2 ($225) was the duplicate, correctly voided (Active FALSE). Void worked; the Hub display failed to redraw the survivor. WO-1053 Drive folder is correctly parented under **"151 W Lanvale St"**, and its 3 photos are correctly tagged WO-1053 in Attachments — so the "2930 St Paul photos" is NOT a routing/DB error (needs image-content check to close out).
+- FIXED (pushed July 18): void handler re-render was fragile DOM surgery → replaced with reliable `loadAll()+openWODetail()` refresh (mirrors quickStatusChange).
+- OPEN Hub items to build next:
+  1. **Admin bill entry** UI in Hub → POST `/vendor-bill/add` (backend already exists).
+  2. **Undo / view+restore voided bills** → POST `/vendor-bill/update {Active:'TRUE'}` (backend exists). Covers the "undo" ask.
+  3. **Dedupe** duplicate bill display + prevent vendor double-submit at source.
+  4. **Internal vendor-instructions field** (visible to vendor, NOT on the bill) — separate from on-bill Notes. Needs a Work_Orders column + Hub input + vendor.html display.
+  5. **Status updates by admin not persisting** — needs Brett to say which screen/control he uses (there are several `/status` callers).
+  6. Confirm WO-1053 photo content (open the 3 tagged images).
+- Type: bug fixes + features (Ridge Co)
+- Status: 1 fixed; rest queued.
+
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
 ---
