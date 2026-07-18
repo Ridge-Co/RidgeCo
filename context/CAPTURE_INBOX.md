@@ -84,7 +84,8 @@
 - Type: venture / offload target
 - Status: new
 - ❓ Confirm which vehicles are SD-registered vs MD (are the Turo cars the SD ones, and the cargo vans the MD/MVA ones?).
-- ❓ Who is the Colorado third-party manager, and what's the exit path from that arrangement?
+- Manager (corrected July 18): current Turo manager = **GiddyUp** (Colorado). **Arslan / "TuroDone4You"** was the FIRST manager — folded almost immediately; treat as defunct (old Drive folder is historical only).
+- ❓ Exit path from GiddyUp → long-term lease-to-own; and which entity owns the Turo cars (Global North, or another)?
 
 ### CAP-004 — Entity note: BMore Management is the parent (INFO)
 - Raw: Signature block confirms BMore Management (Brett Lambert, "Chief More Manager," 410-777-8651, PO Box 39692 Baltimore, www.BMoreManagement.com) as the umbrella over the ventures. Ridge Co, the van fleet, and Turo all appear to sit under it.
@@ -119,6 +120,21 @@
 - Type: info + task
 - Status: new
 - ❓ Confirm the full entity map (Ridge Co = Saint Thomas Ventures LLC? vans/Turo under which entity?).
+
+### CAP-009 — Fleet/vehicle filing model (DECISION — apply everywhere)
+- Decision (July 18): File vehicle assets by **OWNER at the top level** — cargo vans under **Global North Inc**; the current management company is a **VENDOR** with its own folder for manager-relevant items (**Kingbee** for the vans, **GiddyUp** for the Turo cars). Prior managers (**Fluid / FluidTruck**, **Arslan / TuroDone4You**) are historical/defunct folders, kept for reference only.
+- Why: managers change (Fluid→Kingbee; Arslan→GiddyUp) but the owner is stable, so owner-based filing never orphans history on a manager switch.
+- Type: decision / routing rule
+- Status: active — feeds the document-routing map (CAP-005) and the routing build.
+
+### CAP-010 — Database-integrated repair gems + tenant self-help system (PLAN)
+- Vision: both repair gems tie into a per-unit **Equipment Registry + Repair History** so they cross-reference prior work.
+  - Tech gem (Brett): "I'm at 2930 St Paul Apt 3 on the dryer — did we work on this?" → gem checks history (e.g., we did Apt 2 washer, not Apt 3), requests the data-plate photo if model unknown, records the model, troubleshoots, then outputs a summary for BOTH the invoice and the DB (so next time we know what we did).
+  - Tenant gem: uses known model + history to guide safe self-help over chat/SMS; if an appliance has been serviced repeatedly, flags it to Brett as a replacement candidate instead of looping the tenant; captures the model and drafts a work order on escalation.
+- Requires (NEW backlog): (1) per-unit **Equipment Registry** (appliance, make/model/serial, install date) + **Repair History** log in the Maintenance Hub; (2) a Hub endpoint the gems can query by unit+appliance and write back to; (3) the **tenant chat/SMS self-help channel**.
+- Behavior requirement: gems diagnose like a veteran tech — rank suspects, test the fast/fatal ones first (e.g., ohm the compressor before chasing the whole system), but never condemn an expensive part before the killing test is confirmed. (Root of Brett's HVAC frustration.)
+- Type: plan (spans Ridge Co + gem redesign)
+- Status: new — Brett to add more detail; gem instruction drafts v1 delivered (Tech + Tenant).
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
