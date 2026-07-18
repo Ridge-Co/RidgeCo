@@ -11,6 +11,8 @@ Read ALL files before doing any work.
 | VENTURES.md | v1.0 | Every venture — current state, stack, Claude access level, automation gaps |
 | FEATURE_LOG.md | v1.0 | What's working — check before every code change to prevent regressions |
 | BACKLOG.md | v1.0 | Master backlog across all ventures — priorities, in progress, completed |
+| CAPTURE_INBOX.md | v1.0 | Brett's zero-friction brain-dump inbox — CAP items, links to backlog, open questions. Read every session. |
+| HANDWRITING_KEY.md | v1.0 | Reference for reading Brett's handwritten-note photos; grows over time |
 
 ## How to update these files
 
@@ -29,3 +31,5 @@ When a new version is needed (new PAT, new project details, etc.):
 | CREDENTIALS_MAP v1.0 | July 17, 2026 | Initial credentials map — Sheets, GitHub, Cloudflare, QB, Drive |
 | VENTURES v1.0 | July 17, 2026 | Initial ventures overview — Ridge Co, BrettOS, BarrelCo, Cabin, Winchester Hauling |
 | PAT-029 | July 17, 2026 | Claude self-sufficiency mandate — execute without asking Brett for manual steps |
+| Capture Inbox v1.0 | July 18, 2026 | Capture layer created — CAP-001..008 (vans/Kingbee, receipts automation, Turo, cash-flow north star, compliance, registration, entity) |
+| CREDENTIALS_MAP v1.1 | July 18, 2026 | GitHub token reality clarified — push needs Brett's pasted classic PAT; never store token in this public repo |

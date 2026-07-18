@@ -1,5 +1,5 @@
 # BrettOS Credentials Map
-**Version:** v1.0 | **Last Updated:** July 2026
+**Version:** v1.1 | **Last Updated:** July 18, 2026
 **Rule:** This file maps every service Claude may need to interact with, where credentials are stored, and current access status. Update this file whenever a new service is connected or credentials change. Never store actual secret values here — only the map.
 
 ---
@@ -27,11 +27,12 @@
 
 **Purpose:** Code hosting, auto-deploy, context storage, GitHub Actions automation
 **Auth method:** Personal Access Token (PAT) with `repo` scope
-**Token location:** Stored in Claude's session environment — used for git push
+**Token location:** NOT reliably present in the session environment. As of July 18, 2026 the cloud session only exposes read-only proxy-injected placeholder tokens — read (clone/fetch of the public repo) works automatically, but **push requires a real token pasted by Brett**. Brett keeps a classic `repo`-scope PAT (no expiration). If pushes fail with "could not read Username" or "Invalid username or token," ask Brett to paste it, then `git remote set-url origin https://<token>@github.com/Ridge-Co/RidgeCo.git`.
+**CRITICAL:** This repo is PUBLIC. Never write the token value into any file here or commit it. Use it only in-session (git remote URL / one-off push).
 **Org:** Ridge-Co (covers all org repos with one token)
 **Personal repos:** Same token covers personal repos under brett332
-**Expiry:** Check `github.com/settings/tokens` — rotate when expired, update Claude's session token
-**Access status:** ✅ Active
+**Expiry:** Brett's current classic token has NO expiration — rotate periodically for hygiene.
+**Access status:** ⚠️ Read = automatic. WRITE = requires Brett's pasted classic PAT each session until a persistent mechanism (session secret / OAuth connector) exists. GitHub's remote MCP OAuth isn't supported by custom connectors yet, so no clean connector path today.
 **Auto-deploy:** Push to `main` branch of `ridge-co/RidgeCo` → Cloudflare Worker deploys automatically via wrangler
 
 ### Known Repos
