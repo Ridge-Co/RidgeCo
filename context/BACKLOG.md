@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.10 | **Last Updated:** July 19, 2026
+**Version:** v1.11 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -36,6 +36,8 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-075 | 🟡 | Upgrade Hub UI to match the 4518 Fairfax Rd estimate look | Brett's UI baseline. From CAP-018. |
 | B-077 | 🟡 | Preventive-maintenance package | Ties B-072 standards engine + CAP-010. From CAP-018. |
 | B-082 | 🟠 | Cesar mirror site — tracks his own jobs separately but includes Brett's | Vendor-portal extension. Ties CAP-010. From CAP-018. |
+| B-084 | 🟠 | Hub "Receipts to file" queue — OCR + seeded property/WO picker → post to WO (preview-first) | Confirm-first matching (WO#→exact; property→open WOs; else best-guess). Customer-charge check to avoid double-billing. From CAP-002. |
+| B-085 | 🟠 | Verify/fix Drive→QuickBooks receipt-email pipeline | Confirm QB Receipts tab is receiving scans; check the Apps Script trigger + QB allowed-sender registration. From CAP-002. |
 
 ---
 
