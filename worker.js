@@ -1802,6 +1802,23 @@ const QB_TRADES = [
   { trade: 'General',     incomeId: '198',              expenseId: '68'  }, // Repairs Income exists
 ];
 
+// Resolved trade → QB ids (created via /qb/setup-trades, July 19, 2026).
+// Invoices reference `item` (income); vendor bills reference `expense` (account).
+const QB_TRADE_MAP = {
+  Plumbing:   { item: '30', income: '287', expense: '245' },
+  Electrical: { item: '31', income: '288', expense: '235' },
+  HVAC:       { item: '32', income: '289', expense: '239' },
+  Painting:   { item: '33', income: '290', expense: '243' },
+  Flooring:   { item: '34', income: '291', expense: '237' },
+  Carpentry:  { item: '35', income: '292', expense: '218' },
+  Roofing:    { item: '36', income: '293', expense: '246' },
+  Landscaping:{ item: '37', income: '294', expense: '220' },
+  Cleaning:   { item: '22', income: '295', expense: '282' },
+  Appliance:  { item: '39', income: '296', expense: '230' },
+  Windows:    { item: '38', income: '204', expense: '249' },
+  General:    { item: '40', income: '198', expense: '68'  },
+};
+
 // Extract an existing entity Id from a QBO "Duplicate Name Exists" (6240) error.
 function qbDupId(r) {
   try { const e = r?.Fault?.Error?.[0]; if (e?.code === '6240' && e?.Detail) { const m = e.Detail.match(/Id=(\d+)/); if (m) return m[1]; } } catch (x) {}
