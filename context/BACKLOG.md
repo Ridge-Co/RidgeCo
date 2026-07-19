@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.6 | **Last Updated:** July 19, 2026
+**Version:** v1.7 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -30,6 +30,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-010 | 🟢 | WO completion photos auto-organized in Drive | Subfolder structure now live — verify old WOs if needed |
 | B-011 | 🟢 | Invoice PDF generation for customers | QB handles this once API live |
 | B-012 | 🟢 | Vendor performance dashboard | On-time rate, average job cost, photo compliance |
+| B-055 | 🟠 | Lock-code registry — add "parcel locker" category (shareable-with-tenant) | Distinct from lockboxes/door codes; parcel-locker codes can be shared with tenants (situational), others cannot. ⚠ No dedicated lock-code tab in known schema — confirm exists or build. From CAP-016. |
 
 ---
 
@@ -53,6 +54,9 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-048 | 🟡 | WO 153 #2 — HVAC leak, add time | From CAP-014. |
 | B-049 | 🟠 | Pay Sergio — bills entered, needs paid | Sergio = vendor. From CAP-014. |
 | B-050 | 🟡 | QB billing method — how to bill the 1st hour without looking like padding | Brett's model: $75 service charge covers the 1st hour, then $75 each additional hour. Ties to QB invoicing (B-001/B-015). From CAP-014. |
+| B-056 | 🟡 | Change parcel-locker batteries — 3014 & 2930 | From CAP-016. |
+| B-057 | 🟡 | Install new parcel locker @ 115 | From CAP-016. |
+| B-058 | 🟡 | Record lock-code changes — 3014 #3, 3014 #1, 1214 #3 | From CAP-016. |
 
 ---
 

@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.4 | **Last Updated:** July 19, 2026
+**Version:** v1.5 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -225,6 +225,19 @@
   - **Context/location-aware surfacing**: tell the assistant what I'm doing and it hands me other tasks on the way / nearby / in the same context (waiting in line, @ Home Depot, etc.) → **B-054**
   - Form-factor question threaded throughout: can it be done on my phone (easily?), only on desktop, location-specific, out & about? — design input for the capture UX.
 - Links: BACKLOG B-051..B-054; related to CAP-011 (Hub "one ring" principle)
+- Design principle — **"capture vs. do"** (surfaced July 19, Scan_2105_2): separate (a) capturing reference data on-site — lock type/code, HVAC filter size, appliance make/model/serial — from (b) acting on it — order the part, create the WO. Capture must be instant; "do" is an optional follow-on. Ties to CAP-010 (Equipment Registry = the "capture" half; part-ordering / WO creation = the "do" half).
+
+### CAP-016 — Lock-code registry: parcel-locker category + tasks (Ridge Co Hub — feature + tasks)
+- Raw (handwritten note, Scan_2105_2, July 18): "New lock code category: parcel locker / change batteries 3014 & 2930 / install @ 115 / record lock changes 3014 #3, #1, 1214 #3 / BrettOS capture vs do."
+- Type: feature + operational tasks
+- Status: new — feature + tasks graduated to BACKLOG B-055..B-058
+- Feature: the lock-code registry **exists or should** — add a **"parcel locker" category**, distinct from lockboxes / door codes / etc. Key difference: **parcel-locker codes can be shared with tenants** (situational), unlike other codes — so the category needs a shareable-with-tenant flag/visibility rule → **B-055**. ⚠ No dedicated lock-code tab in the known sheet schema — confirm it exists or build it.
+- Tasks:
+  - Change **parcel-locker batteries** at **3014 & 2930** → **B-056**
+  - Install a **new parcel locker @ 115** → **B-057**
+  - Record recent **lock-code changes**: 3014 #3, 3014 #1, 1214 #3 → **B-058**
+- Design note "capture vs. do" → recorded on CAP-015 above; relates to CAP-010 (Equipment Registry).
+- Links: BACKLOG B-055..B-058; CAP-010, CAP-011, CAP-015
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

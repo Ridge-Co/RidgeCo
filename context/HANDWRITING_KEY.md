@@ -1,5 +1,5 @@
 # Brett Handwriting Key
-**Version:** v1.5 | **Last Updated:** July 19, 2026
+**Version:** v1.6 | **Last Updated:** July 19, 2026
 **Purpose:** Reference that helps Claude read Brett's handwritten notes when he photographs paper and dumps it into the Capture Inbox. This grows every session. When Claude can't read something and Brett tells it what it says, the resolution gets logged here so OCR + context get better over time. Expect a few "what the hell does this say, Brett?" rounds early on — each one permanently improves accuracy.
 
 **Approach (confirmed July 19):** Live-capture learning. No calibration sheet. Claude OCRs each handwritten dump, flags uncertain words with ❓ + a best-guess, Brett confirms, and confirmations get logged below. The KNOWN VOCABULARY section is seeded from context so read #1 isn't blind — but those are *expected terms*, not yet confirmed against Brett's actual handwriting. A term only moves to RESOLVED READINGS once Claude has actually read it correctly off a photo.
@@ -27,6 +27,7 @@
 | 2026-07-19 | Scan_2104 (TOPS legal-pad to-do list) | "**U-Haul**" read like "HALL"; "**detector**" read like "deduct"; "**1864 Kerns School Rd**" (not Kean); tenants "**William** 3014 #3 / **Julie** 115 #2 / 2930 **1R** / 115 #1"; "**Sergio** bills — entered/needs paid". Unit "151 #2" was actually **153 #2**. |
 | 2026-07-19 | Scan_2104, billing note | Brett's service-charge model: **$75 covers the 1st hour, $75 each additional hour** (QB billing question — how to bill the 1st hour without it looking like padding). |
 | 2026-07-19 | Scan_2105_1 ("Fix What Bugs Me") | Clean read — capture-system vision note. Confirmed "**tags**" (not "flags"); "FU's" = follow-ups. |
+| 2026-07-19 | Scan_2105_2 (lock-code note) | Clean read. "**parcel locker**" = a lock-code category (distinct from lockboxes/door codes; shareable with tenants). "capture vs do" = Brett's design principle (log job-site data vs. act on it). |
 
 ---
 
@@ -122,6 +123,7 @@
 | Written form | Means |
 |---|---|
 | Hub / Maintenance Hub | index.html admin portal |
+| Parcel locker | A lock-code category (vs. lockbox / door code); codes shareable with tenants |
 | Vendor Portal | vendor.html |
 | Worker | Cloudflare Worker (worker.js) |
 | Twilio | SMS notifications |
