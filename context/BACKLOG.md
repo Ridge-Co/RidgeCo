@@ -78,7 +78,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-070 | 🟢 | Fait Ave/St — replace 3rd-floor pop-up assemblies | Low priority; combine with other work unless owner wants sooner. From CAP-017. |
 | B-071 | 🔴 | FU Vanity repair lead (FB) — time-sensitive | High priority; FB lead likely cooling, follow up ASAP. From CAP-017. |
 | B-087 | 🟡 | Unified vehicle-notice router (tolls, violations, recalls) — route by VIN/plate | Scanned notices → look up holder in Fleet roster (B-090) → forward to Kingbee (tolls@kingbee-vans.com), GiddyUp (info@giddyuprentals.com), or Ray Lewis (NJ van); send + 5-day follow-up until confirmed; dedup vs already-sent; file under Vendors/manager. NJ-van TOLLS = EZ-Pass exception (recalls still go to Ray Lewis). Apps Script/Worker. From CAP-020/CAP-022. |
-| B-090 | 🟠 | Fleet Vehicle roster sheet — VIN/plate → current holder (Kingbee/GiddyUp/Ray Lewis) | Backbone for the vehicle-notice router (B-087) + compliance/registration (CAP-005/006). Brett has a sheet; update holders + share with service account (PAT-027). From CAP-022. |
+| B-090 | 🟠 | Fleet Vehicle roster sheet — VIN/plate → current holder (Kingbee/GiddyUp/Ray Lewis) | Backbone for the vehicle-notice router (B-087) + compliance/registration (CAP-005/006). Sheet: `11HVkmGOKhTveAXGajs0_pTOkPaZk6HXxZmx1h2wz_nY` (shared July 19 but NOT yet with info@ or the service account — can't read it yet). Update holders + add forwarding-email + on/off-platform cols + share w/ service account (PAT-027). From CAP-022. |
 
 ---
 
