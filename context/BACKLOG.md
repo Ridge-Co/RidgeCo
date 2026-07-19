@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.11 | **Last Updated:** July 19, 2026
+**Version:** v1.12 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -37,7 +37,8 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-077 | 🟡 | Preventive-maintenance package | Ties B-072 standards engine + CAP-010. From CAP-018. |
 | B-082 | 🟠 | Cesar mirror site — tracks his own jobs separately but includes Brett's | Vendor-portal extension. Ties CAP-010. From CAP-018. |
 | B-084 | 🟠 | Hub "Receipts to file" queue — OCR + seeded property/WO picker → post to WO (preview-first) | Confirm-first matching (WO#→exact; property→open WOs; else best-guess). Customer-charge check to avoid double-billing. From CAP-002. |
-| B-085 | 🟠 | Verify/fix Drive→QuickBooks receipt-email pipeline | Confirm QB Receipts tab is receiving scans; check the Apps Script trigger + QB allowed-sender registration. From CAP-002. |
+| B-085 | 🟠 | Rebuild receipt intake pipeline — retire the stalled Make.com scenario | Diagnosed July 19: "WO Receipt Inbox" (id 1BpJXcOlW98…) has 10+ receipts stuck since Aug–Dec 2025; Make.com watch→email→move is dead. Replace with Hub pipeline (B-084): QB posting via the connected API + Apps Script file moves. From CAP-002. |
+| B-086 | 🟡 | Reconcile receipts stuck in "WO Receipt Inbox" (Aug–Dec 2025) | 10+ PDFs never processed; confirm which already reached QuickBooks, record/attach the rest, then file by vendor. From CAP-002. |
 
 ---
 

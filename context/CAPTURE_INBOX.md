@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.11 | **Last Updated:** July 19, 2026
+**Version:** v1.12 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -79,6 +79,7 @@
   - NEW step to add: **check whether the charge has already been posted to the relevant customer**, and if NOT, **post it to the relevant work order** (so it flows into the customer's invoice). Must avoid double-posting.
   - Enabler: **QuickBooks is now CONNECTED (prod, July 19)** — the posting side is buildable (ties B-015).
   - Constraint: **Drive MCP can't rename/move/delete** — automated rename + file-to-vendor must run via Google Apps Script or GitHub Actions, not the Drive connector.
+  - DIAGNOSIS (July 19, via Drive inspection): the intake folder is **"WO Receipt Inbox"** (id `1BpJXcOlW98Qdq0nZf-sBa40-3vQ8Lzwc`). It holds **10+ receipts stuck from Aug–Dec 2025** (latest: Waverly Ace Hardware, Dec 8 2025), none moved to a "processed" subfolder or filed by vendor → confirms Brett's **Make.com** scenario (watch folder → batch-email to QB → move to "processed") **is dead/stalled.** The "email trigger" was actually this Make.com scenario, not a QB feature. **Recommendation: retire Make.com** — now that the QB API is connected, do QB posting + file moves inside the Hub pipeline (B-084) via API + Apps Script. The stuck 2025 receipts may never have reached QB → reconcile (B-086).
   - RESOLVED (matching design, July 19): **confirm-first matching.** OCR pulls vendor/date/total/line-items + any property/PO/WO markings. System narrows candidates — WO# present → exact match; only property present → that property's OPEN work orders; nothing → best guesses (vendor+date+amount vs. open WOs). Brett always taps to confirm/correct (he moves fast and tags inconsistently; PO may carry the property but not the WO#). Surfaces as a **Hub "Receipts to file" queue** (one tap per receipt) → posts to WO **preview-first**, with the customer-charge check to prevent double-billing. Builds: **B-084** (queue + WO posting), **B-085** (verify/fix Drive→QB email).
 
 ---
