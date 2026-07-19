@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.5 | **Last Updated:** July 19, 2026
+**Version:** v1.6 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -51,6 +51,7 @@
   3. Dispute/resolve the $11,037 Fluid restitution claim (read VMA Section 7)
   4. Fleet baseline: full roster — VIN, location, status, on/off platform, decommission status
   5. Reconcile Kingbee monthly "Hive Network Reporting" statements (many unread PDFs) → real net income per van
+  6. **Ray (NJ) — private-party van**: a former friend in NJ holds one of Brett's cargo vans off-platform, never pays on time/in full — **$5k behind** on the bill/tolls. Automate weekly EZ-Pass toll pull → auto-invoice Ray. (See CAP-017, B-065/B-066.)
 - Links: NEW venture candidate — "BMore Fleet" (parent entity: BMore Management)
 - ❓ Full exit (sell/lease-to-own ALL vans) or keep some on-platform while transitioning?
 - ❓ How many vans total right now, and how many already decommissioned?
@@ -238,6 +239,30 @@
   - Record recent **lock-code changes**: 3014 #3, 3014 #1, 1214 #3 → **B-058**
 - Design note "capture vs. do" → recorded on CAP-015 above; relates to CAP-010 (Equipment Registry).
 - Links: BACKLOG B-055..B-058; CAP-010, CAP-011, CAP-015
+
+### CAP-017 — Mixed brain-dump: fleet receivable, jobs, BarrelCo, standards vision (multi-venture)
+- Raw (handwritten legal-pad list, Scan_2105, July 18). Classified below; readings corrected by Brett July 19.
+- Type: task list + features (multi-venture)
+- Status: new — active items graduated to BACKLOG B-059..B-072
+- Items:
+  1. **Link tasks → projects** (capture layer) → **B-059** (reinforces CAP-015 "attach entries to major projects")
+  2. ~~FU Kelly Knock re Barre St / Cesar @ Barre St~~ — **canceled job** (FYI)
+  3. **Oscar can do inspections?** — explore/confirm → **B-060**
+  4. **Moving boxes** — from a liquor store + the box-recycling company **Spoon** (friend) referred (cheap moving-box packages); Brett is **moving** → **B-061** (personal)
+  5. **Invoices from Mook** (V-005) → **B-062**
+  6. **Cancel Vendoo** + any other paid FB apps → **B-063** (BarrelCo cost-cut)
+  7. ~~Klarna — purchase to pay for mechanic~~ — **personal truck, DONE** (FYI)
+  8. **Automate FedEx → FedEx store routing** → **B-064**
+  9. **Ray (NJ) — cargo-van toll billing** *(NEW, cash-flow)*: Ray holds one of Brett's vans, **$5k behind**, never pays in full. Automate weekly EZ-Pass toll pull → auto-invoice. → **B-065** (collect the $5k) + **B-066** (weekly EZ-Pass→invoice automation). Links CAP-001, CAP-007.
+  10. **Cesar estimates** — re-itemize into checklists; reduce Cesar to **major items only**, do smaller items with **Oscar** → **B-067** (ties estimating B-030/031)
+  11. ~~Mook — introduce to Maintenance Hub~~ — **DONE** (FYI)
+  12. **Invoice Federal St job** — this job is **NOT in the Hub**; invoices must be created manually → **B-068** (⚠ Hub gap: off-Hub job)
+  13. **FU Fait Ave/St** (owner): collect **payment** + confirm **no more leaks**; also **pop-up assemblies on the 3rd floor need replacing** (low priority, combine with other work unless owner wants sooner) → **B-069** (payment + leak check), **B-070** (3rd-floor pop-up assemblies, low)
+  14. **FU Vanity repair FB lead** — got a lead off FB, forgot to follow up; likely gone but **HIGH priority** → **B-071**
+  15. ~~"What Bugs Me" list as project for AI~~ — struck, not important (already CAP-015)
+  16. **Standards for trades + repairs / recurring-opportunistic task engine** → **B-072** (design note below; ties CAP-010)
+- Design note (B-072) — Brett's ask: not just preventive maintenance, but **low-priority recurring/opportunistic tasks** that only get done when someone's already on-site for another job; track them, auto-surface when due/upcoming (e.g. month 5.25 of a 6-month cycle), auto-attach to any WO at that property. Open question: make completion **required for vendor payment**? Brett leans no (counterproductive; gaming/disputes). **Claude's recommendation:** track-don't-gate by default; carve out a tiny **safety subset** (smoke/CO detector present + install date, water shutoff located) requiring a check or explicit "N/A + reason"; require **data capture, not the repair** (feeds Equipment Registry — "capture vs do"); optionally **incentivize** (bonus / preferred dispatch) rather than withhold pay.
+- Links: BACKLOG B-059..B-072; CAP-001, CAP-007, CAP-010, CAP-015
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

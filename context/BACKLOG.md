@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.7 | **Last Updated:** July 19, 2026
+**Version:** v1.8 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -31,6 +31,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-011 | 🟢 | Invoice PDF generation for customers | QB handles this once API live |
 | B-012 | 🟢 | Vendor performance dashboard | On-time rate, average job cost, photo compliance |
 | B-055 | 🟠 | Lock-code registry — add "parcel locker" category (shareable-with-tenant) | Distinct from lockboxes/door codes; parcel-locker codes can be shared with tenants (situational), others cannot. ⚠ No dedicated lock-code tab in known schema — confirm exists or build. From CAP-016. |
+| B-072 | 🟠 | Trade/repair standards + recurring-opportunistic task engine | If/then by trade for multi-unit; time-based surfacing (e.g. 5.25 of a 6-mo cycle); opportunistic tasks done when already on-site; auto-attach to WOs at that property. Rec: track-don't-gate pay; tiny safety subset requires check or "N/A+reason"; require data-capture not repair; optionally incentivize. Ties CAP-010. From CAP-017. |
 
 ---
 
@@ -57,6 +58,17 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-056 | 🟡 | Change parcel-locker batteries — 3014 & 2930 | From CAP-016. |
 | B-057 | 🟡 | Install new parcel locker @ 115 | From CAP-016. |
 | B-058 | 🟡 | Record lock-code changes — 3014 #3, 3014 #1, 1214 #3 | From CAP-016. |
+| B-060 | 🟢 | Confirm Oscar can do inspections | From CAP-017. |
+| B-061 | 🟢 | Moving boxes — liquor store + box-recycling co (Spoon referral) | Personal (Brett is moving). From CAP-017. |
+| B-062 | 🟡 | Get invoices from Mook (V-005) | From CAP-017. |
+| B-064 | 🟡 | Automate FedEx → FedEx store routing | From CAP-017. |
+| B-065 | 🟠 | Collect from Ray (NJ) — $5k behind on cargo-van tolls/bill | Ray holds one of Brett's vans off-platform, never pays in full. Cash-flow (CAP-001/CAP-007). From CAP-017. |
+| B-066 | 🟡 | Automate weekly EZ-Pass toll pull → auto-invoice Ray | Pull toll data weekly, generate + send invoice. From CAP-017. |
+| B-067 | 🟡 | Re-itemize Cesar estimates into checklists; Cesar = major, Oscar = minor | Ties estimating B-030/031. From CAP-017. |
+| B-068 | 🟠 | Create invoices for Federal St job (off-Hub) | ⚠ Job not in Maintenance Hub. From CAP-017. |
+| B-069 | 🟠 | FU Fait Ave/St owner — collect payment + confirm no more leaks | From CAP-017. |
+| B-070 | 🟢 | Fait Ave/St — replace 3rd-floor pop-up assemblies | Low priority; combine with other work unless owner wants sooner. From CAP-017. |
+| B-071 | 🔴 | FU Vanity repair lead (FB) — time-sensitive | High priority; FB lead likely cooling, follow up ASAP. From CAP-017. |
 
 ---
 
@@ -84,6 +96,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-052 | 🟠 | Voice interface → spreadsheet (voice-to-sheet capture) | From CAP-015. |
 | B-053 | 🟡 | Multi-step tags + categorization of captures | From CAP-015. |
 | B-054 | 🟡 | Context/location-aware task surfacing | Suggest on-the-way / nearby / same-context tasks (@ Home Depot, waiting in line). Form-factor: phone-first vs desktop. From CAP-015. |
+| B-059 | 🟡 | Link tasks → projects (capture layer) | Reinforces CAP-015 "attach entries to major projects." From CAP-017. |
 
 ---
 
@@ -95,6 +108,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-020 | 🟢 | eBay API integration — auto-list new SKUs | Needs eBay Developer token |
 | B-021 | 🟢 | Pricing tracker — compare sold prices to listed prices | |
 | B-041 | 🟡 | FB Listings — post/refresh Facebook listings | From CAP-014 / Scan_2104. |
+| B-063 | 🟡 | Cancel Vendoo + any other paid FB apps | Cost-cut (crosslisting app). From CAP-017. |
 
 ---
 

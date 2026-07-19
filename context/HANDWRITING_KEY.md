@@ -1,5 +1,5 @@
 # Brett Handwriting Key
-**Version:** v1.6 | **Last Updated:** July 19, 2026
+**Version:** v1.7 | **Last Updated:** July 19, 2026
 **Purpose:** Reference that helps Claude read Brett's handwritten notes when he photographs paper and dumps it into the Capture Inbox. This grows every session. When Claude can't read something and Brett tells it what it says, the resolution gets logged here so OCR + context get better over time. Expect a few "what the hell does this say, Brett?" rounds early on — each one permanently improves accuracy.
 
 **Approach (confirmed July 19):** Live-capture learning. No calibration sheet. Claude OCRs each handwritten dump, flags uncertain words with ❓ + a best-guess, Brett confirms, and confirmations get logged below. The KNOWN VOCABULARY section is seeded from context so read #1 isn't blind — but those are *expected terms*, not yet confirmed against Brett's actual handwriting. A term only moves to RESOLVED READINGS once Claude has actually read it correctly off a photo.
@@ -28,6 +28,7 @@
 | 2026-07-19 | Scan_2104, billing note | Brett's service-charge model: **$75 covers the 1st hour, $75 each additional hour** (QB billing question — how to bill the 1st hour without it looking like padding). |
 | 2026-07-19 | Scan_2105_1 ("Fix What Bugs Me") | Clean read — capture-system vision note. Confirmed "**tags**" (not "flags"); "FU's" = follow-ups. |
 | 2026-07-19 | Scan_2105_2 (lock-code note) | Clean read. "**parcel locker**" = a lock-code category (distinct from lockboxes/door codes; shareable with tenants). "capture vs do" = Brett's design principle (log job-site data vs. act on it). |
+| 2026-07-19 | Scan_2105 (mixed legal-pad list) | Corrections: "**Knock**" not Knott (Kelly Knock); "**Fait**" Ave/St not "Job Fair"; "**Vanity**" not "Vanty"; "**Ray's tolls**" not "Kings cargo van bills"; "**box co Re Spoon**" not "box code the spoon"; "**Federal**" = Federal St job. "Task list > projects" = link tasks to projects. |
 
 ---
 
@@ -68,6 +69,13 @@
 | Written form | Means |
 |---|---|
 | Potomac Edison | Electric utility (bill payee) |
+| EZ-Pass | Toll account (source for Ray's weekly toll invoicing) |
+
+### Apps / tools
+| Written form | Means |
+|---|---|
+| Vendoo | Reselling crosslisting app (BarrelCo) — to cancel |
+| Klarna | Buy-now-pay-later (used for a personal-truck mechanic purchase) |
 
 ### Sites & addresses
 | Written form | Means |
@@ -81,6 +89,9 @@
 | 807 N Calvert St (bakery) | Install job site — Cesar floor prep ($300 extra) |
 | Gibbons | Job(s) — Cesar follow-up (confirm exact spelling/location) |
 | 1864 Kerns School Rd | Address on LLC renewal/report line (confirm entity) |
+| Barre St | Job/property (Kelly Knock; job canceled) |
+| Fait Ave / Fait St | Job/property — owner payment + leak check; 3rd-floor pop-up assemblies |
+| Federal St | Job — NOT in the Hub; invoices created manually |
 | Unit numbers | 3014, 1214, 151, 153, 2930, 928, 115 — property/unit refs. Suffixes like "1R" = a unit designation (e.g. rear); "#2"/"#3" = apartment. |
 
 ### Ventures & entities
@@ -118,6 +129,9 @@
 | Julie | Tenant — 115 #2 |
 | Jenn / Jen | Contact/tenant — source of WO time + repair lists |
 | Mark / Amanda | Contacts — WO time in message threads |
+| Kelly Knock | Barre St contact (job canceled) |
+| Spoon | Friend — referred a box-recycling / cheap moving-box company |
+| Ray (NJ) | Former friend in NJ holding one of Brett's cargo vans; $5k behind on tolls/bill |
 
 ### Systems
 | Written form | Means |
