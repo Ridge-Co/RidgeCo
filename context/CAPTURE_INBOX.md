@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.6 | **Last Updated:** July 19, 2026
+**Version:** v1.7 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -263,6 +263,25 @@
   16. **Standards for trades + repairs / recurring-opportunistic task engine** → **B-072** (design note below; ties CAP-010)
 - Design note (B-072) — Brett's ask: not just preventive maintenance, but **low-priority recurring/opportunistic tasks** that only get done when someone's already on-site for another job; track them, auto-surface when due/upcoming (e.g. month 5.25 of a 6-month cycle), auto-attach to any WO at that property. Open question: make completion **required for vendor payment**? Brett leans no (counterproductive; gaming/disputes). **Claude's recommendation:** track-don't-gate by default; carve out a tiny **safety subset** (smoke/CO detector present + install date, water shutoff located) requiring a check or explicit "N/A + reason"; require **data capture, not the repair** (feeds Equipment Registry — "capture vs do"); optionally **incentivize** (bonus / preferred dispatch) rather than withhold pay.
 - Links: BACKLOG B-059..B-072; CAP-001, CAP-007, CAP-010, CAP-015
+
+### CAP-018 — AI/automation vision: onboarding, lead-gen, BarrelCo listings, Cesar mirror (multi-venture)
+- Raw (handwritten legal-pad note, Scan_1338, July 19). Forward-looking feature/vision list. Confirmed with Brett.
+- Type: project / wishlist (multi-venture)
+- Status: new — builds graduated to BACKLOG B-073..B-082
+- Items:
+  1. **Properties onboarding site** for customers — add properties; capable of multiple inputs / **CSV import** → **B-073**
+  2. **Lead-finder Chrome extension** — scan recent (FB) posts needing repairs/lawn care etc., respond, **exclude "I need it today"** desperate posts → **B-074**
+  3. **Upgrade Hub UI** to match the **4518 Fairfax Rd estimate** look (Brett's UI baseline) → **B-075**
+  4. **Estimate-acceptance workflow** — checklist to accept all items in a section OR cherry-pick, with a **running total** → **B-076** (ties estimating B-030/032)
+  5. **Preventive-maintenance package** → **B-077** (ties B-072 standards engine, CAP-010)
+  6. **BarrelCo inventory tracking** — Community Forklift + other outlets, integrated with their sales statements (email? weekly/monthly?); **set min inventory levels + restock** → **B-078** (ties B-019)
+  7. **Retail-outlet tracker for leads** — barrels + related products; gather restock contact info → **B-079**
+  8. Info: **share with AI how Brett's parents are involved + how they can help more** (family/roles context — ❓ Brett to detail)
+  9. **FB Marketplace / listing automation** — AI responds to FB Marketplace messages, captures **off-FB contact info** (or tracks interested buyers) to re-reach when restocks land; AI **renew/delete/repost listings** while contacting prior interested buyers so no lost sales; rebuild a better version of the **"Nerdy Panda"** crosslisting app (was great, had limitations) → **B-080**
+  10. **Lead capture that doesn't look bot / scammy / salesy** → **B-081**
+  11. **Cesar mirror site** — Cesar tracks his own jobs separately from Brett's, but includes Brett's → **B-082** (ties CAP-010)
+- Links: BACKLOG B-073..B-082; CAP-010 (Cesar mirror / equipment), CAP-013/015 (content/capture), B-019/030/032
+- ❓ Open: parents' roles + how AI can leverage them (item 8)
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.8 | **Last Updated:** July 19, 2026
+**Version:** v1.9 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -32,6 +32,10 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-012 | 🟢 | Vendor performance dashboard | On-time rate, average job cost, photo compliance |
 | B-055 | 🟠 | Lock-code registry — add "parcel locker" category (shareable-with-tenant) | Distinct from lockboxes/door codes; parcel-locker codes can be shared with tenants (situational), others cannot. ⚠ No dedicated lock-code tab in known schema — confirm exists or build. From CAP-016. |
 | B-072 | 🟠 | Trade/repair standards + recurring-opportunistic task engine | If/then by trade for multi-unit; time-based surfacing (e.g. 5.25 of a 6-mo cycle); opportunistic tasks done when already on-site; auto-attach to WOs at that property. Rec: track-don't-gate pay; tiny safety subset requires check or "N/A+reason"; require data-capture not repair; optionally incentivize. Ties CAP-010. From CAP-017. |
+| B-073 | 🟠 | Properties onboarding site for customers (add properties; CSV import) | Multiple inputs / CSV. From CAP-018. |
+| B-075 | 🟡 | Upgrade Hub UI to match the 4518 Fairfax Rd estimate look | Brett's UI baseline. From CAP-018. |
+| B-077 | 🟡 | Preventive-maintenance package | Ties B-072 standards engine + CAP-010. From CAP-018. |
+| B-082 | 🟠 | Cesar mirror site — tracks his own jobs separately but includes Brett's | Vendor-portal extension. Ties CAP-010. From CAP-018. |
 
 ---
 
@@ -79,6 +83,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-030 | 🟠 | Estimating template system — reusable proposal generator | Intake form (Sheet or structured input) → auto-generated HTML proposal. Base design on 4518 Fairfax Rd v1.1 as reference. ~2hr build session. |
 | B-031 | 🟠 | Estimating skill/agent — scope intake, photo review, line item generation | Replace Gemini workflow. Ask questions, stick to provided scope, no invented items, build memory of Brett's pricing patterns. |
 | B-032 | 🟡 | Proposal PDF export — one-click PDF with hyperlinks from HTML proposal | Chromium headless print-to-PDF. Links to Drive photos must survive. |
+| B-076 | 🟠 | Estimate-acceptance workflow — accept-all-in-section or cherry-pick w/ running total | Ties B-030/B-032. From CAP-018. |
 
 ---
 
@@ -97,6 +102,8 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-053 | 🟡 | Multi-step tags + categorization of captures | From CAP-015. |
 | B-054 | 🟡 | Context/location-aware task surfacing | Suggest on-the-way / nearby / same-context tasks (@ Home Depot, waiting in line). Form-factor: phone-first vs desktop. From CAP-015. |
 | B-059 | 🟡 | Link tasks → projects (capture layer) | Reinforces CAP-015 "attach entries to major projects." From CAP-017. |
+| B-074 | 🟡 | Lead-finder Chrome extension — scan FB posts needing repairs/lawn care, respond, exclude "I need it today" | From CAP-018. |
+| B-081 | 🟡 | Lead capture that doesn't look bot/scammy/salesy | Cross-cuts B-074/B-080. From CAP-018. |
 
 ---
 
@@ -109,6 +116,9 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-021 | 🟢 | Pricing tracker — compare sold prices to listed prices | |
 | B-041 | 🟡 | FB Listings — post/refresh Facebook listings | From CAP-014 / Scan_2104. |
 | B-063 | 🟡 | Cancel Vendoo + any other paid FB apps | Cost-cut (crosslisting app). From CAP-017. |
+| B-078 | 🟡 | Inventory tracking — Community Forklift + outlets, integrated w/ their sales statements; min levels + restock | Ties B-019. From CAP-018. |
+| B-079 | 🟡 | Retail-outlet tracker for leads (barrels + related products) + gather restock contact info | From CAP-018. |
+| B-080 | 🟠 | FB Marketplace / listing automation — respond to messages, capture off-FB contacts, renew/delete/repost listings, contact prior interested buyers; rebuild a better "Nerdy Panda" | From CAP-018. |
 
 ---
 

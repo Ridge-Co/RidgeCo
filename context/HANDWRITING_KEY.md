@@ -1,5 +1,5 @@
 # Brett Handwriting Key
-**Version:** v1.7 | **Last Updated:** July 19, 2026
+**Version:** v1.8 | **Last Updated:** July 19, 2026
 **Purpose:** Reference that helps Claude read Brett's handwritten notes when he photographs paper and dumps it into the Capture Inbox. This grows every session. When Claude can't read something and Brett tells it what it says, the resolution gets logged here so OCR + context get better over time. Expect a few "what the hell does this say, Brett?" rounds early on — each one permanently improves accuracy.
 
 **Approach (confirmed July 19):** Live-capture learning. No calibration sheet. Claude OCRs each handwritten dump, flags uncertain words with ❓ + a best-guess, Brett confirms, and confirmations get logged below. The KNOWN VOCABULARY section is seeded from context so read #1 isn't blind — but those are *expected terms*, not yet confirmed against Brett's actual handwriting. A term only moves to RESOLVED READINGS once Claude has actually read it correctly off a photo.
@@ -29,6 +29,7 @@
 | 2026-07-19 | Scan_2105_1 ("Fix What Bugs Me") | Clean read — capture-system vision note. Confirmed "**tags**" (not "flags"); "FU's" = follow-ups. |
 | 2026-07-19 | Scan_2105_2 (lock-code note) | Clean read. "**parcel locker**" = a lock-code category (distinct from lockboxes/door codes; shareable with tenants). "capture vs do" = Brett's design principle (log job-site data vs. act on it). |
 | 2026-07-19 | Scan_2105 (mixed legal-pad list) | Corrections: "**Knock**" not Knott (Kelly Knock); "**Fait**" Ave/St not "Job Fair"; "**Vanity**" not "Vanty"; "**Ray's tolls**" not "Kings cargo van bills"; "**box co Re Spoon**" not "box code the spoon"; "**Federal**" = Federal St job. "Task list > projects" = link tasks to projects. |
+| 2026-07-19 | Scan_1338 (AI/automation vision list) | Clean read. Confirmed: "properties onboarding site"; UI baseline = 4518 Fairfax Rd estimate; "**Community Forklift**" (salvage/reuse retail outlet — BarrelCo consignment); "**Nerdy Panda**" (crosslisting reselling app Brett wants to rebuild better). |
 
 ---
 
@@ -76,6 +77,8 @@
 |---|---|
 | Vendoo | Reselling crosslisting app (BarrelCo) — to cancel |
 | Klarna | Buy-now-pay-later (used for a personal-truck mechanic purchase) |
+| Nerdy Panda | Crosslisting reselling app Brett used (had limits) — wants to rebuild better |
+| Community Forklift | Salvage/reuse retail outlet — BarrelCo sells barrels/products there |
 
 ### Sites & addresses
 | Written form | Means |
