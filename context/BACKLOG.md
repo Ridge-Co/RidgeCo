@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.12 | **Last Updated:** July 19, 2026
+**Version:** v1.13 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -76,6 +76,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-069 | 🟠 | FU Fait Ave/St owner — collect payment + confirm no more leaks | From CAP-017. |
 | B-070 | 🟢 | Fait Ave/St — replace 3rd-floor pop-up assemblies | Low priority; combine with other work unless owner wants sooner. From CAP-017. |
 | B-071 | 🔴 | FU Vanity repair lead (FB) — time-sensitive | High priority; FB lead likely cooling, follow up ASAP. From CAP-017. |
+| B-087 | 🟡 | Rental-car toll forwarding automation (Turo) — tolls → GiddyUp + file | Incoming toll → forward to GiddyUp → rename + file under Vendors/Giddyup. Needs: arrival method (email vs scan) + GiddyUp email. Apps Script (Gmail connector can't send). From CAP-020. |
 
 ---
 

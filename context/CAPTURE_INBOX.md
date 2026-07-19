@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.12 | **Last Updated:** July 19, 2026
+**Version:** v1.13 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -80,7 +80,10 @@
   - Enabler: **QuickBooks is now CONNECTED (prod, July 19)** — the posting side is buildable (ties B-015).
   - Constraint: **Drive MCP can't rename/move/delete** — automated rename + file-to-vendor must run via Google Apps Script or GitHub Actions, not the Drive connector.
   - DIAGNOSIS (July 19, via Drive inspection): the intake folder is **"WO Receipt Inbox"** (id `1BpJXcOlW98Qdq0nZf-sBa40-3vQ8Lzwc`). It holds **10+ receipts stuck from Aug–Dec 2025** (latest: Waverly Ace Hardware, Dec 8 2025), none moved to a "processed" subfolder or filed by vendor → confirms Brett's **Make.com** scenario (watch folder → batch-email to QB → move to "processed") **is dead/stalled.** The "email trigger" was actually this Make.com scenario, not a QB feature. **Recommendation: retire Make.com** — now that the QB API is connected, do QB posting + file moves inside the Hub pipeline (B-084) via API + Apps Script. The stuck 2025 receipts may never have reached QB → reconcile (B-086).
-  - RESOLVED (matching design, July 19): **confirm-first matching.** OCR pulls vendor/date/total/line-items + any property/PO/WO markings. System narrows candidates — WO# present → exact match; only property present → that property's OPEN work orders; nothing → best guesses (vendor+date+amount vs. open WOs). Brett always taps to confirm/correct (he moves fast and tags inconsistently; PO may carry the property but not the WO#). Surfaces as a **Hub "Receipts to file" queue** (one tap per receipt) → posts to WO **preview-first**, with the customer-charge check to prevent double-billing. Builds: **B-084** (queue + WO posting), **B-085** (verify/fix Drive→QB email).
+  - RESOLVED (matching design, July 19): **confirm-first matching.** OCR pulls vendor/date/total/line-items + any property/PO/WO markings. System narrows candidates — WO# present → exact match; only property present → that property's OPEN work orders; nothing → best guesses (vendor+date+amount vs. open WOs). Brett always taps to confirm/correct (he moves fast and tags inconsistently; PO may carry the property but not the WO#). Surfaces as a **Hub "Receipts to file" queue** (one tap per receipt) → posts to WO **preview-first**, with the customer-charge check to prevent double-billing. Builds: **B-084** (queue + WO posting), **B-085** (retire Make.com / API pipeline).
+  - Folders (corrected July 19): **INTAKE = PAYABLES Inbox > "Receipts and Invoices"** (created, id `1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n`) — scan here. **FILING = the "Vendors" shared drive** (root `0AIt2A2J2j6aFUk9PVA`) > per-vendor subfolders (Home Depot, Penske, Giddyup, … + "No Vendor" catch-all). **Do NOT file into PAYABLES Inbox subfolders** — those were legacy manual sorting.
+  - Classification branch (important): each receipt is either (a) **property/WO materials** (billable to a customer) or (b) a **business expense** (overhead). Home Depot was historically always WO-related; other vendors could be either. The confirm queue must let Brett pick **WO-materials vs business-expense**; only WO-materials run the customer-charge + WO-post path; BOTH go to QB (bill/expense) + get filed by vendor in the Vendors drive.
+  - Historical / no-WO receipts (Brett will cut-paste the old WO Receipt Inbox files into the new intake): no WO to attach → verify they were charged to a customer somewhere; if not, record appropriately; then rename + push to QB for reconciliation + file by vendor. (Confirmed good, July 19.)
 
 ---
 
@@ -297,6 +300,15 @@
 - Notes: covers Brett's vision (debt payoff → hands-off AI-run businesses → freedom to build creative repurposed-material STRs; pallet business = the financial backbone) and Winchester Hauling's CHEP plan. Per Brett, CHEP return-vendor authorization is now obtained. Full economics/strategy + a "claims to verify" list live only in the private doc.
 - ❓ Overlap expected with the forthcoming (overdue) Gemini data export — reconcile when it arrives.
 - Links: private doc `Brett_Vision_and_CHEP_Private_v1.1` (Drive); relates to CAP-007 (cash-flow), CAP-013 (content/creative), VENTURES (Winchester Hauling)
+
+### CAP-020 — Rental-car toll forwarding automation (Turo cars → GiddyUp — NEW)
+- Raw (July 19): Brett doesn't pay rental-car (Turo) tolls directly — he **forwards them to the management company (GiddyUp)**, then renames + files. Wants it automated.
+- Type: automation
+- Status: new → B-087
+- Flow: incoming toll notice → **forward to GiddyUp** → rename + file under **Vendors > Giddyup** (id `1p-d4CxVgSDaL9nzo0V822cb7aOOavqlv`) — replaces the old separate "processed" subfolder.
+- Constraint: the Gmail connector can only DRAFT, not send → auto-forward must run via Apps Script / the Worker, same as the receipt pipeline.
+- ❓ Needed to build: (1) how do the tolls arrive — email (EZ-Pass / toll authority) or a scanned/saved PDF? (2) GiddyUp's forwarding email address?
+- Links: CAP-003 (Turo / GiddyUp); distinct from Ray's van tolls (CAP-001 / B-066); BACKLOG B-087
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
