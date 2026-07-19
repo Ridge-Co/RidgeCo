@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.1 | **Last Updated:** July 19, 2026
+**Version:** v1.2 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -163,10 +163,11 @@
 - Sub-items:
   1. Source a reliable plumber/handyman sub — the three named leads (Marvin Calderon, Al Stratti, Rob Whitley) are crossed off / didn't pan out → **B-034**
   2. Ask existing contacts for handyman referrals → part of B-034
-  3. Follow up with **Oscar** on the **56 S Culver St** job → **B-035**
-  4. Verify/close the **$300 extra paid to Cesar** (V-003) for floor repairs → **B-036**. Brett's read: legit — floor repairs were necessary before the install, so the extra $300 is owed, not an overpay. Confirm it's recorded correctly.
-- Links: BACKLOG B-034, B-035, B-036
-- Handwriting note: "Oscar Culver" is Name+Street shorthand (Culver = street), not a person's surname. Logged to HANDWRITING_KEY.
+  3. **56 S Culver St job → Cesar got it** (V-003). Follow up with **Cesar on Monday** re: Culver → **B-035**. (The written note read "Oscar Culver," but the job ultimately went to Cesar.)
+  4. Confirm the **$300 extra paid to Cesar** (V-003) is booked in QB — it's for **floor prep on the 807 N Calvert St (bakery) install, NOT Culver** → **B-036**. Brett's read: legit — floor repairs were necessary before the install, so the extra $300 is owed, not an overpay.
+  5. Follow up with **Cesar on Monday** on the **Gibbons** jobs → **B-037**
+- Links: BACKLOG B-034, B-035, B-036, B-037
+- Handwriting note: "Oscar Culver" is Name+Street shorthand (Culver = street), not a surname; the Culver job went to Cesar. The Cesar payment math (Scan_2032) and ledger (Scan_2032_1 bottom) are handwriting-only — not tracked as to-dos. Logged to HANDWRITING_KEY.
 
 ### CAP-013 — Content-creation venture / marketing funnel (NEW lane — PARKED, long-term)
 - Raw (handwritten note, Scan_2020, July 18): Brett's long-term plan to start content creation "once back on his feet" with more organization/automation across the businesses.
@@ -179,6 +180,10 @@
 - Status: **parked** — explicitly long-term; not active until the vehicle/cash-flow bleed (CAP-007) is under control and the businesses are more automated
 - ❓ Which product/service does this sell — BarrelCo, a new digital product, or Ridge Co lead-gen? (Brett to specify when it activates.)
 - Links: strategically downstream of CAP-007 (cash-flow north star)
+- Added July 19 (Scan_2032_1 — the story/"why" behind the content):
+  - Core narrative: "What is the journey I am on that I would like to share?" → the path to **financial, location, and time independence** (FI + freedom of location + time freedom).
+  - Pillars: get **debt-free** (credit cards, consumer/car loans, mortgage); build **significant excess cash flow from multiple streams** (youtube, ST rental, the online work/business doc); **tie in creative self-expression**.
+  - Content format idea — **"Side quests" = A.S.Q. (Answer a Specific Question)**: short how-to content on small things (making things, fixing things, trailer-to-office conversion) — anything not directly tied to the main goal.
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

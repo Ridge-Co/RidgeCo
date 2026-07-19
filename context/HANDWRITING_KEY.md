@@ -1,5 +1,5 @@
 # Brett Handwriting Key
-**Version:** v1.2 | **Last Updated:** July 19, 2026
+**Version:** v1.3 | **Last Updated:** July 19, 2026
 **Purpose:** Reference that helps Claude read Brett's handwritten notes when he photographs paper and dumps it into the Capture Inbox. This grows every session. When Claude can't read something and Brett tells it what it says, the resolution gets logged here so OCR + context get better over time. Expect a few "what the hell does this say, Brett?" rounds early on — each one permanently improves accuracy.
 
 **Approach (confirmed July 19):** Live-capture learning. No calibration sheet. Claude OCRs each handwritten dump, flags uncertain words with ❓ + a best-guess, Brett confirms, and confirmations get logged below. The KNOWN VOCABULARY section is seeded from context so read #1 isn't blind — but those are *expected terms*, not yet confirmed against Brett's actual handwriting. A term only moves to RESOLVED READINGS once Claude has actually read it correctly off a photo.
@@ -19,6 +19,11 @@
 | 2026-07-19 | Scan_2019, "Oscar Cul__r" | **Oscar Culver** = shorthand for "follow up with Oscar on the job at **56 S Culver St**." Culver = street. |
 | 2026-07-19 | Scan_2019, "$300 ... to _esar for floor" | **Cesar** (Cesar Gomez, V-003). "$300 extra to Cesar for floor" — legit; floor repairs were needed before install. |
 | 2026-07-19 | Scan_2020, list item 5 | **"Build email list + continue to add value"** (continue, not "nurture") |
+| 2026-07-19 | Scan_2032_1, journey note | "...small things like **making** things, fixing things..." (making, not "nailing"); "Side quests = **A.S.Q. → Answer a Specific Question (sometimes)**" |
+| 2026-07-19 | Scan_2032_1, bottom ledger | Unit #s (1214, 151, 153, 928) each with **170** to the right; "**Oscar 450 3014**". Payment shorthand — handwriting only, NOT a to-do. |
+| 2026-07-19 | Scan_2032, Cesar money slip | "**pay Cesar**", "**pay Potomac Edison**" (electric utility, not "Antonio Nelson"), "**toilet**", "**floor**". Cesar's $300 floor = **807 N Calvert St bakery** install, NOT Culver. Handwriting only — not a to-do. |
+| 2026-07-19 | Scan_2030, M&T stmt (sideways blue ink) | Facebook-group posting list for BarrelCo barrel products: "online yard sale 16 / Balt city and co yard sale 17 / Balt the yard sale 18 / Balt easy online yard sale 19" (trailing numbers' meaning unknown). Handwriting only. |
+| 2026-07-19 | Job assignment (via Brett) | The **56 S Culver St** job went to **Cesar** (V-003); the written "Oscar Culver" note referenced a follow-up, but Cesar got the job. |
 
 ---
 
@@ -38,6 +43,9 @@
 | MVA | Maryland Motor Vehicle Administration |
 | EFT | Electronic funds transfer (auto-pay) |
 | STR | Short-term rental (the Cabin) |
+| FI | Financial independence (Brett's content pillar) |
+| ST rental | Short-term rental |
+| A.S.Q. | "Answer a Specific Question" — Brett's how-to content format ("side quests") |
 | V- / T- / U- / P- | ID prefixes: Vendor / Tenant / Unit / Property |
 | VIN | Vehicle ID number (Ram ProMaster vans start `3C6LRVDG…`) |
 
@@ -50,6 +58,11 @@
 | Eddie Smith | V-004 | rate TBD |
 | Alan George ("Mook") | V-005 | rate TBD — may write "Mook" |
 
+### Utilities & payees
+| Written form | Means |
+|---|---|
+| Potomac Edison | Electric utility (bill payee) |
+
 ### Sites & addresses
 | Written form | Means |
 |---|---|
@@ -58,7 +71,9 @@
 | 4709 Harford Rd Ste 43 | Business address, Baltimore MD 21214 |
 | PO Box 39692 | Baltimore mailing box |
 | Ashburton | Baltimore STREET name (job/site reference) |
-| 56 S Culver St | Job site — Oscar follow-up (CAP-012) |
+| 56 S Culver St | Job site — Cesar got this job (CAP-012); written note read "Oscar Culver" |
+| 807 N Calvert St (bakery) | Install job site — Cesar floor prep ($300 extra) |
+| Gibbons | Job(s) — Cesar follow-up (confirm exact spelling/location) |
 
 ### Ventures & entities
 | Written form | Means |

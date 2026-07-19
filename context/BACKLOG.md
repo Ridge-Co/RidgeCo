@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.3 | **Last Updated:** July 19, 2026
+**Version:** v1.4 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -39,8 +39,9 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | ID | Priority | Item | Notes |
 |---|---|---|---|
 | B-034 | 🟠 | Source a reliable plumber/handyman subcontractor | Leads dead-ended: Marvin Calderon, Al Stratti (plumber), Rob Whitley (plumber). Action: ask existing contacts for handyman referrals. |
-| B-035 | 🟠 | Follow up with Oscar on the 56 S Culver St job | From "Oscar Culver" note shorthand. |
-| B-036 | 🟡 | Verify/close $300 extra paid to Cesar (V-003) for floor prep | Brett's read: legit — floor repairs were necessary before install, so extra is owed, not an overpay. Confirm recorded correctly. |
+| B-035 | 🟠 | Follow up with Cesar (Mon) on the 56 S Culver St job | Cesar got the Culver job (V-003). Written note read "Oscar Culver," but it went to Cesar. |
+| B-036 | 🟢 | Confirm $300 extra to Cesar (V-003) for 807 N Calvert St bakery floor prep is booked in QB | Legit per Brett — floor repairs were needed before the install (807 N Calvert St bakery, NOT Culver). Owed, not an overpay. |
+| B-037 | 🟠 | Follow up with Cesar (Mon) on the Gibbons jobs | Captured from Scan_2032 session, July 19. |
 
 ---
 
