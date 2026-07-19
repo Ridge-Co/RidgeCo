@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.9 | **Last Updated:** July 19, 2026
+**Version:** v1.10 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -119,6 +119,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-078 | 🟡 | Inventory tracking — Community Forklift + outlets, integrated w/ their sales statements; min levels + restock | Ties B-019. From CAP-018. |
 | B-079 | 🟡 | Retail-outlet tracker for leads (barrels + related products) + gather restock contact info | From CAP-018. |
 | B-080 | 🟠 | FB Marketplace / listing automation — respond to messages, capture off-FB contacts, renew/delete/repost listings, contact prior interested buyers; rebuild a better "Nerdy Panda" | From CAP-018. |
+| B-083 | 🟢 | AI-coordinated Waynesboro VA fulfillment — parents ↔ FB Marketplace buyer | Parents store limited planters/barrels in Waynesboro VA + complete local sales (free secondary market). Future. UX for mother: non-tech-savvy, patient, repeat-friendly. From CAP-018. |
 
 ---
 

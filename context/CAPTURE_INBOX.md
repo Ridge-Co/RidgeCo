@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.7 | **Last Updated:** July 19, 2026
+**Version:** v1.8 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -276,12 +276,12 @@
   5. **Preventive-maintenance package** → **B-077** (ties B-072 standards engine, CAP-010)
   6. **BarrelCo inventory tracking** — Community Forklift + other outlets, integrated with their sales statements (email? weekly/monthly?); **set min inventory levels + restock** → **B-078** (ties B-019)
   7. **Retail-outlet tracker for leads** — barrels + related products; gather restock contact info → **B-079**
-  8. Info: **share with AI how Brett's parents are involved + how they can help more** (family/roles context — ❓ Brett to detail)
+  8. **Parents / Waynesboro VA fulfillment** (resolved July 19): Brett's parents live in **Waynesboro, VA** and store a limited amount of planters/barrels; they **meet FB Marketplace buyers there to complete sales** — a free secondary market for Brett (who's in Baltimore, MD). Future: **AI coordinates the handoff between the parents and the buyer** → **B-083**. UX constraint: **mother is the main helper — not tech-savvy, unsure of herself, re-asks previously-covered questions** — so any tool for her must be dead-simple, patient, and repeat-friendly.
   9. **FB Marketplace / listing automation** — AI responds to FB Marketplace messages, captures **off-FB contact info** (or tracks interested buyers) to re-reach when restocks land; AI **renew/delete/repost listings** while contacting prior interested buyers so no lost sales; rebuild a better version of the **"Nerdy Panda"** crosslisting app (was great, had limitations) → **B-080**
   10. **Lead capture that doesn't look bot / scammy / salesy** → **B-081**
   11. **Cesar mirror site** — Cesar tracks his own jobs separately from Brett's, but includes Brett's → **B-082** (ties CAP-010)
 - Links: BACKLOG B-073..B-082; CAP-010 (Cesar mirror / equipment), CAP-013/015 (content/capture), B-019/030/032
-- ❓ Open: parents' roles + how AI can leverage them (item 8)
+- Parents' role resolved (item 8) → B-083 (future AI-coordinated Waynesboro VA fulfillment)
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
