@@ -34,7 +34,7 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
-    const PUBLIC_PATHS = ['/sms-inbound','/qb/test','/qb/accounts','/qb/connect','/qb/callback','/qb/webhook'];
+    const PUBLIC_PATHS = ['/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
     if (!PUBLIC_PATHS.includes(path)) {
       if (request.headers.get('X-Auth-Token') !== env.WORKER_SECRET)
         return json({ error: 'Unauthorized' }, 401);
@@ -85,6 +85,7 @@ export default {
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
         if (path === '/qb/test')                return await qbTest(env);
         if (path === '/qb/accounts')            return await qbListAccounts(env);
+        if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -1758,8 +1759,8 @@ async function qbAccessToken(env) {
   return data.access_token;
 }
 
-async function qbApi(env, path, method = 'GET', body = null) {
-  const token = await qbAccessToken(env);
+async function qbApi(env, path, method = 'GET', body = null, token = null) {
+  if (!token) token = await qbAccessToken(env);
   const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/${path}`, opts);
@@ -1780,6 +1781,62 @@ async function qbListAccounts(env) {
     const data = await qbApi(env, `query?query=${q}&minorversion=73`);
     const accounts = (data?.QueryResponse?.Account || []).map(a => ({ id: a.Id, name: a.Name, type: a.AccountType, sub: a.AccountSubType, cls: a.Classification }));
     return json({ ok: true, count: accounts.length, accounts });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// Trade → QB accounts/items map. Income created as sub-accounts of "Services" (5).
+// Bills reference the expense account directly; invoices reference the item.
+const QB_INCOME_PARENT = '5'; // Services (Income)
+const QB_TRADES = [
+  { trade: 'Plumbing',    income: 'Plumbing Income',    expenseId: '245' },
+  { trade: 'Electrical',  income: 'Electrical Income',  expenseId: '235' },
+  { trade: 'HVAC',        income: 'HVAC Income',        expenseId: '239' },
+  { trade: 'Painting',    income: 'Painting Income',    expenseId: '243' },
+  { trade: 'Flooring',    income: 'Flooring Income',    expenseId: '237' },
+  { trade: 'Carpentry',   income: 'Carpentry Income',   expenseId: '218' },
+  { trade: 'Roofing',     income: 'Roofing Income',     expenseId: '246' },
+  { trade: 'Landscaping', income: 'Landscaping Income', expenseId: '220' },
+  { trade: 'Cleaning',    income: 'Cleaning Income',    expenseId: '282' },
+  { trade: 'Appliance',   income: 'Appliance Income',   expenseId: '230' },
+  { trade: 'Windows',     incomeId: '204',              expenseId: '249' }, // Window Installation Income exists
+  { trade: 'General',     incomeId: '198',              expenseId: '68'  }, // Repairs Income exists
+];
+
+// One-time: create the trade income accounts + service items in QuickBooks.
+// Idempotent — safe to re-run; skips anything that already exists by name.
+async function qbSetupTrades(env) {
+  try {
+    const token = await qbAccessToken(env); // single refresh for the whole batch
+    const acctData = await qbApi(env, `query?query=${encodeURIComponent('select Id,Name from Account where Active=true maxresults 1000')}&minorversion=73`, 'GET', null, token);
+    const acctByName = {}; for (const a of (acctData?.QueryResponse?.Account || [])) acctByName[a.Name.toLowerCase()] = a.Id;
+    const itemData = await qbApi(env, `query?query=${encodeURIComponent('select Id,Name from Item where Active=true maxresults 1000')}&minorversion=73`, 'GET', null, token);
+    const itemByName = {}; for (const it of (itemData?.QueryResponse?.Item || [])) itemByName[it.Name.toLowerCase()] = it.Id;
+
+    const map = {}, log = [];
+    for (const t of QB_TRADES) {
+      let incomeId = t.incomeId || null;
+      if (!incomeId) {
+        const found = acctByName[t.income.toLowerCase()];
+        if (found) { incomeId = found; log.push(`income exists: ${t.income} (${found})`); }
+        else {
+          const r = await qbApi(env, 'account?minorversion=73', 'POST',
+            { Name: t.income, AccountType: 'Income', AccountSubType: 'ServiceFeeIncome', SubAccount: true, ParentRef: { value: QB_INCOME_PARENT } }, token);
+          incomeId = r?.Account?.Id;
+          if (!incomeId) { log.push(`FAIL income ${t.income}: ${JSON.stringify(r).slice(0,140)}`); continue; }
+          log.push(`created income: ${t.income} (${incomeId})`);
+        }
+      }
+      let itemId = itemByName[t.trade.toLowerCase()];
+      if (!itemId) {
+        const r = await qbApi(env, 'item?minorversion=73', 'POST',
+          { Name: t.trade, Type: 'Service', IncomeAccountRef: { value: incomeId } }, token);
+        itemId = r?.Item?.Id;
+        if (!itemId) { log.push(`FAIL item ${t.trade}: ${JSON.stringify(r).slice(0,140)}`); continue; }
+        log.push(`created item: ${t.trade} (${itemId})`);
+      } else log.push(`item exists: ${t.trade} (${itemId})`);
+      map[t.trade] = { income_acct_id: incomeId, item_id: itemId, expense_acct_id: t.expenseId };
+    }
+    return json({ ok: true, map, log });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
