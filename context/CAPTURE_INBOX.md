@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.17 | **Last Updated:** July 19, 2026
+**Version:** v1.18 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -315,6 +315,7 @@
 - Type: automation
 - Status: new → B-087
 - GiddyUp workflow: forward to **info@giddyuprentals.com** immediately, then **flag follow-up every 5 days until a confirmation email is received** (a typed "received and/or paid" note = done; they're low-tech).
+- SEND MODE (July 19): default to **drafts Brett reviews + sends** (connector can only draft anyway; keeps Brett in control of what goes to third parties). Each forward includes a **short templated cover note** stating what we're asking them to do (e.g. "Please pay this toll for VIN…, reply to confirm") — which also gives Brett a record of what's expected. Can graduate to fully auto-send (via Apps Script) per party once trusted.
 - Dedup / delay handling: notices are mailed, so there's often a lag between the charge and GiddyUp's processing/payment → **cross-reference each incoming toll/ticket/parking charge against recent ones already sent + confirmed**; if it matches one already handled, **save the file but do NOT re-send.**
 - Filing: under the manager's Vendors-drive folder — Giddyup (id `1p-d4CxVgSDaL9nzo0V822cb7aOOavqlv`); Kingbee (confirm/create folder).
 - Constraint: Gmail connector can only DRAFT → auto-send + the 5-day follow-up loop run via Apps Script / the Worker.
@@ -338,6 +339,20 @@
 - **MVA / registration / insurance notices** (intake **Inbox > Fleet Vehicles > MVA Notices**, Brett creating): same router, SPECIAL rule — **forward to KingBee for KingBee-held vans** (they manage registration/insurance), but for **GiddyUp cars, Ray Lewis's van, and LIEN → do NOT forward; Brett resolves those himself** (file + flag for Brett). Refines CAP-005.
 - Dependency: the **Fleet Vehicle roster sheet** (VIN/plate → current holder Kingbee/GiddyUp/Ray Lewis, make/model, on/off platform). Brett has a sheet; needs holders updated + shared with the service account → B-090.
 - Links: CAP-020 (tolls), CAP-005/006 (compliance/registration), CAP-001 (fleet); BACKLOG B-087, B-090
+
+### CAP-023 — BarrelCo leads database (retail-outlet leads — NEW, activates B-079)
+- Raw (July 19): Brett wants to save BarrelCo leads (retail locations to follow up with) into a database — a **sheet + input method**. Has business cards to upload NOW (clear the desk); will add more over time; wants bulk-add later.
+- Type: project (BarrelCo) → B-079
+- Plan: (1) NOW — Brett uploads business-card photos → Claude OCRs → creates/populates a **BarrelCo Leads** sheet (share w/ service account per PAT-027). (2) Ongoing input — options: Google Form (mobile, auto-appends), a Hub "Leads" screen (build), or keep sending cards to Claude. (3) Columns: Business, Contact, Title, Phone, Email, Address, Location type, Product interest, Source, Status, Next action, Date added, Notes.
+- Links: CAP-018 (retail-outlet tracker), BACKLOG B-079
+
+### CAP-024 — Surface captures/tasks in a BrettOS Sheet (accessible + bulk-actionable — NEW)
+- Raw (July 19): Brett wants the captured items/backlog tracked in a **BrettOS spreadsheet he can open anytime** (not only Claude's GitHub markdown), so he can (a) see them as tasks without talking to Claude, (b) update status as he goes, (c) ask Claude to **bulk-categorize / act on sets** of them — Claude then processes or asks for more info.
+- Current state (answering Brett's Q): captures live in the **GitHub repo** (CAPTURE_INBOX.md + BACKLOG.md) — Claude's source of truth, loaded every session (nothing lost) — but NOT yet in a sheet Brett can open/work directly.
+- Plan (proposed): a **BrettOS Tasks sheet** (ID | Title | Venture | Category | Status | Priority | Next action | Links | Updated), seeded from CAP-001..023 + B-001..091, that Brett opens/edits and Claude syncs with the repo. Bulk workflow: Brett tags/asks → Claude reads the sheet, processes or requests info. Eventually surface in the Hub (ties CAP-015 / B-051 / B-059).
+- ❓ Decision: Sheet now / Hub screen / both; pick a single source of truth to avoid drift.
+- Type: project (BrettOS core) → B-091
+- Links: CAP-015 (capture vision), B-051/B-059; BACKLOG B-091
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

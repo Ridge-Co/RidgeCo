@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.17 | **Last Updated:** July 19, 2026
+**Version:** v1.18 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -77,7 +77,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-069 | 🟠 | FU Fait Ave/St owner — collect payment + confirm no more leaks | From CAP-017. |
 | B-070 | 🟢 | Fait Ave/St — replace 3rd-floor pop-up assemblies | Low priority; combine with other work unless owner wants sooner. From CAP-017. |
 | B-071 | 🔴 | FU Vanity repair lead (FB) — time-sensitive | High priority; FB lead likely cooling, follow up ASAP. From CAP-017. |
-| B-087 | 🟡 | Unified vehicle-notice router (tolls, violations, recalls, MVA/registration) — route by VIN/plate | Look up Holder in Fleet roster (B-090) → send + 5-day follow-up until confirmed; dedup vs already-sent; file under Vendors/manager. **Holder→email:** KingBee tolls=tolls@kingbee-vans.com, KingBee recalls/other=hive.network@kingbee-vans.com; Giddyup=info@giddyuprentals.com; Ray Lewis=accounting@lewisdrums.com + rlewis@lewisdrums.com; **LIEN (AUP135)=route to Brett**. NJ-van TOLLS = EZ-Pass exception. **MVA/registration notices: forward ONLY for KingBee vans; GiddyUp/Ray Lewis/LIEN → Brett resolves (no forward).** Apps Script/Worker. From CAP-020/022, CAP-005. |
+| B-087 | 🟡 | Unified vehicle-notice router (tolls, violations, recalls, MVA/registration) — route by VIN/plate | Look up Holder in Fleet roster (B-090) → send + 5-day follow-up until confirmed; dedup vs already-sent; file under Vendors/manager. **Holder→email:** KingBee tolls=tolls@kingbee-vans.com, KingBee recalls/other=hive.network@kingbee-vans.com; Giddyup=info@giddyuprentals.com; Ray Lewis=accounting@lewisdrums.com + rlewis@lewisdrums.com; **LIEN (AUP135)=route to Brett**. NJ-van TOLLS = EZ-Pass exception. **MVA/registration notices: forward ONLY for KingBee vans; GiddyUp/Ray Lewis/LIEN → Brett resolves (no forward).** SEND MODE: drafts-for-review default + templated cover note stating the ask; auto-send later. Apps Script/Worker. From CAP-020/022, CAP-005. |
 | B-090 | 🟠 | Fleet Vehicle roster sheet — VIN/plate → current holder (Kingbee/GiddyUp/Ray Lewis) | Backbone for the vehicle-notice router (B-087) + compliance/registration (CAP-005/006). Sheet `11HVkmGOKhTveAXGajs0_pTOkPaZk6HXxZmx1h2wz_nY` READ July 19 — has VIN, plate (MD Tag #), Holder (KingBee/LIEN/Ray Lewis/Giddyup). 8 vans + 2 Turo. Service account SHARED July 19 — **unblocked.** Remaining: normalize Holder values; holder→email map lives in router config (B-087). Ready to wire. From CAP-022. |
 
 ---
@@ -108,6 +108,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-053 | 🟡 | Multi-step tags + categorization of captures | From CAP-015. |
 | B-054 | 🟡 | Context/location-aware task surfacing | Suggest on-the-way / nearby / same-context tasks (@ Home Depot, waiting in line). Form-factor: phone-first vs desktop. From CAP-015. |
 | B-059 | 🟡 | Link tasks → projects (capture layer) | Reinforces CAP-015 "attach entries to major projects." From CAP-017. |
+| B-091 | 🟠 | BrettOS Tasks sheet — surface captures/backlog as an accessible, updatable, bulk-actionable task list | Brett opens/edits directly (no need to talk to Claude); Claude syncs w/ repo + bulk-categorizes on request. Sheet now, Hub later. From CAP-024. |
 | B-074 | 🟡 | Lead-finder Chrome extension — scan FB posts needing repairs/lawn care, respond, exclude "I need it today" | From CAP-018. |
 | B-081 | 🟡 | Lead capture that doesn't look bot/scammy/salesy | Cross-cuts B-074/B-080. From CAP-018. |
 | B-089 | 🟢 | HSA receipt automation (future, personal) — upload receipts to HSA for reimbursement | Mirrors CAP-002 pipeline; receipts folder in personal Drive; provider upload may need browser automation. From CAP-021. |
