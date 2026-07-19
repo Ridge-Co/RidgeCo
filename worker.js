@@ -1802,6 +1802,12 @@ const QB_TRADES = [
   { trade: 'General',     incomeId: '198',              expenseId: '68'  }, // Repairs Income exists
 ];
 
+// Extract an existing entity Id from a QBO "Duplicate Name Exists" (6240) error.
+function qbDupId(r) {
+  try { const e = r?.Fault?.Error?.[0]; if (e?.code === '6240' && e?.Detail) { const m = e.Detail.match(/Id=(\d+)/); if (m) return m[1]; } } catch (x) {}
+  return null;
+}
+
 // One-time: create the trade income accounts + service items in QuickBooks.
 // Idempotent — safe to re-run; skips anything that already exists by name.
 async function qbSetupTrades(env) {
@@ -1821,18 +1827,18 @@ async function qbSetupTrades(env) {
         else {
           const r = await qbApi(env, 'account?minorversion=73', 'POST',
             { Name: t.income, AccountType: 'Income', AccountSubType: 'ServiceFeeIncome', SubAccount: true, ParentRef: { value: QB_INCOME_PARENT } }, token);
-          incomeId = r?.Account?.Id;
+          incomeId = r?.Account?.Id || qbDupId(r);
           if (!incomeId) { log.push(`FAIL income ${t.income}: ${JSON.stringify(r).slice(0,140)}`); continue; }
-          log.push(`created income: ${t.income} (${incomeId})`);
+          log.push(`${r?.Account?.Id ? 'created' : 'exists'} income: ${t.income} (${incomeId})`);
         }
       }
       let itemId = itemByName[t.trade.toLowerCase()];
       if (!itemId) {
         const r = await qbApi(env, 'item?minorversion=73', 'POST',
           { Name: t.trade, Type: 'Service', IncomeAccountRef: { value: incomeId } }, token);
-        itemId = r?.Item?.Id;
+        itemId = r?.Item?.Id || qbDupId(r);
         if (!itemId) { log.push(`FAIL item ${t.trade}: ${JSON.stringify(r).slice(0,140)}`); continue; }
-        log.push(`created item: ${t.trade} (${itemId})`);
+        log.push(`${r?.Item?.Id ? 'created' : 'exists'} item: ${t.trade} (${itemId})`);
       } else log.push(`item exists: ${t.trade} (${itemId})`);
       map[t.trade] = { income_acct_id: incomeId, item_id: itemId, expense_acct_id: t.expenseId };
     }
