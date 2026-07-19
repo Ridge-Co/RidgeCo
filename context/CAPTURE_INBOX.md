@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.0 | **Last Updated:** July 18, 2026
+**Version:** v1.1 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -149,6 +149,36 @@
   6. Confirm WO-1053 photo content (open the 3 tagged images).
 - Type: bug fixes + features (Ridge Co)
 - Status: 1 fixed; rest queued.
+
+### CAP-012 — Plumber / handyman sourcing (Ridge Co — NEW, active)
+- Raw (handwritten note, Scan_2019, July 18): a list of trade leads, most crossed off.
+  - ~~Marvin Calderon — Plumbing, Ashburton — Handyman?~~ (crossed off)
+  - ~~Al Stratti — Plumber?~~ (crossed off)
+  - ~~Rob Whitley — Plumbing~~ (crossed off)
+  - Ask for handyman referrals
+  - Oscar Culver → follow up with Oscar on the job at **56 S Culver St**
+  - $300 extra to Cesar for floor?
+- Type: task (Ridge Co operations)
+- Status: new — leads dead-ended; active follow-ups remain
+- Sub-items:
+  1. Source a reliable plumber/handyman sub — the three named leads (Marvin Calderon, Al Stratti, Rob Whitley) are crossed off / didn't pan out → **B-034**
+  2. Ask existing contacts for handyman referrals → part of B-034
+  3. Follow up with **Oscar** on the **56 S Culver St** job → **B-035**
+  4. Verify/close the **$300 extra paid to Cesar** (V-003) for floor repairs → **B-036**. Brett's read: legit — floor repairs were necessary before the install, so the extra $300 is owed, not an overpay. Confirm it's recorded correctly.
+- Links: BACKLOG B-034, B-035, B-036
+- Handwriting note: "Oscar Culver" is Name+Street shorthand (Culver = street), not a person's surname. Logged to HANDWRITING_KEY.
+
+### CAP-013 — Content-creation venture / marketing funnel (NEW lane — PARKED, long-term)
+- Raw (handwritten note, Scan_2020, July 18): Brett's long-term plan to start content creation "once back on his feet" with more organization/automation across the businesses.
+  - Create content to sell products/services → (a) ad revenue from subscribers, (b) sales of product/service
+  - Content must add value / solve a problem
+  - Content → Pinterest posts → blogs / videos
+  - Facebook posts → blogs (link to my product) / videos
+  - 5-step plan: (1) Find niche (2) What am I going to sell to them (3) Build website + funnels (4) Create content to drive traffic to funnels (5) Build email list + continue to add value
+- Type: idea / venture
+- Status: **parked** — explicitly long-term; not active until the vehicle/cash-flow bleed (CAP-007) is under control and the businesses are more automated
+- ❓ Which product/service does this sell — BarrelCo, a new digital product, or Ridge Co lead-gen? (Brett to specify when it activates.)
+- Links: strategically downstream of CAP-007 (cash-flow north star)
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

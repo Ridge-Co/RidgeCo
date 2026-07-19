@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.2 | **Last Updated:** July 17, 2026
+**Version:** v1.3 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -30,6 +30,17 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-010 | 🟢 | WO completion photos auto-organized in Drive | Subfolder structure now live — verify old WOs if needed |
 | B-011 | 🟢 | Invoice PDF generation for customers | QB handles this once API live |
 | B-012 | 🟢 | Vendor performance dashboard | On-time rate, average job cost, photo compliance |
+
+---
+
+## RIDGE CO — OPERATIONS / TO-DO
+*(Operational to-dos captured from Brett's notes — not builds. Source: CAP-012.)*
+
+| ID | Priority | Item | Notes |
+|---|---|---|---|
+| B-034 | 🟠 | Source a reliable plumber/handyman subcontractor | Leads dead-ended: Marvin Calderon, Al Stratti (plumber), Rob Whitley (plumber). Action: ask existing contacts for handyman referrals. |
+| B-035 | 🟠 | Follow up with Oscar on the 56 S Culver St job | From "Oscar Culver" note shorthand. |
+| B-036 | 🟡 | Verify/close $300 extra paid to Cesar (V-003) for floor prep | Brett's read: legit — floor repairs were necessary before install, so extra is owed, not an overpay. Confirm recorded correctly. |
 
 ---
 

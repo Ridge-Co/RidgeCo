@@ -1,5 +1,5 @@
 # Brett Handwriting Key
-**Version:** v1.1 | **Last Updated:** July 19, 2026
+**Version:** v1.2 | **Last Updated:** July 19, 2026
 **Purpose:** Reference that helps Claude read Brett's handwritten notes when he photographs paper and dumps it into the Capture Inbox. This grows every session. When Claude can't read something and Brett tells it what it says, the resolution gets logged here so OCR + context get better over time. Expect a few "what the hell does this say, Brett?" rounds early on — each one permanently improves accuracy.
 
 **Approach (confirmed July 19):** Live-capture learning. No calibration sheet. Claude OCRs each handwritten dump, flags uncertain words with ❓ + a best-guess, Brett confirms, and confirmations get logged below. The KNOWN VOCABULARY section is seeded from context so read #1 isn't blind — but those are *expected terms*, not yet confirmed against Brett's actual handwriting. A term only moves to RESOLVED READINGS once Claude has actually read it correctly off a photo.
@@ -11,7 +11,14 @@
 
 | Date | What it looked like / where | Confirmed reading |
 |---|---|---|
-| — | — | — |
+| 2026-07-19 | Scan_2019, top block, capital that looked like "AA" | **Marvin** (Brett's cursive capital M reads like "AA") |
+| 2026-07-19 | Scan_2019, "Calderon" | **Calderon** — surname (lead) |
+| 2026-07-19 | Scan_2019, after Plumbing | **Ashburton** — a STREET name, not a neighborhood |
+| 2026-07-19 | Scan_2019, "Al Strat_" | **Al Stratti** (double-t) — plumber lead |
+| 2026-07-19 | Scan_2019, "R_b Whitley" | **Rob Whitley** (Rob, not Roy/Ray) — plumber lead |
+| 2026-07-19 | Scan_2019, "Oscar Cul__r" | **Oscar Culver** = shorthand for "follow up with Oscar on the job at **56 S Culver St**." Culver = street. |
+| 2026-07-19 | Scan_2019, "$300 ... to _esar for floor" | **Cesar** (Cesar Gomez, V-003). "$300 extra to Cesar for floor" — legit; floor repairs were needed before install. |
+| 2026-07-19 | Scan_2020, list item 5 | **"Build email list + continue to add value"** (continue, not "nurture") |
 
 ---
 
@@ -50,6 +57,8 @@
 | 151 W Lanvale St | Property (WO-1053 lives here) |
 | 4709 Harford Rd Ste 43 | Business address, Baltimore MD 21214 |
 | PO Box 39692 | Baltimore mailing box |
+| Ashburton | Baltimore STREET name (job/site reference) |
+| 56 S Culver St | Job site — Oscar follow-up (CAP-012) |
 
 ### Ventures & entities
 | Written form | Means |
@@ -95,9 +104,12 @@
 ## TRICKY GLYPHS
 *(Character-level notes — how Brett writes a specific letter/number that OCR misreads. Fill in from real captures; empty until confirmed off a photo.)*
 
-| Glyph | Note |
+| Glyph / pattern | Note |
 |---|---|
-| — | *(watch for: VIN strings, apartment numbers, and $ amounts — confirm forms on first capture)* |
+| Capital **M** | Reads like "AA" (e.g. "Marvin" looked like "AAarvin"). If a word opens with "AA…", suspect a capital M. |
+| Strike-through | A line through a name/item = crossed off / dead lead, NOT deletion of meaning. Preserve it as "rejected." |
+| **Name + Street** | Brett writes "FirstName StreetName" (e.g. "Oscar Culver") as shorthand for "follow up with that person about the job at that street." The second word is often a STREET, not a surname. |
+| *(watch)* | VIN strings, apartment numbers, and $ amounts — confirm forms on first capture. |
 
 ---
 
