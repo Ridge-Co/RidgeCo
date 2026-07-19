@@ -1,0 +1,11 @@
+# Cloudflare Worker deploy config for the RidgeCo Maintenance Hub.
+# Purpose: enable push-to-main auto-deploy via Cloudflare Workers Builds.
+# keep_vars = true is CRITICAL — it preserves the environment variables and
+# secrets set in the Cloudflare dashboard (GOOGLE_SA_KEY, QB_*, TWILIO_*,
+# WORKER_SECRET, SHEET_ID, etc.) so a deploy never wipes them.
+
+name = "maintenance-hub"
+main = "worker.js"
+compatibility_date = "2026-06-08"
+keep_vars = true
+workers_dev = true
