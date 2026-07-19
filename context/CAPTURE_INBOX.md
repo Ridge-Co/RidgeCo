@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.8 | **Last Updated:** July 19, 2026
+**Version:** v1.9 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -282,6 +282,14 @@
   11. **Cesar mirror site** — Cesar tracks his own jobs separately from Brett's, but includes Brett's → **B-082** (ties CAP-010)
 - Links: BACKLOG B-073..B-082; CAP-010 (Cesar mirror / equipment), CAP-013/015 (content/capture), B-019/030/032
 - Parents' role resolved (item 8) → B-083 (future AI-coordinated Waynesboro VA fulfillment)
+
+### CAP-019 — ChatGPT export ingested → founding vision + Winchester Hauling/CHEP brief (stored PRIVATELY)
+- Raw (July 19): Brett shared his full ChatGPT data export (174 conversations). Goal: mine his founding vision + early CHEP pallet-recycling planning — his words as intent, ChatGPT's answers NOT as gospel.
+- Type: info / context ingestion
+- Status: done — synthesized brief stored in a **private Google Doc** (too sensitive for this public repo). See the "PRIVATE / SENSITIVE CONTEXT" pointer in CURRENT.md.
+- Notes: covers Brett's vision (debt payoff → hands-off AI-run businesses → freedom to build creative repurposed-material STRs; pallet business = the financial backbone) and Winchester Hauling's CHEP plan. Per Brett, CHEP return-vendor authorization is now obtained. Full economics/strategy + a "claims to verify" list live only in the private doc.
+- ❓ Overlap expected with the forthcoming (overdue) Gemini data export — reconcile when it arrives.
+- Links: private doc `Brett_Vision_and_CHEP_Private_v1.1` (Drive); relates to CAP-007 (cash-flow), CAP-013 (content/creative), VENTURES (Winchester Hauling)
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

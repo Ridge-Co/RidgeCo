@@ -11,8 +11,18 @@ Read ALL files before doing any work.
 | VENTURES.md | v1.0 | Every venture — current state, stack, Claude access level, automation gaps |
 | FEATURE_LOG.md | v1.1 | What's working — check before every code change to prevent regressions |
 | BACKLOG.md | v1.10 | Master backlog across all ventures — priorities, in progress, completed |
-| CAPTURE_INBOX.md | v1.8 | Brett's zero-friction brain-dump inbox — CAP items, links to backlog, open questions. Read every session. |
+| CAPTURE_INBOX.md | v1.9 | Brett's zero-friction brain-dump inbox — CAP items, links to backlog, open questions. Read every session. |
 | HANDWRITING_KEY.md | v1.8 | Reference for reading Brett's handwritten-note photos; grows over time. Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338. |
+
+## PRIVATE / SENSITIVE CONTEXT (NOT in this public repo)
+
+Some context is too sensitive for this **public** repo (personal finances, competitive strategy). It lives in Google Drive and must be read via the **Drive connector** (as `info@bmoremanagement.com`) at the start of any session where it's relevant. This is the durable pointer:
+
+| Doc | Drive file ID | Covers |
+|---|---|---|
+| Brett_Vision_and_CHEP_Private_v1.1 | `1KFI6l4qtZft3kbKaXxLfbwBeYGxV86UmpqENGRD3xl8` | Brett's founding vision/motivation + Winchester Hauling / CHEP pallet-recycling plan, mined from his ChatGPT export. Contains personal figures + competitive strategy — **keep out of the public repo.** |
+
+To read it: Drive connector → `read_file_content(fileId)`. Parent folder: "Brett AI Context" (`1iFFIwzUN4EKhJEgfCAqlUdkt8cyMNClX`). Note: the Drive connector may be unavailable in headless/scheduled runs — that's fine, this brief isn't needed for automated tasks.
 
 ## How to update these files
 
@@ -42,5 +52,6 @@ When a new version is needed (new PAT, new project details, etc.):
 | Context Document v1.9 | July 19, 2026 | Session 2 log row added (handwriting-training system + 7-note capture batch). v1.8 stays in /context as history. |
 | HANDWRITING_KEY v1.7 + CAPTURE_INBOX v1.6 + BACKLOG v1.8 | July 19, 2026 | Scan_2105 (mixed list) → CAP-017 + B-059..B-072. Highlights: Ray (NJ) holds a van, $5k behind → weekly EZ-Pass→invoice automation (CAP-001 sub-thread, B-065/066); Federal St job off-Hub (B-068); Vanity FB lead 🔴 (B-071); Fait Ave/St owner payment+leaks (B-069/070); trade/repair standards + opportunistic-task engine (B-072, track-don't-gate rec). Corrections: Knock/Fait/Vanity/Ray's tolls/box co Re Spoon/Federal. **Handwriting-training batch complete (7 notes, Scans 2019–2105).** |
 | CAPTURE_INBOX v1.8 + BACKLOG v1.10 | July 19, 2026 | Resolved CAP-018 item 8 — parents in Waynesboro VA store/sell planters+barrels to FB buyers locally (free secondary market); future AI-coordinated fulfillment → B-083 (UX for non-tech-savvy mother). |
+| CAPTURE_INBOX v1.9 (+ private Drive doc) | July 19, 2026 | Ingested Brett's ChatGPT export (174 convos) → founding-vision + Winchester Hauling/CHEP synthesis. Stored in PRIVATE Google Doc (Brett_Vision_and_CHEP_Private_v1.1, id 1KFI6l4qtZft3kbKaXxLfbwBeYGxV86UmpqENGRD3xl8) — see PRIVATE CONTEXT pointer. CAP-019 logs it. CHEP now authorized per Brett. |
 | HANDWRITING_KEY v1.8 + CAPTURE_INBOX v1.7 + BACKLOG v1.9 | July 19, 2026 | Scan_1338 (AI/automation vision list) → CAP-018 + B-073..B-082: properties onboarding site, lead-finder Chrome extension, Hub UI → Fairfax estimate look, estimate-acceptance workflow, preventive-maintenance package, BarrelCo inventory (Community Forklift), retail-outlet tracker, FB Marketplace/listing automation (rebuild "Nerdy Panda"), non-botty lead capture, Cesar mirror site. Open ❓: parents' roles. |
 | CREDENTIALS_MAP v1.2 + FEATURE_LOG v1.1 (engineering session) | July 19, 2026 | **BIG DAY.** (1) Fixed the silently-broken Cloudflare deploy — Worker hadn't auto-deployed in days; wired Workers Builds + `wrangler.toml` (keep_vars). (2) Hub fixes now LIVE: void re-render, **WO_ID matching** (status-not-saving root cause), bill→Complete automation. (3) **QuickBooks CONNECTED (production)** — realm 9130355695406136 (Saint Thomas Ventures LLC DBA Ridge Co); created 10 trade income accts + 12 items; `QB_TRADE_MAP` locked in worker.js. (4) Confirmed status lifecycle (…Invoiced→Pending Payment→Paid by Customer→Paid) + payment model 1+2 (worklist+deep-links+webhook auto-flip, overpay guard). Next (July 20): Send-to-QuickBooks invoice/bill/payment build (preview-first). |
