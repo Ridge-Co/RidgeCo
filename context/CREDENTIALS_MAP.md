@@ -1,5 +1,5 @@
 # BrettOS Credentials Map
-**Version:** v1.1 | **Last Updated:** July 18, 2026
+**Version:** v1.2 | **Last Updated:** July 19, 2026
 **Rule:** This file maps every service Claude may need to interact with, where credentials are stored, and current access status. Update this file whenever a new service is connected or credentials change. Never store actual secret values here — only the map.
 
 ---
@@ -33,7 +33,7 @@
 **Personal repos:** Same token covers personal repos under brett332
 **Expiry:** Brett's current classic token has NO expiration — rotate periodically for hygiene.
 **Access status:** ⚠️ Read = automatic. WRITE = requires Brett's pasted classic PAT each session until a persistent mechanism (session secret / OAuth connector) exists. GitHub's remote MCP OAuth isn't supported by custom connectors yet, so no clean connector path today.
-**Auto-deploy:** Push to `main` branch of `ridge-co/RidgeCo` → Cloudflare Worker deploys automatically via wrangler
+**Auto-deploy:** ✅ NOW LIVE (July 19, 2026). It was SILENTLY BROKEN — the Worker was never connected to Git and hadn't deployed in ~4 days (Build tab showed "Connect", last deploy manual). Fixed by adding `wrangler.toml` (with `keep_vars = true` so deploys never wipe dashboard secrets) and connecting **Cloudflare → maintenance-hub → Settings → Build → Git repository** = `Ridge-Co/RidgeCo`, branch `main`, deploy cmd `npx wrangler deploy`. Every push to main now auto-builds + deploys the Worker. (`.html` frontend deploys separately via GitHub Pages.)
 
 ### Known Repos
 | Repo | Purpose | Auto-deploy? |
@@ -58,19 +58,14 @@
 ## QUICKBOOKS ONLINE
 
 **Purpose:** Invoice creation, bill recording, vendor sync for Ridge Co
-**Auth method:** OAuth2 with refresh token (100-day expiry, auto-renews on use)
-**Intuit Developer App:** BrettOS Automation (AppID: 33b9e4af...)
-**Workspace:** BrettOS
-**Development Client ID:** `AB0B9BKsX7xlilodTJILzynggrllfGMxD7RI2AKCRndT1TSWgF`
-**Production credentials:** ⏳ Pending Intuit review (submitted July 17, 2026)
-**Secret location (once approved):** Will be stored as GitHub Actions secrets:
-  - `QB_CLIENT_ID`
-  - `QB_CLIENT_SECRET`
-  - `QB_REFRESH_TOKEN`
-  - `QB_REALM_ID` (company ID)
-**Redirect URI configured:** `https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl`
-**Access status:** ⏳ Pending production approval — development credentials active
-**Next step:** When Intuit approves, run OAuth2 Playground flow to get production refresh token, store as GitHub secrets
+**Auth method:** OAuth2 refresh token. **The refresh token ROTATES** — worker.js treats env `QB_REFRESH_TOKEN` as the initial seed; persistence of the rotated token (to a QB_Config store) ships with the write flow. If QB endpoints 400 with `invalid_grant`, re-auth.
+**Intuit Developer App:** BrettOS Automation
+**Company:** Saint Thomas Ventures LLC DBA Ridge Co.  **Realm/Company ID:** `9130355695406136`
+**Secret location:** **Cloudflare Worker env (NOT GitHub)** — `QB_CLIENT_ID`, `QB_REALM_ID` (plaintext); `QB_CLIENT_SECRET`, `QB_REFRESH_TOKEN` (encrypted). The Worker calls Intuit directly; the cloud session CANNOT reach Intuit, so all QB work runs through Worker endpoints.
+**Endpoints (worker.js):** `GET /qb/test` (company name), `GET /qb/accounts` (chart of accounts), `GET /qb/setup-trades` (idempotent — created 10 trade income sub-accounts under "Services" + 12 service items). Listed in `PUBLIC_PATHS` (bypass WORKER_SECRET so browser/Intuit reach them) — lock down/remove the diagnostic ones (test/accounts) after the build.
+**Trade→account map:** hardcoded as `QB_TRADE_MAP` in worker.js (12 trades → item id / income acct / expense acct). Invoices reference the item; vendor bills reference the expense account directly.
+**Access status:** ✅ **CONNECTED — PRODUCTION** (July 19, 2026). Assessment questionnaire cleared ("no further action required") because it's a single-company self-use app.
+**Next step (July 20):** Send-to-QuickBooks flow — invoice + bill creation (PREVIEW-FIRST), customer/vendor find-or-create, vendor-pay worklist with overpay guard, payment webhooks for auto status-back. Unblocks B-001/B-002/B-015.
 
 ---
 

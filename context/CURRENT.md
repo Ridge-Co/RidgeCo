@@ -7,9 +7,9 @@ Read ALL files before doing any work.
 |---|---|---|
 | Brett_Context_Document_v1.8.md | v1.8 | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-029) |
 | Brett_Cowork_Best_Practices_v1.3.md | v1.3 | Session workflow, common mistakes, how to work with Brett |
-| CREDENTIALS_MAP.md | v1.0 | Every service, auth method, secret location, access status |
+| CREDENTIALS_MAP.md | v1.2 | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality |
 | VENTURES.md | v1.0 | Every venture — current state, stack, Claude access level, automation gaps |
-| FEATURE_LOG.md | v1.0 | What's working — check before every code change to prevent regressions |
+| FEATURE_LOG.md | v1.1 | What's working — check before every code change to prevent regressions |
 | BACKLOG.md | v1.8 | Master backlog across all ventures — priorities, in progress, completed |
 | CAPTURE_INBOX.md | v1.6 | Brett's zero-friction brain-dump inbox — CAP items, links to backlog, open questions. Read every session. |
 | HANDWRITING_KEY.md | v1.7 | Reference for reading Brett's handwritten-note photos; grows over time. Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105. |
@@ -40,3 +40,4 @@ When a new version is needed (new PAT, new project details, etc.):
 | HANDWRITING_KEY v1.5 + CAPTURE_INBOX v1.4 + BACKLOG v1.6 | July 19, 2026 | Scan_2105_1 ("Fix What Bugs Me") → CAP-015 capture-system vision; features → B-051..B-054 (daily digest, voice→sheet, multi-step tags, context/location-aware surfacing). Confirmed "tags" not "flags". Scans 3-4 still pending. |
 | HANDWRITING_KEY v1.6 + CAPTURE_INBOX v1.5 + BACKLOG v1.7 | July 19, 2026 | Scan_2105_2 (lock-code note) → CAP-016 parcel-locker category (shareable-with-tenant) + tasks B-055 (feature) / B-056..B-058 (batteries 3014&2930, install @115, record changes 3014#3/#1, 1214#3). "capture vs do" design principle → CAP-015 (ties to CAP-010 Equipment Registry). Scan 4 still pending. |
 | HANDWRITING_KEY v1.7 + CAPTURE_INBOX v1.6 + BACKLOG v1.8 | July 19, 2026 | Scan_2105 (mixed list) → CAP-017 + B-059..B-072. Highlights: Ray (NJ) holds a van, $5k behind → weekly EZ-Pass→invoice automation (CAP-001 sub-thread, B-065/066); Federal St job off-Hub (B-068); Vanity FB lead 🔴 (B-071); Fait Ave/St owner payment+leaks (B-069/070); trade/repair standards + opportunistic-task engine (B-072, track-don't-gate rec). Corrections: Knock/Fait/Vanity/Ray's tolls/box co Re Spoon/Federal. **Handwriting-training batch complete (7 notes, Scans 2019–2105).** |
+| CREDENTIALS_MAP v1.2 + FEATURE_LOG v1.1 (engineering session) | July 19, 2026 | **BIG DAY.** (1) Fixed the silently-broken Cloudflare deploy — Worker hadn't auto-deployed in days; wired Workers Builds + `wrangler.toml` (keep_vars). (2) Hub fixes now LIVE: void re-render, **WO_ID matching** (status-not-saving root cause), bill→Complete automation. (3) **QuickBooks CONNECTED (production)** — realm 9130355695406136 (Saint Thomas Ventures LLC DBA Ridge Co); created 10 trade income accts + 12 items; `QB_TRADE_MAP` locked in worker.js. (4) Confirmed status lifecycle (…Invoiced→Pending Payment→Paid by Customer→Paid) + payment model 1+2 (worklist+deep-links+webhook auto-flip, overpay guard). Next (July 20): Send-to-QuickBooks invoice/bill/payment build (preview-first). |

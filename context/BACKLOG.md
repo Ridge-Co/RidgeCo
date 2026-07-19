@@ -10,7 +10,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 
 | ID | Venture | Item | Blocker |
 |---|---|---|---|
-| B-015 | Ridge Co | QuickBooks Online API integration — create invoices from Invoice_Review rows | ⏳ Waiting on Intuit production approval (submitted July 17, 2026) |
+| B-015 | Ridge Co | QuickBooks Send-to-QuickBooks flow (invoice + bill + payment) | 🟢 UNBLOCKED July 19 — QB production CONNECTED; 10 trade income accts + 12 items created; `QB_TRADE_MAP` locked in worker.js; deploy pipeline fixed. Remaining (scheduled **July 20**): invoice/bill creation (preview-first), customer/vendor find-or-create, vendor-pay worklist + overpay guard, payment webhooks (auto status-back). |
 
 ---
 
