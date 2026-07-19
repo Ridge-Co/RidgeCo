@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.13 | **Last Updated:** July 19, 2026
+**Version:** v1.14 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -36,9 +36,10 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-075 | 🟡 | Upgrade Hub UI to match the 4518 Fairfax Rd estimate look | Brett's UI baseline. From CAP-018. |
 | B-077 | 🟡 | Preventive-maintenance package | Ties B-072 standards engine + CAP-010. From CAP-018. |
 | B-082 | 🟠 | Cesar mirror site — tracks his own jobs separately but includes Brett's | Vendor-portal extension. Ties CAP-010. From CAP-018. |
-| B-084 | 🟠 | Hub "Receipts to file" queue — OCR + seeded property/WO picker → post to WO (preview-first) | Confirm-first matching (WO#→exact; property→open WOs; else best-guess). Customer-charge check to avoid double-billing. From CAP-002. |
+| B-084 | 🟠 | Hub "Receipts to file" queue — OCR + classify + seeded WO/property picker → post (preview-first) | Confirm-first. 3 categories: customer WO-materials (billable), owned-property expense (e.g. 1864 Kerns STR), business expense ("BMore"). Read hand-written property/WO/"BMore" first → else learned vendor-default (seed: Advance Auto→BMore) → else ask. Customer-charge check; no double-billing. All → QB + filed to Vendors drive. From CAP-002. |
 | B-085 | 🟠 | Rebuild receipt intake pipeline — retire the stalled Make.com scenario | Diagnosed July 19: "WO Receipt Inbox" (id 1BpJXcOlW98…) has 10+ receipts stuck since Aug–Dec 2025; Make.com watch→email→move is dead. Replace with Hub pipeline (B-084): QB posting via the connected API + Apps Script file moves. From CAP-002. |
 | B-086 | 🟡 | Reconcile receipts stuck in "WO Receipt Inbox" (Aug–Dec 2025) | 10+ PDFs never processed; confirm which already reached QuickBooks, record/attach the rest, then file by vendor. From CAP-002. |
+| B-088 | 🟡 | Add 1864 Kerns School Rd (owned STR) to the WO system as a property | For expense tracking; its STR expenses usually have no WO but should apply to the property. From CAP-002. |
 
 ---
 
@@ -76,7 +77,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-069 | 🟠 | FU Fait Ave/St owner — collect payment + confirm no more leaks | From CAP-017. |
 | B-070 | 🟢 | Fait Ave/St — replace 3rd-floor pop-up assemblies | Low priority; combine with other work unless owner wants sooner. From CAP-017. |
 | B-071 | 🔴 | FU Vanity repair lead (FB) — time-sensitive | High priority; FB lead likely cooling, follow up ASAP. From CAP-017. |
-| B-087 | 🟡 | Rental-car toll forwarding automation (Turo) — tolls → GiddyUp + file | Incoming toll → forward to GiddyUp → rename + file under Vendors/Giddyup. Needs: arrival method (email vs scan) + GiddyUp email. Apps Script (Gmail connector can't send). From CAP-020. |
+| B-087 | 🟡 | Vehicle toll/violation forwarding automation — route by plate/VIN | Scanned-by-mail tolls/tickets/parking → forward to GiddyUp (info@giddyuprentals.com) or Kingbee by vehicle; NJ van = EZ-Pass exception (no forward). GiddyUp: send + 5-day follow-up until confirmed; dedup vs already-sent. File under Vendors/manager. Needs Kingbee method. Apps Script. From CAP-020. |
 
 ---
 
@@ -108,6 +109,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-059 | 🟡 | Link tasks → projects (capture layer) | Reinforces CAP-015 "attach entries to major projects." From CAP-017. |
 | B-074 | 🟡 | Lead-finder Chrome extension — scan FB posts needing repairs/lawn care, respond, exclude "I need it today" | From CAP-018. |
 | B-081 | 🟡 | Lead capture that doesn't look bot/scammy/salesy | Cross-cuts B-074/B-080. From CAP-018. |
+| B-089 | 🟢 | HSA receipt automation (future, personal) — upload receipts to HSA for reimbursement | Mirrors CAP-002 pipeline; receipts folder in personal Drive; provider upload may need browser automation. From CAP-021. |
 
 ---
 
