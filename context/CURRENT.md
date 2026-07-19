@@ -12,7 +12,7 @@ Read ALL files before doing any work.
 | FEATURE_LOG.md | v1.0 | What's working — check before every code change to prevent regressions |
 | BACKLOG.md | v1.0 | Master backlog across all ventures — priorities, in progress, completed |
 | CAPTURE_INBOX.md | v1.0 | Brett's zero-friction brain-dump inbox — CAP items, links to backlog, open questions. Read every session. |
-| HANDWRITING_KEY.md | v1.0 | Reference for reading Brett's handwritten-note photos; grows over time |
+| HANDWRITING_KEY.md | v1.1 | Reference for reading Brett's handwritten-note photos; grows over time. Seeded with known vocabulary; live-capture learning loop. |
 
 ## How to update these files
 
@@ -33,3 +33,4 @@ When a new version is needed (new PAT, new project details, etc.):
 | PAT-029 | July 17, 2026 | Claude self-sufficiency mandate — execute without asking Brett for manual steps |
 | Capture Inbox v1.0 | July 18, 2026 | Capture layer created — CAP-001..008 (vans/Kingbee, receipts automation, Turo, cash-flow north star, compliance, registration, entity) |
 | CREDENTIALS_MAP v1.1 | July 18, 2026 | GitHub token reality clarified — push needs Brett's pasted classic PAT; never store token in this public repo |
+| HANDWRITING_KEY v1.1 | July 19, 2026 | Seeded known vocabulary (vendors, sites, entities, fleet/Turo terms, shorthand); confirmed live-capture learning approach (no calibration sheet) |
