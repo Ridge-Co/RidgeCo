@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.3 | **Last Updated:** July 19, 2026
+**Version:** v1.4 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -213,6 +213,18 @@
   21. **Sergio** bills — entered, **needs paid** → **B-049**
 - Links: BACKLOG B-038..B-050
 - Handwriting notes logged: "U-Haul" read like "HALL"; "detector" read like "deduct"; Kerns (not Kean); new names Gina / William / Julie / Jenn / Jen / Mark / Amanda / Sergio.
+
+### CAP-015 — Capture / assistant system vision — "Fix What Bugs Me" (BrettOS — NEW, active)
+- Raw (handwritten legal-pad note, Scan_2105_1, July 18): feature wishlist for the capture/assistant layer we're building. Through-line = **context-aware surfacing**.
+- Type: project / wishlist (BrettOS capture layer)
+- Status: new — concrete features graduated to BACKLOG B-051..B-054
+- Vision items:
+  - **Daily printout/digest of next steps with small wins**; attach new entries to major projects if applicable; leave space for more entries (FU's, invoices, etc.) → **B-051**
+  - **Voice interface → spreadsheet** (voice-to-sheet capture) → **B-052**
+  - **Multi-step tags + categorize** captures → **B-053**
+  - **Context/location-aware surfacing**: tell the assistant what I'm doing and it hands me other tasks on the way / nearby / in the same context (waiting in line, @ Home Depot, etc.) → **B-054**
+  - Form-factor question threaded throughout: can it be done on my phone (easily?), only on desktop, location-specific, out & about? — design input for the capture UX.
+- Links: BACKLOG B-051..B-054; related to CAP-011 (Hub "one ring" principle)
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
