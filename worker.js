@@ -1750,8 +1750,9 @@ async function qbAccessToken(env) {
     headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
     body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(env.QB_REFRESH_TOKEN)}`,
   });
-  const data = await res.json();
-  if (!data.access_token) throw new Error('QB token refresh failed: ' + JSON.stringify(data).slice(0, 300));
+  const text = await res.text();
+  let data = {}; try { data = JSON.parse(text); } catch (e) {}
+  if (!res.ok || !data.access_token) throw new Error(`QB token refresh ${res.status}: ${text.slice(0, 220)}`);
   // NOTE: data.refresh_token rotates — persistence to a QB_Config tab is added with the write flow.
   return data.access_token;
 }
