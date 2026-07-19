@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.16 | **Last Updated:** July 19, 2026
+**Version:** v1.17 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -335,6 +335,7 @@
 - Type: automation
 - Status: new → B-087 (broadened)
 - CONVERGENCE (design): tolls (CAP-020), recalls (CAP-022), and compliance/insurance/registration notices (CAP-005/006) are the **same machinery** → a **unified vehicle-notice router**: identify vehicle by VIN/plate → look up current holder/manager in the **Fleet Vehicle roster** → route (send + 5-day follow-up until confirmed) → dedup vs already-sent → file under the manager's Vendors folder. Per-notice quirks (NJ-van toll = EZ-Pass exception) layer on top.
+- **MVA / registration / insurance notices** (intake **Inbox > Fleet Vehicles > MVA Notices**, Brett creating): same router, SPECIAL rule — **forward to KingBee for KingBee-held vans** (they manage registration/insurance), but for **GiddyUp cars, Ray Lewis's van, and LIEN → do NOT forward; Brett resolves those himself** (file + flag for Brett). Refines CAP-005.
 - Dependency: the **Fleet Vehicle roster sheet** (VIN/plate → current holder Kingbee/GiddyUp/Ray Lewis, make/model, on/off platform). Brett has a sheet; needs holders updated + shared with the service account → B-090.
 - Links: CAP-020 (tolls), CAP-005/006 (compliance/registration), CAP-001 (fleet); BACKLOG B-087, B-090
 
