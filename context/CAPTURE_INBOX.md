@@ -317,7 +317,8 @@
 - Dedup / delay handling: notices are mailed, so there's often a lag between the charge and GiddyUp's processing/payment → **cross-reference each incoming toll/ticket/parking charge against recent ones already sent + confirmed**; if it matches one already handled, **save the file but do NOT re-send.**
 - Filing: under the manager's Vendors-drive folder — Giddyup (id `1p-d4CxVgSDaL9nzo0V822cb7aOOavqlv`); Kingbee (confirm/create folder).
 - Constraint: Gmail connector can only DRAFT → auto-send + the 5-day follow-up loop run via Apps Script / the Worker.
-- ❓ Needed: **Kingbee's forwarding email/method** (email or portal?); a plate/VIN → vehicle → manager lookup.
+- Kingbee forwarding (found in Gmail July 19): **tolls@kingbee-vans.com** (tolls team; general contact hive.network@kingbee-vans.com — they hand payment to processor "Car IQ"). Same send + follow-up-until-confirmed pattern as GiddyUp.
+- ❓ Remaining: a plate/VIN → vehicle → manager lookup (small table) to auto-route.
 - Links: CAP-003 (Turo/GiddyUp), CAP-001 (Kingbee, Ray/B-066); BACKLOG B-087
 
 ### CAP-021 — HSA receipt automation (FUTURE — personal)

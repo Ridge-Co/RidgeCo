@@ -77,7 +77,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-069 | 🟠 | FU Fait Ave/St owner — collect payment + confirm no more leaks | From CAP-017. |
 | B-070 | 🟢 | Fait Ave/St — replace 3rd-floor pop-up assemblies | Low priority; combine with other work unless owner wants sooner. From CAP-017. |
 | B-071 | 🔴 | FU Vanity repair lead (FB) — time-sensitive | High priority; FB lead likely cooling, follow up ASAP. From CAP-017. |
-| B-087 | 🟡 | Vehicle toll/violation forwarding automation — route by plate/VIN | Scanned-by-mail tolls/tickets/parking → forward to GiddyUp (info@giddyuprentals.com) or Kingbee by vehicle; NJ van = EZ-Pass exception (no forward). GiddyUp: send + 5-day follow-up until confirmed; dedup vs already-sent. File under Vendors/manager. Needs Kingbee method. Apps Script. From CAP-020. |
+| B-087 | 🟡 | Vehicle toll/violation forwarding automation — route by plate/VIN | Scanned-by-mail tolls/tickets/parking → forward to GiddyUp (info@giddyuprentals.com) or Kingbee by vehicle; NJ van = EZ-Pass exception (no forward). GiddyUp: send + 5-day follow-up until confirmed; dedup vs already-sent. File under Vendors/manager. Kingbee=tolls@kingbee-vans.com, GiddyUp=info@giddyuprentals.com. Needs plate/VIN→manager lookup. Apps Script/Worker. From CAP-020. |
 
 ---
 
