@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.14 | **Last Updated:** July 19, 2026
+**Version:** v1.15 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -51,7 +51,7 @@
   3. Dispute/resolve the $11,037 Fluid restitution claim (read VMA Section 7)
   4. Fleet baseline: full roster — VIN, location, status, on/off platform, decommission status
   5. Reconcile Kingbee monthly "Hive Network Reporting" statements (many unread PDFs) → real net income per van
-  6. **Ray (NJ) — private-party van**: a former friend in NJ holds one of Brett's cargo vans off-platform, never pays on time/in full — **$5k behind** on the bill/tolls. Automate weekly EZ-Pass toll pull → auto-invoice Ray. (See CAP-017, B-065/B-066.)
+  6. **Ray Lewis (NJ) — private-party van**: a former friend in NJ holds one of Brett's cargo vans off-platform, never pays on time/in full — **$5k behind** on the bill/tolls. Automate weekly EZ-Pass toll pull → auto-invoice Ray Lewis. Recalls/vehicle notices for this van go to Ray Lewis directly (tolls = EZ-Pass). (See CAP-017, B-065/B-066.)
 - Links: NEW venture candidate — "BMore Fleet" (parent entity: BMore Management)
 - ❓ Full exit (sell/lease-to-own ALL vans) or keep some on-platform while transitioning?
 - ❓ How many vans total right now, and how many already decommissioned?
@@ -327,6 +327,15 @@
 - Status: parked/future → B-089
 - Notes: HSA-provider upload may need browser automation or manual (varies by provider — confirm the provider + whether it has an API/portal). Personal-Drive access differs from the business Drive connector.
 - Links: mirrors CAP-002 receipt pipeline; BACKLOG B-089
+
+### CAP-022 — Vehicle RECALL forwarding + unified vehicle-notice router (NEW)
+- Raw (July 19): Same setup as tolls (CAP-020) but for **recalls** — scanned recall notices routed to whoever has the vehicle: **Kingbee** (cargo vans on-platform), **GiddyUp** (Turo cars), or **Ray Lewis** (the NJ van he holds). Intake: **Inbox > Fleet Vehicles > Recalls** (Brett creating now).
+- Difference vs tolls: for the **NJ van**, tolls ride Brett's EZ-Pass (auto-pay), but **recalls go to Ray Lewis** (he physically has the van).
+- Type: automation
+- Status: new → B-087 (broadened)
+- CONVERGENCE (design): tolls (CAP-020), recalls (CAP-022), and compliance/insurance/registration notices (CAP-005/006) are the **same machinery** → a **unified vehicle-notice router**: identify vehicle by VIN/plate → look up current holder/manager in the **Fleet Vehicle roster** → route (send + 5-day follow-up until confirmed) → dedup vs already-sent → file under the manager's Vendors folder. Per-notice quirks (NJ-van toll = EZ-Pass exception) layer on top.
+- Dependency: the **Fleet Vehicle roster sheet** (VIN/plate → current holder Kingbee/GiddyUp/Ray Lewis, make/model, on/off platform). Brett has a sheet; needs holders updated + shared with the service account → B-090.
+- Links: CAP-020 (tolls), CAP-005/006 (compliance/registration), CAP-001 (fleet); BACKLOG B-087, B-090
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

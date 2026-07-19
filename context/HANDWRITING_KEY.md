@@ -1,5 +1,5 @@
 # Brett Handwriting Key
-**Version:** v1.8 | **Last Updated:** July 19, 2026
+**Version:** v1.9 | **Last Updated:** July 19, 2026
 **Purpose:** Reference that helps Claude read Brett's handwritten notes when he photographs paper and dumps it into the Capture Inbox. This grows every session. When Claude can't read something and Brett tells it what it says, the resolution gets logged here so OCR + context get better over time. Expect a few "what the hell does this say, Brett?" rounds early on — each one permanently improves accuracy.
 
 **Approach (confirmed July 19):** Live-capture learning. No calibration sheet. Claude OCRs each handwritten dump, flags uncertain words with ❓ + a best-guess, Brett confirms, and confirmations get logged below. The KNOWN VOCABULARY section is seeded from context so read #1 isn't blind — but those are *expected terms*, not yet confirmed against Brett's actual handwriting. A term only moves to RESOLVED READINGS once Claude has actually read it correctly off a photo.
@@ -134,7 +134,7 @@
 | Mark / Amanda | Contacts — WO time in message threads |
 | Kelly Knock | Barre St contact (job canceled) |
 | Spoon | Friend — referred a box-recycling / cheap moving-box company |
-| Ray (NJ) | Former friend in NJ holding one of Brett's cargo vans; $5k behind on tolls/bill |
+| Ray Lewis (NJ) | Former friend in NJ holding one of Brett's cargo vans; $5k behind on tolls/bill. Recalls/notices for that van route to him; tolls = Brett's EZ-Pass. |
 
 ### Systems
 | Written form | Means |
