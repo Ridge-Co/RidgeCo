@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.2 | **Last Updated:** July 19, 2026
+**Version:** v1.3 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -184,6 +184,35 @@
   - Core narrative: "What is the journey I am on that I would like to share?" → the path to **financial, location, and time independence** (FI + freedom of location + time freedom).
   - Pillars: get **debt-free** (credit cards, consumer/car loans, mortgage); build **significant excess cash flow from multiple streams** (youtube, ST rental, the online work/business doc); **tie in creative self-expression**.
   - Content format idea — **"Side quests" = A.S.Q. (Answer a Specific Question)**: short how-to content on small things (making things, fixing things, trailer-to-office conversion) — anything not directly tied to the main goal.
+
+### CAP-014 — Master operational to-do brain-dump (Ridge Co + admin — mostly NEW, active)
+- Raw (handwritten TOPS legal-pad list, Scan_2104, July 18): Brett's running task list. Classified below — crossed-off = done; "no task" = FYI.
+- Type: task list (operational)
+- Status: new — active items graduated to BACKLOG B-038..B-050
+- Items:
+  1. MD Taxes payment plan → **B-038**
+  2. LLC renewal + annual report (**1864 Kerns School Rd**) → **B-039**
+  3. ★ Cabin shopping list from **Gina** → **B-040** (Cabin)
+  4. ~~Amazon Gift Card — fetch email~~ (done)
+  5. FB Listings → **B-041** (BarrelCo)
+  6. ~~Pay Oscar invoices~~ (done)
+  7. ~~Pay Alex invoices~~ (done)
+  8. Update Tenants: **William 3014 #3**, **Julie 115 #2**, **2930 1R**, **115 #1** (all marked "?") → **B-042**
+  9. FU Ashburton St ESTIMATE (Cesar) — correct, **no task needed** (FYI)
+  10. Sunday invoices still owed: **Bakery** + **153 #2** (written "151 #2" but it's 153 #2) + **2930 detector** → **B-043**
+  11. ~~U-Haul — did I do 2 reservations?~~ (resolved)
+  12. ~~U-Haul van reservation~~ (resolved)
+  13. 56 Culver work order — correct, **no follow-up needed** (FYI; Cesar has the job per B-035)
+  14. Capture WO labor time from messages w/ **Jenn + Mark/Amanda** → **B-044**
+  15. "WO created for Ashburton?" — yes, **not needed** (FYI)
+  16. ~~2930 Apt 3 — list of repairs from Jen~~ (struck)
+  17. Work orders for **151 — Apt 2 & 3 turns** → **B-045**
+  18. **WO 115 Apt 2** — troubleshoot invoice → **B-046**
+  19. **Invoice Ashburton** — diagnose + troubleshoot (2 hrs) → **B-047**; open QB question: how to bill the **1st hour** — Brett's model is a **$75 service charge covering the 1st hour, then $75 each additional hour** — so it doesn't read as padding → **B-050**
+  20. **WO 153 #2** — HVAC leak, add time → **B-048**
+  21. **Sergio** bills — entered, **needs paid** → **B-049**
+- Links: BACKLOG B-038..B-050
+- Handwriting notes logged: "U-Haul" read like "HALL"; "detector" read like "deduct"; Kerns (not Kean); new names Gina / William / Julie / Jenn / Jen / Mark / Amanda / Sergio.
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 

@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.4 | **Last Updated:** July 19, 2026
+**Version:** v1.5 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -34,7 +34,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 ---
 
 ## RIDGE CO — OPERATIONS / TO-DO
-*(Operational to-dos captured from Brett's notes — not builds. Source: CAP-012.)*
+*(Operational to-dos captured from Brett's notes — not builds. Source: CAP-012, CAP-014.)*
 
 | ID | Priority | Item | Notes |
 |---|---|---|---|
@@ -42,6 +42,17 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-035 | 🟠 | Follow up with Cesar (Mon) on the 56 S Culver St job | Cesar got the Culver job (V-003). Written note read "Oscar Culver," but it went to Cesar. |
 | B-036 | 🟢 | Confirm $300 extra to Cesar (V-003) for 807 N Calvert St bakery floor prep is booked in QB | Legit per Brett — floor repairs were needed before the install (807 N Calvert St bakery, NOT Culver). Owed, not an overpay. |
 | B-037 | 🟠 | Follow up with Cesar (Mon) on the Gibbons jobs | Captured from Scan_2032 session, July 19. |
+| B-038 | 🟠 | MD taxes payment plan — set up | From CAP-014. |
+| B-039 | 🟠 | LLC renewal + annual report | Entity address on note: 1864 Kerns School Rd. From CAP-014. |
+| B-042 | 🟡 | Update tenant records — William (3014 #3), Julie (115 #2), 2930 1R, 115 #1 | All marked "?" — verify then update Tenants tab. From CAP-014. |
+| B-043 | 🟠 | Invoice batch still owed — Bakery + 153 #2 + 2930 detector | Note said "151 #2" but it's **153 #2**. "Sunday invoices." From CAP-014. |
+| B-044 | 🟡 | Capture WO labor time from messages (Jenn + Mark/Amanda) | Recover billable time buried in message threads. From CAP-014. |
+| B-045 | 🟡 | Work orders — 151 Apt 2 & 3 turns | From CAP-014. |
+| B-046 | 🟡 | WO 115 Apt 2 — troubleshoot invoice | From CAP-014. |
+| B-047 | 🟡 | Invoice Ashburton — diagnose + troubleshoot (2 hrs) | See B-050 for the 1st-hour billing question. From CAP-014. |
+| B-048 | 🟡 | WO 153 #2 — HVAC leak, add time | From CAP-014. |
+| B-049 | 🟠 | Pay Sergio — bills entered, needs paid | Sergio = vendor. From CAP-014. |
+| B-050 | 🟡 | QB billing method — how to bill the 1st hour without looking like padding | Brett's model: $75 service charge covers the 1st hour, then $75 each additional hour. Ties to QB invoicing (B-001/B-015). From CAP-014. |
 
 ---
 
@@ -75,6 +86,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-019 | 🟡 | Google Sheet for SKU/inventory tracking | Share with service account when created |
 | B-020 | 🟢 | eBay API integration — auto-list new SKUs | Needs eBay Developer token |
 | B-021 | 🟢 | Pricing tracker — compare sold prices to listed prices | |
+| B-041 | 🟡 | FB Listings — post/refresh Facebook listings | From CAP-014 / Scan_2104. |
 
 ---
 
@@ -86,6 +98,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-023 | 🟡 | Booking dashboard — occupancy, revenue, upcoming guests | |
 | B-024 | 🟢 | Automated guest messaging via Uplisting | |
 | B-025 | 🟢 | Expense tracking for cabin maintenance | |
+| B-040 | 🟢 | Cabin shopping list from Gina (★) | From CAP-014 / Scan_2104. |
 
 ---
 
