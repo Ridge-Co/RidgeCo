@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.15 | **Last Updated:** July 19, 2026
+**Version:** v1.16 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -51,7 +51,8 @@
   3. Dispute/resolve the $11,037 Fluid restitution claim (read VMA Section 7)
   4. Fleet baseline: full roster — VIN, location, status, on/off platform, decommission status
   5. Reconcile Kingbee monthly "Hive Network Reporting" statements (many unread PDFs) → real net income per van
-  6. **Ray Lewis (NJ) — private-party van**: a former friend in NJ holds one of Brett's cargo vans off-platform, never pays on time/in full — **$5k behind** on the bill/tolls. Automate weekly EZ-Pass toll pull → auto-invoice Ray Lewis. Recalls/vehicle notices for this van go to Ray Lewis directly (tolls = EZ-Pass). (See CAP-017, B-065/B-066.)
+  6. **Ray Lewis (NJ) — private-party van**: a former friend in NJ holds one of Brett's cargo vans off-platform, never pays on time/in full — **$5k behind** on the bill/tolls. Automate weekly EZ-Pass toll pull → auto-invoice Ray Lewis. Recalls/vehicle notices for this van go to Ray Lewis directly (tolls = EZ-Pass). Ray Lewis = **Lewis Drums** (accounting@lewisdrums.com, rlewis@lewisdrums.com). His van = **AUP134** (VIN 3C6LRVDG3NE133610). (See CAP-017, B-065/B-066.)
+  - **FLEET ROSTER SOURCED (July 19, sheet `11HVkmGOKhTveAXGajs0_pTOkPaZk6HXxZmx1h2wz_nY`):** 8 cargo vans + 2 Turo cars. Holders — **KingBee ×6** (P1142, P6180, P1624, P5531, P4037, P4057), **LIEN ×1** (AUP135, Austin — mechanic's-lien van, Brett to resolve), **Ray Lewis ×1** (AUP134, NJ, flagged DEC1.2 recommend-decommission), **Giddyup ×2** (ST01 Chevy Tahoe, ST02 Toyota Tacoma). Cross-refs: P5531=repair-charge dispute, P4037=DMV renewal issue, P4057 (…0444)=decommission-started, AUP135=Austin lien, AUP134=Ray's NJ van. Plates in "MD Tag #" (2FH90xx). This is the router's source of truth (B-087/B-090).
 - Links: NEW venture candidate — "BMore Fleet" (parent entity: BMore Management)
 - ❓ Full exit (sell/lease-to-own ALL vans) or keep some on-platform while transitioning?
 - ❓ How many vans total right now, and how many already decommissioned?

@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.15 | **Last Updated:** July 19, 2026
+**Version:** v1.16 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -77,8 +77,8 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-069 | 🟠 | FU Fait Ave/St owner — collect payment + confirm no more leaks | From CAP-017. |
 | B-070 | 🟢 | Fait Ave/St — replace 3rd-floor pop-up assemblies | Low priority; combine with other work unless owner wants sooner. From CAP-017. |
 | B-071 | 🔴 | FU Vanity repair lead (FB) — time-sensitive | High priority; FB lead likely cooling, follow up ASAP. From CAP-017. |
-| B-087 | 🟡 | Unified vehicle-notice router (tolls, violations, recalls) — route by VIN/plate | Scanned notices → look up holder in Fleet roster (B-090) → forward to Kingbee (tolls@kingbee-vans.com), GiddyUp (info@giddyuprentals.com), or Ray Lewis (NJ van); send + 5-day follow-up until confirmed; dedup vs already-sent; file under Vendors/manager. NJ-van TOLLS = EZ-Pass exception (recalls still go to Ray Lewis). Apps Script/Worker. From CAP-020/CAP-022. |
-| B-090 | 🟠 | Fleet Vehicle roster sheet — VIN/plate → current holder (Kingbee/GiddyUp/Ray Lewis) | Backbone for the vehicle-notice router (B-087) + compliance/registration (CAP-005/006). Sheet: `11HVkmGOKhTveAXGajs0_pTOkPaZk6HXxZmx1h2wz_nY` (shared July 19 but NOT yet with info@ or the service account — can't read it yet). Update holders + add forwarding-email + on/off-platform cols + share w/ service account (PAT-027). From CAP-022. |
+| B-087 | 🟡 | Unified vehicle-notice router (tolls, violations, recalls) — route by VIN/plate | Look up Holder in Fleet roster (B-090) → send + 5-day follow-up until confirmed; dedup vs already-sent; file under Vendors/manager. **Holder→email:** KingBee tolls=tolls@kingbee-vans.com, KingBee recalls/other=hive.network@kingbee-vans.com; Giddyup=info@giddyuprentals.com; Ray Lewis=accounting@lewisdrums.com + rlewis@lewisdrums.com; **LIEN (AUP135)=route to Brett** (no manager). NJ-van TOLLS = EZ-Pass exception (recalls→Ray Lewis). Apps Script/Worker. From CAP-020/CAP-022. |
+| B-090 | 🟠 | Fleet Vehicle roster sheet — VIN/plate → current holder (Kingbee/GiddyUp/Ray Lewis) | Backbone for the vehicle-notice router (B-087) + compliance/registration (CAP-005/006). Sheet `11HVkmGOKhTveAXGajs0_pTOkPaZk6HXxZmx1h2wz_nY` READ July 19 — has VIN, plate (MD Tag #), Holder (KingBee/LIEN/Ray Lewis/Giddyup). 8 vans + 2 Turo. Remaining: **confirm service-account share (Editor)** for the Worker; normalize Holder values; holder→email map lives in router config (B-087). Mostly ready. From CAP-022. |
 
 ---
 
