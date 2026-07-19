@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.18 | **Last Updated:** July 19, 2026
+**Version:** v1.19 | **Last Updated:** July 19, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -108,7 +108,8 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 | B-053 | 🟡 | Multi-step tags + categorization of captures | From CAP-015. |
 | B-054 | 🟡 | Context/location-aware task surfacing | Suggest on-the-way / nearby / same-context tasks (@ Home Depot, waiting in line). Form-factor: phone-first vs desktop. From CAP-015. |
 | B-059 | 🟡 | Link tasks → projects (capture layer) | Reinforces CAP-015 "attach entries to major projects." From CAP-017. |
-| B-091 | 🟠 | BrettOS Tasks sheet — surface captures/backlog as an accessible, updatable, bulk-actionable task list | Brett opens/edits directly (no need to talk to Claude); Claude syncs w/ repo + bulk-categorizes on request. Sheet now, Hub later. From CAP-024. |
+| B-091 | 🟠 | Reconcile with the REAL BrettOS task app (sheet 1X2oYjD) — append net-new only, dedup | The BrettOS Tasks sheet already exists + holds ~25 of our items (bulk-pasted July 14). Append ONLY net-new (via sheet-ops); BrettOS sheet = canonical task home, repo = deep notes feeding it. From CAP-024/CAP-025. |
+| B-092 | 🟠 | Fix BrettOS integration sync error (Cloudflare 1042) | maintenance_hub + barrelco syncs into BrettOS failing every 6h since July 14 (Integration Logs). From CAP-025. |
 | B-074 | 🟡 | Lead-finder Chrome extension — scan FB posts needing repairs/lawn care, respond, exclude "I need it today" | From CAP-018. |
 | B-081 | 🟡 | Lead capture that doesn't look bot/scammy/salesy | Cross-cuts B-074/B-080. From CAP-018. |
 | B-089 | 🟢 | HSA receipt automation (future, personal) — upload receipts to HSA for reimbursement | Mirrors CAP-002 pipeline; receipts folder in personal Drive; provider upload may need browser automation. From CAP-021. |

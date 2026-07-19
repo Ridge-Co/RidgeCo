@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.18 | **Last Updated:** July 19, 2026
+**Version:** v1.19 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -344,7 +344,13 @@
 - Raw (July 19): Brett wants to save BarrelCo leads (retail locations to follow up with) into a database — a **sheet + input method**. Has business cards to upload NOW (clear the desk); will add more over time; wants bulk-add later.
 - Type: project (BarrelCo) → B-079
 - Plan: (1) NOW — Brett uploads business-card photos → Claude OCRs → creates/populates a **BarrelCo Leads** sheet (share w/ service account per PAT-027). (2) Ongoing input — options: Google Form (mobile, auto-appends), a Hub "Leads" screen (build), or keep sending cards to Claude. (3) Columns: Business, Contact, Title, Phone, Email, Address, Location type, Product interest, Source, Status, Next action, Date added, Notes.
-- Links: CAP-018 (retail-outlet tracker), BACKLOG B-079
+- Expanded July 19 — **four lead types**, each with an Inbox capture folder + a sheet:
+  - **Barrel Leads** (Inbox > Barrel Leads) — BarrelCo retail-outlet leads.
+  - **Vendor Leads** (Inbox > Vendor Leads) — potential Ridge Co vendors/subs.
+  - **CHEP Locations** (Inbox > CHEP Leads > CHEP Locations) — CHEP recycling **supplier** leads (properties/businesses that generate pallets).
+  - **CHEP Vendors** (Inbox > CHEP Vendors) — CHEP **driver** leads (haulers).
+  - Plan: create the 4 as tabs in the BrettOS sheet (or standalone) via **sheet-ops**; input = upload business cards → OCR → append rows; later a Form/Hub screen. Business cards to upload NOW.
+- Links: CAP-018 (retail-outlet tracker), CAP-001/Winchester (CHEP), BACKLOG B-079
 
 ### CAP-024 — Surface captures/tasks in a BrettOS Sheet (accessible + bulk-actionable — NEW)
 - Raw (July 19): Brett wants the captured items/backlog tracked in a **BrettOS spreadsheet he can open anytime** (not only Claude's GitHub markdown), so he can (a) see them as tasks without talking to Claude, (b) update status as he goes, (c) ask Claude to **bulk-categorize / act on sets** of them — Claude then processes or asks for more info.
@@ -353,6 +359,16 @@
 - ❓ Decision: Sheet now / Hub screen / both; pick a single source of truth to avoid drift.
 - Type: project (BrettOS core) → B-091
 - Links: CAP-015 (capture vision), B-051/B-059; BACKLOG B-091
+
+### CAP-025 — Reconcile with the REAL BrettOS task app (sheet 1X2oYjD) — IMPORTANT
+- Discovery (July 19): the "BrettOS sheet" Brett pointed to (`1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA`) is his **real working task app** — tabs: Tasks (BTOS-2026-###), Projects (BTOS-PRJ-###), WBM (brain-dump inbox), Ventures, Patterns (its OWN PAT-001..018 = system-design, NOT our Context-Doc PATs), Dev Log/Wishlist (DL-###), Logs, Integration Logs, Entities, Contacts. Has a web UI + the sheet-ops write path.
+- **Heavy overlap:** it ALREADY holds ~25 of the operational tasks I re-captured from the handwriting scans (Brett bulk-pasted them July 14) → my BACKLOG duplicates his task app. DON'T double-add. Examples: MD taxes (BTOS-001≈B-038), LLC/1864 Kerns (002≈B-039), cabin/Gina (003≈B-040), FB listings (004≈B-041), Sunday invoices (006≈B-043), 151 turns (010≈B-045), WO115 (011≈B-046), Ashburton invoice (012≈B-047), WO153 HVAC (013≈B-048), Oscar inspections (017≈B-060), boxes/Spoon (018≈B-061), Mook invoices (019≈B-062), cancel Vendoo (020≈B-063), Cesar re-itemize (022≈B-067), Federal St (023≈B-068), Fait Ave (024≈B-069, owner = **Jon**), vanity FB (025≈B-071).
+- **Canonical venture codes:** ridge_co, barrel_co, cabin (= WV Cabin "**Milam Ridge**"), personal, cargo_vans, rental_cars, pallets.
+- **Items in BrettOS I was MISSING (now in context):** Projects — **QuickBooks Cleanup** (PRJ-003: 2 yrs missing txns, reconnect banks, reconcile), **Milam Ridge Direct booking site** (PRJ-004), Roadside Stand (PRJ-001), Move Unistrut to Cabin (PRJ-002). Cabin tasks — house-rules/Truvi-vs-Superhog/pet-fee audits (BTOS-026..030). WBM raw — QB logo still "BMore" → change to RidgeCo (WBM-009); 3014 N Calvert door stoppers 2nd-floor + check 1st (WBM-010). **Klarna $961.20 mechanic** (BTOS-021) — I'd noted Klarna "done/personal truck"; RECONCILE.
+- **LIVE BUG:** Integration Logs show maintenance_hub + barrelco sync FAILING every 6h since July 14 ("error code: 1042", Cloudflare). → B-092.
+- ARCHITECTURE: the **BrettOS sheet = canonical task home**; our GitHub CAPTURE_INBOX/BACKLOG = deep design/context notes that FEED it (net-new only). This realizes CAP-024/B-091 — the sheet already exists.
+- Append path: **sheet-ops** (`context/sheet-ops/pending.json` → GitHub Action runs run_ops.py via the service account) appends rows / creates tabs on ANY sheet by ID, incl. this one. Self-sufficient.
+- Links: CAP-024/B-091, CAP-023 (lead sheets), BACKLOG B-092
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
