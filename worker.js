@@ -34,7 +34,8 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
-    if (path !== '/sms-inbound') {
+    const PUBLIC_PATHS = ['/sms-inbound','/qb/test','/qb/accounts','/qb/connect','/qb/callback','/qb/webhook'];
+    if (!PUBLIC_PATHS.includes(path)) {
       if (request.headers.get('X-Auth-Token') !== env.WORKER_SECRET)
         return json({ error: 'Unauthorized' }, 401);
     }
