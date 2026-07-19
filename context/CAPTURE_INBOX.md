@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.9 | **Last Updated:** July 19, 2026
+**Version:** v1.10 | **Last Updated:** July 19, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -74,6 +74,12 @@
   6. Match materials → jobs; on full invoice payment, trigger end-of-week batch payment to the associated credit card *(NEW — card-balance control)*
 - Links: BACKLOG B-001, B-002, B-005, B-007
 - ❓ Which credit card(s) are used for materials, and does the "batch payment" need to actually execute a payment or just stage/notify?
+- Added July 19 (Brett's current process + the missing step):
+  - Current flow: (1) scan receipt via phone app → straight into a Google Drive folder; (2) that Drive folder is *supposed* to auto-email the receipt to QuickBooks for reconciliation — **NEEDS VERIFICATION** (Brett unsure it's firing); (3) rename the file + file it under the vendor (Home Depot, Lowe's, etc.).
+  - NEW step to add: **check whether the charge has already been posted to the relevant customer**, and if NOT, **post it to the relevant work order** (so it flows into the customer's invoice). Must avoid double-posting.
+  - Enabler: **QuickBooks is now CONNECTED (prod, July 19)** — the posting side is buildable (ties B-015).
+  - Constraint: **Drive MCP can't rename/move/delete** — automated rename + file-to-vendor must run via Google Apps Script or GitHub Actions, not the Drive connector.
+  - OPEN DESIGN Q (critical, gates the build): how does each receipt get tied to the right property/work order? (job/PO name written on the receipt → OCR; per-WO Drive subfolder chosen at scan time; or system-proposed match Brett confirms.)
 
 ---
 

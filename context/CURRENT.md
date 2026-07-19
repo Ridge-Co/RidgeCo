@@ -11,7 +11,7 @@ Read ALL files before doing any work.
 | VENTURES.md | v1.0 | Every venture — current state, stack, Claude access level, automation gaps |
 | FEATURE_LOG.md | v1.1 | What's working — check before every code change to prevent regressions |
 | BACKLOG.md | v1.10 | Master backlog across all ventures — priorities, in progress, completed |
-| CAPTURE_INBOX.md | v1.9 | Brett's zero-friction brain-dump inbox — CAP items, links to backlog, open questions. Read every session. |
+| CAPTURE_INBOX.md | v1.10 | Brett's zero-friction brain-dump inbox — CAP items, links to backlog, open questions. Read every session. |
 | HANDWRITING_KEY.md | v1.8 | Reference for reading Brett's handwritten-note photos; grows over time. Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338. |
 
 ## PRIVATE / SENSITIVE CONTEXT (NOT in this public repo)
