@@ -11,3 +11,17 @@ keep_vars = true
 workers_dev = true
 
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
+
+# ── Environment variables & secrets (managed in the Cloudflare dashboard) ──
+# These are intentionally NOT given values here: this file is committed to the
+# repo, so putting secret values in it would leak them. keep_vars = true above
+# preserves whatever is set in the dashboard on every deploy, so they stay in sync.
+# Expected bindings (set/verify in Workers & Pages → maintenance-hub → Settings →
+# Variables and Secrets):
+#   Secrets: WORKER_SECRET, WORKER_SECRET_2 (rotation, temporary), GOOGLE_SA_KEY,
+#            GOOGLE_SA_EMAIL, TWILIO_SID, TWILIO_AUTH, ANTHROPIC_API_KEY,
+#            GOOGLE_MAPS_KEY, KEY_REGISTRY_SHEET_ID, MAKE_WEBHOOK_URL, QB_* (QuickBooks)
+#   Vars:    SHEET_ID, DRIVE_PROPERTIES_ROOT
+# Rotation note (2026-07-20): WORKER_SECRET_2 is the new value during the
+# zero-downtime swap. Once clients are confirmed on it, set WORKER_SECRET = new
+# value, delete WORKER_SECRET_2, and remove the dual-accept branch in worker.js.

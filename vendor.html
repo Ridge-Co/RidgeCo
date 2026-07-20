@@ -188,7 +188,7 @@ input[type=file]{display:none;}
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-var SECRET = 'mh-secret-2026-brett';
+var SECRET = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
 var session = null;
 var currentTab = 'open';
 var failCount = 0;
@@ -1209,7 +1209,7 @@ function submitFeedback() {
   var fullText = "[" + _feedbackSource + "] " + typeLabel + who + ": " + text;
   document.getElementById("feedbackBtn").disabled = true;
   fetch("https://maintenance-hub.brett-2f8.workers.dev/wishlist/add", {
-    method:"POST", headers:{"X-Auth-Token":"mh-secret-2026-brett","Content-Type":"application/json"},
+    method:"POST", headers:{"X-Auth-Token":"mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg","Content-Type":"application/json"},
     body:JSON.stringify({text:fullText})
   }).then(function(r){return r.json();}).then(function(res){
     document.getElementById("feedbackBtn").disabled = false;
