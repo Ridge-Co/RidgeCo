@@ -10,7 +10,7 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 
 | ID | Venture | Item | Blocker |
 |---|---|---|---|
-| B-015 | Ridge Co | QuickBooks Send-to-QuickBooks flow (invoice + bill + payment) | 🟢 UNBLOCKED July 19 — QB production CONNECTED; 10 trade income accts + 12 items created; `QB_TRADE_MAP` locked in worker.js; deploy pipeline fixed. Remaining (scheduled **July 20**): invoice/bill creation (preview-first), customer/vendor find-or-create, vendor-pay worklist + overpay guard, payment webhooks (auto status-back). |
+| B-015 | Ridge Co | QuickBooks Send-to-QuickBooks flow (invoice + bill + payment) | 🟡 INVOICE+BILL SHIPPED July 20 (pending Brett live-verify) — `/qb/send-invoice` preview-first: creates QB Invoice + Bill from Invoice_Review; find-or-create customer/vendor; custom final price + quick-picks; per-receipt reimburse/on-account classification (vendor payable excludes on-account); labor summary + per-receipt material lines; CustomerMemo job-photo link; receipt attachments (all→Invoice, reimburse→Bill); refresh-token persistence; WO→Invoiced. **Remaining (Phase 2):** payments (Payment + BillPayment, QB_Payment_ID col), overpay guard, vendor-pay worklist, payment webhooks (auto status-back). |
 
 ---
 
@@ -18,8 +18,8 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 
 | ID | Priority | Item | Notes |
 |---|---|---|---|
-| B-001 | 🔴 | QB invoice creation from approved Invoice_Review rows | Automated: worker reads Invoice_Review, creates QB invoice via API |
-| B-002 | 🔴 | QB bill recording when vendor bill approved | Record vendor bill in QB simultaneously with invoice |
+| B-001 | ✅ | QB invoice creation from approved Invoice_Review rows | SHIPPED July 20 via `/qb/send-invoice` (preview-first). Pending Brett live-verify. |
+| B-002 | ✅ | QB bill recording when vendor bill approved | SHIPPED July 20 via `/qb/send-invoice` (creates the vendor Bill alongside the invoice). Pending live-verify. |
 | B-003 | 🟠 | Work order creation from index.html | Full form — property, trade, vendor assignment, priority |
 | B-004 | 🟠 | Vendor assignment + reassignment from index.html | Dropdown + history |
 | B-005 | 🟠 | Payment tracking — record when customer pays | Link QB payment status back to sheet |

@@ -2018,8 +2018,8 @@ function driveIdFromUrl(url) {
 }
 
 // Upload a file and attach it to a QBO transaction via the Attachable /upload endpoint (multipart).
-async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, mime, bytes) {
-  const meta = { AttachableRef: [{ EntityRef: { type: entityType, value: String(entityId) }, IncludeOnSend: false }], FileName: filename, ContentType: mime };
+async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, mime, bytes, includeOnSend) {
+  const meta = { AttachableRef: [{ EntityRef: { type: entityType, value: String(entityId) }, IncludeOnSend: !!includeOnSend }], FileName: filename, ContentType: mime };
   const form = new FormData();
   form.append('file_metadata_01', new Blob([JSON.stringify(meta)], { type: 'application/json' }), 'metadata.json');
   form.append('file_content_01', new Blob([bytes], { type: mime }), filename);
@@ -2034,23 +2034,34 @@ async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, 
   return id;
 }
 
-// Attach a bill's reimbursable receipt images to its QB Bill (best-effort; pushes warnings on failure).
-async function qbAttachReceiptsToBill(env, qbToken, billId, billRow, warnings) {
+// Attach material receipt images: ALL receipts to the customer Invoice (visible on send),
+// and reimbursable receipts also to the vendor Bill (internal). Downloads each file once.
+// Best-effort — every failure is a warning, never blocks the send.
+async function qbAttachReceipts(env, qbToken, invoiceId, billId, billRow, warnings) {
   let receipts = [];
   try { receipts = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); } catch (e) {}
-  const reimburse = (Array.isArray(receipts) ? receipts : []).filter(r => r && r.pay !== 'account' && r.url);
-  if (!reimburse.length) return;
+  const withUrl = (Array.isArray(receipts) ? receipts : []).filter(r => r && r.url);
+  if (!withUrl.length) return;
   let gtoken;
   try { gtoken = await getAccessToken(env); } catch (e) { warnings.push('Attachments skipped: Drive auth failed'); return; }
-  for (const r of reimburse) {
+  for (const r of withUrl) {
     const fid = driveIdFromUrl(r.url);
     if (!fid) continue;
-    try {
-      const dl = await driveDownload(gtoken, fid);
-      const ext = dl.mime.includes('pdf') ? '.pdf' : dl.mime.includes('png') ? '.png' : '.jpg';
-      const name = ((r.desc || 'receipt').replace(/[^\w .-]/g, '_')).slice(0, 60) + ext;
-      await qbUploadAttachable(env, qbToken, 'Bill', billId, name, dl.mime, dl.bytes);
-    } catch (e) { warnings.push('Attach receipt failed: ' + (e.message || 'error')); }
+    let dl;
+    try { dl = await driveDownload(gtoken, fid); }
+    catch (e) { warnings.push('Receipt download failed: ' + (e.message || 'error')); continue; }
+    const ext = dl.mime.includes('pdf') ? '.pdf' : dl.mime.includes('png') ? '.png' : '.jpg';
+    const name = ((r.desc || 'receipt').replace(/[^\w .-]/g, '_')).slice(0, 60) + ext;
+    // Customer invoice: every material receipt, regardless of who paid the store.
+    if (invoiceId) {
+      try { await qbUploadAttachable(env, qbToken, 'Invoice', invoiceId, name, dl.mime, dl.bytes, true); }
+      catch (e) { warnings.push('Invoice attach failed: ' + (e.message || 'error')); }
+    }
+    // Vendor bill: only reimburse-the-vendor receipts (they back the payable).
+    if (billId && r.pay !== 'account') {
+      try { await qbUploadAttachable(env, qbToken, 'Bill', billId, name, dl.mime, dl.bytes, false); }
+      catch (e) { warnings.push('Bill attach failed: ' + (e.message || 'error')); }
+    }
   }
 }
 
@@ -2132,9 +2143,9 @@ async function qbSendInvoice(env, body) {
     if (photoFolderUrl) memoParts.push('View job photos: ' + photoFolderUrl);
     const customerMemo = memoParts.join('\n');
 
-    // Count reimbursable receipts (with an image) that will be attached to the QB bill.
-    let reimburseWithUrl = 0;
-    try { const _r = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); if (Array.isArray(_r)) reimburseWithUrl = _r.filter(x => x && x.pay !== 'account' && x.url).length; } catch (e) {}
+    // Count receipts (with an image): all → customer invoice; reimbursable → also the vendor bill.
+    let reimburseWithUrl = 0, allWithUrl = 0;
+    try { const _r = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); if (Array.isArray(_r)) { allWithUrl = _r.filter(x => x && x.url).length; reimburseWithUrl = _r.filter(x => x && x.pay !== 'account' && x.url).length; } } catch (e) {}
 
     const invoicePayload = { Line: inv.lines, TxnDate: txnDate, PrivateNote: note };
     if (customerMemo) invoicePayload.CustomerMemo = { value: customerMemo.slice(0, 1000) };
@@ -2153,7 +2164,7 @@ async function qbSendInvoice(env, body) {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
         customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '' },
         vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '' },
-        invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })) },
+        invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         bill:     { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0, attach_receipts: reimburseWithUrl },
         photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
@@ -2196,8 +2207,8 @@ async function qbSendInvoice(env, body) {
       }
     }
 
-    // Attach reimbursable receipt images to the QB bill (best-effort; never blocks the send).
-    if (billId) { try { await qbAttachReceiptsToBill(env, token, billId, billRow, warnings); } catch (e) { warnings.push('Attachments error: ' + (e.message || '')); } }
+    // Attach receipts: ALL to the customer invoice; reimburse-the-vendor ones also to the bill.
+    if (invoiceId || billId) { try { await qbAttachReceipts(env, token, invoiceId, billId, billRow, warnings); } catch (e) { warnings.push('Attachments error: ' + (e.message || '')); } }
 
     const status = (invoiceId && (billId || vendorCost <= 0)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
     await updateRow(env, 'Invoice_Review', ir.ID, {

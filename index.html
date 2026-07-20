@@ -4800,6 +4800,7 @@ function renderQBPreview(p) {
       '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">CUSTOMER INVOICE</div>' +
       lines +
       '<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;font-weight:bold"><span>Invoice total</span><span style="color:var(--accent2)">$' + (parseFloat(p.invoice.total)||0).toFixed(2) + '</span></div>' +
+      ((p.invoice && p.invoice.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + p.invoice.attach_receipts + ' receipt(s) attached for the customer</div>' : '') +
     '</div>' +
     '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
       '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL</div>' +
