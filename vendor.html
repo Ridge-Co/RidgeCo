@@ -1543,9 +1543,21 @@ function toggleTruckSection() {
   calcBillTotal();
 }
 
+var _receiptPay = {};
+function setReceiptPay(n, mode) {
+  _receiptPay[n] = mode;
+  var rb = document.getElementById('r-pay-reimburse-'+n), ab = document.getElementById('r-pay-account-'+n);
+  if (rb && ab) {
+    var on = mode === 'reimburse';
+    rb.style.background = on ? 'var(--accent2)' : 'var(--surface2)'; rb.style.color = on ? '#000' : 'var(--muted)'; rb.style.borderColor = on ? 'var(--accent2)' : 'var(--border)';
+    ab.style.background = !on ? 'var(--warn)' : 'var(--surface2)'; ab.style.color = !on ? '#000' : 'var(--muted)'; ab.style.borderColor = !on ? 'var(--warn)' : 'var(--border)';
+  }
+  calcBillTotal();
+}
 function addReceiptRow() {
   _receiptCount++;
   var n = _receiptCount;
+  _receiptPay[n] = 'reimburse';
   var div = document.createElement('div');
   div.id = 'receipt-row-' + n;
   div.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px';
@@ -1559,6 +1571,13 @@ function addReceiptRow() {
     '<label id="r-photo-lbl-' + n + '" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px">' +
     '📷 Upload Receipt<input type="file" accept="image/*,application/pdf" onchange="uploadReceiptPhoto(' + n + ',this)" style="display:none"></label>' +
     '<span id="r-photo-status-' + n + '" style="font-size:11px;color:var(--muted)"></span>' +
+    '</div>' +
+    '<div style="margin-top:8px">' +
+      '<div style="font-size:10px;color:var(--muted);margin-bottom:4px">Who paid for this?</div>' +
+      '<div style="display:flex;gap:6px">' +
+        '<button type="button" id="r-pay-reimburse-' + n + '" onclick="setReceiptPay(' + n + ',\'reimburse\')" style="flex:1;padding:6px;border-radius:5px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--accent2);background:var(--accent2);color:#000">Reimburse me</button>' +
+        '<button type="button" id="r-pay-account-' + n + '" onclick="setReceiptPay(' + n + ',\'account\')" style="flex:1;padding:6px;border-radius:5px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--muted)">On company account</button>' +
+      '</div>' +
     '</div>';
   document.getElementById('bill-receipts-list').appendChild(div);
 }
@@ -1622,8 +1641,9 @@ function calcBillTotal() {
     if (!amtEl) continue;
     var amt = parseFloat(amtEl.value) || 0;
     if (amt > 0) {
-      receipts += amt;
-      breakdown.push((descEl?descEl.value:'Receipt') + ': $' + amt.toFixed(2));
+      var onAccount = (_receiptPay[i] === 'account');
+      if (!onAccount) receipts += amt; // only reimbursable receipts are paid to you
+      breakdown.push((descEl?descEl.value:'Receipt') + ': $' + amt.toFixed(2) + (onAccount ? ' <span style="color:var(--muted)">(company account — not paid to you)</span>' : ''));
     }
   }
 
@@ -1650,7 +1670,7 @@ async function submitVendorBill() {
     var amt = parseFloat(amtEl.value) || 0;
     var desc = (document.getElementById('r-desc-' + i)||{}).value || '';
     if (amt > 0 || desc) {
-      receiptItems.push({ amount: amt, desc: desc, url: _uploadedPhotos[i] || '' });
+      receiptItems.push({ amount: amt, desc: desc, url: _uploadedPhotos[i] || '', pay: (_receiptPay[i] === 'account' ? 'account' : 'reimburse') });
     }
   }
 
@@ -1660,6 +1680,7 @@ async function submitVendorBill() {
   var truckAmt = truckUsed ? (parseFloat(document.getElementById('bill-truck-amt').value)||0) : 0;
   var truckDesc = truckUsed ? document.getElementById('bill-truck-desc').value : '';
   var receiptsTotal = receiptItems.reduce(function(s,r){return s+r.amount;},0);
+  var receiptsReimburse = receiptItems.reduce(function(s,r){return s + (r.pay === 'account' ? 0 : r.amount);},0);
 
   // FIX: field names must match Vendor_Bills Sheet column headers exactly
   var body = {
@@ -1674,6 +1695,7 @@ async function submitVendorBill() {
     Truck_Stock: String(truckAmt.toFixed(2)),
     Receipts_JSON: JSON.stringify(receiptItems),
     Receipts_Total: String(receiptsTotal.toFixed(2)),
+    Receipts_Reimburse_Total: String(receiptsReimburse.toFixed(2)),
     Flat_Rate: String(flat.toFixed(2)),
     Total: String(total.toFixed(2)),
     Status: 'submitted',

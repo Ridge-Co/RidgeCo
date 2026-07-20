@@ -497,7 +497,18 @@ async function handlePhotoUploadClean(env, request) {
     if (!propFolder || !propFolder.id) return json({ error: `Could not find/create property folder "${propAddr}"`, step: step.current }, 500);
     step.current = 'find_wo_folder';
     const woLabel  = woId || `upload_${Date.now()}`;
-    const woFolder = await findOrCreateFolder(token, woLabel, propFolder.id);
+    // Vendor cost docs (receipts/bills/invoices) go to a NON-shared internal folder — never the
+    // customer-facing WO folder that gets shared on the invoice. Job photos stay in the WO folder.
+    const INTERNAL_TYPES = ['receipt','bill','invoice'];
+    const isInternal = INTERNAL_TYPES.includes(fileType.toLowerCase());
+    let woFolder;
+    if (isInternal) {
+      const internalRoot = await findOrCreateFolder(token, '_Internal — Vendor Bills', propFolder.id);
+      if (!internalRoot || !internalRoot.id) return json({ error: 'Could not find/create internal vendor-bills folder', step: step.current }, 500);
+      woFolder = await findOrCreateFolder(token, woLabel, internalRoot.id);
+    } else {
+      woFolder = await findOrCreateFolder(token, woLabel, propFolder.id);
+    }
     if (!woFolder || !woFolder.id) return json({ error: `Could not find/create WO folder "${woLabel}"`, step: step.current }, 500);
     step.current = 'upload_file';
     const arrayBuffer = await file.arrayBuffer();
@@ -509,7 +520,8 @@ async function handlePhotoUploadClean(env, request) {
     } catch(sheetErr) { /* non-fatal */ }
     step.current = 'update_wo_fields';
     try {
-      if (woFolder.webViewLink) {
+      // Only the customer-facing WO folder becomes the WO's shared Drive_Folder (photo link).
+      if (!isInternal && woFolder.webViewLink) {
         await updateWOField(env, woId, 'Drive_Folder_URL', woFolder.webViewLink);
         await updateWOField(env, woId, 'Drive_Folder_ID',  woFolder.id);
       }
@@ -1975,6 +1987,73 @@ function buildInvoiceLines(ir, billRow, trade, tradeName) {
   return { lines, materialsTotal: +materialsTotal.toFixed(2), laborAmt, total };
 }
 
+// Make a Drive folder/file anyone-with-link readable (for the customer photo link). Idempotent.
+async function driveShareAnyone(token, fileId) {
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+    });
+    return res.ok;
+  } catch (e) { return false; }
+}
+
+// Download a Drive file's bytes (+ its content-type) so they can be re-uploaded to QuickBooks.
+async function driveDownload(token, fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error('drive download ' + res.status);
+  const mime = res.headers.get('content-type') || 'application/octet-stream';
+  const bytes = await res.arrayBuffer();
+  return { bytes, mime };
+}
+
+// Extract a Drive file id from a webViewLink (…/d/<ID>/… or ?id=<ID>).
+function driveIdFromUrl(url) {
+  if (!url) return '';
+  const m = String(url).match(/\/d\/([A-Za-z0-9_-]+)/) || String(url).match(/[?&]id=([A-Za-z0-9_-]+)/);
+  return m ? m[1] : '';
+}
+
+// Upload a file and attach it to a QBO transaction via the Attachable /upload endpoint (multipart).
+async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, mime, bytes) {
+  const meta = { AttachableRef: [{ EntityRef: { type: entityType, value: String(entityId) }, IncludeOnSend: false }], FileName: filename, ContentType: mime };
+  const form = new FormData();
+  form.append('file_metadata_01', new Blob([JSON.stringify(meta)], { type: 'application/json' }), 'metadata.json');
+  form.append('file_content_01', new Blob([bytes], { type: mime }), filename);
+  const res = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${qbToken}`, Accept: 'application/json' },
+    body: form,
+  });
+  const data = await res.json().catch(() => ({}));
+  const id = data && data.AttachableResponse && data.AttachableResponse[0] && data.AttachableResponse[0].Attachable && data.AttachableResponse[0].Attachable.Id;
+  if (!id) throw new Error(qbFault(data) || ('attach HTTP ' + res.status));
+  return id;
+}
+
+// Attach a bill's reimbursable receipt images to its QB Bill (best-effort; pushes warnings on failure).
+async function qbAttachReceiptsToBill(env, qbToken, billId, billRow, warnings) {
+  let receipts = [];
+  try { receipts = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); } catch (e) {}
+  const reimburse = (Array.isArray(receipts) ? receipts : []).filter(r => r && r.pay !== 'account' && r.url);
+  if (!reimburse.length) return;
+  let gtoken;
+  try { gtoken = await getAccessToken(env); } catch (e) { warnings.push('Attachments skipped: Drive auth failed'); return; }
+  for (const r of reimburse) {
+    const fid = driveIdFromUrl(r.url);
+    if (!fid) continue;
+    try {
+      const dl = await driveDownload(gtoken, fid);
+      const ext = dl.mime.includes('pdf') ? '.pdf' : dl.mime.includes('png') ? '.png' : '.jpg';
+      const name = ((r.desc || 'receipt').replace(/[^\w .-]/g, '_')).slice(0, 60) + ext;
+      await qbUploadAttachable(env, qbToken, 'Bill', billId, name, dl.mime, dl.bytes);
+    } catch (e) { warnings.push('Attach receipt failed: ' + (e.message || 'error')); }
+  }
+}
+
 // GET /qb/ready — approved Invoice_Review rows still waiting to go to QuickBooks.
 async function qbReadyQueue(env) {
   try {
@@ -2045,7 +2124,20 @@ async function qbSendInvoice(env, body) {
     const txnDate = ir.Approved_Date || new Date().toISOString().split('T')[0];
     const note = `RidgeCo IR ${ir.ID} · WO ${ir.WO_ID} · Bill ${ir.Bill_ID}`;
 
+    // Customer-facing photo link (the shared job-photo folder). The folder is shared on confirm only.
+    const photoFolderId  = wo.Drive_Folder_ID || '';
+    const photoFolderUrl = wo.Drive_Folder_URL || '';
+    const memoParts = [];
+    if (wo.Invoice_Memo) memoParts.push(wo.Invoice_Memo);
+    if (photoFolderUrl) memoParts.push('View job photos: ' + photoFolderUrl);
+    const customerMemo = memoParts.join('\n');
+
+    // Count reimbursable receipts (with an image) that will be attached to the QB bill.
+    let reimburseWithUrl = 0;
+    try { const _r = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); if (Array.isArray(_r)) reimburseWithUrl = _r.filter(x => x && x.pay !== 'account' && x.url).length; } catch (e) {}
+
     const invoicePayload = { Line: inv.lines, TxnDate: txnDate, PrivateNote: note };
+    if (customerMemo) invoicePayload.CustomerMemo = { value: customerMemo.slice(0, 1000) };
     const billPayload = {
       Line: [{
         DetailType: 'AccountBasedExpenseLineDetail',
@@ -2062,7 +2154,8 @@ async function qbSendInvoice(env, body) {
         customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '' },
         vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '' },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })) },
-        bill:     { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0 },
+        bill:     { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0, attach_receipts: reimburseWithUrl },
+        photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
         warnings,
       }});
@@ -2076,6 +2169,9 @@ async function qbSendInvoice(env, body) {
     const errors = [];
     let invoiceId = ir.QB_Invoice_ID || '';
     let billId    = ir.QB_Bill_ID || '';
+
+    // Share the job-photo folder so the invoice's CustomerMemo link is viewable by the customer.
+    if (photoFolderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, photoFolderId); } catch (e) { warnings.push('Photo-link share failed'); } }
 
     let customerId = '';
     try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); }
@@ -2099,6 +2195,9 @@ async function qbSendInvoice(env, body) {
         if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
       }
     }
+
+    // Attach reimbursable receipt images to the QB bill (best-effort; never blocks the send).
+    if (billId) { try { await qbAttachReceiptsToBill(env, token, billId, billRow, warnings); } catch (e) { warnings.push('Attachments error: ' + (e.message || '')); } }
 
     const status = (invoiceId && (billId || vendorCost <= 0)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
     await updateRow(env, 'Invoice_Review', ir.ID, {

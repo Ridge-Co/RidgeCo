@@ -4497,8 +4497,20 @@ function renderIRCard(b, i) {
       '</div>' +
     '</div>' +
 
-    // Calculated summary
+    // Calculated summary (suggestion — rewritten by irCalc each keystroke)
     '<div id="ir-summary-'+i+'" style="background:var(--surface2);border:1px solid var(--accent2);border-radius:6px;padding:12px;margin-bottom:12px"></div>' +
+
+    // Final customer price — persistent (not clobbered by irCalc). You set the real price.
+    '<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:6px;padding:12px;margin-bottom:12px">' +
+      '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">FINAL CUSTOMER PRICE — you decide</div>' +
+      '<div id="ir-price-hint-'+i+'" style="font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:8px"></div>' +
+      '<div id="ir-price-chips-'+i+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>' +
+      '<div style="display:flex;align-items:center;gap:6px">' +
+        '<span style="color:var(--muted);font-size:18px">$</span>' +
+        '<input type="number" id="ir-final-price-'+i+'" min="0" step="0.01" placeholder="final price" oninput="irCalc('+i+')" style="width:130px;background:var(--surface);border:1px solid var(--accent2);color:var(--text);font-family:var(--font);font-size:18px;font-weight:bold;padding:9px;border-radius:6px">' +
+        '<button onclick="irResetPrice('+i+')" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:5px;font-family:var(--font);font-size:11px;padding:9px 10px;cursor:pointer">↺ Suggested</button>' +
+      '</div>' +
+    '</div>' +
 
     // Approve / skip buttons
     '<div style="display:flex;gap:8px">' +
@@ -4536,13 +4548,27 @@ function irCalc(i) {
   var jobType = _irJobType[i] || 'standard';
   var billType = b.Bill_Type || 'hourly';
   var hrs = parseFloat(b.Hours) || 0;
-  var rate = parseFloat(b.Rate) || 0;
   var laborTotal = parseFloat(b.Labor_Total) || 0;
   if (billType === 'flat') laborTotal = parseFloat(b.Flat_Rate) || 0;
   var truckStock = parseFloat(b.Truck_Stock) || 0;
-  var receiptsTotal = parseFloat(b.Receipts_Total) || 0;
-  var materials = truckStock + receiptsTotal;
-  var vendorCost = laborTotal + materials; // what Brett pays vendor
+  var receiptsAll = parseFloat(b.Receipts_Total) || 0;
+
+  // Split receipts: reimburse (vendor paid → part of payable) vs on-account (Brett's card).
+  var reimburseReceipts = receiptsAll, accountReceipts = 0;
+  try {
+    var _items = JSON.parse(b.Receipts_JSON || '[]');
+    if (Array.isArray(_items) && _items.length) {
+      reimburseReceipts = 0;
+      _items.forEach(function(r){
+        var amt = parseFloat(r && r.amount) || 0;
+        if (r && r.pay === 'account') accountReceipts += amt; else reimburseReceipts += amt;
+      });
+    }
+  } catch(e) {}
+
+  var customerMaterials = truckStock + receiptsAll;                 // customer pays all materials
+  var totalCost = laborTotal + truckStock + receiptsAll;           // money out of Brett's pocket
+  var vendorPayable = laborTotal + truckStock + reimburseReceipts; // what Brett owes the vendor (QB bill)
 
   // Brett time (on-site coordination)
   var onsiteChecked = (document.getElementById('ir-onsite-'+i)||{}).checked;
@@ -4562,37 +4588,44 @@ function irCalc(i) {
     markupLabel = 'MAX($75, $35 × ' + hrs + ' hrs) = $' + markup.toFixed(2);
   } else if (jobType === 'flat') {
     var custFlat = parseFloat((document.getElementById('ir-flat-price-'+i)||{}).value)||0;
-    markup = custFlat - vendorCost;
-    markupLabel = 'Flat: $' + custFlat.toFixed(2) + ' − $' + vendorCost.toFixed(2) + ' vendor = $' + markup.toFixed(2);
+    markup = custFlat - totalCost;
+    markupLabel = 'Flat: $' + custFlat.toFixed(2) + ' − $' + totalCost.toFixed(2) + ' cost = $' + markup.toFixed(2);
   } else {
     // pass-through: small fixed markup $25-35
     markup = 30;
     markupLabel = 'Pass-through: $30 flat';
   }
 
-  // Processing fee on pre-fee subtotal
-  var subtotal = vendorCost + brettTime + travel + markup;
+  // Suggested (fee-included) price — guidance only; Brett sets the real number.
+  var subtotal = totalCost + brettTime + travel + markup;
   var processingFee = subtotal * 0.05;
-  var customerTotal = subtotal + processingFee;
-  var brettNet = brettTime + travel + markup + processingFee;
+  var suggested = subtotal + processingFee;
+  var round5 = Math.ceil(suggested / 5) * 5;
+  var round10 = Math.ceil(suggested / 10) * 10;
 
-  // Markup flag
+  var finalEl = document.getElementById('ir-final-price-'+i);
+  var entered = finalEl ? parseFloat(finalEl.value) : NaN;
+  var finalPrice = (finalEl && finalEl.value !== '' && isFinite(entered)) ? entered : suggested;
+  var brettNet = finalPrice - totalCost;
+
   var markupWarn = markup < 0
-    ? '<div style="color:var(--danger);font-size:11px;margin-top:6px">⚠ Markup is negative — customer flat price is below vendor cost. Adjust flat price.</div>' : '';
+    ? '<div style="color:var(--warn);font-size:11px;margin-top:6px">Note: flat price is below cost — suggested markup is negative.</div>' : '';
 
   el.innerHTML =
     '<div style="font-size:11px;color:var(--muted);line-height:2;margin-bottom:8px">' +
-      '<div>Vendor labor+materials: <span style="color:var(--text)">$' + vendorCost.toFixed(2) + '</span></div>' +
+      '<div>Vendor labor: <span style="color:var(--text)">$' + laborTotal.toFixed(2) + '</span></div>' +
+      '<div>Materials (billed to customer): <span style="color:var(--text)">$' + customerMaterials.toFixed(2) + '</span>' + (accountReceipts > 0 ? ' <span style="font-size:10px">(incl. $' + accountReceipts.toFixed(2) + ' on your account)</span>' : '') + '</div>' +
       (brettTime > 0 ? '<div>On-site coordination: <span style="color:var(--text)">$' + brettTime.toFixed(2) + '</span> (' + brettHrs + ' hrs × $75, min $75)</div>' : '') +
       (travel > 0 ? '<div>Travel surcharge: <span style="color:var(--text)">$' + travel.toFixed(2) + '</span></div>' : '') +
-      '<div>Markup (' + jobType + '): <span style="color:var(--warn)">$' + markup.toFixed(2) + '</span> <span style="font-size:10px">' + esc(markupLabel) + '</span></div>' +
-      '<div>Processing fee (5%): <span style="color:var(--text)">$' + processingFee.toFixed(2) + '</span></div>' +
+      '<div>Suggested markup (' + jobType + '): <span style="color:var(--warn)">$' + markup.toFixed(2) + '</span> <span style="font-size:10px">' + esc(markupLabel) + '</span></div>' +
+      '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">Vendor payable (QB bill): <span style="color:var(--text)">$' + vendorPayable.toFixed(2) + '</span></div>' +
       markupWarn +
     '</div>' +
     '<div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);padding-top:8px">' +
       '<div>' +
-        '<div style="font-size:11px;color:var(--muted)">Customer Invoice Total</div>' +
-        '<div style="font-size:1.6rem;font-weight:bold;color:var(--accent2)">$' + customerTotal.toFixed(2) + '</div>' +
+        '<div style="font-size:11px;color:var(--muted)">Customer price</div>' +
+        '<div style="font-size:1.6rem;font-weight:bold;color:var(--accent2)">$' + finalPrice.toFixed(2) + '</div>' +
+        (Math.abs(finalPrice - suggested) > 0.005 ? '<div style="font-size:10px;color:var(--muted)">suggested $' + suggested.toFixed(2) + '</div>' : '') +
       '</div>' +
       '<div style="text-align:right">' +
         '<div style="font-size:11px;color:var(--muted)">Brett Net</div>' +
@@ -4600,26 +4633,43 @@ function irCalc(i) {
       '</div>' +
     '</div>';
 
-  // Store calculated values on the bill object for approve
+  // Price hint + quick-pick chips (persistent containers — never touch the input itself)
+  var hintEl = document.getElementById('ir-price-hint-'+i);
+  if (hintEl) hintEl.innerHTML =
+    'Subtotal $' + subtotal.toFixed(2) + ' · 5% fee = $' + processingFee.toFixed(2) + ' → fee-included <b style="color:var(--text)">$' + suggested.toFixed(2) + '</b>';
+  var chipsEl = document.getElementById('ir-price-chips-'+i);
+  if (chipsEl) chipsEl.innerHTML =
+    irChip(i, suggested, 'Fee-incl $' + suggested.toFixed(2)) +
+    irChip(i, round5, 'Round $' + round5.toFixed(2)) +
+    irChip(i, round10, 'Round $' + round10.toFixed(2));
+
   _irBills[i]._calc = {
-    jobType: jobType,
-    brettHrs: brettHrs,
-    brettTime: brettTime,
-    travel: travel,
-    markup: markup,
-    processingFee: processingFee,
-    customerTotal: customerTotal,
-    brettNet: brettNet,
-    vendorCost: vendorCost,
+    jobType: jobType, brettHrs: brettHrs, brettTime: brettTime, travel: travel,
+    markup: markup, processingFee: processingFee,
+    customerTotal: finalPrice, brettNet: brettNet, vendorCost: vendorPayable,
+    suggested: suggested,
   };
+}
+
+function irChip(i, value, label) {
+  return '<button onclick="irPickPrice(' + i + ',' + value.toFixed(2) + ')" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:5px;font-family:var(--font);font-size:12px;padding:7px 10px;cursor:pointer">' + esc(label) + '</button>';
+}
+function irPickPrice(i, value) {
+  var el = document.getElementById('ir-final-price-'+i);
+  if (el) el.value = value.toFixed(2);
+  irCalc(i);
+}
+function irResetPrice(i) {
+  var el = document.getElementById('ir-final-price-'+i);
+  if (el) el.value = '';
+  irCalc(i);
 }
 
 function irApprove(i) {
   var b = _irBills[i];
   if (!b || !b._calc) { toast('Calculate first', 'error'); return; }
   var c = b._calc;
-  if (c.customerTotal <= 0) { toast('Customer total must be > 0', 'error'); return; }
-  if (c.jobType === 'flat' && c.markup < 0) { toast('Markup is negative — adjust flat price', 'error'); return; }
+  if (c.customerTotal <= 0) { toast('Set a final customer price above $0', 'error'); return; }
 
   var btn = document.getElementById('ir-approve-btn-'+i);
   var msg = document.getElementById('ir-msg-'+i);
@@ -4755,7 +4805,9 @@ function renderQBPreview(p) {
       '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL</div>' +
       (p.bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
         '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc(p.vendor.display||'vendor') + '</span><span style="color:var(--warn)">$' + (parseFloat(p.bill.total)||0).toFixed(2) + '</span></div>') +
+      ((p.bill && p.bill.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + p.bill.attach_receipts + ' receipt(s) attach to this bill (not shown to customer)</div>' : '') +
     '</div>' +
+    (p.photo_link ? '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:11px;color:var(--muted)">🖼 Customer invoice links job photos</div>' : '') +
     warns + already;
 }
 
