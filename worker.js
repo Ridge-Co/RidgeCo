@@ -36,12 +36,10 @@ export default {
     const path = url.pathname;
     const PUBLIC_PATHS = ['/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
     if (!PUBLIC_PATHS.includes(path)) {
-      // Secret rotation (zero-downtime): accept the current secret OR a new one
-      // (WORKER_SECRET_2) during the transition window. Once all clients are on the
-      // new value, set WORKER_SECRET = new value, remove WORKER_SECRET_2, and delete
-      // this dual-accept branch.
-      const _tok = request.headers.get('X-Auth-Token');
-      if (_tok !== env.WORKER_SECRET && _tok !== env.WORKER_SECRET_2)
+      // Shared-secret gate. Rotated 2026-07-20 (old value retired). NOTE: this is a
+      // coarse anti-bot gate only — real per-record authz is enforced per endpoint
+      // (Owner_ID / vendor_id / PIN). Slated for replacement by per-user auth.
+      if (request.headers.get('X-Auth-Token') !== env.WORKER_SECRET)
         return json({ error: 'Unauthorized' }, 401);
     }
     try {
