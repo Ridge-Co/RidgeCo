@@ -1,0 +1,16 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "B-015 QB send flow — add QBO_Vendor_ID (Vendors) + ensure QBO_Customer_ID (Owners) so QB ids persist on write-back",
+  "ops": [
+    {
+      "type": "add_column_header",
+      "tab": "Vendors",
+      "header": "QBO_Vendor_ID"
+    },
+    {
+      "type": "add_column_header",
+      "tab": "Owners",
+      "header": "QBO_Customer_ID"
+    }
+  ]
+}

@@ -89,6 +89,7 @@ export default {
         if (path === '/qb/test')                return await qbTest(env);
         if (path === '/qb/accounts')            return await qbListAccounts(env);
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
+        if (path === '/qb/ready')               return await qbReadyQueue(env);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -170,6 +171,7 @@ export default {
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
+        if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -1747,18 +1749,31 @@ const QB_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
 const QB_API_BASE  = 'https://quickbooks.api.intuit.com/v3/company';
 
 async function qbAccessToken(env) {
-  if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REFRESH_TOKEN || !env.QB_REALM_ID)
-    throw new Error('QB env vars missing (need QB_CLIENT_ID, QB_CLIENT_SECRET, QB_REFRESH_TOKEN, QB_REALM_ID)');
+  if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REALM_ID)
+    throw new Error('QB env vars missing (need QB_CLIENT_ID, QB_CLIENT_SECRET, QB_REALM_ID)');
+  // Intuit rotates the refresh token. Prefer the rotated value persisted in the Config
+  // tab; fall back to the env seed. After a successful refresh, persist the new token.
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (e) {}
+  const refresh = (cfg.QB_REFRESH_TOKEN && cfg.QB_REFRESH_TOKEN.trim()) || env.QB_REFRESH_TOKEN;
+  if (!refresh) throw new Error('QB refresh token missing (set QB_REFRESH_TOKEN env or Config)');
   const basic = btoa(`${env.QB_CLIENT_ID}:${env.QB_CLIENT_SECRET}`);
   const res = await fetch(QB_TOKEN_URL, {
     method: 'POST',
     headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(env.QB_REFRESH_TOKEN)}`,
+    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}`,
   });
   const text = await res.text();
   let data = {}; try { data = JSON.parse(text); } catch (e) {}
-  if (!res.ok || !data.access_token) throw new Error(`QB token refresh ${res.status}: ${text.slice(0, 220)}`);
-  // NOTE: data.refresh_token rotates — persistence to a QB_Config tab is added with the write flow.
+  if (!res.ok || !data.access_token) {
+    if (text.includes('invalid_grant'))
+      throw new Error('QB refresh token expired or revoked — reconnect QuickBooks (re-auth needed).');
+    throw new Error(`QB token refresh ${res.status}: ${text.slice(0, 220)}`);
+  }
+  // Persist the rotated refresh token so the next call uses the fresh one (fixes the
+  // old discard-on-every-call bug that would eventually break auth after rotation).
+  if (data.refresh_token && data.refresh_token !== refresh) {
+    try { await setConfigKey(env, { key: 'QB_REFRESH_TOKEN', value: data.refresh_token }); } catch (e) {}
+  }
   return data.access_token;
 }
 
@@ -1828,6 +1843,13 @@ function qbDupId(r) {
   return null;
 }
 
+// Turn a QBO Fault response into a readable one-line error (qbApi does not throw on Faults).
+function qbFault(r) {
+  const e = r?.Fault?.Error?.[0];
+  if (!e) return null;
+  return `QBO ${e.code || ''}: ${e.Message || 'error'}${e.Detail ? ' — ' + e.Detail : ''}`.trim();
+}
+
 // One-time: create the trade income accounts + service items in QuickBooks.
 // Idempotent — safe to re-run; skips anything that already exists by name.
 async function qbSetupTrades(env) {
@@ -1864,6 +1886,230 @@ async function qbSetupTrades(env) {
     }
     return json({ ok: true, map, log });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ── QUICKBOOKS: SEND-TO-QB (invoice + bill, preview-first) ───
+
+// Find (by stored id) or create a QB Customer from an Owner row; persists QBO_Customer_ID back.
+async function qbFindOrCreateCustomer(env, owner, displayName, token) {
+  if (owner.QBO_Customer_ID && owner.QBO_Customer_ID.trim()) return owner.QBO_Customer_ID.trim();
+  const dn = (displayName || '').trim();
+  if (!dn) throw new Error('owner has no name for a QB DisplayName');
+  const payload = { DisplayName: dn };
+  if (owner.Company) payload.CompanyName = owner.Company;
+  const email = owner.Billing_Email || '';
+  if (email) payload.PrimaryEmailAddr = { Address: email };
+  const phone = owner.Billing_Phone || owner.Phone || '';
+  if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };
+  const addr = {};
+  if (owner.Billing_Address) addr.Line1 = owner.Billing_Address;
+  if (owner.Billing_City) addr.City = owner.Billing_City;
+  if (owner.Billing_State) addr.CountrySubDivisionCode = owner.Billing_State;
+  if (owner.Billing_Zip) addr.PostalCode = owner.Billing_Zip;
+  if (Object.keys(addr).length) payload.BillAddr = addr;
+  const r = await qbApi(env, 'customer?minorversion=73', 'POST', payload, token);
+  const id = r?.Customer?.Id || qbDupId(r);
+  if (!id) throw new Error(qbFault(r) || 'could not create QB customer');
+  if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) {} }
+  return id;
+}
+
+// Find (by stored id) or create a QB Vendor from a Vendors row; persists QBO_Vendor_ID back.
+async function qbFindOrCreateVendor(env, vendor, displayName, token) {
+  if (vendor.QBO_Vendor_ID && vendor.QBO_Vendor_ID.trim()) return vendor.QBO_Vendor_ID.trim();
+  const dn = (displayName || '').trim();
+  if (!dn) throw new Error('vendor has no name for a QB DisplayName');
+  const payload = { DisplayName: dn };
+  const phone = vendor.Phone || '';
+  if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };
+  const email = vendor.Email || '';
+  if (email) payload.PrimaryEmailAddr = { Address: email };
+  const r = await qbApi(env, 'vendor?minorversion=73', 'POST', payload, token);
+  const id = r?.Vendor?.Id || qbDupId(r);
+  if (!id) throw new Error(qbFault(r) || 'could not create QB vendor');
+  if (vendor.ID) { try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }); } catch (e) {} }
+  return id;
+}
+
+// Build customer-invoice lines: one line per receipt (materials) + one line for
+// truck/shop stock (if any) + a single labor summary line. Materials show at cost;
+// the labor line absorbs the remainder so the lines always sum to Customer_Total —
+// keeping the internal $75 first-hour / markup off the customer's invoice.
+function buildInvoiceLines(ir, billRow, trade, tradeName) {
+  const itemRef = { value: trade.item };
+  const lines = [];
+  let materialsTotal = 0;
+  let receipts = [];
+  try { receipts = JSON.parse(billRow?.Receipts_JSON || '[]'); } catch (e) {}
+  if (Array.isArray(receipts)) {
+    for (const rc of receipts) {
+      const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
+      if (amt <= 0) continue;
+      materialsTotal += amt;
+      lines.push({
+        DetailType: 'SalesItemLineDetail',
+        Amount: amt,
+        Description: ('Materials — ' + ((rc && rc.desc) || 'receipt')).slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: amt },
+      });
+    }
+  }
+  const truck = +(Number(billRow && billRow.Truck_Stock) || 0).toFixed(2);
+  if (truck > 0) {
+    materialsTotal += truck;
+    lines.push({
+      DetailType: 'SalesItemLineDetail',
+      Amount: truck,
+      Description: ('Materials — ' + ((billRow && billRow.Truck_Desc) || 'shop/truck stock')).slice(0, 4000),
+      SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: truck },
+    });
+  }
+  const total = +(Number(ir.Customer_Total) || 0).toFixed(2);
+  const laborAmt = +(total - materialsTotal).toFixed(2);
+  lines.unshift({
+    DetailType: 'SalesItemLineDetail',
+    Amount: laborAmt,
+    Description: ('Labor & service — ' + tradeName + ' — WO ' + (ir.WO_ID || '')).slice(0, 4000),
+    SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: laborAmt },
+  });
+  return { lines, materialsTotal: +materialsTotal.toFixed(2), laborAmt, total };
+}
+
+// GET /qb/ready — approved Invoice_Review rows still waiting to go to QuickBooks.
+async function qbReadyQueue(env) {
+  try {
+    const [irRows, wos] = await Promise.all([
+      fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders'),
+    ]);
+    const pending = irRows.filter(r => r.Active !== 'FALSE' && (r.QB_Invoice_Status || '').toLowerCase() === 'pending');
+    const out = pending.map(r => {
+      const wo = wos.find(w => w.WO_ID === r.WO_ID || w.ID === r.WO_ID) || {};
+      return {
+        id: r.ID, bill_id: r.Bill_ID, wo_id: r.WO_ID,
+        vendor_id: r.Vendor_ID, vendor_name: r.Vendor_Name,
+        trade: wo.Trade || '', job_type: r.Job_Type || '',
+        customer_total: r.Customer_Total || '0', vendor_cost: r.Vendor_Cost || '0',
+        approved_date: r.Approved_Date || '',
+        qb_invoice_id: r.QB_Invoice_ID || '', qb_bill_id: r.QB_Bill_ID || '',
+      };
+    });
+    return json(out);
+  } catch (e) { return json([]); }
+}
+
+// POST /qb/send-invoice { id | bill_id, preview_only? }
+// Preview returns the resolved customer/vendor/trade + exact lines with ZERO writes.
+// Confirm creates the QB Invoice + Bill (find-or-create customer/vendor), writes the
+// ids + status back to the Invoice_Review row, and flips the WO to Invoiced.
+async function qbSendInvoice(env, body) {
+  try {
+    const previewOnly = !!body.preview_only;
+    const irRows = await fetchTab(env, 'Invoice_Review');
+    const ir = irRows.find(r => (body.id && r.ID === body.id) || (body.bill_id && r.Bill_ID === body.bill_id));
+    if (!ir) return json({ ok: false, error: 'Invoice_Review row not found' }, 404);
+    if (ir.Active === 'FALSE') return json({ ok: false, error: 'This review row is voided' }, 400);
+
+    const haveInv  = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
+    const haveBill = !!(ir.QB_Bill_ID && ir.QB_Bill_ID.trim());
+    if (haveInv && haveBill && !previewOnly) {
+      return json({ ok: true, already_sent: true, invoice_id: ir.QB_Invoice_ID, bill_id: ir.QB_Bill_ID, status: ir.QB_Invoice_Status });
+    }
+
+    const [wos, props, owners, vendors, bills] = await Promise.all([
+      fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'),
+      fetchTab(env, 'Owners'), fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'),
+    ]);
+    const wo      = wos.find(w => w.WO_ID === ir.WO_ID || w.ID === ir.WO_ID) || {};
+    const prop    = props.find(p => p.ID === wo.Property_ID) || {};
+    const owner   = owners.find(o => o.ID === prop.Owner_ID) || null;
+    const vendor  = vendors.find(v => v.ID === ir.Vendor_ID) || {};
+    const billRow = bills.find(b => b.ID === ir.Bill_ID) || {};
+
+    const tradeName = (wo.Trade && QB_TRADE_MAP[wo.Trade]) ? wo.Trade : 'General';
+    const trade = QB_TRADE_MAP[tradeName];
+
+    const warnings = [];
+    if (!wo.WO_ID && !wo.ID) warnings.push('Work order ' + ir.WO_ID + ' not found — trade defaulted to General.');
+    else if (!QB_TRADE_MAP[wo.Trade]) warnings.push('WO trade "' + (wo.Trade || 'blank') + '" not in the QB map — using General.');
+    if (!owner) warnings.push('No owner found for this property — set the property owner before sending.');
+    const custTotal  = Number(ir.Customer_Total) || 0;
+    const vendorCost = Number(ir.Vendor_Cost) || 0;
+    if (custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
+    if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
+
+    const inv = buildInvoiceLines(ir, billRow, trade, tradeName);
+    if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
+
+    const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
+    const vendDisplay = vendor.Name || ir.Vendor_Name || ('Vendor ' + (ir.Vendor_ID || ''));
+    const txnDate = ir.Approved_Date || new Date().toISOString().split('T')[0];
+    const note = `RidgeCo IR ${ir.ID} · WO ${ir.WO_ID} · Bill ${ir.Bill_ID}`;
+
+    const invoicePayload = { Line: inv.lines, TxnDate: txnDate, PrivateNote: note };
+    const billPayload = {
+      Line: [{
+        DetailType: 'AccountBasedExpenseLineDetail',
+        Amount: +vendorCost.toFixed(2),
+        Description: (vendDisplay + ' — ' + tradeName + ' — WO ' + ir.WO_ID).slice(0, 4000),
+        AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } },
+      }],
+      TxnDate: txnDate, PrivateNote: note,
+    };
+
+    if (previewOnly) {
+      return json({ preview: {
+        ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
+        customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '' },
+        vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '' },
+        invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })) },
+        bill:     { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0 },
+        already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
+        warnings,
+      }});
+    }
+
+    // ---- CONFIRM (writes to QuickBooks) ----
+    if (!owner) return json({ ok: false, error: 'No owner on this property — cannot create a QB customer.', warnings });
+    if (custTotal <= 0) return json({ ok: false, error: 'Customer_Total is 0 — nothing to invoice.', warnings });
+
+    const token = await qbAccessToken(env);
+    const errors = [];
+    let invoiceId = ir.QB_Invoice_ID || '';
+    let billId    = ir.QB_Bill_ID || '';
+
+    let customerId = '';
+    try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); }
+    catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
+
+    if (!haveInv) {
+      invoicePayload.CustomerRef = { value: customerId };
+      const r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+      invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+      if (!invoiceId) errors.push('Invoice: ' + (qbFault(r) || 'unknown error'));
+    }
+
+    if (!haveBill && vendorCost > 0) {
+      let vendorId = '';
+      try { vendorId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token); }
+      catch (e) { errors.push('Vendor: ' + e.message); }
+      if (vendorId) {
+        billPayload.VendorRef = { value: vendorId };
+        const r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+        billId = (r && r.Bill && r.Bill.Id) || '';
+        if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+      }
+    }
+
+    const status = (invoiceId && (billId || vendorCost <= 0)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
+    await updateRow(env, 'Invoice_Review', ir.ID, {
+      QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
+    });
+    if (status === 'sent' && ir.WO_ID) { try { await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' }); } catch (e) {} }
+
+    return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId, status, errors, warnings });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
 }
 
 // ── UTILITY ──────────────────────────────────────────────────

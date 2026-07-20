@@ -165,6 +165,7 @@
       <button class="nav-btn" onclick="showPage('owners',this)">OWNERS</button>
       <button class="nav-btn" onclick="showPage('shopping',this)">🛒 SHOPPING</button>
       <button class="nav-btn" onclick="showPage('invoice-review',this)">💰 REVIEW BILLS</button>
+      <button class="nav-btn" onclick="showPage('qb-send',this)">💵 SEND TO QB</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
     </nav>
@@ -327,6 +328,18 @@
     </div>
     <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Review each vendor bill, set markup, and approve to create a customer invoice.</p>
     <div id="ir-list"><div class="loading"><span class="spinner"></span>Loading bills…</div></div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SEND TO QUICKBOOKS PAGE — approved bills → QB invoice + bill
+       ══════════════════════════════════════════════════════ -->
+  <div class="page" id="page-qb-send">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div class="section-title" style="margin:0">💵 SEND TO QUICKBOOKS</div>
+      <button class="btn secondary" onclick="loadQBQueue()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
+    </div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Approved bills waiting to go to QuickBooks. Preview creates nothing — it only shows the invoice + bill. Confirm creates them in QB.</p>
+    <div id="qb-list"><div class="loading"><span class="spinner"></span>Loading queue…</div></div>
   </div>
 
   <div class="page" id="page-owners">
@@ -1005,6 +1018,7 @@ function showPage(name, btn) {
   if (btn) btn.classList.add('active');
   if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); }
   if (name === 'invoice-review') { loadInvoiceReview(); }
+  if (name === 'qb-send') { loadQBQueue(); }
 }
 
 // ── Dashboard ────────────────────────────────────────────────
@@ -4649,6 +4663,149 @@ function irSkip(i) {
   if (card) { card.style.display = 'none'; }
 }
 
+// ══════════════════════════════════════════════════════════════
+//  SEND TO QUICKBOOKS — approved bills → QB invoice + bill (preview-first)
+// ══════════════════════════════════════════════════════════════
+
+var _qbQueue = [];
+var _qbCurrent = null;
+
+function loadQBQueue() {
+  var el = document.getElementById('qb-list');
+  if (!el) return;
+  el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading approved bills…</div>';
+  api('GET', '/qb/ready').then(function(rows) {
+    _qbQueue = Array.isArray(rows) ? rows : [];
+    if (!_qbQueue.length) {
+      el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ Nothing waiting for QuickBooks. Approve bills in Review Bills first.</div>';
+      return;
+    }
+    el.innerHTML =
+      '<div style="display:flex;gap:8px;margin-bottom:12px">' +
+        '<button class="btn" onclick="qbBatchSend()" style="flex:1;font-size:12px">⚡ Send all ' + _qbQueue.length + ' to QuickBooks</button>' +
+      '</div>' +
+      _qbQueue.map(function(r, i){ return renderQBCard(r, i); }).join('');
+  }).catch(function(e){
+    el.innerHTML = '<div style="color:var(--danger);font-size:12px">Error loading queue: ' + esc(e.message||'?') + '</div>';
+  });
+}
+
+function renderQBCard(r, i) {
+  var ct = parseFloat(r.customer_total)||0;
+  var vc = parseFloat(r.vendor_cost)||0;
+  var trade = r.trade || 'General';
+  return '<div id="qb-card-'+i+'" data-irid="'+esc(r.id)+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">' +
+      '<div>' +
+        '<div style="color:var(--accent);font-weight:bold;font-size:.95rem">' + esc(r.vendor_name||'—') + '</div>' +
+        '<div style="color:var(--muted);font-size:11px">' + esc(r.wo_id||'—') + ' · ' + esc(trade) + '</div>' +
+        '<div style="color:var(--muted);font-size:11px">Approved: ' + esc(r.approved_date||'—') + '</div>' +
+      '</div>' +
+      '<div style="text-align:right">' +
+        '<div style="font-size:10px;color:var(--muted);letter-spacing:.06em">INVOICE / BILL</div>' +
+        '<div style="font-size:1.2rem;font-weight:bold;color:var(--accent2)">$' + ct.toFixed(2) + '</div>' +
+        '<div style="font-size:12px;color:var(--warn)">vendor $' + vc.toFixed(2) + '</div>' +
+      '</div>' +
+    '</div>' +
+    '<button onclick="previewQBSend(\''+esc(r.id)+'\')" style="width:100%;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px;cursor:pointer">👁 Preview &amp; Send</button>' +
+    '<div id="qb-msg-'+esc(r.id)+'" style="margin-top:6px"></div>' +
+  '</div>';
+}
+
+function previewQBSend(id) {
+  _qbCurrent = id;
+  document.getElementById('qb-send-title-sub').textContent = 'IR ' + id;
+  document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--muted)">Loading preview…</div>';
+  document.getElementById('qb-send-msg').innerHTML = '';
+  var btn = document.getElementById('qb-send-confirm-btn');
+  btn.disabled = true; btn.textContent = 'CREATE IN QUICKBOOKS';
+  openModal('modal-qb-send');
+  api('POST', '/qb/send-invoice', { id: id, preview_only: true }).then(function(res){
+    if (!res.preview) {
+      document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--danger)">⚠ ' + esc(res.error||'Cannot preview') + '</div>';
+      return;
+    }
+    document.getElementById('qb-send-preview').innerHTML = renderQBPreview(res.preview);
+    btn.disabled = false;
+  }).catch(function(e){
+    document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--danger)">⚠ ' + esc(e.message||'?') + '</div>';
+  });
+}
+
+function renderQBPreview(p) {
+  var lines = (p.invoice.lines||[]).map(function(l){
+    return '<div style="display:flex;justify-content:space-between;gap:8px"><span style="color:var(--muted)">' + esc(l.desc) + '</span><span style="color:var(--text)">$' + (parseFloat(l.amount)||0).toFixed(2) + '</span></div>';
+  }).join('');
+  var warns = (p.warnings&&p.warnings.length) ?
+    '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:8px;font-size:11px;color:var(--warn)">' + p.warnings.map(function(w){return '⚠ '+esc(w);}).join('<br>') + '</div>' : '';
+  var already = (p.already && (p.already.invoice||p.already.bill)) ?
+    '<div style="color:var(--muted);font-size:11px;margin-top:6px">Already in QB → invoice ' + esc(p.already.invoice||'—') + ', bill ' + esc(p.already.bill||'—') + '</div>' : '';
+  return '' +
+    '<div style="font-size:12px;line-height:1.7">' +
+      '<div><b style="color:var(--accent)">Customer:</b> ' + esc(p.customer.display||'—') + (p.customer.existing_id?' <span style="color:var(--muted)">(QB #'+esc(p.customer.existing_id)+')</span>':' <span style="color:var(--warn)">(new)</span>') + '</div>' +
+      '<div><b style="color:var(--accent)">Vendor:</b> ' + esc(p.vendor.display||'—') + (p.vendor.existing_id?' <span style="color:var(--muted)">(QB #'+esc(p.vendor.existing_id)+')</span>':' <span style="color:var(--warn)">(new)</span>') + '</div>' +
+      '<div style="margin:6px 0;color:var(--muted)">Trade: ' + esc(p.trade) + '</div>' +
+    '</div>' +
+    '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
+      '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">CUSTOMER INVOICE</div>' +
+      lines +
+      '<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;font-weight:bold"><span>Invoice total</span><span style="color:var(--accent2)">$' + (parseFloat(p.invoice.total)||0).toFixed(2) + '</span></div>' +
+    '</div>' +
+    '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
+      '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL</div>' +
+      (p.bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
+        '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc(p.vendor.display||'vendor') + '</span><span style="color:var(--warn)">$' + (parseFloat(p.bill.total)||0).toFixed(2) + '</span></div>') +
+    '</div>' +
+    warns + already;
+}
+
+function confirmQBSend() {
+  if (!_qbCurrent) return;
+  var id = _qbCurrent;
+  var btn = document.getElementById('qb-send-confirm-btn');
+  btn.disabled = true; btn.textContent = 'CREATING…';
+  document.getElementById('qb-send-msg').innerHTML = '';
+  api('POST', '/qb/send-invoice', { id: id }).then(function(res){
+    if (res.ok || res.already_sent) {
+      var txt = res.already_sent ? 'Already in QuickBooks.' : ('✓ Created — invoice ' + (res.invoice_id||'—') + ', bill ' + (res.bill_id||'—'));
+      document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + esc(txt) + '</div>';
+      qbMarkDone(id);
+      setTimeout(function(){ closeModal('modal-qb-send'); }, 1600);
+    } else {
+      btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
+      var errs = (res.errors&&res.errors.length) ? res.errors.join('; ') : (res.error||'Error');
+      document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + esc(errs) + '</div>';
+    }
+  }).catch(function(e){
+    btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
+    document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + esc(e.message||'?') + '</div>';
+  });
+}
+
+function qbMarkDone(id) {
+  var card = document.querySelector('[data-irid="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');
+  if (card) { card.style.opacity='0.35'; card.style.pointerEvents='none'; }
+}
+
+// Batch: send each queued row sequentially (no preview), report per-row.
+function qbBatchSend() {
+  if (!_qbQueue.length) return;
+  if (!confirm('Send all ' + _qbQueue.length + ' approved bills to QuickBooks now? Each creates a customer invoice + vendor bill.')) return;
+  var ids = _qbQueue.map(function(r){ return r.id; });
+  var idx = 0, ok = 0, fail = 0;
+  (function next(){
+    if (idx >= ids.length) { toast('QB batch done — ' + ok + ' sent, ' + fail + ' failed', fail?'error':'success'); return; }
+    var id = ids[idx++];
+    var msgEl = document.getElementById('qb-msg-'+id);
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Sending…</span>';
+    api('POST', '/qb/send-invoice', { id: id }).then(function(res){
+      if (res.ok || res.already_sent) { ok++; if (msgEl) msgEl.innerHTML = '<span style="color:var(--accent2);font-size:11px">✓ ' + (res.already_sent?'already in QB':'sent') + '</span>'; qbMarkDone(id); }
+      else { fail++; if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">⚠ ' + esc((res.errors&&res.errors.join('; '))||res.error||'failed') + '</span>'; }
+    }).catch(function(e){ fail++; if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">⚠ ' + esc(e.message||'?') + '</span>'; })
+    .then(function(){ setTimeout(next, 400); });
+  })();
+}
+
 </script>
 
 <!-- SEND PIN PREVIEW MODAL -->
@@ -4662,6 +4819,20 @@ function irSkip(i) {
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-send-pin')">Cancel</button>
       <button class="btn" id="send-pin-confirm-btn" onclick="confirmSendPin()">SEND SMS</button>
+    </div>
+  </div>
+</div>
+
+<!-- SEND TO QUICKBOOKS PREVIEW MODAL -->
+<div class="modal-overlay" id="modal-qb-send">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title">💵 SEND TO QUICKBOOKS — PREVIEW</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:8px">Nothing is created until you confirm. <span id="qb-send-title-sub" style="color:var(--info)"></span></p>
+    <div id="qb-send-preview" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px"></div>
+    <div id="qb-send-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-qb-send')">Cancel</button>
+      <button class="btn" id="qb-send-confirm-btn" onclick="confirmQBSend()">CREATE IN QUICKBOOKS</button>
     </div>
   </div>
 </div>
