@@ -36,7 +36,12 @@ export default {
     const path = url.pathname;
     const PUBLIC_PATHS = ['/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
     if (!PUBLIC_PATHS.includes(path)) {
-      if (request.headers.get('X-Auth-Token') !== env.WORKER_SECRET)
+      // Secret rotation (zero-downtime): accept the current secret OR a new one
+      // (WORKER_SECRET_2) during the transition window. Once all clients are on the
+      // new value, set WORKER_SECRET = new value, remove WORKER_SECRET_2, and delete
+      // this dual-accept branch.
+      const _tok = request.headers.get('X-Auth-Token');
+      if (_tok !== env.WORKER_SECRET && _tok !== env.WORKER_SECRET_2)
         return json({ error: 'Unauthorized' }, 401);
     }
     try {
