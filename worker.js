@@ -665,7 +665,7 @@ async function createWorkOrder(env, body) {
 
 async function appendWONotes(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
-  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id);
+  const wo = findWO(workorders, body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
   const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
   const prefix = body.author ? `[${ts} — ${body.author}] ` : `[${ts}] `;
@@ -677,7 +677,7 @@ async function assignVendor(env, body) {
     fetchTab(env,'Work_Orders'), fetchTab(env,'Vendors'), fetchTab(env,'Tenants'),
     fetchTab(env,'Units'), fetchTab(env,'Properties'), fetchTab(env,'Keys'),
   ]);
-  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const vendor = vendors.find(v => v.ID === body.vendor_id); if (!vendor) return json({ error: 'Vendor not found' }, 404);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const unit     = units.find(u => u.ID === wo.Unit_ID);
@@ -716,7 +716,7 @@ async function assignVendor(env, body) {
 
 async function updateStatus(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
-  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id);
+  const wo = findWO(workorders, body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
   const fields = { Status: body.status };
@@ -978,7 +978,7 @@ async function addVendorBill(env, body) {
     const woKey = body.WO_ID || body.wo_id;
     if (woKey) {
       const wos = await fetchTab(env, 'Work_Orders');
-      const wo = wos.find(w => w.WO_ID === woKey || w.ID === woKey);
+      const wo = findWO(wos, woKey);
       const preComplete = ['New','Assigned','Accepted','In Progress','On Hold'];
       if (wo && preComplete.includes(wo.Status)) {
         await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
@@ -1228,8 +1228,10 @@ async function logWOAudit(env, woId, changedBy, changedByRole, field, oldValue, 
 
 async function getWOAudit(env, url) {
   const woId = url.searchParams.get('wo_id'); if (!woId) return json({ error: 'Missing wo_id' }, 400);
-  const audit = await fetchTab(env, 'WO_Audit');
-  return json(audit.filter(a => a.WO_ID === woId).sort((a,b) => new Date(a.Timestamp)-new Date(b.Timestamp)));
+  try {
+    const audit = await fetchTab(env, 'WO_Audit');
+    return json(audit.filter(a => a.WO_ID === woId).sort((a,b) => new Date(a.Timestamp)-new Date(b.Timestamp)));
+  } catch(e) { return json([]); }
 }
 
 async function translateToEnglish(env, text) {
@@ -1245,7 +1247,7 @@ async function translateToEnglish(env, text) {
 async function addWONote(env, body) {
   if (!body.wo_id || !body.note) return json({ error: 'Missing wo_id or note' }, 400);
   const workorders = await fetchTab(env, 'Work_Orders');
-  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   if (body.author_role === 'owner' && body.owner_id) {
     const properties = await fetchTab(env, 'Properties');
     const prop = properties.find(p => p.ID === wo.Property_ID);
@@ -1284,7 +1286,7 @@ async function ownerUpdateWO(env, body) {
   const allowed = {}; for (const [k,v] of Object.entries(body.fields||{})) { if (OWNER_EDITABLE_FIELDS.includes(k)) allowed[k]=v; }
   if (!Object.keys(allowed).length) return json({ error: 'No owner-editable fields provided' }, 400);
   const [workorders, properties] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties')]);
-  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const prop = properties.find(p => p.ID === wo.Property_ID);
   if (!prop || String(prop.Owner_ID) !== String(body.owner_id)) return json({ error: 'Unauthorized' }, 403);
   await updateRow(env, 'Work_Orders', body.wo_id, allowed);
@@ -1303,7 +1305,7 @@ async function adminUpdateWO(env, body) {
 async function appendDescription(env, body) {
   if (!body.wo_id||!body.text) return json({ error: 'Missing wo_id or text' }, 400);
   const [workorders, properties] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties')]);
-  const wo = workorders.find(w => w.WO_ID === body.wo_id || w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   if (body.author_role === 'owner' && body.owner_id) { const prop = properties.find(p => p.ID === wo.Property_ID); if (!prop || String(prop.Owner_ID) !== String(body.owner_id)) return json({ error: 'Unauthorized' }, 403); }
   const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' });
   const newDesc = (wo.Description||'') + `\n\n[${ts} — ${body.author||'Unknown'} (${body.author_role||'unknown'})] ${body.text.trim()}`;
@@ -1736,6 +1738,14 @@ function nextSafeId(rows) {
 // Matching on r[0] therefore compared against a blank column and silently matched
 // nothing, so status/vendor writes reported success while changing nothing. There
 // is no "WO_ID" column on Work_Orders; earlier code looked one up and got -1.
+// Work_Orders has no WO_ID column, so `w.WO_ID === id` evaluates undefined === undefined
+// whenever the caller omits the id — silently matching the FIRST work order in the sheet
+// and operating on the wrong record. Require a real id and match only the ID column.
+function findWO(workorders, woId) {
+  if (!woId) return null;
+  return workorders.find(w => w.ID === woId) || null;
+}
+
 function idColIndex(headers) {
   const i = headers.indexOf('ID');
   return i >= 0 ? i : 0;
@@ -2106,7 +2116,7 @@ async function qbReadyQueue(env) {
     ]);
     const pending = irRows.filter(r => r.Active !== 'FALSE' && (r.QB_Invoice_Status || '').toLowerCase() === 'pending');
     const out = pending.map(r => {
-      const wo = wos.find(w => w.WO_ID === r.WO_ID || w.ID === r.WO_ID) || {};
+      const wo = findWO(wos, r.WO_ID) || {};
       return {
         id: r.ID, bill_id: r.Bill_ID, wo_id: r.WO_ID,
         vendor_id: r.Vendor_ID, vendor_name: r.Vendor_Name,
@@ -2142,7 +2152,7 @@ async function qbSendInvoice(env, body) {
       fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'),
       fetchTab(env, 'Owners'), fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'),
     ]);
-    const wo      = wos.find(w => w.WO_ID === ir.WO_ID || w.ID === ir.WO_ID) || {};
+    const wo      = findWO(wos, ir.WO_ID) || {};
     const prop    = props.find(p => p.ID === wo.Property_ID) || {};
     const owner   = owners.find(o => o.ID === prop.Owner_ID) || null;
     const vendor  = vendors.find(v => v.ID === ir.Vendor_ID) || {};

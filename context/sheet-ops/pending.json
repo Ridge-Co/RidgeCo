@@ -1,0 +1,25 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Create the missing WO_Audit tab. logWOAudit() swallows all errors ('never break main operation'), so audit writes have silently no-opped since the feature shipped; getWOAudit() had no catch and 500'd on read. Headers match the newRow map in logWOAudit exactly.",
+  "ops": [
+    {
+      "type": "create_tab",
+      "tab": "WO_Audit"
+    },
+    {
+      "type": "write_headers",
+      "tab": "WO_Audit",
+      "headers": [
+        "ID",
+        "WO_ID",
+        "Changed_By",
+        "Changed_By_Role",
+        "Field",
+        "Old_Value",
+        "New_Value",
+        "Timestamp",
+        "Notes"
+      ]
+    }
+  ]
+}
