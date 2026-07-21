@@ -1,5 +1,5 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.7 | **Last Updated:** July 21, 2026
+**Version:** v1.8 | **Last Updated:** July 21, 2026
 **Rule:** Before changing ANY file, check this log. If a feature is marked ✅ Working, verify it still works after your change. If you must touch something that affects a working feature, note it here BEFORE committing.
 
 ---
@@ -8,7 +8,7 @@
 
 | Feature | Status | Notes | Last Verified |
 |---|---|---|---|
-| PIN login (vendor auth) | ✅ Working | Vendors enter name + PIN to access their WOs | July 2026 |
+| PIN login (vendor auth) | ✅ Working | Vendors enter name + **8-char PIN** (3 alpha + 5 digit, e.g. `ABC12345`) via `/vendor-by-pin` — NOT 4-digit. PAT-016 says 4-digit (stale doc); confirmed via CODEMAP July 21. | July 21, 2026 |
 | Work order list with filters | ✅ Working | Filter by trade, priority, sort options | July 2026 |
 | Photo upload — BEFORE/AFTER/REPORT | ✅ Working | `capture` attr removed — gallery bulk + camera both work | July 17, 2026 |
 | Photo upload — bulk from gallery | ✅ Working | `multiple` attr present, no `capture` restriction | July 17, 2026 |
@@ -105,6 +105,10 @@
 20. **`Work_Orders.Notes` is a frozen admin-only archive — never write to it again.** Until B-104 v2.0 it was a single shared column rendered verbatim on BOTH the owner and tenant portals while the admin form labelled it "Internal notes…", so admin/vendor commentary was live on customer surfaces. Those render blocks are removed and the Worker strips `Notes` from every non-admin payload. Its contents are deliberately NOT migrated — they blend owner posts with admin notes and cannot be split safely; Brett reclassifies by hand. New writes go to the role-scoped field: owner→`Owner_Notes`, vendor/admin thread→`Vendor_Admin_Notes`, admin-private→`Admin_Notes`, customer-facing→`Hold_Reason`. (July 21, 2026.)
 20b. **`Hold_Reason` is the ONLY note type that may reach an owner or tenant.** It must be written from an explicit, plain-language reason — never silently populated from an internal status note. If a note is being SMS'd to the owner it is customer-facing by definition and belongs here too. (July 21, 2026.)
 21. **A read endpoint returning `[]` is not proof its tab exists.** PAT-014 try/catch on reads masked the missing `Receipts` tab for weeks — only writes surfaced it. When a tab is suspect, probe a *write* path (`updateRow` with a bogus id 404s before writing anything). Reads swallow; writes tell the truth.
+22. **/sms-inbound is a PUBLIC endpoint** (in `PUBLIC_PATHS` — must stay public for the Twilio webhook). Treat it as an untrusted entry point in the B-093 per-user auth build; don't assume every route is behind WORKER_SECRET. The authoritative route/handler/Sheet-tab index is now **`context/CODEMAP.md`** (maintained by the `ridgeco-map` skill) — consult it before hunting through worker.js/index.html, and refresh it after structural changes. **`/intake` is a second untrusted entry point** — same treatment.
+23. **`WORKER_SECRET` is hardcoded in `owner.html`, `tenant.html` and `vendor.html`,** so every gated route is effectively readable by any portal user. This is the known "Plan B" hole, but note what it costs: the bulk read `/workorders` returns RAW rows, bypassing the `WO_NOTE_VISIBILITY` allowlist entirely, so any private note column is one request away. `worker.js` ships an **optional `ADMIN_TOKEN` tier** — when that env var is set, the bulk reads that expose notes or cross-record PII (`/workorders`, `/tenants`, `/owners`, `/keys`, `/smslog`, …) require it instead. It is a **no-op while `ADMIN_TOKEN` is unset**. Verified no customer portal calls any of those paths. Enable it before relying on note privacy in production. (July 21, 2026.)
+24. **Never interpolate untrusted text into an HTML attribute without escaping quotes.** `index.html`'s `linkify()` escaped `&amp; &lt; &gt;` but not `"`/`'`, then spliced the match into `href="$1"` — and its URL pattern `[^\s]+` swallows quotes. Once B-103 began writing email-derived text into `Description` (rendered via `linkify`), that was **stored XSS in the admin Hub**, where `AUTH_TOKEN` lives in `localStorage`. Use `esc()` for plain text; `linkify` now escapes quotes before matching. (July 21, 2026.)
+25. **Private note content must never enter `WO_Audit`.** The audit trail is rendered in the owner portal and `/wo-audit` has no per-record authorization, so anything stored there is effectively public to portal users. `logWOAudit` redacts `Old_Value`/`New_Value`/`Notes` for every private note field at the WRITE chokepoint — the fact of a change is recorded, never the text. Redacting on write (not on read) means it holds no matter which reader is added later. `Hold_Reason` is deliberately exempt. (July 21, 2026.)
 
 ---
 

@@ -1,5 +1,5 @@
 # Brett Handwriting Key
-**Version:** v1.9 | **Last Updated:** July 19, 2026
+**Version:** v1.10 | **Last Updated:** July 21, 2026
 **Purpose:** Reference that helps Claude read Brett's handwritten notes when he photographs paper and dumps it into the Capture Inbox. This grows every session. When Claude can't read something and Brett tells it what it says, the resolution gets logged here so OCR + context get better over time. Expect a few "what the hell does this say, Brett?" rounds early on — each one permanently improves accuracy.
 
 **Approach (confirmed July 19):** Live-capture learning. No calibration sheet. Claude OCRs each handwritten dump, flags uncertain words with ❓ + a best-guess, Brett confirms, and confirmations get logged below. The KNOWN VOCABULARY section is seeded from context so read #1 isn't blind — but those are *expected terms*, not yet confirmed against Brett's actual handwriting. A term only moves to RESOLVED READINGS once Claude has actually read it correctly off a photo.
@@ -30,6 +30,7 @@
 | 2026-07-19 | Scan_2105_2 (lock-code note) | Clean read. "**parcel locker**" = a lock-code category (distinct from lockboxes/door codes; shareable with tenants). "capture vs do" = Brett's design principle (log job-site data vs. act on it). |
 | 2026-07-19 | Scan_2105 (mixed legal-pad list) | Corrections: "**Knock**" not Knott (Kelly Knock); "**Fait**" Ave/St not "Job Fair"; "**Vanity**" not "Vanty"; "**Ray's tolls**" not "Kings cargo van bills"; "**box co Re Spoon**" not "box code the spoon"; "**Federal**" = Federal St job. "Task list > projects" = link tasks to projects. |
 | 2026-07-19 | Scan_1338 (AI/automation vision list) | Clean read. Confirmed: "properties onboarding site"; UI baseline = 4518 Fairfax Rd estimate; "**Community Forklift**" (salvage/reuse retail outlet — BarrelCo consignment); "**Nerdy Panda**" (crosslisting reselling app Brett wants to rebuild better). |
+| 2026-07-21 | Scanned_202607211020 + Scanned_202607211341 (2-note pre-overhaul brain-dump) | Mostly clean reads → CAP-027/028, B-104..B-123. Confirmed: "**Second Brain**" (BrettOS capture vision); "**STR cleaner scheduling system**" + "**STR App for Cabin — Dashboard & Alerts**"; "**self inspection requirement**" (long-term lease mgmt); "**928 N Calvert St water heater**" (unit 928; contact manufacturer for warranty); "**Ecowize**" (energy-efficiency upgrade company — referral). ❓ UNCONFIRMED spellings: referral names "**Charles Barnett**" → "**Tom Binkell**" @ Ecowize; "**Phoenix**" (target for the inspector app + inspection template — property? partner? company? — meaning unclear). Lockbox code for 4518 Fairfax Apt 1 = handwritten on the page; stored PRIVATELY (data repo), NOT in the public backlog. |
 
 ---
 
@@ -135,6 +136,10 @@
 | Kelly Knock | Barre St contact (job canceled) |
 | Spoon | Friend — referred a box-recycling / cheap moving-box company |
 | Ray Lewis (NJ) | Former friend in NJ holding one of Brett's cargo vans; $5k behind on tolls/bill. Recalls/notices for that van route to him; tolls = Brett's EZ-Pass. |
+| Charles Barnett ❓ | Referral source/owner Brett wants to refer to Ecowize for energy upgrades (spelling unconfirmed, B-110). |
+| Tom Binkell ❓ | Contact at Ecowize (energy-efficiency upgrades) (spelling unconfirmed, B-110). |
+| Ecowize ❓ | Company doing rental-property energy-savings upgrades (spelling unconfirmed, B-110). |
+| Phoenix ❓ | Target for a 2-inspector app + inspection template, "tie into Ridge Co" — property/partner/company unclear (B-118). |
 
 ### Systems
 | Written form | Means |

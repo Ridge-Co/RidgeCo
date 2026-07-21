@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.22 | **Last Updated:** July 21, 2026
+**Version:** v1.23 | **Last Updated:** July 21, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -122,7 +122,31 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-101 · Estimate approval with start-date + deadline
 - B-102 · Hub UI redesign to the Fairfax-estimate design standard
 - B-103 · Email → Work Order intake engine (Buildium + manual lists) — auto-create WOs from customer emails
-- B-104 · WO notes & visibility model — Entry_Notes / Vendor thread / Admin-only / Hold reason + per-role view rules
+**JULY 21 CAPTURES (from Scanned_202607211020 + …1341 → CAP-027/028)**
+- B-104 · STR cleaner scheduling system (cleaner self-serve availability + SMS + calendar sync) [Cabin]
+- B-105 · Cabin STR Dashboard & Alerts app (turns, shopping list, hot tub, lock battery, reviews, docs…) [Cabin]
+- B-106 · Long-term lease management + self-inspection requirement [Ridge Co]
+- B-107 · Post-repair tenant feedback capture [Ridge Co]
+- B-108 · Bulk-share all Drive folders (with owner-info privacy scoping) [Ridge Co/BrettOS]
+- B-109 · 928 N Calvert St water heater — contact manufacturer for warranty [Ridge Co task]
+- B-110 · Refer Charles Barnett → Tom Bialek @ Ecowise (energy upgrades) [Ridge Co task]
+- B-111 · Add 4518 Fairfax as property + record Apt 1 lockbox code (stored privately) [Ridge Co task]
+- B-112 · New-property checklist + intake form → properties database [Ridge Co] (ties B-073)
+- B-113 · AI dispatch tool (troubleshoot summary + model info → WO → vendor); pilot 3014 washer [Ridge Co]
+- B-114 · Vendor text-message mining → surface info gaps for WO system [Ridge Co]
+- B-115 · Vendor tools & equipment tracking → auto-dispatch/assignment input [Ridge Co]
+- B-116 · Vendor availability & schedule prefs (blackout hours/vacations; defer assignment SMS to next avail day) [Ridge Co] (extends B-093/B-094)
+- B-117 · WO as shareable HTML + PDF + owner Drive download, owner-privacy scoped [Ridge Co]
+- B-118 · Z-Inspector app + inspection template for Phoenix Real Estate (client Mark) → tie into Ridge Co
+- B-119 · Ridge Co website + SEO
+- B-120 · Winchester Hauling website + SEO
+- B-121 · Ridge Co Facebook profile overhaul
+- B-122 · BarrelCo — create own Facebook group for barrels (ties B-080)
+- B-123 · Scheduled background agents that act on Brett's to-dos overnight/off-peak (analyze + build) [BrettOS]
+- B-124 · Scan Intake Agent — DAILY 12am poll of the handwriting Drive folder → OCR + handwriting-key learning + auto-file CAP/BACKLOG + auto-create entities (property/tenant/owner/WO + lockbox), tagged+reported [BrettOS] (first instance of B-123; reuses B-103 intake engine)
+- B-125 · Hub quick-command bar — voice/text NL input ("create new property 123 Main St Baltimore MD lockbox 1234") → parse → execute entity action (new property/WO, new/update lockbox·key·access code) [Ridge Co Hub]
+- B-126 · Owner portal billing + marked-up-estimate approval — amounts + invoice link + approve/decline the POST-markup estimate (after Brett reviews, never raw vendor est) [Ridge Co Hub] (from Design Foundation v1.1; builds on B-030/B-101/Invoice_Review)
+- B-127 · WO notes & visibility model — Entry_Notes / Owner_Notes / Vendor↔Admin thread / Admin-only / Hold_Reason + per-role view enforcement [Ridge Co Hub] ⚠️ **ID COLLISION — this was specced as B-104.** The July 21 capture batch independently assigned B-104 to the Cabin STR cleaner item, so this is renumbered to B-127 to avoid a duplicate. **The spec files `context/WO_NOTES_VISIBILITY_MODEL_v1.0.md` / `v2.0.md` and the commit messages still say B-104** — renumber them, or renumber the Cabin item back, whichever you prefer. Nothing in the code depends on the ID.
 <!-- QUICK-INDEX:END -->
 
 
@@ -297,6 +321,36 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 
 **Also — escalate B-092 (integration sync):** since the July 20 `WORKER_SECRET` rotation the BrettOS sync into maintenance_hub + barrelco is now **HTTP 401 Unauthorized** (was error 1042) — the sync caller still uses the OLD secret. Urgent quick-fix; ties the security work (Phase 0). Barrelco also throws an `atob()` base64 error (separate).
 
+
+## JULY 21 CAPTURES (from Scanned_202607211020 + …1341 → CAP-027/028)
+
+| ID | Pri | Item | Notes |
+|---|---|---|---|
+| B-104 | 🟡 | STR cleaner scheduling system (Cabin) | Site for cleaners to see the schedule + pick dates / mark availability; push SMS for last-minute bookings + approaching uncovered dates; sync Brett's calendar. First "describe current process." Feeds B-105. From CAP-027. |
+| B-105 | 🟡 | Cabin STR Dashboard & Alerts app | Single app: upcoming uncovered turns, shopping list, list of automations, reviews needed, doc links (keep-up-to-date), hot tub status, lock battery status, maintenance scheduling, guest feedback. Parent for B-104. From CAP-028. |
+| B-106 | 🟡 | Long-term lease management + self-inspection requirement (Ridge Co) | System to manage long-term (non-STR) leases; includes a self-inspection requirement. From CAP-027. |
+| B-107 | 🟡 | Post-repair tenant feedback capture | Collect tenant feedback after repair services complete. Ties B-006 tenant portal. From CAP-027. |
+| B-108 | 🟡 | Bulk-share all Drive folders | One action to share all WO/property Drive folders — scoped so owners only see what they need (ties B-117 + FEATURE_LOG privacy rule 13). From CAP-027. |
+| B-109 | 🟠 | 928 N Calvert St water heater — warranty | Contact the water-heater manufacturer for warranty (unit 928). Street = **Calvert** confirmed July 21 (matches 807 N Calvert; Culver = 56 S Culver, different property). Ops task. From CAP-027. |
+| B-110 | 🟢 | Refer Charles Barnett → Tom Bialek @ Ecowise | Referral for rental-property energy-savings upgrades. Names confirmed July 21 (Bialek, Ecowise). Networking task. From CAP-027. |
+| B-111 | 🟠 | Add 4518 Fairfax property + Apt 1 lockbox code | Create 4518 Fairfax as a property in the Hub; record the Apt 1 unit-door lockbox code (**code stored privately in the data repo, kept out of this public file**). Ties B-055 lock-code registry. From CAP-027. |
+| B-112 | 🟡 | New-property checklist + intake form → properties DB | Turn Brett's new-property checklist + info-gathering form into a structured intake that builds the properties database. Ties B-073 onboarding site. From CAP-028. |
+| B-113 | 🟠 | AI dispatch tool (troubleshoot + model info → WO → vendor) | Summarize troubleshooting and gather appliance make/model BEFORE creating the WO + dispatching to the vendor (e.g. washing machine). **Pilot on the 3014 washer.** Ties CAP-010 repair gems/Equipment Registry + B-072. From CAP-027/028. |
+| B-114 | 🟡 | Vendor text-message mining → info-gap surfacing | Pull vendor text threads to surface information gaps the WO system should capture; feed the dispatch/info-gathering flow. Ties B-044, B-113. From CAP-028. |
+| B-115 | 🟡 | Vendor tools & equipment tracking | Track what tools/equipment each vendor has, for use as an auto-dispatch/assignment input. Ties CAP-010 + B-113. From CAP-028. |
+| B-116 | 🟠 | Vendor availability & schedule preferences | Per-vendor: no weekends / no evenings / etc; block notifications during set hours + vacations; option to block all except part notifications; **defer assignment SMS to the next available day after a block**. **Directly extends the Phase-1 notification build (B-093/B-094)** — fold in there. From CAP-028. |
+| B-117 | 🟡 | WO as shareable HTML + PDF + owner Drive download | Render work orders as an HTML site sendable as links or PDFs; downloadable into a Google Drive folder — WITHOUT exposing other-owner info. Ties B-011, B-032, privacy rule 13. From CAP-028. |
+| B-118 | 🟡 | Z-Inspector app + inspection template (Phoenix Real Estate) | Build the **Z-Inspector app** + an inspection template for **Phoenix Real Estate** and tie into Ridge Co. Phoenix = client **Mark**'s company (Mark + assistant **Amanda** both have **owner** access on the Hub portal). From CAP-028. |
+| B-119 | 🟡 | Ridge Co website + SEO | Public marketing site with SEO. From CAP-027. |
+| B-120 | 🟡 | Winchester Hauling website + SEO | Public marketing site with SEO. From CAP-027. |
+| B-121 | 🟢 | Ridge Co Facebook profile overhaul | Revamp the Ridge Co FB business profile. From CAP-027. |
+| B-122 | 🟢 | BarrelCo — own Facebook group for barrels | Create Brett's own FB group for barrel sales (vs relying on existing yard-sale groups). Ties B-080, CAP-018. From CAP-027. |
+| B-123 | 🟡 | Scheduled background agents on to-dos | Separate agents that run in the background on a schedule (overnight / off-peak) to act on Brett's to-do items — analyze + build. Operating directive, not just a feature; ties the "autonomous ops" goal + CAP-015 + "Second Brain" (CAP-028 #2). From CAP-028. |
+| B-124 | 🟠 | **Scan Intake Agent** (first B-123 instance) | **Cadence: DAILY 12:00am ET** (changed from hourly July 21 — hourly full-session polls too costly; midnight run "gets things ready for the next day"). **Write behavior: auto-create live records, tagged "Unverified — from scan", and report each (Brett's choice July 21).** Scheduled task polling the handwriting Drive folder (`1iXjjwsnPKF_GtlR8gesxS9uJppO4xntZ`) for NEW scans (diff vs a processed-file ledger — connector can't move/rename, so track by file ID; a `Processed` subfolder exists but is manual-only). For each new scan: OCR → append handwriting-key improvements → split into (a) **ideas/tasks** → CAP/BACKLOG (today's manual flow, automated), and (b) **structured entity actions** → find-or-create **Property / Tenant / Owner / Work Order + lockbox code** via worker routes (`/property/add`, `/tenant/add`, `/owner/add`, `/workorder`, `/key/add`+`/key/update`). New WO w/ missing property → create the property first, tag ownership + tenant. Goal: a property record exists so Brett can attach WO photos/inspections on a site visit. **Reuses the B-103 source-agnostic `/intake` engine** as the "handwriting parser" (don't duplicate find-or-create). **Open blockers:** (1) headless credential availability — a scheduled fresh session may lack the Drive connector + the write path (WORKER_SECRET for worker calls; GitHub PAT for repo/sheet-ops); first fire self-tests + reports. (2) write-behavior decision (auto-create-tagged vs review-queue). From CAP-028 #7; ties B-123, B-103, B-055. |
+| B-125 | 🟠 | **Hub quick-command bar** (voice/text → action) | A command box on the Hub dashboard (index.html) that takes **voice (Web Speech API on Android Chrome) or typed** free text and just executes: "create new property 123 Main St Baltimore MD with lockbox code 1234", "new work order at 928 N Calvert — no hot water", "update lockbox 1214 #3 to 4471", "new key/access code …". New `POST /command` worker route → LLM parse (worker already has an AI binding via `generateEstimateText`/`translateToEnglish`) → structured `{action, entity, fields}` → route to existing handlers (`/property/add`, `/workorder`, `/key/add`, `/key/update`, `/tenant/add`, `/owner/add`). New WO w/ missing property → create property first. Additive build (new route + new dashboard panel); reuses current WORKER_SECRET (will inherit Phase-0 auth later). Key/code updates are history-logged (`updateKeyWithHistory`) so "just do" is safe; creates are soft-deletable (Active flag). Shares the parse→action core with B-124 + B-103. From July 21 ask. |
+| B-126 | 🟠 | **Owner billing + marked-up-estimate approval** | Owner portal (owner.html) currently has NO billing view at all. Add: **amounts + invoice link** per WO, and **estimate approval** — but the approvable estimate is the **marked-up, Brett-reviewed version** (Invoice_Review / customer-facing), **never the raw vendor estimate**. Flow: vendor estimate → Brett review + markup → surfaced to owner → owner approve/decline (feeds start-date + WO). Builds on B-030 (estimate template), B-101 (estimate approval + start-date), Invoice_Review markup. From Design Foundation v1.1 (decision #3, July 21). |
+
+---
 
 ## COMPLETED
 

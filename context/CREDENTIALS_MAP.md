@@ -1,5 +1,5 @@
 # BrettOS Credentials Map
-**Version:** v1.2 | **Last Updated:** July 19, 2026
+**Version:** v1.3 | **Last Updated:** July 21, 2026
 **Rule:** This file maps every service Claude may need to interact with, where credentials are stored, and current access status. Update this file whenever a new service is connected or credentials change. Never store actual secret values here — only the map.
 
 ---
@@ -8,13 +8,19 @@
 
 **Purpose:** Primary database for all BrettOS ventures
 **Auth method:** Service account (server-to-server, no user login required)
-**Service account:** `brett-os-sheets@brettos-502323.iam.gserviceaccount.com`
-**GCP project:** `brettos-502323`
-**Secret location:** GitHub Actions org-level secret `GOOGLE_SA_KEY` (Ridge-Co org) — covers all org repos automatically. Also added to individual personal repos.
-**How Claude writes to sheets:** Push `context/sheet-ops/pending.json` to the repo → GitHub Actions triggers `run_ops.py` → sheet updated automatically
+
+> ⚠️ **THERE ARE TWO SERVICE ACCOUNTS — they are NOT the same, and using the wrong one is a silent "caller does not have permission" error. Confirmed July 21, 2026 during the B-103 staging build.**
+>
+> | Mechanism | Service account (share NEW sheets with this) | GCP project | Where its key lives |
+> |---|---|---|---|
+> | **Cloudflare Worker RUNTIME** — every live read/write the Worker does (all `/…` endpoints, `/intake`, Drive uploads) | **`maintenance-hub-sheets@maintenance-hub-498819.iam.gserviceaccount.com`** | `maintenance-hub-498819` | Cloudflare env `GOOGLE_SA_EMAIL` + `GOOGLE_SA_KEY` (the Worker signs its JWT with `iss = GOOGLE_SA_EMAIL`, worker.js ~L2279) |
+> | **GitHub Actions sheet-ops** — column adds / bulk writes via `context/sheet-ops/pending.json` → `run_ops.py` | `brett-os-sheets@brettos-502323.iam.gserviceaccount.com` | `brettos-502323` | GitHub Actions org secret `GOOGLE_SA_KEY` (Ridge-Co org) |
+>
+> **Rule of thumb:** if the **Worker** needs to read/write a sheet at runtime, share it with the **maintenance-hub-498819** account. If a **sheet-op** (pending.json) needs to touch it, share it with the **brettos-502323** account. When unsure, share the sheet with **both** as Editor.
+
 **Expiry:** Service account keys do not expire unless manually rotated
 **Access status:** ✅ Active
-**Requirement:** Every new Google Sheet must be shared with the service account email as Editor before ops will work (PAT-027)
+**Requirement (PAT-027):** Every new Google Sheet must be shared as Editor with the correct service account(s) above **before** any Worker read or sheet-op will succeed. The old single-account guidance ("brett-os-sheets only") was incomplete and caused the B-103 staging permission error.
 
 ### Known Sheets
 | Sheet Name | Sheet ID | Shared? |
@@ -48,8 +54,10 @@
 **Worker name:** `maintenance-hub` (or similar — verify in Cloudflare dashboard)
 **Live URL:** `https://maintenance-hub.brett-2f8.workers.dev`
 **Auth method:** Deploy via GitHub push — no direct Cloudflare API access needed
-**Worker secrets:** Set in Cloudflare dashboard → Workers → Settings → Variables. Claude cannot set these directly — Brett must add via dashboard.
-**Known worker secrets:** `SHEET_ID`, `GOOGLE_SA_KEY` (or similar — verify in dashboard)
+**Worker secrets:** Set in Cloudflare dashboard → Workers → maintenance-hub → Settings → Variables and secrets. Global to the Worker (shared across the production deployment AND all preview/branch deployments — there is NO dashboard way to scope a var to preview-only; confirmed July 21, 2026). Claude cannot set these — Brett adds via dashboard.
+**Runtime service account:** `GOOGLE_SA_EMAIL` = `maintenance-hub-sheets@maintenance-hub-498819.iam.gserviceaccount.com` (see the TWO-service-accounts table under GOOGLE SHEETS). This is the identity the Worker uses for **both** Sheets and Drive.
+**Known worker vars/secrets (verified July 21, 2026):** `SHEET_ID`, `STAGING_SHEET_ID`, `GOOGLE_SA_EMAIL`, `GOOGLE_SA_KEY`, `DRIVE_PROPERTIES_ROOT`, `DRIVE_VENDORS_ROOT`, `KEY_REGISTRY_SHEET_ID`, `WORKER_SECRET`, `INTAKE_TOKEN`, `TWILIO_SID`, `TWILIO_AUTH`, `TWILIO_FROM`, `QB_CLIENT_ID`, `QB_CLIENT_SECRET`, `QB_REALM_ID`, `QB_REFRESH_TOKEN`. **Do NOT set `STAGING=1`** as a global var — it would flip production into staging mode (reads `STAGING_SHEET_ID`, breaks the live Hub). Staging is auto-detected from the `staging-` preview hostname instead (worker.js ~L45).
+**Staging sandbox (B-103):** the `staging` branch deploys to `https://staging-maintenance-hub.brett-2f8.workers.dev`; the Worker detects that hostname and swaps `SHEET_ID`→`STAGING_SHEET_ID` and suppresses SMS. Staging sheet `16PCD3tIDatZLhMeHdbeYC-4R4BVNCcZ26iBY90H6dFY` must be shared with the runtime SA above.
 **Expiry:** N/A — deploy is always current with repo main branch
 **Access status:** ✅ Active (via GitHub push)
 
