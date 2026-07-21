@@ -1,5 +1,5 @@
 # Ridge Co Hub — UX + Design Foundation
-**Version:** v1.0 (DRAFT — for Brett's review, July 21, 2026)
+**Version:** v1.1 (decisions locked July 21, 2026)
 **Owner:** Brett | **Applies to:** index.html (admin Hub), vendor.html, tenant.html, owner.html, customer.html, worker.js status logic
 **Related:** B-075 / B-102 (UI), Phase 0.2 status SSOT, the whole overhaul. Grounded in a per-role code audit of the live files (July 21).
 
@@ -17,7 +17,7 @@ The core idea: **usability is structural, cosmetics are a skin.** Usability come
 
 If we do this in order, the cosmetic pass never has to be sacrificed for usability. If we skip it and skin at the end, we'd be forced to choose — which is exactly what Brett wanted to avoid.
 
-**Status of this doc:** DRAFT. Brett reacts → it hardens into the standard (v1.1) → the overhaul references it.
+**Status:** Locked v1.1 — this is the standard the overhaul references. The five open decisions were resolved by Brett on July 21 (see §8).
 
 ---
 
@@ -131,10 +131,15 @@ One module (worker.js + a mirror the front-ends import) is the single source for
 
 ## 5. Visual tokens (the skin — applied LAST, via theme-factory)
 
-Structure this now so the cosmetic pass is a variable swap, not a rewrite. **Calibrate the actual values against the 4518 Fairfax Rd proposal** (Brett's visual north star) in the cosmetic phase.
+Structure this now so the cosmetic pass is a variable swap, not a rewrite. **The 4518 Fairfax Rd proposal look is LOCKED as the visual target (Brett, July 21)** — calibrate exact values against it in the cosmetic phase, with two locked adjustments below.
 
-- **Color roles (not raw hex scattered in markup):** `--bg`, `--surface`, `--text`, `--text-muted`, `--primary`, `--danger`, `--success`, plus one distinct hue per status stage. Every status color and button color references a role token.
-- **Type scale:** 5 steps, base ≥16px for inputs. One font family (retire the ad-hoc `Courier New` monospace on the portals unless that's the intended brand look — decide in cosmetic pass).
+**Locked visual direction (July 21):**
+- **Tighter whitespace.** The Fairfax proposal reads a bit airy — reduce the white space so screens feel denser/more efficient (esp. admin lists on desktop; comfortable 44px targets still hold on mobile).
+- **Slight-gray background, high-contrast text.** Move OFF the current dark `Courier New` portal look to a **light theme with a slight gray background** (surfaces/cards sit just above it) and **text that pops** — near-black body text on the gray, strong contrast (passes WCAG AA). Not stark white, not dark.
+- **Proportional font.** Replace `Courier New` monospace on the portals with a clean **proportional** font (Fairfax-calibrated).
+
+- **Color roles (not raw hex scattered in markup):** `--bg` (slight gray), `--surface` (near-white cards), `--text` (near-black, high contrast), `--text-muted`, `--primary`, `--danger`, `--success`, plus one distinct hue per status stage. Every status color and button color references a role token.
+- **Type scale:** 5 steps, base ≥16px for inputs. One **proportional** font family across Hub + all portals (retire `Courier New`).
 - **Spacing scale:** 4/8/12/16/24/32. Kill one-off inline paddings.
 - **Radius + elevation:** one radius token, one shadow scale for cards/modals.
 - **Density:** comfortable default (44px controls), with an optional compact mode for admin tables on desktop.
@@ -156,9 +161,9 @@ Highest-leverage fixes, grouped. Most are **both** usability and consistency win
 
 **Vendor:** wire Spanish across the whole UI + EN/ES toggle · one-tap status save (kill the confusing 2-step) · wire or delete the dead scheduling modal · add camera capture to photo upload · lazy-load card widgets · let a vendor see/flag an unset rate.
 
-**Tenant:** **add a create-issue flow** (the missing core) · fix the `api()` bug so uploads work · add error/timeout/retry on load · hide billing jargon · i18n.
+**Tenant (scope locked July 21):** **build the create-issue flow** (the missing core) · give tenants **full view of their open WO updates + their own photos/videos** (before/after they submitted) · **NEVER expose billing** — no amounts, no invoice states, no Invoiced/Paid jargon anywhere in the tenant view · fix the `api()` bug so uploads work · add error/timeout/retry on load · i18n (EN/ES). *(Refines B-006.)*
 
-**Owner:** **add a billing view** (amounts + invoice link; approve/dispute if wanted) · reconcile the 3 priority lists to one · fix/hide non-working email channel + phantom "Scheduled" tier · confirm on visibility/scheduled-date toggles · unify list-vs-detail status label source.
+**Owner (scope locked July 21):** **build a billing view** — **amounts + invoice link** — AND **estimate approval**. Critical gate: the estimate an owner approves is the **marked-up estimate produced AFTER Brett reviews it and adds markup** (the Invoice_Review / customer-facing version), **never the raw vendor estimate**. So the flow is vendor estimate → Brett review + markup → *then* surfaced to owner for approve/decline. *(New requirement → B-126; builds on the estimate/markup flow B-030/B-101 and Invoice_Review.)* Also: reconcile the 3 priority lists to one · fix/hide non-working email channel + phantom "Scheduled" tier · confirm on visibility/scheduled-date toggles · unify list-vs-detail status label source.
 
 ---
 
@@ -172,13 +177,15 @@ Net: usability is delivered *throughout* Phases 0–3 (so even if the cosmetic P
 
 ---
 
-## 8. Open decisions for Brett
+## 8. Locked decisions (Brett, July 21)
 
-1. **Monospace vs proportional font on the portals** — the dark `Courier New` look: intentional brand, or replace with a cleaner proportional font in the cosmetic pass?
-2. **Tenant create-issue flow** — build it (recommended; it's the portal's purpose), or keep tenants comment-only?
-3. **Owner billing view** — amounts + invoice link only, or also an approve/dispute action for clients like Phoenix?
-4. **Vendor Spanish** — confirm it's a real priority (audit says it's ~95% non-functional today) so we scope the i18n layer accordingly.
-5. **How locked is the Fairfax look** as the visual target, or do you want to see 2–3 theme directions in Phase 4 before committing?
+1. **Font:** replace the `Courier New` monospace with a cleaner **proportional** font (cosmetic pass). ✅
+2. **Tenant create-issue flow:** **build it.** Tenants get **full view of their open WO updates + their own photos/videos**, but **no billing info** whatsoever. ✅ *(→ B-006 refined)*
+3. **Owner billing:** **amounts + invoice link + estimate approval** — where the approvable estimate is the **marked-up version after Brett's review**, NOT the raw vendor estimate. ✅ *(→ B-126)*
+4. **Vendor Spanish:** **critical** — full i18n layer + EN/ES toggle is P0 for the portal work. ✅
+5. **Fairfax look:** **locked** as the visual target, with two adjustments — **reduce whitespace** and use a **slight-gray background with high-contrast ("pop") text** (see §5). ✅
+
+All five are reflected above (§5 tokens, §6 per-role). This doc is now the locked standard for the overhaul.
 
 ---
-*v1.0 DRAFT — react and I'll harden it into the standard the overhaul references.*
+*v1.1 — locked standard. Update in place if a convention changes; note it here.*
