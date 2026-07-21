@@ -126,6 +126,7 @@ export default {
         if (path === '/workorder')                return await createWorkOrder(env, body);
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
+        if (path === '/wo/append-entry-note')     return await appendEntryNote(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
         if (path === '/time-entry/add')           return await addTimeEntry(env, body);
@@ -682,14 +683,44 @@ async function createWorkOrder(env, body) {
   return json({ success: true, id: woId });
 }
 
+// One attributed line: "[Jul 21, 3:45 PM — Brett] text". Shared by every
+// append-only WO field so attribution can't drift between them (B-104).
+function attributedLine(text, author) {
+  const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+  return `${author ? `[${ts} — ${author}] ` : `[${ts}] `}${text}`;
+}
+
+// APPEND, never overwrite. Entry_Notes and Vendor_Thread are multi-source: Brett's
+// "lockbox is red" and Buildium's "call 24h ahead" must BOTH survive on the same
+// WO, so a write that replaces the field is always a bug.
+async function appendWOField(env, woId, field, text, author, wo = null) {
+  if (!text) return { skipped: true };
+  if (!wo) {
+    const workorders = await fetchTab(env, 'Work_Orders');
+    wo = findWO(workorders, woId);
+    if (!wo) return { error: 'WO not found' };
+  }
+  const existing = wo[field] || '';
+  const line = attributedLine(text, author);
+  await updateWOFields(env, woId, { [field]: existing ? `${existing}\n${line}` : line });
+  return { success: true, line };
+}
+
 async function appendWONotes(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
-  const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
-  const prefix = body.author ? `[${ts} — ${body.author}] ` : `[${ts}] `;
-  await updateWOFields(env, body.wo_id, { Notes: wo.Notes ? `${wo.Notes}\n${prefix}${body.note}` : `${prefix}${body.note}` });
+  const res = await appendWOField(env, body.wo_id, 'Notes', body.note, body.author, wo);
+  if (res.error) return json({ error: res.error }, 404);
   return json({ success: true });
+}
+
+// Admin appends access/scheduling info to a WO. Append-only + attributed.
+async function appendEntryNote(env, body) {
+  if (!body.wo_id || !body.note) return json({ error: 'wo_id and note required' }, 400);
+  const res = await appendWOField(env, body.wo_id, 'Entry_Notes', body.note, body.author || 'admin');
+  if (res.error) return json({ error: res.error }, 404);
+  return json({ success: true, line: res.line });
 }
 async function assignVendor(env, body) {
   const [workorders, vendors, tenants, units, properties, keys] = await Promise.all([
@@ -853,7 +884,14 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
   }
   const rawLockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit.Unit_Label||'');
   const lockboxes = (opts.omitLockbox || !vendorHasAccess) ? [] : rawLockboxes;
-  const accessNotes = (!vendorHasAccess) ? '' : (property.Access_Notes||'');
+  // BOTH, never one-or-the-other. The property default ("side gate is unlocked")
+  // and the per-WO note ("call owner 24h ahead") are different facts — letting a
+  // WO note hide the standing default is how a vendor ends up at a door they
+  // can't open. Still fully gated by Vendor_Needs_Access.
+  // Entry_Notes is append-only and therefore multi-line; flatten it, because this
+  // same string is injected into the single-line vendor assignment SMS.
+  const accessNotes = (!vendorHasAccess) ? ''
+    : [property.Access_Notes, (wo.Entry_Notes || '').replace(/\n+/g, ' | ')].filter(Boolean).join(' | ');
   const legacyLockbox = (!lockboxes.length && vendorHasAccess && property.Lockbox_Code) ? property.Lockbox_Code : '';
   const base = {
     ...wo,
@@ -867,8 +905,24 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
     access_notes: accessNotes,
     vendor_has_access: vendorHasAccess,
   };
-  if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; base.vendor_phone = ''; }
-  if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; }
+  // `base` starts as {...wo}, so EVERY raw Work_Orders column is exposed by
+  // default — a new column leaks to every role the moment it's created unless it
+  // is stripped here. Entry_Notes is admin+vendor only (B-104 matrix), and the
+  // pass-2 fields are listed now so they can't leak in the window between the
+  // sheet-op and their code landing. Deleting an absent key is a no-op.
+  const PRIVATE_WO_FIELDS = ['Entry_Notes', 'Vendor_Thread', 'Admin_Notes'];
+  const stripPrivate = (o) => { for (const f of PRIVATE_WO_FIELDS) delete o[f]; };
+
+  if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; base.vendor_phone = ''; stripPrivate(base); }
+  if (opts.ownerView)  {
+    delete base.Invoice_ID;
+    // Owners must not see access info (B-104 matrix). access_notes now carries
+    // Entry_Notes as well as the property default, so leaving it on the owner
+    // payload would hand the owner both.
+    delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = [];
+    stripPrivate(base);
+    base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status;
+  }
   return base;
 }
 
@@ -2237,10 +2291,6 @@ async function handleIntake(env, body) {
   if (!parsed.owner_wo_ref)
     return review('No Buildium work order number found — cannot dedupe this email, so it will not auto-create');
 
-  // Detected from the data rather than assumed, so intake works before and after
-  // the Entry_Notes column lands.
-  const hasEntryCol = Object.keys(workorders[0] || {}).includes('Entry_Notes');
-
   const [properties, owners, units, tenants] = await Promise.all([
     fetchTab(env, 'Properties'), fetchTab(env, 'Owners'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'),
   ]);
@@ -2279,11 +2329,10 @@ async function handleIntake(env, body) {
     owner_wo_ref: parsed.owner_wo_ref,
     wo_contact_name: parsed.tenant.name,
     wo_contact_phone: parsed.tenant.phone,
-    // Entry info belongs in Entry_Notes. Until that column exists it still must
-    // not be lost, so it degrades into Notes with a clear prefix (never the raw
-    // section header). Once the column is added this branch stops firing — no
-    // rework, and no window where access info silently vanishes.
-    notes: hasEntryCol ? '' : (parsed.entry_notes ? `Entry: ${parsed.entry_notes}` : ''),
+    // Entry info goes to Entry_Notes (admin+vendor only), never to Notes — the
+    // owner and tenant portals both render Notes verbatim, so the old fallback
+    // was publishing Buildium entry info to them.
+    notes: '',
     type: 'email-intake',
     created_by: `intake:${source}`,
   });
@@ -2294,12 +2343,14 @@ async function handleIntake(env, body) {
   // Traceability columns. updateWOFields skips headers that don't exist, so this
   // is a no-op (not an error) until the Source / Intake_Message_ID columns land.
   try {
-    const post = { Source: `email-${source}`, Intake_Message_ID: message_id || '' };
-    // Only the email's own entry info goes here. A blank must NOT be written —
-    // an empty Entry_Notes is what makes the WO fall back to the property's
-    // standing Access_Notes default.
-    if (parsed.entry_notes) post.Entry_Notes = parsed.entry_notes;
-    await updateWOFields(env, woId, post);
+    await updateWOFields(env, woId, { Source: `email-${source}`, Intake_Message_ID: message_id || '' });
+    // Attributed append, per B-104. The WO was created microseconds ago so
+    // Entry_Notes is empty, but this goes through the same append path as every
+    // other writer — Brett's later "lockbox is red" must not overwrite this line
+    // and this must not overwrite his. A blank is never written, so a WO with no
+    // entry info keeps falling back to the property's Access_Notes default.
+    if (parsed.entry_notes)
+      await appendWOField(env, woId, 'Entry_Notes', parsed.entry_notes, 'Owner/Buildium', { Entry_Notes: '' });
   } catch (e) { /* non-fatal */ }
 
   const files = await ingestFiles(env, woId, propAddress, parsed.files);

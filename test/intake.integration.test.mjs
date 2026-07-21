@@ -221,6 +221,9 @@ const call = async (url, { token, env = {}, method = 'POST', body = {} } = {}) =
   return { status: res.status, body: await res.json() };
 };
 const BASE_ENV = { WORKER_SECRET: 'prod-secret', INTAKE_TOKEN: 'intake-secret' };
+// Staging env for routed calls: STAGING_SHEET_ID must be present or the
+// fail-closed guard correctly 503s before the handler ever runs.
+const ROUTED_ENV = () => ({ ...BASE_ENV, ...ENV(), STAGING: '1', STAGING_SHEET_ID: 'STAGING_SHEET' });
 
 section('staging guard — fails closed');
 reset();
@@ -279,18 +282,19 @@ SHEETS.Work_Orders[0] = [...WO_HEADERS, 'Entry_Notes'];
 r = await run(ENTRY_EMAIL);
 eq(r.status, 'created', 'created');
 let row = SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1];
-eq(get(row, 'Entry_Notes'), 'Pets: Yes - Cat | Lockbox on the side door', 'entry info written to Entry_Notes');
-eq(get(row, 'Notes'), '', 'Notes stays clean when the column exists');
+eq(/^\[.+ — Owner\/Buildium\] Pets: Yes - Cat \| Lockbox on the side door$/.test(get(row, 'Entry_Notes')), true,
+  'entry info written to Entry_Notes, attributed [ts — Owner/Buildium]');
+eq(get(row, 'Notes'), '', 'Notes stays clean — owner+tenant portals render Notes verbatim');
 eq(get(row, 'Description'), 'Leaking toilet — Water pooling on the floor.', 'Description is just the problem');
 eq(/Contact and scheduling|Vendor information|Vendor name/.test(get(row, 'Description') + get(row, 'Notes') + get(row, 'Entry_Notes')), false, 'NO section header text anywhere on the WO');
 eq(get(row, 'WO_Contact_Name'), 'Ian Rogers', 'contact still parsed from the renamed header block');
 
-section('entry routing — Entry_Notes column ABSENT (info must not be lost)');
+section('entry routing — Entry_Notes column ABSENT');
 reset();
 r = await run(ENTRY_EMAIL);
 row = SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1];
-eq(get(row, 'Notes'), 'Entry: Pets: Yes - Cat | Lockbox on the side door', 'degrades into Notes with a clean prefix');
-eq(/Contact and scheduling|Vendor information/.test(get(row, 'Notes')), false, 'still no raw header text');
+eq(r.status, 'created', 'WO still created before the column exists');
+eq(get(row, 'Notes'), '', 'entry info is NOT dumped into the owner/tenant-visible Notes field');
 
 section('entry routing — no entry info in the email');
 reset();
@@ -298,6 +302,86 @@ SHEETS.Work_Orders[0] = [...WO_HEADERS, 'Entry_Notes'];
 r = await run(buildEmail({ html: buildEmail().html.replace('<p>Entry details</p><p>Pets: Yes - Cat</p>', '') }));
 row = SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1];
 eq(get(row, 'Entry_Notes'), '', 'Entry_Notes left blank so the property Access_Notes default applies');
+
+// ── B-104 pass 1: Entry_Notes append semantics + visibility contract ─────────
+section('Entry_Notes — APPEND, never overwrite (multi-source)');
+reset();
+SHEETS.Work_Orders[0] = [...WO_HEADERS, 'Entry_Notes'];
+await run(ENTRY_EMAIL);                                   // Buildium writes first
+let woId = get(SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1], 'ID');
+// Brett then adds his own note via the admin endpoint.
+c = await call(`${PROD}/wo/append-entry-note`, {
+  token: 'prod-secret', env: ROUTED_ENV(),
+  body: { wo_id: woId, note: 'lockbox is red', author: 'Brett' },
+});
+eq(c.status, 200, 'admin append accepted');
+let entry = get(SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1], 'Entry_Notes');
+eq(entry.includes('Pets: Yes - Cat'), true, 'the Buildium line SURVIVED the admin write');
+eq(entry.includes('lockbox is red'), true, "Brett's line is present");
+eq(entry.split('\n').length, 2, 'two attributed lines, not one overwritten value');
+eq(/— Owner\/Buildium\]/.test(entry) && /— Brett\]/.test(entry), true, 'each line keeps its own author');
+// And a third writer still appends rather than clobbering.
+await call(`${PROD}/wo/append-entry-note`, {
+  token: 'prod-secret', env: ROUTED_ENV(),
+  body: { wo_id: woId, note: 'call owner 24h ahead', author: 'Brett' },
+});
+entry = get(SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1], 'Entry_Notes');
+eq(entry.split('\n').length, 3, 'third append preserved both earlier lines');
+
+section('Entry_Notes — vendor sees BOTH the property default and the WO note');
+const PROPS_WITH_ACCESS = () => [['ID','Address','City','State','Zip','Owner_ID','Access_Notes','Active'],
+  ['10','1110 N Dukeland St','Baltimore','MD','21216','1','side gate is unlocked','TRUE']];
+const vendorView = async () => {
+  reset();
+  SHEETS.Properties = PROPS_WITH_ACCESS();
+  SHEETS.Work_Orders[0] = [...WO_HEADERS, 'Entry_Notes'];
+  SHEETS.Work_Orders.push(['auto','WO-2001','10','','','V-1','manual','Plumbing','job','normal','New','r1','','','admin','2026-07-21','','','','','','[Jul 21 — Brett] lockbox is red']);
+  const res = await call(`${PROD}/vendor-workorders?vendor_id=V-1`, { method: 'GET', token: 'prod-secret', env: ROUTED_ENV() });
+  return res.body.find(w => w.ID === 'WO-2001');
+};
+let vw = await vendorView();
+eq(vw.access_notes.includes('side gate is unlocked'), true, 'property default is shown');
+eq(vw.access_notes.includes('lockbox is red'), true, 'per-WO Entry_Notes is shown');
+// Attribution is preserved into the vendor view on purpose — the vendor should
+// see who said what and when.
+eq(vw.access_notes, 'side gate is unlocked | [Jul 21 — Brett] lockbox is red', 'BOTH, joined — the WO note never hides the default');
+// Multi-line Entry_Notes must flatten: this string goes into the assign SMS.
+const multi = await (async () => {
+  reset();
+  SHEETS.Properties = PROPS_WITH_ACCESS();
+  SHEETS.Work_Orders[0] = [...WO_HEADERS, 'Entry_Notes'];
+  SHEETS.Work_Orders.push(['auto','WO-2002','10','','','V-1','manual','Plumbing','job','normal','New','r2','','','admin','2026-07-21','','','','','','[a] one\n[b] two']);
+  const res = await call(`${PROD}/vendor-workorders?vendor_id=V-1`, { method: 'GET', token: 'prod-secret', env: ROUTED_ENV() });
+  return res.body.find(w => w.ID === 'WO-2002');
+})();
+eq(multi.access_notes.includes('\n'), false, 'multi-line Entry_Notes flattened for the SMS');
+eq(multi.access_notes, 'side gate is unlocked | [a] one | [b] two', 'every appended line reaches the vendor');
+
+section('Entry_Notes — privacy contract (B-104 matrix)');
+// Vendor: allowed. Tenant + owner: never — including the RAW column, which the
+// {...wo} spread in enrichWO would otherwise pass straight through.
+eq(vw.Entry_Notes === undefined || vw.Entry_Notes !== '', true, 'vendor may see entry info');
+const roleView = async (route, q) => {
+  reset();
+  SHEETS.Properties = PROPS_WITH_ACCESS();
+  SHEETS.Work_Orders[0] = [...WO_HEADERS, 'Entry_Notes'];
+  SHEETS.Work_Orders.push(['auto','WO-2001','10','5','7','V-1','manual','Plumbing','job','normal','New','r1','','','admin','2026-07-21','','','','','','[Jul 21 — Brett] lockbox is red']);
+  const res = await call(`${PROD}${route}?${q}`, { method: 'GET', token: 'prod-secret', env: ROUTED_ENV() });
+  return (res.body || []).find(w => w.ID === 'WO-2001');
+};
+const tv = await roleView('/tenant-workorders', 'tenant_id=7');
+if (tv) {
+  eq(tv.Entry_Notes, undefined, 'TENANT: raw Entry_Notes column stripped');
+  eq(tv.access_notes, undefined, 'TENANT: access_notes stripped');
+  eq(JSON.stringify(tv).includes('lockbox is red'), false, 'TENANT: entry text appears nowhere in the payload');
+} else { fail += 3; console.log('  ❌ tenant view returned no WO-2001'); }
+const ov = await roleView('/owner-workorders', 'owner_id=1');
+if (ov) {
+  eq(ov.Entry_Notes, undefined, 'OWNER: raw Entry_Notes column stripped');
+  eq(ov.access_notes, undefined, 'OWNER: access_notes stripped (was leaking the property default before B-104)');
+  eq(JSON.stringify(ov).includes('lockbox is red'), false, 'OWNER: entry text appears nowhere in the payload');
+  eq(JSON.stringify(ov).includes('side gate is unlocked'), false, 'OWNER: property access default not leaked either');
+} else { fail += 4; console.log('  ❌ owner view returned no WO-2001'); }
 
 console.log(`\n${'='.repeat(52)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(52)}`);
 if (fail) process.exit(1);
