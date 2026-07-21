@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.21 | **Last Updated:** July 21, 2026
+**Version:** v1.22 | **Last Updated:** July 21, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -276,11 +276,13 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 ## RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)
 *Sequenced plan + testing strategy live in the July 21 build-plan doc. Consolidates the RidgeCo Main "Wishlist" tab (76 items) + these new asks. Priority: Ridge Co. Nothing ships without a test.*
 
+**Locked decisions (July 21):** tomorrow = quick wins → security fix (per-user auth; **phone-only tenant login**) + fix the live 401 sync outage (B-092) → status-enum SSOT → Cron infra → Phase 1 notifications (**hold-SMS-til-8am**, email deferred). UI redesign = **Phase 4** (after engine stable).
+
 | ID | Priority | Item | Notes |
 |---|---|---|---|
-| B-093 | 🟠 | Notification engine v2 — quiet-hours + channel routing + test/admin mute | Wrap the single `sendSMS` chokepoint (worker.js:1627): preference check, 8pm–8am ET quiet hours, per-recipient SMS-vs-email, test-mode + admin-mute (2hr auto-resume via Config flag). Needs an email channel (greenfield) + Cron for release. Foundation for B-094/B-095. New asks + Wishlist #8/#32. |
+| B-093 | 🟠 | Notification engine v2 — quiet-hours + hold-til-8am + test/admin mute | Wrap the single `sendSMS` chokepoint (worker.js:1627): preference check, 8pm–8am ET quiet hours = **HOLD SMS til 8am via the notification queue + Cron** (email channel DEFERRED per July 21 decision); test-mode + admin-mute (2hr auto-resume via Config flag). Foundation for B-094/B-095. New asks + Wishlist #8/#32. |
 | B-094 | 🟠 | WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET) | Checkbox on new-WO/assign form; default off during quiet hours; suppresses the vendor-assign SMS (worker.js:703). Sits on B-093. |
-| B-095 | 🟠 | Tenant + owner after-hours silent mode — email instead of SMS 8pm–8am ET | Same quiet window; route to email in-hours. Blocker: no email path exists; Tenants have no email column. Sits on B-093. |
+| B-095 | 🟠 | Tenant + owner after-hours silent mode (hold SMS til 8am) | Same 8pm–8am ET quiet window; HOLD the SMS until 8am next-day via the notification queue + Cron (no email channel yet — July 21 decision). Sits on B-093. |
 | B-096 | 🟠 | Split work order + dependencies | Parent/child WOs from one request; dependency chains (cleaner after painter). Greenfield (no split today). Wishlist #16. |
 | B-097 | 🟠 | Vendor-triggered recurring WO w/ smart clock-reset | Vendor triggers next occurrence to attach a bill; reset the recurrence clock only if actual is close to schedule (13d on a 14d cycle = no reset; weekly on a biweekly = reset). Ties B-098. |
 | B-098 | 🟠 | Recurring WO from template + seasonal windows | Template carries a default schedule (editable on template AND instance); recurs only between start/end dates (growing season; fall leaf cleanup). Needs Cron + recurrence model. Wishlist #33. |
