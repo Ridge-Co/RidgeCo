@@ -1,0 +1,18 @@
+{
+  "_comment": "Ledger of handwriting scans already processed. Scan Intake Agent (B-124) skips any fileId listed here. Connector can't move/rename files, so dedup is by Drive fileId. Folder: 1iXjjwsnPKF_GtlR8gesxS9uJppO4xntZ.",
+  "folder_id": "1iXjjwsnPKF_GtlR8gesxS9uJppO4xntZ",
+  "processed": [
+    {"fileId": "1IIGgbyib9I-CqROuPlATaSYwArtHwAdH", "title": "Scanned_20260721-1020.pdf", "processed": "2026-07-21", "result": "CAP-027 + B-104..B-122"},
+    {"fileId": "1sUWnW4UU1Bzf4htysukJS0UAEeVwx-HN", "title": "Scanned_20260721-1341.pdf", "processed": "2026-07-21", "result": "CAP-028 + B-105..B-124"},
+    {"fileId": "1o313LGEylsK-E4d6Y3hvKK9oaKg8fX-m", "title": "Scanned_20260719-1338.pdf", "processed": "2026-07-19", "result": "CAP-018 + B-073..B-082"},
+    {"fileId": "1Z8yrU28GW_4OiDdNjL2ZLe4aCk_7ofyN", "title": "Scanned_20260718-2105.pdf", "processed": "2026-07-19", "result": "CAP-015/016/017 batch"},
+    {"fileId": "1BAkO68M057JMC3B27a0tIHyD3Tp-UVe-", "title": "Scanned_20260718-2105.pdf", "processed": "2026-07-19", "result": "CAP-015/016/017 batch"},
+    {"fileId": "1VvzBRXHFLS5BZ4H7E8nrgp_tUjyRLnv7", "title": "Scanned_20260718-2105.pdf", "processed": "2026-07-19", "result": "CAP-015/016/017 batch"},
+    {"fileId": "1NlK9CTxcRmXy47neTPwF2037SVkYfeci", "title": "Scanned_20260718-2030.pdf", "processed": "2026-07-19", "result": "Scan_2030 FB yard-sale groups (handwriting only)"},
+    {"fileId": "1_hyKs4xtiF-Yqp3cbbkH2gcCrqtHEIuv", "title": "Scanned_20260718-2032.pdf", "processed": "2026-07-19", "result": "Scan_2032 pay-list (handwriting only)"},
+    {"fileId": "1_NVj4pSV47L9MIvFWn406CCe56ihuEZP", "title": "Scanned_20260718-2032.pdf", "processed": "2026-07-19", "result": "Scan_2032_1 ledger (handwriting only)"},
+    {"fileId": "153Vvzb09SsrO7gqDBd5GCCdeqGShtaKN", "title": "Scanned_20260718-2104.pdf", "processed": "2026-07-19", "result": "CAP-014 + B-038..B-050"},
+    {"fileId": "1qCNsVfoKCYJ62dOeCvhvNZsUrsy9sKqp", "title": "Scanned_20260718-2020.pdf", "processed": "2026-07-19", "result": "CAP-013 (parked)"},
+    {"fileId": "15jbjSOXoEnLA_rlGcmV7Xt-tAcDnodHW", "title": "Scanned_20260718-2019.pdf", "processed": "2026-07-19", "result": "CAP-012 + B-034..B-036"}
+  ]
+}
