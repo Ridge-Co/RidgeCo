@@ -15,7 +15,7 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 | Brett_Cowork_Best_Practices_v1.3.md | v1.3 | ✅ ALWAYS | Session workflow, common mistakes, how to work with Brett |
 | CREDENTIALS_MAP.md | v1.2 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality |
 | VENTURES.md | v1.0 | ✅ ALWAYS | Every venture — current state, stack, Claude access level, automation gaps |
-| FEATURE_LOG.md | v1.1 | ✅ ALWAYS | What's working — check before every code change to prevent regressions |
+| FEATURE_LOG.md | v1.3 | ✅ ALWAYS | What's working — check before every code change to prevent regressions |
 | BACKLOG.md | v1.20 | ⏳ index always, detail on-demand | Master backlog across all ventures. Quick Index block at top (always-load); full entries on demand. |
 | CAPTURE_INBOX.md | v1.20 | ⏳ index always, detail on-demand | Brett's brain-dump inbox — CAP items. Quick Index block at top (always-load); full entries on demand. |
 | HANDWRITING_KEY.md | v1.9 | ⏳ ON-DEMAND | Reference for reading Brett's handwritten-note photos (load only for handwriting tasks). Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338. |
