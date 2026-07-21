@@ -655,11 +655,22 @@ function buildWODetail(wo, audit) {
   html += '<div style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="openDescUpdate(\'' + wo.ID + '\')">+ ADD UPDATE</button></div>';
   html += '</div>';
 
-  // ── Notes ──
-  if (wo.Notes) {
+  // ── Your notes ──
+  // B-104 v2.0: the legacy `Notes` field is NO LONGER rendered here. It was a
+  // single shared column that mixed owner posts with Brett's internal notes —
+  // and the admin form labels it "Internal notes…", so anything he typed there
+  // was showing up on this page. The Worker now strips `Notes` from the owner
+  // payload entirely; owners see only their own Owner_Notes.
+  if (wo.Owner_Notes) {
     html += '<div class="detail-section">';
-    html += '<div class="detail-section-title">NOTES</div>';
-    html += '<div class="desc-thread">' + esc(wo.Notes) + '</div>';
+    html += '<div class="detail-section-title">YOUR NOTES</div>';
+    html += '<div class="desc-thread">' + esc(wo.Owner_Notes) + '</div>';
+    html += '</div>';
+  }
+  if (wo.Hold_Reason) {
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">ON HOLD</div>';
+    html += '<div class="desc-thread">' + esc(wo.Hold_Reason) + '</div>';
     html += '</div>';
   }
   html += buildPhotoSection(wo.ID, wo.property_address||wo.Address||'', { canBefore:false, canAfter:false, canReport:true, canReceipt:false, viewAll:true });

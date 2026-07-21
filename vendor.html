@@ -433,7 +433,9 @@ function renderWOs(wos) {
         (wo.Owner_WO_Ref ? '<div class="detail-row"><span class="detail-label">Owner Ref #</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Owner_WO_Ref) + '</span></div>' : '') +
         '<div class="detail-row"><span class="detail-label">Issue</span><span class="detail-val">' + esc(wo.Description || '—') + '</span></div>' +
         '<div class="detail-row"><span class="detail-label">Tenant</span><span class="detail-val">' + tenantHtml + '</span></div>' +
-        (wo.Notes ? '<div class="detail-row"><span class="detail-label">Notes</span><span class="detail-val">' + esc(wo.Notes) + '</span></div>' : '') +
+        (wo.Hold_Reason ? '<div class="detail-row"><span class="detail-label">On Hold</span><span class="detail-val">' + esc(wo.Hold_Reason) + '</span></div>' : '') +
+        (wo.Owner_Notes ? '<div class="detail-row"><span class="detail-label">Owner Notes</span><span class="detail-val">' + esc(wo.Owner_Notes) + '</span></div>' : '') +
+        (wo.Vendor_Admin_Notes ? '<div class="detail-row"><span class="detail-label">Notes</span><span class="detail-val" style="white-space:pre-wrap">' + esc(wo.Vendor_Admin_Notes) + '</span></div>' : '') +
         (wo.Scheduled_Date ? '<div class="detail-row"><span class="detail-label">Scheduled</span><span class="detail-val">' + esc(wo.Scheduled_Date) + '</span></div>' : '') +
         (wo.master_key ? '<div style="background:#1a2540;border:1px solid var(--info);border-radius:6px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px">' + '<span style="font-size:1.1rem">🔑</span>' + '<div><div style="color:var(--info);font-weight:bold;font-size:10px;letter-spacing:.06em">MASTER KEY REQUIRED</div>' + '<div style="color:var(--text);font-size:12px">' + esc(wo.master_key) + '</div></div></div>' : '') +
         (wo.vendor_has_access === false ? '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px">' +

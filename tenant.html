@@ -387,11 +387,14 @@ function buildDetail(wo, idx) {
   }
   html += '</div>';
 
-  // Notes (if any)
-  if (wo.Notes) {
+  // B-104 v2.0: the legacy `Notes` field is NO LONGER rendered here. It carried
+  // internal admin/vendor commentary (the admin form calls it "Internal
+  // notes…") straight onto the tenant portal. The Worker now strips it from the
+  // tenant payload. Hold_Reason is the one note type written for tenant eyes.
+  if (wo.Hold_Reason) {
     html += '<div class="detail-section">';
-    html += '<div class="detail-section-title">UPDATES &amp; NOTES</div>';
-    html += '<div class="note-thread">' + esc(wo.Notes) + '</div>';
+    html += '<div class="detail-section-title">ON HOLD</div>';
+    html += '<div class="note-thread">' + esc(wo.Hold_Reason) + '</div>';
     html += '</div>';
   }
 

@@ -497,7 +497,7 @@
       <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" style="width:100%"><option value="">Assign after creation</option></select></div>
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
       <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
-      <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
+      <div class="form-group full"><label>Admin Notes <span style="font-weight:normal;color:var(--muted)">(private — admin only)</span></label><textarea id="wo-notes" placeholder="Private admin notes — never shown to owner, tenant, or vendor..."></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
       <div class="form-group full">
         <label>Vendor Access to Property <span style="font-weight:normal;color:var(--muted)">— share lockbox/entry codes with vendor?</span></label>
@@ -646,7 +646,7 @@
       </div>
       <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
       <div class="form-group full"><label>Description</label><textarea id="ewo-description" style="min-height:120px;resize:vertical"></textarea></div>
-      <div class="form-group full"><label>Notes</label><textarea id="ewo-notes"></textarea></div>
+      <div class="form-group full"><label>Admin Notes <span style="font-weight:normal;color:var(--muted)">(private — admin only)</span></label><textarea id="ewo-notes"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(owner's internal tracking number)</span></label><input type="text" id="ewo-owner-ref" placeholder="e.g. PM-4821"></div>
       <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">CONTACT OVERRIDE <span style="font-weight:normal;text-transform:none;letter-spacing:0">— overrides tenant record on this WO only. Edit the tenant record itself in the Tenants tab.</span></div></div>
       <div class="form-group"><label>Tenant on this WO</label><select id="ewo-tenant-id" style="width:100%"><option value="">— linked tenant (default) —</option></select></div>
@@ -1223,10 +1223,10 @@ function openWODetail(woId) {
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto">' +
     linkify(wo.Description||'No description') +
     '</div></div>' +
-    (wo.Notes ? '<div style="margin-bottom:14px">' +
-    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">NOTES</div>' +
+    (wo.Vendor_Admin_Notes ? '<div style="margin-bottom:14px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">ADMIN &harr; VENDOR NOTES</div>' +
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;color:var(--muted)">' +
-    linkify(wo.Notes) + '</div></div>' : '') +
+    linkify(wo.Vendor_Admin_Notes) + '</div></div>' : '') +
     '<table class="data-table" style="margin-bottom:16px">' +
     '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span></td></tr>' +
     '<tr><td style="color:var(--muted)">Trade</td><td>'+(wo.Trade||'—')+'</td></tr>' +
@@ -1650,7 +1650,7 @@ function submitNewWO() {
     trade:trade, priority:document.getElementById('wo-priority').value,
     type:document.getElementById('wo-type').value,
     description:document.getElementById('wo-desc').value,
-    notes:document.getElementById('wo-notes').value,
+    admin_notes:document.getElementById("wo-notes").value,
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
@@ -2159,7 +2159,7 @@ function openEditWOModal(woId) {
     var tn = document.getElementById('ewo-notes');
     if (tn && tn.value) { tn.style.height='auto'; tn.style.height=Math.max(80,tn.scrollHeight)+'px'; }
   }, 30);
-  document.getElementById('ewo-notes').value = wo.Notes||'';
+  document.getElementById('ewo-notes').value = wo.Admin_Notes||'';
   document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
   document.getElementById('ewo-contact-name').value = wo.WO_Contact_Name||'';
   document.getElementById('ewo-contact-phone').value = wo.WO_Contact_Phone||'';
@@ -2212,7 +2212,7 @@ function submitEditWO() {
     Status: document.getElementById('ewo-status').value,
     Scheduled_Date: document.getElementById('ewo-scheduled').value,
     Description: document.getElementById('ewo-description').value,
-    Notes: document.getElementById('ewo-notes').value,
+    Admin_Notes: document.getElementById("ewo-notes").value,
     Owner_WO_Ref: document.getElementById('ewo-owner-ref').value.trim(),
     WO_Contact_Name: document.getElementById('ewo-contact-name').value.trim(),
     WO_Contact_Phone: document.getElementById('ewo-contact-phone').value.trim(),

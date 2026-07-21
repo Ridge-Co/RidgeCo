@@ -103,6 +103,7 @@ export default {
         if (path === '/vendor-workorders')      return await vendorWorkorders(env, url);
         if (path === '/tenant-workorders')      return await tenantWorkorders(env, url);
         if (path === '/owner-workorders')       return await ownerWorkorders(env, url);
+        if (path === '/owner-export')           return await ownerExport(env, url);
         if (path === '/owner-notifications')    return await getOwnerNotifications(env, url);
         if (path === '/owner-users')            return await getOwnerUsers(env, url);
         if (path === '/notifications/pending')  return await processPendingNotifications(env);
@@ -127,6 +128,7 @@ export default {
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo/append-entry-note')     return await appendEntryNote(env, body);
+        if (path === '/workorder/vendor-note')    return await addVendorNote(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
         if (path === '/time-entry/add')           return await addTimeEntry(env, body);
@@ -669,7 +671,7 @@ async function createWorkOrder(env, body) {
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
   const woId = `WO-${nextWONum}`, now = new Date().toISOString();
-  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Vendor_Needs_Access: body.vendor_needs_access||'auto' }[h] ?? ''));
+  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Admin_Notes: body.admin_notes||'', Hold_Reason: '', Vendor_Needs_Access: body.vendor_needs_access||'auto' }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   try {
     const tenants = await fetchTab(env, 'Tenants');
@@ -722,6 +724,47 @@ async function appendEntryNote(env, body) {
   if (res.error) return json({ error: res.error }, 404);
   return json({ success: true, line: res.line });
 }
+
+// Vendor writes to the shared private admin↔vendor thread. Scoped: a vendor may
+// only post to a WO actually assigned to them.
+async function addVendorNote(env, body) {
+  if (!body.wo_id || !body.note) return json({ error: 'wo_id and note required' }, 400);
+  if (!body.vendor_id) return json({ error: 'vendor_id required' }, 400);
+  const [workorders, vendors] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors')]);
+  const wo = findWO(workorders, body.wo_id);
+  if (!wo) return json({ error: 'WO not found' }, 404);
+  if (String(wo.Vendor_ID) !== String(body.vendor_id)) return json({ error: 'Unauthorized' }, 403);
+  const vendor = vendors.find(v => v.ID === body.vendor_id) || {};
+  let text = body.note;
+  if (vendor.Language === 'es') {
+    const en = await translateToEnglish(env, text);
+    if (en && en !== text) text = `[ES] ${text}\n[EN] ${en}`;
+  }
+  const name = vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim() || 'Vendor';
+  const res = await appendWOField(env, body.wo_id, 'Vendor_Admin_Notes', text, `${name} (vendor)`, wo);
+  await logWOAudit(env, body.wo_id, name, 'vendor', 'Vendor_Admin_Notes', '', text.substring(0, 100), 'Vendor note appended');
+  return json({ success: true, line: res.line });
+}
+
+// The owner-facing export payload (WO PDF, owner email, anything a customer
+// receives). Deliberately a SEPARATE endpoint built through ownerExportWO() so a
+// future PDF cannot be wired to the raw row by accident.
+async function ownerExport(env, url) {
+  const ownerId = url.searchParams.get('owner_id');
+  const woId    = url.searchParams.get('wo_id');
+  if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
+  const [workorders, properties, units, tenants, keys, vendors] = await Promise.all([
+    fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'),
+    fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchTab(env,'Vendors'),
+  ]);
+  const ownerPropIds = new Set(properties.filter(p => String(p.Owner_ID) === String(ownerId)).map(p => p.ID));
+  let wos = workorders.filter(w => ownerPropIds.has(w.Property_ID));
+  if (woId) wos = wos.filter(w => w.ID === woId);
+  const out = wos.map(wo => ownerExportWO(
+    enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors })
+  ));
+  return json(out);
+}
 async function assignVendor(env, body) {
   const [workorders, vendors, tenants, units, properties, keys] = await Promise.all([
     fetchTab(env,'Work_Orders'), fetchTab(env,'Vendors'), fetchTab(env,'Tenants'),
@@ -770,19 +813,28 @@ async function updateStatus(env, body) {
   if (!wo) return json({ error: 'WO not found' }, 404);
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
   const fields = { Status: body.status };
+  let statusNote = '';
   if (body.notes) {
-    let statusNote = body.notes;
+    statusNote = body.notes;
     if (body.vendor_id) {
       const sVendors = await fetchTab(env, 'Vendors');
       const sVendor = sVendors.find(v => v.ID === body.vendor_id);
       if (sVendor?.Language === 'es') { const en = await translateToEnglish(env, statusNote); if (en && en !== statusNote) statusNote = `[ES] ${statusNote}\n[EN] ${en}`; }
     }
-    fields.Notes = statusNote;
+    // Was `fields.Notes = statusNote` — a destructive OVERWRITE that replaced the
+    // entire note history with one status comment, on a field the owner and
+    // tenant portals both rendered. Now appended to the private admin↔vendor
+    // thread after the status write.
   }
+  // Moving to On Hold captures the plain-language reason. Hold_Reason is the ONE
+  // note field the matrix exposes to owner and tenant, so it is written from an
+  // explicit hold_reason, never silently from an internal status note.
+  if (body.status === 'On Hold' && body.hold_reason) fields.Hold_Reason = body.hold_reason;
   if (body.scheduled_date) fields.Scheduled_Date = body.scheduled_date;
   if (body.status === 'Complete' || body.status === 'Pending Invoice')
     fields.Completed_Date = wo.Completed_Date || new Date().toISOString();
   await updateWOFields(env, body.wo_id, fields);
+  if (statusNote) await appendWOField(env, body.wo_id, 'Vendor_Admin_Notes', statusNote, `${changedBy} (${changedRole})`, wo);
   await logWOAudit(env, body.wo_id, changedBy, changedRole, 'Status', wo.Status||'', body.status, body.notes||'');
   const config = await fetchConfig(env);
   if (body.status === 'Complete') {
@@ -828,14 +880,16 @@ async function vendorWorkorders(env, url) {
   const vendorId = url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys, config] = await Promise.all([
+  const [workorders, properties, units, tenants, keys, config, vendors] = await Promise.all([
     fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'),
-    fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchConfig(env),
+    fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchConfig(env), fetchTab(env,'Vendors'),
   ]);
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   const wos = workorders.filter(w => w.Vendor_ID === vendorId && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults }));
+  // vendorView is explicit so the vendor gets the vendor allowlist (no
+  // Admin_Notes, no legacy Notes) rather than falling through to admin.
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true, vendors }));
   enriched.sort((a, b) => { const pa = PRIORITY_ORDER[a.Priority?.toLowerCase()] ?? 2, pb = PRIORITY_ORDER[b.Priority?.toLowerCase()] ?? 2; return pa !== pb ? pa - pb : (a.property_address||'').localeCompare(b.property_address||''); });
   return json(enriched);
 }
@@ -844,10 +898,10 @@ async function tenantWorkorders(env, url) {
   const tenantId = url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys')]);
+  const [workorders, properties, units, tenants, keys, vendors] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchTab(env,'Vendors')]);
   const tenant = tenants.find(t => t.ID === tenantId); if (!tenant) return json([]);
   const wos = workorders.filter(w => { if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true, vendors }));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
 }
@@ -856,12 +910,56 @@ async function ownerWorkorders(env, url) {
   const ownerId = url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys')]);
+  const [workorders, properties, units, tenants, keys, vendors] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchTab(env,'Vendors')]);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
   const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors }));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
+}
+
+// ── B-104 v2.0 VISIBILITY MATRIX ─────────────────────────────────────────────
+// THE single source of truth for which note fields each role receives. enrichWO
+// builds on {...wo}, so every Work_Orders column is exposed by default — this is
+// an ALLOWLIST: any note field not named here is deleted before the payload
+// leaves the Worker. A new note column is therefore private until it is listed,
+// which is the safe direction to fail.
+// `Notes` is the LEGACY column: admin-only archive, read-only, never written to
+// again. It used to render verbatim on the owner AND tenant portals.
+const WO_NOTE_FIELDS = ['Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes', 'Hold_Reason', 'Notes'];
+const WO_NOTE_VISIBILITY = {
+  admin:  ['Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes', 'Hold_Reason', 'Notes'],
+  vendor: ['Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Hold_Reason'],
+  owner:  ['Owner_Notes', 'Hold_Reason'],
+  tenant: ['Hold_Reason'],
+};
+
+function applyNoteVisibility(obj, role) {
+  const allowed = WO_NOTE_VISIBILITY[role] || WO_NOTE_VISIBILITY.tenant;
+  for (const f of WO_NOTE_FIELDS) if (!allowed.includes(f)) delete obj[f];
+  return obj;
+}
+
+// The exact payload an owner may receive. A WO PDF or any other owner-facing
+// export MUST be built from this and nothing else — building from the raw row is
+// how a private note ends up in a document sent to a customer.
+function ownerExportWO(enriched) {
+  return {
+    ID: enriched.ID,
+    property_address: enriched.property_address || '',
+    unit_label: enriched.unit_label || '',
+    Trade: enriched.Trade || '',
+    Description: enriched.Description || '',
+    Status: enriched.Display_Status || enriched.Status || '',
+    Priority: enriched.Priority || '',
+    Scheduled_Date: enriched.Scheduled_Date || '',
+    Completed_Date: enriched.Completed_Date || '',
+    Created_Date: enriched.Created_Date || '',
+    Hold_Reason: enriched.Hold_Reason || '',
+    Owner_Notes: enriched.Owner_Notes || '',
+    vendor_name: enriched.vendor_name || '',
+    Owner_WO_Ref: enriched.Owner_WO_Ref || '',
+  };
 }
 
 function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) {
@@ -905,25 +1003,28 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
     access_notes: accessNotes,
     vendor_has_access: vendorHasAccess,
   };
-  // `base` starts as {...wo}, so EVERY raw Work_Orders column is exposed by
-  // default — a new column leaks to every role the moment it's created unless it
-  // is stripped here. Entry_Notes is admin+vendor only (B-104 matrix), and the
-  // pass-2 fields are listed now so they can't leak in the window between the
-  // sheet-op and their code landing. Deleting an absent key is a no-op.
-  const PRIVATE_WO_FIELDS = ['Entry_Notes', 'Vendor_Thread', 'Admin_Notes'];
-  const stripPrivate = (o) => { for (const f of PRIVATE_WO_FIELDS) delete o[f]; };
+  // Vendor identity. enrichWO never resolved this before, so owner.html:647 and
+  // tenant.html:379 have been rendering an always-empty wo.vendor_name.
+  const vendor = (opts.vendors || []).find(v => v.ID === wo.Vendor_ID) || {};
+  const vendorName = vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim();
 
-  if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; base.vendor_phone = ''; stripPrivate(base); }
+  const role = opts.tenantView ? 'tenant' : opts.ownerView ? 'owner' : opts.vendorView ? 'vendor' : 'admin';
+  base.vendor_name = vendorName;
+  // Every role sees the vendor's NAME. Only the owner is denied the PHONE —
+  // that's what protects Brett's GC position (owner can't go around him to the
+  // sub). The tenant DOES get it; they coordinate access. (Changed in v2.0: the
+  // tenant view used to blank it.)
+  base.vendor_phone = role === 'owner' ? '' : (vendor.Phone || '');
+
+  if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; }
   if (opts.ownerView)  {
     delete base.Invoice_ID;
-    // Owners must not see access info (B-104 matrix). access_notes now carries
-    // Entry_Notes as well as the property default, so leaving it on the owner
-    // payload would hand the owner both.
+    // Owners must not see access info. access_notes carries Entry_Notes as well
+    // as the property default, so leaving it on the owner payload hands over both.
     delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = [];
-    stripPrivate(base);
     base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status;
   }
-  return base;
+  return applyNoteVisibility(base, role);
 }
 
 async function getPropertyFull(env, url) {
@@ -1331,12 +1432,26 @@ async function addWONote(env, body) {
     const allVendors = await fetchTab(env, 'Vendors'), noteVendor = allVendors.find(v => v.ID === body.vendor_id);
     if (noteVendor?.Language === 'es') { const en = await translateToEnglish(env, noteText); if (en && en !== noteText) noteText = `[ES] ${noteText}\n[EN] ${en}`; }
   }
-  const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' });
-  const attribution = `[${ts} — ${body.author||'Unknown'} (${body.author_role||'unknown'})]`;
-  const newNotes = wo.Notes ? `${wo.Notes}\n${attribution} ${noteText}` : `${attribution} ${noteText}`;
-  await updateWOFields(env, body.wo_id, { Notes: newNotes });
-  await logWOAudit(env, body.wo_id, body.author, body.author_role, 'Notes', wo.Notes||'', noteText.substring(0,100), 'Note appended');
+  // B-104 v2.0: route by the AUTHOR'S ROLE instead of dumping everything into the
+  // single `Notes` column, which rendered verbatim on the owner AND tenant
+  // portals. Admin may target a specific field explicitly.
+  const ADMIN_TARGETS = ['Vendor_Admin_Notes', 'Admin_Notes', 'Entry_Notes'];
+  let field;
+  if (body.author_role === 'owner')       field = 'Owner_Notes';
+  else if (body.author_role === 'vendor') field = 'Vendor_Admin_Notes';
+  else field = ADMIN_TARGETS.includes(body.field) ? body.field : 'Vendor_Admin_Notes';
 
+  const author = `${body.author||'Unknown'} (${body.author_role||'unknown'})`;
+  await appendWOField(env, body.wo_id, field, noteText, author, wo);
+  await logWOAudit(env, body.wo_id, body.author, body.author_role, field, '', noteText.substring(0,100), 'Note appended');
+
+  if (body.notify_owner_status_note === true) {
+    // This text is about to be SMS'd to the owner, so it is customer-facing by
+    // definition — it belongs in Hold_Reason, the one field the matrix exposes
+    // to owner and tenant. Without this it would sit only in the admin↔vendor
+    // thread while the owner had already received it.
+    try { await updateWOFields(env, body.wo_id, { Hold_Reason: noteText }); } catch(e) {}
+  }
   if (body.notify_owner_status_note === true) {
     try {
       const [properties, owners] = await Promise.all([fetchTab(env,'Properties'), fetchTab(env,'Owners')]);

@@ -1,0 +1,12 @@
+{
+  "_README": "STAGED — NOT ACTIVE. The GitHub Action (.github/workflows/sheet-ops.yml) triggers only on the exact path context/sheet-ops/pending.json, so this file does nothing where it sits. TO RUN: (1) replace sheet_id with the RidgeCo STAGING sheet id, (2) copy this file to context/sheet-ops/pending.json, (3) push. STAGING FIRST; repeat with the live id 1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4 only at merge time. This supersedes staged_B104_entry_notes.json (Entry_Notes is included here, and add_column_header is a no-op if it already exists).",
+  "sheet_id": "REPLACE_WITH_STAGING_SHEET_ID",
+  "description": "B-104 v2.0: role-scoped work order note fields. Entry_Notes (admin+vendor, append-only, attributed), Owner_Notes (owner writes; admin+vendor+owner read, NOT tenant), Vendor_Admin_Notes (shared admin<->vendor thread, append-only, attributed), Admin_Notes (admin ONLY), Hold_Reason (the one customer-facing note — admin+vendor+owner+tenant). All additive trailing columns, so no existing worker.js column index shifts (FEATURE_LOG rules 3 and 6). The legacy Notes column is intentionally LEFT IN PLACE as an admin-only archive — do not delete it and do not migrate its contents; it mixes owner posts with admin notes and cannot be split safely.",
+  "ops": [
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Entry_Notes" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Owner_Notes" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Vendor_Admin_Notes" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Admin_Notes" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Hold_Reason" }
+  ]
+}
