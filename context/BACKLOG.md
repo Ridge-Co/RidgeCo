@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.20 | **Last Updated:** July 21, 2026
+**Version:** v1.21 | **Last Updated:** July 21, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -110,6 +110,17 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-027 · Driver portal — route assignment, pickup confirmation
 - B-028 · Automated driver payment
 - B-029 · CHEP/PECO reconciliation — pallets in vs out
+**RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)**
+- B-093 · Notification engine v2 — quiet-hours + channel routing + test/admin mute
+- B-094 · WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET)
+- B-095 · Tenant + owner after-hours silent mode — email instead of SMS 8pm–8am ET
+- B-096 · Split work order + dependencies
+- B-097 · Vendor-triggered recurring WO w/ smart clock-reset
+- B-098 · Recurring WO from template + seasonal windows
+- B-099 · Template-from-vendor trigger → mark-complete + QB, no SMS
+- B-100 · Pre-triggered / dependency WOs (turnover cleaner)
+- B-101 · Estimate approval with start-date + deadline
+- B-102 · Hub UI redesign to the Fairfax-estimate design standard
 <!-- QUICK-INDEX:END -->
 
 
@@ -261,6 +272,25 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 | B-029 | 🟢 | CHEP/PECO reconciliation — pallets in vs out | |
 
 ---
+
+## RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)
+*Sequenced plan + testing strategy live in the July 21 build-plan doc. Consolidates the RidgeCo Main "Wishlist" tab (76 items) + these new asks. Priority: Ridge Co. Nothing ships without a test.*
+
+| ID | Priority | Item | Notes |
+|---|---|---|---|
+| B-093 | 🟠 | Notification engine v2 — quiet-hours + channel routing + test/admin mute | Wrap the single `sendSMS` chokepoint (worker.js:1627): preference check, 8pm–8am ET quiet hours, per-recipient SMS-vs-email, test-mode + admin-mute (2hr auto-resume via Config flag). Needs an email channel (greenfield) + Cron for release. Foundation for B-094/B-095. New asks + Wishlist #8/#32. |
+| B-094 | 🟠 | WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET) | Checkbox on new-WO/assign form; default off during quiet hours; suppresses the vendor-assign SMS (worker.js:703). Sits on B-093. |
+| B-095 | 🟠 | Tenant + owner after-hours silent mode — email instead of SMS 8pm–8am ET | Same quiet window; route to email in-hours. Blocker: no email path exists; Tenants have no email column. Sits on B-093. |
+| B-096 | 🟠 | Split work order + dependencies | Parent/child WOs from one request; dependency chains (cleaner after painter). Greenfield (no split today). Wishlist #16. |
+| B-097 | 🟠 | Vendor-triggered recurring WO w/ smart clock-reset | Vendor triggers next occurrence to attach a bill; reset the recurrence clock only if actual is close to schedule (13d on a 14d cycle = no reset; weekly on a biweekly = reset). Ties B-098. |
+| B-098 | 🟠 | Recurring WO from template + seasonal windows | Template carries a default schedule (editable on template AND instance); recurs only between start/end dates (growing season; fall leaf cleanup). Needs Cron + recurrence model. Wishlist #33. |
+| B-099 | 🟠 | Template-from-vendor trigger → mark-complete + QB, no SMS | Create WO from a template tied to a vendor on receipt of their bill (e.g. fire-extinguisher service); default Complete, suppress SMS, push to QB. |
+| B-100 | 🟠 | Pre-triggered / dependency WOs (turnover cleaner) | Schedule a WO in advance tied to a move-out date and/or another WO; notify the assignee when the dependency (painter) completes; earliest-start = move-out. Wishlist #13/#63. |
+| B-101 | 🟠 | Estimate approval with start-date + deadline | Approve estimate but earliest-start = +N days; add to calendar; vendor notice carries earliest-start + deadline disclaimer. Builds on approveEstimate (worker.js:1064). |
+| B-102 | 🟡 | Hub UI redesign to the Fairfax-estimate design standard | Codify the 4518 Fairfax estimate look as the Hub design system (minimum standard, then elevate). Design-led track; do AFTER functional stability. Wishlist #23/#30/#57/#70/#75/#76. |
+
+**Also — escalate B-092 (integration sync):** since the July 20 `WORKER_SECRET` rotation the BrettOS sync into maintenance_hub + barrelco is now **HTTP 401 Unauthorized** (was error 1042) — the sync caller still uses the OLD secret. Urgent quick-fix; ties the security work (Phase 0). Barrelco also throws an `atob()` base64 error (separate).
+
 
 ## COMPLETED
 
