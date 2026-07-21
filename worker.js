@@ -2492,7 +2492,7 @@ async function handleIntake(env, body) {
 
 // Named exports for the offline parser tests (test/intake.test.mjs). Extra named
 // exports alongside the default export are inert in the Workers runtime.
-export { detectSource, htmlToText, normalizeAddr, unitKey, phoneKey, keywordTrade, parseBuildium, resolveOwner, resolveProperty, handleIntake };
+export { detectSource, htmlToText, normalizeAddr, unitKey, phoneKey, keywordTrade, parseBuildium, resolveOwner, resolveProperty, handleIntake, handlePhotoUploadClean, enrichWO, ownerExportWO };
 
 // ── GOOGLE SHEETS / AUTH ─────────────────────────────────────
 
