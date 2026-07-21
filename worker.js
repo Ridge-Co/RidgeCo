@@ -638,9 +638,14 @@ async function createWorkOrder(env, body) {
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
   const headers = rows[0];
+  // The WO number lives in the "ID" column, which is NOT column 0 — column 0 is
+  // Vendor_Needs_Access (blank/"auto"). Reading r[0] found no numbers at all, so
+  // every new WO restarted at WO-1001 and collided with itself. Resolve by header.
+  const idCol = headers.indexOf('ID');
+  if (idCol === -1) throw new Error('Work_Orders tab has no ID column');
   let nextWONum = 1001;
   if (rows.length > 1) {
-    const existingNums = rows.slice(1).map(r => parseInt((r[0]||'').replace('WO-','')) || 0).filter(n => Number.isFinite(n) && n > 0);
+    const existingNums = rows.slice(1).map(r => parseInt(String(r[idCol]||'').replace(/\D/g,'')) || 0).filter(n => Number.isFinite(n) && n > 0);
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
   const woId = `WO-${nextWONum}`, now = new Date().toISOString();
@@ -1378,7 +1383,7 @@ async function updateWOField(env, woId, fieldName, value) {
   try {
     const data=await sheetsRequest(env,'GET','/values/Work_Orders'); const rows=data.values||[], headers=rows[0]||[];
     const colIdx=headers.indexOf(fieldName); if(colIdx===-1) return;
-    const idCol=headers.indexOf('ID'), _wc=headers.indexOf('WO_ID'), rowIdx=rows.findIndex((r,i)=>i>0&&(r[idCol]===woId||(_wc>=0&&r[_wc]===woId))); if(rowIdx===-1) return;
+    const idCol=idColIndex(headers), rowIdx=rows.findIndex((r,i)=>i>0&&r[idCol]===woId); if(rowIdx===-1) return;
     const colLetter=colIdx<26?String.fromCharCode(65+colIdx):'A'+String.fromCharCode(65+colIdx-26);
     await sheetsRequest(env,'PUT',`/values/Work_Orders!${colLetter}${rowIdx+1}?valueInputOption=RAW`,{values:[[value]]});
   } catch(e) { /* non-fatal */ }
@@ -1726,6 +1731,16 @@ function nextSafeId(rows) {
 // Sheets stack trace. Reads already swallow this (returning []), which is exactly
 // what hid the missing Receipts tab for weeks: /receipts looked healthy while every
 // write 500'd. Writes must fail LOUDLY but legibly.
+// Resolves the column holding a row's key. Most tabs put "ID" at column 0, but
+// Work_Orders does NOT — column 0 is Vendor_Needs_Access and "ID" sits at index 1.
+// Matching on r[0] therefore compared against a blank column and silently matched
+// nothing, so status/vendor writes reported success while changing nothing. There
+// is no "WO_ID" column on Work_Orders; earlier code looked one up and got -1.
+function idColIndex(headers) {
+  const i = headers.indexOf('ID');
+  return i >= 0 ? i : 0;
+}
+
 function isMissingTabError(e) {
   return /Unable to parse range/i.test(e && e.message || '');
 }
@@ -1757,7 +1772,7 @@ async function updateRow(env, tab, id, fields) {
   try { data = await sheetsRequest(env,'GET',`/values/${tab}`); }
   catch(e) { if(isMissingTabError(e)) return missingTabResponse(tab); throw e; }
   if(!data.values) return json({error:'Tab not found'},404);
-  const [headers,...rows]=data.values; const _wc=(tab==='Work_Orders')?headers.indexOf('WO_ID'):-1; const rowIndex=rows.findIndex(r=>r[0]===String(id)||(_wc>=0&&r[_wc]===String(id)));
+  const [headers,...rows]=data.values; const _idc=idColIndex(headers); const rowIndex=rows.findIndex(r=>r[_idc]===String(id));
   if(rowIndex===-1) return json({error:'Row not found'},404);
   const sheetRow=rowIndex+2, updates=[];
   for(const [field,value] of Object.entries(fields)){const colIndex=headers.indexOf(field);if(colIndex!==-1)updates.push({range:`${tab}!${col(colIndex)}${sheetRow}`,values:[[value]]});}
@@ -1768,7 +1783,7 @@ async function updateRow(env, tab, id, fields) {
 
 async function updateWOFields(env, woId, fields) {
   const data=await sheetsRequest(env,'GET',`/values/Work_Orders`); if(!data.values) return;
-  const [headers,...rows]=data.values; const _wc=headers.indexOf('WO_ID'); const rowIndex=rows.findIndex(r=>r[0]===woId||(_wc>=0&&r[_wc]===woId));
+  const [headers,...rows]=data.values; const _idc=idColIndex(headers); const rowIndex=rows.findIndex(r=>r[_idc]===woId);
   if(rowIndex===-1) return; const sheetRow=rowIndex+2, updates=[];
   for(const [field,value] of Object.entries(fields)){const ci=headers.indexOf(field);if(ci!==-1)updates.push({range:`Work_Orders!${col(ci)}${sheetRow}`,values:[[value]]});}
   if(updates.length) await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:updates});
