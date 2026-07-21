@@ -1,4 +1,4 @@
-# Work Order Notes & Visibility Model v1.0 (B-104)
+# Work Order Notes & Visibility Model v1.0 (B-127, was B-104)
 
 **Decided by Brett, July 21, 2026.** Build on the `staging` branch alongside B-103 (intake populates several of these fields). **Nothing here may leak a private note to an owner or tenant — treat the visibility matrix as a hard contract, not a guideline.**
 
@@ -66,4 +66,4 @@
 ---
 
 ## Ties to B-103
-Intake's entry-info routing (the "Contact and scheduling information" parser fix) lands in **`Entry_Notes`**, appended and attributed `[Owner/Buildium]`. So build B-104's `Entry_Notes` field first, then point the B-103 parser at it. The Buildium section-header leak fix (add the missing headers to `BUILDIUM_LABELS`) ships in the same pass.
+Intake's entry-info routing (the "Contact and scheduling information" parser fix) lands in **`Entry_Notes`**, appended and attributed `[Owner/Buildium]`. So build B-127's `Entry_Notes` field first, then point the B-103 parser at it. The Buildium section-header leak fix (add the missing headers to `BUILDIUM_LABELS`) ships in the same pass.

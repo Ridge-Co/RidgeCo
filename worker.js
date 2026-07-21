@@ -84,7 +84,7 @@ export default {
       // ── Optional admin-token tier (OFF until ADMIN_TOKEN is set) ────────────
       // WORKER_SECRET is hardcoded in owner.html / tenant.html / vendor.html, so
       // it is readable by any portal user — which makes every gated route
-      // effectively public. That predates this work, but B-104 raises the stakes:
+      // effectively public. That predates this work, but B-127 raises the stakes:
       // Work_Orders now holds admin-only and vendor-only note columns, and the
       // bulk /workorders read returns raw rows, bypassing the visibility matrix
       // entirely. These paths are the bulk reads that expose notes or PII across
@@ -702,8 +702,16 @@ async function createWorkOrder(env, body) {
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
   const woId = `WO-${nextWONum}`, now = new Date().toISOString();
-  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Admin_Notes: body.admin_notes||'', Hold_Reason: '', Vendor_Needs_Access: body.vendor_needs_access||'auto' }[h] ?? ''));
+  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Admin_Notes: body.admin_notes||'', Hold_Reason: body.hold_reason||'', Vendor_Needs_Access: body.vendor_needs_access||'auto' }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
+  // Entry_Notes is append-only + attributed, so it goes through appendWOField
+  // rather than into the row map — the WO was just created so it starts empty.
+  // Attribution: an email-intake create passes its own author; an admin create
+  // is stamped "Admin". createWorkOrder is a Response-returning helper, so this
+  // runs before the return below.
+  if (body.entry_notes) {
+    try { await appendWOField(env, woId, 'Entry_Notes', body.entry_notes, body.entry_notes_author || 'Admin', { Entry_Notes: '' }); } catch(e) { /* non-fatal */ }
+  }
   try {
     const tenants = await fetchTab(env, 'Tenants');
     const activeTenants = tenants.filter(t => { if (t.Active === 'FALSE') return false; if (body.unit_id) return t.Unit_ID === body.unit_id; if (body.property_id) return !t.Unit_ID && String(t.Property_ID) === String(body.property_id); return false; });
@@ -717,7 +725,7 @@ async function createWorkOrder(env, body) {
 }
 
 // One attributed line: "[Jul 21, 3:45 PM — Brett] text". Shared by every
-// append-only WO field so attribution can't drift between them (B-104).
+// append-only WO field so attribution can't drift between them (B-127).
 function attributedLine(text, author) {
   const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
   return `${author ? `[${ts} — ${author}] ` : `[${ts}] `}${text}`;
@@ -953,7 +961,7 @@ async function ownerWorkorders(env, url) {
   return json(enriched);
 }
 
-// ── B-104 v2.0 VISIBILITY MATRIX ─────────────────────────────────────────────
+// ── B-127 v2.0 VISIBILITY MATRIX ─────────────────────────────────────────────
 // THE single source of truth for which note fields each role receives. enrichWO
 // builds on {...wo}, so every Work_Orders column is exposed by default — this is
 // an ALLOWLIST: any note field not named here is deleted before the payload
@@ -1478,7 +1486,7 @@ async function addWONote(env, body) {
     const allVendors = await fetchTab(env, 'Vendors'), noteVendor = allVendors.find(v => v.ID === body.vendor_id);
     if (noteVendor?.Language === 'es') { const en = await translateToEnglish(env, noteText); if (en && en !== noteText) noteText = `[ES] ${noteText}\n[EN] ${en}`; }
   }
-  // B-104 v2.0: route by the AUTHOR'S ROLE instead of dumping everything into the
+  // B-127 v2.0: route by the AUTHOR'S ROLE instead of dumping everything into the
   // single `Notes` column, which rendered verbatim on the owner AND tenant
   // portals. Admin may target a specific field explicitly.
   const ADMIN_TARGETS = ['Vendor_Admin_Notes', 'Admin_Notes', 'Entry_Notes'];
@@ -2553,7 +2561,7 @@ async function handleIntake(env, body) {
   // is a no-op (not an error) until the Source / Intake_Message_ID columns land.
   try {
     await updateWOFields(env, woId, { Source: `email-${source}`, Intake_Message_ID: message_id || '' });
-    // Attributed append, per B-104. The WO was created microseconds ago so
+    // Attributed append, per B-127. The WO was created microseconds ago so
     // Entry_Notes is empty, but this goes through the same append path as every
     // other writer — Brett's later "lockbox is red" must not overwrite this line
     // and this must not overwrite his. A blank is never written, so a WO with no
@@ -2586,7 +2594,7 @@ async function handleIntake(env, body) {
 
 // Named exports for the offline parser tests (test/intake.test.mjs). Extra named
 // exports alongside the default export are inert in the Workers runtime.
-export { detectSource, htmlToText, normalizeAddr, unitKey, phoneKey, keywordTrade, parseBuildium, resolveOwner, resolveProperty, handleIntake, handlePhotoUploadClean, enrichWO, ownerExportWO };
+export { detectSource, htmlToText, normalizeAddr, unitKey, phoneKey, keywordTrade, parseBuildium, resolveOwner, resolveProperty, handleIntake, handlePhotoUploadClean, enrichWO, ownerExportWO, createWorkOrder };
 
 // ── GOOGLE SHEETS / AUTH ─────────────────────────────────────
 

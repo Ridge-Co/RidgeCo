@@ -249,5 +249,46 @@ eq(cell('Hold_Reason'), '', 'clearHoldReason() empties the field');
 eq(cell('Entry_Notes'), S.entry, 'clearing Hold_Reason left Entry_Notes intact');
 eq(cell('Admin_Notes'), S.admin, 'clearing Hold_Reason left Admin_Notes intact');
 
+// ── create-form compose fields (createWorkOrder) ─────────────────────────────
+section('create form — hold_reason set directly, entry_notes appended attributed');
+reset();
+const { handleIntake: _hi } = mod; void _hi;
+const createWorkOrder = mod.createWorkOrder;
+let cr = await (await createWorkOrder(ENV(), {
+  property_id: '10', trade: 'Plumbing', description: 'Leak',
+  hold_reason: 'waiting on a part', entry_notes: 'lockbox is red', created_by: 'admin',
+})).json();
+eq(cr.success, true, 'WO created');
+const created = SHEETS.Work_Orders.find(r => r[WO_HEADERS.indexOf('ID')] === cr.id);
+const cell2 = (name) => created[WO_HEADERS.indexOf(name)];
+eq(cell2('Hold_Reason'), 'waiting on a part', 'hold_reason written directly (replace)');
+eq(/^\[.+ — Admin\] lockbox is red$/.test(cell2('Entry_Notes')), true, 'entry_notes appended and attributed to Admin');
+eq(cell2('Notes'), '', 'legacy Notes untouched');
+
+section('create form — blank compose fields write nothing');
+reset();
+cr = await (await createWorkOrder(ENV(), { property_id: '10', trade: 'Plumbing', description: 'x', created_by: 'admin' })).json();
+const created2 = SHEETS.Work_Orders.find(r => r[WO_HEADERS.indexOf('ID')] === cr.id);
+eq(created2[WO_HEADERS.indexOf('Entry_Notes')], '', 'no entry note when the box is empty');
+eq(created2[WO_HEADERS.indexOf('Hold_Reason')], '', 'no hold reason when the box is empty');
+
+section('intake create path does not double-write Entry_Notes');
+reset();
+const handleIntake = mod.handleIntake;
+const BUILDIUM_EMAIL = {
+  sender: 'Buildium <donotreply@managebuilding.com>',
+  subject: 'Phoenix Estate Rentals, LLC: Work order 838106',
+  message_id: 'msg-entry-1',
+  html: `<p>Work order #838106-9: Leaking toilet</p><p>Job description</p><p>Water pooling.</p>` +
+        `<p>Entry details</p><p>Pets: Yes - Cat</p>` +
+        `<p>Location</p><p>1110 N Dukeland St - 1</p><p>Baltimore, MD 21216</p>`,
+  plaintext: '',
+};
+await (await handleIntake(ENV(), BUILDIUM_EMAIL)).json();
+const iwo = SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1];
+const entryLines = iwo[WO_HEADERS.indexOf('Entry_Notes')].split('\n').filter(Boolean);
+eq(entryLines.length, 1, 'intake writes exactly one Entry_Notes line (its own append, not also createWorkOrder)');
+eq(/— Owner\/Buildium\]/.test(entryLines[0]), true, 'and keeps the Owner/Buildium attribution');
+
 console.log(`\n${'='.repeat(52)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(52)}`);
 if (fail) process.exit(1);

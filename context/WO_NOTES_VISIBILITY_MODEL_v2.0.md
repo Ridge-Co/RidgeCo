@@ -1,4 +1,4 @@
-# Work Order Notes & Visibility Model v2.0 (B-104)
+# Work Order Notes & Visibility Model v2.0 (B-127, was B-104)
 
 **Decided by Brett, July 21, 2026.** Supersedes v1.0. Build on `staging` alongside B-103. **The visibility matrix is a hard contract — a private note reaching an owner or tenant is a defect, not a cosmetic bug.**
 

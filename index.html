@@ -498,6 +498,8 @@
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
       <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
       <div class="form-group full"><label>Admin Notes <span style="font-weight:normal;color:var(--muted)">(private — admin only)</span></label><textarea id="wo-notes" placeholder="Private admin notes — never shown to owner, tenant, or vendor..."></textarea></div>
+      <div class="form-group full"><label>Entry / Access Notes <span style="font-weight:normal;color:var(--accent2)">(admin + vendor only)</span></label><textarea id="wo-entry-notes" placeholder="Access info the vendor needs — e.g. lockbox is red, call owner 24h ahead. Appends to the property's standing access notes."></textarea></div>
+      <div class="form-group full"><label>Hold Reason <span style="font-weight:normal;color:var(--warn)">(visible to owner + tenant — keep it customer-safe)</span></label><textarea id="wo-hold-reason" placeholder="Only if creating on hold — e.g. waiting on a part, ETA Friday"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
       <div class="form-group full">
         <label>Vendor Access to Property <span style="font-weight:normal;color:var(--muted)">— share lockbox/entry codes with vendor?</span></label>
@@ -647,6 +649,8 @@
       <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
       <div class="form-group full"><label>Description</label><textarea id="ewo-description" style="min-height:120px;resize:vertical"></textarea></div>
       <div class="form-group full"><label>Admin Notes <span style="font-weight:normal;color:var(--muted)">(private — admin only)</span></label><textarea id="ewo-notes"></textarea></div>
+      <div class="form-group full"><label>Add Entry / Access Note <span style="font-weight:normal;color:var(--accent2)">(admin + vendor only — appends, never overwrites)</span></label><textarea id="ewo-entry-add" placeholder="New access note to append — e.g. lockbox is red. Leave blank to keep existing notes unchanged."></textarea></div>
+      <div class="form-group full"><label>Hold Reason <span style="font-weight:normal;color:var(--warn)">(visible to owner + tenant)</span></label><textarea id="ewo-hold-reason" placeholder="Plain, customer-safe reason if on hold — e.g. waiting on a part, ETA Friday"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(owner's internal tracking number)</span></label><input type="text" id="ewo-owner-ref" placeholder="e.g. PM-4821"></div>
       <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">CONTACT OVERRIDE <span style="font-weight:normal;text-transform:none;letter-spacing:0">— overrides tenant record on this WO only. Edit the tenant record itself in the Tenants tab.</span></div></div>
       <div class="form-group"><label>Tenant on this WO</label><select id="ewo-tenant-id" style="width:100%"><option value="">— linked tenant (default) —</option></select></div>
@@ -1621,6 +1625,8 @@ function openNewWOModal() {
   // Clear textareas and reset selects
   var desc = document.getElementById('wo-desc'); if(desc) desc.value='';
   var notes = document.getElementById('wo-notes'); if(notes) notes.value='';
+  var enotes = document.getElementById('wo-entry-notes'); if(enotes) enotes.value='';
+  var hreason = document.getElementById('wo-hold-reason'); if(hreason) hreason.value='';
   var trade = document.getElementById('wo-trade'); if(trade) trade.value='';
   var priority = document.getElementById('wo-priority'); if(priority) priority.value='normal';
   var type = document.getElementById('wo-type'); if(type) type.value='manual';
@@ -1674,6 +1680,8 @@ function submitNewWO() {
     type:document.getElementById('wo-type').value,
     description:document.getElementById('wo-desc').value,
     admin_notes:document.getElementById("wo-notes").value,
+    entry_notes:document.getElementById('wo-entry-notes').value.trim(),
+    hold_reason:document.getElementById('wo-hold-reason').value.trim(),
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
@@ -2183,6 +2191,8 @@ function openEditWOModal(woId) {
     if (tn && tn.value) { tn.style.height='auto'; tn.style.height=Math.max(80,tn.scrollHeight)+'px'; }
   }, 30);
   document.getElementById('ewo-notes').value = wo.Admin_Notes||'';
+  var eea = document.getElementById('ewo-entry-add'); if(eea) eea.value='';
+  var ehr = document.getElementById('ewo-hold-reason'); if(ehr) ehr.value = wo.Hold_Reason||'';
   document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
   document.getElementById('ewo-contact-name').value = wo.WO_Contact_Name||'';
   document.getElementById('ewo-contact-phone').value = wo.WO_Contact_Phone||'';
@@ -2236,15 +2246,27 @@ function submitEditWO() {
     Scheduled_Date: document.getElementById('ewo-scheduled').value,
     Description: document.getElementById('ewo-description').value,
     Admin_Notes: document.getElementById("ewo-notes").value,
+    // Hold_Reason is set/replace — safe as a bulk field. Entry_Notes is NOT here:
+    // it's append-only (FEATURE_LOG rule 19), so it goes through a separate
+    // /wo/append-entry-note call below and never a bulk overwrite.
+    Hold_Reason: document.getElementById('ewo-hold-reason').value.trim(),
     Owner_WO_Ref: document.getElementById('ewo-owner-ref').value.trim(),
     WO_Contact_Name: document.getElementById('ewo-contact-name').value.trim(),
     WO_Contact_Phone: document.getElementById('ewo-contact-phone').value.trim(),
   };
   var newTenant = document.getElementById('ewo-tenant-id').value;
   if (newTenant) fields.Tenant_ID = newTenant;
+  var entryAdd = document.getElementById('ewo-entry-add').value.trim();
   api('POST','/wo/admin-update',{wo_id:woId, fields:fields, admin_name:'Admin'}).then(function(res){
     if(res.error){logError('Edit WO',res.error);toast('Error: '+res.error,'error');return;}
-    toast('Work order updated','success');closeModal('modal-edit-wo');loadAll();
+    // Append the new entry note only if one was entered, after the bulk save.
+    var after = entryAdd
+      ? api('POST','/wo/append-entry-note',{wo_id:woId, note:entryAdd, author:'Admin'})
+      : Promise.resolve();
+    return after.then(function(){
+      toast('Work order updated'+(entryAdd?' + entry note added':''),'success');
+      closeModal('modal-edit-wo');loadAll();
+    });
   }).catch(function(e){logError('Edit WO',e.message);toast('Error: '+e.message,'error');});
 }
 
@@ -2358,7 +2380,7 @@ function setVendorAccess(woId, value) {
   });
 }
 
-// Append-only + attributed (B-104). Goes through /wo/append-entry-note so the
+// Append-only + attributed (B-127). Goes through /wo/append-entry-note so the
 // Worker builds the "[ts — author]" line; never a raw field overwrite.
 function addEntryNote(woId) {
   var el = document.getElementById('entry-note-input');
