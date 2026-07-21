@@ -11,14 +11,15 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 
 | File | Version | Load | Description |
 |---|---|---|---|
-| Brett_Context_Document_v1.10.md | v1.10 | ✅ ALWAYS | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-030), Session 3 log |
+| Brett_Context_Document_v1.11.md | v1.11 | ✅ ALWAYS | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-030), Session 4 log |
 | Brett_Cowork_Best_Practices_v1.3.md | v1.3 | ✅ ALWAYS | Session workflow, common mistakes, how to work with Brett |
 | CREDENTIALS_MAP.md | v1.2 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality |
 | VENTURES.md | v1.0 | ✅ ALWAYS | Every venture — current state, stack, Claude access level, automation gaps |
-| FEATURE_LOG.md | v1.4 | ✅ ALWAYS | What's working — check before every code change to prevent regressions |
+| FEATURE_LOG.md | v1.5 | ✅ ALWAYS | What's working — check before every code change to prevent regressions |
 | BACKLOG.md | v1.22 | ⏳ index always, detail on-demand | Master backlog across all ventures. Quick Index block at top (always-load); full entries on demand. |
 | CAPTURE_INBOX.md | v1.21 | ⏳ index always, detail on-demand | Brett's brain-dump inbox — CAP items. Quick Index block at top (always-load); full entries on demand. |
 | HANDWRITING_KEY.md | v1.9 | ⏳ ON-DEMAND | Reference for reading Brett's handwritten-note photos (load only for handwriting tasks). Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338. |
+| CODEMAP.md | v1.0 | ⏳ ON-DEMAND (build/debug) | BrettOS code map — ≈120 Worker endpoints (handler→Sheet tab→auth), helper/chokepoint index, index.html + vendor.html screen maps, and a Sheet-tab reverse index. Load for any Ridge Co build/debug or "where does X live" task instead of reading worker.js/index.html in full. Maintained by the `ridgeco-map` skill; refresh after structural code changes. |
 
 ## PRIVATE / SENSITIVE CONTEXT (NOT in this public repo)
 
@@ -67,3 +68,7 @@ When a new version is needed (new PAT, new project details, etc.):
 | BACKLOG v1.21→v1.22 + CAPTURE_INBOX v1.21 (big-build planning) | July 21, 2026 | Pulled ALL wishlist (RidgeCo Main Wishlist tab = 76 + BrettOS task app) via Drive; added **B-093..B-102** + CAP-026; **escalated B-092** (BrettOS sync HTTP 401 from July 20 secret rotation); mapped Hub architecture; locked July 22 build decisions (quick-wins→security[phone-only]→cron→notifications[hold-til-8am]; UI=Phase4). |
 | Two-tier loading + Quick Index (BACKLOG v1.20 + CAPTURE_INBOX v1.20 + CURRENT.md) | July 21, 2026 | **Efficiency without loss.** brett-context loader made two-tier: ✅ always-load the small governing set (Context Doc, Best Practices, CREDENTIALS_MAP, VENTURES, FEATURE_LOG, private 00_INDEX) + the new **Quick Index** blocks at the top of BACKLOG & CAPTURE; ⏳ lazy-load full BACKLOG/CAPTURE detail, HANDWRITING_KEY, and venture briefs only when a task needs them (grep first). Guardrail: keep FEATURE_LOG loaded + grep BACKLOG+CAPTURE before any build/debug. Measured (brett-flow eval): ~95% less context read at equal answer quality. Pairs with the `brett-flow` skill. |
 | CREDENTIALS_MAP v1.2 + FEATURE_LOG v1.1 (engineering session) | July 19, 2026 | **BIG DAY.** (1) Fixed the silently-broken Cloudflare deploy — Worker hadn't auto-deployed in days; wired Workers Builds + `wrangler.toml` (keep_vars). (2) Hub fixes now LIVE: void re-render, **WO_ID matching** (status-not-saving root cause), bill→Complete automation. (3) **QuickBooks CONNECTED (production)** — realm 9130355695406136 (Saint Thomas Ventures LLC DBA Ridge Co); created 10 trade income accts + 12 items; `QB_TRADE_MAP` locked in worker.js. (4) Confirmed status lifecycle (…Invoiced→Pending Payment→Paid by Customer→Paid) + payment model 1+2 (worklist+deep-links+webhook auto-flip, overpay guard). Next (July 20): Send-to-QuickBooks invoice/bill/payment build (preview-first). |
+| ridgeco-map + brett-amplify skills (Session 4) | July 21, 2026 | Built two custom skills after researching 4 community tools (Graphify/Headroom/Omniroute/Brainstorming — all skipped as ill-fit; ideas adapted instead). **ridgeco-map** generates/maintains CODEMAP.md; **brett-amplify** is the idea-amplifier ideation layer. Delivered as .skill files, Brett saved both. |
+| CODEMAP.md v1.0 + CURRENT.md (loader wiring) | July 21, 2026 | Generated `context/CODEMAP.md` (full endpoint/helper/screen/tab-reverse index) via ridgeco-map + subagent fan-out; pushed. Added to CURRENT.md as ⏳ on-demand for build/debug. Surfaced 3 doc drifts: vendor PIN is 8-char not 4-digit (PAT-016 stale — matters for B-093 security build); /sms-inbound is PUBLIC; route names un-hyphenated. |
+| Context Document v1.11 | July 21, 2026 | Session 4 log row (skills + CODEMAP). v1.10 stays in /context as history. |
+| FEATURE_LOG v1.5 | July 21, 2026 | Vendor PIN row corrected to 8-char; rule 17 added (/sms-inbound public; CODEMAP is the route/tab index of record). |
