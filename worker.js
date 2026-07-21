@@ -34,12 +34,40 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
+
+    // ── STAGING SANDBOX (B-103) ──────────────────────────────────────────────
+    // Cloudflare preview deployments SHARE production secrets/env, so a preview of
+    // new code would otherwise write to the LIVE sheet and fire REAL SMS. Isolate
+    // the DATA in code instead: swap SHEET_ID for STAGING_SHEET_ID and make sendSMS
+    // log-only. Everything else behaves identically.
+    // Fails CLOSED: if staging is detected but STAGING_SHEET_ID is unset we refuse
+    // the request rather than silently falling back to the production sheet.
+    if (url.hostname.startsWith('staging-') || env.STAGING === '1') {
+      if (!env.STAGING_SHEET_ID)
+        return json({ error: 'Staging mode active but STAGING_SHEET_ID is not set — refusing to fall back to the live sheet.' }, 503);
+      env = { ...env, STAGING: '1', SHEET_ID: env.STAGING_SHEET_ID };
+      // QuickBooks has NO staging equivalent — the creds point at the live realm.
+      // Two ways staging would corrupt production if these ran: (a) Intuit ROTATES
+      // and invalidates the refresh token on every refresh and qbAccessToken
+      // persists the new one to the *staging* Config, leaving production holding a
+      // dead token (FEATURE_LOG rule 8); (b) /qb/send-invoice would create a REAL
+      // invoice from test data. Note the /qb/* read routes are in PUBLIC_PATHS, so
+      // this must be blocked before the auth gate, not after.
+      if (path.startsWith('/qb'))
+        return json({ error: 'QuickBooks is disabled in staging — it has no sandbox and would rotate the production refresh token.', staging: true }, 503);
+    }
+
     const PUBLIC_PATHS = ['/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Shared-secret gate. Rotated 2026-07-20 (old value retired). NOTE: this is a
       // coarse anti-bot gate only — real per-record authz is enforced per endpoint
       // (Owner_ID / vendor_id / PIN). Slated for replacement by per-user auth.
-      if (request.headers.get('X-Auth-Token') !== env.WORKER_SECRET)
+      const token = request.headers.get('X-Auth-Token');
+      // /intake* accepts its own dedicated INTAKE_TOKEN so that rotating the shared
+      // WORKER_SECRET (security build) doesn't break the Apps Script poller, and vice
+      // versa. WORKER_SECRET still works so the Hub can call these routes too.
+      const intakeOk = path.startsWith('/intake') && env.INTAKE_TOKEN && token === env.INTAKE_TOKEN;
+      if (!intakeOk && token !== env.WORKER_SECRET)
         return json({ error: 'Unauthorized' }, 401);
     }
     try {
@@ -171,6 +199,7 @@ export default {
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
+        if (path === '/intake')                   return await handleIntake(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -491,23 +520,13 @@ async function handlePhotoUploadClean(env, request) {
     if (!propsRoot) return json({ error: 'DRIVE_PROPERTIES_ROOT env var not set' }, 500);
     const token = await getAccessToken(env);
     if (!token) return json({ error: 'Failed to get Google access token' }, 500);
-    step.current = 'find_prop_folder';
-    const propFolder = await findOrCreateFolder(token, propAddr, propsRoot, propsRoot);
-    if (!propFolder || !propFolder.id) return json({ error: `Could not find/create property folder "${propAddr}"`, step: step.current }, 500);
     step.current = 'find_wo_folder';
     const woLabel  = woId || `upload_${Date.now()}`;
     // Vendor cost docs (receipts/bills/invoices) go to a NON-shared internal folder — never the
     // customer-facing WO folder that gets shared on the invoice. Job photos stay in the WO folder.
     const INTERNAL_TYPES = ['receipt','bill','invoice'];
     const isInternal = INTERNAL_TYPES.includes(fileType.toLowerCase());
-    let woFolder;
-    if (isInternal) {
-      const internalRoot = await findOrCreateFolder(token, '_Internal — Vendor Bills', propFolder.id);
-      if (!internalRoot || !internalRoot.id) return json({ error: 'Could not find/create internal vendor-bills folder', step: step.current }, 500);
-      woFolder = await findOrCreateFolder(token, woLabel, internalRoot.id);
-    } else {
-      woFolder = await findOrCreateFolder(token, woLabel, propFolder.id);
-    }
+    const woFolder = await getWOFolder(token, propsRoot, propAddr, woLabel, isInternal);
     if (!woFolder || !woFolder.id) return json({ error: `Could not find/create WO folder "${woLabel}"`, step: step.current }, 500);
     step.current = 'upload_file';
     const arrayBuffer = await file.arrayBuffer();
@@ -1371,6 +1390,21 @@ async function findOrCreateFolder(token, name, parentId, sharedDriveId) {
   return existing || await createDriveFolder(token, name, parentId);
 }
 
+// Resolves (creating as needed) the Drive folder a WO's files belong in:
+//   <properties root>/<property address>/<WO id>                  ← customer-facing
+//   <properties root>/<property address>/_Internal — Vendor Bills/<WO id>  ← isInternal
+// Extracted from handlePhotoUploadClean (July 21, 2026) so the vendor-upload path and
+// the email-intake ingest path can never drift apart on folder layout or on the
+// receipt-privacy rule (FEATURE_LOG rule 13). Returns null if a folder can't be made.
+async function getWOFolder(token, propsRoot, propAddr, woLabel, isInternal) {
+  const propFolder = await findOrCreateFolder(token, propAddr, propsRoot, propsRoot);
+  if (!propFolder || !propFolder.id) return null;
+  if (!isInternal) return await findOrCreateFolder(token, woLabel, propFolder.id);
+  const internalRoot = await findOrCreateFolder(token, '_Internal — Vendor Bills', propFolder.id);
+  if (!internalRoot || !internalRoot.id) return null;
+  return await findOrCreateFolder(token, woLabel, internalRoot.id);
+}
+
 async function uploadFileToDrive(token, arrayBuffer, filename, mimeType, folderId, sharedDriveId) {
   const metadata=JSON.stringify({name:filename,parents:[folderId]}), boundary='ridgeco_boundary_xyz', enc=new TextEncoder();
   const metaPart=enc.encode(`--${boundary}\nContent-Type: application/json\n\n${metadata}\n--${boundary}\nContent-Type: ${mimeType}\n\n`);
@@ -1629,6 +1663,12 @@ async function handleInboundSMS(env, request) {
 async function sendSMS(env, to, message) {
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
+  // Staging sandbox (B-103): never place a real Twilio call from a preview deploy.
+  // This is the single SMS chokepoint, so gating here covers every caller.
+  if (env.STAGING === '1') {
+    console.log(`[STAGING] SMS suppressed → ${to}: ${message}`);
+    return { staging: true, suppressed: true, to, body: message };
+  }
   const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
     method: 'POST',
     headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_SID}:${env.TWILIO_AUTH}`), 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1645,18 +1685,603 @@ async function logSMS(env, woId, recipientType, recipientId, phone, message) {
   } catch(e) { /* non-fatal — SMS already sent, logging is secondary */ }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// EMAIL → WORK ORDER INTAKE (B-103, Phase A)
+// ══════════════════════════════════════════════════════════════════════════════
+// An Apps Script poller reads Gmail and POSTs the raw message to /intake. ALL
+// parsing and business logic lives here so it is git-versioned and curl-testable
+// (PAT-001). Adding a new source later = one parser + one line in detectSource;
+// nothing else in the pipeline changes.
+//
+//   detect → parse → dedupe → resolve → create WO → ingest files → notify
+//
+// SAFETY POSTURE: this path creates records from untrusted email, so it is
+// deliberately conservative. A confident match is reused; a genuine no-match may
+// create a Unit/Tenant (cheap to fix); an AMBIGUOUS or partial property match
+// NEVER auto-creates — it returns needs_review so a human decides. Phase B turns
+// those into Intake_Queue rows + a Hub review screen.
+
+const INTAKE_SOURCES = {
+  'managebuilding.com':               'buildium',
+  'phoenixestatesmaryland@gmail.com': 'manual',
+  'appfolio.com':                     'appfolio',
+};
+
+function detectSource(sender, subject) {
+  const s = String(sender || '').toLowerCase();
+  // Senders arrive as either "Name <a@b.com>" or a bare address.
+  const addr = (s.match(/<([^>]+)>/) || [null, s])[1].trim();
+  for (const [needle, source] of Object.entries(INTAKE_SOURCES)) {
+    if (addr.includes(needle)) return source;
+  }
+  return 'unknown';
+}
+
+// ── TEXT EXTRACTION ──────────────────────────────────────────────────────────
+const HTML_ENTITIES = { amp:'&', lt:'<', gt:'>', quot:'"', apos:"'", nbsp:' ', '#39':"'", '#x27':"'", '#160':' ' };
+
+function decodeEntities(s) {
+  return String(s || '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&#(\d+);/g,         (_, d) => String.fromCharCode(parseInt(d, 10)))
+    .replace(/&([a-z]+);/gi,      (m, e) => HTML_ENTITIES[e.toLowerCase()] ?? m);
+}
+
+// Buildium's mail is table-based HTML. Block-level tags become newlines so that
+// "label / value" pairs stay on separate lines for the section parser below.
+function htmlToText(html) {
+  if (!html) return '';
+  return decodeEntities(
+    String(html)
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|tr|td|th|li|h[1-6]|table)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+  )
+    .split('\n')
+    .map(l => l.replace(/[ \t ]+/g, ' ').trim())
+    .filter((l, i, arr) => l !== '' || (arr[i - 1] || '') !== '')
+    .join('\n')
+    .trim();
+}
+
+// Labels that end a section. Kept broad so an unexpected block doesn't get
+// swallowed into the previous field's value.
+const BUILDIUM_LABELS = [
+  'work order','location','entry contacts','entry contact','entry details','entry notes',
+  'job description','tenant notes','description','files','attachments','photos','priority',
+  'category','requested by','status','assigned to','due date','notes','pets','property',
+  'unit','tenant','vendor','created','scheduled',
+];
+
+function isLabelLine(line) {
+  const l = line.toLowerCase().replace(/[:\s]+$/, '').trim();
+  return BUILDIUM_LABELS.includes(l);
+}
+
+// Returns the lines that follow `label` up to the next label line.
+// Handles both "Label:" on its own line and "Label: value" inline.
+function sectionAfter(lines, label) {
+  const want = label.toLowerCase();
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const bare = lines[i].toLowerCase().replace(/[:\s]+$/, '').trim();
+    // Three shapes seen in the wild: "Label" alone, "Label: value", and — when a
+    // mail client flattens the HTML table into a plain body — "Label value".
+    const inline = lines[i].match(new RegExp(`^${want}\\s*(?::\\s*|\\s+)(.+)$`, 'i'));
+    if (bare !== want && !inline) continue;
+    if (inline && inline[1].trim()) out.push(inline[1].trim());
+    for (let j = i + 1; j < lines.length; j++) {
+      if (isLabelLine(lines[j])) break;
+      if (lines[j].trim()) out.push(lines[j].trim());
+    }
+    break;
+  }
+  return out;
+}
+
+// ── ADDRESS NORMALIZATION ────────────────────────────────────────────────────
+// Collapses the many spellings of one address to a single comparable key so
+// "1110 North Dukeland Street - 1" and "1110 N Dukeland St" match. Normalizes to
+// the SHORT form (n / st / ave) so both directions converge on the same key.
+const ADDR_WORDS = {
+  north:'n', south:'s', east:'e', west:'w',
+  northeast:'ne', northwest:'nw', southeast:'se', southwest:'sw',
+  street:'st', avenue:'ave', av:'ave', road:'rd', drive:'dr', lane:'ln',
+  boulevard:'blvd', court:'ct', place:'pl', terrace:'ter', parkway:'pkwy',
+  circle:'cir', highway:'hwy', square:'sq', trail:'trl', way:'way',
+  apartment:'apt', suite:'ste',
+};
+
+// Matches a TRAILING unit designator only: " - 1", "#1", " Unit 1", " Apt 2B".
+// The separators are anchored deliberately. An unanchored alternation like
+// (?:-|#|unit|apt|ste) matches mid-word, which silently ate real street names:
+// "1200 Winchester" → "1200 winche" + a phantom Unit "r", and "8 Cross-Keys" →
+// "8 cross". Worse, it truncated asymmetrically, so a property matched itself as
+// "ambiguous" and stuck every WO at that address in review.
+const UNIT_SUFFIX = /(?:\s+-\s*|\s*#\s*|\s+(?:unit|apt|apartment|ste|suite)\.?\s*)([\w-]+)\s*$/i;
+
+function normalizeAddr(s) {
+  if (!s) return '';
+  let out = String(s).toLowerCase();
+  out = out.replace(/,\s*$/, '').replace(UNIT_SUFFIX, '');
+  out = out.replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  return out.split(' ').map(w => ADDR_WORDS[w] || w).filter(Boolean).join(' ');
+}
+
+function unitKey(s) {
+  return String(s || '').toLowerCase().replace(/^(?:#|(?:unit|apt|apartment|ste|suite)\b\.?)\s*/i, '').replace(/\s+/g, '').trim();
+}
+
+// Last 10 digits — the only phone comparison that survives +1 / (410) / dashes.
+function phoneKey(p) {
+  const d = String(p || '').replace(/\D/g, '');
+  return d.length >= 10 ? d.slice(-10) : '';
+}
+
+// ── TRADE GUESS ──────────────────────────────────────────────────────────────
+// A GUESS ONLY — always overridable in the Hub. Keys must stay in QB_TRADE_MAP
+// or /qb/send-invoice silently falls back to "General".
+const TRADE_KEYWORDS = [
+  ['Plumbing',    /\b(toilet|leak|leaking|drain|clog|clogged|faucet|sink|pipe|water heater|sewer|shower|tub|sump|garbage disposal|no hot water|running water)\b/i],
+  ['Electrical',  /\b(outlet|breaker|electric|electrical|wiring|light switch|no power|short circuit|gfci|fuse|sparking)\b/i],
+  // Appliance is tested BEFORE HVAC on purpose: "refrigerator is not cooling"
+  // matches HVAC's "not cooling" too, and the appliance noun is the stronger signal.
+  ['Appliance',   /\b(refrigerator|fridge|stove|oven|range|dishwasher|washer|dryer|microwave|appliance)\b/i],
+  ['HVAC',        /\b(hvac|furnace|boiler|no heat|air condition|a\/c|ac unit|thermostat|radiator|not cooling|not heating)\b/i],
+  ['Roofing',     /\b(roof|shingle|gutter|downspout|soffit|ceiling leak)\b/i],
+  ['Windows',     /\b(window|screen|glass|pane|storm door)\b/i],
+  ['Flooring',    /\b(floor|flooring|carpet|tile|hardwood|subfloor|laminate)\b/i],
+  ['Painting',    /\b(paint|painting|drywall|plaster|patch)\b/i],
+  ['Carpentry',   /\b(door|cabinet|trim|stair|railing|deck|fence|framing|lock|deadbolt)\b/i],
+  ['Landscaping', /\b(lawn|grass|yard|tree|shrub|landscap|snow removal|leaves)\b/i],
+  ['Cleaning',    /\b(clean|cleaning|trash|debris|junk removal|pest|rodent|roach|mice)\b/i],
+];
+
+function keywordTrade(text) {
+  const t = String(text || '');
+  for (const [trade, re] of TRADE_KEYWORDS) if (re.test(t)) return trade;
+  return '';
+}
+
+// ── BUILDIUM PARSER ──────────────────────────────────────────────────────────
+// One Buildium email == exactly one work order (confirmed: three issues at one
+// address arrive as three separate emails). Returns a normalized item plus the
+// warnings that downstream code uses to decide create-vs-review.
+function parseBuildium(html, subject, plaintext) {
+  // HTML FIRST — this is deliberate and load-bearing. Buildium sends table-based
+  // HTML, and the Apps Script poller sends BOTH bodies on every message. Preferring
+  // plaintext meant the tested HTML path would never execute in production, and
+  // Gmail's flattened plain body renders the table as "Location 1110 N Dukeland St"
+  // on ONE line, which the section parser can't split → every email would have
+  // returned needs_review forever. Plaintext is the fallback for a text-only sender.
+  const text = htmlToText(html) || String(plaintext || '').trim();
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const warnings = [];
+
+  // Ref: body "Work order #838106-1: Leaking toilet" wins (it carries the -1
+  // suffix); the subject "Work order 838106" is the fallback.
+  const bodyRef = text.match(/work order\s*#\s*([\w-]+)\s*:?\s*(.*)/i);
+  const subjRef = String(subject || '').match(/work order\s*#?\s*([\w-]+)/i);
+  const ownerRef = (bodyRef && bodyRef[1]) || (subjRef && subjRef[1]) || '';
+  if (!ownerRef) warnings.push('No Buildium work order number found');
+
+  // Title = the text after the ref on the same line.
+  let title = (bodyRef && bodyRef[2] || '').trim();
+  const jobDesc    = sectionAfter(lines, 'job description').join('\n');
+  const tenantNote = sectionAfter(lines, 'tenant notes').join('\n');
+  const descBlock  = sectionAfter(lines, 'description').join('\n');
+  if (!title) title = (jobDesc || descBlock || '').split('\n')[0] || '';
+  const description = [title, jobDesc || descBlock, tenantNote].filter(Boolean).join(' — ').trim();
+  if (!description) warnings.push('No description found');
+
+  // Location block: street line, then "City, ST 12345".
+  const loc = sectionAfter(lines, 'location');
+  let street = '', unitLabel = '', city = '', state = '', zip = '';
+  for (const line of loc) {
+    const csz = line.match(/^(.+?),\s*([A-Za-z]{2})\.?\s+(\d{5})(?:-\d{4})?$/);
+    if (csz && !city) { city = csz[1].trim(); state = csz[2].toUpperCase(); zip = csz[3]; continue; }
+    if (!street) {
+      const m = line.match(UNIT_SUFFIX);
+      if (m) { street = line.slice(0, m.index).trim(); unitLabel = m[1].trim(); }
+      else street = line.trim();
+    }
+  }
+  if (!street) warnings.push('No property address found in the Location block');
+
+  // Entry contacts → tenant.
+  const contact = sectionAfter(lines, 'entry contacts').concat(sectionAfter(lines, 'entry contact'));
+  const contactText = contact.join('\n');
+  const email = (contactText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/) || [''])[0];
+  const phone = (contactText.match(/(?:\+1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [''])[0];
+  // A person's name, not just "a short line". The loose version accepted prose
+  // like "Tenant will be home" or "No pets" — and resolveTenant CREATES a tenant
+  // row (with an auto PIN) from whatever lands here. Require 2-4 tokens that all
+  // start with a capital, which prose fails on its lowercase words.
+  const NAME_STOPWORDS = new Set(['pets','pet','entry','notes','note','none','tenant','owner','contact','contacts','yes','no','na','unknown','vacant','key','lockbox']);
+  let contactName = '';
+  for (const line of contact) {
+    if (line.includes('@') || phoneKey(line)) continue;
+    const toks = line.trim().split(/\s+/);
+    if (toks.length < 2 || toks.length > 4) continue;
+    if (!toks.every(t => /^[A-Z][A-Za-z'.-]*$/.test(t))) continue;
+    if (toks.some(t => NAME_STOPWORDS.has(t.toLowerCase().replace(/[^a-z]/g, '')))) continue;
+    contactName = line.trim();
+    break;
+  }
+
+  // Entry/pet details → WO notes (access hints the vendor needs).
+  const entryNotes = [...sectionAfter(lines, 'entry details'), ...sectionAfter(lines, 'entry notes'), ...sectionAfter(lines, 'pets')]
+    .filter(Boolean).join(' | ');
+
+  // Owner: Buildium puts the management company in the subject prefix and footer.
+  const ownerName = (String(subject || '').match(/^(.*?):\s*work order/i) || [null, ''])[1].trim();
+
+  // Files: S3 links in the body (images AND video). Scan the RAW html as well as
+  // the flattened text — the links live in href/src attributes, which htmlToText
+  // strips, leaving only the visible link label behind. Dedupe: the same asset is
+  // routinely linked twice (thumbnail + full size).
+  const urlSource = `${decodeEntities(String(html || ''))}\n${text}`;
+  const candidates = (urlSource.match(/https?:\/\/[^\s"'<>)\]]+/gi) || [])
+    .map(u => u.replace(/[.,;]+$/, ''))
+    .filter(u => /amazonaws\.com|s3[.-]|managebuilding\.com/i.test(u))
+    // Accept a known media extension OR a download-style link. Requiring an
+    // extension alone silently dropped Buildium's extension-less
+    // ".../api/file/download?id=99" links — i.e. lost photos, with no warning.
+    // No PDFs: intake files are tenant job photos, and a PDF here would be logged
+    // as a photo in the customer-facing folder (see FEATURE_LOG rule 13).
+    .filter(u => /\.(jpe?g|png|gif|heic|webp|bmp|mov|mp4|m4v|avi)(\?|$)/i.test(u) || /\/(file|files|download|attachment)s?[\/?]/i.test(u));
+  // Dedupe ignoring the query string: the same asset is routinely linked twice as
+  // "photo.jpg?w=100" (thumbnail) and "photo.jpg" (full size). Keep the longest
+  // variant of each path — the full-size link is the one without a size param.
+  const byPath = new Map();
+  for (const u of candidates) {
+    const key  = u.split('?')[0];
+    const prev = byPath.get(key);
+    // Prefer the variant with no query string (the full-size original); the
+    // thumbnail is the one carrying ?w=/?size= params.
+    if (!prev || (prev.includes('?') && !u.includes('?'))) byPath.set(key, u);
+  }
+  const urls = [...byPath.values()];
+
+  const priority = /\b(emergency|urgent|asap|no heat|no hot water|flood|gas leak)\b/i.test(text) ? 'urgent' : 'normal';
+
+  return {
+    source: 'buildium',
+    owner_wo_ref: ownerRef,
+    owner_name: ownerName,
+    description,
+    priority,
+    trade: keywordTrade(`${title} ${jobDesc} ${tenantNote}`),
+    property: { address: street, city, state, zip },
+    unit_label: unitLabel,
+    tenant: { name: contactName, phone, email },
+    notes: entryNotes,
+    files: urls,
+    warnings,
+  };
+}
+
+// ── RESOLVERS ────────────────────────────────────────────────────────────────
+// addRow returns a Response; these helpers unwrap it to the new row's id.
+async function addRowId(env, tab, body) {
+  const res  = await addRow(env, tab, body);
+  const data = await res.json();
+  if (!data.success || !data.id) throw new Error(`Could not add ${tab} row: ${data.error || 'unknown error'}`);
+  return String(data.id);
+}
+
+// Owners are billing entities — a wrong or duplicated one corrupts invoicing, so
+// this NEVER creates. No confident match ⇒ the item goes to review.
+function resolveOwner(owners, name) {
+  const want = String(name || '').toLowerCase().replace(/[.,]/g, '').replace(/\b(llc|inc|corp|co|ltd)\b/g, '').replace(/\s+/g, ' ').trim();
+  if (!want) return { status: 'no_match' };
+  const active = owners.filter(o => o.Active !== 'FALSE');
+  const norm = o => String(o.Company || `${o.First_Name || ''} ${o.Last_Name || ''}`)
+    .toLowerCase().replace(/[.,]/g, '').replace(/\b(llc|inc|corp|co|ltd)\b/g, '').replace(/\s+/g, ' ').trim();
+  const hits = active.filter(o => norm(o) === want);
+  if (hits.length === 1) return { status: 'matched', row: hits[0] };
+  if (hits.length > 1)   return { status: 'ambiguous' };
+  // A loose match must clear a real bar. A bare substring test bound the wrong
+  // owner: "Ridge Co, LLC" normalizes to "ridge", which is a substring of
+  // "Ridge Estates of Maryland" — one hit, silently "matched", and the new
+  // property lands under the wrong Owner_ID and invoices the wrong customer.
+  // Require a substantial overlap: >=8 chars and >=2 shared significant words.
+  const words = s => new Set(s.split(' ').filter(w => w.length > 2));
+  const wantWords = words(want);
+  const loose = active.filter(o => {
+    const n = norm(o);
+    if (!n || n.length < 8 || want.length < 8) return false;
+    if (!n.includes(want) && !want.includes(n)) return false;
+    let shared = 0;
+    for (const w of words(n)) if (wantWords.has(w)) shared++;
+    return shared >= 2;
+  });
+  if (loose.length === 1) return { status: 'matched', row: loose[0] };
+  return { status: loose.length > 1 ? 'ambiguous' : 'no_match' };
+}
+
+// Properties are the join point for every WO — a duplicate property silently
+// splits a building's history in two. Exact normalized match reuses; a PARTIAL
+// match (same house number + street, different spelling) is treated as ambiguous
+// and sent to review rather than risking either a dupe or the wrong building.
+function resolveProperty(properties, parsed) {
+  const want = normalizeAddr(parsed.property.address);
+  if (!want) return { status: 'no_address' };
+  const active = properties.filter(p => p.Active !== 'FALSE');
+  const exact = active.filter(p => normalizeAddr(p.Address) === want);
+  if (exact.length === 1) return { status: 'matched', row: exact[0] };
+  if (exact.length > 1)   return { status: 'ambiguous', candidates: exact.map(p => p.ID) };
+
+  const houseNum = (want.match(/^(\d+)/) || [])[1];
+  if (houseNum) {
+    const partial = active.filter(p => {
+      const n = normalizeAddr(p.Address);
+      if (!n.startsWith(houseNum + ' ')) return false;
+      const a = want.split(' ').filter(w => w.length > 2);
+      const b = n.split(' ').filter(w => w.length > 2);
+      return a.some(w => b.includes(w));
+    });
+    if (partial.length) return { status: 'ambiguous', candidates: partial.map(p => p.ID) };
+  }
+  return { status: 'no_match' };
+}
+
+async function resolveUnit(env, units, propertyId, unitLabel) {
+  if (!unitLabel) return '';
+  const key = unitKey(unitLabel);
+  const hit = units.find(u => String(u.Property_ID) === String(propertyId) && u.Active !== 'FALSE' && unitKey(u.Unit_Label) === key);
+  if (hit) return hit.ID;
+  return await addRowId(env, 'Units', { Property_ID: String(propertyId), Unit_Label: unitLabel, Active: 'TRUE' });
+}
+
+// Tenants match on phone first (the only reliable key), then on name within the
+// same unit/property. A genuine no-match creates one — addRow auto-generates the
+// phone-based PIN, so the new tenant can use the portal immediately.
+async function resolveTenant(env, tenants, propertyId, unitId, tenant) {
+  const pk = phoneKey(tenant.phone);
+  const scoped = tenants.filter(t => t.Active !== 'FALSE' && (
+    (unitId && String(t.Unit_ID) === String(unitId)) || String(t.Property_ID) === String(propertyId)
+  ));
+  if (pk) {
+    const byPhone = tenants.find(t => t.Active !== 'FALSE' && phoneKey(t.Phone) === pk);
+    if (byPhone) return byPhone.ID;
+  }
+  const name = String(tenant.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (name) {
+    const byName = scoped.find(t => `${t.First_Name || ''} ${t.Last_Name || ''}`.toLowerCase().replace(/\s+/g, ' ').trim() === name);
+    if (byName) return byName.ID;
+  }
+  if (!name && !pk) return '';
+  const parts = name ? tenant.name.trim().split(/\s+/) : [];
+  return await addRowId(env, 'Tenants', {
+    Property_ID: String(propertyId),
+    Unit_ID: unitId ? String(unitId) : '',
+    First_Name: parts[0] || '',
+    Last_Name: parts.slice(1).join(' '),
+    Phone: tenant.phone || '',
+    Email: tenant.email || '',
+    Active: 'TRUE',
+  });
+}
+
+// ── FILE INGEST ──────────────────────────────────────────────────────────────
+const INTAKE_MAX_FILE_BYTES = 45 * 1024 * 1024; // Worker memory guard (videos!)
+
+// Best-effort per file, exactly like the QB attachment path: one bad URL warns,
+// it never fails the work order that was already created.
+async function ingestFiles(env, woId, propAddr, urls) {
+  const result = { uploaded: 0, warnings: [], folder_url: '' };
+  if (!urls || !urls.length) return result;
+  const propsRoot = env.DRIVE_PROPERTIES_ROOT;
+  if (!propsRoot) { result.warnings.push('DRIVE_PROPERTIES_ROOT not set — files skipped'); return result; }
+
+  let token, folder;
+  try {
+    token = await getAccessToken(env);
+    // Drive has no staging root, and a staging sheet is a COPY of live, so its WO
+    // ids collide with real folders. Prefix staging uploads so test files are
+    // obvious and never mix into a customer-facing folder that gets shared.
+    const label = env.STAGING === '1' ? `_STAGING ${woId}` : woId;
+    folder = await getWOFolder(token, propsRoot, propAddr || 'Unknown Property', label, false);
+  } catch (e) { result.warnings.push(`Drive setup failed: ${e.message}`); return result; }
+  if (!folder || !folder.id) { result.warnings.push('Could not create the WO Drive folder — files skipped'); return result; }
+  result.folder_url = folder.webViewLink || '';
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { redirect: 'follow' });
+      if (!res.ok) { result.warnings.push(`${url} → HTTP ${res.status}`); continue; }
+      const mime = (res.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim();
+      // A login/interstitial page comes back as HTML with a 200. Uploading that
+      // as a "photo" would be worse than skipping it — flag it loudly instead.
+      if (/^text\/html/i.test(mime)) { result.warnings.push(`${url} → returned HTML (link is not publicly fetchable)`); continue; }
+      const len = parseInt(res.headers.get('content-length') || '0', 10);
+      if (len > INTAKE_MAX_FILE_BYTES) { result.warnings.push(`${url} → ${Math.round(len / 1048576)}MB exceeds the ${INTAKE_MAX_FILE_BYTES / 1048576}MB limit`); continue; }
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > INTAKE_MAX_FILE_BYTES) { result.warnings.push(`${url} → too large`); continue; }
+      let filename = '';
+      try { filename = decodeURIComponent((new URL(url).pathname.split('/').pop() || '').trim()); } catch (e) {}
+      if (!filename) filename = `intake_${result.uploaded + 1}`;
+      const up = await uploadFileToDrive(token, buf, filename, mime, folder.id, propsRoot);
+      if (!up || !up.id) { result.warnings.push(`${filename} → Drive upload failed`); continue; }
+      result.uploaded++;
+      try {
+        await addRow(env, 'Attachments', {
+          WO_ID: woId, File_Name: filename, File_Type: 'photo',
+          Drive_File_ID: up.id, Drive_URL: up.webViewLink || up.id, Mime_Type: mime,
+          Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
+        });
+      } catch (e) { /* non-fatal — the file is already in Drive */ }
+    } catch (e) { result.warnings.push(`${url} → ${e.message}`); }
+  }
+
+  if (result.uploaded > 0 && folder.webViewLink) {
+    try {
+      await updateWOFields(env, woId, { Drive_Folder_URL: folder.webViewLink, Drive_Folder_ID: folder.id });
+    } catch (e) { /* non-fatal */ }
+  }
+  return result;
+}
+
+// ── POST-CREATE HOOK ─────────────────────────────────────────────────────────
+// THE AUTO-ASSIGN SEAM (Phase D). v1 notifies the admin and nothing else. When
+// auto-assign lands it calls pickVendor()/assignVendor() HERE — no other part of
+// the intake pipeline changes.
+async function onIntakeCreated(env, wo) {
+  const config = await fetchConfig(env);
+  const phone  = config.intake_admin_phone || config.admin_phone || '';
+  if (!phone) return { notified: false, reason: 'no admin phone in Config' };
+  const where = [wo.address, wo.unit_label ? `Unit ${wo.unit_label}` : ''].filter(Boolean).join(' ');
+  const msg = `📥 New WO from email: ${wo.id}\n${where}\n${String(wo.description || '').slice(0, 120)}` +
+              (wo.owner_wo_ref ? `\nRef ${wo.owner_wo_ref}` : '') +
+              (wo.trade ? `\nTrade guess: ${wo.trade}` : '');
+  await sendSMS(env, phone, msg);
+  return { notified: true };
+}
+
+// ── ENDPOINT ─────────────────────────────────────────────────────────────────
+// POST /intake  { sender, subject, date, message_id, html, plaintext }
+//
+// Always returns HTTP 200 with a `status` the poller branches on, so a parse
+// problem never looks like a transport failure and never makes Apps Script retry
+// forever:  created | duplicate | needs_review | skipped | unsupported
+async function handleIntake(env, body) {
+  const { sender = '', subject = '', message_id = '', html = '', plaintext = '' } = body || {};
+  const config = await fetchConfig(env);
+  // Tolerant of how the switch actually gets typed into the Config tab.
+  if (/^(false|no|0|off)$/i.test(String(config.intake_enabled || '').trim()))
+    return json({ status: 'skipped', reason: 'intake_enabled is off in Config' });
+
+  const source = detectSource(sender, subject);
+  if (source === 'unknown')  return json({ status: 'unsupported', reason: `Unrecognized sender: ${sender}`, source });
+  if (source === 'appfolio') return json({ status: 'unsupported', reason: 'AppFolio parser not built yet (needs sample emails)', source });
+  if (source === 'manual')   return json({ status: 'needs_review', reason: 'Manual free-text lists land in the review queue (Phase C)', source });
+
+  const parsed = parseBuildium(html, subject, plaintext);
+  const review = (reasons, extra = {}) =>
+    json({ status: 'needs_review', source, reasons: [].concat(reasons), parsed, ...extra });
+
+  // Dedupe BEFORE any write. Two layers: the customer's ref number (the real
+  // business key) and the Gmail message id (guards a re-forwarded message).
+  const workorders = await fetchTab(env, 'Work_Orders');
+  if (parsed.owner_wo_ref) {
+    const dupe = workorders.find(w => w.Owner_WO_Ref && w.Owner_WO_Ref === parsed.owner_wo_ref);
+    if (dupe) return json({ status: 'duplicate', wo_id: dupe.ID, owner_wo_ref: parsed.owner_wo_ref, source });
+  }
+  if (message_id) {
+    const dupe = workorders.find(w => w.Intake_Message_ID && w.Intake_Message_ID === message_id);
+    if (dupe) return json({ status: 'duplicate', wo_id: dupe.ID, message_id, source });
+  }
+  if (!parsed.property.address) return review('No property address could be parsed from the email');
+  if (!parsed.description)      return review('No description could be parsed from the email');
+  // Owner_WO_Ref is the primary dedupe key. Auto-creating without one produces a
+  // WO that nothing can match on a re-delivery — and Intake_Message_ID is the
+  // only other layer, which no-ops until that column exists. Refuse rather than
+  // risk a double-create; a human confirms it instead.
+  if (!parsed.owner_wo_ref)
+    return review('No Buildium work order number found — cannot dedupe this email, so it will not auto-create');
+
+  const [properties, owners, units, tenants] = await Promise.all([
+    fetchTab(env, 'Properties'), fetchTab(env, 'Owners'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'),
+  ]);
+
+  const prop = resolveProperty(properties, parsed);
+  if (prop.status === 'ambiguous')
+    return review(`Address "${parsed.property.address}" partially matches existing properties — confirm which one`, { candidates: prop.candidates });
+
+  let propertyId, propAddress;
+  if (prop.status === 'matched') {
+    propertyId  = prop.row.ID;
+    propAddress = prop.row.Address;
+  } else {
+    // Genuine no-match: safe to create, but only with a confident owner — an
+    // ownerless property breaks invoicing downstream (/qb/send-invoice).
+    const owner = resolveOwner(owners, parsed.owner_name);
+    if (owner.status !== 'matched')
+      return review(`New address "${parsed.property.address}", and its owner "${parsed.owner_name || 'unknown'}" could not be matched — confirm before creating the property`);
+    propAddress = parsed.property.address;
+    propertyId  = await addRowId(env, 'Properties', {
+      Address: propAddress, City: parsed.property.city, State: parsed.property.state,
+      Zip: parsed.property.zip, Owner_ID: String(owner.row.ID), Active: 'TRUE',
+    });
+  }
+
+  const unitId   = await resolveUnit(env, units, propertyId, parsed.unit_label);
+  const tenantId = await resolveTenant(env, tenants, propertyId, unitId, parsed.tenant);
+
+  const createRes = await createWorkOrder(env, {
+    property_id: String(propertyId),
+    unit_id: unitId ? String(unitId) : '',
+    tenant_id: tenantId ? String(tenantId) : '',
+    description: parsed.description,
+    priority: parsed.priority,
+    trade: parsed.trade,
+    owner_wo_ref: parsed.owner_wo_ref,
+    wo_contact_name: parsed.tenant.name,
+    wo_contact_phone: parsed.tenant.phone,
+    notes: parsed.notes,
+    type: 'email-intake',
+    created_by: `intake:${source}`,
+  });
+  const created = await createRes.json();
+  if (!created.success) return json({ status: 'error', error: created.error || 'createWorkOrder failed', parsed }, 500);
+  const woId = created.id;
+
+  // Traceability columns. updateWOFields skips headers that don't exist, so this
+  // is a no-op (not an error) until the Source / Intake_Message_ID columns land.
+  try {
+    await updateWOFields(env, woId, { Source: `email-${source}`, Intake_Message_ID: message_id || '' });
+  } catch (e) { /* non-fatal */ }
+
+  const files = await ingestFiles(env, woId, propAddress, parsed.files);
+
+  let notify = { notified: false };
+  try {
+    notify = await onIntakeCreated(env, {
+      id: woId, description: parsed.description, address: propAddress,
+      unit_label: parsed.unit_label, owner_wo_ref: parsed.owner_wo_ref, trade: parsed.trade,
+    });
+  } catch (e) { /* a notify failure must never undo a created WO */ }
+
+  return json({
+    status: 'created', source, wo_id: woId,
+    owner_wo_ref: parsed.owner_wo_ref,
+    property_id: String(propertyId), unit_id: unitId || '', tenant_id: tenantId || '',
+    trade_guess: parsed.trade,
+    files: { found: parsed.files.length, uploaded: files.uploaded, warnings: files.warnings },
+    notified: notify.notified,
+    warnings: parsed.warnings,
+    staging: env.STAGING === '1',
+  });
+}
+
+// Named exports for the offline parser tests (test/intake.test.mjs). Extra named
+// exports alongside the default export are inert in the Workers runtime.
+export { detectSource, htmlToText, normalizeAddr, unitKey, phoneKey, keywordTrade, parseBuildium, resolveOwner, resolveProperty, handleIntake };
+
 // ── GOOGLE SHEETS / AUTH ─────────────────────────────────────
 
 function b64url(str) { return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 
+// Google's tokens are valid for an hour, but this was re-minted on EVERY Sheets
+// call — 2 subrequests apiece. One /intake with photos ran ~55-60 subrequests,
+// over Cloudflare's 50-per-request cap. Cache per isolate, with a 5-minute safety
+// margin. Keyed by SA email + sheet so a staging isolate can never reuse a token
+// minted for different credentials.
+let _tokenCache = null;
+
 async function getAccessToken(env) {
   const now=Math.floor(Date.now()/1000);
+  const cacheKey=`${env.GOOGLE_SA_EMAIL||''}|${env.SHEET_ID||''}`;
+  if(_tokenCache&&_tokenCache.key===cacheKey&&_tokenCache.exp>now+300) return _tokenCache.token;
   const header=b64url(JSON.stringify({alg:'RS256',typ:'JWT'}));
   const claim=b64url(JSON.stringify({iss:env.GOOGLE_SA_EMAIL,scope:'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',aud:'https://oauth2.googleapis.com/token',exp:now+3600,iat:now}));
   const sigInput=`${header}.${claim}`, key=await importPrivateKey(env.GOOGLE_SA_KEY);
   const jwt=`${sigInput}.${await signRS256(sigInput,key)}`;
   const resp=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:`grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`});
   const data=await resp.json(); if(!data.access_token) throw new Error('Google auth failed: '+JSON.stringify(data));
+  _tokenCache={key:cacheKey,token:data.access_token,exp:now+(data.expires_in||3600)};
   return data.access_token;
 }
 

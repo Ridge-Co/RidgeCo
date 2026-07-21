@@ -1,0 +1,18 @@
+{
+  "_README": "STAGED — NOT ACTIVE. The GitHub Action (.github/workflows/sheet-ops.yml) triggers only on the exact path context/sheet-ops/pending.json, so this file does nothing where it sits. TO RUN: (1) replace sheet_id below with the RidgeCo STAGING sheet id, (2) copy this file to context/sheet-ops/pending.json, (3) push. Run it against STAGING first; only after staging passes, repeat with the live id 1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4. Both ops are additive — new trailing columns and new Config rows — so no existing worker.js column reference shifts (FEATURE_LOG rules 3 and 5).",
+  "sheet_id": "REPLACE_WITH_STAGING_SHEET_ID",
+  "description": "B-103 Phase A (email->WO intake). Adds Work_Orders.Source (email-buildium / email-manual) and Work_Orders.Intake_Message_ID (Gmail message id) for traceability and dedupe, plus the intake Config switches. worker.js writes these via updateWOFields, which skips headers that do not exist, so intake already works without them - these columns turn on traceability, they are not a prerequisite. Intake_Queue is Phase B, not this file.",
+  "ops": [
+    {
+      "type": "add_column_header",
+      "tab": "Work_Orders",
+      "header": "Source"
+    },
+    {
+      "type": "add_column_header",
+      "tab": "Work_Orders",
+      "header": "Intake_Message_ID"
+    }
+  ],
+  "_config_note": "No Config ops here on purpose. Config is a bare key/value tab with no header row, and run_ops.py's append_row derives its column names from row 0 - it would have appended a blank row. Neither key is required: worker.js treats intake as ENABLED unless intake_enabled is explicitly the string FALSE, and intake_admin_phone falls back to the existing admin_phone. To set either one, use the existing endpoint instead: POST /config/set {\"key\":\"intake_enabled\",\"value\":\"FALSE\"} - setConfigKey handles the append correctly."
+}
