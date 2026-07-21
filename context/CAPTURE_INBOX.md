@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.20 | **Last Updated:** July 21, 2026
+**Version:** v1.21 | **Last Updated:** July 21, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -33,6 +33,7 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - CAP-023 — BarrelCo leads database (retail-outlet leads — NEW, activates B-079)
 - CAP-024 — Surface captures/tasks in a BrettOS Sheet (accessible + bulk-actionable — NEW)
 - CAP-025 — Reconcile with the REAL BrettOS task app (sheet 1X2oYjD) — IMPORTANT
+- CAP-026 — Ridge Co big-build planning + full wishlist consolidation (Ridge Co — planning)
 <!-- QUICK-INDEX:END -->
 
 
@@ -401,6 +402,17 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - ARCHITECTURE: the **BrettOS sheet = canonical task home**; our GitHub CAPTURE_INBOX/BACKLOG = deep design/context notes that FEED it (net-new only). This realizes CAP-024/B-091 — the sheet already exists.
 - Append path: **sheet-ops** (`context/sheet-ops/pending.json` → GitHub Action runs run_ops.py via the service account) appends rows / creates tabs on ANY sheet by ID, incl. this one. Self-sufficient.
 - Links: CAP-024/B-091, CAP-023 (lead sheets), BACKLOG B-092
+
+### CAP-026 — Ridge Co big-build planning + full wishlist consolidation (Ridge Co — planning)
+- Raw (July 21): Brett wants a huge Ridge Co build; pull ALL wishlist items from the sheets, tidy them, do the scheduled security fix. Gave 8 new asks.
+- Type: project (planning)
+- Status: in-plan → graduated to B-093..B-102
+- Pulled (Drive connector): RidgeCo Main `Wishlist` tab = **76 items** + BrettOS Tasks app (BTOS/WBM/DL tabs). Consolidated into the July 21 build-plan doc, grouped by subsystem → phase.
+- Architecture mapped (subagent, grounded in code): single `sendSMS` chokepoint (worker.js:1627); **NO cron anywhere**; **NO email path** (Tenants have no email column); WO status values duplicated ~7 places; `WO_Templates` tab exists but prefill-only (no server-side instantiation); **no recurring/split logic**; estimate flow via `approveEstimate` (worker.js:1064); `Notification_Queue` tab + `Send_After` exists but is never flushed (no cron).
+- New asks → **B-093** notification engine v2 / quiet-hours, **B-094** vendor SMS opt-out checkbox, **B-095** tenant/owner hold-SMS-til-8am, **B-096** split+dependencies, **B-097** vendor-triggered recurring + smart clock-reset, **B-098** recurring-from-template + seasonal windows, **B-099** template-from-vendor trigger, **B-100** pre-triggered/dependency WOs, **B-101** estimate approval + start-date, **B-102** Fairfax UI redesign.
+- **LIVE BUG diagnosed:** BrettOS sync into maintenance_hub + barrelco = **HTTP 401 Unauthorized** since the July 20 `WORKER_SECRET` rotation (sync caller still uses old secret) → **B-092** escalated; barrelco also throws an `atob()` base64 error. Fix folded into the Phase-0 security work.
+- **Locked decisions (July 21):** tomorrow = quick wins → security fix (**phone-only** tenant login) + fix the 401 → status-enum SSOT → Cron infra → Phase 1 notifications (**hold-SMS-til-8am**, email channel deferred). UI redesign = **Phase 4** (after engine stable).
+- Links: BACKLOG B-092..B-102; private `property-maintenance.md`; July 21 build-plan doc; ties CAP-011 (Hub "one ring"), CAP-025 (BrettOS task app).
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
