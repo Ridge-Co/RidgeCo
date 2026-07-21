@@ -17,6 +17,13 @@
  *      Minutes timer → every 5 minutes.
  *   5. Point WORKER_URL at the production URL only after staging passes.
  *
+ * SECURITY: every message is checked for DMARC (or SPF+DKIM) pass before it is
+ * forwarded — see checkAuthentication_. The Worker authorizes intake on the
+ * sender address, and the From header is forgeable, so this check is what makes
+ * that trust meaningful. A message failing it is labelled NeedsReview, never
+ * forwarded. If legitimate Buildium mail ever starts getting blocked, check the
+ * log for the recorded verdict before relaxing anything.
+ *
  * LABELS (two-layer dedupe — the Worker also checks Owner_WO_Ref):
  *   RidgeCo/Processed   → handled; never sent again.
  *   RidgeCo/NeedsReview → parsed but a human must confirm. Excluded from the
@@ -71,8 +78,51 @@ function pollIntake() {
   }
 }
 
+/**
+ * Email authentication check — the intake trust boundary.
+ *
+ * The Worker decides what to do based on the sender address, and Gmail's
+ * `from:` search matches the FROM HEADER, which anyone can forge. Without this,
+ * sending mail that merely CLAIMS to be from Buildium drives the whole
+ * record-creation pipeline (work orders, properties, units, tenants) with no
+ * token at all.
+ *
+ * Gmail records its verdict in the Authentication-Results header. We require
+ * DMARC=pass, which only succeeds when SPF or DKIM aligns with the From domain —
+ * exactly the property we need. A message that fails is NOT silently dropped;
+ * it's labelled for review so a false negative is visible rather than lost.
+ *
+ * Returns { pass: bool, detail: string }.
+ */
+function checkAuthentication_(message) {
+  var raw;
+  try { raw = message.getRawContent(); }
+  catch (e) { return { pass: false, detail: 'could not read raw content: ' + e }; }
+  if (!raw) return { pass: false, detail: 'empty raw content' };
+
+  // Only the headers, and only the receiving server's own results.
+  var headers = raw.split(/\r?\n\r?\n/)[0] || '';
+  var unfolded = headers.replace(/\r?\n[ \t]+/g, ' ');
+  var lines = unfolded.split(/\r?\n/);
+  var results = lines.filter(function (l) { return /^Authentication-Results:/i.test(l); }).join(' ').toLowerCase();
+
+  if (!results) return { pass: false, detail: 'no Authentication-Results header' };
+  if (/dmarc=pass/.test(results)) return { pass: true, detail: 'dmarc=pass' };
+  // Fall back to SPF+DKIM both passing if DMARC wasn't evaluated.
+  if (/spf=pass/.test(results) && /dkim=pass/.test(results)) return { pass: true, detail: 'spf+dkim pass' };
+
+  var why = (results.match(/(dmarc|spf|dkim)=(\w+)/g) || []).join(' ') || 'no verdict found';
+  return { pass: false, detail: why };
+}
+
 /** Returns 'ok' | 'review' | 'error'. */
 function postMessage_(workerUrl, intakeToken, message) {
+  var auth = checkAuthentication_(message);
+  if (!auth.pass) {
+    Logger.log('  BLOCKED (failed email auth: ' + auth.detail + '): ' + message.getSubject());
+    return 'review';   // labelled NeedsReview — visible, not silently discarded
+  }
+
   var payload = {
     sender:     message.getFrom(),
     subject:    message.getSubject(),

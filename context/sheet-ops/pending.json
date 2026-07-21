@@ -1,0 +1,13 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "B-103 + B-104: work order intake traceability and the role-scoped notes model, against the LIVE RidgeCo Main sheet. Source + Intake_Message_ID give email intake its two dedupe layers (Intake_Message_ID is currently dead code without this column, leaving dedupe resting entirely on the sender-supplied Owner_WO_Ref). Entry_Notes / Owner_Notes / Vendor_Admin_Notes / Admin_Notes / Hold_Reason are the B-104 v2.0 role-scoped note fields; worker.js enforces per-role visibility via the WO_NOTE_VISIBILITY allowlist in enrichWO. All seven ops are add_column_header, which is additive and idempotent — new trailing columns only, so no existing worker.js column index shifts (FEATURE_LOG rules 3 and 6) and re-running is safe. The legacy Notes column is deliberately LEFT IN PLACE as an admin-only archive: do not delete it and do not migrate its contents, which mix owner posts with admin notes and cannot be split safely.",
+  "ops": [
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Source" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Intake_Message_ID" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Entry_Notes" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Owner_Notes" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Vendor_Admin_Notes" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Admin_Notes" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Hold_Reason" }
+  ]
+}
