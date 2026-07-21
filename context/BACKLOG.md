@@ -1,10 +1,117 @@
 # BrettOS Master Backlog
-**Version:** v1.19 | **Last Updated:** July 19, 2026
+**Version:** v1.20 | **Last Updated:** July 21, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
 
 ---
+
+<!-- QUICK-INDEX:START — always-loadable map; full entries below; grep an ID to jump to detail -->
+## Quick Index
+_Compact map of every open backlog item. Read THIS map on load (two-tier loading); open a full entry below only when a task needs it — grep the ID._
+
+**IN PROGRESS**
+- B-015 · QuickBooks Send-to-QuickBooks flow (invoice + bill + payment)
+**RIDGE CO — WORK ORDER MANAGEMENT**
+- B-001 · QB invoice creation from approved Invoice_Review rows
+- B-002 · QB bill recording when vendor bill approved
+- B-003 · Work order creation from index.html
+- B-004 · Vendor assignment + reassignment from index.html
+- B-005 · Payment tracking — record when customer pays
+- B-006 · Tenant portal — report issues, view WO status
+- B-007 · Automated vendor payment via QuickBooks
+- B-008 · Email/SMS notifications — vendor gets WO assigned
+- B-009 · Email/SMS notifications — Brett gets bill submitted for review
+- B-010 · WO completion photos auto-organized in Drive
+- B-011 · Invoice PDF generation for customers
+- B-012 · Vendor performance dashboard
+- B-055 · Lock-code registry — add "parcel locker" category (shareable-with-tenant
+- B-072 · Trade/repair standards + recurring-opportunistic task engine
+- B-073 · Properties onboarding site for customers (add properties; CSV import)
+- B-075 · Upgrade Hub UI to match the 4518 Fairfax Rd estimate look
+- B-077 · Preventive-maintenance package
+- B-082 · Cesar mirror site — tracks his own jobs separately but includes Brett's
+- B-084 · Hub "Receipts to file" queue — OCR + classify + seeded WO/property picke
+- B-085 · Rebuild receipt intake pipeline — retire the stalled Make.com scenario
+- B-086 · Reconcile receipts stuck in "WO Receipt Inbox" (Aug–Dec 2025)
+- B-088 · Add 1864 Kerns School Rd (owned STR) to the WO system as a property
+**RIDGE CO — OPERATIONS / TO-DO**
+- B-034 · Source a reliable plumber/handyman subcontractor
+- B-035 · Follow up with Cesar (Mon) on the 56 S Culver St job
+- B-036 · Confirm $300 extra to Cesar (V-003) for 807 N Calvert St bakery floor pr
+- B-037 · Follow up with Cesar (Mon) on the Gibbons jobs
+- B-038 · MD taxes payment plan — set up
+- B-039 · LLC renewal + annual report
+- B-042 · Update tenant records — William (3014 #3), Julie (115 #2), 2930 1R, 115 
+- B-043 · Invoice batch still owed — Bakery + 153 #2 + 2930 detector
+- B-044 · Capture WO labor time from messages (Jenn + Mark/Amanda)
+- B-045 · Work orders — 151 Apt 2 & 3 turns
+- B-046 · WO 115 Apt 2 — troubleshoot invoice
+- B-047 · Invoice Ashburton — diagnose + troubleshoot (2 hrs)
+- B-048 · WO 153 #2 — HVAC leak, add time
+- B-049 · Pay Sergio — bills entered, needs paid
+- B-050 · QB billing method — how to bill the 1st hour without looking like paddin
+- B-056 · Change parcel-locker batteries — 3014 & 2930
+- B-057 · Install new parcel locker @ 115
+- B-058 · Record lock-code changes — 3014 #3, 3014 #1, 1214 #3
+- B-060 · Confirm Oscar can do inspections
+- B-061 · Moving boxes — liquor store + box-recycling co (Spoon referral)
+- B-062 · Get invoices from Mook (V-005)
+- B-064 · Automate FedEx → FedEx store routing
+- B-065 · Collect from Ray (NJ) — $5k behind on cargo-van tolls/bill
+- B-066 · Automate weekly EZ-Pass toll pull → auto-invoice Ray
+- B-067 · Re-itemize Cesar estimates into checklists; Cesar = major, Oscar = minor
+- B-068 · Create invoices for Federal St job (off-Hub)
+- B-069 · FU Fait Ave/St owner — collect payment + confirm no more leaks
+- B-070 · Fait Ave/St — replace 3rd-floor pop-up assemblies
+- B-071 · FU Vanity repair lead (FB) — time-sensitive
+- B-087 · Unified vehicle-notice router (tolls, violations, recalls, MVA/registrat
+- B-090 · Fleet Vehicle roster sheet — VIN/plate → current holder (Kingbee/GiddyUp
+**RIDGE CO — ESTIMATING**
+- B-030 · Estimating template system — reusable proposal generator
+- B-031 · Estimating skill/agent — scope intake, photo review, line item generatio
+- B-032 · Proposal PDF export — one-click PDF with hyperlinks from HTML proposal
+- B-076 · Estimate-acceptance workflow — accept-all-in-section or cherry-pick w/ r
+**BRETTOS INFRASTRUCTURE**
+- B-013 · Scheduled context update — auto-push session log after each session
+- B-014 · QB refresh token auto-renewal monitoring
+- B-016 · Multi-venture dashboard — one page, all ventures status
+- B-017 · Agent builder — create reusable agents for common tasks
+- B-018 · Automated session log append after every Cowork session
+- B-033 · Best Practices doc update — no AI-obvious filenames, no PDF header/foote
+- B-051 · Daily digest of next steps + small wins
+- B-052 · Voice interface → spreadsheet (voice-to-sheet capture)
+- B-053 · Multi-step tags + categorization of captures
+- B-054 · Context/location-aware task surfacing
+- B-059 · Link tasks → projects (capture layer)
+- B-091 · Reconcile with the REAL BrettOS task app (sheet 1X2oYjD) — append net-ne
+- B-092 · Fix BrettOS integration sync error (Cloudflare 1042)
+- B-074 · Lead-finder Chrome extension — scan FB posts needing repairs/lawn care, 
+- B-081 · Lead capture that doesn't look bot/scammy/salesy
+- B-089 · HSA receipt automation (future, personal) — upload receipts to HSA for r
+**BARRELCO**
+- B-019 · Google Sheet for SKU/inventory tracking
+- B-020 · eBay API integration — auto-list new SKUs
+- B-021 · Pricing tracker — compare sold prices to listed prices
+- B-041 · FB Listings — post/refresh Facebook listings
+- B-063 · Cancel Vendoo + any other paid FB apps
+- B-078 · Inventory tracking — Community Forklift + outlets, integrated w/ their s
+- B-079 · Retail-outlet tracker for leads (barrels + related products) + gather re
+- B-080 · FB Marketplace / listing automation — respond to messages, capture off-F
+- B-083 · AI-coordinated Waynesboro VA fulfillment — parents ↔ FB Marketplace buye
+**CABIN (WV STR)**
+- B-022 · Uplisting API connection — booking sync
+- B-023 · Booking dashboard — occupancy, revenue, upcoming guests
+- B-024 · Automated guest messaging via Uplisting
+- B-025 · Expense tracking for cabin maintenance
+- B-040 · Cabin shopping list from Gina (★)
+**WINCHESTER HAULING**
+- B-026 · Clarify current stack — what exists, what's manual
+- B-027 · Driver portal — route assignment, pickup confirmation
+- B-028 · Automated driver payment
+- B-029 · CHEP/PECO reconciliation — pallets in vs out
+<!-- QUICK-INDEX:END -->
+
 
 ## IN PROGRESS
 

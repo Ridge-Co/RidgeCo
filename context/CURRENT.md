@@ -1,18 +1,24 @@
 # Current Context Files — Ridge Co / Brett AI
 
-These are the authoritative files Claude must read at the start of every session.
-Read ALL files before doing any work.
+These are the authoritative context files. As of July 21, 2026 the `brett-context` loader is **two-tier**
+(for token efficiency without loss — see the ✅ ALWAYS / ⏳ ON-DEMAND column):
 
-| File | Version | Description |
-|---|---|---|
-| Brett_Context_Document_v1.9.md | v1.9 | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-029), Session 2 log |
-| Brett_Cowork_Best_Practices_v1.3.md | v1.3 | Session workflow, common mistakes, how to work with Brett |
-| CREDENTIALS_MAP.md | v1.2 | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality |
-| VENTURES.md | v1.0 | Every venture — current state, stack, Claude access level, automation gaps |
-| FEATURE_LOG.md | v1.1 | What's working — check before every code change to prevent regressions |
-| BACKLOG.md | v1.19 | Master backlog across all ventures — priorities, in progress, completed |
-| CAPTURE_INBOX.md | v1.19 | Brett's zero-friction brain-dump inbox — CAP items, links to backlog, open questions. Read every session. |
-| HANDWRITING_KEY.md | v1.9 | Reference for reading Brett's handwritten-note photos; grows over time. Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338. |
+- **✅ ALWAYS-LOAD** the small governing set every session — these keep Claude correct and are cheap.
+- **⏳ ON-DEMAND** the big files only when a task needs them (grep the topic/ID first). BACKLOG and
+  CAPTURE_INBOX each carry a **Quick Index block at the top** that IS always-loadable; read the map,
+  open a full entry only when needed. Guardrail: before any build/debug, keep FEATURE_LOG loaded and
+  grep BACKLOG+CAPTURE for the venture/topic so you never act on partial context.
+
+| File | Version | Load | Description |
+|---|---|---|---|
+| Brett_Context_Document_v1.9.md | v1.9 | ✅ ALWAYS | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-029), Session 2 log |
+| Brett_Cowork_Best_Practices_v1.3.md | v1.3 | ✅ ALWAYS | Session workflow, common mistakes, how to work with Brett |
+| CREDENTIALS_MAP.md | v1.2 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality |
+| VENTURES.md | v1.0 | ✅ ALWAYS | Every venture — current state, stack, Claude access level, automation gaps |
+| FEATURE_LOG.md | v1.1 | ✅ ALWAYS | What's working — check before every code change to prevent regressions |
+| BACKLOG.md | v1.20 | ⏳ index always, detail on-demand | Master backlog across all ventures. Quick Index block at top (always-load); full entries on demand. |
+| CAPTURE_INBOX.md | v1.20 | ⏳ index always, detail on-demand | Brett's brain-dump inbox — CAP items. Quick Index block at top (always-load); full entries on demand. |
+| HANDWRITING_KEY.md | v1.9 | ⏳ ON-DEMAND | Reference for reading Brett's handwritten-note photos (load only for handwriting tasks). Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338. |
 
 ## PRIVATE / SENSITIVE CONTEXT (NOT in this public repo)
 
@@ -55,4 +61,5 @@ When a new version is needed (new PAT, new project details, etc.):
 | CAPTURE_INBOX v1.9 (+ private Drive doc) | July 19, 2026 | Ingested Brett's ChatGPT export (174 convos) → founding-vision + Winchester Hauling/CHEP synthesis. Stored in PRIVATE Google Doc (Brett_Vision_and_CHEP_Private_v1.1, id 1KFI6l4qtZft3kbKaXxLfbwBeYGxV86UmpqENGRD3xl8) — see PRIVATE CONTEXT pointer. CAP-019 logs it. CHEP now authorized per Brett. |
 | HANDWRITING_KEY v1.8 + CAPTURE_INBOX v1.7 + BACKLOG v1.9 | July 19, 2026 | Scan_1338 (AI/automation vision list) → CAP-018 + B-073..B-082: properties onboarding site, lead-finder Chrome extension, Hub UI → Fairfax estimate look, estimate-acceptance workflow, preventive-maintenance package, BarrelCo inventory (Community Forklift), retail-outlet tracker, FB Marketplace/listing automation (rebuild "Nerdy Panda"), non-botty lead capture, Cesar mirror site. Open ❓: parents' roles. |
 | Receipts pipeline design (CAP-002/020/021) | July 19, 2026 | Designed the receipt automation: intake = PAYABLES Inbox>Receipts and Invoices; filing = Vendors shared drive (0AIt2A2J2j6aFUk9PVA). Make.com dead (receipts stuck since 2025) → rebuild on QB API. Confirm-first queue w/ 3 categories (customer WO / owned-property e.g. 1864 Kerns STR / BMore business expense), hand-written-marking-first + learned vendor-defaults (Advance Auto→BMore). Builds B-084..B-089; toll-forwarding automation (GiddyUp/Kingbee by plate/VIN, EZ-Pass exception) CAP-020/B-087; HSA future CAP-021/B-089. |
+| Two-tier loading + Quick Index (BACKLOG v1.20 + CAPTURE_INBOX v1.20 + CURRENT.md) | July 21, 2026 | **Efficiency without loss.** brett-context loader made two-tier: ✅ always-load the small governing set (Context Doc, Best Practices, CREDENTIALS_MAP, VENTURES, FEATURE_LOG, private 00_INDEX) + the new **Quick Index** blocks at the top of BACKLOG & CAPTURE; ⏳ lazy-load full BACKLOG/CAPTURE detail, HANDWRITING_KEY, and venture briefs only when a task needs them (grep first). Guardrail: keep FEATURE_LOG loaded + grep BACKLOG+CAPTURE before any build/debug. Measured (brett-flow eval): ~95% less context read at equal answer quality. Pairs with the `brett-flow` skill. |
 | CREDENTIALS_MAP v1.2 + FEATURE_LOG v1.1 (engineering session) | July 19, 2026 | **BIG DAY.** (1) Fixed the silently-broken Cloudflare deploy — Worker hadn't auto-deployed in days; wired Workers Builds + `wrangler.toml` (keep_vars). (2) Hub fixes now LIVE: void re-render, **WO_ID matching** (status-not-saving root cause), bill→Complete automation. (3) **QuickBooks CONNECTED (production)** — realm 9130355695406136 (Saint Thomas Ventures LLC DBA Ridge Co); created 10 trade income accts + 12 items; `QB_TRADE_MAP` locked in worker.js. (4) Confirmed status lifecycle (…Invoiced→Pending Payment→Paid by Customer→Paid) + payment model 1+2 (worklist+deep-links+webhook auto-flip, overpay guard). Next (July 20): Send-to-QuickBooks invoice/bill/payment build (preview-first). |

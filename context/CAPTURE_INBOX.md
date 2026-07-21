@@ -1,8 +1,40 @@
 # BrettOS Capture Inbox
-**Version:** v1.19 | **Last Updated:** July 19, 2026
+**Version:** v1.20 | **Last Updated:** July 21, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
+
+<!-- QUICK-INDEX:START — always-loadable map; full entries below; grep an ID to jump to detail -->
+## Quick Index
+_Compact map of every capture item. Read THIS map on load (two-tier loading); open a full entry below only when a task needs it — grep the ID._
+
+- CAP-001 — Cargo van fleet / Kingbee exit (NEW venture — likely a 6th lane under BMore Management)
+- CAP-002 — Materials-receipt automation (Ridge Co — part NEW, part planned)
+- CAP-003 — Turo vehicle rentals (NEW lane — surfaced from calendar reminders)
+- CAP-004 — Entity note: BMore Management is the parent (INFO)
+- CAP-005 — Compliance-notice auto-forward automation (vehicles — NEW, high value)
+- CAP-006 — Vehicle registration & renewal tracker (NEW)
+- CAP-007 — CASH-FLOW CRUNCH (STRATEGIC NORTH STAR — read before prioritizing anything)
+- CAP-008 — Entity structure + active GL insurance switch (INFO + near-term to-do)
+- CAP-009 — Fleet/vehicle filing model (DECISION — apply everywhere)
+- CAP-010 — Database-integrated repair gems + tenant self-help system (PLAN)
+- CAP-011 — RidgeCo Hub "one ring" punch list (WO-1053 session, July 18)
+- CAP-012 — Plumber / handyman sourcing (Ridge Co — NEW, active)
+- CAP-013 — Content-creation venture / marketing funnel (NEW lane — PARKED, long-term)
+- CAP-014 — Master operational to-do brain-dump (Ridge Co + admin — mostly NEW, active)
+- CAP-015 — Capture / assistant system vision — "Fix What Bugs Me" (BrettOS — NEW, active)
+- CAP-016 — Lock-code registry: parcel-locker category + tasks (Ridge Co Hub — feature + tasks)
+- CAP-017 — Mixed brain-dump: fleet receivable, jobs, BarrelCo, standards vision (multi-venture)
+- CAP-018 — AI/automation vision: onboarding, lead-gen, BarrelCo listings, Cesar mirror (multi-venture)
+- CAP-019 — ChatGPT export ingested → founding vision + Winchester Hauling/CHEP brief (stored PRIVATELY)
+- CAP-020 — Vehicle toll / violation forwarding automation (Turo→GiddyUp, vans→Kingbee — NEW)
+- CAP-021 — HSA receipt automation (FUTURE — personal)
+- CAP-022 — Vehicle RECALL forwarding + unified vehicle-notice router (NEW)
+- CAP-023 — BarrelCo leads database (retail-outlet leads — NEW, activates B-079)
+- CAP-024 — Surface captures/tasks in a BrettOS Sheet (accessible + bulk-actionable — NEW)
+- CAP-025 — Reconcile with the REAL BrettOS task app (sheet 1X2oYjD) — IMPORTANT
+<!-- QUICK-INDEX:END -->
+
 
 ## HOW IT WORKS
 
