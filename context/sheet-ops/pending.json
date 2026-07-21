@@ -1,0 +1,27 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Create the missing Receipts tab. GET /receipts silently returned [] via its PAT-014 catch, masking that the tab never existed; every write path (/receipt/add, /receipt/delete) 500'd with 'Unable to parse range: Receipts'. ID must be first — updateRow matches r[0]; addRow maps values by header name.",
+  "ops": [
+    {
+      "type": "create_tab",
+      "tab": "Receipts"
+    },
+    {
+      "type": "write_headers",
+      "tab": "Receipts",
+      "headers": [
+        "ID",
+        "WO_ID",
+        "Amount",
+        "Description",
+        "Store",
+        "Date",
+        "Added_By",
+        "Added_By_ID",
+        "Role",
+        "Created_Date",
+        "Active"
+      ]
+    }
+  ]
+}

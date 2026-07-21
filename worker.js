@@ -153,7 +153,6 @@ export default {
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
-        if (path === '/fire-make-webhook')        return await fireMakeWebhook(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/master-key/add')           return await addRow(env, 'Master_Keys', body);
         if (path === '/master-key/update')        return await updateRow(env, 'Master_Keys', body.id, body.fields);
@@ -1385,13 +1384,10 @@ async function updateWOField(env, woId, fieldName, value) {
   } catch(e) { /* non-fatal */ }
 }
 
-async function fireMakeWebhook(env, body) {
-  const webhookUrl=env.MAKE_WEBHOOK_URL; if(!webhookUrl) return json({error:'MAKE_WEBHOOK_URL not configured'},400);
-  if(body.customer_charge) await updateWOField(env,body.wo_id,'Customer_Charge',body.customer_charge);
-  if(body.invoice_memo)    await updateWOField(env,body.wo_id,'Invoice_Memo',body.invoice_memo);
-  const res=await fetch(webhookUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const text=await res.text(); return json({success:res.ok,status:res.status,response:text});
-}
+// Retired July 20, 2026 — the Make.com → QBO webhook path is dead (Make stopped
+// firing in 2025). Invoicing now goes through the preview-first /qb/send-invoice
+// flow against Intuit directly. The old /fire-make-webhook route is gone; the Hub
+// button that called it now opens the QB preview modal.
 
 async function updateOwnerBilling(env, body) {
   if (!body.owner_id) return json({error:'Missing owner_id'},400);
@@ -1726,8 +1722,23 @@ function nextSafeId(rows) {
   return ids.length>0?Math.max(...ids)+1:1;
 }
 
+// PAT-014: a missing tab must surface as a clean, actionable 404 — never a raw
+// Sheets stack trace. Reads already swallow this (returning []), which is exactly
+// what hid the missing Receipts tab for weeks: /receipts looked healthy while every
+// write 500'd. Writes must fail LOUDLY but legibly.
+function isMissingTabError(e) {
+  return /Unable to parse range/i.test(e && e.message || '');
+}
+function missingTabResponse(tab) {
+  return json({ error: `Sheet tab "${tab}" does not exist`, tab, hint: 'Create it via context/sheet-ops/pending.json' }, 404);
+}
+
 async function addRow(env, tab, body) {
-  const data=await sheetsRequest(env,'GET',`/values/${tab}`); const rows=data.values||[[]], headers=rows[0];
+  let data;
+  try { data = await sheetsRequest(env,'GET',`/values/${tab}`); }
+  catch(e) { if(isMissingTabError(e)) return missingTabResponse(tab); throw e; }
+  const rows=data.values||[[]], headers=rows[0];
+  if(!headers||!headers.length) return json({ error:`Sheet tab "${tab}" has no header row`, tab }, 500);
   let nextId=1; if(rows.length>1){const existingIds=rows.slice(1).map(r=>parseInt(r[0]||'0')).filter(n=>Number.isFinite(n)&&n>0);if(existingIds.length>0)nextId=Math.max(...existingIds)+1;}
   const PHONE_TABS=['Vendors','Owner_Users','Tenants','Owners']; if(PHONE_TABS.includes(tab)&&body.Phone) body.Phone=normalizePhone(body.Phone);
   const PIN_TABS=['Vendors','Owner_Users','Tenants']; if(PIN_TABS.includes(tab)&&!body.PIN&&body.Phone) body.PIN=generatePIN(body.Phone);
@@ -1737,8 +1748,15 @@ async function addRow(env, tab, body) {
 }
 
 async function updateRow(env, tab, id, fields) {
+  // Callers pass body.fields straight through, so an omitted `fields` used to throw
+  // a raw TypeError on `fields.Phone` before any validation ran.
+  if(!fields||typeof fields!=='object') return json({error:'fields object required'},400);
+  if(id===undefined||id===null||id==='') return json({error:'id required'},400);
   if(fields.Phone) fields.Phone=normalizePhone(fields.Phone);
-  const data=await sheetsRequest(env,'GET',`/values/${tab}`); if(!data.values) return json({error:'Tab not found'},404);
+  let data;
+  try { data = await sheetsRequest(env,'GET',`/values/${tab}`); }
+  catch(e) { if(isMissingTabError(e)) return missingTabResponse(tab); throw e; }
+  if(!data.values) return json({error:'Tab not found'},404);
   const [headers,...rows]=data.values; const _wc=(tab==='Work_Orders')?headers.indexOf('WO_ID'):-1; const rowIndex=rows.findIndex(r=>r[0]===String(id)||(_wc>=0&&r[_wc]===String(id)));
   if(rowIndex===-1) return json({error:'Row not found'},404);
   const sheetRow=rowIndex+2, updates=[];

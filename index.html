@@ -1261,7 +1261,7 @@ function openWODetail(woId) {
     (qboStatus ? '<span style="color:var(--muted);font-size:11px;padding:4px 0">'+esc(qboStatus)+'</span>' : '') +
     '</div>'
   ) : '';
-  document.getElementById('detail-body').innerHTML += statusHtml;
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', statusHtml);
 
   // ── B: Photo upload section ────────────────────────────
   var propForUpload = prop ? (prop.Address||'') : '';
@@ -1296,12 +1296,12 @@ function openWODetail(woId) {
     ' style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:60px;resize:vertical;margin-top:4px">'+esc(wo.Invoice_Memo||wo.Description||'')+'</textarea>' +
     '</div>' +
     '<div style="display:flex;gap:8px">' +
-    '<button onclick="fireInvoiceWebhook(\''+woId+'\')" style="background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 16px;cursor:pointer">🚀 Send to Make → QBO</button>' +
+    '<button onclick="sendWOToQuickBooks(\''+woId+'\')" style="background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 16px;cursor:pointer">📤 Send to QuickBooks</button>' +
     '<button onclick="saveDraftInvoice(\''+woId+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;font-family:var(--font);font-size:12px;padding:8px 14px;cursor:pointer">💾 Save Draft</button>' +
     '<div id="inv-msg-'+woId+'" style="font-size:11px;color:var(--muted);padding:8px 0"></div>' +
     '</div>' +
   '</div>';
-  document.getElementById('detail-body').innerHTML += invoiceHtml;
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', invoiceHtml);
   loadVendorBillForInvoice(woId);
 
   // Materials section for this WO
@@ -1311,11 +1311,11 @@ function openWODetail(woId) {
     '<button class="btn small" onclick="openAddMaterialModal(\''+woId+'\')">+ Add Item</button></div>' +
     '<div id="wo-mat-list-'+woId+'" style="font-size:12px"><span style="color:var(--muted)">Loading…</span></div>' +
   '</div>';
-  document.getElementById('detail-body').innerHTML += matHtml;
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', matHtml);
   loadWOMaterials(woId);
 
   // Append audit section after the detail body builds
-  document.getElementById('detail-body').innerHTML += auditHtml;
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', auditHtml);
   // Load audit trail
   // Load vendor bills — show ALL bills for this WO, not just most recent
   api('GET','/vendor-bills?wo_id='+woId).then(function(bills){
@@ -1429,7 +1429,7 @@ function openWODetail(woId) {
     '<div style="font-size:10px;color:var(--muted);margin-top:8px">Trade defaults are set in Config → Access_Trade_Defaults. Trades not listed default to YES.</div>' +
     '</div>';
 
-  document.getElementById('detail-body').innerHTML += tvSection + vaSection;
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
 
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
@@ -3760,28 +3760,29 @@ function saveDraftInvoice(woId) {
 }
 
 // Fire Make webhook → QuickBooks invoice + bill creation
-function fireInvoiceWebhook(woId) {
-  var charge = (document.getElementById('inv-charge-' + woId) || {}).value || '';
-  var memo   = (document.getElementById('inv-memo-'   + woId) || {}).value || '';
-  var msgEl  = document.getElementById('inv-msg-' + woId);
-  if (!charge) { toast('Enter a customer charge amount first', 'error'); return; }
-  if (msgEl) msgEl.textContent = 'Sending to Make…';
-  var wo = safeArray(state.workorders).find(function(w) { return w.ID === woId; });
-  api('POST', '/invoice-webhook', {
-    wo_id: woId, charge: charge, memo: memo,
-    property: wo ? (wo.Property_Address || wo.property_address || '') : '',
-    vendor_id: wo ? wo.Vendor_ID : '',
-    owner_wo_ref: wo ? wo.Owner_WO_Ref : '',
-  }).then(function(res) {
-    if (res.success || res.ok) {
-      if (msgEl) msgEl.innerHTML = '<span style="color:var(--accent2)">✓ Sent to Make → QBO</span>';
-      toast('Invoice sent to QuickBooks', 'success');
-      updateWOStatus(woId, 'Invoiced');
-    } else {
-      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">' + (res.error || 'Webhook failed') + '</span>';
+// Replaces the retired "Send to Make → QBO" button (Make.com died in 2025, and the
+// button posted to /invoice-webhook, a route that never existed → 404 "Not found").
+//
+// /qb/send-invoice works off an approved Invoice_Review row, not a raw WO — so this
+// resolves the WO's pending IR row and hands off to the same preview-first modal the
+// SEND TO QB tab uses. No approved bill means there is genuinely nothing to invoice
+// yet, so say so and point at Review Bills rather than failing cryptically.
+function sendWOToQuickBooks(woId) {
+  var msgEl = document.getElementById('inv-msg-' + woId);
+  if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted)">Checking for an approved bill…</span>';
+  api('GET', '/qb/ready').then(function(rows) {
+    _qbQueue = Array.isArray(rows) ? rows : [];
+    var row = _qbQueue.find(function(r) { return r.wo_id === woId; });
+    if (!row) {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--warn)">No approved bill for this WO yet — approve it in ' +
+        '<a href="#" onclick="closeModal(\'modal-wo-detail\');showPage(\'invoice-review\',null);return false" style="color:var(--accent)">Review Bills</a> first.</span>';
+      return;
     }
+    if (msgEl) msgEl.innerHTML = '';
+    closeModal('modal-wo-detail');
+    previewQBSend(row.id);   // preview creates nothing — confirm happens in the modal
   }).catch(function(e) {
-    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Error: ' + e.message + '</span>';
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Error: ' + esc(e.message || '?') + '</span>';
   });
 }
 
