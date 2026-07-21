@@ -115,7 +115,10 @@ eq(p.files.length, 2, 'files deduped (photo linked twice) and video kept');
 ok(p.files.some(f => /\.MOV$/.test(f)), 'video file included');
 ok(p.description.includes('Leaking toilet'), 'description keeps the title');
 ok(p.description.includes('pooling'), 'description includes the job description');
-ok(p.notes.includes('Cat'), 'pet/entry detail lands in notes');
+// Changed July 21: entry/pet detail is ACCESS info and now routes to entry_notes,
+// not the free-text Notes log. See the WO-1068 regression section.
+ok(p.entry_notes.includes('Cat'), 'pet/entry detail lands in entry_notes');
+eq(p.notes, '', 'Notes left clean');
 eq(p.warnings, [], 'no warnings on a well-formed email');
 
 section('parseBuildium — urgent + subject-only ref');
@@ -222,6 +225,81 @@ ok(files.files.some(u => u.includes('/file/download')), 'extension-less download
 eq(files.files.filter(u => u.includes('photo.jpg')).length, 1, 'thumbnail and full-size deduped to one');
 eq(files.files.find(u => u.includes('photo.jpg')), 'https://s3.amazonaws.com/b/photo.jpg', 'full-size variant preferred over the thumbnail');
 eq(files.files.some(u => u.endsWith('.pdf')), false, 'PDF excluded — intake files are job photos (FEATURE_LOG rule 13)');
+
+section('REGRESSION: WO-1068 — Buildium section headers must not leak into fields');
+// Real-email test, July 21. "Contact and scheduling information", "Parts and labor
+// details" and "Vendor information" were missing from BUILDIUM_LABELS, so
+// sectionAfter() ran straight through them and the literal header text landed in
+// Description and Notes ("Contact and scheduling information" appeared TWICE on
+// WO-1068). Layout below matches the real mail: the header sits between
+// "Job description" and "Entry details".
+const WO1068 = `
+<p>Work order #838106-1: Leaking toilet</p>
+<p>Job description</p>
+<p>Toilet runs constantly and water is pooling on the floor.</p>
+<p>Contact and scheduling information</p>
+<p>Ian Rogers</p>
+<p>(240) 288-0886</p>
+<p>Entry details</p>
+<p>Pets: Yes - Cat</p>
+<p>Lockbox on the side door</p>
+<p>Parts and labor details</p>
+<p>Charge work to</p>
+<p>Owner</p>
+<p>Invoice no.</p>
+<p>INV-4471</p>
+<p>Vendor information</p>
+<p>Vendor name</p>
+<p>Acme Plumbing</p>
+<p>Vendor contact info</p>
+<p>(410) 555-0100</p>
+<p>Vendor notes</p>
+<p>Call before arriving</p>
+<p>Location</p>
+<p>1110 North Dukeland Street - 1</p>
+<p>Baltimore, MD 21216</p>`;
+const w68 = parseBuildium(WO1068, 'Phoenix Estate Rentals, LLC: Work order 838106', '');
+
+const LEAKY = ['Contact and scheduling information','Parts and labor details','Vendor information',
+  'Vendor name','Vendor contact info','Vendor notes','Invoice no','Charge work to'];
+for (const h of LEAKY) {
+  eq(w68.description.includes(h), false, `"${h}" absent from Description`);
+  eq(w68.entry_notes.includes(h), false, `"${h}" absent from entry notes`);
+}
+// The specific WO-1068 symptom: the header appeared twice.
+eq((w68.description.match(/Contact and scheduling information/g) || []).length, 0, 'no duplicated header text in Description');
+
+// Description stays clean: the problem + tenant notes, nothing else.
+eq(w68.description, 'Leaking toilet — Toilet runs constantly and water is pooling on the floor.', 'Description is exactly title + job description');
+eq(w68.description.includes('Acme Plumbing'), false, 'vendor block does not bleed into Description');
+eq(w68.description.includes('INV-4471'), false, 'invoice number does not bleed into Description');
+
+// Entry content is captured and routed to entry_notes, not Notes.
+eq(w68.entry_notes, 'Pets: Yes - Cat | Lockbox on the side door', 'entry details captured, stopping at the next header');
+eq(w68.notes, '', 'Notes is no longer a dumping ground for entry info');
+eq(w68.entry_notes.includes('Owner'), false, 'the "Charge work to" value does not bleed into entry notes');
+
+// The tenant block moved: the real mail files it under "Contact and scheduling
+// information", not "Entry contacts". Reading only the latter meant NO tenant was
+// parsed and none got linked to the work order.
+eq(w68.tenant.name, 'Ian Rogers', 'tenant parsed from "Contact and scheduling information"');
+eq(w68.tenant.phone, '(240) 288-0886', 'tenant phone parsed from the renamed block');
+eq(w68.tenant.name.includes('Acme'), false, 'vendor name is not mistaken for the tenant');
+
+// The rest of the email still parses with the new boundaries in place.
+eq(w68.property.address, '1110 North Dukeland Street', 'address still parsed');
+eq(w68.unit_label, '1', 'unit still parsed');
+eq(w68.owner_wo_ref, '838106-1', 'ref still parsed');
+eq(w68.trade, 'Plumbing', 'trade still guessed');
+
+section('REGRESSION: an unknown future header is reported, not silently swallowed');
+const future = parseBuildium(
+  '<p>Work order #5: leak</p><p>Job description</p><p>Pipe burst</p><p>Some Brand New Section</p><p>junk</p><p>Location</p><p>5 Oak St</p>', 'x', '');
+eq(future.warnings.some(w => /unrecognized section header/i.test(w)), true, 'unknown header raises a warning');
+eq(future.warnings.some(w => w.includes('Some Brand New Section')), true, 'the warning names the offending line');
+// A normal email must not trip the heuristic.
+eq(p.warnings, [], 'well-formed email still produces zero warnings');
+eq(w68.warnings, [], 'WO-1068 layout produces zero warnings once its headers are known');
 
 console.log(`\n${'='.repeat(52)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(52)}`);
 if (fail) process.exit(1);

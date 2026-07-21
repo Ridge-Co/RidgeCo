@@ -262,5 +262,42 @@ r = await run(buildEmail({ subject: 'Phoenix Estate Rentals, LLC: maintenance', 
 eq(r.status, 'needs_review', 'no ref → review (it would be undedupable)');
 eq(woRows().length, 1, 'nothing created');
 
+// ── entry/access routing (WO-1068 follow-up) ─────────────────────────────────
+const ENTRY_EMAIL = buildEmail({
+  html: `<p>Work order #838106-1: Leaking toilet</p>
+    <p>Job description</p><p>Water pooling on the floor.</p>
+    <p>Contact and scheduling information</p><p>Ian Rogers</p><p>(240) 288-0886</p>
+    <p>Entry details</p><p>Pets: Yes - Cat</p><p>Lockbox on the side door</p>
+    <p>Vendor information</p><p>Vendor name</p><p>Acme Plumbing</p>
+    <p>Location</p><p>1110 North Dukeland Street - 1</p><p>Baltimore, MD 21216</p>`,
+});
+const get = (row, name) => row[SHEETS.Work_Orders[0].indexOf(name)];
+
+section('entry routing — Entry_Notes column PRESENT');
+reset();
+SHEETS.Work_Orders[0] = [...WO_HEADERS, 'Entry_Notes'];
+r = await run(ENTRY_EMAIL);
+eq(r.status, 'created', 'created');
+let row = SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1];
+eq(get(row, 'Entry_Notes'), 'Pets: Yes - Cat | Lockbox on the side door', 'entry info written to Entry_Notes');
+eq(get(row, 'Notes'), '', 'Notes stays clean when the column exists');
+eq(get(row, 'Description'), 'Leaking toilet — Water pooling on the floor.', 'Description is just the problem');
+eq(/Contact and scheduling|Vendor information|Vendor name/.test(get(row, 'Description') + get(row, 'Notes') + get(row, 'Entry_Notes')), false, 'NO section header text anywhere on the WO');
+eq(get(row, 'WO_Contact_Name'), 'Ian Rogers', 'contact still parsed from the renamed header block');
+
+section('entry routing — Entry_Notes column ABSENT (info must not be lost)');
+reset();
+r = await run(ENTRY_EMAIL);
+row = SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1];
+eq(get(row, 'Notes'), 'Entry: Pets: Yes - Cat | Lockbox on the side door', 'degrades into Notes with a clean prefix');
+eq(/Contact and scheduling|Vendor information/.test(get(row, 'Notes')), false, 'still no raw header text');
+
+section('entry routing — no entry info in the email');
+reset();
+SHEETS.Work_Orders[0] = [...WO_HEADERS, 'Entry_Notes'];
+r = await run(buildEmail({ html: buildEmail().html.replace('<p>Entry details</p><p>Pets: Yes - Cat</p>', '') }));
+row = SHEETS.Work_Orders[SHEETS.Work_Orders.length - 1];
+eq(get(row, 'Entry_Notes'), '', 'Entry_Notes left blank so the property Access_Notes default applies');
+
 console.log(`\n${'='.repeat(52)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(52)}`);
 if (fail) process.exit(1);

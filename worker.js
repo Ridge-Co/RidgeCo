@@ -1747,16 +1747,46 @@ function htmlToText(html) {
 
 // Labels that end a section. Kept broad so an unexpected block doesn't get
 // swallowed into the previous field's value.
+// Every one of these ENDS the preceding section. A header missing from this list
+// doesn't just fail to parse — sectionAfter() runs straight through it and the
+// literal header text lands in Description/Notes. That's how "Contact and
+// scheduling information" leaked twice onto WO-1068 (real email, July 21).
 const BUILDIUM_LABELS = [
   'work order','location','entry contacts','entry contact','entry details','entry notes',
   'job description','tenant notes','description','files','attachments','photos','priority',
   'category','requested by','status','assigned to','due date','notes','pets','property',
   'unit','tenant','vendor','created','scheduled',
+  // Added July 21 from the WO-1068 real-email test.
+  'contact and scheduling information','parts and labor details','vendor information',
+  'vendor name','vendor contact info','vendor notes','invoice no','charge work to',
 ];
 
 function isLabelLine(line) {
-  const l = line.toLowerCase().replace(/[:\s]+$/, '').trim();
+  // Trailing period matters: the real header is "Invoice no." — stripping only
+  // colons/space left it unmatched.
+  const l = line.toLowerCase().replace(/[.:\s]+$/, '').trim();
   return BUILDIUM_LABELS.includes(l);
+}
+
+// Buildium can add a section header at any time, and the failure mode is silent
+// corruption of the WO. Rather than only ever finding out from a bad work order,
+// flag anything INSIDE a captured section that looks like a header we don't know:
+// a short, title-ish line with no sentence punctuation. This only ever adds a
+// warning — it never changes what gets parsed.
+function suspectHeaderLines(lines) {
+  return lines.filter(l => {
+    const t = l.trim();
+    if (t.length < 8 || t.length > 60) return false;
+    if (/[.!?,;:]/.test(t)) return false;
+    const words = t.split(/\s+/);
+    if (words.length < 2 || words.length > 6) return false;
+    if (!/^[A-Z]/.test(t) || /\d/.test(t)) return false;
+    // Must read as Title Case. Without this, ordinary entry content like
+    // "Lockbox on the side door" trips the heuristic and every WO carries a
+    // bogus warning — which trains you to ignore warnings entirely.
+    const capitalized = words.filter(w => /^[A-Z]/.test(w)).length;
+    return capitalized / words.length >= 0.6;
+  });
 }
 
 // Returns the lines that follow `label` up to the next label line.
@@ -1890,7 +1920,14 @@ function parseBuildium(html, subject, plaintext) {
   if (!street) warnings.push('No property address found in the Location block');
 
   // Entry contacts → tenant.
-  const contact = sectionAfter(lines, 'entry contacts').concat(sectionAfter(lines, 'entry contact'));
+  // The real WO-1068 mail puts the tenant under "Contact and scheduling
+  // information", not "Entry contacts" — reading only the latter meant no tenant
+  // name/phone/email was parsed at all, so no tenant got linked to the WO.
+  const contact = [...new Set([
+    ...sectionAfter(lines, 'entry contacts'),
+    ...sectionAfter(lines, 'entry contact'),
+    ...sectionAfter(lines, 'contact and scheduling information'),
+  ])];
   const contactText = contact.join('\n');
   const email = (contactText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/) || [''])[0];
   const phone = (contactText.match(/(?:\+1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [''])[0];
@@ -1910,9 +1947,17 @@ function parseBuildium(html, subject, plaintext) {
     break;
   }
 
-  // Entry/pet details → WO notes (access hints the vendor needs).
-  const entryNotes = [...sectionAfter(lines, 'entry details'), ...sectionAfter(lines, 'entry notes'), ...sectionAfter(lines, 'pets')]
-    .filter(Boolean).join(' | ');
+  // Entry/pet details are ACCESS information, not a general note — they belong on
+  // the WO's entry field where the vendor actually looks (and where the assign SMS
+  // reads from), not appended to the free-text Notes log.
+  // "Pets: Yes - Cat" sits INSIDE the entry-details block but also matches the
+  // standalone "pets" label, so the naive concat captured it twice — once whole,
+  // once as the bare value. Drop any line already contained in a longer one.
+  const rawEntry = [...new Set(
+    [...sectionAfter(lines, 'entry details'), ...sectionAfter(lines, 'entry notes'), ...sectionAfter(lines, 'pets')].filter(Boolean)
+  )];
+  const entryLines = rawEntry.filter(l => !rawEntry.some(o => o !== l && o.length > l.length && o.includes(l)));
+  const entryNotes = entryLines.join(' | ');
 
   // Owner: Buildium puts the management company in the subject prefix and footer.
   const ownerName = (String(subject || '').match(/^(.*?):\s*work order/i) || [null, ''])[1].trim();
@@ -1946,6 +1991,15 @@ function parseBuildium(html, subject, plaintext) {
 
   const priority = /\b(emergency|urgent|asap|no heat|no hot water|flood|gas leak)\b/i.test(text) ? 'urgent' : 'normal';
 
+  // Surface unknown section headers that landed inside parsed content.
+  const suspects = [...new Set([
+    ...suspectHeaderLines((jobDesc || descBlock || '').split('\n')),
+    ...suspectHeaderLines(tenantNote.split('\n')),
+    ...suspectHeaderLines(entryLines),
+  ])].filter(s => s.toLowerCase() !== title.toLowerCase());
+  if (suspects.length)
+    warnings.push(`Possible unrecognized section header(s) in parsed content — add to BUILDIUM_LABELS if so: ${suspects.join(' / ')}`);
+
   return {
     source: 'buildium',
     owner_wo_ref: ownerRef,
@@ -1956,7 +2010,8 @@ function parseBuildium(html, subject, plaintext) {
     property: { address: street, city, state, zip },
     unit_label: unitLabel,
     tenant: { name: contactName, phone, email },
-    notes: entryNotes,
+    entry_notes: entryNotes,
+    notes: '',
     files: urls,
     warnings,
   };
@@ -2182,6 +2237,10 @@ async function handleIntake(env, body) {
   if (!parsed.owner_wo_ref)
     return review('No Buildium work order number found — cannot dedupe this email, so it will not auto-create');
 
+  // Detected from the data rather than assumed, so intake works before and after
+  // the Entry_Notes column lands.
+  const hasEntryCol = Object.keys(workorders[0] || {}).includes('Entry_Notes');
+
   const [properties, owners, units, tenants] = await Promise.all([
     fetchTab(env, 'Properties'), fetchTab(env, 'Owners'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'),
   ]);
@@ -2220,7 +2279,11 @@ async function handleIntake(env, body) {
     owner_wo_ref: parsed.owner_wo_ref,
     wo_contact_name: parsed.tenant.name,
     wo_contact_phone: parsed.tenant.phone,
-    notes: parsed.notes,
+    // Entry info belongs in Entry_Notes. Until that column exists it still must
+    // not be lost, so it degrades into Notes with a clear prefix (never the raw
+    // section header). Once the column is added this branch stops firing — no
+    // rework, and no window where access info silently vanishes.
+    notes: hasEntryCol ? '' : (parsed.entry_notes ? `Entry: ${parsed.entry_notes}` : ''),
     type: 'email-intake',
     created_by: `intake:${source}`,
   });
@@ -2231,7 +2294,12 @@ async function handleIntake(env, body) {
   // Traceability columns. updateWOFields skips headers that don't exist, so this
   // is a no-op (not an error) until the Source / Intake_Message_ID columns land.
   try {
-    await updateWOFields(env, woId, { Source: `email-${source}`, Intake_Message_ID: message_id || '' });
+    const post = { Source: `email-${source}`, Intake_Message_ID: message_id || '' };
+    // Only the email's own entry info goes here. A blank must NOT be written —
+    // an empty Entry_Notes is what makes the WO fall back to the property's
+    // standing Access_Notes default.
+    if (parsed.entry_notes) post.Entry_Notes = parsed.entry_notes;
+    await updateWOFields(env, woId, post);
   } catch (e) { /* non-fatal */ }
 
   const files = await ingestFiles(env, woId, propAddress, parsed.files);
