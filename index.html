@@ -2315,8 +2315,19 @@ document.querySelectorAll('.modal-overlay').forEach(function(m){
 // Convert URLs in text to clickable links
 function linkify(text) {
   if (!text) return '—';
-  var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:var(--info);word-break:break-all">$1</a>');
+  // Quotes MUST be escaped here. This used to escape only & < > and then splice
+  // the match into href="$1" — and the URL pattern [^\s]+ happily swallows a
+  // quote, so text like  http://a.co/"onmouseover="…  closed the attribute and
+  // injected a live event handler. Since B-103 writes email-derived text into
+  // Description, that was stored XSS in the admin Hub, where AUTH_TOKEN sits in
+  // localStorage. Escaping quotes BEFORE the match means no raw quote survives
+  // to break out of the attribute.
+  var escaped = String(text)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return escaped.replace(/(https?:\/\/[^\s<>"']+)/g, function(u) {
+    return '<a href="' + u + '" target="_blank" rel="noopener" style="color:var(--info);word-break:break-all">' + u + '</a>';
+  });
 }
 
 function tenantToggle(field, currentVal, label, woId) {

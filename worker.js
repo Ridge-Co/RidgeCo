@@ -55,6 +55,11 @@ export default {
       // this must be blocked before the auth gate, not after.
       if (path.startsWith('/qb'))
         return json({ error: 'QuickBooks is disabled in staging — it has no sandbox and would rotate the production refresh token.', staging: true }, 503);
+      // The staging swap covers SHEET_ID, but KEY_REGISTRY_SHEET_ID is a separate
+      // spreadsheet of live lockbox/door codes that it does NOT override — so this
+      // route would read production key material from a staging deploy.
+      if (path === '/import-key-registry')
+        return json({ error: 'Key registry import is disabled in staging — it reads the production key registry.', staging: true }, 503);
     }
 
     const PUBLIC_PATHS = ['/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
@@ -66,9 +71,35 @@ export default {
       // /intake* accepts its own dedicated INTAKE_TOKEN so that rotating the shared
       // WORKER_SECRET (security build) doesn't break the Apps Script poller, and vice
       // versa. WORKER_SECRET still works so the Hub can call these routes too.
-      const intakeOk = path.startsWith('/intake') && env.INTAKE_TOKEN && token === env.INTAKE_TOKEN;
-      if (!intakeOk && token !== env.WORKER_SECRET)
+      // Exact list, NOT startsWith('/intake'). A prefix match means the next
+      // route someone names /intake-queue or /intake-review silently inherits the
+      // poller's token with no code change — and Phase B is literally called the
+      // intake review queue.
+      const INTAKE_PATHS = ['/intake'];
+      const intakeOk = INTAKE_PATHS.includes(path) && env.INTAKE_TOKEN && token === env.INTAKE_TOKEN;
+      const isAdmin  = !!env.ADMIN_TOKEN && token === env.ADMIN_TOKEN;
+      if (!intakeOk && !isAdmin && token !== env.WORKER_SECRET)
         return json({ error: 'Unauthorized' }, 401);
+
+      // ── Optional admin-token tier (OFF until ADMIN_TOKEN is set) ────────────
+      // WORKER_SECRET is hardcoded in owner.html / tenant.html / vendor.html, so
+      // it is readable by any portal user — which makes every gated route
+      // effectively public. That predates this work, but B-104 raises the stakes:
+      // Work_Orders now holds admin-only and vendor-only note columns, and the
+      // bulk /workorders read returns raw rows, bypassing the visibility matrix
+      // entirely. These paths are the bulk reads that expose notes or PII across
+      // ALL records; none of them is used by any customer portal (verified), so
+      // requiring a separate token here costs the portals nothing.
+      // Set ADMIN_TOKEN in Cloudflare and enter it in the Hub to switch this on.
+      // While ADMIN_TOKEN is unset this block is a no-op and behaviour is exactly
+      // as before.
+      const ADMIN_ONLY_PATHS = [
+        '/workorders', '/tenants', '/owners', '/keys', '/master-keys', '/keys-history',
+        '/smslog', '/units', '/properties', '/vendors', '/invoices', '/materials',
+        '/returns', '/owner-users', '/wishlist', '/wo-templates', '/cache',
+      ];
+      if (env.ADMIN_TOKEN && ADMIN_ONLY_PATHS.includes(path) && !isAdmin)
+        return json({ error: 'This endpoint requires the admin token', path }, 403);
     }
     try {
       if (request.method === 'GET') {
@@ -758,7 +789,11 @@ async function ownerExport(env, url) {
     fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchTab(env,'Vendors'),
   ]);
   const ownerPropIds = new Set(properties.filter(p => String(p.Owner_ID) === String(ownerId)).map(p => p.ID));
-  let wos = workorders.filter(w => ownerPropIds.has(w.Property_ID));
+  // Match /owner-workorders: open work orders only unless closed ones are asked
+  // for. Returning the full history by default made this endpoint strictly
+  // broader than the one it mirrors.
+  const includeClosed = url.searchParams.get('include_closed') === 'true';
+  let wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   if (woId) wos = wos.filter(w => w.ID === woId);
   const out = wos.map(wo => ownerExportWO(
     enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors })
@@ -1390,7 +1425,18 @@ async function generateEstimateText(env, body) {
 }
 // ── WO AUDIT ─────────────────────────────────────────────────
 
+// Private note CONTENT must never enter WO_Audit. The audit trail is rendered in
+// the owner portal, and /wo-audit has no per-record authorization — so any value
+// written here is effectively readable. Redacting at the single write chokepoint
+// means the protection holds regardless of who reads it later, instead of relying
+// on every reader to filter correctly. The FACT of a change is still recorded.
+// Hold_Reason is deliberately excluded — it is customer-facing by design.
+const AUDIT_REDACTED_FIELDS = ['Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes', 'Notes'];
+
 async function logWOAudit(env, woId, changedBy, changedByRole, field, oldValue, newValue, notes='') {
+  if (AUDIT_REDACTED_FIELDS.includes(field)) {
+    oldValue = ''; newValue = '(content redacted — private note)'; notes = '';
+  }
   try {
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
     const rows = data.values||[]; if (!rows.length) return;
@@ -1440,18 +1486,17 @@ async function addWONote(env, body) {
   if (body.author_role === 'owner')       field = 'Owner_Notes';
   else if (body.author_role === 'vendor') field = 'Vendor_Admin_Notes';
   else field = ADMIN_TARGETS.includes(body.field) ? body.field : 'Vendor_Admin_Notes';
+  // Asking to notify the owner MEANS the text is customer-facing, so it must land
+  // in the one customer-facing field. Previously the flag was honoured no matter
+  // which field was targeted, so `field:'Admin_Notes'` + this flag would SMS
+  // admin-only text to the owner and copy it into Hold_Reason (tenant-visible).
+  if (body.notify_owner_status_note === true) field = 'Hold_Reason';
 
   const author = `${body.author||'Unknown'} (${body.author_role||'unknown'})`;
-  await appendWOField(env, body.wo_id, field, noteText, author, wo);
+  if (field === 'Hold_Reason') await updateWOFields(env, body.wo_id, { Hold_Reason: noteText });
+  else await appendWOField(env, body.wo_id, field, noteText, author, wo);
   await logWOAudit(env, body.wo_id, body.author, body.author_role, field, '', noteText.substring(0,100), 'Note appended');
 
-  if (body.notify_owner_status_note === true) {
-    // This text is about to be SMS'd to the owner, so it is customer-facing by
-    // definition — it belongs in Hold_Reason, the one field the matrix exposes
-    // to owner and tenant. Without this it would sit only in the admin↔vendor
-    // thread while the owner had already received it.
-    try { await updateWOFields(env, body.wo_id, { Hold_Reason: noteText }); } catch(e) {}
-  }
   if (body.notify_owner_status_note === true) {
     try {
       const [properties, owners] = await Promise.all([fetchTab(env,'Properties'), fetchTab(env,'Owners')]);
@@ -1880,8 +1925,16 @@ function detectSource(sender, subject) {
   const s = String(sender || '').toLowerCase();
   // Senders arrive as either "Name <a@b.com>" or a bare address.
   const addr = (s.match(/<([^>]+)>/) || [null, s])[1].trim();
+  // Match on the address DOMAIN, anchored. This used to be a substring test over
+  // the whole address, so "notices@managebuilding.com.attacker.net" matched — an
+  // attacker didn't even need to spoof, they could send DMARC-valid mail from a
+  // domain they own and drive the whole record-creation pipeline.
+  const at = addr.lastIndexOf('@');
+  if (at === -1) return 'unknown';
+  const domain = addr.slice(at + 1).toLowerCase().replace(/[>\s]+$/, '');
   for (const [needle, source] of Object.entries(INTAKE_SOURCES)) {
-    if (addr.includes(needle)) return source;
+    if (needle.includes('@')) { if (addr.toLowerCase() === needle) return source; continue; }
+    if (domain === needle || domain.endsWith(`.${needle}`)) return source;
   }
   return 'unknown';
 }
@@ -2268,7 +2321,10 @@ async function resolveTenant(env, tenants, propertyId, unitId, tenant) {
     (unitId && String(t.Unit_ID) === String(unitId)) || String(t.Property_ID) === String(propertyId)
   ));
   if (pk) {
-    const byPhone = tenants.find(t => t.Active !== 'FALSE' && phoneKey(t.Phone) === pk);
+    // Scoped to this property/unit on purpose. A global phone match meant an
+    // email claiming a known tenant's number bound the WO to that tenant even at
+    // a completely different property — silent data corruption from untrusted input.
+    const byPhone = scoped.find(t => phoneKey(t.Phone) === pk);
     if (byPhone) return byPhone.ID;
   }
   const name = String(tenant.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -2292,11 +2348,35 @@ async function resolveTenant(env, tenants, propertyId, unitId, tenant) {
 // ── FILE INGEST ──────────────────────────────────────────────────────────────
 const INTAKE_MAX_FILE_BYTES = 45 * 1024 * 1024; // Worker memory guard (videos!)
 
+// Hosts intake will fetch attachments from. An email can name any URL it likes,
+// so this is the trust boundary for outbound fetches — keep it as small as the
+// real senders require. Suffix-matched against the parsed hostname so a lookalike
+// domain ("s3.amazonaws.com.evil.tld") cannot pass.
+const INGEST_ALLOWED_HOSTS = ['amazonaws.com', 'managebuilding.com', 'buildium.com'];
+
+function isAllowedIngestUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch (e) { return false; }
+  if (u.protocol !== 'https:') return false;
+  const host = u.hostname.toLowerCase();
+  return INGEST_ALLOWED_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
+}
+
 // Best-effort per file, exactly like the QB attachment path: one bad URL warns,
 // it never fails the work order that was already created.
+// Hard cap on files per email. Each one costs a fetch + a Drive upload + an
+// Attachments row (~3 subrequests) against Cloudflare's 50-per-request budget, so
+// an email with 30 links kills the request mid-loop and leaves a WO with partial
+// attachments. Real Buildium jobs carry a handful of photos.
+const INTAKE_MAX_FILES = 10;
+
 async function ingestFiles(env, woId, propAddr, urls) {
   const result = { uploaded: 0, warnings: [], folder_url: '' };
   if (!urls || !urls.length) return result;
+  if (urls.length > INTAKE_MAX_FILES) {
+    result.warnings.push(`${urls.length} files found — only the first ${INTAKE_MAX_FILES} were ingested`);
+    urls = urls.slice(0, INTAKE_MAX_FILES);
+  }
   const propsRoot = env.DRIVE_PROPERTIES_ROOT;
   if (!propsRoot) { result.warnings.push('DRIVE_PROPERTIES_ROOT not set — files skipped'); return result; }
 
@@ -2314,13 +2394,27 @@ async function ingestFiles(env, woId, propAddr, urls) {
 
   for (const url of urls) {
     try {
-      const res = await fetch(url, { redirect: 'follow' });
+      // SSRF guard. These URLs come out of attacker-influenceable email HTML and
+      // the response body is written into our Drive. Restrict to https on the
+      // hosts Buildium actually serves files from, and do NOT follow redirects —
+      // an allowlisted URL that 302s to somewhere else would otherwise defeat
+      // the check entirely.
+      if (!isAllowedIngestUrl(url)) { result.warnings.push(`${url} → blocked (not an allowed file host)`); continue; }
+      const res = await fetch(url, { redirect: 'manual' });
+      if (res.status >= 300 && res.status < 400) { result.warnings.push(`${url} → redirected (not followed)`); continue; }
       if (!res.ok) { result.warnings.push(`${url} → HTTP ${res.status}`); continue; }
       const mime = (res.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim();
       // A login/interstitial page comes back as HTML with a 200. Uploading that
       // as a "photo" would be worse than skipping it — flag it loudly instead.
       if (/^text\/html/i.test(mime)) { result.warnings.push(`${url} → returned HTML (link is not publicly fetchable)`); continue; }
-      const len = parseInt(res.headers.get('content-length') || '0', 10);
+      // A missing Content-Length must be REFUSED, not treated as zero. A chunked
+      // response reports no length, so `len = 0` sailed past the guard and
+      // arrayBuffer() then materialised the whole body — a one-email OOM of the
+      // isolate, since the size check only ran afterwards.
+      const lenHeader = res.headers.get('content-length');
+      if (lenHeader === null) { result.warnings.push(`${url} → no Content-Length, refused (cannot bound the download)`); continue; }
+      const len = parseInt(lenHeader, 10);
+      if (!Number.isFinite(len) || len <= 0) { result.warnings.push(`${url} → unusable Content-Length`); continue; }
       if (len > INTAKE_MAX_FILE_BYTES) { result.warnings.push(`${url} → ${Math.round(len / 1048576)}MB exceeds the ${INTAKE_MAX_FILE_BYTES / 1048576}MB limit`); continue; }
       const buf = await res.arrayBuffer();
       if (buf.byteLength > INTAKE_MAX_FILE_BYTES) { result.warnings.push(`${url} → too large`); continue; }
