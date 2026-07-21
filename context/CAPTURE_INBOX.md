@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.21 | **Last Updated:** July 21, 2026
+**Version:** v1.22 | **Last Updated:** July 21, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -34,6 +34,8 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - CAP-024 — Surface captures/tasks in a BrettOS Sheet (accessible + bulk-actionable — NEW)
 - CAP-025 — Reconcile with the REAL BrettOS task app (sheet 1X2oYjD) — IMPORTANT
 - CAP-026 — Ridge Co big-build planning + full wishlist consolidation (Ridge Co — planning)
+- CAP-027 — Pre-overhaul brain-dump, note 1 (Scanned_202607211020): STR cleaner scheduling, long-term leases, dispatch tool, property tasks, websites+SEO (multi-venture — NEW) → B-104..B-115, B-119..B-122
+- CAP-028 — Pre-overhaul brain-dump, note 2 (Scanned_202607211341): WO-as-site/PDF sharing, Second Brain, vendor-text mining, property DB, inspector app, STR dashboard app, background agents, vendor equipment + schedule prefs (multi-venture — NEW) → B-113..B-123
 <!-- QUICK-INDEX:END -->
 
 
@@ -413,6 +415,40 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - **LIVE BUG diagnosed:** BrettOS sync into maintenance_hub + barrelco = **HTTP 401 Unauthorized** since the July 20 `WORKER_SECRET` rotation (sync caller still uses old secret) → **B-092** escalated; barrelco also throws an `atob()` base64 error. Fix folded into the Phase-0 security work.
 - **Locked decisions (July 21):** tomorrow = quick wins → security fix (**phone-only** tenant login) + fix the 401 → status-enum SSOT → Cron infra → Phase 1 notifications (**hold-SMS-til-8am**, email channel deferred). UI redesign = **Phase 4** (after engine stable).
 - Links: BACKLOG B-092..B-102; private `property-maintenance.md`; July 21 build-plan doc; ties CAP-011 (Hub "one ring"), CAP-025 (BrettOS task app).
+
+### CAP-027 — Pre-overhaul brain-dump, note 1 (Scanned_202607211020, July 21) (multi-venture — NEW)
+- Raw (handwritten legal pad, read off photo): a mix of new ideas + concrete tasks Brett wants captured before the Ridge Co overhaul. Line by line:
+  1. **"STR – Cleaner Scheduling System"** — describe current scheduling process; a site for cleaners to see the schedule + pick dates / indicate availability; push SMS for last-minute bookings + approaching uncovered dates; update Brett's calendar. → **B-104** (feeds the STR dashboard app, B-105/CAP-028).
+  2. **"System for managing long-term leases"** + "self inspection requirement". → **B-106**.
+  3. **"Tenant feedback from repair services."** → **B-107** (ties B-006 tenant portal).
+  4. **"Bulk sharing of all Drive folders."** → **B-108** (ties the owner-privacy concern in CAP-028 #1).
+  5. **"FB group creation for barrels → create my own group."** (BarrelCo) → **B-122** (ties B-080 FB automation, CAP-018).
+  6. **"928 N Calvert St water heater(s) — contact manufacturer for warranty."** (unit 928; ❓ confirm street = Calvert) → **B-109**.
+  7. **"Refer Charles Barnett to Tom Binkell at Ecowize for rental property upgrades for energy savings."** ❓ all three names spelling-unconfirmed → **B-110**.
+  8. **"4518 Fairfax — create property; Lockbox [code] on Apt 1 unit door."** Actual lock code = handwritten on the page, stored PRIVATELY (data repo), kept out of this public file. → **B-111** (ties B-055 lock-code registry; 4518 Fairfax = the UI baseline property B-075/B-102).
+  9. **"Dispatch tool that summarizes troubleshooting + gathers model info before sending into work order + dispatching to vendor"** (example: washing machine); **"do this for 3014 washer"** as the pilot. → **B-113** (ties CAP-010 repair gems/Equipment Registry, B-072).
+  10. **"Ridge Co website w/ SEO"** → **B-119**; **"Winchester Hauling website w/ SEO"** → **B-120**; **"Ridge Co FB profile overhaul"** → **B-121**.
+- Type: mostly NEW (mix of feature ideas + ops tasks)
+- Status: parsed → graduated to B-104..B-122 (see per-line above)
+- ❓ Open: street name on #6 (Calvert vs Culver); referral name spellings on #7.
+- Links: BACKLOG B-104..B-122; CAP-028 (companion note); CAP-010 (equipment/dispatch), CAP-018 (FB/lead automation), B-055/B-073/B-075.
+
+### CAP-028 — Pre-overhaul brain-dump, note 2 (Scanned_202607211341, July 21) (multi-venture — NEW)
+- Raw (handwritten legal pad, read off photo):
+  1. **"Work orders as HTML site in Ridge Co so they can be sent as links or PDFs; better sharing + ability to download into a Google Drive folder — but WITHOUT sharing info on owners that they don't need."** → **B-117** (ties B-011 invoice PDF, B-032 proposal PDF, FEATURE_LOG privacy rule 13).
+  2. **"Second Brain."** — BrettOS capture/knowledge vision. → recorded here; extends CAP-015 (capture system) + CAP-024 (surface captures in a Sheet). Also fuels **B-123**.
+  3. **"Download vendor text messages to surface information gaps to close with the WO system + info gathering."** → **B-114** (ties B-044 capture WO time from messages, B-113 dispatch tool).
+  4. **"Find my new-property checklist + info-gathering form → create a database for properties."** → **B-112** (ties B-073 properties onboarding site + CAP-027 #2).
+  5. **"Build a 2-inspector app + create inspection template for Phoenix → tie into Ridge Co."** ❓ "Phoenix" = property/partner/company unclear. → **B-118**.
+  6. **"STR App for Cabin — Dashboard & Alerts":** upcoming uncovered turns · shopping list · list of automations · reviews needed · links to documents for keeping up to date · hot tub status · lock battery status · maintenance scheduling · guest feedback. → **B-105** (parent; B-104 cleaner-scheduling feeds it).
+  7. **"Need Claude to start acting on the items on my to-dos. Need separate agents to run in the background on a schedule (overnight + efficient off-peak) — analyze + build."** → **B-123** (autonomous background agents; ties the long-term "autonomous ops" goal + CAP-015).
+  8. **"Vendor tools + equipment tracking for use in auto-dispatch + assignment."** → **B-115** (ties CAP-010 Equipment Registry, B-113).
+  9. **"Vendor schedule options — no weekends / no evenings / etc; let them block notifications during certain hours and vacations; option to block all except part notifications; send assignment notifications the next available day after a block."** → **B-116** (directly extends the Phase-1 notification build B-093/B-094).
+- Type: mostly NEW (feature ideas + one operating directive, #7)
+- Status: parsed → graduated to B-105, B-112..B-118, B-123 (see per-line)
+- ❓ Open: "Phoenix" meaning (#5).
+- Note for the big build: **#9 is directly relevant to Phase 1 notifications** (B-093/B-094) and **#7 (background agents) is an operating directive**, not just a feature — surface both when the overhaul starts.
+- Links: BACKLOG B-105/B-112..B-118/B-123; CAP-027 (companion note); CAP-010, CAP-015, CAP-024; B-006/B-044/B-073/B-093/B-094.
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
