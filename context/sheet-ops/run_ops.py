@@ -79,7 +79,12 @@ for op in ops:
                 results.append(f'❌ update_cell_by_id: Tab {tab} is empty')
                 continue
             headers = all_rows[0]
-            row_idx = next((i for i, r in enumerate(all_rows[1:], 1) if r and r[0] == row_id), None)
+            # The key column is NOT always index 0. On Work_Orders, column 0 is
+            # Vendor_Needs_Access and the real "ID" column sits at index 1, so
+            # matching r[0] compared against a blank column and never matched.
+            id_col = headers.index('ID') if 'ID' in headers else 0
+            row_idx = next((i for i, r in enumerate(all_rows[1:], 1)
+                            if r and len(r) > id_col and r[id_col] == row_id), None)
             if row_idx is None:
                 results.append(f'❌ update_cell_by_id: Row ID {row_id} not found in {tab}')
                 continue

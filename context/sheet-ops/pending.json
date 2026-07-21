@@ -1,0 +1,11 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Renumber the duplicate WO-1017. Two distinct jobs shared the ID (a pre-existing dupe from June, not from the WO-1001 numbering bug). Sheet row 17 (created 2026-06-08, Property_ID 6, 'Yard cleanup') keeps WO-1017; sheet row 18 (created 2026-06-12, Property_ID 57, 'Apt 4 turnover / smoke detectors') becomes WO-1060, the next free number after 1059. Verified zero child records reference WO-1017 (materials/receipts/bills/wo_tenants/audit all 0), so nothing is orphaned. Targeted by absolute range because update_cell_by_id matches r[0], which on Work_Orders is Vendor_Needs_Access, not ID. ID is column B.",
+  "ops": [
+    {
+      "type": "set_cell",
+      "range": "Work_Orders!B18",
+      "value": "WO-1060"
+    }
+  ]
+}
