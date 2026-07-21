@@ -25,3 +25,5 @@ workers_dev = true
 # Rotation note (2026-07-20): WORKER_SECRET_2 is the new value during the
 # zero-downtime swap. Once clients are confirmed on it, set WORKER_SECRET = new
 # value, delete WORKER_SECRET_2, and remove the dual-accept branch in worker.js.
+
+# 2026-07-21 EMERGENCY REDEPLOY — restore known-good Worker after a staging build reached production (admin-token gate 403d the live Hub). No functional change.
