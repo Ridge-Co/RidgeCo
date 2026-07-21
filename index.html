@@ -1429,7 +1429,30 @@ function openWODetail(woId) {
     '<div style="font-size:10px;color:var(--muted);margin-top:8px">Trade defaults are set in Config → Access_Trade_Defaults. Trades not listed default to YES.</div>' +
     '</div>';
 
-  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
+  // Entry / access notes — append-only, attributed. Shows the property's standing
+  // Access_Notes default above the per-WO thread so it's obvious the WO note ADDS
+  // to the default rather than replacing it (matches what the vendor sees).
+  var enSection = '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">ENTRY / ACCESS NOTES <span style="color:var(--accent2)">· admin + vendor only</span></div>' +
+    (prop && prop.Access_Notes ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Property default: <span style="color:var(--text)">' + esc(prop.Access_Notes) + '</span></div>' : '') +
+    (wo.Entry_Notes
+      ? '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:140px;overflow-y:auto;margin-bottom:8px">' + esc(wo.Entry_Notes) + '</div>'
+      : '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">No entry notes on this work order yet.</div>') +
+    '<textarea id="entry-note-input" rows="2" placeholder="Add entry/access note — e.g. lockbox is red, call owner 24h ahead…" style="width:100%;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px;margin-bottom:6px"></textarea>' +
+    '<button onclick="addEntryNote(\'' + woId + '\')" class="btn btn-sm secondary">+ Add Entry Note</button>' +
+    '<div style="font-size:10px;color:var(--muted);margin-top:6px">Appends a timestamped line — never overwrites. Not visible to the owner or tenant.</div>' +
+    '</div>';
+
+  // Hold reason — the ONE note field that is deliberately customer-facing.
+  var hrSection = '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">HOLD REASON <span style="color:var(--warn)">· visible to owner + tenant</span></div>' +
+    '<textarea id="hold-reason-input" rows="2" placeholder="Plain language, safe for customer eyes — e.g. waiting on a part, ETA Friday" style="width:100%;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px;margin-bottom:6px">' + esc(wo.Hold_Reason || '') + '</textarea>' +
+    '<button onclick="saveHoldReason(\'' + woId + '\')" class="btn btn-sm secondary">Save Hold Reason</button>' +
+    (wo.Hold_Reason ? ' <button onclick="clearHoldReason(\'' + woId + '\')" class="btn btn-sm secondary">Clear</button>' : '') +
+    '<div style="font-size:10px;color:var(--muted);margin-top:6px">This is the only note the owner and tenant can see. Keep internal detail out of it.</div>' +
+    '</div>';
+
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection + enSection + hrSection);
 
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
@@ -2319,6 +2342,43 @@ function setVendorAccess(woId, value) {
     if (res.success) {
       var label = value==='TRUE'?'Access ON (codes shared)':value==='FALSE'?'Access OFF (codes hidden)':'Access set to trade default';
       toast(label,'success');
+      loadAll().then(function(){ openWODetail(woId); });
+    } else toast('Error: '+(res.error||''),'error');
+  });
+}
+
+// Append-only + attributed (B-104). Goes through /wo/append-entry-note so the
+// Worker builds the "[ts — author]" line; never a raw field overwrite.
+function addEntryNote(woId) {
+  var el = document.getElementById('entry-note-input');
+  var note = el ? el.value.trim() : '';
+  if (!note) { toast('Enter a note first','error'); return; }
+  api('POST','/wo/append-entry-note',{wo_id:woId, note:note, author:'Admin'}).then(function(res){
+    if (res.success) {
+      toast('Entry note added','success');
+      loadAll().then(function(){ openWODetail(woId); });
+    } else toast('Error: '+(res.error||''),'error');
+  });
+}
+
+// Hold_Reason is a single current value, not a thread — it answers "why is this
+// on hold right now", so it is set/replaced rather than appended.
+function saveHoldReason(woId) {
+  var el = document.getElementById('hold-reason-input');
+  var val = el ? el.value.trim() : '';
+  if (!val) { toast('Enter a reason, or use Clear','error'); return; }
+  api('POST','/wo/admin-update',{wo_id:woId, admin_name:'Admin', fields:{Hold_Reason:val}}).then(function(res){
+    if (res.success) {
+      toast('Hold reason saved — visible to owner + tenant','success');
+      loadAll().then(function(){ openWODetail(woId); });
+    } else toast('Error: '+(res.error||''),'error');
+  });
+}
+
+function clearHoldReason(woId) {
+  api('POST','/wo/admin-update',{wo_id:woId, admin_name:'Admin', fields:{Hold_Reason:''}}).then(function(res){
+    if (res.success) {
+      toast('Hold reason cleared','success');
       loadAll().then(function(){ openWODetail(woId); });
     } else toast('Error: '+(res.error||''),'error');
   });

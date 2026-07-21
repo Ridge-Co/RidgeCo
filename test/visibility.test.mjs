@@ -223,5 +223,31 @@ await call('/status', { method: 'POST', body: { wo_id: 'WO-3001', status: 'On Ho
 eq(cell('Hold_Reason'), 'waiting on a part, ETA Friday', 'explicit hold_reason written');
 eq(cell('Hold_Reason').includes('internal'), false, 'the internal status note did NOT become the customer-facing reason');
 
+// ── admin compose boxes (exact payloads index.html sends) ────────────────────
+section('admin compose — Entry_Notes box appends + attributes');
+reset();
+let ac = await call('/wo/append-entry-note', { method: 'POST', body: { wo_id: 'WO-3001', note: 'lockbox is red', author: 'Admin' } });
+eq(ac.status, 200, 'addEntryNote() payload accepted');
+eq(cell('Entry_Notes').includes(S.entry), true, 'existing entry note survived');
+eq(cell('Entry_Notes').includes('lockbox is red'), true, 'new line added');
+eq(/— Admin\]/.test(cell('Entry_Notes')), true, 'attributed to Admin');
+eq(cell('Entry_Notes').split('\n').length, 2, 'appended as a second line, not an overwrite');
+ac = await call('/wo/append-entry-note', { method: 'POST', body: { wo_id: 'WO-3001', note: '', author: 'Admin' } });
+eq(ac.status, 400, 'empty note rejected (UI also guards, but the Worker must too)');
+
+section('admin compose — Hold_Reason box sets and clears');
+reset();
+ac = await call('/wo/admin-update', { method: 'POST', body: { wo_id: 'WO-3001', admin_name: 'Admin', fields: { Hold_Reason: 'waiting on a part, ETA Friday' } } });
+eq(ac.status, 200, 'saveHoldReason() payload accepted');
+eq(cell('Hold_Reason'), 'waiting on a part, ETA Friday', 'hold reason replaced (single current value, not a thread)');
+// It must actually reach the customer surfaces — that is the point of the field.
+eq(woFrom((await call('/owner-workorders?owner_id=1')).body).Hold_Reason, 'waiting on a part, ETA Friday', 'owner sees the new hold reason');
+eq(woFrom((await call('/tenant-workorders?tenant_id=7')).body).Hold_Reason, 'waiting on a part, ETA Friday', 'tenant sees the new hold reason');
+await call('/wo/admin-update', { method: 'POST', body: { wo_id: 'WO-3001', admin_name: 'Admin', fields: { Hold_Reason: '' } } });
+eq(cell('Hold_Reason'), '', 'clearHoldReason() empties the field');
+// Clearing must not disturb the private fields sitting beside it.
+eq(cell('Entry_Notes'), S.entry, 'clearing Hold_Reason left Entry_Notes intact');
+eq(cell('Admin_Notes'), S.admin, 'clearing Hold_Reason left Admin_Notes intact');
+
 console.log(`\n${'='.repeat(52)}\n  ${pass} passed, ${fail} failed\n${'='.repeat(52)}`);
 if (fail) process.exit(1);
