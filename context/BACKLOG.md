@@ -129,7 +129,7 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-107 · Post-repair tenant feedback capture [Ridge Co]
 - B-108 · Bulk-share all Drive folders (with owner-info privacy scoping) [Ridge Co/BrettOS]
 - B-109 · 928 N Calvert St water heater — contact manufacturer for warranty [Ridge Co task]
-- B-110 · Refer Charles Barnett → Tom Binkell @ Ecowize (energy upgrades) ❓names [Ridge Co task]
+- B-110 · Refer Charles Barnett → Tom Bialek @ Ecowise (energy upgrades) [Ridge Co task]
 - B-111 · Add 4518 Fairfax as property + record Apt 1 lockbox code (stored privately) [Ridge Co task]
 - B-112 · New-property checklist + intake form → properties database [Ridge Co] (ties B-073)
 - B-113 · AI dispatch tool (troubleshoot summary + model info → WO → vendor); pilot 3014 washer [Ridge Co]
@@ -137,12 +137,13 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-115 · Vendor tools & equipment tracking → auto-dispatch/assignment input [Ridge Co]
 - B-116 · Vendor availability & schedule prefs (blackout hours/vacations; defer assignment SMS to next avail day) [Ridge Co] (extends B-093/B-094)
 - B-117 · WO as shareable HTML + PDF + owner Drive download, owner-privacy scoped [Ridge Co]
-- B-118 · 2-inspector app + inspection template for "Phoenix" → tie into Ridge Co ❓Phoenix
+- B-118 · Z-Inspector app + inspection template for Phoenix Real Estate (client Mark) → tie into Ridge Co
 - B-119 · Ridge Co website + SEO
 - B-120 · Winchester Hauling website + SEO
 - B-121 · Ridge Co Facebook profile overhaul
 - B-122 · BarrelCo — create own Facebook group for barrels (ties B-080)
 - B-123 · Scheduled background agents that act on Brett's to-dos overnight/off-peak (analyze + build) [BrettOS]
+- B-124 · Scan Intake Agent — hourly poll of the handwriting Drive folder → OCR + handwriting-key learning + auto-file CAP/BACKLOG + find-or-create entities (property/tenant/owner/WO + lockbox) [BrettOS] (first instance of B-123; reuses B-103 intake engine)
 <!-- QUICK-INDEX:END -->
 
 
@@ -326,8 +327,8 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 | B-106 | 🟡 | Long-term lease management + self-inspection requirement (Ridge Co) | System to manage long-term (non-STR) leases; includes a self-inspection requirement. From CAP-027. |
 | B-107 | 🟡 | Post-repair tenant feedback capture | Collect tenant feedback after repair services complete. Ties B-006 tenant portal. From CAP-027. |
 | B-108 | 🟡 | Bulk-share all Drive folders | One action to share all WO/property Drive folders — scoped so owners only see what they need (ties B-117 + FEATURE_LOG privacy rule 13). From CAP-027. |
-| B-109 | 🟠 | 928 N Calvert St water heater — warranty | Contact the water-heater manufacturer for warranty (unit 928). ❓ confirm street = Calvert. Ops task. From CAP-027. |
-| B-110 | 🟢 | Refer Charles Barnett → Tom Binkell @ Ecowize | Referral for rental-property energy-savings upgrades. ❓ all three names spelling-unconfirmed. Networking task. From CAP-027. |
+| B-109 | 🟠 | 928 N Calvert St water heater — warranty | Contact the water-heater manufacturer for warranty (unit 928). Street = **Calvert** confirmed July 21 (matches 807 N Calvert; Culver = 56 S Culver, different property). Ops task. From CAP-027. |
+| B-110 | 🟢 | Refer Charles Barnett → Tom Bialek @ Ecowise | Referral for rental-property energy-savings upgrades. Names confirmed July 21 (Bialek, Ecowise). Networking task. From CAP-027. |
 | B-111 | 🟠 | Add 4518 Fairfax property + Apt 1 lockbox code | Create 4518 Fairfax as a property in the Hub; record the Apt 1 unit-door lockbox code (**code stored privately in the data repo, kept out of this public file**). Ties B-055 lock-code registry. From CAP-027. |
 | B-112 | 🟡 | New-property checklist + intake form → properties DB | Turn Brett's new-property checklist + info-gathering form into a structured intake that builds the properties database. Ties B-073 onboarding site. From CAP-028. |
 | B-113 | 🟠 | AI dispatch tool (troubleshoot + model info → WO → vendor) | Summarize troubleshooting and gather appliance make/model BEFORE creating the WO + dispatching to the vendor (e.g. washing machine). **Pilot on the 3014 washer.** Ties CAP-010 repair gems/Equipment Registry + B-072. From CAP-027/028. |
@@ -335,12 +336,13 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 | B-115 | 🟡 | Vendor tools & equipment tracking | Track what tools/equipment each vendor has, for use as an auto-dispatch/assignment input. Ties CAP-010 + B-113. From CAP-028. |
 | B-116 | 🟠 | Vendor availability & schedule preferences | Per-vendor: no weekends / no evenings / etc; block notifications during set hours + vacations; option to block all except part notifications; **defer assignment SMS to the next available day after a block**. **Directly extends the Phase-1 notification build (B-093/B-094)** — fold in there. From CAP-028. |
 | B-117 | 🟡 | WO as shareable HTML + PDF + owner Drive download | Render work orders as an HTML site sendable as links or PDFs; downloadable into a Google Drive folder — WITHOUT exposing other-owner info. Ties B-011, B-032, privacy rule 13. From CAP-028. |
-| B-118 | 🟡 | 2-inspector app + inspection template ("Phoenix") | Build a 2-inspector app + inspection template for "Phoenix" and tie into Ridge Co. ❓ "Phoenix" = property/partner/company unclear — clarify before building. From CAP-028. |
+| B-118 | 🟡 | Z-Inspector app + inspection template (Phoenix Real Estate) | Build the **Z-Inspector app** + an inspection template for **Phoenix Real Estate** and tie into Ridge Co. Phoenix = client **Mark**'s company (Mark + assistant **Amanda** both have **owner** access on the Hub portal). From CAP-028. |
 | B-119 | 🟡 | Ridge Co website + SEO | Public marketing site with SEO. From CAP-027. |
 | B-120 | 🟡 | Winchester Hauling website + SEO | Public marketing site with SEO. From CAP-027. |
 | B-121 | 🟢 | Ridge Co Facebook profile overhaul | Revamp the Ridge Co FB business profile. From CAP-027. |
 | B-122 | 🟢 | BarrelCo — own Facebook group for barrels | Create Brett's own FB group for barrel sales (vs relying on existing yard-sale groups). Ties B-080, CAP-018. From CAP-027. |
 | B-123 | 🟡 | Scheduled background agents on to-dos | Separate agents that run in the background on a schedule (overnight / off-peak) to act on Brett's to-do items — analyze + build. Operating directive, not just a feature; ties the "autonomous ops" goal + CAP-015 + "Second Brain" (CAP-028 #2). From CAP-028. |
+| B-124 | 🟠 | **Scan Intake Agent** (first B-123 instance) | Hourly scheduled task polling the handwriting Drive folder (`1iXjjwsnPKF_GtlR8gesxS9uJppO4xntZ`) for NEW scans (diff vs a processed-file ledger — connector can't move/rename, so track by file ID; a `Processed` subfolder exists but is manual-only). For each new scan: OCR → append handwriting-key improvements → split into (a) **ideas/tasks** → CAP/BACKLOG (today's manual flow, automated), and (b) **structured entity actions** → find-or-create **Property / Tenant / Owner / Work Order + lockbox code** via worker routes (`/property/add`, `/tenant/add`, `/owner/add`, `/workorder`, `/key/add`+`/key/update`). New WO w/ missing property → create the property first, tag ownership + tenant. Goal: a property record exists so Brett can attach WO photos/inspections on a site visit. **Reuses the B-103 source-agnostic `/intake` engine** as the "handwriting parser" (don't duplicate find-or-create). **Open blockers:** (1) headless credential availability — a scheduled fresh session may lack the Drive connector + the write path (WORKER_SECRET for worker calls; GitHub PAT for repo/sheet-ops); first fire self-tests + reports. (2) write-behavior decision (auto-create-tagged vs review-queue). From CAP-028 #7; ties B-123, B-103, B-055. |
 
 ---
 
