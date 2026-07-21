@@ -121,6 +121,7 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-100 · Pre-triggered / dependency WOs (turnover cleaner)
 - B-101 · Estimate approval with start-date + deadline
 - B-102 · Hub UI redesign to the Fairfax-estimate design standard
+- B-103 · Email → Work Order intake engine (Buildium + manual lists) — auto-create WOs from customer emails
 <!-- QUICK-INDEX:END -->
 
 
@@ -290,6 +291,7 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 | B-100 | 🟠 | Pre-triggered / dependency WOs (turnover cleaner) | Schedule a WO in advance tied to a move-out date and/or another WO; notify the assignee when the dependency (painter) completes; earliest-start = move-out. Wishlist #13/#63. |
 | B-101 | 🟠 | Estimate approval with start-date + deadline | Approve estimate but earliest-start = +N days; add to calendar; vendor notice carries earliest-start + deadline disclaimer. Builds on approveEstimate (worker.js:1064). |
 | B-102 | 🟡 | Hub UI redesign to the Fairfax-estimate design standard | Codify the 4518 Fairfax estimate look as the Hub design system (minimum standard, then elevate). Design-led track; do AFTER functional stability. Wishlist #23/#30/#57/#70/#75/#76. |
+| B-103 | 🟠 | Email → Work Order intake engine (Buildium + manual lists) | Source-agnostic intake engine + pluggable parsers. Apps Script poller forwards new maintenance emails → new `POST /intake` in worker.js → detect source → parse → find-or-create Owner/Property/Unit/Tenant → pull photos (S3→Drive) → `createWorkOrder` with `Owner_WO_Ref` → notify admin (`onIntakeCreated` = auto-assign seam). v1 = engine + **Buildium parser** (deterministic, high-confidence, auto-create) + **manual-list AI parser** (Mark's free-text lists → new `Intake_Queue` tab + Hub review screen → `/intake/approve`). Keyword trade-guess (easily overridable). Dedicated `INTAKE_TOKEN`. Build on a **staging branch + test sheet** (see EMAIL_INTAKE_BUILD_BRIEF). Decisions locked July 21. Full plan: `RidgeCo_Email_Intake_Build_Plan_v1.0` + `context/EMAIL_INTAKE_BUILD_BRIEF_v1.0.md`. Phase D (auto-assign) + AppFolio parser = future. |
 
 **Also — escalate B-092 (integration sync):** since the July 20 `WORKER_SECRET` rotation the BrettOS sync into maintenance_hub + barrelco is now **HTTP 401 Unauthorized** (was error 1042) — the sync caller still uses the OLD secret. Urgent quick-fix; ties the security work (Phase 0). Barrelco also throws an `atob()` base64 error (separate).
 
