@@ -1,7 +1,8 @@
-# Second Brain — Multi-Role Ask Agent — Build Brief v1.1 (B-133)
+# Second Brain — Multi-Role Ask Agent — Build Brief v1.2 (B-133)
 
 **For:** the Claude Code session that builds this. **Read `brett-context` + `brett-flow` + `CODEMAP.md` first (PAT-024).**
-**v1.1 (July 22) — MAJOR pivot:** Brett confirmed this is the seed of a **multi-role assistant for vendors and drivers**, not just his personal query surface. Real target questions: vendor "what's the lockbox code for X / when do I get paid?"; driver "where else can I take these pallets since location A is full? / what's the gate code for location B?". This makes **identity-scoped authorization the P0 spine** (below). Also locked v1.1: **phone-only PIN** auth (not the admin login); **seed the Brain now** from existing briefs. Where anything below conflicts with this banner, the banner wins.
+**v1.1 (July 22) — MAJOR pivot:** Brett confirmed this is the seed of a **multi-role assistant**, not just his personal query surface. This makes **identity-scoped authorization the P0 spine** (below). Also locked: **phone-only PIN** auth (not the admin login); **seed the Brain now** from existing briefs.
+**v1.2 (July 22) — scope refinements (Brett):** (a) **v1 roles = `admin` + `vendor` + `owner` + `tenant`.** **`driver` is designed-for but DEFERRED** (lower priority) — keep the role/allow-set/`Drop_Locations` seams so it bolts on with no rework. (b) **`Drop_Locations` = low-priority bolt-on**, not built in v1 (Brett has 1 definite site, 1 maybe, 1 coming — populate later). (c) **Brain privacy = LOCKED by default:** non-admin roles see a chunk ONLY if it's explicitly tagged for their role; everything sensitive stays admin-only until Brett opens it. Where anything below conflicts with these banners, the newest banner wins.
 
 This is the execution contract for the FIRST human surface of the Second Brain (CAP-028 #2): a place Brett — and, PIN-scoped, his vendors and drivers — can ask a question from a phone and get an answer, plus drop a capture — all through one screen, answered by a lightweight Worker call (never a full Cowork session).
 
@@ -17,19 +18,22 @@ Because this hands **lockbox codes, gate codes, and pay info to third parties**,
 
 **Auth = phone-only PIN (reuse existing infra).** `/ask` is NOT behind `WORKER_SECRET` (that's admin-only). It authenticates by **PIN**, exactly like `/vendor-by-pin` / `/tenant-by-pin` / `/owner-by-pin` already do, with the existing brute-force lockout (`checkPinLockout`/`recordPinFailure`/`clearPinLockout` ≈230/247/272, `PIN_Lockout` tab). One surface for everyone; the PIN resolves to a person + role.
 
-**Roles v1 (confirm #2):** `admin` (Brett — full brain) · `vendor` (Vendors tab, 8-char PIN) · `driver` (Winchester system, B-132). `owner`/`tenant` are trivial later adds (PINs already exist).
+**Roles v1 = `admin` + `vendor` + `owner` + `tenant`** (v1.2). `driver` is built into the model (role enum, allow-set logic, `Drop_Locations` seam) but **deferred** — no `driver` PINs wired in v1; adding it later = populate `Drop_Locations` + flip it on, no rework.
 
 **Scoping rules (enforced in the Worker, before the model ever sees data):**
 | Role | Can ask about | Hard-blocked from |
 |---|---|---|
 | admin (Brett) | everything | — |
 | vendor | their own assigned WOs; **access/lockbox codes only for properties on an active assigned WO**; their own bill/pay status; general trade info | other vendors' WOs, any owner PII/billing, properties they're not on |
-| driver | CHEP/Winchester drop-network (where to take pallets, capacity/status); **gate codes only for sites on their route/assignment**; their own pay | Ridge Co property data, other drivers' pay |
+| owner | **their own** properties, WOs on them, and billing/invoice status (reuse `/owner-by-pin`, `/owner/get-billing`) | other owners' data, vendor pay/bills, Brett's finances |
+| tenant | **their own** unit + WO status/updates on it; **only tenant-shareable codes** (e.g. parcel-locker per B-055) | any lockbox/door code not marked tenant-shareable, other units, owner/vendor/financial data |
+| driver *(deferred)* | drop-network + gate codes for assigned sites + own pay | Ridge Co property data, other drivers' pay |
 
-- **Resolve identity → build an allow-set of WO/property/site IDs for that person → filter every FACT lookup to that set.** A code lookup that isn't in the allow-set returns "not authorized for that location," never the code.
-- **`Audience` tag on every Brain chunk + a `visibility` on sensitive rows** — a chunk/answer is only returned if the asker's role/identity is in its audience. Lockbox/gate codes are audience = assigned-only.
-- **Audit EVERY sensitive answer** → `Ask_Audit` tab (who asked, role, question, what was returned, allowed?). Non-negotiable for codes going to third parties.
-- **Localize to Spanish** for vendor/driver (vendor Spanish = P0 per HUB_UX_DESIGN_FOUNDATION). Detect from PIN's language pref or the question language.
+- **Resolve identity → build an allow-set of WO/property/unit IDs for that person → filter every FACT lookup to that set.** A code/record not in the allow-set returns "not authorized," never the value.
+- **Code sensitivity tiers:** parcel-locker codes = tenant-shareable (B-055); lockbox/door/gate codes = assigned-worker-only, never tenant. Enforce per-code, not per-property.
+- **Brain `Audience` = LOCKED default (v1.2):** a chunk is returned to a non-admin only if its `Audience` explicitly names that role/person. Untagged ⇒ admin-only. Brett opens categories up by tagging.
+- **Audit EVERY sensitive answer** → `Ask_Audit` (who, role, question, what returned, allowed?). Non-negotiable for codes/PII to third parties.
+- **Localize to Spanish** for vendor (vendor Spanish = P0 per HUB_UX_DESIGN_FOUNDATION); owner/tenant per their language pref. Detect from PIN's lang or the question.
 
 ---
 
@@ -79,7 +83,7 @@ Phone (ask.html, PIN)  ──POST /ask {pin,q}──►  Worker
 ### Core handler `handleAsk(env, body)`
 0. **Auth+scope FIRST** — `resolveAsker(env, pin)` → `{person, role, lang, allowSet}` (allowSet = the WO/property/site ids this person may see; admin = unrestricted). Bad PIN → lockout + generic reject. Everything below runs *inside* this scope.
 1. `classifyQuery(env, q, role)` → `FACT | SEMANTIC | CAPTURE`. Cheap-tier model, strict-JSON `{intent, entities:{property?,person?,site?,venture?}, wants_detail}`. `note:`/`capture:` prefix short-circuits to CAPTURE with no model call.
-2. **FACT** → resolve entities against live tabs with `fetchTab` (≈1689): Work_Orders (col1=`ID`, resolve via `findWO`/`idColIndex`, never `r[0]` — FL rule 6), Properties, Tenants, Owners, Vendors, Keys/lock-codes (B-055), `Drop_Locations`. **Filter to `allowSet` BEFORE phrasing** — a code/pay/site not in the allow-set returns "not authorized for that location," never the value. Address normalize (reuse `normalizeAddr` if present). Hand only the authorized rows to the model to phrase a ≤2-sentence answer (localized to `lang`). Never invent a fact not in the rows.
+2. **FACT** → resolve entities against live tabs with `fetchTab` (≈1689): Work_Orders (col1=`ID`, resolve via `findWO`/`idColIndex`, never `r[0]` — FL rule 6), Properties, Tenants, Owners, Vendors, Keys/lock-codes (B-055, honoring the tenant-shareable tier). (`Drop_Locations` is driver-only → deferred, not queried in v1.) **Filter to `allowSet` BEFORE phrasing** — a code/pay/record not in the allow-set returns "not authorized," never the value. Address normalize (reuse `normalizeAddr` if present). Hand only the authorized rows to the model to phrase a ≤2-sentence answer (localized to `lang`). Never invent a fact not in the rows.
 3. **SEMANTIC** → `retrieveBrain(env, q, role)` = top-k keyword/tag match over the `Brain` tab **filtered by `Audience`** (chunk visible to this role/person only). Feed top chunks + q to the REASON tier for a judgment answer (localized). Each chunk carries `Source, Updated, Confidence` → surface as a source tag.
 4. **CAPTURE** → `addRow(env, 'Capture', {person, role, ...})` (≈1761 auto-assigns ID/Active/timestamps). No model call beyond classify. Ack ("Captured ✓").
 5. `routeAI(env, {type:'brain_query', tier, prompt, schema})` if B-127 exists; **else** inline `callClaude` (reuse Batch AI Processor #10). Log `Ops_Telemetry` (`job_type=brain_query`).
@@ -104,7 +108,7 @@ Phone (ask.html, PIN)  ──POST /ask {pin,q}──►  Worker
   (`Source` = "scan"/"session"/"brief"/"email"; `Audience` = who may see it: `admin` / `vendor` / `driver` / `all` (+ optional scope key like a property/site id); `Confidence` = high/med/unverified; `Chunk` = a self-contained fact/note ≤ ~500 chars.)
 - **New tab `Ask_Users`** — the role map: `ID, Person_Ref (vendor/tenant/owner/driver id or "admin"), Role, PIN_Ref, Lang, Active`. (PINs themselves stay on the existing Vendors/Owners/Tenants/driver tabs — this just maps a PIN's owner → role + language. Brett = one `admin` row.)
 - **New tab `Ask_Audit`** — every sensitive answer: `ID, Timestamp, Person_Ref, Role, Question, Intent, Returned_Summary, Allowed, Notes`.
-- **New tab `Drop_Locations`** (Winchester/CHEP pallet network — powers the driver "where else can I take these"): `ID, Site_Name, Address, Type, Status (open/full/closed), Capacity_Note, Gate_Code_Ref, Hours, Updated, Active`. **⚠ Needs source data — see open question #1.** Gate codes stored per-site and released only to a driver assigned to that site.
+- **`Drop_Locations` — DEFERRED (v1.2), create the empty tab only.** Schema stays so `driver` bolts on later: `ID, Site_Name, Address, Type, Status (open/full/closed), Capacity_Note, Gate_Code_Ref, Hours, Updated, Active`. Brett has 1 definite site, 1 maybe, 1 coming — populate when the driver role is turned on. Not wired into `/ask` in v1.
 - **New tab `Capture`** — phone/other captures land here; B-134 syncs to the repo `CAPTURE_INBOX.md` nightly (this IS CAP-024 "surface captures in a Sheet"):
   `ID, Received, Source, Raw, Parsed_Tag, Venture_Guess, Status, Filed_CAP, Active`
 - **Reuse `Ops_Telemetry`** (from B-127) for `/ask` logging; if B-127 hasn't created it yet, create it here.
@@ -116,7 +120,7 @@ Phone (ask.html, PIN)  ──POST /ask {pin,q}──►  Worker
 ## Front-end — standalone `ask.html` (model on vendor.html; EN/ES)
 
 A separate PIN-gated mobile page (NOT the admin Hub — vendors/drivers use it):
-- **PIN gate first** (reuse vendor.html's PIN-entry + lockout UX). On success the server returns `{role, lang}`; the page adapts labels + language (ES for vendor/driver).
+- **PIN gate first** (reuse vendor.html's PIN-entry + lockout UX). On success the server returns `{role, lang}`; the page adapts labels + language (ES per the person's language pref; vendor Spanish = P0).
 - One big text input + **Ask** button + a **Capture** toggle (or `note:` prefix). Mobile-first: full-width, big tap targets, keyboard-mic friendly (native dictation = "voice" in v1, no transcription build).
 - Calls `POST /ask` with `{pin, q}`. Renders the short answer, a **More** expander when `more_available`, and small source chips (`Source · Updated · Confidence`). Role-appropriate empty states (a vendor sees "ask about your jobs, codes, or pay").
 - Brett's `admin` PIN unlocks the full brain + the capture list; vendor/driver views are scoped and get no capture list in v1.
@@ -142,20 +146,21 @@ A separate PIN-gated mobile page (NOT the admin Hub — vendors/drivers use it):
 - FACT answers verifiably match the Sheet (spot-check 10).
 
 ## Build order (auth spine FIRST)
-A) **Auth+scope:** `Ask_Users` + `Ask_Audit` tabs + `resolveAsker`/`scopeFilter` + PIN lockout reuse → unit-test the allow-set matrix (vendor can't see another vendor's WO/code/pay; driver can't see Ridge Co).
-B) `Brain` (seed now) + `Capture` + `Drop_Locations` tabs + `/ask` handler FACT path (scoped) + `Ops_Telemetry`/`Ask_Audit` logging → curl-test each role against staging.
+A) **Auth+scope:** `Ask_Users` + `Ask_Audit` tabs + `resolveAsker`/`scopeFilter` + PIN lockout reuse → unit-test the allow-set matrix for **admin/vendor/owner/tenant** (each role can't reach outside its lane; tenant can't see a non-tenant-shareable code).
+B) `Brain` (seed now, LOCKED audience) + `Capture` tabs + empty `Drop_Locations` (deferred) + `/ask` handler FACT path (scoped) + `Ops_Telemetry`/`Ask_Audit` logging → curl-test each role against staging.
 C) `ask.html` PIN-gated page (EN/ES) → Chrome-test at phone width, per role.
 D) CAPTURE path + `note:` prefix.
 E) SEMANTIC path (Audience-filtered) over the seeded Brain.
 F) Swap inline model → `routeAI` once B-127 lands. → update FEATURE_LOG + BACKLOG (B-133) + push.
+(driver role + `Drop_Locations` population = a later, low-priority bolt-on — seams already in place.)
 
 ## Verify before "done" (brett-flow)
-**Authorization matrix is the headline test:** curl `/ask` as admin/vendor/driver against **staging** and prove each role gets ONLY its allow-set (attempt an out-of-scope lockbox/gate/pay lookup → must return "not authorized," never the value); confirm `Ask_Audit` logged it. Then: classify FACT/SEMANTIC/CAPTURE correctly; Chrome-test `ask.html` per role at phone width incl. Spanish; bad-PIN lockout works; no FEATURE_LOG "✅ Working" row regressed. Then log + push.
+**Authorization matrix is the headline test:** curl `/ask` as admin/vendor/owner/tenant against **staging** and prove each gets ONLY its allow-set (out-of-scope code/pay/PII lookup → "not authorized," never the value; a tenant asking for a lockbox/door code that isn't tenant-shareable is refused); confirm `Ask_Audit` logged it. Then: classify FACT/SEMANTIC/CAPTURE correctly; Chrome-test `ask.html` per role at phone width incl. Spanish; bad-PIN lockout works; Brain LOCKED-default proven (an untagged sensitive chunk never reaches a non-admin); no FEATURE_LOG "✅ Working" row regressed. Then log + push.
 
-## Open questions for Brett (PAT-025)
-1. **Pallet drop-network data** — does a list of CHEP/Winchester drop sites (with open/full status + gate codes) exist anywhere yet, or is assembling `Drop_Locations` part of this build? The driver "where else can I take these" question can't work without it.
-2. **v1 roles = admin + vendor + driver** (recommended), or add owner + tenant from day one? (Their PINs already exist, so it's a small addition either way.)
-3. **Brain seeded now** = confirmed (v1.1). Anything you want deliberately EXCLUDED from the vendor/driver-visible Brain (e.g. finances, owner PII, competitive/CHEP-sensitive notes)? Default: everything sensitive is `Audience=admin` unless tagged otherwise.
+## Decisions resolved (Brett, July 22) — nothing outstanding for v1
+1. **Drop-network data** — needs building but **low priority**; not in v1. Create the empty `Drop_Locations` tab as a seam; populate when driver turns on (1 definite + 1 maybe + 1 coming).
+2. **v1 roles** = admin + vendor + owner + tenant; **driver deferred** (designed-for, not wired).
+3. **Brain privacy** = **LOCKED by default** — non-admin sees only explicitly-tagged chunks; sensitive stays admin-only until Brett opens it.
 
 ---
 
