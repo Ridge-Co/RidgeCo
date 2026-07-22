@@ -79,7 +79,7 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-017 · Agent builder — create reusable agents for common tasks
 - B-018 · Automated session log append after every Cowork session
 - B-033 · Best Practices doc update — no AI-obvious filenames, no PDF header/foote
-- B-051 · Daily digest of next steps + small wins
+- B-051 · Daily digest of next steps + small wins — ✅ SHIPPED July 22 (GET /daily-digest + 7am cron; delivery dormant until Twilio; see FEATURE_LOG v1.7)
 - B-052 · Voice interface → spreadsheet (voice-to-sheet capture)
 - B-053 · Multi-step tags + categorization of captures
 - B-054 · Context/location-aware task surfacing

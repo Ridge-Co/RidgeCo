@@ -1,6 +1,20 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.6 | **Last Updated:** July 21, 2026
+**Version:** v1.7 | **Last Updated:** July 22, 2026
 **Rule:** Before changing ANY file, check this log. If a feature is marked ✅ Working, verify it still works after your change. If you must touch something that affects a working feature, note it here BEFORE committing.
+
+---
+
+## DAILY DIGEST (worker.js — B-051, shipped July 22, 2026)
+
+| Feature | Status | Notes | Last Verified |
+|---|---|---|---|
+| `GET /daily-digest` | ✅ Working (deployed) | Auth-gated. Read-only morning digest built from Work_Orders + Vendor_Bills + Properties/Vendors/Tenants by real column names. `?deliver=1` triggers delivery (else preview JSON). Verified against live sheet July 22 (40 open WOs, 3 overdue, 4 vendor bills $501, pulse 64/80/6). | July 22, 2026 |
+| `scheduled()` cron | ✅ Live, DORMANT | wrangler `crons=["0 11 * * *"]` = 7am EDT / 6am EST. Builds digest daily; **sends nothing** until Config `digest_enabled=TRUE`. Safe by design. | July 22, 2026 |
+| Delivery layer | ⏳ Dormant (by design) | SMS via existing `sendSMS` — needs `TWILIO_FROM` + Twilio send live + Config `digest_sms_enabled=TRUE` + `digest_sms_to`. Email = `deliverDigestEmail` STUB, pick a provider later (`EMAIL_API_KEY`/`EMAIL_FROM`). **Do not "fix" the stub as if broken — it's intentionally off.** | July 22, 2026 |
+| Config keys | Reference | `digest_enabled`, `digest_sms_enabled`, `digest_sms_to`, `digest_email_enabled`, `digest_email_to`. All absent/blank = fully dormant. | July 22, 2026 |
+
+**To turn delivery ON (Brett, after Twilio send is live):** set `TWILIO_FROM`, then in Config set `digest_enabled=TRUE`, `digest_sms_enabled=TRUE`, `digest_sms_to=<your #>`. Nothing else changes.
+**Known gaps (v2):** digest pulls only Sheet data — captures/backlog (GitHub) and receivables (e.g. Ray's tolls) not included yet; Invoices tab is empty so "Money" reads Vendor_Bills.
 
 ---
 
