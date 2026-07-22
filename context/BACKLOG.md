@@ -31,8 +31,8 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-075 · Upgrade Hub UI to match the 4518 Fairfax Rd estimate look
 - B-077 · Preventive-maintenance package
 - B-082 · Cesar mirror site — tracks his own jobs separately but includes Brett's
-- B-084 · Hub "Receipts to file" queue — OCR + classify + seeded WO/property picke
-- B-085 · Rebuild receipt intake pipeline — retire the stalled Make.com scenario
+- B-084 · Hub "Receipts to file" queue — OCR + classify + seeded WO/property picke — 🟡 ENGINE SHIPPED July 22 (/receipt-intake, /receipt-scan, /receipt-queue, approve+file; Receipts_Queue tab). NEXT: Hub review screen + Gmail intake + real-receipt vision test. See FEATURE_LOG v1.8
+- B-085 · Rebuild receipt intake pipeline — retire the stalled Make.com scenario — 🟡 first slice SHIPPED July 22 (own-purchase receipts; Drive intake + confirm-first queue; QB posting deferred)
 - B-086 · Reconcile receipts stuck in "WO Receipt Inbox" (Aug–Dec 2025)
 - B-088 · Add 1864 Kerns School Rd (owned STR) to the WO system as a property
 **RIDGE CO — OPERATIONS / TO-DO**

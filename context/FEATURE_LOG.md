@@ -1,5 +1,5 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.7 | **Last Updated:** July 22, 2026
+**Version:** v1.8 | **Last Updated:** July 22, 2026
 **Rule:** Before changing ANY file, check this log. If a feature is marked ✅ Working, verify it still works after your change. If you must touch something that affects a working feature, note it here BEFORE committing.
 
 ---
@@ -15,6 +15,23 @@
 
 **To turn delivery ON (Brett, after Twilio send is live):** set `TWILIO_FROM`, then in Config set `digest_enabled=TRUE`, `digest_sms_enabled=TRUE`, `digest_sms_to=<your #>`. Nothing else changes.
 **Known gaps (v2):** digest pulls only Sheet data — captures/backlog (GitHub) and receivables (e.g. Ray's tolls) not included yet; Invoices tab is empty so "Money" reads Vendor_Bills.
+
+---
+
+## RECEIPT PIPELINE (worker.js — B-084/085 first slice, shipped July 22, 2026)
+
+Own-purchase receipts ONLY (business / owned-property / personal-HSA). **WO/vendor receipts are a SEPARATE existing vendor-portal flow — do not merge them into this.**
+
+| Feature | Status | Notes | Last Verified |
+|---|---|---|---|
+| `POST /receipt-intake` | ✅ Deployed | `{file_id\|file_url\|image_b64(+mime), source}` → Claude-vision extract (vendor/date/total/handwritten) → 4-bucket classify → best-effort WO/property auto-link → `Receipts_Queue` (pending). Money-facing ⇒ claude-sonnet-4-6 (PAT-031). **Vision accuracy not yet confirmed on a live receipt** — that's the first activation test. | syntax only, July 22 |
+| `POST /receipt-scan` (+ daily cron) | ✅ Deployed, self-provisioning | First run creates a `Receipts_Inbox` Drive folder under `DRIVE_PROPERTIES_ROOT` and writes `receipts_inbox_folder_id` to Config; later runs pull new drops into the queue. Runs in the 11:00-UTC `scheduled()` handler. Read + queue only. | syntax only, July 22 |
+| `GET /receipt-queue` | ✅ Deployed | `?status=pending\|filed\|all`. Lists queue rows for the review screen (Hub UI = next step). | syntax only, July 22 |
+| `POST /receipt-queue/approve` | ✅ Deployed | `{id, corrections?}` → files the receipt into the Vendors Drive folder (`receipts_dest_folder_id` or `DRIVE_VENDORS_ROOT`), marks `filed`, and **learns vendor→category** into Config `receipt_vendor_defaults`. No QuickBooks. | syntax only, July 22 |
+| `Receipts_Queue` tab | ✅ Auto-created | `ensureTab()` self-creates it (ID,Source,Source_File_ID,…,Category,Handwritten_Note,Suggested_WO_ID,Suggested_Property_ID,Confidence,Status,Filed_File_URL,…). No manual sheet-ops. | July 22 |
+
+**Config keys:** `receipts_inbox_folder_id` (auto-set), `receipts_dest_folder_id` (defaults to Vendors drive), `receipt_vendor_defaults` (learned JSON map).
+**Deferred (next steps):** Gmail intake from info@ + brett@ (needs a mail-access collector feeding `/receipt-intake` — Worker has no Gmail scope); a Hub review screen consuming `/receipt-queue`; QuickBooks posting (explicitly out of this slice). **Vision extraction accuracy still needs a real-receipt test.**
 
 ---
 
