@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.22 | **Last Updated:** July 21, 2026
+**Version:** v1.23 | **Last Updated:** July 22, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -436,7 +436,7 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 ### CAP-028 — Pre-overhaul brain-dump, note 2 (Scanned_202607211341, July 21) (multi-venture — NEW)
 - Raw (handwritten legal pad, read off photo):
   1. **"Work orders as HTML site in Ridge Co so they can be sent as links or PDFs; better sharing + ability to download into a Google Drive folder — but WITHOUT sharing info on owners that they don't need."** → **B-117** (ties B-011 invoice PDF, B-032 proposal PDF, FEATURE_LOG privacy rule 13).
-  2. **"Second Brain."** — BrettOS capture/knowledge vision. → recorded here; extends CAP-015 (capture system) + CAP-024 (surface captures in a Sheet). Also fuels **B-123**.
+  2. **"Second Brain."** — BrettOS capture/knowledge vision. → recorded here; extends CAP-015 (capture system) + CAP-024 (surface captures in a Sheet). Also fuels **B-123**. **GRADUATED July 22:** designed as a router between the deterministic layer (Sheets/Worker = truth for money/records) and the semantic layer (briefs/captures = nuance) — the best inbox is Brett's own sessions (self-writing brain). **First human surface = phone query** (Brett's call July 22). → **B-133** (phone "Ask" screen + `/ask`, brief `SECOND_BRAIN_QUERY_BUILD_BRIEF_v1.0`), **B-134** (self-writing brain / nightly Brain-index + Capture→repo sync = CAP-024), **B-135** (LEARNED.md valet-memory), **B-136** (SMS door, blocked on Twilio). Two-layer + freshness-tag discipline logged to avoid the #535 structured-data trap.
   3. **"Download vendor text messages to surface information gaps to close with the WO system + info gathering."** → **B-114** (ties B-044 capture WO time from messages, B-113 dispatch tool).
   4. **"Find my new-property checklist + info-gathering form → create a database for properties."** → **B-112** (ties B-073 properties onboarding site + CAP-027 #2).
   5. **"Build a 2-inspector app + create inspection template for Phoenix → tie into Ridge Co."** ❓ "Phoenix" = property/partner/company unclear. → **B-118**.

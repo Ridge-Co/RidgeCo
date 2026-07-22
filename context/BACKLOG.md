@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.24 | **Last Updated:** July 22, 2026
+**Version:** v1.25 | **Last Updated:** July 22, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -117,6 +117,11 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-130 · Optimizer: Scout agent — research new skills/tools/models, filter for stack-fit, propose
 - B-131 · Optimizer: Reuse-Radar — spot shared mechanisms across ventures before rebuilding
 - B-132 · Winchester driver-payment system on the WO engine — verify pallet count → invoice → pay → SMS → recruitment signal (reuse of B-003/007/028/029)
+**BRETTOS — SECOND BRAIN (July 22 — see SECOND_BRAIN_QUERY_BUILD_BRIEF_v1.0; CAP-028 #2 / CAP-015 / CAP-024)**
+- B-133 · 🟠 Second Brain — phone query surface: Hub "🧠 Ask" screen + `POST /ask` (direct Worker call, NOT a Cowork session; behind WORKER_SECRET). Classifies FACT (live Sheets) / SEMANTIC (Brain tab) / CAPTURE (Capture tab). Read+capture only, no structured writes. Transport v1 = Hub screen (Twilio down). Brief: `SECOND_BRAIN_QUERY_BUILD_BRIEF_v1.0`.
+- B-134 · 🟠 Self-writing brain — nightly agent fills the `Brain` tab (chunks + freshness tags) and syncs the `Capture` tab → repo `CAPTURE_INBOX.md`. Makes "effortless growth" real; is CAP-024. The ingestion loop the phone reads. Ties B-124 (scan agent), B-103 (intake engine), B-123 (background agents).
+- B-135 · 🟡 LEARNED.md valet-memory — every Brett correction becomes a `Brain` chunk (Source=learned) so the assistant retains nuance/exceptions (#257 "shirts need light starch"). Generalizes the HANDWRITING_KEY live-learning pattern to all domains.
+- B-136 · 🟡 ⏳ SMS door for the brain — once Twilio is fixed, an inbound route calls the same `handleAsk`; caller-ID whitelist = auth; adds "reply MORE" + dictated MMS voice notes (finishes B-052). Blocked on Twilio setup fix.
 **RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)**
 - B-093 · Notification engine v2 — quiet-hours + channel routing + test/admin mute
 - B-094 · WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET)
