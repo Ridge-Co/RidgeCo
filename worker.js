@@ -90,6 +90,7 @@ export default {
         if (path === '/qb/accounts')            return await qbListAccounts(env);
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
         if (path === '/qb/ready')               return await qbReadyQueue(env);
+        if (path === '/daily-digest')           return await digestResponse(env, url);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -176,6 +177,16 @@ export default {
     } catch (err) {
       return json({ error: err.message, stack: err.stack, type: err.constructor.name }, 500);
     }
+  },
+
+  // Daily digest cron (Session 5). Delivery is gated by Config flags and stays
+  // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
+  // with delivery off just builds the digest and returns — no messages, negligible cost.
+  async scheduled(event, env, ctx) {
+    try {
+      const digest = await buildDigest(env);
+      await deliverDigest(env, digest);
+    } catch (e) { /* non-fatal: a digest error must never affect anything else */ }
   }
 };
 
@@ -1643,6 +1654,90 @@ async function logSMS(env, woId, recipientType, recipientId, phone, message) {
     const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),WO_ID:woId||'',Recipient_Type:recipientType||'',Recipient_ID:recipientId||'',Phone:phone||'',Message:message||'',Sent_Date:now,Status:'sent',Twilio_SID:''}[h]??''));
     await sheetsRequest(env,'POST',`/values/SMS_Logs:append?valueInputOption=RAW`,{values:[newRow]});
   } catch(e) { /* non-fatal — SMS already sent, logging is secondary */ }
+}
+
+// ── DAILY DIGEST (Session 5) ─────────────────────────────────
+// Read-only 7am morning digest. buildDigest NEVER writes business data. Delivery
+// is gated by Config flags and stays dormant until Brett enables it after Twilio
+// send is live. Pulls from live tabs by their real column names.
+const DIGEST_CLOSED = ['Paid','Invoiced','Cancelled','Closed','Void'];
+
+function etTodayISO() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
+function etStamp() { return new Date().toLocaleString('en-US', { timeZone:'America/New_York', weekday:'short', month:'short', day:'numeric', year:'numeric' }); }
+function daysAgoISO(n) { return new Date(Date.now()-n*86400000).toLocaleDateString('en-CA', { timeZone:'America/New_York' }); }
+function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpperCase() !== 'FALSE'); }
+
+async function buildDigest(env) {
+  const today = etTodayISO();
+  const [wos, bills, props, vendors, tenants] = await Promise.all([
+    fetchTab(env,'Work_Orders').catch(()=>[]),
+    fetchTab(env,'Vendor_Bills').catch(()=>[]),
+    fetchTab(env,'Properties').catch(()=>[]),
+    fetchTab(env,'Vendors').catch(()=>[]),
+    fetchTab(env,'Tenants').catch(()=>[]),
+  ]);
+  const open = wos.filter(w => OPEN_WO_STATUSES.includes(w.Status));
+  const isUrgent = w => String(w.Priority||'').toLowerCase()==='urgent';
+  const label = w => `WO-${w.ID||'?'} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))}${w.Unit_Label?(' '+w.Unit_Label):''} · ${w.Status}${isUrgent(w)?' · URGENT':''}${w.Description?(' · '+String(w.Description).slice(0,55)):''}`;
+  const overdue = open.filter(w => w.Scheduled_Date && w.Scheduled_Date < today && !DIGEST_CLOSED.includes(w.Status));
+  const dueToday = open.filter(w => w.Scheduled_Date === today);
+  const onHold  = open.filter(w => w.Status === 'On Hold');
+  const urgent  = open.filter(w => isUrgent(w) && w.Status!=='On Hold' && !overdue.includes(w)).slice(0,6);
+  const pendingBills = activeRows(bills).filter(b => String(b.Status||'').toLowerCase()==='submitted');
+  const billsTotal = pendingBills.reduce((s,b)=> s + (parseFloat(b.Total||b.Customer_Total||0)||0), 0);
+  const since = daysAgoISO(4);
+  const wins = wos.filter(w => w.Completed_Date && w.Completed_Date >= since).slice(0,6);
+  return {
+    today, stamp: etStamp(),
+    overdue: overdue.map(label), dueToday: dueToday.map(label), onHold: onHold.map(label), urgent: urgent.map(label),
+    pendingBills: pendingBills.map(b=>`Bill ${b.ID} · ${b.Vendor_Name||('V-'+(b.Vendor_ID||'?'))} · WO-${b.WO_ID||'?'} · $${(parseFloat(b.Total||b.Customer_Total||0)||0).toFixed(2)}`),
+    billsTotal,
+    wins: wins.map(w=>`WO-${w.ID} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))} · ${w.Status} · ${String(w.Description||'').slice(0,45)}`),
+    pulse: { properties: activeRows(props).length, tenants: activeRows(tenants).length, vendors: activeRows(vendors).length, open_wos: open.length, pending_bills: pendingBills.length },
+  };
+}
+
+function formatDigestText(d) {
+  const L = [];
+  L.push(`RIDGE CO — DAILY DIGEST · ${d.stamp}`); L.push('');
+  L.push('▶ NEEDS YOU TODAY');
+  if (d.overdue.length)  { L.push(`${d.overdue.length} overdue:`); d.overdue.slice(0,6).forEach(x=>L.push('· '+x)); }
+  if (d.dueToday.length) { L.push(`${d.dueToday.length} scheduled today:`); d.dueToday.forEach(x=>L.push('· '+x)); }
+  if (d.onHold.length)   { L.push(`${d.onHold.length} on hold:`); d.onHold.forEach(x=>L.push('· '+x)); }
+  if (d.urgent.length)   { L.push('Urgent open:'); d.urgent.forEach(x=>L.push('· '+x)); }
+  if (!d.overdue.length && !d.dueToday.length && !d.onHold.length && !d.urgent.length) L.push('· Nothing flagged — clear runway.');
+  L.push(''); L.push('▶ MONEY');
+  if (d.pendingBills.length) { L.push(`${d.pendingBills.length} vendor bills to review ($${d.billsTotal.toFixed(2)}):`); d.pendingBills.forEach(x=>L.push('· '+x)); }
+  else L.push('· No vendor bills awaiting review.');
+  L.push(''); L.push('▶ WINS (last 4 days)');
+  if (d.wins.length) d.wins.forEach(x=>L.push('· '+x)); else L.push('· —');
+  L.push(''); L.push(`▶ PULSE  ${d.pulse.properties} properties · ${d.pulse.tenants} tenants · ${d.pulse.vendors} vendors · ${d.pulse.open_wos} open WOs`);
+  return L.join('\n');
+}
+
+async function deliverDigest(env, digest) {
+  const cfg = await fetchConfig(env);
+  if (String(cfg.digest_enabled||'').toUpperCase() !== 'TRUE') return { delivered:false, reason:'digest_enabled not TRUE (dormant)' };
+  const text = formatDigestText(digest);
+  const out = { sms:null, email:null };
+  if (String(cfg.digest_sms_enabled||'').toUpperCase()==='TRUE' && cfg.digest_sms_to && env.TWILIO_FROM) out.sms = await sendSMS(env, cfg.digest_sms_to, text);
+  if (String(cfg.digest_email_enabled||'').toUpperCase()==='TRUE' && cfg.digest_email_to) out.email = await deliverDigestEmail(env, cfg.digest_email_to, 'Ridge Co — Daily Digest', text);
+  return { delivered:true, out };
+}
+
+// Email adapter — intentionally a stub until Brett picks a provider (SendGrid /
+// Twilio Email / Resend). Turning it on is one function body + one secret; nothing
+// else in the digest changes.
+async function deliverDigestEmail(env, to, subject, text) {
+  if (!env.EMAIL_API_KEY || !env.EMAIL_FROM) return { skipped:'email provider not configured' };
+  return { skipped:'adapter not yet wired' };
+}
+
+async function digestResponse(env, url) {
+  const digest = await buildDigest(env);
+  let delivery = { delivered:false, reason:'preview only (add ?deliver=1 to send)' };
+  if (url.searchParams.get('deliver') === '1') delivery = await deliverDigest(env, digest);
+  return json({ ok:true, text: formatDigestText(digest), digest, delivery });
 }
 
 // ── GOOGLE SHEETS / AUTH ─────────────────────────────────────

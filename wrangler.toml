@@ -10,6 +10,13 @@ compatibility_date = "2026-06-08"
 keep_vars = true
 workers_dev = true
 
+# Daily digest cron (Session 5). 11:00 UTC = 7:00 AM Eastern during EDT (summer);
+# it lands at 6:00 AM during EST (winter) — refine with DST logic later if needed.
+# The scheduled() handler builds the digest but sends nothing until Config
+# digest_enabled=TRUE, so this trigger is harmless until Brett turns delivery on.
+[triggers]
+crons = ["0 11 * * *"]
+
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 
 # ── Environment variables & secrets (managed in the Cloudflare dashboard) ──
