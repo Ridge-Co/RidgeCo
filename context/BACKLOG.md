@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.25 | **Last Updated:** July 22, 2026
+**Version:** v1.26 | **Last Updated:** July 22, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -122,6 +122,9 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-134 · 🟠 Self-writing brain — nightly agent fills the `Brain` tab (chunks + freshness tags) and syncs the `Capture` tab → repo `CAPTURE_INBOX.md`. Makes "effortless growth" real; is CAP-024. The ingestion loop the phone reads. Ties B-124 (scan agent), B-103 (intake engine), B-123 (background agents).
 - B-135 · 🟡 LEARNED.md valet-memory — every Brett correction becomes a `Brain` chunk (Source=learned) so the assistant retains nuance/exceptions (#257 "shirts need light starch"). Generalizes the HANDWRITING_KEY live-learning pattern to all domains.
 - B-136 · 🟡 ⏳ SMS door for the brain — once Twilio is fixed, an inbound route calls the same `handleAsk`; caller-ID whitelist = auth; adds "reply MORE" + dictated MMS voice notes (finishes B-052). Blocked on Twilio setup fix.
+- B-137 · 🟠 **Near-term notification stopgap (pre-Twilio)** — split delivery by recipient: **email auto-sends** (owners + email-capable tenants, via Gmail connector) NOW; **SMS = a Hub "Send Queue"** where the system composes each message (recipient + text + language) and Brett **one-taps to send from the number they already know** (`sms:` prefill for personal-number contacts; copy+open-thread for GV). AI does 100% of composing; Brett is the send button. **GV auto-send RULED OUT (verified July 22): no Google Voice send API; email-reply only works replying to inbound; 3rd-party email→SMS = paid middleman (skip).** Clean bridge to Twilio: same queue + templates flip to auto-send later. Ties B-093 (channel-tiering), B-133 (two-way owner/vendor lane).
+- B-138 · 🟠 **Contact channel map** — add per-contact fields on Vendors/Tenants/Owners: `Brett_Number_Known` (personal / google_voice), `Preferred_Channel` (sms/email), `Lang`. Prerequisite for B-137 (which link to generate + who needs the intro) AND for Twilio later + the B-133 language pref. Known: **Mark & Amanda = GV; Jennifer & Adrian = personal;** rest = Brett fills in.
+- B-139 · 🟡 **Vendor "Ridge Co line" intro** — one-time staggered message introducing the GV number as Brett's Ridge Co/dispatch line (NOT "reach me for most things" — framed as the job line so it stays honest when the assistant later sends codes/pay from it). EN + **ES (P0)** drafts done (July 22). **Only personal-number contacts get it** (Mark/Amanda already on GV). Send individually/staggered (GV daily limits + anti-spam). Gated on B-138.
 **RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)**
 - B-093 · Notification engine v2 — quiet-hours + channel routing + test/admin mute
 - B-094 · WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET)
