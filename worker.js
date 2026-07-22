@@ -91,6 +91,7 @@ export default {
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
         if (path === '/qb/ready')               return await qbReadyQueue(env);
         if (path === '/daily-digest')           return await digestResponse(env, url);
+        if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -172,6 +173,9 @@ export default {
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
+        if (path === '/receipt-intake')           return await receiptIntake(env, body);
+        if (path === '/receipt-scan')             return await receiptScan(env);
+        if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -187,6 +191,9 @@ export default {
       const digest = await buildDigest(env);
       await deliverDigest(env, digest);
     } catch (e) { /* non-fatal: a digest error must never affect anything else */ }
+    // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
+    // the confirm-first queue. Read + queue only; no money, no customer contact.
+    try { await receiptScan(env); } catch (e) { /* non-fatal */ }
   }
 };
 
@@ -1738,6 +1745,144 @@ async function digestResponse(env, url) {
   let delivery = { delivered:false, reason:'preview only (add ?deliver=1 to send)' };
   if (url.searchParams.get('deliver') === '1') delivery = await deliverDigest(env, digest);
   return json({ ok:true, text: formatDigestText(digest), digest, delivery });
+}
+
+// ── RECEIPT PIPELINE (Session 5) ─────────────────────────────
+// Own-purchase receipts (NOT vendor/WO receipts — those stay in the vendor-portal
+// flow). Intake → Claude-vision extract → confirm-first queue → on approval, file to
+// the Vendors Drive folder. No QuickBooks, no money movement. Additive + safe.
+const RECEIPTS_QUEUE_HEADERS = ['ID','Source','Source_File_ID','Source_File_URL','Received_Date','Vendor','Receipt_Date','Total','Category','Handwritten_Note','Suggested_WO_ID','Suggested_Property_ID','Confidence','Status','Filed_File_URL','Raw_Extract','Notes','Active'];
+const RECEIPT_CATEGORIES = ['customer WO','owned-property','BMore business','personal/HSA'];
+
+// Create a tab + header row if missing (self-provisioning — no manual sheet-ops step).
+async function ensureTab(env, name, headers) {
+  try {
+    const data = await sheetsRequest(env, 'GET', `/values/${name}`);
+    if (!data.values || !data.values.length) await sheetsRequest(env, 'POST', `/values/${name}:append?valueInputOption=RAW`, { values: [headers] });
+    return;
+  } catch (e) {
+    if (!isMissingTabError(e)) throw e;
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: name } } }] });
+    await sheetsRequest(env, 'POST', `/values/${name}:append?valueInputOption=RAW`, { values: [headers] });
+  }
+}
+
+function bytesToB64(buf) {
+  const b = new Uint8Array(buf); let s = ''; const CH = 0x8000;
+  for (let i = 0; i < b.length; i += CH) s += String.fromCharCode.apply(null, b.subarray(i, i + CH));
+  return btoa(s);
+}
+
+// Read a receipt image/PDF with Claude vision → strict JSON. Money-facing ⇒ Claude (PAT-031).
+async function receiptExtract(env, bytes, mime) {
+  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+  const media = isPdf
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+    : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt INCLUDING any hand-written markings. Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null), handwritten_note (verbatim hand-written text, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Prioritize hand-written markings when choosing the category. JSON only, no prose.`;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 600, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }) });
+  const data = await resp.json();
+  const txt = (data.content?.[0]?.text || '').trim();
+  try { return JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim()); }
+  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', suggested_category: '', confidence: 0 }; }
+}
+
+// Best-effort auto-link to a WO (by "WO-1234" in the note) or a property (address token).
+async function autoLinkReceipt(env, ex) {
+  const out = { wo_id: '', property_id: '' };
+  const note = `${ex.handwritten_note || ''} ${ex.vendor || ''}`.toLowerCase();
+  try {
+    const m = note.match(/wo[-\s]?(\d{3,5})/);
+    if (m) { const wos = await fetchTab(env, 'Work_Orders'); const hit = wos.find(w => String(w.ID) === m[1]); if (hit) out.wo_id = hit.ID; }
+    const props = await fetchTab(env, 'Properties');
+    const hit = props.find(p => { const a = String(p.Address || '').toLowerCase(); return a && a.length > 4 && note.includes(a.split(' ').slice(0, 2).join(' ')); });
+    if (hit) out.property_id = hit.ID;
+  } catch (e) { /* best-effort */ }
+  return out;
+}
+
+// POST /receipt-intake — {file_id | file_url | image_b64(+mime), source} → queue row (pending).
+async function receiptIntake(env, body) {
+  let bytes, mime, fileId = body.file_id || '', fileUrl = body.file_url || '';
+  if (!fileId && fileUrl) fileId = driveIdFromUrl(fileUrl);
+  if (fileId) { const tok = await getAccessToken(env); const dl = await driveDownload(tok, fileId); bytes = dl.bytes; mime = dl.mime; }
+  else if (body.image_b64) { const bin = atob(body.image_b64); const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i); bytes = arr.buffer; mime = body.mime || 'image/jpeg'; }
+  else return json({ error: 'need file_id, file_url, or image_b64' }, 400);
+  const ex = await receiptExtract(env, bytes, mime);
+  const cfg = await fetchConfig(env);
+  let defaults = {}; try { defaults = JSON.parse(cfg.receipt_vendor_defaults || '{}'); } catch (e) {}
+  const vkey = String(ex.vendor || '').toLowerCase().trim();
+  let category = ex.suggested_category || '';
+  for (const k in defaults) { if (k && vkey && vkey.includes(k)) { category = defaults[k]; break; } }
+  const link = await autoLinkReceipt(env, ex);
+  await ensureTab(env, 'Receipts_Queue', RECEIPTS_QUEUE_HEADERS);
+  const row = {
+    Source: body.source || 'manual', Source_File_ID: fileId || '', Source_File_URL: fileUrl || '', Received_Date: new Date().toISOString(),
+    Vendor: ex.vendor || '', Receipt_Date: ex.date || '', Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
+    Category: category, Handwritten_Note: ex.handwritten_note || '', Suggested_WO_ID: link.wo_id || '', Suggested_Property_ID: link.property_id || '',
+    Confidence: String(ex.confidence ?? ''), Status: 'pending', Filed_File_URL: '', Raw_Extract: JSON.stringify(ex).slice(0, 900), Notes: '', Active: 'TRUE',
+  };
+  const appended = await addRow(env, 'Receipts_Queue', row);
+  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) {}
+  return json({ ok: true, id: newId, queued: { ...row, ID: newId }, extract: ex });
+}
+
+// POST /receipt-scan (also called by cron) — pull new files from the inbox Drive folder.
+// Self-provisions the folder the first time so there's no manual setup.
+async function receiptScan(env) {
+  const cfg = await fetchConfig(env);
+  const tok = await getAccessToken(env);
+  let folder = cfg.receipts_inbox_folder_id;
+  if (!folder) {
+    const root = env.DRIVE_PROPERTIES_ROOT;
+    if (!root) return json({ ok: true, scanned: 0, note: 'no inbox folder and no DRIVE_PROPERTIES_ROOT to create one' });
+    const f = await findOrCreateFolder(tok, 'Receipts_Inbox', root, root);
+    if (!f?.id) return json({ error: 'could not create Receipts_Inbox' }, 500);
+    folder = f.id;
+    await setConfigKey(env, { key: 'receipts_inbox_folder_id', value: folder });
+    return json({ ok: true, scanned: 0, provisioned: true, folder_id: folder, folder_url: f.webViewLink || '', note: 'Receipts_Inbox created — drop receipts here, then scan again.' });
+  }
+  const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '50' });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${tok}` } });
+  const data = await res.json(); const files = data.files || [];
+  let existing = []; try { existing = await fetchTab(env, 'Receipts_Queue'); } catch (e) {}
+  const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
+  let n = 0; const errs = [];
+  for (const f of files) { if (seen.has(f.id)) continue; try { await receiptIntake(env, { file_id: f.id, source: 'drive' }); n++; } catch (e) { errs.push(f.name + ': ' + (e.message || 'err')); } }
+  return json({ ok: true, folder_id: folder, scanned: n, skipped: files.length - n, errors: errs });
+}
+
+async function listReceiptQueue(env, url) {
+  let rows = []; try { rows = await fetchTab(env, 'Receipts_Queue'); } catch (e) { return json([]); }
+  const status = url.searchParams.get('status') || 'pending';
+  return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (status === 'all' || (r.Status || 'pending') === status)));
+}
+
+// POST /receipt-queue/approve — {id, corrections?} → file to Vendors Drive, mark filed, learn vendor default.
+async function approveReceiptQueue(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipts_Queue'); const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  const c = body.corrections || {};
+  const vendor = c.vendor ?? row.Vendor, date = c.date ?? row.Receipt_Date, total = c.total ?? row.Total, category = c.category ?? row.Category;
+  const woId = c.wo_id ?? row.Suggested_WO_ID, propId = c.property_id ?? row.Suggested_Property_ID;
+  const cfg = await fetchConfig(env); const dest = cfg.receipts_dest_folder_id || env.DRIVE_VENDORS_ROOT;
+  let filedUrl = '';
+  const fileId = row.Source_File_ID || driveIdFromUrl(row.Source_File_URL);
+  if (fileId && dest) {
+    try {
+      const tok = await getAccessToken(env); const dl = await driveDownload(tok, fileId);
+      const ext = /pdf/i.test(dl.mime) ? '.pdf' : /png/i.test(dl.mime) ? '.png' : '.jpg';
+      const safe = s => String(s || '').replace(/[^\w .-]/g, '_').slice(0, 40);
+      const name = `${date || 'nodate'}_${safe(vendor)}_${safe(total)}${ext}`;
+      const up = await uploadFileToDrive(tok, dl.bytes, name, dl.mime, dest, dest);
+      filedUrl = up.webViewLink || '';
+    } catch (e) { /* filing best-effort — still mark reviewed */ }
+  }
+  await updateRow(env, 'Receipts_Queue', id, { Vendor: vendor, Receipt_Date: date, Total: String(total), Category: category, Suggested_WO_ID: woId, Suggested_Property_ID: propId, Status: 'filed', Filed_File_URL: filedUrl });
+  try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = JSON.parse(cfg.receipt_vendor_defaults || '{}'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) {}
+  return json({ ok: true, id, filed: filedUrl || null, category });
 }
 
 // ── GOOGLE SHEETS / AUTH ─────────────────────────────────────
