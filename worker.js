@@ -1751,7 +1751,7 @@ async function digestResponse(env, url) {
 // Own-purchase receipts (NOT vendor/WO receipts — those stay in the vendor-portal
 // flow). Intake → Claude-vision extract → confirm-first queue → on approval, file to
 // the Vendors Drive folder. No QuickBooks, no money movement. Additive + safe.
-const RECEIPTS_QUEUE_HEADERS = ['ID','Source','Source_File_ID','Source_File_URL','Received_Date','Vendor','Receipt_Date','Total','Category','Handwritten_Note','Suggested_WO_ID','Suggested_Property_ID','Confidence','Status','Filed_File_URL','Raw_Extract','Notes','Active'];
+const RECEIPTS_QUEUE_HEADERS = ['ID','Source','Source_File_ID','Source_File_URL','Received_Date','Vendor','Receipt_Date','Total','Category','Handwritten_Note','PO_Reference','Suggested_WO_ID','Suggested_Property_ID','Confidence','Status','Filed_File_URL','Raw_Extract','Notes','Active'];
 const RECEIPT_CATEGORIES = ['customer WO','owned-property','BMore business','personal/HSA'];
 
 // Create a tab + header row if missing (self-provisioning — no manual sheet-ops step).
@@ -1780,7 +1780,7 @@ async function receiptExtract(env, bytes, mime) {
   const media = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
-  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt INCLUDING any hand-written markings. Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null), handwritten_note (verbatim hand-written text, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Prioritize hand-written markings when choosing the category. JSON only, no prose.`;
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 600, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }) });
   const data = await resp.json();
   const txt = (data.content?.[0]?.text || '').trim();
@@ -1791,7 +1791,7 @@ async function receiptExtract(env, bytes, mime) {
 // Best-effort auto-link to a WO (by "WO-1234" in the note) or a property (address token).
 async function autoLinkReceipt(env, ex) {
   const out = { wo_id: '', property_id: '' };
-  const note = `${ex.handwritten_note || ''} ${ex.vendor || ''}`.toLowerCase();
+  const note = `${ex.handwritten_note || ''} ${ex.po_reference || ''} ${ex.vendor || ''}`.toLowerCase();
   try {
     const m = note.match(/wo[-\s]?(\d{3,5})/);
     if (m) { const wos = await fetchTab(env, 'Work_Orders'); const hit = wos.find(w => String(w.ID) === m[1]); if (hit) out.wo_id = hit.ID; }
@@ -1820,7 +1820,7 @@ async function receiptIntake(env, body) {
   const row = {
     Source: body.source || 'manual', Source_File_ID: fileId || '', Source_File_URL: fileUrl || '', Received_Date: new Date().toISOString(),
     Vendor: ex.vendor || '', Receipt_Date: ex.date || '', Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
-    Category: category, Handwritten_Note: ex.handwritten_note || '', Suggested_WO_ID: link.wo_id || '', Suggested_Property_ID: link.property_id || '',
+    Category: category, Handwritten_Note: ex.handwritten_note || '', PO_Reference: ex.po_reference || '', Suggested_WO_ID: link.wo_id || '', Suggested_Property_ID: link.property_id || '',
     Confidence: String(ex.confidence ?? ''), Status: 'pending', Filed_File_URL: '', Raw_Extract: JSON.stringify(ex).slice(0, 900), Notes: '', Active: 'TRUE',
   };
   const appended = await addRow(env, 'Receipts_Queue', row);
