@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.23 | **Last Updated:** July 21, 2026
+**Version:** v1.24 | **Last Updated:** July 22, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -110,6 +110,13 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-027 · Driver portal — route assignment, pickup confirmation
 - B-028 · Automated driver payment
 - B-029 · CHEP/PECO reconciliation — pallets in vs out
+**BRETTOS — EFFICIENCY & OPTIMIZATION (July 22 — see MODEL_ROUTING + CONTINUOUS_IMPROVEMENT briefs)**
+- B-127 · Model-routing layer — secure DIY multi-model router in Worker (cheap-by-default + escalate; Gemini+Claude direct; PAT-031). Brief: `MODEL_ROUTING_BUILD_BRIEF_v1.0`
+- B-128 · Job telemetry spine — `Ops_Telemetry` tab + logging (prerequisite for the Optimizer)
+- B-129 · Optimizer: weekly Reviewer agent — reads telemetry → ranked improvement proposals (payoff/effort/risk/next-action)
+- B-130 · Optimizer: Scout agent — research new skills/tools/models, filter for stack-fit, propose
+- B-131 · Optimizer: Reuse-Radar — spot shared mechanisms across ventures before rebuilding
+- B-132 · Winchester driver-payment system on the WO engine — verify pallet count → invoice → pay → SMS → recruitment signal (reuse of B-003/007/028/029)
 **RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)**
 - B-093 · Notification engine v2 — quiet-hours + channel routing + test/admin mute
 - B-094 · WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET)

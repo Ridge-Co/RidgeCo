@@ -11,7 +11,7 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 
 | File | Version | Load | Description |
 |---|---|---|---|
-| Brett_Context_Document_v1.11.md | v1.11 | ✅ ALWAYS | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-030), Session 4 log |
+| Brett_Context_Document_v1.12.md | v1.12 | ✅ ALWAYS | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-032 — adds PAT-031 route+instrument, PAT-032 continuous review), Session 5 log |
 | Brett_Cowork_Best_Practices_v1.3.md | v1.3 | ✅ ALWAYS | Session workflow, common mistakes, how to work with Brett |
 | CREDENTIALS_MAP.md | v1.3 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality. **v1.3: two-service-accounts correction (Worker runtime = maintenance-hub-498819, NOT brett-os-sheets) + Worker var list + STAGING=1 warning** |
 | VENTURES.md | v1.0 | ✅ ALWAYS | Every venture — current state, stack, Claude access level, automation gaps |
@@ -21,6 +21,8 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 | HANDWRITING_KEY.md | v1.10 | ⏳ ON-DEMAND | Reference for reading Brett's handwritten-note photos (load only for handwriting tasks). Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338 + Scanned_202607211020/1341. |
 | HUB_UX_DESIGN_FOUNDATION_v1.1.md | v1.1 LOCKED | ⏳ ON-DEMAND (UI/overhaul) | The UX + Design Foundation — usability audit (per role) + component/UX conventions + Status SSOT + visual tokens + how it sequences into the overhaul. The yardstick every UI/feature build measures against. Decisions locked July 21. |
 | CODEMAP.md | v1.0 | ⏳ ON-DEMAND (build/debug) | BrettOS code map — ≈120 Worker endpoints (handler→Sheet tab→auth), helper/chokepoint index, index.html + vendor.html screen maps, and a Sheet-tab reverse index. Load for any Ridge Co build/debug or "where does X live" task instead of reading worker.js/index.html in full. Maintained by the `ridgeco-map` skill; refresh after structural code changes. |
+| MODEL_ROUTING_BUILD_BRIEF_v1.0.md | v1.0 | ⏳ ON-DEMAND (AI-routing build) | Execution contract for the secure DIY multi-model router (B-127). Cheap-by-default + escalate; Gemini+Claude direct-from-Worker (no gateway); telemetry-logged. Governs all AI calls per PAT-031. |
+| CONTINUOUS_IMPROVEMENT_STRATEGY_v1.0.md | v1.0 | ⏳ ON-DEMAND (strategy/optimizer) | "The Optimizer" — supervisory continuous-improvement layer (Instrument→Review→Research→Propose→Decide→Measure). Watches telemetry, proposes ranked data-backed improvements + new lines, researches fitting new skills/tools. Governs per PAT-032. B-128..B-132. |
 
 ## PRIVATE / SENSITIVE CONTEXT (NOT in this public repo)
 
@@ -75,3 +77,4 @@ When a new version is needed (new PAT, new project details, etc.):
 | CODEMAP.md v1.0 + CURRENT.md (loader wiring) | July 21, 2026 | Generated `context/CODEMAP.md` (full endpoint/helper/screen/tab-reverse index) via ridgeco-map + subagent fan-out; pushed. Added to CURRENT.md as ⏳ on-demand for build/debug. Surfaced 3 doc drifts: vendor PIN is 8-char not 4-digit (PAT-016 stale — matters for B-093 security build); /sms-inbound is PUBLIC; route names un-hyphenated. |
 | Context Document v1.11 | July 21, 2026 | Session 4 log row (skills + CODEMAP). v1.10 stays in /context as history. |
 | FEATURE_LOG v1.5 | July 21, 2026 | Vendor PIN row corrected to 8-char; rule 17 added (/sms-inbound public; CODEMAP is the route/tab index of record). |
+| Model Routing + The Optimizer (Context v1.12, BACKLOG v1.24) | July 22, 2026 | Reviewed Headroom (compression) + OmniRoute (gateway) → both rejected for fit/security; chose secure DIY router. Added `MODEL_ROUTING_BUILD_BRIEF_v1.0` (B-127) + `CONTINUOUS_IMPROVEMENT_STRATEGY_v1.0` ("The Optimizer", B-128..B-132). New **PAT-031** (route+instrument+measure+reuse by default) + **PAT-032** (continuous review). Session 5 log row. v1.11 stays in /context as history. |
