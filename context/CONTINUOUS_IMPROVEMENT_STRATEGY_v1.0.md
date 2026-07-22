@@ -11,10 +11,21 @@ Not just efficiency. A **supervisory layer that watches everything we run, on re
 
 Guardrails baked in from the start (from Brett's own operating manual):
 - **Data-backed, not vibes.** Every proposal cites real telemetry/observation, not a guess.
-- **Top-3, not a firehose.** Ranked, scannable, each with a single concrete next action (personal-mindset: structure + next action, no cheerleading).
+- **Top-10 ranked by impact, not a firehose.** Highest-impact first; each row scannable with a single concrete next action (personal-mindset: structure + next action, no cheerleading). Brett chooses which to build this round; the rest go to the Bench.
+- **Nothing gets thrown away — the Bench carries forward.** Items that make the Top-10 but aren't chosen this round persist and are **re-scored every round**. A #7 today can become #1 later as the business changes, effort drops, or a dependency ships. (Brett's explicit directive.)
 - **Brett decides, Optimizer proposes.** Nothing self-executes past a human gate.
 - **Payoff must be measured after the fact** — did the change actually help? (Anti-"checker theater.")
 - **Simplest viable path first**; honest "don't build this yet" is a valid output.
+
+### Impact rubric (how the Top-10 is ranked)
+**Impact is ranked highest-first.** Impact = the larger of **time/effort saved** or **cost saved** — but **effectiveness improvements cannot be ignored** and are scored alongside. Each candidate is rated H/M/L on three dimensions, then ranked by overall impact:
+- **Time/Effort saved** — how much manual work it removes. **Recurring savers outrank one-time savers** (they compound).
+- **Cost saved / recovered** — direct dollars: lower spend, recovered receivables, captured deductions, new revenue enabled.
+- **Effectiveness** — fewer errors, better decisions, better customer/vendor experience, less risk. A money- or customer-facing accuracy gain counts here even if it saves no time.
+
+**Effort** is shown next to each item but is NOT the ranking axis — it's the *selection* factor. Among high-impact items, low-effort ones get chosen first this round; high-impact/high-effort ones stay ranked high on the Bench until their effort drops or their payoff is urgent. Ranking answers "how much is this worth?"; effort answers "do we do it now or next round?"
+
+The live ranked list + Bench lives in `OPTIMIZER_ROUND_LOG.md` (updated every round).
 
 ## 2. The core loop (a proactive/goal loop — see the Loops discussion)
 
@@ -23,9 +34,9 @@ Guardrails baked in from the start (from Brett's own operating manual):
 1. **Instrument.** Every skill, process, and Worker job emits a small telemetry record (model used, tokens, cost, latency, success/fail, escalations, human-corrections). Lives in `Ops_Telemetry` (from the Model Routing build) plus lightweight process logs. *This is the "real data" the whole thing runs on — nothing else works without it, so it ships first.*
 2. **Review** (scheduled agent, e.g. weekly). Reads telemetry + BACKLOG + current skills and asks: what's slow, expensive, or error-prone? Where did the cheap model escalate a lot (routing mis-tiered)? Which process still has manual steps? Which two systems share a mechanism and could be merged?
 3. **Research** (Scout agent). Scans for new skills/tools/models/patterns others use (web + skill/plugin registries + model releases), and **filters against Brett's constraints** (mobile/Cowork, single-file, own-the-Worker, $20/mo cap, security-first). Proposes only what actually fits — the same job we just did by hand for Headroom/OmniRoute, now automated.
-4. **Propose.** Delivers the ranked top-3 to Brett: *"Do X → payoff (time/$/quality), effort, risk, next action."* Uses `brett-amplify` framing for "what this unlocks next."
-5. **Decide.** Brett approves → graduates to a `brett-flow` build. Existing things improved = versioned; new things = a build brief.
-6. **Measure.** After a change ships, telemetry proves whether the payoff materialized. Closes the loop and tunes the next round.
+4. **Propose.** Delivers the **ranked Top-10** to Brett (impact rubric above): each row = *"Do X → impact (time/$/effectiveness), effort, risk, next action."* Uses `brett-amplify` framing for "what this unlocks next." Brett picks which to build this round; unchosen items drop to the **Bench** in `OPTIMIZER_ROUND_LOG.md`.
+5. **Decide.** Brett approves → graduates to a `brett-flow` build. Existing things improved = versioned; new things = a build brief. Chosen items leave the Top-10; the Bench back-fills the freed slots next round.
+6. **Measure.** After a change ships, telemetry proves whether the payoff materialized. Closes the loop and **re-scores the whole Bench** — rankings shift as the business changes, so the next round's Top-10 is freshly ordered, not stale.
 
 ## 3. Components to build
 

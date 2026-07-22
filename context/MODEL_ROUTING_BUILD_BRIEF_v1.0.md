@@ -18,7 +18,8 @@ We do **not** use OmniRoute / a hosted AI gateway, because a gateway is a proxy 
 - **Routing is a policy WE write, not magic.** A small classifier + a rules table Brett controls. Default cheap, escalate on need.
 - **Cheap-by-default + automatic escalation.** The cheap model runs first; if it returns low confidence or malformed output, the router kicks the same job up to a stronger model. This is the "monitor → escalate only ambiguous cases" philosophy (#257) applied to model choice.
 - **Every routed job logs telemetry** (feeds the Optimizer — see `CONTINUOUS_IMPROVEMENT_STRATEGY_v1.0`). No build ships without a way to measure it (**PAT-031**).
-- **Providers v1:** Google Gemini (cheap tier) + Anthropic Claude (reasoning tier). Others only if a real need appears; never "free" third-party tiers for business data.
+- **Providers v1 (LOCKED):** Google Gemini (cheap tier) + Anthropic Claude (reasoning tier). Only two. Others only if a real need appears; never "free" third-party tiers for business data.
+- **Default policy (LOCKED, Brett July 22): cheapest-that-passes** for every job by default. **Force the REASON/HIGH tier (Claude) for anything customer-facing or money-facing**, regardless of how simple the job looks — tag those jobs `customer_facing` or `money_facing` and the router pins them to Claude even if the cheap model would have "passed." Cost is not the deciding factor when a customer sees it or money moves.
 
 ---
 
@@ -33,6 +34,8 @@ A `MODEL_REGISTRY` map in worker.js (or a `Model_Registry` Config block) listing
 | **CHEAP** | bulk / structured / low-judgment: transcribe a note, extract receipt fields, tag a task, summarize one email, first-pass parse | Gemini Flash |
 | **REASON** | subjective / stakes / customer- or money-facing: draft a marked-up estimate, reconcile an ambiguous QB entry, tenant-facing message, final classification | Claude Sonnet |
 | **HARD** | rare, hardest reasoning / multi-step synthesis | Claude Opus |
+
+**Policy rule (LOCKED):** default = **cheapest-that-passes** (start CHEAP, escalate only on validation fail). **Override:** any job tagged `customer_facing` or `money_facing` is pinned to REASON (Claude) up front — never served by the cheap tier even if it would pass. Money and customers get the best model by default; everything else earns its way up.
 
 ### Core function
 `routeAI(env, job)` where `job = { type, tier?, prompt, input, schema?, maxTokens? }`:
@@ -81,6 +84,6 @@ A) `routeAI` + Gemini adapter + registry/routes config + `Ops_Telemetry` logging
 B) Wrap the existing Claude calls to go through `routeAI`; add the escalation path.
 C) Back-fill `Human_Corrected` from Hub edits. → update FEATURE_LOG + BACKLOG (B-127) + push.
 
-## Open questions for Brett (PAT-025)
-1. Default policy per job type: **cheapest-that-passes** everywhere, or **highest-quality** for anything customer/money-facing? (Recommend: cheapest-that-passes for parsing, highest-quality for customer/financial.)
-2. OK to start with just Gemini + Claude, add others only on demand? (Recommend yes.)
+## Decisions resolved (Brett, July 22) — no open questions; ready to build
+1. **Policy:** cheapest-that-passes by default; highest-quality (Claude) forced for anything customer-facing or money-facing. ✅
+2. **Providers:** Gemini + Claude only. ✅
