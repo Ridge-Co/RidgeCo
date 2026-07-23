@@ -116,7 +116,7 @@
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-var TOKEN = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
+var TOKEN = '';  // set from the tenant PIN login below — NO hardcoded admin secret (SEC-1)
 var tenantData = null;
 var selectedFiles = [];
 
@@ -149,6 +149,7 @@ function lookupPin() {
       return;
     }
     tenantData = res;
+    if (res.token) TOKEN = res.token;   // scoped tenant token drives the submit + upload
     document.getElementById('tc-name').textContent = res.tenant_name;
     document.getElementById('tc-addr').textContent =
       res.property_address +

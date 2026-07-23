@@ -154,7 +154,7 @@
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-var TOKEN  = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
+var TOKEN  = '';  // token from owner PIN login — NO hardcoded admin secret (SEC-1)
 var ownerData = null;
 var ownerProperties = [];
 var selectedFiles = [];
@@ -211,6 +211,7 @@ function lookupPin() {
         return;
       }
       ownerData = res;
+      if (res.token) TOKEN = res.token;   // scoped owner token drives submit + upload
       showLoading('Loading your properties...');
       return apiFetch('/owner-properties?owner_id=' + res.owner_id)
         .then(function(props) {

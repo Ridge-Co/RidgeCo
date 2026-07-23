@@ -137,7 +137,9 @@
 
 <script>
 const WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-const TOKEN = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
+// Admin data tool (no PIN login). Admin token comes from localStorage (shared with the
+// admin Hub) or a one-time prompt — NOT hardcoded in this public page (SEC-1).
+const TOKEN = (function(){ try { var t = localStorage.getItem('mh_auth') || ''; if (!t) { t = (prompt('Admin token required to view/edit building info:')||'').trim(); if (t) localStorage.setItem('mh_auth', t); } return t; } catch(e){ return ''; } })();
 
 let allProperties = [];
 let allUnits = [];
