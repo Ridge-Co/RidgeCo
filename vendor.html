@@ -188,7 +188,8 @@ input[type=file]{display:none;}
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-var SECRET = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
+var SECRET = '';                 // session token, set on PIN login — NO hardcoded admin secret (SEC-1)
+var SESS_KEY = 'mh_vendor_sess'; // persisted {…, token} so a reload / auto-refresh stays logged in
 var session = null;
 var currentTab = 'open';
 var failCount = 0;
@@ -208,6 +209,19 @@ function api(path, opts) {
   opts.headers = opts.headers || {};
   opts.headers['X-Auth-Token'] = SECRET;
   return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+}
+
+// Applied on successful PIN login AND when restoring a persisted session on load.
+function onLoginSuccess(data, persist) {
+  session = data;
+  if (data.token) SECRET = data.token;            // scoped token drives every subsequent call
+  LANG = (data.language === 'es') ? 'es' : 'en';
+  var vn = document.getElementById('vendorName'); if (vn) vn.textContent = data.vendor_name || '';
+  show('screenLogin', false);
+  show('screenDash', true);
+  applyTranslations();
+  loadWorkOrders();
+  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
 }
 
 // ── Login ────────────────────────────────────────────────────
@@ -255,15 +269,9 @@ function doLogin() {
         return;
       }
       // Success
-      session = data;
-      LANG = (data.language === 'es') ? 'es' : 'en';
       failCount = 0;
       updateDots();
-      document.getElementById('vendorName').textContent = data.vendor_name;
-      show('screenLogin', false);
-      show('screenDash', true);
-      applyTranslations();
-      loadWorkOrders();
+      onLoginSuccess(data, true);
     })
     .catch(function(err) {
       btn.disabled = false;
@@ -284,7 +292,15 @@ function doLogout() {
   document.getElementById('woList').innerHTML = '<div class="spinner">Loading work orders…</div>';
   show('screenDash', false);
   show('screenLogin', true);
+  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
 }
+
+// Restore a persisted session so a reload / auto-refresh keeps the vendor logged in.
+(function restoreVendorSession(){
+  try { var raw = localStorage.getItem(SESS_KEY);
+    if (raw) { var d = JSON.parse(raw); if (d && d.token) onLoginSuccess(d, false); }
+  } catch(e){}
+})();
 
 // Floating toast notification — used after async actions (estimate save, etc.)
 function toast(msg, type) {
@@ -1211,7 +1227,7 @@ function submitFeedback() {
   var fullText = "[" + _feedbackSource + "] " + typeLabel + who + ": " + text;
   document.getElementById("feedbackBtn").disabled = true;
   fetch("https://maintenance-hub.brett-2f8.workers.dev/wishlist/add", {
-    method:"POST", headers:{"X-Auth-Token":"mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg","Content-Type":"application/json"},
+    method:"POST", headers:{"X-Auth-Token":SECRET,"Content-Type":"application/json"},
     body:JSON.stringify({text:fullText})
   }).then(function(r){return r.json();}).then(function(res){
     document.getElementById("feedbackBtn").disabled = false;
