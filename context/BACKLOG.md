@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.28 | **Last Updated:** July 23, 2026
+**Version:** v1.29 | **Last Updated:** July 23, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -139,6 +139,7 @@ _The 5 verbs: DEFINE what good is → TEST for it positively → REVIEW against 
 - B-148 · 🟡 **Canary rollout + automated rollback (MEASURE/safety).** Even after gates pass: deploy behind a flag / to a canary slice, watch the B-147 KPIs for N hours, auto-rollback on threshold breach. Automates the rule-18 manual `main` force-redeploy. Reversibility = a quality property.
 - B-149 · 🟡 **House-style consistency checks (REVIEW — the no-framework linter).** Encode conventions as checks since there's no framework: every endpoint uses the auth helper, resolves WO by header name (rule-6 bug), uses QB_TRADE_MAP, returns the standard error shape, conforms to Status SSOT. Directly attacks the UX-audit rot (status defined ~22 ways, 5 button systems).
 - B-150 · 🟡 **Quality-gate policy + Brett spot-check sampling (CALIBRATE — the teeth).** Merge thresholds by blast radius (money = 100% rubric + human; internal tooling = auto-merge at ≥Nq score). Plus 1-in-N Brett spot-review even of auto-merged work so the bar stays calibrated to his taste and agents don't drift. Ties the autonomy ladder (B-143).
+- B-151 · 🔴 **Control Panel / "Check Everything" surface (THE keystone — Brett can't read code).** The human-facing translation layer that makes the whole quality+autonomy stack usable by a non-coder: every gate/test/KPI rendered as plain-English checks + an approve/reject decision. Brett is the APPROVER, not the inspector — like reading an inspection report, never source. Screens: (1) Hub Health (smoke suite → "5 core jobs working"), (2) **Needs You** approval queue (each staged build = plain summary + quality report card + "how I checked it" + Preview/Approve/Send-back), (3) Did-For-You (autonomous low-risk log), (4) Watch List (KPIs in English incl. Brett-corrections-per-feature + EN/ES coverage), (5) one-tap **Roll back to this morning**. Mobile-first, Fairfax look. ✅ **Interactive MOCKUP delivered July 23** (`brettos-control-panel.html`) — awaiting Brett feedback before it graduates to a live build wired to real data. This is what B-144..150 report INTO; without it the quality layer is invisible to Brett. Reframes B-150 (his spot-check/approval happens HERE).
 **RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)**
 - B-093 · Notification engine v2 — quiet-hours + channel routing + test/admin mute
 - B-094 · WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET)
@@ -296,6 +297,7 @@ _The 5 verbs: DEFINE what good is → TEST for it positively → REVIEW against 
 | B-148 | 🟡 | **Canary rollout + automated rollback** — MEASURE/safety | flag/canary, watch KPIs N hrs, auto-rollback on breach; automates rule-18 rollback. From CAP-029. |
 | B-149 | 🟡 | **House-style consistency checks** — REVIEW (no-framework linter) | auth helper, WO-by-header, QB_TRADE_MAP, standard error shape, Status SSOT. From CAP-029. |
 | B-150 | 🟡 | **Quality-gate policy + Brett spot-checks** — CALIBRATE | merge thresholds by blast radius + 1-in-N human spot-review of auto-merged work. Ties B-143. From CAP-029. |
+| B-151 | 🔴 | **Control Panel / "Check Everything" surface** — KEYSTONE (Brett can't read code) | Plain-English human surface all of B-144..150 report into: Health + Needs-You approval queue + Did-For-You + Watch List + one-tap rollback. Brett = approver not inspector. ✅ Interactive MOCKUP delivered July 23 (`brettos-control-panel.html`); awaiting feedback → live build. From CAP-029. |
 
 ---
 
