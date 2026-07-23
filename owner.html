@@ -401,7 +401,8 @@ textarea{resize:vertical;min-height:70px;}
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-var SECRET = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
+var SECRET = '';                // session token from PIN login — NO hardcoded admin secret (SEC-1)
+var SESS_KEY = 'mh_owner_sess'; // persisted so a reload / auto-refresh stays logged in
 var session = null;
 var ownerProps = [];
 var allWOs = [];
@@ -470,22 +471,30 @@ function doLogin() {
         }
         return;
       }
-      session = data;
-      var displayName = data.user_name || data.owner_name;
-      var displayCo = data.is_sub_user && data.owner_company
-        ? data.owner_company
-        : (data.owner_company || 'Owner Portal');
-      document.getElementById('ownerName').textContent = displayName;
-      document.getElementById('ownerCompany').textContent = displayCo;
-      show('screenLogin', false);
-      show('screenDash', true);
-      loadDashboard();
+      onLoginSuccess(data, true);
     })
     .catch(function(){ btn.disabled = false; btn.textContent = 'SIGN IN'; showLoginMsg('Connection error.','error'); });
 }
 
+function onLoginSuccess(data, persist){
+  session = data;
+  if (data.token) SECRET = data.token;
+  var displayName = data.user_name || data.owner_name || '';
+  var displayCo = data.is_sub_user && data.owner_company ? data.owner_company : (data.owner_company || 'Owner Portal');
+  var n=document.getElementById('ownerName'); if(n) n.textContent = displayName;
+  var c=document.getElementById('ownerCompany'); if(c) c.textContent = displayCo;
+  show('screenLogin', false);
+  show('screenDash', true);
+  loadDashboard();
+  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
+}
+(function restoreOwnerSession(){
+  try { var raw=localStorage.getItem(SESS_KEY); if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } } catch(e){}
+})();
+
 function doLogout() {
   session = null; ownerProps = []; allWOs = [];
+  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
@@ -1008,7 +1017,7 @@ function submitFeedback() {
   var fullText = "[OWNER] " + typeLabel + who + ": " + text;
   document.getElementById("feedbackBtn").disabled = true;
   fetch("https://maintenance-hub.brett-2f8.workers.dev/wishlist/add", {
-    method:"POST", headers:{"X-Auth-Token":"mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg","Content-Type":"application/json"},
+    method:"POST", headers:{"X-Auth-Token":SECRET,"Content-Type":"application/json"},
     body:JSON.stringify({text:fullText})
   }).then(function(r){return r.json();}).then(function(res){
     document.getElementById("feedbackBtn").disabled = false;

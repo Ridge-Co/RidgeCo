@@ -203,7 +203,8 @@ textarea{resize:vertical;min-height:70px;}
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-var SECRET = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
+var SECRET = '';                 // session token from PIN login — NO hardcoded admin secret (SEC-1)
+var SESS_KEY = 'mh_tenant_sess'; // persisted so a reload / auto-refresh stays logged in
 var session = null;
 var allWOs = [];
 var activeNoteWOId = null;
@@ -264,19 +265,29 @@ function doLogin() {
         }
         return;
       }
-      session = data;
-      document.getElementById('tenantName').textContent = data.tenant_name;
-      document.getElementById('tenantAddr').textContent = data.property_address + (data.unit_label ? ' · Unit ' + data.unit_label : '');
-      document.getElementById('feedbackFloatBtn').style.display = '';
-      show('screenLogin', false);
-      show('screenDash', true);
-      loadWOs();
+      onLoginSuccess(data, true);
     })
     .catch(function(){ btn.disabled=false; btn.textContent='SIGN IN'; showLoginMsg('Connection error.','error'); });
 }
 
+function onLoginSuccess(data, persist){
+  session = data;
+  if (data.token) SECRET = data.token;
+  var n=document.getElementById('tenantName'); if(n) n.textContent = data.tenant_name || '';
+  var a=document.getElementById('tenantAddr'); if(a) a.textContent = (data.property_address||'') + (data.unit_label ? ' · Unit ' + data.unit_label : '');
+  var fb=document.getElementById('feedbackFloatBtn'); if(fb) fb.style.display = '';
+  show('screenLogin', false);
+  show('screenDash', true);
+  loadWOs();
+  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
+}
+(function restoreTenantSession(){
+  try { var raw=localStorage.getItem(SESS_KEY); if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } } catch(e){}
+})();
+
 function doLogout() {
   session = null; allWOs = [];
+  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
