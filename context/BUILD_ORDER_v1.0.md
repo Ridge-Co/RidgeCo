@@ -26,6 +26,7 @@ Blast-radius reminder (from CAP-029): a new `.html` file = near-zero risk (GitHu
 4. **Quality Bar / Definition-of-Done rubric (B-144)** — what "good" means per change-class; what the validator + reviewer score against.
 
 ## Phase 2 — Wire the panel to real everything
+- **ARCHITECTURE (Brett, July 23):** the Command Center is the **BrettOS layer**, not a Ridge Co feature — it sits ABOVE the ventures. It is the realization of **B-016** (multi-venture dashboard = BrettOS homepage). Currently hosted in the Ridge-Co/RidgeCo repo + reading only `maintenance-hub` purely as a pragmatic interim (that's where live data + Pages hosting already existed). **Proper home = BrettOS**, federating each venture's own Worker: Ridge Co ← `maintenance-hub`, BarrelCo ← `barrel-co`, plus `brett-os` / `round-bar-e796`. When federated, the "Other ventures (manual)" card goes live. Interim location does NOT limit function; move/rehost is a Phase-2 task, not urgent.
 - **Health tab** ← smoke-harness results (Phase 1.2).
 - **Priority engine (B-153)** — who's-waiting + deadline + $ ranking, per-venture #1 next step, "Stalled & costing you." Needs a data source for non-RidgeCo ventures (BrettOS Sheet / backlog sync — B-091/B-134).
 - **Multi-venture live data** — folds in B-016 (multi-venture dashboard) + B-051 (daily digest).
