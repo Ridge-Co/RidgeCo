@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.27 | **Last Updated:** July 23, 2026
+**Version:** v1.28 | **Last Updated:** July 23, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -130,6 +130,15 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-141 · 🟠 **Smoke-test harness (autonomy prerequisite #2 — SELF-VERIFICATION).** A script that curls every critical endpoint (list from CODEMAP) and asserts the expected JSON — the machine's stand-in for "Brett taps the app." Encode FEATURE_LOG regression rules as assertions where possible. Without this an agent literally cannot know it broke something. Runs against the B-140 preview lane.
 - B-142 · 🟠 **ridgeco-validate skill (autonomy prerequisite #3 — REVIEW GATE).** Adversarial built-vs-brief validator; the missing 7th "software-factory" role. Reports gaps by severity, fixes nothing; mandatory for money/customer/auth. ✅ **DELIVERED July 23 (this session) as `ridgeco-validate.skill`** — save it. Wire into brett-flow as the step-5.5 gate.
 - B-143 · 🟡 **Autonomy ladder (the governing strategy doc).** Blast-radius-gated staging: autonomy is EARNED per-section by rails (isolation + smoke + validator), never granted globally. Money/QB/customer-comms/auth stay human-gated by design. Ties B-127 router ("force Claude for money-facing" → extend to "force human"), B-129 Optimizer (validator verdicts = telemetry), CAP-029.
+**BRETTOS — QUALITY LAYER (July 23 — the "not-broken is a FLOOR, quality is the CEILING" upgrade; see CAP-029)**
+_The 5 verbs: DEFINE what good is → TEST for it positively → REVIEW against it → MEASURE it in prod → CALIBRATE the bar._
+- B-144 · 🟠 **Quality Bar / Definition-of-Done rubric (DEFINE — the missing quality parameter).** Per change-class checklists of what "good" means beyond "it works": Worker endpoint (idempotent, auth-tagged, telemetry-logged, standard error shape, no N+1 sheet reads, WO-by-header-name); Hub screen (Status SSOT, one button system, mobile tap targets, EN/ES parity, loading/empty/error states); money change (penny-correct, no double-post, reconciles to QB). This is what ridgeco-validate and the reviewer score against. Foundational — build first.
+- B-145 · 🟠 **Golden-path scenario tests + seeded fixture dataset (TEST positively).** Smoke = "endpoint answers 200"; golden = "create WO → assign → bill → approve → QB posts correct amount → status flips to Paid." End-to-end business-outcome assertions on the B-140 preview lane, run against a SEEDED test Sheet/tenant so autonomous runs never touch real records (also closes the "single live DB" blocker). 
+- B-146 · 🟠 **Quality-reviewer agent (REVIEW — second lens beyond ridgeco-validate).** Validator = "matches the brief"; reviewer = "is it GOOD" — a multi-lens panel (correctness / security / SSOT-consistency / mobile-UX / i18n / data-integrity), higher effort for money/customer code. Adopts the "software-factory" security-reviewer + accessibility-reviewer roles as rubric lenses.
+- B-147 · 🟡 **Quality KPIs into the Optimizer (MEASURE — quality you can't see isn't quality).** Post-deploy signals: error rate + p95 latency per endpoint, QB reconciliation drift, **Brett-corrections-per-feature**, vendor task-completion rate, EN/ES coverage %. Feed B-128 telemetry spine → B-129 Optimizer so a feature that ships clean but creates support pain SHOWS UP. Ties PAT-032.
+- B-148 · 🟡 **Canary rollout + automated rollback (MEASURE/safety).** Even after gates pass: deploy behind a flag / to a canary slice, watch the B-147 KPIs for N hours, auto-rollback on threshold breach. Automates the rule-18 manual `main` force-redeploy. Reversibility = a quality property.
+- B-149 · 🟡 **House-style consistency checks (REVIEW — the no-framework linter).** Encode conventions as checks since there's no framework: every endpoint uses the auth helper, resolves WO by header name (rule-6 bug), uses QB_TRADE_MAP, returns the standard error shape, conforms to Status SSOT. Directly attacks the UX-audit rot (status defined ~22 ways, 5 button systems).
+- B-150 · 🟡 **Quality-gate policy + Brett spot-check sampling (CALIBRATE — the teeth).** Merge thresholds by blast radius (money = 100% rubric + human; internal tooling = auto-merge at ≥Nq score). Plus 1-in-N Brett spot-review even of auto-merged work so the bar stays calibrated to his taste and agents don't drift. Ties the autonomy ladder (B-143).
 **RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)**
 - B-093 · Notification engine v2 — quiet-hours + channel routing + test/admin mute
 - B-094 · WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET)
@@ -280,6 +289,13 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 | B-141 | 🟠 | **Smoke-test harness** — autonomy prerequisite #2 (self-verification) | curl-assert every critical endpoint from CODEMAP + FEATURE_LOG rules as assertions; runs against B-140 preview. Machine stand-in for Brett's tap-test. From CAP-029. |
 | B-142 | 🟠 | **ridgeco-validate skill** — autonomy prerequisite #3 (review gate) | Adversarial built-vs-brief validator; fixes nothing; mandatory for money/customer/auth. ✅ DELIVERED July 23 as `ridgeco-validate.skill`. Wire into brett-flow step 5.5. From CAP-029. |
 | B-143 | 🟡 | **Autonomy ladder** — governing strategy doc | Blast-radius-gated: autonomy earned per-section by rails, never global; money/QB/customer/auth stay human-gated. Ties B-127/B-129. From CAP-029. |
+| B-144 | 🟠 | **Quality Bar / Definition-of-Done rubric** — DEFINE (the quality parameter) | Per change-class "what good is" checklists; what validator+reviewer score against. Build first. From CAP-029. |
+| B-145 | 🟠 | **Golden-path scenario tests + seeded fixtures** — TEST positively | End-to-end business-outcome assertions on B-140 preview against a test Sheet/tenant; also closes single-live-DB blocker. From CAP-029. |
+| B-146 | 🟠 | **Quality-reviewer agent** — REVIEW (2nd lens beyond ridgeco-validate) | Multi-lens panel: correctness/security/SSOT/mobile/i18n/data-integrity. From CAP-029. |
+| B-147 | 🟡 | **Quality KPIs into the Optimizer** — MEASURE | error rate, p95, QB drift, Brett-corrections/feature, EN/ES coverage → B-128/B-129. From CAP-029. |
+| B-148 | 🟡 | **Canary rollout + automated rollback** — MEASURE/safety | flag/canary, watch KPIs N hrs, auto-rollback on breach; automates rule-18 rollback. From CAP-029. |
+| B-149 | 🟡 | **House-style consistency checks** — REVIEW (no-framework linter) | auth helper, WO-by-header, QB_TRADE_MAP, standard error shape, Status SSOT. From CAP-029. |
+| B-150 | 🟡 | **Quality-gate policy + Brett spot-checks** — CALIBRATE | merge thresholds by blast radius + 1-in-N human spot-review of auto-merged work. Ties B-143. From CAP-029. |
 
 ---
 
