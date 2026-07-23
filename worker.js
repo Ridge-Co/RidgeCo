@@ -34,75 +34,17 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
-
-    // ── STAGING SANDBOX (B-103) ──────────────────────────────────────────────
-    // Cloudflare preview deployments SHARE production secrets/env, so a preview of
-    // new code would otherwise write to the LIVE sheet and fire REAL SMS. Isolate
-    // the DATA in code instead: swap SHEET_ID for STAGING_SHEET_ID and make sendSMS
-    // log-only. Everything else behaves identically.
-    // Fails CLOSED: if staging is detected but STAGING_SHEET_ID is unset we refuse
-    // the request rather than silently falling back to the production sheet.
-    if (url.hostname.startsWith('staging-') || env.STAGING === '1') {
-      if (!env.STAGING_SHEET_ID)
-        return json({ error: 'Staging mode active but STAGING_SHEET_ID is not set — refusing to fall back to the live sheet.' }, 503);
-      env = { ...env, STAGING: '1', SHEET_ID: env.STAGING_SHEET_ID };
-      // QuickBooks has NO staging equivalent — the creds point at the live realm.
-      // Two ways staging would corrupt production if these ran: (a) Intuit ROTATES
-      // and invalidates the refresh token on every refresh and qbAccessToken
-      // persists the new one to the *staging* Config, leaving production holding a
-      // dead token (FEATURE_LOG rule 8); (b) /qb/send-invoice would create a REAL
-      // invoice from test data. Note the /qb/* read routes are in PUBLIC_PATHS, so
-      // this must be blocked before the auth gate, not after.
-      if (path.startsWith('/qb'))
-        return json({ error: 'QuickBooks is disabled in staging — it has no sandbox and would rotate the production refresh token.', staging: true }, 503);
-      // The staging swap covers SHEET_ID, but KEY_REGISTRY_SHEET_ID is a separate
-      // spreadsheet of live lockbox/door codes that it does NOT override — so this
-      // route would read production key material from a staging deploy.
-      if (path === '/import-key-registry')
-        return json({ error: 'Key registry import is disabled in staging — it reads the production key registry.', staging: true }, 503);
-    }
-
-    const PUBLIC_PATHS = ['/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
+    const PUBLIC_PATHS = ['/health','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Shared-secret gate. Rotated 2026-07-20 (old value retired). NOTE: this is a
       // coarse anti-bot gate only — real per-record authz is enforced per endpoint
       // (Owner_ID / vendor_id / PIN). Slated for replacement by per-user auth.
-      const token = request.headers.get('X-Auth-Token');
-      // /intake* accepts its own dedicated INTAKE_TOKEN so that rotating the shared
-      // WORKER_SECRET (security build) doesn't break the Apps Script poller, and vice
-      // versa. WORKER_SECRET still works so the Hub can call these routes too.
-      // Exact list, NOT startsWith('/intake'). A prefix match means the next
-      // route someone names /intake-queue or /intake-review silently inherits the
-      // poller's token with no code change — and Phase B is literally called the
-      // intake review queue.
-      const INTAKE_PATHS = ['/intake'];
-      const intakeOk = INTAKE_PATHS.includes(path) && env.INTAKE_TOKEN && token === env.INTAKE_TOKEN;
-      const isAdmin  = !!env.ADMIN_TOKEN && token === env.ADMIN_TOKEN;
-      if (!intakeOk && !isAdmin && token !== env.WORKER_SECRET)
+      if (request.headers.get('X-Auth-Token') !== env.WORKER_SECRET)
         return json({ error: 'Unauthorized' }, 401);
-
-      // ── Optional admin-token tier (OFF until ADMIN_TOKEN is set) ────────────
-      // WORKER_SECRET is hardcoded in owner.html / tenant.html / vendor.html, so
-      // it is readable by any portal user — which makes every gated route
-      // effectively public. That predates this work, but B-127 raises the stakes:
-      // Work_Orders now holds admin-only and vendor-only note columns, and the
-      // bulk /workorders read returns raw rows, bypassing the visibility matrix
-      // entirely. These paths are the bulk reads that expose notes or PII across
-      // ALL records; none of them is used by any customer portal (verified), so
-      // requiring a separate token here costs the portals nothing.
-      // Set ADMIN_TOKEN in Cloudflare and enter it in the Hub to switch this on.
-      // While ADMIN_TOKEN is unset this block is a no-op and behaviour is exactly
-      // as before.
-      const ADMIN_ONLY_PATHS = [
-        '/workorders', '/tenants', '/owners', '/keys', '/master-keys', '/keys-history',
-        '/smslog', '/units', '/properties', '/vendors', '/invoices', '/materials',
-        '/returns', '/owner-users', '/wishlist', '/wo-templates', '/cache',
-      ];
-      if (env.ADMIN_TOKEN && ADMIN_ONLY_PATHS.includes(path) && !isAdmin)
-        return json({ error: 'This endpoint requires the admin token', path }, 403);
     }
     try {
       if (request.method === 'GET') {
+        if (path === '/health')                 return await health(env);
         if (path === '/properties')             return await getSheet(env, 'Properties');
         if (path === '/public/entities-feed')   return await getEntitiesFeed(env);
         if (path === '/units')                  return await getSheet(env, 'Units');
@@ -134,7 +76,6 @@ export default {
         if (path === '/vendor-workorders')      return await vendorWorkorders(env, url);
         if (path === '/tenant-workorders')      return await tenantWorkorders(env, url);
         if (path === '/owner-workorders')       return await ownerWorkorders(env, url);
-        if (path === '/owner-export')           return await ownerExport(env, url);
         if (path === '/owner-notifications')    return await getOwnerNotifications(env, url);
         if (path === '/owner-users')            return await getOwnerUsers(env, url);
         if (path === '/notifications/pending')  return await processPendingNotifications(env);
@@ -150,6 +91,8 @@ export default {
         if (path === '/qb/accounts')            return await qbListAccounts(env);
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
         if (path === '/qb/ready')               return await qbReadyQueue(env);
+        if (path === '/daily-digest')           return await digestResponse(env, url);
+        if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -158,8 +101,6 @@ export default {
         if (path === '/workorder')                return await createWorkOrder(env, body);
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
-        if (path === '/wo/append-entry-note')     return await appendEntryNote(env, body);
-        if (path === '/workorder/vendor-note')    return await addVendorNote(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
         if (path === '/time-entry/add')           return await addTimeEntry(env, body);
@@ -233,12 +174,27 @@ export default {
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
-        if (path === '/intake')                   return await handleIntake(env, body);
+        if (path === '/receipt-intake')           return await receiptIntake(env, body);
+        if (path === '/receipt-scan')             return await receiptScan(env);
+        if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
       return json({ error: err.message, stack: err.stack, type: err.constructor.name }, 500);
     }
+  },
+
+  // Daily digest cron (Session 5). Delivery is gated by Config flags and stays
+  // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
+  // with delivery off just builds the digest and returns — no messages, negligible cost.
+  async scheduled(event, env, ctx) {
+    try {
+      const digest = await buildDigest(env);
+      await deliverDigest(env, digest);
+    } catch (e) { /* non-fatal: a digest error must never affect anything else */ }
+    // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
+    // the confirm-first queue. Read + queue only; no money, no customer contact.
+    try { await receiptScan(env); } catch (e) { /* non-fatal */ }
   }
 };
 
@@ -554,13 +510,23 @@ async function handlePhotoUploadClean(env, request) {
     if (!propsRoot) return json({ error: 'DRIVE_PROPERTIES_ROOT env var not set' }, 500);
     const token = await getAccessToken(env);
     if (!token) return json({ error: 'Failed to get Google access token' }, 500);
+    step.current = 'find_prop_folder';
+    const propFolder = await findOrCreateFolder(token, propAddr, propsRoot, propsRoot);
+    if (!propFolder || !propFolder.id) return json({ error: `Could not find/create property folder "${propAddr}"`, step: step.current }, 500);
     step.current = 'find_wo_folder';
     const woLabel  = woId || `upload_${Date.now()}`;
     // Vendor cost docs (receipts/bills/invoices) go to a NON-shared internal folder — never the
     // customer-facing WO folder that gets shared on the invoice. Job photos stay in the WO folder.
     const INTERNAL_TYPES = ['receipt','bill','invoice'];
     const isInternal = INTERNAL_TYPES.includes(fileType.toLowerCase());
-    const woFolder = await getWOFolder(token, propsRoot, propAddr, woLabel, isInternal);
+    let woFolder;
+    if (isInternal) {
+      const internalRoot = await findOrCreateFolder(token, '_Internal — Vendor Bills', propFolder.id);
+      if (!internalRoot || !internalRoot.id) return json({ error: 'Could not find/create internal vendor-bills folder', step: step.current }, 500);
+      woFolder = await findOrCreateFolder(token, woLabel, internalRoot.id);
+    } else {
+      woFolder = await findOrCreateFolder(token, woLabel, propFolder.id);
+    }
     if (!woFolder || !woFolder.id) return json({ error: `Could not find/create WO folder "${woLabel}"`, step: step.current }, 500);
     step.current = 'upload_file';
     const arrayBuffer = await file.arrayBuffer();
@@ -702,16 +668,8 @@ async function createWorkOrder(env, body) {
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
   const woId = `WO-${nextWONum}`, now = new Date().toISOString();
-  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Admin_Notes: body.admin_notes||'', Hold_Reason: body.hold_reason||'', Vendor_Needs_Access: body.vendor_needs_access||'auto' }[h] ?? ''));
+  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Vendor_Needs_Access: body.vendor_needs_access||'auto' }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
-  // Entry_Notes is append-only + attributed, so it goes through appendWOField
-  // rather than into the row map — the WO was just created so it starts empty.
-  // Attribution: an email-intake create passes its own author; an admin create
-  // is stamped "Admin". createWorkOrder is a Response-returning helper, so this
-  // runs before the return below.
-  if (body.entry_notes) {
-    try { await appendWOField(env, woId, 'Entry_Notes', body.entry_notes, body.entry_notes_author || 'Admin', { Entry_Notes: '' }); } catch(e) { /* non-fatal */ }
-  }
   try {
     const tenants = await fetchTab(env, 'Tenants');
     const activeTenants = tenants.filter(t => { if (t.Active === 'FALSE') return false; if (body.unit_id) return t.Unit_ID === body.unit_id; if (body.property_id) return !t.Unit_ID && String(t.Property_ID) === String(body.property_id); return false; });
@@ -724,89 +682,14 @@ async function createWorkOrder(env, body) {
   return json({ success: true, id: woId });
 }
 
-// One attributed line: "[Jul 21, 3:45 PM — Brett] text". Shared by every
-// append-only WO field so attribution can't drift between them (B-127).
-function attributedLine(text, author) {
-  const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
-  return `${author ? `[${ts} — ${author}] ` : `[${ts}] `}${text}`;
-}
-
-// APPEND, never overwrite. Entry_Notes and Vendor_Thread are multi-source: Brett's
-// "lockbox is red" and Buildium's "call 24h ahead" must BOTH survive on the same
-// WO, so a write that replaces the field is always a bug.
-async function appendWOField(env, woId, field, text, author, wo = null) {
-  if (!text) return { skipped: true };
-  if (!wo) {
-    const workorders = await fetchTab(env, 'Work_Orders');
-    wo = findWO(workorders, woId);
-    if (!wo) return { error: 'WO not found' };
-  }
-  const existing = wo[field] || '';
-  const line = attributedLine(text, author);
-  await updateWOFields(env, woId, { [field]: existing ? `${existing}\n${line}` : line });
-  return { success: true, line };
-}
-
 async function appendWONotes(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
-  const res = await appendWOField(env, body.wo_id, 'Notes', body.note, body.author, wo);
-  if (res.error) return json({ error: res.error }, 404);
+  const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+  const prefix = body.author ? `[${ts} — ${body.author}] ` : `[${ts}] `;
+  await updateWOFields(env, body.wo_id, { Notes: wo.Notes ? `${wo.Notes}\n${prefix}${body.note}` : `${prefix}${body.note}` });
   return json({ success: true });
-}
-
-// Admin appends access/scheduling info to a WO. Append-only + attributed.
-async function appendEntryNote(env, body) {
-  if (!body.wo_id || !body.note) return json({ error: 'wo_id and note required' }, 400);
-  const res = await appendWOField(env, body.wo_id, 'Entry_Notes', body.note, body.author || 'admin');
-  if (res.error) return json({ error: res.error }, 404);
-  return json({ success: true, line: res.line });
-}
-
-// Vendor writes to the shared private admin↔vendor thread. Scoped: a vendor may
-// only post to a WO actually assigned to them.
-async function addVendorNote(env, body) {
-  if (!body.wo_id || !body.note) return json({ error: 'wo_id and note required' }, 400);
-  if (!body.vendor_id) return json({ error: 'vendor_id required' }, 400);
-  const [workorders, vendors] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors')]);
-  const wo = findWO(workorders, body.wo_id);
-  if (!wo) return json({ error: 'WO not found' }, 404);
-  if (String(wo.Vendor_ID) !== String(body.vendor_id)) return json({ error: 'Unauthorized' }, 403);
-  const vendor = vendors.find(v => v.ID === body.vendor_id) || {};
-  let text = body.note;
-  if (vendor.Language === 'es') {
-    const en = await translateToEnglish(env, text);
-    if (en && en !== text) text = `[ES] ${text}\n[EN] ${en}`;
-  }
-  const name = vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim() || 'Vendor';
-  const res = await appendWOField(env, body.wo_id, 'Vendor_Admin_Notes', text, `${name} (vendor)`, wo);
-  await logWOAudit(env, body.wo_id, name, 'vendor', 'Vendor_Admin_Notes', '', text.substring(0, 100), 'Vendor note appended');
-  return json({ success: true, line: res.line });
-}
-
-// The owner-facing export payload (WO PDF, owner email, anything a customer
-// receives). Deliberately a SEPARATE endpoint built through ownerExportWO() so a
-// future PDF cannot be wired to the raw row by accident.
-async function ownerExport(env, url) {
-  const ownerId = url.searchParams.get('owner_id');
-  const woId    = url.searchParams.get('wo_id');
-  if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
-  const [workorders, properties, units, tenants, keys, vendors] = await Promise.all([
-    fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'),
-    fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchTab(env,'Vendors'),
-  ]);
-  const ownerPropIds = new Set(properties.filter(p => String(p.Owner_ID) === String(ownerId)).map(p => p.ID));
-  // Match /owner-workorders: open work orders only unless closed ones are asked
-  // for. Returning the full history by default made this endpoint strictly
-  // broader than the one it mirrors.
-  const includeClosed = url.searchParams.get('include_closed') === 'true';
-  let wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
-  if (woId) wos = wos.filter(w => w.ID === woId);
-  const out = wos.map(wo => ownerExportWO(
-    enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors })
-  ));
-  return json(out);
 }
 async function assignVendor(env, body) {
   const [workorders, vendors, tenants, units, properties, keys] = await Promise.all([
@@ -856,28 +739,19 @@ async function updateStatus(env, body) {
   if (!wo) return json({ error: 'WO not found' }, 404);
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
   const fields = { Status: body.status };
-  let statusNote = '';
   if (body.notes) {
-    statusNote = body.notes;
+    let statusNote = body.notes;
     if (body.vendor_id) {
       const sVendors = await fetchTab(env, 'Vendors');
       const sVendor = sVendors.find(v => v.ID === body.vendor_id);
       if (sVendor?.Language === 'es') { const en = await translateToEnglish(env, statusNote); if (en && en !== statusNote) statusNote = `[ES] ${statusNote}\n[EN] ${en}`; }
     }
-    // Was `fields.Notes = statusNote` — a destructive OVERWRITE that replaced the
-    // entire note history with one status comment, on a field the owner and
-    // tenant portals both rendered. Now appended to the private admin↔vendor
-    // thread after the status write.
+    fields.Notes = statusNote;
   }
-  // Moving to On Hold captures the plain-language reason. Hold_Reason is the ONE
-  // note field the matrix exposes to owner and tenant, so it is written from an
-  // explicit hold_reason, never silently from an internal status note.
-  if (body.status === 'On Hold' && body.hold_reason) fields.Hold_Reason = body.hold_reason;
   if (body.scheduled_date) fields.Scheduled_Date = body.scheduled_date;
   if (body.status === 'Complete' || body.status === 'Pending Invoice')
     fields.Completed_Date = wo.Completed_Date || new Date().toISOString();
   await updateWOFields(env, body.wo_id, fields);
-  if (statusNote) await appendWOField(env, body.wo_id, 'Vendor_Admin_Notes', statusNote, `${changedBy} (${changedRole})`, wo);
   await logWOAudit(env, body.wo_id, changedBy, changedRole, 'Status', wo.Status||'', body.status, body.notes||'');
   const config = await fetchConfig(env);
   if (body.status === 'Complete') {
@@ -923,16 +797,14 @@ async function vendorWorkorders(env, url) {
   const vendorId = url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys, config, vendors] = await Promise.all([
+  const [workorders, properties, units, tenants, keys, config] = await Promise.all([
     fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'),
-    fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchConfig(env), fetchTab(env,'Vendors'),
+    fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchConfig(env),
   ]);
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   const wos = workorders.filter(w => w.Vendor_ID === vendorId && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
-  // vendorView is explicit so the vendor gets the vendor allowlist (no
-  // Admin_Notes, no legacy Notes) rather than falling through to admin.
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true, vendors }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults }));
   enriched.sort((a, b) => { const pa = PRIORITY_ORDER[a.Priority?.toLowerCase()] ?? 2, pb = PRIORITY_ORDER[b.Priority?.toLowerCase()] ?? 2; return pa !== pb ? pa - pb : (a.property_address||'').localeCompare(b.property_address||''); });
   return json(enriched);
 }
@@ -941,10 +813,10 @@ async function tenantWorkorders(env, url) {
   const tenantId = url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys, vendors] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchTab(env,'Vendors')]);
+  const [workorders, properties, units, tenants, keys] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys')]);
   const tenant = tenants.find(t => t.ID === tenantId); if (!tenant) return json([]);
   const wos = workorders.filter(w => { if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true, vendors }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true }));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
 }
@@ -953,56 +825,12 @@ async function ownerWorkorders(env, url) {
   const ownerId = url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys, vendors] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchTab(env,'Vendors')]);
+  const [workorders, properties, units, tenants, keys] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys')]);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
   const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true }));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
-}
-
-// ── B-127 v2.0 VISIBILITY MATRIX ─────────────────────────────────────────────
-// THE single source of truth for which note fields each role receives. enrichWO
-// builds on {...wo}, so every Work_Orders column is exposed by default — this is
-// an ALLOWLIST: any note field not named here is deleted before the payload
-// leaves the Worker. A new note column is therefore private until it is listed,
-// which is the safe direction to fail.
-// `Notes` is the LEGACY column: admin-only archive, read-only, never written to
-// again. It used to render verbatim on the owner AND tenant portals.
-const WO_NOTE_FIELDS = ['Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes', 'Hold_Reason', 'Notes'];
-const WO_NOTE_VISIBILITY = {
-  admin:  ['Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes', 'Hold_Reason', 'Notes'],
-  vendor: ['Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Hold_Reason'],
-  owner:  ['Owner_Notes', 'Hold_Reason'],
-  tenant: ['Hold_Reason'],
-};
-
-function applyNoteVisibility(obj, role) {
-  const allowed = WO_NOTE_VISIBILITY[role] || WO_NOTE_VISIBILITY.tenant;
-  for (const f of WO_NOTE_FIELDS) if (!allowed.includes(f)) delete obj[f];
-  return obj;
-}
-
-// The exact payload an owner may receive. A WO PDF or any other owner-facing
-// export MUST be built from this and nothing else — building from the raw row is
-// how a private note ends up in a document sent to a customer.
-function ownerExportWO(enriched) {
-  return {
-    ID: enriched.ID,
-    property_address: enriched.property_address || '',
-    unit_label: enriched.unit_label || '',
-    Trade: enriched.Trade || '',
-    Description: enriched.Description || '',
-    Status: enriched.Display_Status || enriched.Status || '',
-    Priority: enriched.Priority || '',
-    Scheduled_Date: enriched.Scheduled_Date || '',
-    Completed_Date: enriched.Completed_Date || '',
-    Created_Date: enriched.Created_Date || '',
-    Hold_Reason: enriched.Hold_Reason || '',
-    Owner_Notes: enriched.Owner_Notes || '',
-    vendor_name: enriched.vendor_name || '',
-    Owner_WO_Ref: enriched.Owner_WO_Ref || '',
-  };
 }
 
 function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) {
@@ -1025,14 +853,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
   }
   const rawLockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit.Unit_Label||'');
   const lockboxes = (opts.omitLockbox || !vendorHasAccess) ? [] : rawLockboxes;
-  // BOTH, never one-or-the-other. The property default ("side gate is unlocked")
-  // and the per-WO note ("call owner 24h ahead") are different facts — letting a
-  // WO note hide the standing default is how a vendor ends up at a door they
-  // can't open. Still fully gated by Vendor_Needs_Access.
-  // Entry_Notes is append-only and therefore multi-line; flatten it, because this
-  // same string is injected into the single-line vendor assignment SMS.
-  const accessNotes = (!vendorHasAccess) ? ''
-    : [property.Access_Notes, (wo.Entry_Notes || '').replace(/\n+/g, ' | ')].filter(Boolean).join(' | ');
+  const accessNotes = (!vendorHasAccess) ? '' : (property.Access_Notes||'');
   const legacyLockbox = (!lockboxes.length && vendorHasAccess && property.Lockbox_Code) ? property.Lockbox_Code : '';
   const base = {
     ...wo,
@@ -1046,28 +867,9 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
     access_notes: accessNotes,
     vendor_has_access: vendorHasAccess,
   };
-  // Vendor identity. enrichWO never resolved this before, so owner.html:647 and
-  // tenant.html:379 have been rendering an always-empty wo.vendor_name.
-  const vendor = (opts.vendors || []).find(v => v.ID === wo.Vendor_ID) || {};
-  const vendorName = vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim();
-
-  const role = opts.tenantView ? 'tenant' : opts.ownerView ? 'owner' : opts.vendorView ? 'vendor' : 'admin';
-  base.vendor_name = vendorName;
-  // Every role sees the vendor's NAME. Only the owner is denied the PHONE —
-  // that's what protects Brett's GC position (owner can't go around him to the
-  // sub). The tenant DOES get it; they coordinate access. (Changed in v2.0: the
-  // tenant view used to blank it.)
-  base.vendor_phone = role === 'owner' ? '' : (vendor.Phone || '');
-
-  if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; }
-  if (opts.ownerView)  {
-    delete base.Invoice_ID;
-    // Owners must not see access info. access_notes carries Entry_Notes as well
-    // as the property default, so leaving it on the owner payload hands over both.
-    delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = [];
-    base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status;
-  }
-  return applyNoteVisibility(base, role);
+  if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; base.vendor_phone = ''; }
+  if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; }
+  return base;
 }
 
 async function getPropertyFull(env, url) {
@@ -1433,18 +1235,7 @@ async function generateEstimateText(env, body) {
 }
 // ── WO AUDIT ─────────────────────────────────────────────────
 
-// Private note CONTENT must never enter WO_Audit. The audit trail is rendered in
-// the owner portal, and /wo-audit has no per-record authorization — so any value
-// written here is effectively readable. Redacting at the single write chokepoint
-// means the protection holds regardless of who reads it later, instead of relying
-// on every reader to filter correctly. The FACT of a change is still recorded.
-// Hold_Reason is deliberately excluded — it is customer-facing by design.
-const AUDIT_REDACTED_FIELDS = ['Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes', 'Notes'];
-
 async function logWOAudit(env, woId, changedBy, changedByRole, field, oldValue, newValue, notes='') {
-  if (AUDIT_REDACTED_FIELDS.includes(field)) {
-    oldValue = ''; newValue = '(content redacted — private note)'; notes = '';
-  }
   try {
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
     const rows = data.values||[]; if (!rows.length) return;
@@ -1486,24 +1277,11 @@ async function addWONote(env, body) {
     const allVendors = await fetchTab(env, 'Vendors'), noteVendor = allVendors.find(v => v.ID === body.vendor_id);
     if (noteVendor?.Language === 'es') { const en = await translateToEnglish(env, noteText); if (en && en !== noteText) noteText = `[ES] ${noteText}\n[EN] ${en}`; }
   }
-  // B-127 v2.0: route by the AUTHOR'S ROLE instead of dumping everything into the
-  // single `Notes` column, which rendered verbatim on the owner AND tenant
-  // portals. Admin may target a specific field explicitly.
-  const ADMIN_TARGETS = ['Vendor_Admin_Notes', 'Admin_Notes', 'Entry_Notes'];
-  let field;
-  if (body.author_role === 'owner')       field = 'Owner_Notes';
-  else if (body.author_role === 'vendor') field = 'Vendor_Admin_Notes';
-  else field = ADMIN_TARGETS.includes(body.field) ? body.field : 'Vendor_Admin_Notes';
-  // Asking to notify the owner MEANS the text is customer-facing, so it must land
-  // in the one customer-facing field. Previously the flag was honoured no matter
-  // which field was targeted, so `field:'Admin_Notes'` + this flag would SMS
-  // admin-only text to the owner and copy it into Hold_Reason (tenant-visible).
-  if (body.notify_owner_status_note === true) field = 'Hold_Reason';
-
-  const author = `${body.author||'Unknown'} (${body.author_role||'unknown'})`;
-  if (field === 'Hold_Reason') await updateWOFields(env, body.wo_id, { Hold_Reason: noteText });
-  else await appendWOField(env, body.wo_id, field, noteText, author, wo);
-  await logWOAudit(env, body.wo_id, body.author, body.author_role, field, '', noteText.substring(0,100), 'Note appended');
+  const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' });
+  const attribution = `[${ts} — ${body.author||'Unknown'} (${body.author_role||'unknown'})]`;
+  const newNotes = wo.Notes ? `${wo.Notes}\n${attribution} ${noteText}` : `${attribution} ${noteText}`;
+  await updateWOFields(env, body.wo_id, { Notes: newNotes });
+  await logWOAudit(env, body.wo_id, body.author, body.author_role, 'Notes', wo.Notes||'', noteText.substring(0,100), 'Note appended');
 
   if (body.notify_owner_status_note === true) {
     try {
@@ -1610,21 +1388,6 @@ async function createDriveFolder(token, name, parentId) {
 async function findOrCreateFolder(token, name, parentId, sharedDriveId) {
   const existing = await findDriveFolder(token, name, parentId, sharedDriveId);
   return existing || await createDriveFolder(token, name, parentId);
-}
-
-// Resolves (creating as needed) the Drive folder a WO's files belong in:
-//   <properties root>/<property address>/<WO id>                  ← customer-facing
-//   <properties root>/<property address>/_Internal — Vendor Bills/<WO id>  ← isInternal
-// Extracted from handlePhotoUploadClean (July 21, 2026) so the vendor-upload path and
-// the email-intake ingest path can never drift apart on folder layout or on the
-// receipt-privacy rule (FEATURE_LOG rule 13). Returns null if a folder can't be made.
-async function getWOFolder(token, propsRoot, propAddr, woLabel, isInternal) {
-  const propFolder = await findOrCreateFolder(token, propAddr, propsRoot, propsRoot);
-  if (!propFolder || !propFolder.id) return null;
-  if (!isInternal) return await findOrCreateFolder(token, woLabel, propFolder.id);
-  const internalRoot = await findOrCreateFolder(token, '_Internal — Vendor Bills', propFolder.id);
-  if (!internalRoot || !internalRoot.id) return null;
-  return await findOrCreateFolder(token, woLabel, internalRoot.id);
 }
 
 async function uploadFileToDrive(token, arrayBuffer, filename, mimeType, folderId, sharedDriveId) {
@@ -1885,12 +1648,6 @@ async function handleInboundSMS(env, request) {
 async function sendSMS(env, to, message) {
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
-  // Staging sandbox (B-103): never place a real Twilio call from a preview deploy.
-  // This is the single SMS chokepoint, so gating here covers every caller.
-  if (env.STAGING === '1') {
-    console.log(`[STAGING] SMS suppressed → ${to}: ${message}`);
-    return { staging: true, suppressed: true, to, body: message };
-  }
   const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
     method: 'POST',
     headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_SID}:${env.TWILIO_AUTH}`), 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1907,717 +1664,240 @@ async function logSMS(env, woId, recipientType, recipientId, phone, message) {
   } catch(e) { /* non-fatal — SMS already sent, logging is secondary */ }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// EMAIL → WORK ORDER INTAKE (B-103, Phase A)
-// ══════════════════════════════════════════════════════════════════════════════
-// An Apps Script poller reads Gmail and POSTs the raw message to /intake. ALL
-// parsing and business logic lives here so it is git-versioned and curl-testable
-// (PAT-001). Adding a new source later = one parser + one line in detectSource;
-// nothing else in the pipeline changes.
-//
-//   detect → parse → dedupe → resolve → create WO → ingest files → notify
-//
-// SAFETY POSTURE: this path creates records from untrusted email, so it is
-// deliberately conservative. A confident match is reused; a genuine no-match may
-// create a Unit/Tenant (cheap to fix); an AMBIGUOUS or partial property match
-// NEVER auto-creates — it returns needs_review so a human decides. Phase B turns
-// those into Intake_Queue rows + a Hub review screen.
+// ── DAILY DIGEST (Session 5) ─────────────────────────────────
+// Read-only 7am morning digest. buildDigest NEVER writes business data. Delivery
+// is gated by Config flags and stays dormant until Brett enables it after Twilio
+// send is live. Pulls from live tabs by their real column names.
+const DIGEST_CLOSED = ['Paid','Invoiced','Cancelled','Closed','Void'];
 
-const INTAKE_SOURCES = {
-  'managebuilding.com':               'buildium',
-  'phoenixestatesmaryland@gmail.com': 'manual',
-  'appfolio.com':                     'appfolio',
-};
+function etTodayISO() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
+function etStamp() { return new Date().toLocaleString('en-US', { timeZone:'America/New_York', weekday:'short', month:'short', day:'numeric', year:'numeric' }); }
+function daysAgoISO(n) { return new Date(Date.now()-n*86400000).toLocaleDateString('en-CA', { timeZone:'America/New_York' }); }
+function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpperCase() !== 'FALSE'); }
 
-function detectSource(sender, subject) {
-  const s = String(sender || '').toLowerCase();
-  // Senders arrive as either "Name <a@b.com>" or a bare address.
-  const addr = (s.match(/<([^>]+)>/) || [null, s])[1].trim();
-  // Match on the address DOMAIN, anchored. This used to be a substring test over
-  // the whole address, so "notices@managebuilding.com.attacker.net" matched — an
-  // attacker didn't even need to spoof, they could send DMARC-valid mail from a
-  // domain they own and drive the whole record-creation pipeline.
-  const at = addr.lastIndexOf('@');
-  if (at === -1) return 'unknown';
-  const domain = addr.slice(at + 1).toLowerCase().replace(/[>\s]+$/, '');
-  for (const [needle, source] of Object.entries(INTAKE_SOURCES)) {
-    if (needle.includes('@')) { if (addr.toLowerCase() === needle) return source; continue; }
-    if (domain === needle || domain.endsWith(`.${needle}`)) return source;
-  }
-  return 'unknown';
-}
-
-// ── TEXT EXTRACTION ──────────────────────────────────────────────────────────
-const HTML_ENTITIES = { amp:'&', lt:'<', gt:'>', quot:'"', apos:"'", nbsp:' ', '#39':"'", '#x27':"'", '#160':' ' };
-
-function decodeEntities(s) {
-  return String(s || '')
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
-    .replace(/&#(\d+);/g,         (_, d) => String.fromCharCode(parseInt(d, 10)))
-    .replace(/&([a-z]+);/gi,      (m, e) => HTML_ENTITIES[e.toLowerCase()] ?? m);
-}
-
-// Buildium's mail is table-based HTML. Block-level tags become newlines so that
-// "label / value" pairs stay on separate lines for the section parser below.
-function htmlToText(html) {
-  if (!html) return '';
-  return decodeEntities(
-    String(html)
-      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/(p|div|tr|td|th|li|h[1-6]|table)>/gi, '\n')
-      .replace(/<[^>]+>/g, ' ')
-  )
-    .split('\n')
-    .map(l => l.replace(/[ \t ]+/g, ' ').trim())
-    .filter((l, i, arr) => l !== '' || (arr[i - 1] || '') !== '')
-    .join('\n')
-    .trim();
-}
-
-// Labels that end a section. Kept broad so an unexpected block doesn't get
-// swallowed into the previous field's value.
-// Every one of these ENDS the preceding section. A header missing from this list
-// doesn't just fail to parse — sectionAfter() runs straight through it and the
-// literal header text lands in Description/Notes. That's how "Contact and
-// scheduling information" leaked twice onto WO-1068 (real email, July 21).
-const BUILDIUM_LABELS = [
-  'work order','location','entry contacts','entry contact','entry details','entry notes',
-  'job description','tenant notes','description','files','attachments','photos','priority',
-  'category','requested by','status','assigned to','due date','notes','pets','property',
-  'unit','tenant','vendor','created','scheduled',
-  // Added July 21 from the WO-1068 real-email test.
-  'contact and scheduling information','parts and labor details','vendor information',
-  'vendor name','vendor contact info','vendor notes','invoice no','charge work to',
-];
-
-function isLabelLine(line) {
-  // Trailing period matters: the real header is "Invoice no." — stripping only
-  // colons/space left it unmatched.
-  const l = line.toLowerCase().replace(/[.:\s]+$/, '').trim();
-  return BUILDIUM_LABELS.includes(l);
-}
-
-// Buildium can add a section header at any time, and the failure mode is silent
-// corruption of the WO. Rather than only ever finding out from a bad work order,
-// flag anything INSIDE a captured section that looks like a header we don't know:
-// a short, title-ish line with no sentence punctuation. This only ever adds a
-// warning — it never changes what gets parsed.
-function suspectHeaderLines(lines) {
-  return lines.filter(l => {
-    const t = l.trim();
-    if (t.length < 8 || t.length > 60) return false;
-    if (/[.!?,;:]/.test(t)) return false;
-    const words = t.split(/\s+/);
-    if (words.length < 2 || words.length > 6) return false;
-    if (!/^[A-Z]/.test(t) || /\d/.test(t)) return false;
-    // Must read as Title Case. Without this, ordinary entry content like
-    // "Lockbox on the side door" trips the heuristic and every WO carries a
-    // bogus warning — which trains you to ignore warnings entirely.
-    const capitalized = words.filter(w => /^[A-Z]/.test(w)).length;
-    return capitalized / words.length >= 0.6;
-  });
-}
-
-// Returns the lines that follow `label` up to the next label line.
-// Handles both "Label:" on its own line and "Label: value" inline.
-function sectionAfter(lines, label) {
-  const want = label.toLowerCase();
-  const out = [];
-  for (let i = 0; i < lines.length; i++) {
-    const bare = lines[i].toLowerCase().replace(/[:\s]+$/, '').trim();
-    // Three shapes seen in the wild: "Label" alone, "Label: value", and — when a
-    // mail client flattens the HTML table into a plain body — "Label value".
-    const inline = lines[i].match(new RegExp(`^${want}\\s*(?::\\s*|\\s+)(.+)$`, 'i'));
-    if (bare !== want && !inline) continue;
-    if (inline && inline[1].trim()) out.push(inline[1].trim());
-    for (let j = i + 1; j < lines.length; j++) {
-      if (isLabelLine(lines[j])) break;
-      if (lines[j].trim()) out.push(lines[j].trim());
-    }
-    break;
-  }
-  return out;
-}
-
-// ── ADDRESS NORMALIZATION ────────────────────────────────────────────────────
-// Collapses the many spellings of one address to a single comparable key so
-// "1110 North Dukeland Street - 1" and "1110 N Dukeland St" match. Normalizes to
-// the SHORT form (n / st / ave) so both directions converge on the same key.
-const ADDR_WORDS = {
-  north:'n', south:'s', east:'e', west:'w',
-  northeast:'ne', northwest:'nw', southeast:'se', southwest:'sw',
-  street:'st', avenue:'ave', av:'ave', road:'rd', drive:'dr', lane:'ln',
-  boulevard:'blvd', court:'ct', place:'pl', terrace:'ter', parkway:'pkwy',
-  circle:'cir', highway:'hwy', square:'sq', trail:'trl', way:'way',
-  apartment:'apt', suite:'ste',
-};
-
-// Matches a TRAILING unit designator only: " - 1", "#1", " Unit 1", " Apt 2B".
-// The separators are anchored deliberately. An unanchored alternation like
-// (?:-|#|unit|apt|ste) matches mid-word, which silently ate real street names:
-// "1200 Winchester" → "1200 winche" + a phantom Unit "r", and "8 Cross-Keys" →
-// "8 cross". Worse, it truncated asymmetrically, so a property matched itself as
-// "ambiguous" and stuck every WO at that address in review.
-const UNIT_SUFFIX = /(?:\s+-\s*|\s*#\s*|\s+(?:unit|apt|apartment|ste|suite)\.?\s*)([\w-]+)\s*$/i;
-
-function normalizeAddr(s) {
-  if (!s) return '';
-  let out = String(s).toLowerCase();
-  out = out.replace(/,\s*$/, '').replace(UNIT_SUFFIX, '');
-  out = out.replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
-  return out.split(' ').map(w => ADDR_WORDS[w] || w).filter(Boolean).join(' ');
-}
-
-function unitKey(s) {
-  return String(s || '').toLowerCase().replace(/^(?:#|(?:unit|apt|apartment|ste|suite)\b\.?)\s*/i, '').replace(/\s+/g, '').trim();
-}
-
-// Last 10 digits — the only phone comparison that survives +1 / (410) / dashes.
-function phoneKey(p) {
-  const d = String(p || '').replace(/\D/g, '');
-  return d.length >= 10 ? d.slice(-10) : '';
-}
-
-// ── TRADE GUESS ──────────────────────────────────────────────────────────────
-// A GUESS ONLY — always overridable in the Hub. Keys must stay in QB_TRADE_MAP
-// or /qb/send-invoice silently falls back to "General".
-const TRADE_KEYWORDS = [
-  ['Plumbing',    /\b(toilet|leak|leaking|drain|clog|clogged|faucet|sink|pipe|water heater|sewer|shower|tub|sump|garbage disposal|no hot water|running water)\b/i],
-  ['Electrical',  /\b(outlet|breaker|electric|electrical|wiring|light switch|no power|short circuit|gfci|fuse|sparking)\b/i],
-  // Appliance is tested BEFORE HVAC on purpose: "refrigerator is not cooling"
-  // matches HVAC's "not cooling" too, and the appliance noun is the stronger signal.
-  ['Appliance',   /\b(refrigerator|fridge|stove|oven|range|dishwasher|washer|dryer|microwave|appliance)\b/i],
-  ['HVAC',        /\b(hvac|furnace|boiler|no heat|air condition|a\/c|ac unit|thermostat|radiator|not cooling|not heating)\b/i],
-  ['Roofing',     /\b(roof|shingle|gutter|downspout|soffit|ceiling leak)\b/i],
-  ['Windows',     /\b(window|screen|glass|pane|storm door)\b/i],
-  ['Flooring',    /\b(floor|flooring|carpet|tile|hardwood|subfloor|laminate)\b/i],
-  ['Painting',    /\b(paint|painting|drywall|plaster|patch)\b/i],
-  ['Carpentry',   /\b(door|cabinet|trim|stair|railing|deck|fence|framing|lock|deadbolt)\b/i],
-  ['Landscaping', /\b(lawn|grass|yard|tree|shrub|landscap|snow removal|leaves)\b/i],
-  ['Cleaning',    /\b(clean|cleaning|trash|debris|junk removal|pest|rodent|roach|mice)\b/i],
-];
-
-function keywordTrade(text) {
-  const t = String(text || '');
-  for (const [trade, re] of TRADE_KEYWORDS) if (re.test(t)) return trade;
-  return '';
-}
-
-// ── BUILDIUM PARSER ──────────────────────────────────────────────────────────
-// One Buildium email == exactly one work order (confirmed: three issues at one
-// address arrive as three separate emails). Returns a normalized item plus the
-// warnings that downstream code uses to decide create-vs-review.
-function parseBuildium(html, subject, plaintext) {
-  // HTML FIRST — this is deliberate and load-bearing. Buildium sends table-based
-  // HTML, and the Apps Script poller sends BOTH bodies on every message. Preferring
-  // plaintext meant the tested HTML path would never execute in production, and
-  // Gmail's flattened plain body renders the table as "Location 1110 N Dukeland St"
-  // on ONE line, which the section parser can't split → every email would have
-  // returned needs_review forever. Plaintext is the fallback for a text-only sender.
-  const text = htmlToText(html) || String(plaintext || '').trim();
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const warnings = [];
-
-  // Ref: body "Work order #838106-1: Leaking toilet" wins (it carries the -1
-  // suffix); the subject "Work order 838106" is the fallback.
-  const bodyRef = text.match(/work order\s*#\s*([\w-]+)\s*:?\s*(.*)/i);
-  const subjRef = String(subject || '').match(/work order\s*#?\s*([\w-]+)/i);
-  const ownerRef = (bodyRef && bodyRef[1]) || (subjRef && subjRef[1]) || '';
-  if (!ownerRef) warnings.push('No Buildium work order number found');
-
-  // Title = the text after the ref on the same line.
-  let title = (bodyRef && bodyRef[2] || '').trim();
-  const jobDesc    = sectionAfter(lines, 'job description').join('\n');
-  const tenantNote = sectionAfter(lines, 'tenant notes').join('\n');
-  const descBlock  = sectionAfter(lines, 'description').join('\n');
-  if (!title) title = (jobDesc || descBlock || '').split('\n')[0] || '';
-  const description = [title, jobDesc || descBlock, tenantNote].filter(Boolean).join(' — ').trim();
-  if (!description) warnings.push('No description found');
-
-  // Location block: street line, then "City, ST 12345".
-  const loc = sectionAfter(lines, 'location');
-  let street = '', unitLabel = '', city = '', state = '', zip = '';
-  for (const line of loc) {
-    const csz = line.match(/^(.+?),\s*([A-Za-z]{2})\.?\s+(\d{5})(?:-\d{4})?$/);
-    if (csz && !city) { city = csz[1].trim(); state = csz[2].toUpperCase(); zip = csz[3]; continue; }
-    if (!street) {
-      const m = line.match(UNIT_SUFFIX);
-      if (m) { street = line.slice(0, m.index).trim(); unitLabel = m[1].trim(); }
-      else street = line.trim();
-    }
-  }
-  if (!street) warnings.push('No property address found in the Location block');
-
-  // Entry contacts → tenant.
-  // The real WO-1068 mail puts the tenant under "Contact and scheduling
-  // information", not "Entry contacts" — reading only the latter meant no tenant
-  // name/phone/email was parsed at all, so no tenant got linked to the WO.
-  const contact = [...new Set([
-    ...sectionAfter(lines, 'entry contacts'),
-    ...sectionAfter(lines, 'entry contact'),
-    ...sectionAfter(lines, 'contact and scheduling information'),
-  ])];
-  const contactText = contact.join('\n');
-  const email = (contactText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/) || [''])[0];
-  const phone = (contactText.match(/(?:\+1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [''])[0];
-  // A person's name, not just "a short line". The loose version accepted prose
-  // like "Tenant will be home" or "No pets" — and resolveTenant CREATES a tenant
-  // row (with an auto PIN) from whatever lands here. Require 2-4 tokens that all
-  // start with a capital, which prose fails on its lowercase words.
-  const NAME_STOPWORDS = new Set(['pets','pet','entry','notes','note','none','tenant','owner','contact','contacts','yes','no','na','unknown','vacant','key','lockbox']);
-  let contactName = '';
-  for (const line of contact) {
-    if (line.includes('@') || phoneKey(line)) continue;
-    const toks = line.trim().split(/\s+/);
-    if (toks.length < 2 || toks.length > 4) continue;
-    if (!toks.every(t => /^[A-Z][A-Za-z'.-]*$/.test(t))) continue;
-    if (toks.some(t => NAME_STOPWORDS.has(t.toLowerCase().replace(/[^a-z]/g, '')))) continue;
-    contactName = line.trim();
-    break;
-  }
-
-  // Entry/pet details are ACCESS information, not a general note — they belong on
-  // the WO's entry field where the vendor actually looks (and where the assign SMS
-  // reads from), not appended to the free-text Notes log.
-  // "Pets: Yes - Cat" sits INSIDE the entry-details block but also matches the
-  // standalone "pets" label, so the naive concat captured it twice — once whole,
-  // once as the bare value. Drop any line already contained in a longer one.
-  const rawEntry = [...new Set(
-    [...sectionAfter(lines, 'entry details'), ...sectionAfter(lines, 'entry notes'), ...sectionAfter(lines, 'pets')].filter(Boolean)
-  )];
-  const entryLines = rawEntry.filter(l => !rawEntry.some(o => o !== l && o.length > l.length && o.includes(l)));
-  const entryNotes = entryLines.join(' | ');
-
-  // Owner: Buildium puts the management company in the subject prefix and footer.
-  const ownerName = (String(subject || '').match(/^(.*?):\s*work order/i) || [null, ''])[1].trim();
-
-  // Files: S3 links in the body (images AND video). Scan the RAW html as well as
-  // the flattened text — the links live in href/src attributes, which htmlToText
-  // strips, leaving only the visible link label behind. Dedupe: the same asset is
-  // routinely linked twice (thumbnail + full size).
-  const urlSource = `${decodeEntities(String(html || ''))}\n${text}`;
-  const candidates = (urlSource.match(/https?:\/\/[^\s"'<>)\]]+/gi) || [])
-    .map(u => u.replace(/[.,;]+$/, ''))
-    .filter(u => /amazonaws\.com|s3[.-]|managebuilding\.com/i.test(u))
-    // Accept a known media extension OR a download-style link. Requiring an
-    // extension alone silently dropped Buildium's extension-less
-    // ".../api/file/download?id=99" links — i.e. lost photos, with no warning.
-    // No PDFs: intake files are tenant job photos, and a PDF here would be logged
-    // as a photo in the customer-facing folder (see FEATURE_LOG rule 13).
-    .filter(u => /\.(jpe?g|png|gif|heic|webp|bmp|mov|mp4|m4v|avi)(\?|$)/i.test(u) || /\/(file|files|download|attachment)s?[\/?]/i.test(u));
-  // Dedupe ignoring the query string: the same asset is routinely linked twice as
-  // "photo.jpg?w=100" (thumbnail) and "photo.jpg" (full size). Keep the longest
-  // variant of each path — the full-size link is the one without a size param.
-  const byPath = new Map();
-  for (const u of candidates) {
-    const key  = u.split('?')[0];
-    const prev = byPath.get(key);
-    // Prefer the variant with no query string (the full-size original); the
-    // thumbnail is the one carrying ?w=/?size= params.
-    if (!prev || (prev.includes('?') && !u.includes('?'))) byPath.set(key, u);
-  }
-  const urls = [...byPath.values()];
-
-  const priority = /\b(emergency|urgent|asap|no heat|no hot water|flood|gas leak)\b/i.test(text) ? 'urgent' : 'normal';
-
-  // Surface unknown section headers that landed inside parsed content.
-  const suspects = [...new Set([
-    ...suspectHeaderLines((jobDesc || descBlock || '').split('\n')),
-    ...suspectHeaderLines(tenantNote.split('\n')),
-    ...suspectHeaderLines(entryLines),
-  ])].filter(s => s.toLowerCase() !== title.toLowerCase());
-  if (suspects.length)
-    warnings.push(`Possible unrecognized section header(s) in parsed content — add to BUILDIUM_LABELS if so: ${suspects.join(' / ')}`);
-
+async function buildDigest(env) {
+  const today = etTodayISO();
+  const [wos, bills, props, vendors, tenants] = await Promise.all([
+    fetchTab(env,'Work_Orders').catch(()=>[]),
+    fetchTab(env,'Vendor_Bills').catch(()=>[]),
+    fetchTab(env,'Properties').catch(()=>[]),
+    fetchTab(env,'Vendors').catch(()=>[]),
+    fetchTab(env,'Tenants').catch(()=>[]),
+  ]);
+  const open = wos.filter(w => OPEN_WO_STATUSES.includes(w.Status));
+  const isUrgent = w => String(w.Priority||'').toLowerCase()==='urgent';
+  const label = w => `WO-${w.ID||'?'} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))}${w.Unit_Label?(' '+w.Unit_Label):''} · ${w.Status}${isUrgent(w)?' · URGENT':''}${w.Description?(' · '+String(w.Description).slice(0,55)):''}`;
+  const overdue = open.filter(w => w.Scheduled_Date && w.Scheduled_Date < today && !DIGEST_CLOSED.includes(w.Status));
+  const dueToday = open.filter(w => w.Scheduled_Date === today);
+  const onHold  = open.filter(w => w.Status === 'On Hold');
+  const urgent  = open.filter(w => isUrgent(w) && w.Status!=='On Hold' && !overdue.includes(w)).slice(0,6);
+  const pendingBills = activeRows(bills).filter(b => String(b.Status||'').toLowerCase()==='submitted');
+  const billsTotal = pendingBills.reduce((s,b)=> s + (parseFloat(b.Total||b.Customer_Total||0)||0), 0);
+  const since = daysAgoISO(4);
+  const wins = wos.filter(w => w.Completed_Date && w.Completed_Date >= since).slice(0,6);
   return {
-    source: 'buildium',
-    owner_wo_ref: ownerRef,
-    owner_name: ownerName,
-    description,
-    priority,
-    trade: keywordTrade(`${title} ${jobDesc} ${tenantNote}`),
-    property: { address: street, city, state, zip },
-    unit_label: unitLabel,
-    tenant: { name: contactName, phone, email },
-    entry_notes: entryNotes,
-    notes: '',
-    files: urls,
-    warnings,
+    today, stamp: etStamp(),
+    overdue: overdue.map(label), dueToday: dueToday.map(label), onHold: onHold.map(label), urgent: urgent.map(label),
+    pendingBills: pendingBills.map(b=>`Bill ${b.ID} · ${b.Vendor_Name||('V-'+(b.Vendor_ID||'?'))} · WO-${b.WO_ID||'?'} · $${(parseFloat(b.Total||b.Customer_Total||0)||0).toFixed(2)}`),
+    billsTotal,
+    wins: wins.map(w=>`WO-${w.ID} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))} · ${w.Status} · ${String(w.Description||'').slice(0,45)}`),
+    pulse: { properties: activeRows(props).length, tenants: activeRows(tenants).length, vendors: activeRows(vendors).length, open_wos: open.length, pending_bills: pendingBills.length },
   };
 }
 
-// ── RESOLVERS ────────────────────────────────────────────────────────────────
-// addRow returns a Response; these helpers unwrap it to the new row's id.
-async function addRowId(env, tab, body) {
-  const res  = await addRow(env, tab, body);
-  const data = await res.json();
-  if (!data.success || !data.id) throw new Error(`Could not add ${tab} row: ${data.error || 'unknown error'}`);
-  return String(data.id);
+function formatDigestText(d) {
+  const L = [];
+  L.push(`RIDGE CO — DAILY DIGEST · ${d.stamp}`); L.push('');
+  L.push('▶ NEEDS YOU TODAY');
+  if (d.overdue.length)  { L.push(`${d.overdue.length} overdue:`); d.overdue.slice(0,6).forEach(x=>L.push('· '+x)); }
+  if (d.dueToday.length) { L.push(`${d.dueToday.length} scheduled today:`); d.dueToday.forEach(x=>L.push('· '+x)); }
+  if (d.onHold.length)   { L.push(`${d.onHold.length} on hold:`); d.onHold.forEach(x=>L.push('· '+x)); }
+  if (d.urgent.length)   { L.push('Urgent open:'); d.urgent.forEach(x=>L.push('· '+x)); }
+  if (!d.overdue.length && !d.dueToday.length && !d.onHold.length && !d.urgent.length) L.push('· Nothing flagged — clear runway.');
+  L.push(''); L.push('▶ MONEY');
+  if (d.pendingBills.length) { L.push(`${d.pendingBills.length} vendor bills to review ($${d.billsTotal.toFixed(2)}):`); d.pendingBills.forEach(x=>L.push('· '+x)); }
+  else L.push('· No vendor bills awaiting review.');
+  L.push(''); L.push('▶ WINS (last 4 days)');
+  if (d.wins.length) d.wins.forEach(x=>L.push('· '+x)); else L.push('· —');
+  L.push(''); L.push(`▶ PULSE  ${d.pulse.properties} properties · ${d.pulse.tenants} tenants · ${d.pulse.vendors} vendors · ${d.pulse.open_wos} open WOs`);
+  return L.join('\n');
 }
 
-// Owners are billing entities — a wrong or duplicated one corrupts invoicing, so
-// this NEVER creates. No confident match ⇒ the item goes to review.
-function resolveOwner(owners, name) {
-  const want = String(name || '').toLowerCase().replace(/[.,]/g, '').replace(/\b(llc|inc|corp|co|ltd)\b/g, '').replace(/\s+/g, ' ').trim();
-  if (!want) return { status: 'no_match' };
-  const active = owners.filter(o => o.Active !== 'FALSE');
-  const norm = o => String(o.Company || `${o.First_Name || ''} ${o.Last_Name || ''}`)
-    .toLowerCase().replace(/[.,]/g, '').replace(/\b(llc|inc|corp|co|ltd)\b/g, '').replace(/\s+/g, ' ').trim();
-  const hits = active.filter(o => norm(o) === want);
-  if (hits.length === 1) return { status: 'matched', row: hits[0] };
-  if (hits.length > 1)   return { status: 'ambiguous' };
-  // A loose match must clear a real bar. A bare substring test bound the wrong
-  // owner: "Ridge Co, LLC" normalizes to "ridge", which is a substring of
-  // "Ridge Estates of Maryland" — one hit, silently "matched", and the new
-  // property lands under the wrong Owner_ID and invoices the wrong customer.
-  // Require a substantial overlap: >=8 chars and >=2 shared significant words.
-  const words = s => new Set(s.split(' ').filter(w => w.length > 2));
-  const wantWords = words(want);
-  const loose = active.filter(o => {
-    const n = norm(o);
-    if (!n || n.length < 8 || want.length < 8) return false;
-    if (!n.includes(want) && !want.includes(n)) return false;
-    let shared = 0;
-    for (const w of words(n)) if (wantWords.has(w)) shared++;
-    return shared >= 2;
-  });
-  if (loose.length === 1) return { status: 'matched', row: loose[0] };
-  return { status: loose.length > 1 ? 'ambiguous' : 'no_match' };
+async function deliverDigest(env, digest) {
+  const cfg = await fetchConfig(env);
+  if (String(cfg.digest_enabled||'').toUpperCase() !== 'TRUE') return { delivered:false, reason:'digest_enabled not TRUE (dormant)' };
+  const text = formatDigestText(digest);
+  const out = { sms:null, email:null };
+  if (String(cfg.digest_sms_enabled||'').toUpperCase()==='TRUE' && cfg.digest_sms_to && env.TWILIO_FROM) out.sms = await sendSMS(env, cfg.digest_sms_to, text);
+  if (String(cfg.digest_email_enabled||'').toUpperCase()==='TRUE' && cfg.digest_email_to) out.email = await deliverDigestEmail(env, cfg.digest_email_to, 'Ridge Co — Daily Digest', text);
+  return { delivered:true, out };
 }
 
-// Properties are the join point for every WO — a duplicate property silently
-// splits a building's history in two. Exact normalized match reuses; a PARTIAL
-// match (same house number + street, different spelling) is treated as ambiguous
-// and sent to review rather than risking either a dupe or the wrong building.
-function resolveProperty(properties, parsed) {
-  const want = normalizeAddr(parsed.property.address);
-  if (!want) return { status: 'no_address' };
-  const active = properties.filter(p => p.Active !== 'FALSE');
-  const exact = active.filter(p => normalizeAddr(p.Address) === want);
-  if (exact.length === 1) return { status: 'matched', row: exact[0] };
-  if (exact.length > 1)   return { status: 'ambiguous', candidates: exact.map(p => p.ID) };
-
-  const houseNum = (want.match(/^(\d+)/) || [])[1];
-  if (houseNum) {
-    const partial = active.filter(p => {
-      const n = normalizeAddr(p.Address);
-      if (!n.startsWith(houseNum + ' ')) return false;
-      const a = want.split(' ').filter(w => w.length > 2);
-      const b = n.split(' ').filter(w => w.length > 2);
-      return a.some(w => b.includes(w));
-    });
-    if (partial.length) return { status: 'ambiguous', candidates: partial.map(p => p.ID) };
-  }
-  return { status: 'no_match' };
+// Email adapter — intentionally a stub until Brett picks a provider (SendGrid /
+// Twilio Email / Resend). Turning it on is one function body + one secret; nothing
+// else in the digest changes.
+async function deliverDigestEmail(env, to, subject, text) {
+  if (!env.EMAIL_API_KEY || !env.EMAIL_FROM) return { skipped:'email provider not configured' };
+  return { skipped:'adapter not yet wired' };
 }
 
-async function resolveUnit(env, units, propertyId, unitLabel) {
-  if (!unitLabel) return '';
-  const key = unitKey(unitLabel);
-  const hit = units.find(u => String(u.Property_ID) === String(propertyId) && u.Active !== 'FALSE' && unitKey(u.Unit_Label) === key);
-  if (hit) return hit.ID;
-  return await addRowId(env, 'Units', { Property_ID: String(propertyId), Unit_Label: unitLabel, Active: 'TRUE' });
+async function digestResponse(env, url) {
+  const digest = await buildDigest(env);
+  let delivery = { delivered:false, reason:'preview only (add ?deliver=1 to send)' };
+  if (url.searchParams.get('deliver') === '1') delivery = await deliverDigest(env, digest);
+  return json({ ok:true, text: formatDigestText(digest), digest, delivery });
 }
 
-// Tenants match on phone first (the only reliable key), then on name within the
-// same unit/property. A genuine no-match creates one — addRow auto-generates the
-// phone-based PIN, so the new tenant can use the portal immediately.
-async function resolveTenant(env, tenants, propertyId, unitId, tenant) {
-  const pk = phoneKey(tenant.phone);
-  const scoped = tenants.filter(t => t.Active !== 'FALSE' && (
-    (unitId && String(t.Unit_ID) === String(unitId)) || String(t.Property_ID) === String(propertyId)
-  ));
-  if (pk) {
-    // Scoped to this property/unit on purpose. A global phone match meant an
-    // email claiming a known tenant's number bound the WO to that tenant even at
-    // a completely different property — silent data corruption from untrusted input.
-    const byPhone = scoped.find(t => phoneKey(t.Phone) === pk);
-    if (byPhone) return byPhone.ID;
-  }
-  const name = String(tenant.name || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  if (name) {
-    const byName = scoped.find(t => `${t.First_Name || ''} ${t.Last_Name || ''}`.toLowerCase().replace(/\s+/g, ' ').trim() === name);
-    if (byName) return byName.ID;
-  }
-  if (!name && !pk) return '';
-  const parts = name ? tenant.name.trim().split(/\s+/) : [];
-  return await addRowId(env, 'Tenants', {
-    Property_ID: String(propertyId),
-    Unit_ID: unitId ? String(unitId) : '',
-    First_Name: parts[0] || '',
-    Last_Name: parts.slice(1).join(' '),
-    Phone: tenant.phone || '',
-    Email: tenant.email || '',
-    Active: 'TRUE',
-  });
-}
+// ── RECEIPT PIPELINE (Session 5) ─────────────────────────────
+// Own-purchase receipts (NOT vendor/WO receipts — those stay in the vendor-portal
+// flow). Intake → Claude-vision extract → confirm-first queue → on approval, file to
+// the Vendors Drive folder. No QuickBooks, no money movement. Additive + safe.
+const RECEIPTS_QUEUE_HEADERS = ['ID','Source','Source_File_ID','Source_File_URL','Received_Date','Vendor','Receipt_Date','Total','Category','Handwritten_Note','PO_Reference','Suggested_WO_ID','Suggested_Property_ID','Confidence','Status','Filed_File_URL','Raw_Extract','Notes','Active'];
+const RECEIPT_CATEGORIES = ['customer WO','owned-property','BMore business','personal/HSA'];
 
-// ── FILE INGEST ──────────────────────────────────────────────────────────────
-const INTAKE_MAX_FILE_BYTES = 45 * 1024 * 1024; // Worker memory guard (videos!)
-
-// Hosts intake will fetch attachments from. An email can name any URL it likes,
-// so this is the trust boundary for outbound fetches — keep it as small as the
-// real senders require. Suffix-matched against the parsed hostname so a lookalike
-// domain ("s3.amazonaws.com.evil.tld") cannot pass.
-const INGEST_ALLOWED_HOSTS = ['amazonaws.com', 'managebuilding.com', 'buildium.com'];
-
-function isAllowedIngestUrl(raw) {
-  let u;
-  try { u = new URL(raw); } catch (e) { return false; }
-  if (u.protocol !== 'https:') return false;
-  const host = u.hostname.toLowerCase();
-  return INGEST_ALLOWED_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
-}
-
-// Best-effort per file, exactly like the QB attachment path: one bad URL warns,
-// it never fails the work order that was already created.
-// Hard cap on files per email. Each one costs a fetch + a Drive upload + an
-// Attachments row (~3 subrequests) against Cloudflare's 50-per-request budget, so
-// an email with 30 links kills the request mid-loop and leaves a WO with partial
-// attachments. Real Buildium jobs carry a handful of photos.
-const INTAKE_MAX_FILES = 10;
-
-async function ingestFiles(env, woId, propAddr, urls) {
-  const result = { uploaded: 0, warnings: [], folder_url: '' };
-  if (!urls || !urls.length) return result;
-  if (urls.length > INTAKE_MAX_FILES) {
-    result.warnings.push(`${urls.length} files found — only the first ${INTAKE_MAX_FILES} were ingested`);
-    urls = urls.slice(0, INTAKE_MAX_FILES);
-  }
-  const propsRoot = env.DRIVE_PROPERTIES_ROOT;
-  if (!propsRoot) { result.warnings.push('DRIVE_PROPERTIES_ROOT not set — files skipped'); return result; }
-
-  let token, folder;
+// Create a tab + header row if missing (self-provisioning — no manual sheet-ops step).
+async function ensureTab(env, name, headers) {
   try {
-    token = await getAccessToken(env);
-    // Drive has no staging root, and a staging sheet is a COPY of live, so its WO
-    // ids collide with real folders. Prefix staging uploads so test files are
-    // obvious and never mix into a customer-facing folder that gets shared.
-    const label = env.STAGING === '1' ? `_STAGING ${woId}` : woId;
-    folder = await getWOFolder(token, propsRoot, propAddr || 'Unknown Property', label, false);
-  } catch (e) { result.warnings.push(`Drive setup failed: ${e.message}`); return result; }
-  if (!folder || !folder.id) { result.warnings.push('Could not create the WO Drive folder — files skipped'); return result; }
-  result.folder_url = folder.webViewLink || '';
+    const data = await sheetsRequest(env, 'GET', `/values/${name}`);
+    if (!data.values || !data.values.length) await sheetsRequest(env, 'POST', `/values/${name}:append?valueInputOption=RAW`, { values: [headers] });
+    return;
+  } catch (e) {
+    if (!isMissingTabError(e)) throw e;
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: name } } }] });
+    await sheetsRequest(env, 'POST', `/values/${name}:append?valueInputOption=RAW`, { values: [headers] });
+  }
+}
 
-  for (const url of urls) {
+function bytesToB64(buf) {
+  const b = new Uint8Array(buf); let s = ''; const CH = 0x8000;
+  for (let i = 0; i < b.length; i += CH) s += String.fromCharCode.apply(null, b.subarray(i, i + CH));
+  return btoa(s);
+}
+
+// Read a receipt image/PDF with Claude vision → strict JSON. Money-facing ⇒ Claude (PAT-031).
+async function receiptExtract(env, bytes, mime) {
+  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+  const media = isPdf
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+    : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 600, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }) });
+  const data = await resp.json();
+  const txt = (data.content?.[0]?.text || '').trim();
+  try { return JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim()); }
+  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', suggested_category: '', confidence: 0 }; }
+}
+
+// Best-effort auto-link to a WO (by "WO-1234" in the note) or a property (address token).
+async function autoLinkReceipt(env, ex) {
+  const out = { wo_id: '', property_id: '' };
+  const note = `${ex.handwritten_note || ''} ${ex.po_reference || ''} ${ex.vendor || ''}`.toLowerCase();
+  try {
+    const m = note.match(/wo[-\s]?(\d{3,5})/);
+    if (m) { const wos = await fetchTab(env, 'Work_Orders'); const hit = wos.find(w => String(w.ID) === m[1]); if (hit) out.wo_id = hit.ID; }
+    const props = await fetchTab(env, 'Properties');
+    const hit = props.find(p => { const a = String(p.Address || '').toLowerCase(); return a && a.length > 4 && note.includes(a.split(' ').slice(0, 2).join(' ')); });
+    if (hit) out.property_id = hit.ID;
+  } catch (e) { /* best-effort */ }
+  return out;
+}
+
+// POST /receipt-intake — {file_id | file_url | image_b64(+mime), source} → queue row (pending).
+async function receiptIntake(env, body) {
+  let bytes, mime, fileId = body.file_id || '', fileUrl = body.file_url || '';
+  if (!fileId && fileUrl) fileId = driveIdFromUrl(fileUrl);
+  if (fileId) { const tok = await getAccessToken(env); const dl = await driveDownload(tok, fileId); bytes = dl.bytes; mime = dl.mime; }
+  else if (body.image_b64) { const bin = atob(body.image_b64); const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i); bytes = arr.buffer; mime = body.mime || 'image/jpeg'; }
+  else return json({ error: 'need file_id, file_url, or image_b64' }, 400);
+  const ex = await receiptExtract(env, bytes, mime);
+  const cfg = await fetchConfig(env);
+  let defaults = {}; try { defaults = JSON.parse(cfg.receipt_vendor_defaults || '{}'); } catch (e) {}
+  const vkey = String(ex.vendor || '').toLowerCase().trim();
+  let category = ex.suggested_category || '';
+  for (const k in defaults) { if (k && vkey && vkey.includes(k)) { category = defaults[k]; break; } }
+  const link = await autoLinkReceipt(env, ex);
+  await ensureTab(env, 'Receipts_Queue', RECEIPTS_QUEUE_HEADERS);
+  const row = {
+    Source: body.source || 'manual', Source_File_ID: fileId || '', Source_File_URL: fileUrl || '', Received_Date: new Date().toISOString(),
+    Vendor: ex.vendor || '', Receipt_Date: ex.date || '', Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
+    Category: category, Handwritten_Note: ex.handwritten_note || '', PO_Reference: ex.po_reference || '', Suggested_WO_ID: link.wo_id || '', Suggested_Property_ID: link.property_id || '',
+    Confidence: String(ex.confidence ?? ''), Status: 'pending', Filed_File_URL: '', Raw_Extract: JSON.stringify(ex).slice(0, 900), Notes: '', Active: 'TRUE',
+  };
+  const appended = await addRow(env, 'Receipts_Queue', row);
+  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) {}
+  return json({ ok: true, id: newId, queued: { ...row, ID: newId }, extract: ex });
+}
+
+// POST /receipt-scan (also called by cron) — pull new files from the inbox Drive folder.
+// Self-provisions the folder the first time so there's no manual setup.
+async function receiptScan(env) {
+  const cfg = await fetchConfig(env);
+  const tok = await getAccessToken(env);
+  let folder = cfg.receipts_inbox_folder_id;
+  if (!folder) {
+    const root = env.DRIVE_PROPERTIES_ROOT;
+    if (!root) return json({ ok: true, scanned: 0, note: 'no inbox folder and no DRIVE_PROPERTIES_ROOT to create one' });
+    const f = await findOrCreateFolder(tok, 'Receipts_Inbox', root, root);
+    if (!f?.id) return json({ error: 'could not create Receipts_Inbox' }, 500);
+    folder = f.id;
+    await setConfigKey(env, { key: 'receipts_inbox_folder_id', value: folder });
+    return json({ ok: true, scanned: 0, provisioned: true, folder_id: folder, folder_url: f.webViewLink || '', note: 'Receipts_Inbox created — drop receipts here, then scan again.' });
+  }
+  const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '50' });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${tok}` } });
+  const data = await res.json(); const files = data.files || [];
+  let existing = []; try { existing = await fetchTab(env, 'Receipts_Queue'); } catch (e) {}
+  const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
+  let n = 0; const errs = [];
+  for (const f of files) { if (seen.has(f.id)) continue; try { await receiptIntake(env, { file_id: f.id, source: 'drive' }); n++; } catch (e) { errs.push(f.name + ': ' + (e.message || 'err')); } }
+  return json({ ok: true, folder_id: folder, scanned: n, skipped: files.length - n, errors: errs });
+}
+
+async function listReceiptQueue(env, url) {
+  let rows = []; try { rows = await fetchTab(env, 'Receipts_Queue'); } catch (e) { return json([]); }
+  const status = url.searchParams.get('status') || 'pending';
+  return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (status === 'all' || (r.Status || 'pending') === status)));
+}
+
+// POST /receipt-queue/approve — {id, corrections?} → file to Vendors Drive, mark filed, learn vendor default.
+async function approveReceiptQueue(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipts_Queue'); const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  const c = body.corrections || {};
+  const vendor = c.vendor ?? row.Vendor, date = c.date ?? row.Receipt_Date, total = c.total ?? row.Total, category = c.category ?? row.Category;
+  const woId = c.wo_id ?? row.Suggested_WO_ID, propId = c.property_id ?? row.Suggested_Property_ID;
+  const cfg = await fetchConfig(env); const dest = cfg.receipts_dest_folder_id || env.DRIVE_VENDORS_ROOT;
+  let filedUrl = '';
+  const fileId = row.Source_File_ID || driveIdFromUrl(row.Source_File_URL);
+  if (fileId && dest) {
     try {
-      // SSRF guard. These URLs come out of attacker-influenceable email HTML and
-      // the response body is written into our Drive. Restrict to https on the
-      // hosts Buildium actually serves files from, and do NOT follow redirects —
-      // an allowlisted URL that 302s to somewhere else would otherwise defeat
-      // the check entirely.
-      if (!isAllowedIngestUrl(url)) { result.warnings.push(`${url} → blocked (not an allowed file host)`); continue; }
-      const res = await fetch(url, { redirect: 'manual' });
-      if (res.status >= 300 && res.status < 400) { result.warnings.push(`${url} → redirected (not followed)`); continue; }
-      if (!res.ok) { result.warnings.push(`${url} → HTTP ${res.status}`); continue; }
-      const mime = (res.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim();
-      // A login/interstitial page comes back as HTML with a 200. Uploading that
-      // as a "photo" would be worse than skipping it — flag it loudly instead.
-      if (/^text\/html/i.test(mime)) { result.warnings.push(`${url} → returned HTML (link is not publicly fetchable)`); continue; }
-      // A missing Content-Length must be REFUSED, not treated as zero. A chunked
-      // response reports no length, so `len = 0` sailed past the guard and
-      // arrayBuffer() then materialised the whole body — a one-email OOM of the
-      // isolate, since the size check only ran afterwards.
-      const lenHeader = res.headers.get('content-length');
-      if (lenHeader === null) { result.warnings.push(`${url} → no Content-Length, refused (cannot bound the download)`); continue; }
-      const len = parseInt(lenHeader, 10);
-      if (!Number.isFinite(len) || len <= 0) { result.warnings.push(`${url} → unusable Content-Length`); continue; }
-      if (len > INTAKE_MAX_FILE_BYTES) { result.warnings.push(`${url} → ${Math.round(len / 1048576)}MB exceeds the ${INTAKE_MAX_FILE_BYTES / 1048576}MB limit`); continue; }
-      const buf = await res.arrayBuffer();
-      if (buf.byteLength > INTAKE_MAX_FILE_BYTES) { result.warnings.push(`${url} → too large`); continue; }
-      let filename = '';
-      try { filename = decodeURIComponent((new URL(url).pathname.split('/').pop() || '').trim()); } catch (e) {}
-      if (!filename) filename = `intake_${result.uploaded + 1}`;
-      const up = await uploadFileToDrive(token, buf, filename, mime, folder.id, propsRoot);
-      if (!up || !up.id) { result.warnings.push(`${filename} → Drive upload failed`); continue; }
-      result.uploaded++;
-      try {
-        await addRow(env, 'Attachments', {
-          WO_ID: woId, File_Name: filename, File_Type: 'photo',
-          Drive_File_ID: up.id, Drive_URL: up.webViewLink || up.id, Mime_Type: mime,
-          Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
-        });
-      } catch (e) { /* non-fatal — the file is already in Drive */ }
-    } catch (e) { result.warnings.push(`${url} → ${e.message}`); }
+      const tok = await getAccessToken(env); const dl = await driveDownload(tok, fileId);
+      const ext = /pdf/i.test(dl.mime) ? '.pdf' : /png/i.test(dl.mime) ? '.png' : '.jpg';
+      const safe = s => String(s || '').replace(/[^\w .-]/g, '_').slice(0, 40);
+      const name = `${date || 'nodate'}_${safe(vendor)}_${safe(total)}${ext}`;
+      const up = await uploadFileToDrive(tok, dl.bytes, name, dl.mime, dest, dest);
+      filedUrl = up.webViewLink || '';
+    } catch (e) { /* filing best-effort — still mark reviewed */ }
   }
-
-  if (result.uploaded > 0 && folder.webViewLink) {
-    try {
-      await updateWOFields(env, woId, { Drive_Folder_URL: folder.webViewLink, Drive_Folder_ID: folder.id });
-    } catch (e) { /* non-fatal */ }
-  }
-  return result;
+  await updateRow(env, 'Receipts_Queue', id, { Vendor: vendor, Receipt_Date: date, Total: String(total), Category: category, Suggested_WO_ID: woId, Suggested_Property_ID: propId, Status: 'filed', Filed_File_URL: filedUrl });
+  try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = JSON.parse(cfg.receipt_vendor_defaults || '{}'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) {}
+  return json({ ok: true, id, filed: filedUrl || null, category });
 }
-
-// ── POST-CREATE HOOK ─────────────────────────────────────────────────────────
-// THE AUTO-ASSIGN SEAM (Phase D). v1 notifies the admin and nothing else. When
-// auto-assign lands it calls pickVendor()/assignVendor() HERE — no other part of
-// the intake pipeline changes.
-async function onIntakeCreated(env, wo) {
-  const config = await fetchConfig(env);
-  const phone  = config.intake_admin_phone || config.admin_phone || '';
-  if (!phone) return { notified: false, reason: 'no admin phone in Config' };
-  const where = [wo.address, wo.unit_label ? `Unit ${wo.unit_label}` : ''].filter(Boolean).join(' ');
-  const msg = `📥 New WO from email: ${wo.id}\n${where}\n${String(wo.description || '').slice(0, 120)}` +
-              (wo.owner_wo_ref ? `\nRef ${wo.owner_wo_ref}` : '') +
-              (wo.trade ? `\nTrade guess: ${wo.trade}` : '');
-  await sendSMS(env, phone, msg);
-  return { notified: true };
-}
-
-// ── ENDPOINT ─────────────────────────────────────────────────────────────────
-// POST /intake  { sender, subject, date, message_id, html, plaintext }
-//
-// Always returns HTTP 200 with a `status` the poller branches on, so a parse
-// problem never looks like a transport failure and never makes Apps Script retry
-// forever:  created | duplicate | needs_review | skipped | unsupported
-async function handleIntake(env, body) {
-  const { sender = '', subject = '', message_id = '', html = '', plaintext = '' } = body || {};
-  const config = await fetchConfig(env);
-  // Tolerant of how the switch actually gets typed into the Config tab.
-  if (/^(false|no|0|off)$/i.test(String(config.intake_enabled || '').trim()))
-    return json({ status: 'skipped', reason: 'intake_enabled is off in Config' });
-
-  const source = detectSource(sender, subject);
-  if (source === 'unknown')  return json({ status: 'unsupported', reason: `Unrecognized sender: ${sender}`, source });
-  if (source === 'appfolio') return json({ status: 'unsupported', reason: 'AppFolio parser not built yet (needs sample emails)', source });
-  if (source === 'manual')   return json({ status: 'needs_review', reason: 'Manual free-text lists land in the review queue (Phase C)', source });
-
-  const parsed = parseBuildium(html, subject, plaintext);
-  const review = (reasons, extra = {}) =>
-    json({ status: 'needs_review', source, reasons: [].concat(reasons), parsed, ...extra });
-
-  // Dedupe BEFORE any write. Two layers: the customer's ref number (the real
-  // business key) and the Gmail message id (guards a re-forwarded message).
-  const workorders = await fetchTab(env, 'Work_Orders');
-  if (parsed.owner_wo_ref) {
-    const dupe = workorders.find(w => w.Owner_WO_Ref && w.Owner_WO_Ref === parsed.owner_wo_ref);
-    if (dupe) return json({ status: 'duplicate', wo_id: dupe.ID, owner_wo_ref: parsed.owner_wo_ref, source });
-  }
-  if (message_id) {
-    const dupe = workorders.find(w => w.Intake_Message_ID && w.Intake_Message_ID === message_id);
-    if (dupe) return json({ status: 'duplicate', wo_id: dupe.ID, message_id, source });
-  }
-  if (!parsed.property.address) return review('No property address could be parsed from the email');
-  if (!parsed.description)      return review('No description could be parsed from the email');
-  // Owner_WO_Ref is the primary dedupe key. Auto-creating without one produces a
-  // WO that nothing can match on a re-delivery — and Intake_Message_ID is the
-  // only other layer, which no-ops until that column exists. Refuse rather than
-  // risk a double-create; a human confirms it instead.
-  if (!parsed.owner_wo_ref)
-    return review('No Buildium work order number found — cannot dedupe this email, so it will not auto-create');
-
-  const [properties, owners, units, tenants] = await Promise.all([
-    fetchTab(env, 'Properties'), fetchTab(env, 'Owners'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'),
-  ]);
-
-  const prop = resolveProperty(properties, parsed);
-  if (prop.status === 'ambiguous')
-    return review(`Address "${parsed.property.address}" partially matches existing properties — confirm which one`, { candidates: prop.candidates });
-
-  let propertyId, propAddress;
-  if (prop.status === 'matched') {
-    propertyId  = prop.row.ID;
-    propAddress = prop.row.Address;
-  } else {
-    // Genuine no-match: safe to create, but only with a confident owner — an
-    // ownerless property breaks invoicing downstream (/qb/send-invoice).
-    const owner = resolveOwner(owners, parsed.owner_name);
-    if (owner.status !== 'matched')
-      return review(`New address "${parsed.property.address}", and its owner "${parsed.owner_name || 'unknown'}" could not be matched — confirm before creating the property`);
-    propAddress = parsed.property.address;
-    propertyId  = await addRowId(env, 'Properties', {
-      Address: propAddress, City: parsed.property.city, State: parsed.property.state,
-      Zip: parsed.property.zip, Owner_ID: String(owner.row.ID), Active: 'TRUE',
-    });
-  }
-
-  const unitId   = await resolveUnit(env, units, propertyId, parsed.unit_label);
-  const tenantId = await resolveTenant(env, tenants, propertyId, unitId, parsed.tenant);
-
-  const createRes = await createWorkOrder(env, {
-    property_id: String(propertyId),
-    unit_id: unitId ? String(unitId) : '',
-    tenant_id: tenantId ? String(tenantId) : '',
-    description: parsed.description,
-    priority: parsed.priority,
-    trade: parsed.trade,
-    owner_wo_ref: parsed.owner_wo_ref,
-    wo_contact_name: parsed.tenant.name,
-    wo_contact_phone: parsed.tenant.phone,
-    // Entry info goes to Entry_Notes (admin+vendor only), never to Notes — the
-    // owner and tenant portals both render Notes verbatim, so the old fallback
-    // was publishing Buildium entry info to them.
-    notes: '',
-    type: 'email-intake',
-    created_by: `intake:${source}`,
-  });
-  const created = await createRes.json();
-  if (!created.success) return json({ status: 'error', error: created.error || 'createWorkOrder failed', parsed }, 500);
-  const woId = created.id;
-
-  // Traceability columns. updateWOFields skips headers that don't exist, so this
-  // is a no-op (not an error) until the Source / Intake_Message_ID columns land.
-  try {
-    await updateWOFields(env, woId, { Source: `email-${source}`, Intake_Message_ID: message_id || '' });
-    // Attributed append, per B-127. The WO was created microseconds ago so
-    // Entry_Notes is empty, but this goes through the same append path as every
-    // other writer — Brett's later "lockbox is red" must not overwrite this line
-    // and this must not overwrite his. A blank is never written, so a WO with no
-    // entry info keeps falling back to the property's Access_Notes default.
-    if (parsed.entry_notes)
-      await appendWOField(env, woId, 'Entry_Notes', parsed.entry_notes, 'Owner/Buildium', { Entry_Notes: '' });
-  } catch (e) { /* non-fatal */ }
-
-  const files = await ingestFiles(env, woId, propAddress, parsed.files);
-
-  let notify = { notified: false };
-  try {
-    notify = await onIntakeCreated(env, {
-      id: woId, description: parsed.description, address: propAddress,
-      unit_label: parsed.unit_label, owner_wo_ref: parsed.owner_wo_ref, trade: parsed.trade,
-    });
-  } catch (e) { /* a notify failure must never undo a created WO */ }
-
-  return json({
-    status: 'created', source, wo_id: woId,
-    owner_wo_ref: parsed.owner_wo_ref,
-    property_id: String(propertyId), unit_id: unitId || '', tenant_id: tenantId || '',
-    trade_guess: parsed.trade,
-    files: { found: parsed.files.length, uploaded: files.uploaded, warnings: files.warnings },
-    notified: notify.notified,
-    warnings: parsed.warnings,
-    staging: env.STAGING === '1',
-  });
-}
-
-// Named exports for the offline parser tests (test/intake.test.mjs). Extra named
-// exports alongside the default export are inert in the Workers runtime.
-export { detectSource, htmlToText, normalizeAddr, unitKey, phoneKey, keywordTrade, parseBuildium, resolveOwner, resolveProperty, handleIntake, handlePhotoUploadClean, enrichWO, ownerExportWO, createWorkOrder };
 
 // ── GOOGLE SHEETS / AUTH ─────────────────────────────────────
 
 function b64url(str) { return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 
-// Google's tokens are valid for an hour, but this was re-minted on EVERY Sheets
-// call — 2 subrequests apiece. One /intake with photos ran ~55-60 subrequests,
-// over Cloudflare's 50-per-request cap. Cache per isolate, with a 5-minute safety
-// margin. Keyed by SA email + sheet so a staging isolate can never reuse a token
-// minted for different credentials.
-let _tokenCache = null;
-
 async function getAccessToken(env) {
   const now=Math.floor(Date.now()/1000);
-  const cacheKey=`${env.GOOGLE_SA_EMAIL||''}|${env.SHEET_ID||''}`;
-  if(_tokenCache&&_tokenCache.key===cacheKey&&_tokenCache.exp>now+300) return _tokenCache.token;
   const header=b64url(JSON.stringify({alg:'RS256',typ:'JWT'}));
   const claim=b64url(JSON.stringify({iss:env.GOOGLE_SA_EMAIL,scope:'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',aud:'https://oauth2.googleapis.com/token',exp:now+3600,iat:now}));
   const sigInput=`${header}.${claim}`, key=await importPrivateKey(env.GOOGLE_SA_KEY);
   const jwt=`${sigInput}.${await signRS256(sigInput,key)}`;
   const resp=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:`grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`});
   const data=await resp.json(); if(!data.access_token) throw new Error('Google auth failed: '+JSON.stringify(data));
-  _tokenCache={key:cacheKey,token:data.access_token,exp:now+(data.expires_in||3600)};
   return data.access_token;
 }
 
@@ -2650,6 +1930,18 @@ async function getSheet(env, tab) {
 async function fetchTab(env, tab) {
   const data=await sheetsRequest(env,'GET',`/values/${tab}`); if(!data.values||data.values.length<2) return [];
   const [headers,...rows]=data.values; return rows.map(row=>{const o={};headers.forEach((h,i)=>o[h]=row[i]||'');return o;});
+}
+
+async function health(env) {
+  // PUBLIC read-only self-check so an automated agent can verify the Worker
+  // without a browser or auth. Row counts per key tab + which sheet it points at
+  // (last 6 chars of SHEET_ID, so staging vs prod is visible without leaking it).
+  const out = { ok: true, sheet_tail: (env.SHEET_ID || '').slice(-6), tabs: {}, ts: Date.now() };
+  for (const t of ['Work_Orders','Vendors','Invoices','Config']) {
+    try { const rows = await fetchTab(env, t); out.tabs[t] = rows.length; }
+    catch (e) { out.ok = false; out.tabs[t] = 'ERROR: ' + (e && e.message ? e.message : String(e)); }
+  }
+  return json(out);
 }
 
 async function getConfig(env) {
