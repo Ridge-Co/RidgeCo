@@ -28,13 +28,17 @@ const PIN_MAX_ATTEMPTS = 4;
 const PIN_LOCKOUT_MIN  = 5;
 const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
+// BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
+// Portals poll GET /version and refresh themselves onto new code when this changes
+// (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
+const BUILD_VERSION = '2026-07-23.1';
 
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
-    const PUBLIC_PATHS = ['/health','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
+    const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -51,6 +55,7 @@ export default {
     try {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env);
+        if (path === '/version')                return json({ version: BUILD_VERSION });
         if (path === '/properties')             return await getSheet(env, 'Properties');
         if (path === '/public/entities-feed')   return await getEntitiesFeed(env);
         if (path === '/units')                  return await getSheet(env, 'Units');

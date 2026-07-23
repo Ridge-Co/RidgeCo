@@ -1810,5 +1810,34 @@ function applyTranslations() {
   document.title = 'Ridge Co — Portal de Contratistas';
 }
 </script>
+<!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner) -->
+<script>
+(function(){
+  var VER_URL = WORKER + '/version', booted = null;
+  function dirty(){
+    var el = document.activeElement;
+    if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
+    return !!document.querySelector('[data-unsaved="1"]');
+  }
+  function banner(){
+    if (document.getElementById('mh-upd-banner')) return;
+    var b = document.createElement('div');
+    b.id = 'mh-upd-banner';
+    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#0b8a3e;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
+    b.textContent = 'Update ready — tap to refresh';
+    b.onclick = function(){ location.reload(true); };
+    document.body.appendChild(b);
+  }
+  function check(){
+    fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      if (!d || !d.version) return;
+      if (booted === null){ booted = d.version; return; }
+      if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
+    }).catch(function(){});
+  }
+  check();
+  setInterval(check, 60000);
+})();
+</script>
 </body>
 </html>
