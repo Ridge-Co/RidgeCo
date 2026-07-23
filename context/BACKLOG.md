@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.26 | **Last Updated:** July 22, 2026
+**Version:** v1.27 | **Last Updated:** July 23, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -125,6 +125,11 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-137 · 🟠 **Near-term notification stopgap (pre-Twilio)** — split delivery by recipient: **email auto-sends** (owners + email-capable tenants, via Gmail connector) NOW; **SMS = a Hub "Send Queue"** where the system composes each message (recipient + text + language) and Brett **one-taps to send from the number they already know** (`sms:` prefill for personal-number contacts; copy+open-thread for GV). AI does 100% of composing; Brett is the send button. **GV auto-send RULED OUT (verified July 22): no Google Voice send API; email-reply only works replying to inbound; 3rd-party email→SMS = paid middleman (skip).** Clean bridge to Twilio: same queue + templates flip to auto-send later. Ties B-093 (channel-tiering), B-133 (two-way owner/vendor lane).
 - B-138 · 🟠 **Contact channel map** — add per-contact fields on Vendors/Tenants/Owners: `Brett_Number_Known` (personal / google_voice), `Preferred_Channel` (sms/email), `Lang`. Prerequisite for B-137 (which link to generate + who needs the intro) AND for Twilio later + the B-133 language pref. Known: **Mark & Amanda = GV; Jennifer & Adrian = personal;** rest = Brett fills in.
 - B-139 · 🟡 **Vendor "Ridge Co line" intro** — one-time staggered message introducing the GV number as Brett's Ridge Co/dispatch line (NOT "reach me for most things" — framed as the job line so it stays honest when the assistant later sends codes/pay from it). EN + **ES (P0)** drafts done (July 22). **Only personal-number contacts get it** (Mark/Amanda already on GV). Send individually/staggered (GV daily limits + anti-spam). Gated on B-138.
+**BRETTOS — AUTONOMY SUBSTRATE (July 23 — the safe path to autonomous multi-section builds; see CAP-029)**
+- B-140 · 🟠 **Staging/preview Worker lane (autonomy prerequisite #1 — ISOLATION).** A genuinely isolated preview target so autonomous/risky code NEVER runs on the live Hub. Fix is the July 21 lesson (FEATURE_LOG rule 18): non-prod deploy command = `wrangler versions upload` → *preview URL*, never `wrangler deploy`. Until this exists, "Builds for non-production branches" stays OFF and no agent merges unattended. This is the gate everything else on the ladder sits behind.
+- B-141 · 🟠 **Smoke-test harness (autonomy prerequisite #2 — SELF-VERIFICATION).** A script that curls every critical endpoint (list from CODEMAP) and asserts the expected JSON — the machine's stand-in for "Brett taps the app." Encode FEATURE_LOG regression rules as assertions where possible. Without this an agent literally cannot know it broke something. Runs against the B-140 preview lane.
+- B-142 · 🟠 **ridgeco-validate skill (autonomy prerequisite #3 — REVIEW GATE).** Adversarial built-vs-brief validator; the missing 7th "software-factory" role. Reports gaps by severity, fixes nothing; mandatory for money/customer/auth. ✅ **DELIVERED July 23 (this session) as `ridgeco-validate.skill`** — save it. Wire into brett-flow as the step-5.5 gate.
+- B-143 · 🟡 **Autonomy ladder (the governing strategy doc).** Blast-radius-gated staging: autonomy is EARNED per-section by rails (isolation + smoke + validator), never granted globally. Money/QB/customer-comms/auth stay human-gated by design. Ties B-127 router ("force Claude for money-facing" → extend to "force human"), B-129 Optimizer (validator verdicts = telemetry), CAP-029.
 **RIDGE CO — BIG BUILD QUEUE (planned July 22, 2026)**
 - B-093 · Notification engine v2 — quiet-hours + channel routing + test/admin mute
 - B-094 · WO-create vendor SMS opt-out checkbox (default OFF 8pm–8am ET)
@@ -271,6 +276,10 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 | B-074 | 🟡 | Lead-finder Chrome extension — scan FB posts needing repairs/lawn care, respond, exclude "I need it today" | From CAP-018. |
 | B-081 | 🟡 | Lead capture that doesn't look bot/scammy/salesy | Cross-cuts B-074/B-080. From CAP-018. |
 | B-089 | 🟢 | HSA receipt automation (future, personal) — upload receipts to HSA for reimbursement | Mirrors CAP-002 pipeline; receipts folder in personal Drive; provider upload may need browser automation. From CAP-021. |
+| B-140 | 🟠 | **Staging/preview Worker lane** — autonomy prerequisite #1 (isolation) | `wrangler versions upload` → preview URL, never `deploy`. Fixes FEATURE_LOG rule 18. Gate for all autonomous/risky code. From CAP-029. |
+| B-141 | 🟠 | **Smoke-test harness** — autonomy prerequisite #2 (self-verification) | curl-assert every critical endpoint from CODEMAP + FEATURE_LOG rules as assertions; runs against B-140 preview. Machine stand-in for Brett's tap-test. From CAP-029. |
+| B-142 | 🟠 | **ridgeco-validate skill** — autonomy prerequisite #3 (review gate) | Adversarial built-vs-brief validator; fixes nothing; mandatory for money/customer/auth. ✅ DELIVERED July 23 as `ridgeco-validate.skill`. Wire into brett-flow step 5.5. From CAP-029. |
+| B-143 | 🟡 | **Autonomy ladder** — governing strategy doc | Blast-radius-gated: autonomy earned per-section by rails, never global; money/QB/customer/auth stay human-gated. Ties B-127/B-129. From CAP-029. |
 
 ---
 

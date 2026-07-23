@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.23 | **Last Updated:** July 22, 2026
+**Version:** v1.24 | **Last Updated:** July 23, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -36,6 +36,7 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - CAP-026 — Ridge Co big-build planning + full wishlist consolidation (Ridge Co — planning)
 - CAP-027 — Pre-overhaul brain-dump, note 1 (Scanned_202607211020): STR cleaner scheduling, long-term leases, dispatch tool, property tasks, websites+SEO (multi-venture — NEW) → B-104..B-115, B-119..B-122
 - CAP-028 — Pre-overhaul brain-dump, note 2 (Scanned_202607211341): WO-as-site/PDF sharing, Second Brain, vendor-text mining, property DB, inspector app, STR dashboard app, background agents, vendor equipment + schedule prefs (multi-venture — NEW) → B-113..B-123
+- CAP-029 — Reviewed Ray Fu "software factory / 7 Fable agents" video → autonomy roadmap decision: build the safety substrate (isolation + smoke tests + validator) BEFORE any autonomous builds; autonomy earned per-section by blast-radius rails → B-140..B-143 + ridgeco-validate skill
 <!-- QUICK-INDEX:END -->
 
 
@@ -449,6 +450,18 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - ❓ Open: "Phoenix" meaning (#5).
 - Note for the big build: **#9 is directly relevant to Phase 1 notifications** (B-093/B-094) and **#7 (background agents) is an operating directive**, not just a feature — surface both when the overhaul starts.
 - Links: BACKLOG B-105/B-112..B-118/B-123; CAP-027 (companion note); CAP-010, CAP-015, CAP-024; B-006/B-044/B-073/B-093/B-094.
+
+### CAP-029 — "Software factory / 7 Fable agents" video review → autonomy roadmap (BrettOS — decision)
+- Raw: Brett shared Ray Fu's YouTube short "How to build a software factory with 7 Claude Fable Agents" and asked (1) is the strategy significant/helpful to what we're doing, and (2) "how do we get from where we are now to code working autonomously through major sections of my goals without breaking my system?"
+- Type: decision-needed → decided
+- Status: linked → graduated (B-140..B-143)
+- The strategy: split a build across 7 narrow agents (researcher → story → spec → backend → frontend → test-verifier → validator) with 3 human approval gates. Real thesis = separation of concerns + verify gates so one bad assumption doesn't compound into bad schema→API→UI.
+- Verdict: **significant as VALIDATION, not as a blueprint.** Brett is already ~75% of this pattern — brett-context=CLAUDE.md, brett-flow=plan/verify discipline, ridgeco-map=researcher, build briefs=spec-writer, model routing=cheap-default+escalate. Mismatches: it's built for Claude Code CLI (named agents + tool restrictions + hooks), a conventional backend/frontend/test-harness codebase, and PR flow — Brett's is Cowork-on-mobile, a single worker.js + HTML on Sheets, no tests, git-push auto-deploy. "Ships while you sleep" is actively wrong for a live money/customer Hub.
+- **The autonomy answer (the core decision):** autonomy scales with *blast-radius rails, not model capability.* The two things brett-flow deliberately dropped (isolation via branches/worktrees; a test harness) are the exact two things autonomy REQUIRES — because autonomy removes the human whose judgment those rails replace. FEATURE_LOG rule 18 (July 21) proves a single unguarded push already blanked the live Hub *with a human present.*
+- Four blockers to autonomy, all in "without breaking my system": (1) no isolation — bad code hits live Hub instantly; (2) no self-verification — no tests, only Brett tapping the app catches breakage; (3) money/customer/auth surface — QB, invoices, tenant/owner comms, some irreversible (sent emails, posted invoices); (4) single live DB — Sheets is prod, no dev data.
+- **The ladder (decided):** Stage 0 = now (human-in-loop). Stage 1 = build the substrate: staging/preview lane (B-140) + smoke harness (B-141) + validator (B-142, delivered). Stage 2 = autonomy on read-only/no-write work first (research, capture parsing, backlog grooming, CODEMAP refresh, Optimizer propose). Stage 3 = autonomous *isolated* builds that stop at a staged PR behind mandatory gates (smoke pass + validator PASS + no regression + not money/customer). Stage 4 = per-section auto-merge only for sections fully test-covered, non-money, reversible, proven. Money/QB/customer/auth = human-gated by design, maybe forever.
+- Sub-items → B-140 (staging/preview lane), B-141 (smoke harness), B-142 (ridgeco-validate skill — DELIVERED this session), B-143 (autonomy-ladder strategy doc).
+- Links: brett-flow (guardrails section — the dropped worktrees/TDD are the autonomy prerequisites), FEATURE_LOG rule 18, B-127 (router "force Claude for money" → extend to "force human"), B-128/B-129 (Optimizer = the supervisor; validator verdicts = telemetry), CAP-015 (background-agents vision), CAP-028 #7 (background agents directive).
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
