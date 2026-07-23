@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.32 | **Last Updated:** July 23, 2026
+**Version:** v1.33 | **Last Updated:** July 23, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -35,6 +35,8 @@ _Compact map of every open backlog item. Read THIS map on load (two-tier loading
 - B-085 · Rebuild receipt intake pipeline — retire the stalled Make.com scenario — 🟡 first slice SHIPPED July 22 (own-purchase receipts; Drive intake + confirm-first queue; QB posting deferred)
 - B-086 · Reconcile receipts stuck in "WO Receipt Inbox" (Aug–Dec 2025)
 - B-088 · Add 1864 Kerns School Rd (owned STR) to the WO system as a property
+- B-154 · Contact-logging buttons on a WO ("SMS sent" / "Left Message") — one-tap, auto date-stamp + manual override → clean "tenant contacted" event
+- B-155 · Auto-"Scheduled" status — setting a Scheduled_Date flips WO status to Scheduled automatically
 **RIDGE CO — OPERATIONS / TO-DO**
 - B-034 · Source a reliable plumber/handyman subcontractor
 - B-035 · Follow up with Cesar (Mon) on the 56 S Culver St job
@@ -215,6 +217,8 @@ _The 5 verbs: DEFINE what good is → TEST for it positively → REVIEW against 
 | B-085 | 🟠 | Rebuild receipt intake pipeline — retire the stalled Make.com scenario | Diagnosed July 19: "WO Receipt Inbox" (id 1BpJXcOlW98…) has 10+ receipts stuck since Aug–Dec 2025; Make.com watch→email→move is dead. Replace with Hub pipeline (B-084): QB posting via the connected API + Apps Script file moves. From CAP-002. |
 | B-086 | 🟡 | Reconcile receipts stuck in "WO Receipt Inbox" (Aug–Dec 2025) | 10+ PDFs never processed; confirm which already reached QuickBooks, record/attach the rest, then file by vendor. From CAP-002. |
 | B-088 | 🟡 | Add 1864 Kerns School Rd (owned STR) to the WO system as a property | For expense tracking; its STR expenses usually have no WO but should apply to the property. From CAP-002. |
+| B-154 | 🟠 | **Contact-logging buttons on a WO — "SMS sent" + "Left Message (LM)"** with auto date-stamp + manual override | One-tap buttons that write a timestamped outreach event (who/when/channel) instead of free-text notes; date editable for backdating. Produces the **clean "tenant contacted" event** the owner-update stage currently has to infer from Notes (see the Phoenix owner dashboard, July 23). Feeds B-095 owner channel (contacted milestone), the Change Log feed, and the Phase-2 owner daily-digest. Ties owner-update build + B-093/B-133. Surfaced July 23 building the Phoenix owner dashboard. |
+| B-155 | 🟠 | **Auto-"Scheduled" status** — setting a Scheduled_Date flips WO status to Scheduled automatically | Adding/clearing a schedule date drives the status (set date → Scheduled; clear/complete handled), so "Scheduled" stops being a manual, drifting state. Fixes the Design-Foundation finding that the `Scheduled` status is a phantom that never fires; part of the Status SSOT (HUB_UX_DESIGN_FOUNDATION §4). Feeds B-095 (Scheduled milestone notify) + the owner dashboard "Scheduled" stage (which today only trusts a real Scheduled_Date). Surfaced July 23. |
 
 ---
 
