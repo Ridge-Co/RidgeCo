@@ -118,9 +118,13 @@ const WHY={ 'New':'unassigned — dispatch a vendor', 'Declined':'vendor decline
 
 function h(s){return (s==null?'':(''+s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 async function getJSON(path){
-  const r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}});
-  const d=await r.json();
-  if(d && d.error==='Unauthorized') throw new Error('unauth');
+  let r;
+  try{ r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}}); }
+  catch(e){ throw new Error(path+' → could not connect (network/CORS)'); }
+  let d=null,t='';
+  try{ t=await r.text(); d=JSON.parse(t); }catch(e){}
+  if(!r.ok) throw new Error(path+' → HTTP '+r.status+' '+((d&&d.error)?d.error:t.slice(0,90)));
+  if(d&&d.error) throw new Error(path+' → '+d.error);
   return d;
 }
 function daysSince(s){const t=Date.parse(s);if(isNaN(t))return null;return Math.floor((Date.now()-t)/86400000)}
@@ -131,7 +135,7 @@ async function load(){
     const [wos,inv,bills,vendors,props,units]=await Promise.all(
       ['/workorders','/invoices','/vendor-bills?status=submitted','/vendors','/properties','/units'].map(getJSON));
     render({wos,inv,bills,vendors,props,units,live:true});
-  }catch(e){ sampleMode('could not reach your Hub from here'); }
+  }catch(e){ sampleMode('DIAGNOSTIC → '+e.message); }
 }
 
 function sampleMode(reason){
