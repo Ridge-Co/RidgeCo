@@ -95,10 +95,16 @@
 </div></div>
 
 <script>
-const WORKER='https://maintenance-hub.brett-2f8.workers.dev';
-const AUTH_KEY='mh_auth';
+const _params=new URLSearchParams(location.search);
+const STAGING=_params.has('staging')||_params.get('env')==='staging';
+const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
+const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';  // staging uses its own token, separate from prod
 let TOKEN='';
 try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
+if(STAGING){try{document.title='BrettOS — Command Center (STAGING)';
+  var _b=document.createElement('div');_b.textContent='🧪 STAGING SANDBOX — test data only, not your live Hub';
+  _b.style.cssText='background:#7a3fb0;color:#fff;font-weight:800;font-size:12px;text-align:center;padding:7px;letter-spacing:.4px';
+  document.body.insertBefore(_b,document.body.firstChild);}catch(e){}}
 
 // status model (from live code: index.html STA map + worker OPEN_WO_STATUSES)
 const NEEDS_BRETT={'New':1,'Declined':1,'On Hold':1,'Complete':1,'Pending Invoice':1};
