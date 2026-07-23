@@ -1,5 +1,5 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.8 | **Last Updated:** July 22, 2026
+**Version:** v1.9 | **Last Updated:** July 23, 2026
 **Rule:** Before changing ANY file, check this log. If a feature is marked ✅ Working, verify it still works after your change. If you must touch something that affects a working feature, note it here BEFORE committing.
 
 ---
@@ -15,6 +15,18 @@
 
 **To turn delivery ON (Brett, after Twilio send is live):** set `TWILIO_FROM`, then in Config set `digest_enabled=TRUE`, `digest_sms_enabled=TRUE`, `digest_sms_to=<your #>`. Nothing else changes.
 **Known gaps (v2):** digest pulls only Sheet data — captures/backlog (GitHub) and receivables (e.g. Ray's tolls) not included yet; Invoices tab is empty so "Money" reads Vendor_Bills.
+
+---
+
+## COMMAND CENTER (command-center.html — B-151 Phase 0, shipped July 23, 2026)
+
+| Feature | Status | Notes | Last Verified |
+|---|---|---|---|
+| `command-center.html` | ✅ Shipped (READ-ONLY) | New static page on GitHub Pages. **Does NOT touch worker.js — zero Worker/deploy risk.** Reads live `/workorders`, `/invoices`, `/vendor-bills?status=submitted`, `/vendors`, `/properties`, `/units` with header `X-Auth-Token` from `localStorage['mh_auth']` (same as index.html). Ranks open WOs by who's-waiting (NEEDS_BRETT: New/Declined/On Hold/Complete/Pending Invoice) + Priority + age; counts need-your-OK / waiting / aging-7d+; vendor-bill review queue; money-owed from unpaid invoices; "Other ventures" manual card. | July 23, 2026 (code-verified vs live schema; runtime eyeball pending Brett) |
+| Sample fallback | ✅ By design | No token / Hub unreachable → clearly-labeled **SAMPLE** data so the page never blanks. Badge shows LIVE vs SAMPLE. | July 23, 2026 |
+| Approve / Rollback buttons | ⛔ Present but DISABLED (by design) | Read-only until BUILD_ORDER Phase 1/3 (preview lane + validator + versioning). Rollback shows a "not armed yet" note. **Do not wire these to write actions until the substrate exists.** | July 23, 2026 |
+
+**Note:** Invoices tab is currently empty (see digest note) → "Money owed" may read empty until invoices exist; degrades gracefully. Phase 2 can switch the feed to the existing `/daily-digest` aggregate.
 
 ---
 

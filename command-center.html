@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BrettOS — Command Center</title>
+<style>
+  :root{
+    --bg:#e9ebef;--card:#fff;--ink:#0e1621;--muted:#5b6672;--line:#d8dce2;
+    --green:#1a8f4c;--greenbg:#e6f4ec;--amber:#b26a00;--amberbg:#fbf0dd;
+    --red:#c0242b;--redbg:#f9e4e4;--blue:#1f5fbf;--bluebg:#e7effb;
+    --shadow:0 1px 2px rgba(16,23,32,.08),0 1px 8px rgba(16,23,32,.04);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+    font-size:16px;line-height:1.4;padding-bottom:40px}
+  .wrap{max-width:520px;margin:0 auto;padding:0 12px}
+  header{position:sticky;top:0;z-index:20;background:var(--bg);padding:12px 0 8px}
+  .title{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .title small{font-weight:600;color:var(--muted);font-size:12px}
+  .mode{font-size:11px;font-weight:800;padding:3px 9px;border-radius:20px;margin-left:auto}
+  .mode.live{background:var(--greenbg);color:var(--green)}
+  .mode.sample{background:var(--amberbg);color:var(--amber)}
+  .health{margin-top:8px;border-radius:14px;padding:13px 14px;box-shadow:var(--shadow);
+    display:flex;align-items:center;gap:12px;border:1px solid var(--line);background:var(--greenbg);border-color:#bfe3cd}
+  .dot{width:13px;height:13px;border-radius:50%;flex:none;background:var(--green)}
+  .health h1{margin:0;font-size:16px;font-weight:800}
+  .health p{margin:2px 0 0;font-size:12.5px;color:var(--muted)}
+  .rbtop{width:100%;margin-top:8px;border-radius:12px;padding:11px;font-size:12.5px;font-weight:800;letter-spacing:.3px;
+    background:#fff;color:var(--red);border:2px solid var(--red);box-shadow:0 3px 10px rgba(192,36,43,.18);cursor:pointer}
+  .rbtop b{letter-spacing:1px} .rbtop.off{opacity:.6}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0;box-shadow:var(--shadow)}
+  .card h2{margin:0 0 2px;font-size:16px;font-weight:800}
+  .hero{border-left:4px solid var(--red)}
+  .kick{font-size:11px;font-weight:800;color:var(--red);letter-spacing:.5px}
+  .plain{font-size:14px;color:#26313d;margin:6px 0 0}
+  .note{font-size:12px;color:var(--muted);margin:8px 2px 0}
+  .counts{display:flex;gap:8px;margin-top:4px}
+  .count{flex:1;background:#f5f7f9;border:1px solid var(--line);border-radius:11px;padding:10px 6px;text-align:center}
+  .count b{display:block;font-size:20px;font-weight:800} .count small{font-size:11px;color:var(--muted)}
+  .row2{display:flex;align-items:flex-start;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .row2:last-child{border-bottom:none}
+  .pdot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:5px}
+  .pdot.r{background:var(--red)} .pdot.a{background:var(--amber)} .pdot.y{background:#c9a400} .pdot.g{background:var(--green)} .pdot.b{background:var(--blue)}
+  .row2 .t{flex:1;font-size:14px;font-weight:600}
+  .row2 .t small{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:1px}
+  .rtag{display:inline-block;font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;margin:0 5px 3px 0;white-space:nowrap}
+  .rtag.wait{background:var(--bluebg);color:var(--blue)} .rtag.due{background:var(--redbg);color:var(--red)}
+  .rtag.cash{background:var(--greenbg);color:var(--green)} .rtag.cost{background:var(--amberbg);color:var(--amber)}
+  .vtag{font-size:10px;font-weight:800;color:#42505e;background:#eef0f3;padding:3px 8px;border-radius:20px;flex:none;margin-top:1px}
+  .btns{display:flex;gap:8px;margin-top:12px}
+  .btn{flex:1;border:none;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700}
+  .btn.off{background:#eef0f3;color:#8a95a1}
+  .foot{font-size:11.5px;color:var(--muted);text-align:center;margin:16px 4px 2px;line-height:1.5}
+  .tokbar{display:none;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+  .tokbar input{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-size:14px;margin:6px 0}
+  .tokbar button{width:100%;border:none;border-radius:9px;padding:11px;font-weight:700;background:var(--blue);color:#fff}
+  .spin{color:var(--muted);font-size:13px;padding:14px 2px}
+  /* sheet */
+  .sheet{position:fixed;inset:0;z-index:50;background:rgba(10,15,20,.45);display:none;align-items:flex-end}
+  .sheet.on{display:flex}
+  .sheet .panel{background:#fff;width:100%;max-width:520px;margin:0 auto;border-radius:18px 18px 0 0;padding:18px 16px 22px}
+  .sheet h3{margin:0 0 6px;font-size:17px} .sheet p{margin:0 0 12px;font-size:14px;color:#33404d}
+  .chkwrap{display:flex;align-items:center;gap:11px;background:var(--redbg);border:1px solid #ecc3c3;border-radius:11px;padding:13px;margin-bottom:12px;font-size:13px;font-weight:700;color:#7a1d22}
+  .chkwrap input{width:22px;height:22px;flex:none}
+  .sheet .r{display:flex;gap:8px}.sheet .r button{flex:1;border:none;border-radius:11px;padding:12px;font-weight:700}
+  .cancel{background:#eef0f3;color:#42505e}.confirm{background:var(--red);color:#fff}.confirm:disabled{opacity:.4;cursor:not-allowed}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="title">🛠️ BrettOS Command Center <span class="mode sample" id="mode">…</span></div>
+    <div class="health"><span class="dot"></span><div><h1 id="hTitle">Loading…</h1><p id="hSub">reading your live Hub</p></div></div>
+    <button class="rbtop off" onclick="rollback()">🛡 <b>EMERGENCY</b> · ↺ Roll Hub back (turns on at safe-launch)</button>
+  </header>
+
+  <div class="tokbar" id="tokbar">
+    <b>Enter your Hub access token to see live data</b>
+    <div class="note" style="margin:2px 0 0">Same token your Hub uses. Stored only on this device.</div>
+    <input type="password" id="tok" placeholder="access token" autocomplete="off">
+    <button onclick="saveTok()">Connect to live data</button>
+  </div>
+
+  <div id="body"><div class="spin">Loading your Hub…</div></div>
+
+  <p class="foot" id="foot">Read-only view — it shows your work, it never changes anything yet.<br>Approvals &amp; rollback turn on once the safe-launch rails are in place.</p>
+</div>
+
+<div class="sheet" id="sheet"><div class="panel">
+  <h3 id="shT">Confirm</h3><p id="shB"></p>
+  <label class="chkwrap" id="shCk" style="display:none"><input type="checkbox" id="shChk" onchange="document.getElementById('shGo').disabled=!this.checked"><span>Yes — roll the Hub back to the last known-good version.</span></label>
+  <div class="r"><button class="cancel" onclick="closeSheet()">Cancel</button><button class="confirm" id="shGo">OK</button></div>
+</div></div>
+
+<script>
+const WORKER='https://maintenance-hub.brett-2f8.workers.dev';
+const AUTH_KEY='mh_auth';
+let TOKEN='';
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
+
+// status model (from live code: index.html STA map + worker OPEN_WO_STATUSES)
+const NEEDS_BRETT={'New':1,'Declined':1,'On Hold':1,'Complete':1,'Pending Invoice':1};
+const WAITING={'Assigned':1,'Accepted':1,'In Progress':1,'Invoiced':1};
+const DONE={'Paid':1,'Cancelled':1};
+const PRI={urgent:3,high:2,normal:1,low:0};
+const WHY={ 'New':'unassigned — dispatch a vendor', 'Declined':'vendor declined — reassign',
+  'On Hold':'stalled — needs you to unblock', 'Complete':'work done — invoice the customer',
+  'Pending Invoice':'awaiting the bill — then invoice', 'Invoiced':'invoice sent — waiting on payment',
+  'Assigned':'vendor notified — waiting on them','Accepted':'vendor accepted','In Progress':'vendor working' };
+
+function h(s){return (s==null?'':(''+s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+async function getJSON(path){
+  const r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}});
+  const d=await r.json();
+  if(d && d.error==='Unauthorized') throw new Error('unauth');
+  return d;
+}
+function daysSince(s){const t=Date.parse(s);if(isNaN(t))return null;return Math.floor((Date.now()-t)/86400000)}
+
+async function load(){
+  if(!TOKEN){return sampleMode('no token yet')}
+  try{
+    const [wos,inv,bills,vendors,props,units]=await Promise.all(
+      ['/workorders','/invoices','/vendor-bills?status=submitted','/vendors','/properties','/units'].map(getJSON));
+    render({wos,inv,bills,vendors,props,units,live:true});
+  }catch(e){ sampleMode('could not reach your Hub from here'); }
+}
+
+function sampleMode(reason){
+  const wos=[
+    {ID:'WO-1061',Status:'New',Priority:'urgent',Property_ID:'P1',Unit_ID:'U1',Vendor_ID:'',Trade:'Plumbing',Description:'No hot water',Created_Date:'2026-07-16'},
+    {ID:'WO-1058',Status:'Complete',Priority:'high',Property_ID:'P2',Unit_ID:'U2',Vendor_ID:'V1',Trade:'HVAC',Description:'Mini-split leak',Created_Date:'2026-07-11'},
+    {ID:'WO-1060',Status:'Declined',Priority:'normal',Property_ID:'P3',Unit_ID:'',Vendor_ID:'V2',Trade:'Electrical',Description:'Outlet dead',Created_Date:'2026-07-18'},
+    {ID:'WO-1055',Status:'Pending Invoice',Priority:'normal',Property_ID:'P1',Unit_ID:'U3',Vendor_ID:'V1',Trade:'General',Description:'Door repair',Created_Date:'2026-07-14'},
+    {ID:'WO-1052',Status:'Invoiced',Priority:'normal',Property_ID:'P2',Unit_ID:'',Vendor_ID:'V1',Trade:'Paint',Description:'Turn paint',Created_Date:'2026-07-09'},
+    {ID:'WO-1051',Status:'In Progress',Priority:'low',Property_ID:'P3',Unit_ID:'',Vendor_ID:'V2',Trade:'Landscaping',Description:'Yard cleanup',Created_Date:'2026-07-20'}
+  ];
+  const inv=[{WO_ID:'WO-1052',Amount:'480',Status:'Invoiced'},{WO_ID:'WO-1049',Amount:'275',Status:'Invoiced'}];
+  const bills=[{WO_ID:'WO-1058',Vendor_Name:'Cesar',Total:'320',Status:'submitted'}];
+  const vendors=[{ID:'V1',Name:'Cesar'},{ID:'V2',Name:'Oscar'}];
+  const props=[{ID:'P1',Address:'56 S Culver St'},{ID:'P2',Address:'807 N Calvert St'},{ID:'P3',Address:'153 Ashburton'}];
+  const units=[{ID:'U1',Unit_Label:'Apt 2'},{ID:'U2',Unit_Label:'Apt 1'},{ID:'U3',Unit_Label:'Unit B'}];
+  render({wos,inv,bills,vendors,props,units,live:false,reason});
+}
+
+function render(d){
+  const idx=(arr,k)=>{const m={};(arr||[]).forEach(r=>m[r[k]]=r);return m};
+  const P=idx(d.props,'ID'),U=idx(d.units,'ID'),V=idx(d.vendors,'ID');
+  const addr=w=>{const p=P[w.Property_ID];const u=U[w.Unit_ID];return (p?p.Address:(w.Property_ID||'—'))+(u&&u.Unit_Label?' · '+u.Unit_Label:'')};
+  const vend=w=>{const v=V[w.Vendor_ID];return v?(v.Name||v.Vendor_Name||''):''};
+
+  const open=(d.wos||[]).filter(w=>!DONE[w.Status]);
+  const score=w=>{ let s=0; if(NEEDS_BRETT[w.Status])s+=100; s+=(PRI[(w.Priority||'').toLowerCase()]||0)*10;
+    const ag=daysSince(w.Created_Date); if(ag!=null)s+=Math.min(ag,30); if(w.Status==='New'||w.Status==='Declined')s+=15;
+    if(w.Status==='Complete'||w.Status==='Pending Invoice')s+=8; return s; };
+  open.sort((a,b)=>score(b)-score(a));
+
+  const needsBrett=open.filter(w=>NEEDS_BRETT[w.Status]);
+  const waiting=open.filter(w=>WAITING[w.Status]);
+  const outInv=(d.inv||[]).filter(i=>i.Status!=='Paid');
+  const bills=d.bills||[];
+  const overdue=open.filter(w=>{const a=daysSince(w.Created_Date);return a!=null&&a>=7&&(w.Status==='New'||w.Status==='Assigned'||w.Status==='Accepted'||w.Status==='In Progress'||w.Status==='On Hold')});
+
+  // mode + health
+  document.getElementById('mode').className='mode '+(d.live?'live':'sample');
+  document.getElementById('mode').textContent=d.live?'LIVE':'SAMPLE';
+  document.getElementById('hTitle').textContent=d.live?'Live — reading your Hub':'Sample data';
+  document.getElementById('hSub').textContent=d.live?(open.length+' open work orders · '+overdue.length+' aging'):('Showing an example — '+(d.reason||'')+'. Connect below for live.');
+  document.getElementById('tokbar').style.display=d.live?'none':'block';
+
+  // hero — the single next step
+  let hero;
+  if(bills.length){hero={k:'DO THIS NEXT · APPROVALS',t:'Review '+bills.length+' vendor bill'+(bills.length>1?'s':'')+' waiting',b:'Vendors submitted bills — until you review them you can’t invoice the customer or pay the vendor. Fastest way to unlock money on both sides.'};}
+  else if(needsBrett.length){const w=needsBrett[0];hero={k:'DO THIS NEXT · RIDGE CO',t:w.ID+' — '+(WHY[w.Status]||w.Status),b:(w.Trade?w.Trade+': ':'')+(w.Description||'')+' at '+addr(w)+'. Someone’s waiting on this one.'};}
+  else{hero={k:'ALL CLEAR',t:'Nothing needs you right now',b:'No unassigned, declined, on-hold, or ready-to-invoice work. Nicely done.'};}
+
+  let html='';
+  html+='<div class="card hero"><div class="kick">'+h(hero.k)+'</div><h2 style="margin-top:5px">'+h(hero.t)+'</h2><p class="plain">'+h(hero.b)+'</p>'
+      +'<div class="btns"><button class="btn off" disabled>Open (soon)</button><button class="btn off" disabled>Mark done (soon)</button></div></div>';
+
+  html+='<div class="card"><h2>Where things stand</h2><div class="counts">'
+      +'<div class="count"><b>'+(needsBrett.length+bills.length)+'</b><small>need your OK</small></div>'
+      +'<div class="count"><b>'+(waiting.length+outInv.length)+'</b><small>waiting on others</small></div>'
+      +'<div class="count" style="border-color:#ecc3c3;background:var(--redbg)"><b style="color:var(--red)">'+overdue.length+'</b><small>aging 7d+</small></div></div>'
+      +'<p class="note">Ranked by who’s waiting on you, then priority, then how long it’s been sitting.</p></div>';
+
+  // vendor bills to review
+  if(bills.length){
+    html+='<div class="card"><h2>Vendor bills to review</h2>';
+    bills.forEach(b=>{html+='<div class="row2"><span class="pdot r"></span><div class="t"><span class="rtag due">⏳ your review</span>'
+      +'<span class="rtag cash">$'+h(b.Total||b.Customer_Total||'—')+'</span><br>'+h(b.Vendor_Name||vend(b)||'Vendor')+' — '+h(b.WO_ID||'')
+      +'<small>approve to invoice the customer + pay the vendor</small></div><span class="vtag">RIDGE CO</span></div>';});
+    html+='</div>';
+  }
+
+  // open work, who's waiting
+  html+='<div class="card"><h2>Open work — who’s waiting</h2>';
+  if(!open.length){html+='<p class="note">Nothing open. 🎉</p>';}
+  open.slice(0,14).forEach(w=>{
+    const nb=NEEDS_BRETT[w.Status]; const ag=daysSince(w.Created_Date);
+    const dotc=nb?(w.Status==='New'||w.Status==='Declined'?'r':'a'):(w.Status==='Invoiced'?'b':'y');
+    let tags='';
+    if(nb)tags+='<span class="rtag due">⏳ needs you</span>';
+    if(w.Status==='Invoiced')tags+='<span class="rtag cash">$ awaiting pay</span>';
+    if(ag!=null&&ag>=7&&nb)tags+='<span class="rtag cost">'+ag+'d old</span>';
+    html+='<div class="row2"><span class="pdot '+dotc+'"></span><div class="t">'+tags+'<br>'+h(w.ID)+' — '+h(w.Trade||w.Description||'work order')
+      +'<small>'+h(addr(w))+(vend(w)?' · '+h(vend(w)):'')+' · '+h(WHY[w.Status]||w.Status)+'</small></div><span class="vtag">RIDGE CO</span></div>';
+  });
+  if(open.length>14)html+='<p class="note">+ '+(open.length-14)+' more open</p>';
+  html+='</div>';
+
+  // outstanding money in
+  if(outInv.length){
+    let total=outInv.reduce((s,i)=>s+(parseFloat(i.Amount)||0),0);
+    html+='<div class="card"><h2>Money owed to you</h2><div class="row2"><span class="pdot b"></span><div class="t">'
+      +'<span class="rtag cash">$'+total.toLocaleString()+'</span><br>'+outInv.length+' invoice'+(outInv.length>1?'s':'')+' not yet paid'
+      +'<small>customers still owe — follow up if aging</small></div><span class="vtag">RIDGE CO</span></div></div>';
+  }
+
+  // other ventures — manual until their data is wired (Phase 2)
+  html+='<div class="card"><h2>Other ventures <small style="font-weight:600;color:var(--muted)">· manual for now</small></h2>'
+    +'<div class="row2"><span class="pdot r"></span><div class="t"><span class="rtag due">📅 Friday</span><span class="rtag cost">~$1,750 lost</span><br>'
+    +'BarrelCo → Community Forklift drop-off<small>truck tow issue fixed · load + deliver Fri</small></div><span class="vtag">BARRELCO</span></div>'
+    +'<div class="row2"><span class="pdot r"></span><div class="t"><span class="rtag due">⚠ past due</span><br>Call SBA — EIDL re-enrollment<small>top cash risk</small></div><span class="vtag">FINANCE</span></div>'
+    +'<div class="row2"><span class="pdot a"></span><div class="t">Confirm Kingbee proof-of-claim filed<small>protects your funds pool</small></div><span class="vtag">FLEET</span></div>'
+    +'<p class="note">These come from your backlog. Once the BrettOS sheet is wired (Phase 2) they’ll be live too.</p></div>';
+
+  document.getElementById('body').innerHTML=html;
+}
+
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
+
+// emergency rollback — UI present, action gated until the preview/versioning lane exists
+function openSheet(t,b,red,go,reqCk){document.getElementById('shT').textContent=t;document.getElementById('shB').textContent=b;
+  const g=document.getElementById('shGo');g.className='confirm';g.textContent=reqCk?'Roll back':'OK';g.onclick=function(){go&&go();closeSheet()};
+  const w=document.getElementById('shCk'),c=document.getElementById('shChk');
+  if(reqCk){w.style.display='flex';c.checked=false;g.disabled=true}else{w.style.display='none';g.disabled=false}
+  document.getElementById('sheet').classList.add('on');}
+function closeSheet(){document.getElementById('sheet').classList.remove('on')}
+function rollback(){openSheet('Rollback isn’t armed yet','One-tap rollback turns on once the safe-launch rails (preview lane + versioning) are built — that’s Phase 3 of the locked build order. For now this button is a placeholder so the layout is final.',false,null,false);}
+
+load();
+</script>
+</body>
+</html>
