@@ -34,13 +34,19 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
-    const PUBLIC_PATHS = ['/health','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
+    const PUBLIC_PATHS = ['/health','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
     if (!PUBLIC_PATHS.includes(path)) {
-      // Shared-secret gate. Rotated 2026-07-20 (old value retired). NOTE: this is a
-      // coarse anti-bot gate only — real per-record authz is enforced per endpoint
-      // (Owner_ID / vendor_id / PIN). Slated for replacement by per-user auth.
-      if (request.headers.get('X-Auth-Token') !== env.WORKER_SECRET)
-        return json({ error: 'Unauthorized' }, 401);
+      // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
+      // PIN-issued session token grants ONLY its role's allow-listed endpoints
+      // (scoped, see ROLE_SCOPES). Per-record authz (vendor_id/Owner_ID/PIN) still
+      // enforced inside each handler. PIN-login endpoints are PUBLIC (gated by PIN +
+      // lockout) so a portal can log in without ever carrying the admin secret.
+      const _tok = request.headers.get('X-Auth-Token') || '';
+      if (_tok !== env.WORKER_SECRET) {
+        const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
+        if (!_session || !isPathAllowedForRole(path, _session.role))
+          return json({ error: 'Unauthorized' }, 401);
+      }
     }
     try {
       if (request.method === 'GET') {
@@ -347,6 +353,7 @@ async function tenantByPin(env, url) {
       unit_id:          tenant.Unit_ID||'',
       unit_label:       unit.Unit_Label||'',
       owner_id:         prop.Owner_ID||'',  // FIX: added for Tenant_Submit_WOs check
+      token:            await makeSessionToken({ role: 'tenant', id: tenant.ID }, env.WORKER_SECRET),
     });
   });
 }
@@ -369,6 +376,7 @@ async function ownerByPin(env, url) {
         owner_name: owner ? `${owner.First_Name||''} ${owner.Last_Name||''}`.trim() || owner.Company || '' : '',
         owner_company: owner?.Company||'', owner_phone: owner?.Phone||'',
         user_name: `${user.First_Name} ${user.Last_Name||''}`.trim(), user_phone: user.Phone||'', is_sub_user: true,
+        token: await makeSessionToken({ role: 'owner', id: user.Owner_ID }, env.WORKER_SECRET),
       });
     }
     const owner = owners.find(o => o.PIN && o.PIN.toLowerCase() === p.toLowerCase() && o.Active !== 'FALSE');
@@ -377,6 +385,7 @@ async function ownerByPin(env, url) {
       owner_id: owner.ID, owner_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(),
       owner_company: owner.Company||'', owner_phone: owner.Phone||'',
       user_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(), is_sub_user: false,
+      token: await makeSessionToken({ role: 'owner', id: owner.ID }, env.WORKER_SECRET),
     });
   });
 }
@@ -402,6 +411,7 @@ async function vendorByPin(env, url) {
       vendor_id: vendor.ID, vendor_name: vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim(),
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
       vendor_trades: vendor.Trades||vendor.Trade||'', vendor_rate: vendor.Hourly_Rate||'', language: vendor.Language||'en',
+      token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET),
     });
   });
 }
@@ -1889,6 +1899,23 @@ async function approveReceiptQueue(env, body) {
 // ── GOOGLE SHEETS / AUTH ─────────────────────────────────────
 
 function b64url(str) { return btoa(unescape(encodeURIComponent(str))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+
+// ── Scoped session tokens (SEC-1 / B-093) ──────────────────────────────────────
+// PIN login issues a signed, role-scoped token so portals never carry the admin
+// secret. HMAC-SHA256 over the payload; integrity-protected (not secret). Same code
+// is offline-tested in test/session-auth.test.mjs.
+const _tenc = new TextEncoder(), _tdec = new TextDecoder();
+function _b64urlBytes(bytes){ let s=''; for(const b of bytes) s+=String.fromCharCode(b); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function _b64urlToBytes(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while(str.length%4) str+='='; const bin=atob(str); const out=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; }
+async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw', _tenc.encode(secret), {name:'HMAC',hash:'SHA-256'}, false, ['sign']); const sig=await crypto.subtle.sign('HMAC', key, _tenc.encode(data)); return _b64urlBytes(new Uint8Array(sig)); }
+async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
+async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
+const ROLE_SCOPES = {
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/attachments','/estimate','/estimates','/receipt/add','/receipt/delete','/receipts','/status','/time-entries','/time-entry/add','/time-entry/delete','/upload-photo'],
+  tenant: ['/tenant-by-pin','/tenant-workorders','/attachments','/wo/add-note'],
+  owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder'],
+};
+function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !!(s && s.includes(path)); }
 
 async function getAccessToken(env) {
   const now=Math.floor(Date.now()/1000);
