@@ -31,6 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 
 export default {
   async fetch(request, env) {
+    __custSentThisRun = 0;  // B-156: customer-send rate cap is PER REQUEST — reset here (module scope persists across requests in a warm isolate)
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
@@ -187,6 +188,7 @@ export default {
   // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
   // with delivery off just builds the digest and returns — no messages, negligible cost.
   async scheduled(event, env, ctx) {
+    __custSentThisRun = 0;  // B-156: reset the customer-send rate cap per cron run (queue drain etc.)
     try {
       const digest = await buildDigest(env);
       await deliverDigest(env, digest);
@@ -748,9 +750,8 @@ async function createWorkOrder(env, body) {
           first: rTenant.First_Name, issue: body.issue_summary || body.trade || 'your request',
           unitLabel: tenantUnitLabel(rUnit), lang: tenantLang(rTenant),
         });
-        await sendSMS(env, rTenant.Phone, msg);
-        await logSMS(env, woId, 'tenant_received', rTenant.ID, rTenant.Phone, msg);
-        await updateWOFields(env, woId, { Tenant_SMS_Sent: 'TRUE' });
+        const _nr = await notifyCustomer(env, { audience:'tenant', event:'received', to: rTenant.Phone, message: msg, woId, recipientId: rTenant.ID, wo: { Created_Date: now }, suppress: (body.suppress_notify===true || _flagOn(body.suppress_notify) || body.backfill===true) });
+        if (_nr.sent) await updateWOFields(env, woId, { Tenant_SMS_Sent: 'TRUE' });
       }
     }
   } catch(e) { /* non-fatal: WO already created */ }
@@ -803,9 +804,8 @@ async function assignVendor(env, body) {
       first: tenant.First_Name, issue: wo.Issue_Summary || wo.Trade,
       tech: techDisplayName(vendor), unitLabel: tenantUnitLabel(unit), lang: tenantLang(tenant),
     });
-    await sendSMS(env, tenant.Phone, msg);
-    await logSMS(env, body.wo_id, 'tenant_assigned', tenant.ID, tenant.Phone, msg);
-    tenantSMSSent = true;
+    const _na = await notifyCustomer(env, { audience:'tenant', event:'assigned', to: tenant.Phone, message: msg, woId: body.wo_id, recipientId: tenant.ID, wo, suppress: (body.suppress_notify===true || _flagOn(body.suppress_notify) || body.backfill===true) });
+    tenantSMSSent = !!_na.sent;
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
   return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent });
@@ -840,7 +840,7 @@ async function updateStatus(env, body) {
         first: tenant.First_Name, issue: wo.Issue_Summary || wo.Trade,
         unitLabel: tenantUnitLabel(unit), lang: tenantLang(tenant),
       });
-      await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_complete', tenant.ID, tenant.Phone, msg);
+      await notifyCustomer(env, { audience:'tenant', event:'complete', to: tenant.Phone, message: msg, woId: body.wo_id, recipientId: tenant.ID, wo, suppress: (body.suppress_notify===true || _flagOn(body.suppress_notify) || body.backfill===true) });
     }
     if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
@@ -855,7 +855,7 @@ async function updateStatus(env, body) {
           first: hTenant.First_Name, issue: wo.Issue_Summary || wo.Trade,
           reason: body.hold_reason || body.notes || '', lang: tenantLang(hTenant),
         });
-        await sendSMS(env, hTenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_hold', hTenant.ID, hTenant.Phone, msg);
+        await notifyCustomer(env, { audience:'tenant', event:'hold', to: hTenant.Phone, message: msg, woId: body.wo_id, recipientId: hTenant.ID, wo, suppress: (body.suppress_notify===true || _flagOn(body.suppress_notify) || body.backfill===true) });
       }
     } catch(e) { /* non-fatal */ }
   }
@@ -868,7 +868,7 @@ async function updateStatus(env, body) {
       if (owner?.Phone) {
         const statusMsgs = { Assigned: `Hi ${owner.First_Name}, a technician has been assigned to the ${wo.Trade} job at ${property.Address}. Ref: ${body.wo_id}.`, Scheduled: `Hi ${owner.First_Name}, the ${wo.Trade} job at ${property.Address} has been scheduled. Ref: ${body.wo_id}.`, Complete: `Hi ${owner.First_Name}, the ${wo.Trade} work at ${property.Address} is complete. An invoice will follow. Ref: ${body.wo_id}.`, Invoiced: `Hi ${owner.First_Name}, an invoice has been submitted for ${wo.Trade} at ${property.Address}. Ref: ${body.wo_id}. Contact us with any questions.` };
         const msg = statusMsgs[body.status];
-        if (msg) { await sendSMS(env, owner.Phone, msg); await logSMS(env, body.wo_id, `owner_${body.status.toLowerCase()}`, owner.ID, owner.Phone, msg); await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' }); }
+        if (msg) { const _no = await notifyCustomer(env, { audience:'owner', event: body.status.toLowerCase(), to: owner.Phone, message: msg, woId: body.wo_id, recipientId: owner.ID, wo, suppress: (body.suppress_notify===true || _flagOn(body.suppress_notify) || body.backfill===true) }); if (_no.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' }); }
       }
     }
   }
@@ -1384,8 +1384,7 @@ async function addWONote(env, body) {
       const noteOwner = noteProp ? owners.find(o => o.ID === noteProp.Owner_ID) : null;
       if (noteOwner?.Phone) {
         const ownerMsg = `Hi ${noteOwner.First_Name}, your work order ${body.wo_id} has been placed on hold. Note: ${noteText}. Reply or call us with any questions.`;
-        await sendSMS(env, noteOwner.Phone, ownerMsg);
-        await logSMS(env, body.wo_id, 'owner_onhold_note', noteOwner.ID, noteOwner.Phone, ownerMsg);
+        await notifyCustomer(env, { audience:'owner', event:'onhold_note', to: noteOwner.Phone, message: ownerMsg, woId: body.wo_id, recipientId: noteOwner.ID, wo, suppress: (body.suppress_notify===true || _flagOn(body.suppress_notify) || body.backfill===true) });
       }
     } catch(e) { /* non-fatal — note already saved */ }
   }
@@ -1648,7 +1647,7 @@ async function scheduleWO(env, body) {
         ? buildTenantMsg('enroute',{first:tenant.First_Name,issue:_issue,tech:_tech,lang:_lang})
         : buildTenantMsg('scheduled',{first:tenant.First_Name,issue:_issue,tech:_tech,date:dateStr,window:body.window,unitLabel:_uL,lang:_lang});
       const now=new Date(), tomorrow=new Date(now); tomorrow.setDate(tomorrow.getDate()+1); const tomorrowStr=tomorrow.toISOString().split('T')[0];
-      if(schedDate===today||isWithinHour){await sendSMS(env,tenant.Phone,msg);await logSMS(env,body.wo_id,'tenant_schedule',tenant.ID,tenant.Phone,msg);tenantSMSSent=true;}
+      if(schedDate===today||isWithinHour){const _ns=await notifyCustomer(env,{audience:'tenant',event:'schedule',to:tenant.Phone,message:msg,woId:body.wo_id,recipientId:tenant.ID,wo,suppress:(body.suppress_notify===true||_flagOn(body.suppress_notify)||body.backfill===true)});tenantSMSSent=!!_ns.sent;}
       else{let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter);notifyQueued=true;}
     }
   }
@@ -1668,15 +1667,22 @@ async function processPendingNotifications(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/Notification_Queue`); if(!data.values||data.values.length<2) return json({processed:0});
     const [headers,...rows]=data.values;
-    const iPhone=headers.indexOf('Phone'),iMsg=headers.indexOf('Message'),iAfter=headers.indexOf('Send_After'),iSent=headers.indexOf('Sent'),iWO=headers.indexOf('WO_ID');
-    const now=new Date(); let processed=0;
+    const iPhone=headers.indexOf('Phone'),iMsg=headers.indexOf('Message'),iAfter=headers.indexOf('Send_After'),iSent=headers.indexOf('Sent'),iWO=headers.indexOf('WO_ID'),iType=headers.indexOf('Type'),iCreated=headers.indexOf('Created_At');
+    const now=new Date(); let processed=0, suppressed=0;
+    const qcfg=await fetchConfig(env);  // B-156: the drain obeys the SAME kill switch / rate cap / staleness / mute as live sends
     for(const row of rows){
-      if((row[iSent]||'')==='TRUE') continue;
+      if((row[iSent]||'')==='TRUE'||(row[iSent]||'')==='SUPPRESSED') continue;
       const sendAfter=row[iAfter]?new Date(row[iAfter]):null; if(sendAfter&&sendAfter>now) continue;
       const phone=row[iPhone],msg=row[iMsg];
-      if(phone&&msg){await sendSMS(env,phone,msg);await logSMS(env,row[iWO]||'','queued_notification','',phone,msg);const rowIndex=rows.indexOf(row);await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:[{range:`Notification_Queue!${col(iSent)}${rowIndex+2}`,values:[['TRUE']]}]});processed++;}
+      if(!(phone&&msg)) continue;
+      const qType=String(iType>=0?(row[iType]||''):'')||'queued', qAud=qType.startsWith('owner')?'owner':'tenant';
+      const qr=await notifyCustomer(env,{audience:qAud,event:qType,to:phone,message:msg,woId:row[iWO]||'',wo:{Created_At:iCreated>=0?row[iCreated]:''},cfg:qcfg});
+      const rowIndex=rows.indexOf(row), mark=v=>sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:[{range:`Notification_Queue!${col(iSent)}${rowIndex+2}`,values:[[v]]}]});
+      if(qr.sent){await mark('TRUE');processed++;}
+      else if(['stale','wo_suppress','req_suppress'].includes(qr.suppressed)){await mark('SUPPRESSED');suppressed++;}  // permanent — never blast stale/suppressed backlog
+      // transient (kill_switch / muted / ratecap): leave unsent so it drains later, rate-capped, once enabled
     }
-    return json({processed});
+    return json({processed,suppressed});
   } catch(e){return json({processed:0,error:e.message});}
 }
 
@@ -1741,6 +1747,61 @@ async function handleInboundSMS(env, request) {
   return twilioResponse(`Message received. Your coordinator will follow up.`);
 }
 
+// ── B-156 CUSTOMER-COMMS SAFETY GATE ────────────────────────────────────────
+// EVERY tenant/owner (customer-facing) message routes through notifyCustomer, NOT
+// raw sendSMS. Vendor/admin/PIN sends stay on raw sendSMS (operational). Design:
+//   • MASTER KILL SWITCH, DEFAULT DEAD: customer_sms_enabled must be explicitly TRUE.
+//     A missing/blank/anything-else Config value = OFF. Nothing customer-facing hits
+//     Twilio until Brett flips it. Per-audience: customer_sms_tenant_enabled /
+//     customer_sms_owner_enabled (default to master when unset).
+//   • BACKFILL/OUTSIDE-SYSTEM GUARD: a WO with Suppress_Notify=TRUE, or a request
+//     carrying suppress_notify/backfill, never notifies — so logging old or
+//     done-outside-the-system work generates no texts.
+//   • STALENESS GUARD: never message about a WO older than notify_max_wo_age_days
+//     (default 30) — stops "cleaning out very old work orders" from blasting texts.
+//   • RATE CAP: notify_max_per_run (default 25) per Worker invocation — a backlog or
+//     bulk update can't fire hundreds at once; the overflow is logged as suppressed.
+//   • MUTE WINDOW: notify_mute_until (ISO) hard-mutes until then.
+//   • TEST MODE: notify_test_mode → redirect every customer message to
+//     notify_test_phone, prefixed "[TEST → <real#>]", for safe live testing.
+// Every decision (sent OR suppressed:<reason>) is written to SMS_Logs.
+let __custSentThisRun = 0;  // reset to 0 at each fetch()/scheduled() entry — makes the rate cap per-request, not per-isolate-lifetime
+function _flagOn(v){ return ['TRUE','ON','1','YES','ENABLED'].includes(String(v==null?'':v).trim().toUpperCase()); }
+function _woAgeDays(wo){ const d=wo&&(wo.Created_Date||wo.Created||wo.Created_At); if(!d) return 0; const t=Date.parse(d); return isNaN(t)?0:(Date.now()-t)/86400000; }
+function customerSendPolicy(cfg, o){
+  const aud=o.audience||'tenant';
+  // 1. explicit per-WO / per-request suppression (backfill, outside-system, bulk cleanup)
+  if (o.wo && _flagOn(o.wo.Suppress_Notify)) return { ok:false, reason:'wo_suppress' };
+  if (o.suppress) return { ok:false, reason:'req_suppress' };
+  // 2. MASTER kill switch (default OFF) AND per-audience switch
+  const master=_flagOn(cfg.customer_sms_enabled);
+  const audKey='customer_sms_'+aud+'_enabled';
+  const audOn=(cfg[audKey]===undefined||cfg[audKey]==='')?master:_flagOn(cfg[audKey]);
+  if (!master || !audOn) return { ok:false, reason:'kill_switch' };
+  // 3. mute window
+  if (cfg.notify_mute_until){ const mt=Date.parse(cfg.notify_mute_until); if(!isNaN(mt)&&mt>Date.now()) return { ok:false, reason:'muted' }; }
+  // 4. staleness
+  const maxAge=parseFloat(cfg.notify_max_wo_age_days||'30');
+  if (maxAge>0 && o.wo && _woAgeDays(o.wo)>maxAge) return { ok:false, reason:'stale' };
+  // 5. per-invocation rate cap
+  const maxRun=parseInt(cfg.notify_max_per_run||'25',10);
+  if (Number.isFinite(maxRun) && maxRun>0 && __custSentThisRun>=maxRun) return { ok:false, reason:'ratecap' };
+  // 6. test-mode redirect
+  let to=o.to, message=o.message;
+  if (_flagOn(cfg.notify_test_mode)){ const tp=normalizePhone(cfg.notify_test_phone||''); if(!tp) return { ok:false, reason:'test_no_dest' }; message='[TEST → '+o.to+'] '+message; to=tp; }
+  return { ok:true, to, message };
+}
+async function notifyCustomer(env, o){
+  const cfg=o.cfg||await fetchConfig(env);
+  const rtype=`${o.audience||'tenant'}_${o.event||'msg'}`;
+  const p=customerSendPolicy(cfg, o);
+  if (!p.ok){ await logSMS(env, o.woId||'', rtype, o.recipientId||'', o.to||'', o.message||'', 'suppressed:'+p.reason); return { suppressed:p.reason }; }
+  __custSentThisRun++;
+  const r=await sendSMS(env, p.to, p.message);
+  await logSMS(env, o.woId||'', rtype, o.recipientId||'', o.to||'', p.message, 'sent');
+  return { sent:true, result:r };
+}
+
 async function sendSMS(env, to, message) {
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
@@ -1752,10 +1813,10 @@ async function sendSMS(env, to, message) {
   return resp.json();
 }
 
-async function logSMS(env, woId, recipientType, recipientId, phone, message) {
+async function logSMS(env, woId, recipientType, recipientId, phone, message, status) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/SMS_Logs`);const rows=data.values||[[]];const headers=rows[0];const now=new Date().toISOString();
-    const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),WO_ID:woId||'',Recipient_Type:recipientType||'',Recipient_ID:recipientId||'',Phone:phone||'',Message:message||'',Sent_Date:now,Status:'sent',Twilio_SID:''}[h]??''));
+    const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),WO_ID:woId||'',Recipient_Type:recipientType||'',Recipient_ID:recipientId||'',Phone:phone||'',Message:message||'',Sent_Date:now,Status:status||'sent',Twilio_SID:''}[h]??''));
     await sheetsRequest(env,'POST',`/values/SMS_Logs:append?valueInputOption=RAW`,{values:[newRow]});
   } catch(e) { /* non-fatal — SMS already sent, logging is secondary */ }
 }

@@ -118,6 +118,36 @@ Quiet-hours (8pm–8am ET hold-til-8am), test-mode, and admin-mute all come **fr
 
 ---
 
+## 5.1 Customer-comms SAFETY LAYER — kill switch + guardrails (BUILT July 24, `notifyCustomer`)
+
+**Non-negotiable (Brett, July 24):** no customer/tenant/owner message goes out until Brett flips a switch; no backlog blast; no texts about old / backfilled / done-outside-the-system work; nothing useless, ill-timed, or inaccurate. Every tenant + owner send now routes through **`notifyCustomer` → `customerSendPolicy`** (worker.js, above `sendSMS`). Vendor/admin/PIN sends stay on raw `sendSMS` (operational, unchanged). Every decision — sent OR `suppressed:<reason>` — is written to `SMS_Logs`.
+
+**Config flags (all in the Config tab; MISSING = OFF, so the default state is DEAD):**
+
+| Flag | Default | Effect |
+|---|---|---|
+| `customer_sms_enabled` | **(unset = OFF)** | **MASTER KILL SWITCH.** Must be `TRUE` for ANY customer SMS to send. This is the go-live switch. |
+| `customer_sms_tenant_enabled` | → master | Per-audience switch (go live for tenants only). Defaults to master when unset. |
+| `customer_sms_owner_enabled` | → master | Per-audience switch (owners). Lets you enable tenants first, owners later. |
+| `notify_test_mode` | OFF | Redirect EVERY customer message to `notify_test_phone`, prefixed `[TEST → <real#>]`. Safe live testing without touching a real tenant. |
+| `notify_test_phone` | — | Where test-mode messages go (your phone). |
+| `notify_max_wo_age_days` | `30` | **Staleness guard** — never message about a WO whose Created_Date is older than this. Stops "clearing out old WOs" from blasting. Set LOW (e.g. `2`) during initial testing. |
+| `notify_max_per_run` | `25` | **Rate cap per request/cron run** — a bulk update or backlog drain can't fire more than this at once; overflow logged `suppressed:ratecap`. |
+| `notify_mute_until` | — | ISO timestamp: hard-mute all customer sends until then (panic button). |
+
+**Per-WO / per-request guards (independent of the switches):**
+- **`Work_Orders.Suppress_Notify = TRUE`** → that WO never notifies. Set it on any WO logged after-the-fact or done outside the system.
+- Request body **`suppress_notify:true`** or **`backfill:true`** on any create/assign/status/schedule call → no customer message. Bulk-import and cleanup tools must pass this.
+- The **Notification_Queue drain obeys the same policy** — flipping the switch on does NOT flush the backlog uncapped; stale/suppressed queued rows are marked `SUPPRESSED` (never sent), transient ones drain later, rate-capped.
+
+**GO-LIVE CHECKLIST (the safe sequence):**
+1. Deploy with every flag unset → **state is DEAD**, nothing sends. (Confirm via `SMS_Logs`: entries show `suppressed:kill_switch`.)
+2. Set `notify_test_mode=TRUE` + `notify_test_phone=<your #>` + `customer_sms_enabled=TRUE` + `notify_max_wo_age_days=2`. Exercise the 5 events on a fresh test WO → every message lands on YOUR phone, prefixed `[TEST →]`. Verify copy + unit label + tech name + EN/ES.
+3. Turn `notify_test_mode` OFF, keep `customer_sms_tenant_enabled=TRUE` only (owners still off), keep age guard tight. Run ONE real low-risk tenant through a live WO. Watch `SMS_Logs`.
+4. Widen: raise `notify_max_wo_age_days` to taste, enable owners, done. Reverse instantly by setting `customer_sms_enabled` (or a per-audience flag) back to `FALSE`, or `notify_mute_until` for a timed pause.
+
+**Email:** same principle, deferred with the email channel. When customer email is built it MUST mirror this: a `customer_email_enabled` master flag defaulting DEAD + the same staleness/backfill/rate/test guards. Tracked as the B-156 email follow-up. (A `digest_email_enabled` default-off stub already exists as precedent.)
+
 ## 6. Decisions to lock (recommended default → ❓ = needs Brett)
 
 1. **Event set** = Received, Assigned, Scheduled, On Hold, Complete; In-Progress + En-route OFF by default. → recommend **yes**. ❓ add In-Progress?
