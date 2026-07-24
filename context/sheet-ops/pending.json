@@ -1,0 +1,11 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "B-156 support columns: tenant Lang + SMS_OptOut, WO Issue_Summary + Suppress_Notify (backfill/outside-system guard), Units Display_Label",
+  "ops": [
+    { "type": "add_column_header", "tab": "Tenants", "header": "Lang" },
+    { "type": "add_column_header", "tab": "Tenants", "header": "SMS_OptOut" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Issue_Summary" },
+    { "type": "add_column_header", "tab": "Work_Orders", "header": "Suppress_Notify" },
+    { "type": "add_column_header", "tab": "Units", "header": "Display_Label" }
+  ]
+}
