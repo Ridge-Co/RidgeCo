@@ -162,7 +162,7 @@ tr:hover td{background:var(--surface2);}
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-var SECRET = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
+var SECRET = (localStorage.getItem('mh_auth')||'');
 
 var csvRows = [];      // raw parsed CSV rows (arrays)
 var csvHeaders = [];   // header row
