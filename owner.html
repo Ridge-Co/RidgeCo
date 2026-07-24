@@ -401,7 +401,8 @@ textarea{resize:vertical;min-height:70px;}
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
-var SECRET = 'mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg';
+var SECRET = '';                // session token from PIN login — NO hardcoded admin secret (SEC-1)
+var SESS_KEY = 'mh_owner_sess'; // persisted so a reload / auto-refresh stays logged in
 var session = null;
 var ownerProps = [];
 var allWOs = [];
@@ -470,22 +471,30 @@ function doLogin() {
         }
         return;
       }
-      session = data;
-      var displayName = data.user_name || data.owner_name;
-      var displayCo = data.is_sub_user && data.owner_company
-        ? data.owner_company
-        : (data.owner_company || 'Owner Portal');
-      document.getElementById('ownerName').textContent = displayName;
-      document.getElementById('ownerCompany').textContent = displayCo;
-      show('screenLogin', false);
-      show('screenDash', true);
-      loadDashboard();
+      onLoginSuccess(data, true);
     })
     .catch(function(){ btn.disabled = false; btn.textContent = 'SIGN IN'; showLoginMsg('Connection error.','error'); });
 }
 
+function onLoginSuccess(data, persist){
+  session = data;
+  if (data.token) SECRET = data.token;
+  var displayName = data.user_name || data.owner_name || '';
+  var displayCo = data.is_sub_user && data.owner_company ? data.owner_company : (data.owner_company || 'Owner Portal');
+  var n=document.getElementById('ownerName'); if(n) n.textContent = displayName;
+  var c=document.getElementById('ownerCompany'); if(c) c.textContent = displayCo;
+  show('screenLogin', false);
+  show('screenDash', true);
+  loadDashboard();
+  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
+}
+(function restoreOwnerSession(){
+  try { var raw=localStorage.getItem(SESS_KEY); if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } } catch(e){}
+})();
+
 function doLogout() {
   session = null; ownerProps = []; allWOs = [];
+  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
@@ -997,7 +1006,7 @@ function submitFeedback() {
   var fullText = "[OWNER] " + typeLabel + who + ": " + text;
   document.getElementById("feedbackBtn").disabled = true;
   fetch("https://maintenance-hub.brett-2f8.workers.dev/wishlist/add", {
-    method:"POST", headers:{"X-Auth-Token":"mh-pbg5R2uGZUi52XyzDiMNned-27TashvL3ED62rEYiIg","Content-Type":"application/json"},
+    method:"POST", headers:{"X-Auth-Token":SECRET,"Content-Type":"application/json"},
     body:JSON.stringify({text:fullText})
   }).then(function(r){return r.json();}).then(function(res){
     document.getElementById("feedbackBtn").disabled = false;
@@ -1169,6 +1178,35 @@ function buildPhotoSection(woId, propAddr, opts) {
     sections + '</div>';
 }
 
+</script>
+<!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner) -->
+<script>
+(function(){
+  var VER_URL = WORKER + '/version', booted = null;
+  function dirty(){
+    var el = document.activeElement;
+    if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
+    return !!document.querySelector('[data-unsaved="1"]');
+  }
+  function banner(){
+    if (document.getElementById('mh-upd-banner')) return;
+    var b = document.createElement('div');
+    b.id = 'mh-upd-banner';
+    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#0b8a3e;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
+    b.textContent = 'Update ready — tap to refresh';
+    b.onclick = function(){ location.reload(true); };
+    document.body.appendChild(b);
+  }
+  function check(){
+    fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      if (!d || !d.version) return;
+      if (booted === null){ booted = d.version; return; }
+      if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
+    }).catch(function(){});
+  }
+  check();
+  setInterval(check, 60000);
+})();
 </script>
 </body>
 </html>
