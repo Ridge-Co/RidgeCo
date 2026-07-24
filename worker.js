@@ -554,10 +554,67 @@ async function handlePhotoUploadClean(env, request) {
 function isTenantNotifiable(tenant, wo) {
   if (!tenant || !tenant.Phone) return false;
   if (tenant.Active === 'FALSE') return false;
+  if (String(tenant.SMS_OptOut || '').toUpperCase() === 'TRUE') return false;   // B-156: honor opt-out (STOP)
+  if (wo && wo.Tenant_Visible === 'FALSE') return false;                        // B-156: never notify on a tenant-hidden WO
   const now = new Date();
   if (tenant.Move_Out_Date) { const moveOut = new Date(tenant.Move_Out_Date + 'T23:59:59'); if (moveOut < now) return false; }
   if (tenant.Move_In_Date && wo && wo.Created_Date) { if (new Date(tenant.Move_In_Date) > new Date(wo.Created_Date)) return false; }
   return true;
+}
+
+// ── B-156: Tenant WO-lifecycle notifications ────────────────────────────────
+// One templated builder + a unit-label normalizer so tenant copy is consistent,
+// billing-safe, and audience-correct. Tenant sees the SHORT unit ("Apt 3"),
+// never the full property address (they live there) and never a bare "3".
+// See context/SERVICE_DELIVERY_WAVE0_BUILD_BRIEF_v1.0.md.
+function unitLabel(raw) {
+  let s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  if (/^(apt|apartment|unit|ste|suite|rm|room|bsmt|basement|rear|front|store|#)/i.test(s)) {
+    return s.replace(/^apartment/i, 'Apt').replace(/^#\s*/, 'Apt ');
+  }
+  if (/^[0-9]+[a-z]?$/i.test(s) || /^[a-z]$/i.test(s)) return 'Apt ' + s.toUpperCase();
+  return s; // oddball as-is (e.g. "Rear House"); Display_Label override wins upstream
+}
+function tenantUnitLabel(unit) {
+  if (!unit) return '';
+  return String(unit.Display_Label || '').trim() || unitLabel(unit.Unit_Label);
+}
+function techDisplayName(vendor) {
+  if (!vendor) return 'a technician';
+  const f = String(vendor.First_Name || '').trim(), l = String(vendor.Last_Name || '').trim();
+  if (f) return l ? `${f} ${l[0]}.` : f;
+  return String(vendor.Company || vendor.Name || 'a technician').trim() || 'a technician';
+}
+function tenantLang(tenant) {
+  const l = String((tenant && (tenant.Language || tenant.Lang)) || '').toLowerCase();
+  return l.startsWith('es') ? 'es' : 'en';
+}
+function buildTenantMsg(event, c) {
+  const lang = c.lang === 'es' ? 'es' : 'en';
+  const first = c.first || 'there', issue = c.issue || 'your request', tech = c.tech || 'a technician';
+  const locEN = c.unitLabel ? ` at ${c.unitLabel}` : '', locES = c.unitLabel ? ` en ${c.unitLabel}` : '';
+  const T = {
+    received: {
+      en: `Hi ${first}, it's Ridge Co — we got your request about ${issue}${locEN}. We'll get someone on it and follow up shortly. Nothing else you need to do. 👍`,
+      es: `Hola ${first}, somos Ridge Co — recibimos su solicitud sobre ${issue}${locES}. Nos encargaremos y le daremos seguimiento pronto. No necesita hacer nada más. 👍` },
+    assigned: {
+      en: `Update on your ${issue} request: ${tech} is handling it and will reach out to set up a time. Expect a call or text from them soon. — Ridge Co`,
+      es: `Actualización de su solicitud (${issue}): ${tech} se encargará y se comunicará para coordinar una hora. Espere su llamada o mensaje pronto. — Ridge Co` },
+    scheduled: {
+      en: `Your ${issue} repair is set for ${c.date} (${c.window}). ${tech} plans to be out then — reply here if that time doesn't work. — Ridge Co`,
+      es: `Su reparación (${issue}) está programada para ${c.date} (${c.window}). ${tech} planea ir entonces — responda aquí si esa hora no funciona. — Ridge Co` },
+    enroute: {
+      en: `Hi ${first}, ${tech} is on the way for your ${issue} repair and should arrive within the hour. — Ridge Co`,
+      es: `Hola ${first}, ${tech} va en camino para su reparación (${issue}) y debería llegar dentro de una hora. — Ridge Co` },
+    on_hold: {
+      en: `Quick update on your ${issue} repair — it's on hold${c.reason ? ': ' + c.reason : ''}. We'll message you the moment it's moving again. — Ridge Co`,
+      es: `Actualización rápida de su reparación (${issue}) — está en pausa${c.reason ? ': ' + c.reason : ''}. Le avisaremos en cuanto se reanude. — Ridge Co` },
+    complete: {
+      en: `Good news ${first} — your ${issue} repair${locEN} is done. If anything isn't right, just reply and we'll take care of it. — Ridge Co`,
+      es: `Buenas noticias ${first} — su reparación (${issue})${locES} está lista. Si algo no está bien, responda y lo resolveremos. — Ridge Co` },
+  };
+  return (T[event] || T.received)[lang];
 }
 
 function roundUpTo15(minutes) { if (minutes <= 0) return 15; return Math.ceil(minutes / 15) * 15; }
@@ -678,6 +735,25 @@ async function createWorkOrder(env, body) {
       await addRow(env, 'WO_Tenants', { WO_ID: woId, Tenant_ID: tid, Tenant_Name: ((t.First_Name||'')+' '+(t.Last_Name||'')).trim(), Tenant_Phone: t.Phone||'', Added_By: 'system-auto', Added_Date: now, Active: 'TRUE' });
     }
   } catch(e) {}
+  // B-156: tenant received-ack (SD-001) — the 0-to-1 "we heard you" moment, on intake.
+  try {
+    if (body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE') {
+      const [rUnits, rTenants] = await Promise.all([fetchTab(env, 'Units'), fetchTab(env, 'Tenants')]);
+      const rUnit = body.unit_id ? rUnits.find(u => u.ID === body.unit_id) : null;
+      const rTid = body.tenant_id || (rUnit && rUnit.Tenant_ID) || null;
+      const rTenant = rTid ? rTenants.find(t => t.ID === rTid) : null;
+      const rTVis = (body.tenant_visible !== false && body.tenant_visible !== 'FALSE') ? 'TRUE' : 'FALSE';
+      if (rTenant && rTenant.Phone && isTenantNotifiable(rTenant, { Created_Date: now, Tenant_Visible: rTVis })) {
+        const msg = buildTenantMsg('received', {
+          first: rTenant.First_Name, issue: body.issue_summary || body.trade || 'your request',
+          unitLabel: tenantUnitLabel(rUnit), lang: tenantLang(rTenant),
+        });
+        await sendSMS(env, rTenant.Phone, msg);
+        await logSMS(env, woId, 'tenant_received', rTenant.ID, rTenant.Phone, msg);
+        await updateWOFields(env, woId, { Tenant_SMS_Sent: 'TRUE' });
+      }
+    }
+  } catch(e) { /* non-fatal: WO already created */ }
   return json({ success: true, id: woId });
 }
 
@@ -722,10 +798,13 @@ async function assignVendor(env, body) {
     await logSMS(env, body.wo_id, 'vendor', vendor.ID, vendor.Phone, msg);
     vendorSMSSent = true;
   }
-  if (tenant?.Phone && isTenantNotifiable(tenant, wo)) {
-    const msg = `Hi ${tenant.First_Name}, your maintenance request (${wo.Trade}) has been assigned to a technician. They will contact you to schedule. Ref: ${body.wo_id}.`;
+  if (tenant?.Phone && isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    const msg = buildTenantMsg('assigned', {
+      first: tenant.First_Name, issue: wo.Issue_Summary || wo.Trade,
+      tech: techDisplayName(vendor), unitLabel: tenantUnitLabel(unit), lang: tenantLang(tenant),
+    });
     await sendSMS(env, tenant.Phone, msg);
-    await logSMS(env, body.wo_id, 'tenant', tenant.ID, tenant.Phone, msg);
+    await logSMS(env, body.wo_id, 'tenant_assigned', tenant.ID, tenant.Phone, msg);
     tenantSMSSent = true;
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
@@ -753,16 +832,32 @@ async function updateStatus(env, body) {
   await updateWOFields(env, body.wo_id, fields);
   await logWOAudit(env, body.wo_id, changedBy, changedRole, 'Status', wo.Status||'', body.status, body.notes||'');
   const config = await fetchConfig(env);
-  if (body.status === 'Complete') {
-    const [units, tenants, properties] = await Promise.all([fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Properties')]);
-    const unit = units.find(u => u.ID === wo.Unit_ID), tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID)), property = properties.find(p => p.ID === wo.Property_ID);
-    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+  if (body.status === 'Complete' && wo.Status !== 'Complete') {
+    const [units, tenants] = await Promise.all([fetchTab(env,'Units'), fetchTab(env,'Tenants')]);
+    const unit = units.find(u => u.ID === wo.Unit_ID), tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID));
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
-      const msg = `Hi ${tenant.First_Name}, your ${wo.Trade} repair at ${address} is complete. If you have any concerns please reply or call us. Ref: ${body.wo_id}.`;
+      const msg = buildTenantMsg('complete', {
+        first: tenant.First_Name, issue: wo.Issue_Summary || wo.Trade,
+        unitLabel: tenantUnitLabel(unit), lang: tenantLang(tenant),
+      });
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_complete', tenant.ID, tenant.Phone, msg);
     }
     if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
+  }
+  // B-156: tenant On Hold notification (+ reason), transition-guarded for idempotency.
+  if (body.status === 'On Hold' && wo.Status !== 'On Hold') {
+    try {
+      const [hUnits, hTenants] = await Promise.all([fetchTab(env,'Units'), fetchTab(env,'Tenants')]);
+      const hUnit = hUnits.find(u => u.ID === wo.Unit_ID), hTenant = hTenants.find(t => t.ID === (hUnit?.Tenant_ID || wo.Tenant_ID));
+      if (isTenantNotifiable(hTenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+        const msg = buildTenantMsg('on_hold', {
+          first: hTenant.First_Name, issue: wo.Issue_Summary || wo.Trade,
+          reason: body.hold_reason || body.notes || '', lang: tenantLang(hTenant),
+        });
+        await sendSMS(env, hTenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_hold', hTenant.ID, hTenant.Phone, msg);
+      }
+    } catch(e) { /* non-fatal */ }
   }
   const notifyStatuses = ['Assigned','Scheduled','Complete','Invoiced'];
   if (notifyStatuses.includes(body.status)) {
@@ -1544,12 +1639,14 @@ async function scheduleWO(env, body) {
   await logWOAudit(env,body.wo_id,body.updated_by||'admin',body.updated_by_role||'admin','Scheduled',wo.Scheduled_Date||'',schedDate+' '+(body.window||''),isWithinHour?'On my way notification':'Appointment scheduled');
   let tenantSMSSent=false, notifyQueued=false;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
-    const [units,tenants,properties]=await Promise.all([fetchTab(env,'Units'),fetchTab(env,'Tenants'),fetchTab(env,'Properties')]);
-    const unit=units.find(u=>u.ID===wo.Unit_ID), tenant=tenants.find(t=>t.ID===(unit?.Tenant_ID||wo.Tenant_ID)), property=properties.find(p=>p.ID===wo.Property_ID);
-    const address=property?property.Address+(unit?' Unit '+unit.Unit_Label:''):'your address';
+    const [units,tenants,vendors]=await Promise.all([fetchTab(env,'Units'),fetchTab(env,'Tenants'),fetchTab(env,'Vendors')]);
+    const unit=units.find(u=>u.ID===wo.Unit_ID), tenant=tenants.find(t=>t.ID===(unit?.Tenant_ID||wo.Tenant_ID)), vendor=vendors.find(v=>v.ID===wo.Vendor_ID);
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
-      const msg=isWithinHour?`Hi ${tenant.First_Name}, your technician is on the way and will arrive within 1 hour for the ${wo.Trade} work at ${address}. Ref: ${body.wo_id}.`:`Hi ${tenant.First_Name}, your ${wo.Trade} appointment at ${address} is scheduled for ${dateStr}, ${body.window}. Ref: ${body.wo_id}.`;
+      const _issue=wo.Issue_Summary||wo.Trade, _tech=techDisplayName(vendor), _lang=tenantLang(tenant), _uL=tenantUnitLabel(unit);
+      const msg=isWithinHour
+        ? buildTenantMsg('enroute',{first:tenant.First_Name,issue:_issue,tech:_tech,lang:_lang})
+        : buildTenantMsg('scheduled',{first:tenant.First_Name,issue:_issue,tech:_tech,date:dateStr,window:body.window,unitLabel:_uL,lang:_lang});
       const now=new Date(), tomorrow=new Date(now); tomorrow.setDate(tomorrow.getDate()+1); const tomorrowStr=tomorrow.toISOString().split('T')[0];
       if(schedDate===today||isWithinHour){await sendSMS(env,tenant.Phone,msg);await logSMS(env,body.wo_id,'tenant_schedule',tenant.ID,tenant.Phone,msg);tenantSMSSent=true;}
       else{let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter);notifyQueued=true;}
