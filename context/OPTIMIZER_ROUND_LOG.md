@@ -39,3 +39,16 @@ Plus below-the-line watchlist (didn't make Top-10 this round, still tracked): Ve
 - Once telemetry is live, **#8 Reviewer agent** likely jumps — it's the thing that generates future rounds.
 - **#4 QB Send flow** and **#3 Email→WO** are near-tied with #2; if #2 ships fast, one of them is the obvious next pick.
 - **#10 Driver payments** should be watched against CHEP volume — a real uptick there moves it up sharply.
+
+---
+
+## DECISION LOCKED — July 24, 2026: token-relief plan (build-time vs run-time)
+
+**Correction to earlier framing.** The model router (B-127) offloads **run-time** AI (the Worker's own calls, e.g. receipt vision) from Claude → Gemini. Run-time already bills to the Worker's API key, **separate from Brett's Claude subscription weekly limit.** So the router is a runtime *cost* play — it does **NOT** relieve the weekly limit that caps how many builds Brett can do. Do not rank/pitch B-127 as the weekly-limit fix.
+
+**What actually relieves the weekly limit (build-time = Claude subscription):** in priority order —
+1. **Decouple background builds onto API / pay-as-you-go billing** (not the subscription), so build *volume* stops hitting the weekly cap. Config/plan decision, not code. **← do first, biggest relief.**
+2. **Gemini build-time subcontractor** — offload the token-heavy build sub-tasks (research, big reads, first drafts) to Gemini so Claude only spends on orchestration + code edits. Small build. **← do second.**
+3. **brett-flow lean loading** — already active (~95% fewer tokens/build).
+
+**Router (B-127):** stays queued for run-time savings as automations scale — NOT the weekly-limit fix.
