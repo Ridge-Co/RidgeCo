@@ -70,6 +70,22 @@ This **event→message map IS the seed of the Flows engine (B-177)** — when B-
 *(ES mirror strings maintained alongside; reuse the existing `translateToEnglish` binding's reverse or keep a static ES table — decision §7.)*
 **In Progress** and **day-of "en route"** are intentionally **OFF by default** (noise); "en route" needs a vendor "on my way" trigger → B-158.
 
+### Token rendering — audience-specific location (resolves the "{unit} is vague" gap)
+
+`{unit}` must NOT render the raw Units-tab cell (free-entered — one property holds `Apt 3`, another `3`, another `3R`). Define **three tokens**, and tenant copy uses the short one:
+
+| Token | Renders | Used in | Example |
+|---|---|---|---|
+| `{unit}` | **normalized short unit label** — `unitLabel(raw)` | **tenant** messages | `Apt 3` |
+| `{property}` | property street address only | rarely for tenants | `2930 Saint Paul St` |
+| `{addr}` | full `{property}, {unit}` (+ city) | **vendor / dispatch** messages (B-160/B-175) | `2930 Saint Paul St, Apt 3, Baltimore` |
+
+**Rule:** the **tenant lives there** — never send them the full property address (redundant, wastes SMS chars); never send a bare `3` (ambiguous). Tenant = `Apt 3`. **Vendor/tech = the full `{addr}`** (they need to find it).
+
+`unitLabel(raw)` normalization: trim; if the value already starts with a designator (`Apt`/`Apartment`/`Unit`/`Ste`/`#`), pass through (normalizing `Apartment`→`Apt`, `#3`→`Apt 3`); if it's a bare number/letter (`3`, `3R`, `B`), prefix `Apt `; if the unit is blank/only-one-unit-on-property, render empty and drop the "at {unit}" clause entirely. A per-Unit optional `Display_Label` override wins when set (for oddballs like `Basement`, `Rear House`, `Store`).
+
+So for `2930 Saint Paul St Apt 3`: **tenant SMS says `Apt 3`**; the vendor's dispatch packet says `2930 Saint Paul St, Apt 3, Baltimore`.
+
 ---
 
 ## 4. Data model
@@ -81,6 +97,7 @@ This **event→message map IS the seed of the Flows engine (B-177)** — when B-
 | **Tenants** | `SMS_OptOut` (bool) | **add** — set by inbound STOP + manual |
 | **Work_Orders** | `Tenant_Visible` | exists (`/wo/set-tenant-visibility`). Respect. |
 | **Work_Orders** | `Issue_Summary` | short tenant-safe label for {issue}; derive from description if absent |
+| **Units** | `Display_Label` (optional) | override for `unitLabel()` on oddballs (Basement / Rear House / Store); else normalized from the unit-number cell at render time |
 | **Work_Orders** | `Scheduled_Date`, `Scheduled_Window` | from `scheduleWO`; reuse |
 | **SMS_Logs** | `Channel`, `Event`, `WO_ID` | tag tenant messages (add cols if absent) |
 | **Config** | `notify.tenant.<event>` on/off; `notify.tenant.enabled`; test-mode/admin-mute (reuse B-093 flags) | per-event kill switches |
@@ -117,6 +134,7 @@ Quiet-hours (8pm–8am ET hold-til-8am), test-mode, and admin-mute all come **fr
 - [ ] Each of the 5 events fires **exactly one** tenant message (idempotent on re-save; no dup on repeated `/status`).
 - [ ] `assigned` message **names the assigned tech**; `scheduled` includes date + window; `on_hold` includes the reason.
 - [ ] **No billing terms** ever appear in tenant copy — all stage words via `label(status,'renter')`; Pending Invoice/Invoiced/Paid never reach a tenant.
+- [ ] `{unit}` in tenant copy renders the **normalized short label** (`Apt 3`), never the full property address and never a bare `3`; blank/single-unit → the "at {unit}" clause is dropped; `Display_Label` override wins. Vendor/dispatch copy uses full `{addr}`.
 - [ ] Respects `Tenant_Visible=false` (no message), `SMS_OptOut` (no send, timeline only), test-mode + admin-mute + quiet-hours (via `sendSMS`).
 - [ ] Tenant with **no phone** → in-Hub timeline entry written, **no error thrown**.
 - [ ] EN + ES both render correctly from tenant `Lang`.
