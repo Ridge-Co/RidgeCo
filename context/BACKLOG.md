@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.33 | **Last Updated:** July 23, 2026
+**Version:** v1.34 | **Last Updated:** July 24, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
@@ -180,6 +180,56 @@ _The 5 verbs: DEFINE what good is → TEST for it positively → REVIEW against 
 - B-124 · Scan Intake Agent — DAILY 12am poll of the handwriting Drive folder → OCR + handwriting-key learning + auto-file CAP/BACKLOG + auto-create entities (property/tenant/owner/WO + lockbox), tagged+reported [BrettOS] (first instance of B-123; reuses B-103 intake engine)
 - B-125 · Hub quick-command bar — voice/text NL input ("create new property 123 Main St Baltimore MD lockbox 1234") → parse → execute entity action (new property/WO, new/update lockbox·key·access code) [Ridge Co Hub]
 - B-126 · Owner portal billing + marked-up-estimate approval — amounts + invoice link + approve/decline the POST-markup estimate (after Brett reviews, never raw vendor est) [Ridge Co Hub] (from Design Foundation v1.1; builds on B-030/B-101/Invoice_Review)
+**RIDGE CO — SERVICE DELIVERY INITIATIVE (B-156..B-202 — from the 224-idea research, July 24; full ranked list in SERVICE_DELIVERY_ROADMAP_v1.0)**
+_🔴 Wave 0 = Communication (leads everything, Brett's directive). Detail table in the SERVICE DELIVERY section below._
+- B-156 · 🔴 Tenant WO-lifecycle notifications — received-ack (on intake) + assigned (name the tech + window) + scheduled + en-route + complete + reassurance line (extends B-093/095 to the tenant lane)
+- B-157 · 🔴 Post-repair survey on close + low-score alert to Brett + high-score Google-review invite + auto-harvest 5★ to public profile (extends B-107)
+- B-158 · 🟠 Two-way texting (confirm/reschedule) + appointment reminders (day-before + en-route) [gated B-136]
+- B-159 · 🟠 Proactive SLA-breach heads-up (tenant + Brett) before it's late
+- B-160 · 🟠 AI-drafted comms — vendor dispatch packet + owner summary/approval request (reuses router B-127)
+- B-161 · 🟡 Auto-nudge vendor on missing invoice/status 24-48h + read-only alerts for low-tech subs + written-confirm-of-calls
+- B-162 · 🟢 Dedicated local maintenance phone line (white-label intake) [gated B-136]
+- B-163 · 🟠 Pre-submit troubleshooting + tenant self-help library (DIY checklist page + 5 how-to videos + symptom KB) — activates CAP-010, feeds B-113
+- B-164 · 🟠 Intake form upgrade — required fields + photo/video required + free-text + appliance make/model prompt + emergency def + priority self-select (extends B-006)
+- B-165 · 🟠 Tenant self-scheduling of appointment windows + self-reschedule links (ties B-116)
+- B-166 · 🟡 QR code in every unit → report-issue form + asset record (ties B-170)
+- B-167 · 🟡 Duplicate/known-issue detection at intake (ties B-133)
+- B-168 · 🟡 Move-in guide + appliance packet auto-generated per unit
+- B-169 · 🟠 Six-field telemetry schema + KPI/aging views (first-response, resolution, first-time-fix, reopen, cost/WO+unit, SLA%, PMP, aging buckets) — extends B-128
+- B-170 · 🟠 Appliance/asset registry "big six" + nameplate OCR (reuse B-084) + QR tags + warranty-check-before-repair — graduates CAP-010
+- B-171 · 🟡 Failure/root-cause codes per asset + real-time asset health status + cost roll-up (feeds B-169)
+- B-172 · 🟡 Repair-gems/troubleshooting KB + SOP library + shared template import (ties CAP-010/B-134/B-072)
+- B-173 · 🟡 Central manuals/warranty/receipt vault linked to asset+QR + folder naming convention
+- B-174 · 🟢 Auto-PO/restock alert on low-stock threshold + truck par levels
+- B-175 · 🟠 Standardized dispatch job-packet template (address/code/scope/photos/ref) — ties CAP-028
+- B-176 · 🟠 Vendor↔tenant direct scheduling with confirm-back guardrails — THE middleman fix (ties B-116)
+- B-177 · 🟠 Event-driven automation engine "Flows" — user-defined trigger→multi-action rules (graduates B-017; substrate under Wave 0)
+- B-178 · 🟠 QC auto-flag on WO closeout (overpricing/missing photos/low profit/thin notes) + dual-sided completion verification (ties B-012)
+- B-179 · 🟠 NTE-by-issue-type thresholds + written scope on every authorization + spending threshold for auto-proceed (ties B-126)
+- B-180 · 🟡 Standardized task + preset-price catalog (ties B-030/B-067/B-031)
+- B-181 · 🟡 Same-trip dispatch (vendor already on-site) + geographic route batching + backup-tech suggest (ties B-072/B-004)
+- B-182 · 🟡 Vendor onboarding activation packet + COI/license expiry auto-reminders + scorecard thresholds + 3-tier bench (ties B-034/B-012)
+- B-183 · 🟡 Multi-vendor per single work order (ties B-096)
+- B-184 · 🟢 Live tech GPS check-in (ties B-012)
+- B-185 · 🟠 Remote video/photo diagnosis + live video troubleshooting before dispatch (ties B-113)
+- B-186 · 🟠 Tiered PM plans (Basic/Plus/Premium) + seasonal checklists + per-asset PM templates + auto-recurring PM WO gen (graduates B-077; reuses B-051/B-098)
+- B-187 · 🟠 Filter-delivery subscription (anchor PM service; 38% fewer HVAC tickets) — ties B-186
+- B-188 · 🟡 IoT leak + temp/humidity sensors — pilot at 1864 Kerns (ties B-088)
+- B-189 · 🟠 Owner reporting pack — standardized monthly report + context notes + good/better/best options + KPI surfacing + capital-replacement forecast (ties B-016/B-126)
+- B-190 · 🟠 Invoice/billing quality — plain-English work description required + granular GL categories + auto-flat-% markup + cross-check invoice vs request + 1-click claim doc package (ties B-011/B-126/B-010)
+- B-191 · 🟡 Color-coded make-ready/turn board + turn-priority scoring + pre-move-out walkthrough + standardized turn checklist (ties B-045/B-153/B-104)
+- B-192 · 🟡 Project-level jobs with budget-vs-actual (ties B-076)
+- B-193 · 🟢 Ancillary-revenue resident-benefits marketplace (insurance/pest/filter/housekeeping) — new revenue lane, ties B-187
+- B-194 · 🟡 Asset lifecycle: 50% repair-vs-replace rule + expected-life register + backfill history from old invoices (ties B-170/B-086)
+- B-195 · 🟡 AI intake triage + self-troubleshooting + AI WO-scope drafting + severity scoring (graduates B-133/B-113 tenant lane)
+- B-196 · 🟢 Computer-vision — photo triage + before/after verification + nameplate model recognition + turnover damage assessment (ties B-170/B-010)
+- B-197 · 🟢 AI feedback loop (triage calibration) + NL analytics + agentic WO coordination (ties B-134/B-140s)
+- B-198 · 🟢 Smart-lock time-boxed vendor codes (ties B-055)
+- B-199 · 🟢 Voice-to-WO field capture + tech "how do I fix X" copilot + AI procedure generation (ties B-052/CAP-010)
+- B-200 · 🟢 Cross-company benchmarking + coordinator-effectiveness metric (ties B-129)
+- B-201 · 🟢 Predictive maintenance (runtime/anomaly) + parts forecaster + predictive HVAC (later-stage)
+- B-202 · 🟢 Tenant self-inspections + periodic mid-lease inspections + video inspections + drive-by exterior (ties CAP-028/B-106)
+
 <!-- QUICK-INDEX:END -->
 
 
@@ -400,6 +450,84 @@ _The 5 verbs: DEFINE what good is → TEST for it positively → REVIEW against 
 | B-126 | 🟠 | **Owner billing + marked-up-estimate approval** | Owner portal (owner.html) currently has NO billing view at all. Add: **amounts + invoice link** per WO, and **estimate approval** — but the approvable estimate is the **marked-up, Brett-reviewed version** (Invoice_Review / customer-facing), **never the raw vendor estimate**. Flow: vendor estimate → Brett review + markup → surfaced to owner → owner approve/decline (feeds start-date + WO). Builds on B-030 (estimate template), B-101 (estimate approval + start-date), Invoice_Review markup. From Design Foundation v1.1 (decision #3, July 21). |
 
 ---
+
+## RIDGE CO — SERVICE DELIVERY INITIATIVE (July 24, 2026 — from the 224-idea research)
+*Graduated from the Service-Delivery research (report `RidgeCo_Service_Delivery_Playbook` + `RidgeCo_Service_Delivery_Idea_Matrix.xlsx` + the full ranked `SERVICE_DELIVERY_ROADMAP_v1.0.md`). All 224 researched ideas + 12-product competitor teardown are scored by impact-vs-effort and sequenced into 6 waves. **Wave 0 = Communication and leads everything (Brett's directive, July 24).** Each B-item below consolidates several ranked SD-### ideas; the roadmap doc maps every SD-ID → its B-item. The 70 "already building" ideas map to existing B-items (noted inline); nothing was discarded — "we can use something from all of them."*
+
+**Governing rails:** anything that writes / touches money-customer-auth / deploys hand-edited worker.js follows the BUILD_ORDER preview-lane + validator gates. Communication that sends SMS is gated on the Twilio door (B-136); until then, email + in-Hub surfaces ship first (per B-093 policy).
+
+### 🔴 Wave 0 — Communication (do first)
+| ID | Pri | Item | Notes |
+|---|---|---|---|
+| B-156 | 🔴 | Tenant WO-lifecycle notification set | Fire a tenant message on every Status-SSOT transition: **received-ack on intake** ("Got it — someone will reach out within X"), **assigned** (name the tech + trade + window — Brett's 0-to-1 example), **scheduled**, **en-route**, **complete**, + the **"you don't need to do anything else" reassurance line**. EN/ES both directions. Extends the notification engine (B-093/094/095, which are owner/vendor-centric) to the **tenant lane**. Covers SD-001/003/006 + tenant multi-stage + lifecycle. SMS gated on B-136; email/in-Hub now. |
+| B-157 | 🔴 | Post-repair survey + review loop | 1-question Customer-Effort survey auto-fired on WO close; **low score → instant alert to Brett** to call same-day; **high score → one-tap Google-review link** + auto-route 5★ to the public profile. Extends B-107 (post-repair feedback). Covers SD-004 + low-score-alert + review-invite + auto-harvest. |
+| B-158 | 🟠 | Two-way texting + appointment reminders | Make status texts repliable (confirm/reschedule → WO notes); reminder the evening before + "tech ~30 min out" day-of. Cuts no-access failed visits. Gated on B-136. |
+| B-159 | 🟠 | Proactive SLA-breach heads-up | If a ticket nears its response deadline unassigned, auto-alert Brett (and optionally text the tenant a heads-up) BEFORE it's late. Needs the SLA timer from B-169. |
+| B-160 | 🟠 | AI-drafted comms | LLM drafts the **vendor dispatch packet** (address, codes, scope, photos, access) and the **owner summary/approval request** (plain-English + photo) as editable drafts. Reuses the model router (B-127). Covers SD-005/007. |
+| B-161 | 🟡 | Vendor comms discipline | Auto-nudge a vendor with no invoice/status within 24-48h of "done" (descendant of Brett's old Zapier nudge); read-only email/SMS alerts for subs who won't log in; auto-confirm every phone call in writing. Ties B-009/B-093. |
+| B-162 | 🟢 | Dedicated local maintenance line | A local-area-code number residents call/text for maintenance, logged straight into the Hub; home for the voice/SMS agent once Twilio's live. Gated B-136. |
+
+### 🟠 Wave 1 — Capture, Deflect & Self-Serve
+| ID | Pri | Item | Notes |
+|---|---|---|---|
+| B-163 | 🟠 | Pre-submit troubleshooting + self-help library | Category-matched "have you checked…?" step before the WO submits (breaker/GFCI/disposal/running-toilet/thermostat/detector); DIY checklist page; 5 filmed 60-sec how-to videos; symptom-language KB refreshed from recurring tickets. Deflects 20-30%. **Activates CAP-010 tenant self-help**, feeds B-113. |
+| B-164 | 🟠 | Intake form upgrade | Required fields + **photo/video required** + free-text box + **"photo the data plate" appliance make/model prompt** (feeds B-170) + emergency-vs-not definition + priority self-select + one-channel funnel. Extends B-006. |
+| B-165 | 🟠 | Tenant self-scheduling | Offer available windows in the portal so the tenant books directly; self-reschedule links. Removes Brett from scheduling. Ties vendor schedule prefs (B-116) + B-176. |
+| B-166 | 🟡 | Per-unit QR → report + asset | Sticker/QR in each unit opens the maintenance form (asset pre-tagged) AND the asset record. Drives 85%+ portal adoption. Ties B-170. |
+| B-167 | 🟡 | Duplicate/known-issue detection | At creation, match unit+category against open WOs and link instead of spawning a second dispatch. Ties B-133. |
+| B-168 | 🟡 | Move-in guide + appliance packet | Auto-generated per unit from the property/asset record: shutoff + panel locations, appliance use, filter schedule, DIY checklist. Pre-empts first-months calls. |
+
+### 🟠 Wave 2 — Data & Measurement Foundation
+| ID | Pri | Item | Notes |
+|---|---|---|---|
+| B-169 | 🟠 | Six-field telemetry + KPI/aging views | Capture per ticket: submitted, first-response, priority, closed, second-visit(Y/N), vendor, cost — then every KPI falls out: first-response/resolution time, first-time-fix, reopen rate, cost/WO + cost/unit, SLA compliance, preventive-to-reactive ratio, **aging buckets (0-2/3-7/8-14/15+, red past SLA = the morning worklist)**. Extends the telemetry spine (B-128); powers the Optimizer (B-129) + owner KPIs. |
+| B-170 | 🟠 | Appliance/asset registry (graduates CAP-010) | Per asset: type/brand/model/serial/install-date/warranty ("big six"). **Nameplate OCR via the receipt pipeline (B-084)**; unique asset ID + physical/QR tag; **warranty-check before authorizing any paid repair**; history rolls up per-asset. Brett's stated appliance-model DB. Ties B-113/B-166/B-194. |
+| B-171 | 🟡 | Failure codes + asset health | Structured failure/root-cause code on each repair (turns telemetry into a Pareto engine); real-time health/condition status per asset; roll cost+downtime up the Property→Unit→Asset tree. Feeds B-169/B-189. |
+| B-172 | 🟡 | Repair-gems KB + SOP library | Searchable symptom→cause→fix log (CAP-010 repair gems) + templated 8-section SOPs (B-072) + import/adapt shared checklist templates; self-writing brain (B-134) grows it from closed WOs. |
+| B-173 | 🟡 | Manuals/warranty/receipt vault | One cloud location for every manual/warranty/receipt linked to the asset (+QR), with a consistent Property→Unit→Asset→Date folder naming convention. Assemble an insurance/owner pack in minutes. |
+| B-174 | 🟢 | Parts par levels + auto-restock | Truck core-kit par levels + auto restock-alert/draft-PO when a vendor-linked part drops below threshold. Prevents the "thought I had one" second visit. |
+
+### 🟡 Wave 3 — Dispatch & Vendor Automation
+| ID | Pri | Item | Notes |
+|---|---|---|---|
+| B-175 | 🟠 | Standardized dispatch job-packet | Every WO ships with address+unit, tenant contact, access/lock code, scope, ref #, before-photos, troubleshooting transcript — kills "what's the gate code?" calls. Ties CAP-028 (WO-as-site). |
+| B-176 | 🟠 | Vendor↔tenant direct scheduling (middleman fix) | Authorize vendor↔tenant scheduling with guardrails: vendor must confirm the window back to the system + honor arrival SLAs + log it. THE fix for "stuck as middleman for every reschedule." Ties B-116/B-165. |
+| B-177 | 🟠 | Event-driven automation engine ("Flows") | User-defined trigger→multi-action rules ("on urgent WO → text tenant ETA + flag Brett + set follow-up"). Generalizes B-156 lifecycle messages; graduates B-017 (agent builder). Cited ~1.2 days off unit turns. **Substrate that multiplies every notification/dispatch item** — build the engine once. |
+| B-178 | 🟠 | Closeout QC + dual verification | Auto-flag any completed WO for overpricing / missing photos / low profit / thin notes before it closes; confirm the fix with **both** tenant and vendor before closing/paying. Standards enforcer, hands-free. Ties B-012. |
+| B-179 | 🟠 | NTE + spend guardrails | Not-to-exceed caps **by issue type** (not per trade); written scope on every authorization; spending threshold below which Brett just acts (no owner approval). Small jobs flow untouched; owners protected. Ties B-126. |
+| B-180 | 🟡 | Task + preset-price catalog | Unlimited standardized tasks each with preset scope+price → WOs and estimates build in seconds; consistent cost. Ties B-030/B-067/B-031. |
+| B-181 | 🟡 | Route/trip optimization | **Same-trip dispatch** (route open WOs onto a trip a vendor is already making) + geographic clustering by neighborhood/day + backup-tech auto-suggest. Cuts windshield time + whole truck-rolls. Ties B-072/B-004. |
+| B-182 | 🟡 | Vendor lifecycle system | Onboarding activation packet (W-9, COI additional-insured, license verified, rates, ZIPs); **COI/license expiry auto-reminders (60/30/7) + auto-block** (reuse CAP-005 router); scorecard thresholds (on-time ≥90%, callback ≤5%) → best-jobs-to-best-subs; 3-tier bench. Ties B-034/B-012. |
+| B-183 | 🟡 | Multi-vendor per work order | One WO worked by multiple vendors (plumber + drywall) with centralized tracking + a single owner invoice. Ties B-096 (split WO). |
+| B-184 | 🟢 | Live tech GPS check-in | Field tech checks into a WO with GPS; feeds utilization metrics. More relevant as W2 techs are added. Ties B-012. |
+| B-185 | 🟠 | Remote diagnosis before dispatch | Review intake photo/video from the office + optional no-app **live video troubleshooting** to de-escalate dispatch (cited 48% of critical issues). Two visits → one. Ties B-113. |
+
+### 🟡 Wave 4 — Prevention, Owner Intelligence & Revenue
+| ID | Pri | Item | Notes |
+|---|---|---|---|
+| B-186 | 🟠 | Tiered PM plans + auto-generation (graduates B-077) | Basic/Plus/Premium retainer tiers; seasonal checklists (HVAC 2×/yr, water-heater flush, dryer vent, detectors, leak sweep, winterization, hose swap); per-asset PM templates applied everywhere; **cron auto-generates the PM WOs** (reuse B-051/B-098). Converts reactive calls to recurring revenue. |
+| B-187 | 🟠 | Filter-delivery subscription | Dated, sized filters shipped/swapped every 60-90 days — anchor PM service; cited 38% fewer HVAC tickets across 7,772 homes. Ties B-186. |
+| B-188 | 🟠 | Leak / temp / humidity sensors | Cheap sensors under sinks/WH/washer + in vacant units/basements; alerts auto-open a WO; insurers discount premiums. **Pilot at 1864 Kerns (B-088).** |
+| B-189 | 🟠 | Owner reporting pack | Standardized monthly report (same format/day) + context-note beside any spiked number + good/better/best options on big repairs + owner-facing KPIs + year-by-year capital-replacement forecast (data-backed reqs get ~4.2× approval). Ties B-016/B-126. |
+| B-190 | 🟠 | Invoice/billing quality + margin | Plain-English work description required (reject "toilet fixed") + granular GL categories + auto flat-% markup rule + cross-check invoice vs original request + 1-click insurance-claim doc package. Ties B-011/B-126/B-010. |
+| B-191 | 🟡 | Turn/make-ready system | Color-coded make-ready board across a unit's WOs+inspections + turn-priority scoring (reuse B-153) + pre-move-out walkthrough (pre-scope/pre-order) + standardized turn checklist w/ fixed sequence. Ties B-045/B-104. |
+| B-192 | 🟢 | Project-level jobs | Group renovations/turns as a project with budget-vs-actual — clean owner rollup + guard against under-billing multi-visit work. Ties B-076. |
+| B-193 | 🟢 | Resident-benefits marketplace | Bundle renters insurance / pest / filter delivery / housekeeping as a paid resident package = ancillary revenue; filter piece doubles as PM. Ties B-187. |
+| B-194 | 🟡 | Asset lifecycle planning | 50% repair-vs-replace rule + expected-life register + backfill high-value-asset history from old invoices (ties B-086). Feeds B-170/B-189. |
+
+### 🟢 Wave 5 — AI Depth & Emerging Tech
+| ID | Pri | Item | Notes |
+|---|---|---|---|
+| B-195 | 🟠 | AI intake triage + scope drafting | 24/7 AI intake that asks clarifying Qs, categorizes trade+severity, drafts the WO scope + parts, scores priority w/ SLA timer. Graduates B-133/B-113 tenant lane. |
+| B-196 | 🟢 | Computer vision | Photo triage (stain vs mold, severity) + before/after fix verification + nameplate model recognition (feeds B-170) + move-in-vs-move-out damage assessment. Human-in-the-loop. Ties B-010. |
+| B-197 | 🟢 | AI depth | Triage calibration feedback loop (learns Brett's buildings — a moat) + natural-language analytics over WO data + agentic WO coordination within blast-radius rails (CAP-029). Ties B-134/B-140s. |
+| B-198 | 🟢 | Smart-lock vendor access | Time-boxed single-use codes tied to the WO window, auto-expiring, entry logged — no trips just to let a tech in. Extends lock-code registry (B-055). |
+| B-199 | 🟢 | Field AI capture | Voice-to-WO field notes (B-052) + tech "how do I fix X" copilot grounded on repair gems + AI procedure generation from manuals. Ties CAP-010/B-134. |
+| B-200 | 🟢 | Ops intelligence | Coordinator/dispatcher-effectiveness metric (tells Brett when to hire/automate the dispatch seat) + cross-company benchmarking. Ties B-129. |
+| B-201 | 🟢 | Predictive maintenance | Runtime/anomaly monitoring + predictive HVAC + parts forecaster. Later-stage; needs sensors/history first. |
+| B-202 | 🟢 | Inspection depth | Tenant self-inspections w/ photos + periodic mid-lease inspections + on-device video inspections + drive-by exterior checks. Ties CAP-028/B-106/B-118. |
+
+
 
 ## COMPLETED
 
