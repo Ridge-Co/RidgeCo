@@ -1,5 +1,36 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.9 | **Last Updated:** July 23, 2026
+**Version:** v1.10 | **Last Updated:** August 3, 2026
+
+---
+
+## BILLING — ONE SURFACE (index.html + worker.js, shipped Aug 3, 2026)
+
+**The work order is the billing home.** Vendor bill → both suggested prices → approve →
+preview → send to QuickBooks, all in the WO detail panel. Review Bills is the queue that
+opens the right work order. There is now ONE pricing surface; do not add a second.
+
+| Feature | Status | Notes | Last Verified |
+|---|---|---|---|
+| WO Invoice Builder — full billing flow | ✅ Shipped | `invPricing` / `invRenderSuggestions` / `invLoadStatus` / `invBillThisJob`. Both formulas shown side by side (tiered via `calcTieredEstimate`; itemized = MAX($75,$35×hrs)+Brett time+travel+5%). Brett always sets the final number. | Aug 3, 2026 (code + offline tests; runtime pending) |
+| Bill picker on multi-bill WOs | ✅ Shipped | A WO can carry bills from 2 vendors. `_invPreferBill` carries the chosen bill from the Review Bills card; picker chips switch. Prevents billing one vendor and stranding the other. | Aug 3, 2026 |
+| QuickBooks status band | ✅ Shipped | unapproved / approved-at-$X / partial / in-QuickBooks-with-both-ids / **reviewed_no_row**. "In QuickBooks" is ONLY claimed with the QB ids in hand. | Aug 3, 2026 |
+| `GET /qb/ready?all=1&wo_id=` | ✅ Shipped | Returns rows at any status, optionally per-WO, so the Hub reads a bill's real QB position instead of inferring it from an empty queue. Paramless calls behave exactly as before. | Aug 3, 2026 |
+| `POST /invoice-review/approve` | ✅ Fixed | Returns the REAL Invoice_Review row id (was `'IR-'+Date.now()`, which addRow overwrites — so approve could never chain into send). Also idempotent per Bill_ID. | Aug 3, 2026 |
+| Review Bills — job context | ✅ Shipped | Cards join Work_Orders for Description/Trade/Priority/tenant/address + "Full work order ↗". Vendor_Bills only stores WO_ID + Vendor_Name; its Job_Type/Notes are empty in practice. | Aug 3, 2026 |
+| Review Bills — "Already handled — clear from queue" | ✅ Shipped | For bills settled outside the Hub (paid direct in QB). Flips Vendor_Bills.Status to `reviewed`, writes NO Invoice_Review row. Gated to WOs with exactly one queued bill. | Aug 3, 2026 |
+
+---
+
+## DUPLICATE-SUBMISSION GUARDS (vendor.html + worker.js, shipped Aug 3, 2026)
+
+| Feature | Status | Notes | Last Verified |
+|---|---|---|---|
+| `claimSubmit()` latch | ✅ Shipped | Shared in-flight guard on receipt / time / estimate submits + button disable + input clear on success. `submitEstimate` had NO guard — WO-1052/1012/1062 each had two identical estimates ~1s apart. | Aug 3, 2026 |
+| Bill modal guard | ✅ Fixed | Held until `closeBillModal()` instead of released 2s early while the modal sat open and populated. | Aug 3, 2026 |
+| `findRecentDuplicate()` backstop | ✅ Shipped | Server-side, on estimates/receipts/time/bills. **Fails OPEN** — an undateable or unreadable row never blocks a write. 30 offline tests in `test/dupe-guard.test.mjs`. | Aug 3, 2026 |
+| `addRow` id allocation | ✅ Fixed | Resolves the ID column by header name (rule 6), `reduce` not `Math.max(...)`. Fixes the Attachments ID collisions. | Aug 3, 2026 |
+| vendor.html `api()` serialization | ✅ Fixed | **`/receipt/add`, `/receipt/delete`, `/time-entry/add`, `/time-entry/delete` had never worked** — see rule 19. | Aug 3, 2026 |
+
 **Rule:** Before changing ANY file, check this log. If a feature is marked ✅ Working, verify it still works after your change. If you must touch something that affects a working feature, note it here BEFORE committing.
 
 ---
@@ -141,6 +172,12 @@ Own-purchase receipts ONLY (business / owned-property / personal-HSA). **WO/vend
 18. **Cloudflare "Builds for non-production branches" can deploy straight to PRODUCTION — the non-prod deploy command MUST be `npx wrangler versions upload`, never `npx wrangler deploy`.** 🔴 **July 21, 2026 production incident.** Enabling non-production branch builds for the `staging` sandbox (B-103) caused every push to `staging` to run the production **`wrangler deploy`** command, silently overwriting the LIVE Worker with unmerged staging code. When the admin-token security gate (part of the unmerged notes-model/security work) landed on production, it **403'd every bulk read** (`{"error":"This endpoint requires the admin token"}`) and the live Hub showed **0 work orders / 0 properties** — which *looked* like blanked/lost data but was **not**: all 343 WOs + every tab were 100% intact in the sheet the whole time. It was purely the wrong code version answering. **Fixed by force-redeploying `main`** (rollback commit `3cf9a96`). Prevention: (a) non-prod branch deploy command = `wrangler versions upload` (→ a *preview* URL), NEVER `wrangler deploy`; (b) if unsure, keep "Builds for non-production branches" **OFF** — that is its current required state until reconfigured; (c) the `staging-` hostname sandbox mode (worker.js ~L45) only isolates data on a *preview* URL — it does nothing if staging code reaches the production URL. **Diagnostic key:** Hub reads its shared token from `localStorage['mh_auth']`; a **401** = token mismatch (wrong `mh_auth`), a **403 "requires the admin token"** = production is running the unmerged new code (redeploy `main`). The current shared secret is hardcoded in every portal `.html` (the exact security flaw B-093 exists to fix).
 
 ---
+
+19. **A wrong ROUTE and a wrong COLUMN both return success — check for each separately.** Two silent-no-op classes bit us the same day. (a) `index.html`'s `api()` resolves on any HTTP status, so posting to a route that does not exist (`/update-wo` — the real one is `/workorder/update`) returned a 404 that read as a normal response: "💾 Save draft" reported "✓ Saved" and saved nothing, every time, and the customer invoice memo was discarded on its way to QuickBooks. (b) `updateRow` returns `{success:true, message:'No matching fields'}` when NONE of the fields match a header — a write that touched nothing. Use `woUpdateLanded(r)` (`r.success && r.message !== 'No matching fields'`) rather than bare `r.success`. Verified Aug 3: `Customer_Charge` (index 34) and `Invoice_Memo` (index 35) DO exist on Work_Orders.
+20. **`vendor.html`'s `api()` has two calling styles and only one used to serialise.** `api('POST', path, body)` stringifies; `api(path, {method, body:{…}})` handed `fetch` a raw object, which becomes the literal text `"[object Object]"` as `text/plain`, so the Worker's `request.json()` threw and the call 500'd. That silently killed **every receipt and time-entry write from the vendor portal since it shipped** — which is why the `Receipts` tab was empty. Fixed inside `api()` so both styles work. When a tab is mysteriously empty, suspect the client serialisation before the handler.
+21. **Never infer "already sent to QuickBooks" from an absent row.** `/qb/ready` hides sent rows, so "not in the queue" was being read as "already invoiced" — and it disabled the only button that could bill the job. A bill marked `reviewed` with no Invoice_Review row behind it is NOT approved: nothing was queued and no invoice exists (the `reviewed_no_row` state). Claim "in QuickBooks" only when `QB_Invoice_ID` and `QB_Bill_ID` are both in hand. This is rule 16 applied to money.
+22. **A work order can carry bills from more than one vendor, and each needs its own invoice.** Anything that picks "the bill" for a WO must carry a specific `Bill_ID`, never just take the newest — and "Mark Reviewed" writes no Invoice_Review row, so it retires a bill from the queue WITHOUT invoicing the customer or paying the vendor. Do not offer it as a way to clear a bill you actually intend to bill.
+23. **The duplicate-submission backstop must fail OPEN.** `findRecentDuplicate` returns null on any error, and skips rows whose `Created_Date` will not parse. An early version treated an undateable row as a match at any age, which silently swallowed real submissions behind a success message. Losing a vendor's work is strictly worse than the duplicate row it prevents.
 
 ## HOW TO UPDATE THIS LOG
 

@@ -11,7 +11,8 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 _Compact map of every open backlog item. Read THIS map on load (two-tier loading); open a full entry below only when a task needs it — grep the ID._
 
 **IN PROGRESS**
-- B-015 · QuickBooks Send-to-QuickBooks flow (invoice + bill + payment)
+- B-015 · QuickBooks Send-to-QuickBooks flow (invoice + bill + payment) — 🟡 Aug 3: billing consolidated onto the work order; approve→preview→send now chains. Never exercised end-to-end against live QB (Invoice_Review was empty until now) — needs one real send.
+- B-203 · 🔴 Tenant transfer + un-archive (move to a different unit; move a moved-out tenant back in). UI-only gap — `/tenant/update` already writes Unit_ID/Property_ID/Active. Must clear `Move_Out_Date` AND reissue the PIN (3 independent gates), and reconcile `Units.Tenant_ID` on BOTH sides. Hazard: `processMoveOut` never clears `Units.Tenant_ID`, so /assign texts moved-out tenants and new WOs get stamped with the wrong Tenant_ID; plus duplicate tenant rows already created by the manual workaround.
 **RIDGE CO — WORK ORDER MANAGEMENT**
 - B-001 · QB invoice creation from approved Invoice_Review rows
 - B-002 · QB bill recording when vendor bill approved
