@@ -2710,6 +2710,37 @@ function apiPromise(method, path, body) {
   return api(method, path, body);
 }
 
+// Add a SECOND PERSON to an existing owner, rather than a second owner record. Two owner
+// rows for one company splits the properties, confuses reporting, and only one of them can
+// hold the QuickBooks link — but until now "create another owner" was the only thing you
+// could do when someone needed their own login.
+function addOwnerContact(ownerId, ownerLabel) {
+  var first = prompt('First name of the new contact at ' + ownerLabel + ':');
+  if (!first) return;
+  first = first.trim();
+  if (!first) return;
+  var last  = (prompt('Last name (optional):') || '').trim();
+  var phone = (prompt('Mobile number — this is what their PIN gets texted to:') || '').trim();
+  if (!phone) { toast('A phone number is needed to issue a PIN', 'error'); return; }
+  var email = (prompt('Email (optional):') || '').trim();
+
+  api('POST', '/owner-user/add', {
+    Owner_ID: ownerId, First_Name: first, Last_Name: last,
+    Phone: phone, Email: email, Role: 'secondary', Active: 'TRUE',
+    Created_Date: new Date().toISOString().split('T')[0],
+  }).then(function(res) {
+    if (!res || res.error) { toast((res && res.error) || 'Could not add the contact', 'error'); return; }
+    // The worker generates a PIN from the phone number for owner users.
+    toast(first + ' added to ' + ownerLabel + (res.pin ? ' — PIN ' + res.pin : ''), 'success');
+    if (res.pin) {
+      alert(first + ' can now sign in to the owner portal.\n\nPIN: ' + res.pin +
+            '\nThey enter their first name (' + first + ') along with it.\n\n' +
+            'Both contacts see the same properties, and billing stays on one QuickBooks customer.');
+    }
+    loadAll();
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
 // ── Owners Page Render ────────────────────────────────────────
 function renderOwnersPage() {
   var el = document.getElementById('owners-list');
@@ -2720,7 +2751,9 @@ function renderOwnersPage() {
   // Load Owner_Users too
   api('GET', '/owner-users?owner_id=all').catch(function(){ return []; }).then(function() {});
 
-  var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11px">PIN messages go to the Owner_Users sub-users when available. Set up Owner_Users tab in Sheet to enable per-person PINs.</div>';
+  var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
+    'Several people at one company belong on <b>one</b> owner record — use <b>+ Contact</b> to give each their own login. ' +
+    'A second owner row splits the properties and only one of them can hold the QuickBooks link.</div>';
   html += '<table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'owners-action-bar\')"></th>' +
     '<th>Name / Company</th><th>Phone</th><th>Properties</th><th>PIN</th><th></th></tr></thead><tbody>';
@@ -2738,6 +2771,7 @@ function renderOwnersPage() {
       '<td style="color:'+(o.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(o.PIN||'—')+'</td>' +
       '<td style="display:flex;gap:4px">' +
       '<button class="btn small secondary" onclick="toast(\'Edit owners via Sheet for now\',\'info\')">Edit</button>' +
+      '<button class="btn small" style="background:var(--accent2);color:#000" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
       '</td></tr>';
   }).join('');
@@ -7245,6 +7279,44 @@ function migrateTrades(apply) {
 // Two rows for one owner is the same problem as two rows for one building: each collects
 // its own properties and portal users, and neither half is complete. It also blocks the
 // QuickBooks link, because two owners can't share one customer without saying so.
+// Convert a surplus owner ROW into a second login on the keeper. This is the right answer
+// when the two rows are two people at one company — merging would deactivate the row and
+// take that person's portal access with it.
+function ownerToUser(fromId, toId, apply) {
+  var el = document.getElementById('admin-tool-result');
+  api('POST', '/admin/owner-to-user', { from_id: fromId, to_id: toId, apply: !!apply }).then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    if (apply) {
+      toast(res.person + ' is now a second login', 'success');
+      if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ ' + esc(res.note || '') +
+        (res.moved ? ' Moved ' + res.moved + ' reference(s) across.' : '') +
+        (res.qb_moved ? ' The QuickBooks link came too.' : '') + '</span>' +
+        (res.warning ? '<div style="color:var(--danger);font-size:11px;margin-top:4px">⚠ ' + esc(res.warning) + '</div>' : '');
+      loadAll();
+      return;
+    }
+    var plan = safeArray(res.plan);
+    if (el) el.innerHTML =
+      '<div style="line-height:1.6"><b>' + esc(res.person) + '</b> becomes a second login on <b>' + esc(res.keeper) + '</b>.<br>' +
+      (res.already_user ? '<span style="color:var(--muted)">They already have a login there — it will be reused.</span><br>' : '') +
+      (res.has_pin
+        ? '<span style="color:var(--accent2)">Their PIN carries across.</span> ' +
+          '<span style="color:var(--muted)">From now on they also give their first name — <b>' + esc(res.login_first_name || '') + '</b> — when signing in. ' +
+          'An owner row signs in on the PIN alone; an owner user gives both.</span>' +
+          (res.login_name_changes
+            ? '<div style="color:var(--warn);font-size:10.5px;margin-top:3px">⚠ That row has no first name, so the login name would be "' +
+              esc(res.login_first_name || '') + '" — taken from the company. Put their real first name on the owner row before converting.</div>'
+            : '') + '<br>'
+        : '<span style="color:var(--warn)">That row has no PIN, so there is no login to carry — they will need one set up.</span><br>') +
+      (plan.length ? 'Moving to ' + esc(res.keeper) + ':<br>' + plan.map(function(pl) {
+          return '· ' + pl.count + ' × ' + esc(pl.tab.replace(/_/g, ' '));
+        }).join('<br>') : 'Nothing else is attached to that row.') +
+      '<br><span style="color:var(--muted);font-size:10.5px">The old owner row is then deactivated. Its PIN is cleared first so one PIN never matches two records.</span>' +
+      '<br><button class="btn small" onclick="ownerToUser(\'' + esc(fromId) + '\',\'' + esc(toId) + '\',true)" ' +
+        'style="background:var(--accent2);color:#000;margin-top:6px">Do it</button></div>';
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
 function checkDuplicateOwners() {
   var el = document.getElementById('admin-tool-result');
   if (el) el.textContent = '⏳ Checking…';
@@ -7272,9 +7344,19 @@ function checkDuplicateOwners() {
         }).join('') +
         '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
           rows.filter(function(r) { return r !== keeper; }).map(function(r) {
-            return '<button class="btn small" onclick="mergeOwner(\'' + esc(String(r.id)) + '\',\'' + esc(String(keeper.id)) + '\',false)" ' +
-              'style="background:var(--surface2);color:var(--text);font-size:10.5px">Preview: move ID ' + esc(String(r.id)) + ' into ID ' + esc(String(keeper.id)) + '</button>';
+            // Two actions, because there are two different situations. A row with its own
+            // login is usually a second PERSON, and converting keeps them signed in.
+            // A row without one is usually a stray duplicate, and merging is right.
+            return '<button class="btn small" onclick="ownerToUser(\'' + esc(String(r.id)) + '\',\'' + esc(String(keeper.id)) + '\',false)" ' +
+                'style="background:var(--accent2);color:#000;font-size:10.5px">' +
+                (r.has_login ? '★ ' : '') + 'Make ID ' + esc(String(r.id)) + ' a second login on ID ' + esc(String(keeper.id)) + '</button> ' +
+              '<button class="btn small" onclick="mergeOwner(\'' + esc(String(r.id)) + '\',\'' + esc(String(keeper.id)) + '\',false)" ' +
+                'style="background:var(--surface2);color:var(--text);font-size:10.5px">Or merge it away</button>';
           }).join('') +
+          '<div style="color:var(--muted);font-size:10.5px;margin-top:6px;line-height:1.5">' +
+            'Two people at one company should be one owner record with two logins — that keeps the ' +
+            'properties together and lets a single QuickBooks link cover both. Merge only a row that ' +
+            'is genuinely a stray duplicate.</div>' +
         '</div>' +
       '</div>';
     }).join('');

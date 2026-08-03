@@ -162,6 +162,7 @@ export default {
         if (path === '/admin/fix-stale-tenants')  return await adminFixStaleTenants(env, body);
         if (path === '/admin/merge-property')     return await adminMergeProperty(env, body);
         if (path === '/admin/merge-owner')        return await adminMergeOwner(env, body);
+        if (path === '/admin/owner-to-user')      return await adminOwnerToUser(env, body);
         if (path === '/admin/migrate-trades')     return await adminMigrateTrades(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
@@ -1718,6 +1719,119 @@ const OWNER_REFS = [
 ];
 
 // GET /admin/duplicate-owners
+// POST /admin/owner-to-user { from_id, to_id, apply? }
+// Two people at one company should be ONE owner record with TWO logins — that's exactly
+// what Owner_Users is for. Two Owners rows instead means the properties split, reporting
+// sees two owners, and only one of them can hold the QuickBooks link.
+//
+// This converts the surplus Owners row into an Owner_User on the keeper, carrying the
+// person's PIN across so their login keeps working, then moves anything attached and
+// deactivates the old row. Nobody loses access, which is the whole difference between
+// this and a merge.
+async function adminOwnerToUser(env, body) {
+  const fromId = String(body.from_id || '').trim();
+  const toId   = String(body.to_id || '').trim();
+  const apply  = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  if (!fromId || !toId) return json({ error: 'from_id and to_id required' }, 400);
+  if (fromId === toId)  return json({ error: 'from_id and to_id are the same row' }, 400);
+
+  const [owners, ownerUsers] = await Promise.all([fetchTab(env, 'Owners'), fetchTab(env, 'Owner_Users')]);
+  const from = owners.find(o => String(o.ID) === fromId);
+  const to   = owners.find(o => String(o.ID) === toId);
+  if (!from) return json({ error: `No owner ${fromId}` }, 404);
+  if (!to)   return json({ error: `No owner ${toId}` }, 404);
+
+  const personName = ((from.First_Name || '') + ' ' + (from.Last_Name || '')).trim() || qbOwnerDisplayName(from);
+  if (!personName) return json({ error: 'That row has no person name to carry across.' }, 400);
+
+  // A PIN already in use would let two people log in as each other.
+  const pin = String(from.PIN || '').trim();
+  if (pin) {
+    const pinClash = ownerUsers.find(u => String(u.PIN || '').trim().toLowerCase() === pin.toLowerCase() && u.Active !== 'FALSE');
+    if (pinClash) return json({ error: `That PIN is already used by owner user "${pinClash.First_Name || pinClash.ID}". Change one of them first.` }, 409);
+    // Check active OWNERS too. Login tries Owner_Users first and returns null outright on a
+    // name mismatch — no fallthrough. So a PIN shared with another owner would send that
+    // person's login into this new user, fail the name check, and lock them out completely.
+    const ownerClash = owners.find(o => String(o.ID) !== fromId && String(o.PIN || '').trim().toLowerCase() === pin.toLowerCase() && o.Active !== 'FALSE');
+    if (ownerClash) return json({ error: `That PIN is also on owner "${qbOwnerDisplayName(ownerClash)}". Converting would lock them out — change one PIN first.` }, 409);
+  }
+
+  const alreadyUser = ownerUsers.find(u => String(u.Owner_ID) === toId && u.Active !== 'FALSE' &&
+    ((u.First_Name || '') + ' ' + (u.Last_Name || '')).trim().toLowerCase() === personName.toLowerCase());
+
+  // What moves across with them.
+  const plan = [];
+  for (const ref of OWNER_REFS) {
+    let rows;
+    try { rows = await fetchTab(env, ref.tab); }
+    catch (e) { if (isMissingTabError(e)) continue; return json({ error: `Could not read ${ref.tab} — stopping.` }, 500); }
+    const hits = rows.filter(r => String(r[ref.col] || '') === fromId && r.Active !== 'FALSE');
+    if (hits.length) plan.push({ tab: ref.tab, col: ref.col, ids: hits.map(r => r.ID), count: hits.length });
+  }
+
+  const loginFirstName = from.First_Name || personName.split(' ')[0] || '';
+  if (!apply) {
+    return json({ success: true, applied: false, from: fromId, to: toId,
+      person: personName, keeper: qbOwnerDisplayName(to),
+      has_pin: !!pin, already_user: !!alreadyUser,
+      // Owner rows log in on PIN alone; owner USERS must also give a first name. That's a
+      // real change to how this person signs in, and it should not be a surprise.
+      login_first_name: loginFirstName,
+      login_name_changes: !from.First_Name,
+      plan, total: plan.reduce((n, p) => n + p.count, 0) });
+  }
+
+  // Create the login FIRST. If anything later fails, the person can already sign in and
+  // the old row is still live — nobody is locked out at any point.
+  let userId = alreadyUser ? alreadyUser.ID : '';
+  if (!alreadyUser) {
+    const res = await addRow(env, 'Owner_Users', {
+      Owner_ID: toId,
+      First_Name: loginFirstName,
+      Last_Name:  from.Last_Name || '',
+      Phone: from.Phone || '', Email: from.Billing_Email || from.Email || '',
+      PIN: pin, Role: 'secondary', Active: 'TRUE',
+      Created_Date: new Date().toISOString().split('T')[0],
+    });
+    try { const parsed = await res.clone().json(); userId = parsed && parsed.id ? String(parsed.id) : ''; } catch (e) {}
+    if (!userId) return json({ error: 'Could not create the owner user — nothing else was changed.' }, 500);
+  }
+
+  const moved = [], failed = [];
+  for (const step of plan) {
+    for (const id of step.ids) {
+      try { await updateRow(env, step.tab, id, { [step.col]: toId }); moved.push(step.tab + ':' + id); }
+      catch (e) { failed.push(step.tab + ':' + id); }
+    }
+  }
+  if (failed.length) {
+    return json({ success: false, applied: true, owner_user_id: userId, moved: moved.length, failed,
+      error: `${personName} can now sign in under ${qbOwnerDisplayName(to)}, but ${failed.length} reference(s) didn't move. Both owner rows are still active. Re-run to finish.` }, 500);
+  }
+
+  // Carry the QuickBooks link over if only the old row had one.
+  const fq = (from.QBO_Customer_ID || '').trim(), tq = (to.QBO_Customer_ID || '').trim();
+  if (fq && !tq) { try { await updateRow(env, 'Owners', toId, { QBO_Customer_ID: fq }); } catch (e) {} }
+
+  // Clear the old PIN before deactivating, so one PIN never resolves to two records.
+  // updateRow returns a 404 response rather than throwing, so its result has to be read —
+  // otherwise a failed deactivation reports success while the old row stays live with a
+  // working PIN.
+  let deactivated = true;
+  try {
+    const dRes = await updateRow(env, 'Owners', fromId, { Active: 'FALSE', PIN: '' });
+    const dBody = await dRes.clone().json();
+    deactivated = !!(dBody && dBody.success);
+  } catch (e) { deactivated = false; }
+
+  return json({ success: true, applied: true, owner_user_id: userId, person: personName,
+    keeper: qbOwnerDisplayName(to), moved: moved.length, qb_moved: !!(fq && !tq),
+    deactivated,
+    warning: deactivated ? '' : `${personName} can sign in under ${qbOwnerDisplayName(to)}, but the old owner row could not be deactivated — it is still active and still holds the PIN. Deactivate it by hand.`,
+    login_name: loginFirstName,
+    note: `${personName} now signs in as a secondary user on ${qbOwnerDisplayName(to)} with the same PIN, giving their first name "${loginFirstName}".` });
+}
+
 async function adminDuplicateOwners(env) {
   const owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE');
   const groups = {};
@@ -3507,7 +3621,7 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
 // truck/shop stock (if any) + a single labor summary line. Materials show at cost;
 // the labor line absorbs the remainder so the lines always sum to Customer_Total —
 // keeping the internal $75 first-hour / markup off the customer's invoice.
-function buildInvoiceLines(ir, billRow, trade, tradeName) {
+function buildInvoiceLines(ir, billRow, trade, tradeName, wo) {
   const itemRef = { value: trade.item };
   const lines = [];
   let materialsTotal = 0;
@@ -3538,10 +3652,19 @@ function buildInvoiceLines(ir, billRow, trade, tradeName) {
   }
   const total = +(Number(ir.Customer_Total) || 0).toFixed(2);
   const laborAmt = +(total - materialsTotal).toFixed(2);
+  // Say what was actually done. The description belongs on the line the owner is paying,
+  // not buried in a note under the total — an invoice reading "Labor & service —
+  // Landscaping" tells them nothing about the job.
+  // Slice the description, not the joined string — otherwise a long one takes the
+  // "— WO 1062" reference off the end with it.
+  const workDesc = String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim().slice(0, 3800);
+  const labelParts = [tradeName];
+  if (workDesc) labelParts.push(workDesc);
+  labelParts.push('WO ' + (ir.WO_ID || ''));
   lines.unshift({
     DetailType: 'SalesItemLineDetail',
     Amount: laborAmt,
-    Description: ('Labor & service — ' + tradeName + ' — WO ' + (ir.WO_ID || '')).slice(0, 4000),
+    Description: labelParts.join(' — ').slice(0, 4000),
     SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: laborAmt },
   });
   return { lines, materialsTotal: +materialsTotal.toFixed(2), laborAmt, total };
@@ -3739,7 +3862,7 @@ async function qbSendInvoice(env, body) {
     if (custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
     if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
 
-    const inv = buildInvoiceLines(ir, billRow, trade, tradeName);
+    const inv = buildInvoiceLines(ir, billRow, trade, tradeName, wo);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
@@ -3749,9 +3872,13 @@ async function qbSendInvoice(env, body) {
 
     // Customer-facing photo link (the shared job-photo folder). The folder is shared on confirm only.
     const photoFolderId  = wo.Drive_Folder_ID || '';
-    const photoFolderUrl = wo.Drive_Folder_URL || '';
+    // The ID and the URL are written by two separate updates, so a folder can exist with no
+    // URL stored. That folder is real and shareable — build the link from the id rather
+    // than telling Brett there are no photos.
+    const photoFolderUrl = wo.Drive_Folder_URL || (photoFolderId ? ('https://drive.google.com/drive/folders/' + photoFolderId) : '');
+    // The memo is now for the photo link only. The work description moved to the line item
+    // where it belongs — repeating it here just made the invoice say the same thing twice.
     const memoParts = [];
-    if (wo.Invoice_Memo) memoParts.push(wo.Invoice_Memo);
     if (photoFolderUrl) memoParts.push('View job photos: ' + photoFolderUrl);
     const customerMemo = memoParts.join('\n');
 
@@ -3759,6 +3886,8 @@ async function qbSendInvoice(env, body) {
     let reimburseWithUrl = 0, allWithUrl = 0;
     try { const _r = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); if (Array.isArray(_r)) { allWithUrl = _r.filter(x => x && x.url).length; reimburseWithUrl = _r.filter(x => x && x.pay !== 'account' && x.url).length; } } catch (e) {}
 
+    // DocNumber is deliberately NOT sent — QuickBooks assigns the next number in its own
+    // sequence. Supplying one here would break that sequence and collide on a re-send.
     const invoicePayload = { Line: inv.lines, TxnDate: txnDate, PrivateNote: note };
     if (customerMemo) invoicePayload.CustomerMemo = { value: customerMemo.slice(0, 1000) };
     const billPayload = {
@@ -3794,6 +3923,10 @@ async function qbSendInvoice(env, body) {
         warnings.push(`No vendor bill will be created — ${vendDisplay} is marked in-house.`);
       }
 
+      if (!photoFolderUrl) {
+        warnings.push('No job-photo folder on this work order, so the invoice will carry no photo link. Upload a photo to the job to create one.');
+      }
+
       return json({ preview: {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
@@ -3821,6 +3954,7 @@ async function qbSendInvoice(env, body) {
     const errors = [];
     let invoiceId = ir.QB_Invoice_ID || '';
     let billId    = ir.QB_Bill_ID || '';
+    let invoiceDocNumber = '';
 
     // Share the job-photo folder so the invoice's CustomerMemo link is viewable by the customer.
     if (photoFolderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, photoFolderId); } catch (e) { warnings.push('Photo-link share failed'); } }
@@ -3873,6 +4007,15 @@ async function qbSendInvoice(env, body) {
       const r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
       invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
       if (!invoiceId) errors.push('Invoice: ' + (qbFault(r) || 'unknown error'));
+      else {
+        // QuickBooks assigns the invoice number itself — UNLESS "Custom transaction
+        // numbers" is on in its settings, in which case an omitted number stays blank.
+        // Report it back so a blank one is caught here rather than found weeks later.
+        invoiceDocNumber = (r.Invoice && r.Invoice.DocNumber) || '';
+        if (!invoiceDocNumber) {
+          warnings.push('QuickBooks left the invoice number blank. Turn OFF Settings → Sales → Sales form content → Custom transaction numbers, and it will number them itself.');
+        }
+      }
     }
 
     // An in-house vendor is you, or someone on the payroll. The work happened, but no money
@@ -3916,7 +4059,8 @@ async function qbSendInvoice(env, body) {
     });
     if (status === 'sent' && ir.WO_ID) { try { await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' }); } catch (e) {} }
 
-    return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId, status, errors, warnings });
+    return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId,
+                  invoice_number: invoiceDocNumber, status, errors, warnings });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
