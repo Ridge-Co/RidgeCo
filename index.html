@@ -1294,16 +1294,39 @@ function openWODetail(woId) {
     '<div id="inv-markup-'+woId+'" style="color:var(--accent2);font-size:11px;margin-top:4px"></div>' +
     '</div>' +
     '</div>' +
+
+    // Both pricing formulas, side by side. They used to live on different screens and
+    // disagree; now you see both and pick. Tap either to load it into the box above.
+    '<div id="inv-suggest-'+woId+'" style="margin-bottom:12px"></div>' +
+
+    // On-site time + travel feed the itemized suggestion. Collapsed until you need them.
+    '<div style="background:var(--surface);border-radius:6px;padding:10px;margin-bottom:12px">' +
+      '<div style="color:var(--muted);font-size:10px;letter-spacing:.06em;margin-bottom:8px">ADD-ONS (feed the itemized price)</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text);cursor:pointer">' +
+          '<input type="checkbox" id="inv-onsite-'+woId+'" onchange="calcInvoiceMarkup(\''+woId+'\')" style="width:auto;padding:0"> On-site (Brett time)' +
+        '</label>' +
+        '<input type="number" id="inv-brett-hrs-'+woId+'" min="0.5" step="0.5" placeholder="hrs" oninput="calcInvoiceMarkup(\''+woId+'\')"' +
+        ' style="width:70px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:6px;border-radius:5px;text-align:center">' +
+        '<span style="color:var(--muted);font-size:11px">× $75/hr (min $75)</span>' +
+        '<span style="color:var(--muted);font-size:11px;margin-left:auto">Travel $</span>' +
+        '<input type="number" id="inv-travel-'+woId+'" min="0" step="5" placeholder="0" oninput="calcInvoiceMarkup(\''+woId+'\')"' +
+        ' style="width:80px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:6px;border-radius:5px">' +
+      '</div>' +
+    '</div>' +
+
+    // Where this bill stands: not approved / approved and waiting / already in QuickBooks.
+    '<div id="inv-status-'+woId+'" style="margin-bottom:12px"></div>' +
     '<div style="margin-bottom:10px">' +
     '<label style="color:var(--muted);font-size:11px;letter-spacing:.06em">MEMO FOR CUSTOMER INVOICE</label>' +
     '<textarea id="inv-memo-'+woId+'" placeholder="What was done (visible on customer invoice)…"' +
     ' style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:60px;resize:vertical;margin-top:4px">'+esc(wo.Invoice_Memo||wo.Description||'')+'</textarea>' +
     '</div>' +
-    '<div style="display:flex;gap:8px">' +
-    '<button onclick="sendWOToQuickBooks(\''+woId+'\')" style="background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 16px;cursor:pointer">📤 Send to QuickBooks</button>' +
-    '<button onclick="saveDraftInvoice(\''+woId+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;font-family:var(--font);font-size:12px;padding:8px 14px;cursor:pointer">💾 Save Draft</button>' +
-    '<div id="inv-msg-'+woId+'" style="font-size:11px;color:var(--muted);padding:8px 0"></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<button id="inv-bill-btn-'+woId+'" onclick="invBillThisJob(\''+woId+'\')" style="flex:1;min-width:200px;background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:11px 16px;cursor:pointer">📤 Approve &amp; send to QuickBooks</button>' +
+    '<button onclick="saveDraftInvoice(\''+woId+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;font-family:var(--font);font-size:12px;padding:11px 14px;cursor:pointer">💾 Save draft</button>' +
     '</div>' +
+    '<div id="inv-msg-'+woId+'" style="font-size:11.5px;color:var(--muted);padding:8px 0"></div>' +
   '</div>';
   document.getElementById('detail-body').insertAdjacentHTML('beforeend', invoiceHtml);
   loadVendorBillForInvoice(woId);
@@ -3704,16 +3727,61 @@ function injectMasterKeyInfo(wo) {
 // ══════════════════════════════════════════════════════════
 
 // Load vendor bill breakdown into the invoice builder panel
+// The bill currently loaded into each work order's Invoice Builder, keyed by WO id.
+// Billing happens here now, so this screen needs the actual bill row — not just its total
+// scraped back out of rendered text.
+var _invBill = {};
+// Which bill the panel should load for a WO, when the WO carries more than one.
+var _invPreferBill = {};
+
+function invPickBill(woId, billId) {
+  _invPreferBill[woId] = String(billId);
+  loadVendorBillForInvoice(woId);
+}
+
 function loadVendorBillForInvoice(woId) {
   var el = document.getElementById('inv-vendor-breakdown-' + woId);
   if (!el) return;
   api('GET', '/vendor-bills?wo_id=' + woId).then(function(bills) {
     if (!Array.isArray(bills) || !bills.length) {
       el.innerHTML = '<span style="color:var(--muted)">No bill submitted yet</span>';
+      _invBill[woId] = null;
+      invRenderStatus(woId, null);
       return;
     }
-    var bill = bills[bills.length - 1];
+    // Ignore voided bills, and bill against the newest live one.
+    var live = bills.filter(function(b) { return b.Active !== 'FALSE'; });
+    if (!live.length) {
+      el.innerHTML = '<span style="color:var(--muted)">All bills on this job are voided</span>';
+      _invBill[woId] = null;
+      invRenderStatus(woId, null);
+      return;
+    }
+    // Honour the bill that was actually chosen (from the Review Bills queue, or the picker
+    // below). Fall back to the newest only when nothing was specified.
+    var want = _invPreferBill[woId];
+    var bill = (want && live.find(function(b) { return String(b.ID) === String(want); })) || live[live.length - 1];
+    _invBill[woId] = bill;
+
     var rows = '';
+    if (live.length > 1) {
+      // Two vendors on one job is a normal shape, and each bill needs its own invoice.
+      // Show every one of them and make switching explicit rather than picking silently.
+      rows +=
+        '<div style="color:var(--warn);font-size:11px;margin-bottom:6px">⚠ ' + live.length + ' bills on this job — each needs billing separately.</div>' +
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">' +
+          live.map(function(b) {
+            var on = String(b.ID) === String(bill.ID);
+            var done = (b.Status || '').toLowerCase() === 'reviewed';
+            return '<button onclick="invPickBill(\'' + woId + '\',\'' + esc(String(b.ID)) + '\')" ' +
+              'style="cursor:pointer;font-family:var(--font);font-size:10.5px;padding:4px 8px;border-radius:4px;' +
+              'border:1px solid ' + (on ? 'var(--accent)' : 'var(--border)') + ';' +
+              'background:' + (on ? 'var(--accent)' : 'var(--surface2)') + ';color:' + (on ? '#fff' : 'var(--muted)') + '">' +
+              esc(b.Vendor_Name || ('Bill ' + b.ID)) + ' $' + (parseFloat(b.Total) || 0).toFixed(2) + (done ? ' ✓' : '') +
+            '</button>';
+          }).join('') +
+        '</div>';
+    }
     if (bill.Vendor_Name)
       rows += '<div style="color:var(--muted);font-size:11px;margin-bottom:6px">From: ' + esc(bill.Vendor_Name) + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>';
     if (parseFloat(bill.Labor_Total||0) > 0)
@@ -3744,9 +3812,75 @@ function loadVendorBillForInvoice(woId) {
       chargeEl.setAttribute('value', suggested);
     }
     calcInvoiceMarkup(woId);
+    invLoadStatus(woId);
   }).catch(function() {
     el.innerHTML = '<span style="color:var(--muted)">No bill submitted yet</span>';
+    _invBill[woId] = null;
   });
+}
+
+// ── The two pricing formulas ─────────────────────────────────
+// They used to live on separate screens with different answers. Both are computed here off
+// the same bill so the difference is a choice you make, not a discrepancy you discover.
+function invPricing(woId) {
+  var bill = _invBill[woId];
+  if (!bill) return null;
+
+  var billType   = bill.Bill_Type || 'hourly';
+  var hrs        = parseFloat(bill.Hours) || 0;
+  var laborTotal = parseFloat(bill.Labor_Total) || 0;
+  if (billType === 'flat') laborTotal = parseFloat(bill.Flat_Rate) || 0;
+  var truckStock = parseFloat(bill.Truck_Stock) || 0;
+  var receiptsAll = parseFloat(bill.Receipts_Total) || 0;
+
+  // Receipts split: reimburse (vendor paid, so part of what you owe them) vs on-account
+  // (your card — the customer still pays, the vendor never gets reimbursed).
+  var reimburse = receiptsAll, onAccount = 0;
+  try {
+    var items = JSON.parse(bill.Receipts_JSON || '[]');
+    if (Array.isArray(items) && items.length) {
+      reimburse = 0;
+      items.forEach(function(r) {
+        var amt = parseFloat(r && r.amount) || 0;
+        if (r && r.pay === 'account') onAccount += amt; else reimburse += amt;
+      });
+    }
+  } catch (e) {}
+
+  var totalCost     = laborTotal + truckStock + receiptsAll;              // out of your pocket
+  var vendorPayable = laborTotal + truckStock + reimburse;                // the QuickBooks bill
+
+  var onsite   = (document.getElementById('inv-onsite-' + woId) || {}).checked;
+  var brettHrs = onsite ? (parseFloat((document.getElementById('inv-brett-hrs-' + woId) || {}).value) || 1) : 0;
+  var brettTime = onsite ? Math.max(75, brettHrs * 75) : 0;
+  var travel    = parseFloat((document.getElementById('inv-travel-' + woId) || {}).value) || 0;
+
+  // A — tiered: one move off total cost, scales the percentage down as jobs get bigger.
+  var tiered = calcTieredEstimate(totalCost);
+
+  // B — itemized: the Review Bills math. Markup is MAX($75, $35/hr), then your on-site
+  // time and travel on top, then the 5% processing fee.
+  var itemMarkup   = Math.max(75, 35 * hrs);
+  var itemSubtotal = totalCost + brettTime + travel + itemMarkup;
+  var itemFee      = itemSubtotal * 0.05;
+  var itemized     = Math.ceil((itemSubtotal + itemFee) / 5) * 5;
+
+  return {
+    billType: billType, hrs: hrs, laborTotal: laborTotal, truckStock: truckStock,
+    receiptsAll: receiptsAll, reimburse: reimburse, onAccount: onAccount,
+    totalCost: totalCost, vendorPayable: vendorPayable,
+    brettTime: brettTime, brettHrs: brettHrs, travel: travel,
+    tieredPrice: tiered.finalPrice, tieredPct: Math.round(tiered.markupPct * 100),
+    itemizedPrice: itemized, itemMarkup: itemMarkup,
+  };
+}
+
+function invUsePrice(woId, amount) {
+  var el = document.getElementById('inv-charge-' + woId);
+  if (!el) return;
+  el.value = Number(amount).toFixed(2);
+  el.setAttribute('value', Number(amount).toFixed(2));
+  calcInvoiceMarkup(woId);
 }
 
 // Calculate markup % between vendor cost and customer charge
@@ -3771,19 +3905,226 @@ function calcInvoiceMarkup(woId) {
       '<b style="color:var(--accent);font-size:14px">$' + charge.toFixed(2) + '</b>';
   }
 
-  var breakdownEl = document.getElementById('inv-vendor-breakdown-' + woId);
-  // Try to extract vendor total from breakdown text
-  var totalMatch = breakdownEl && breakdownEl.textContent.match(/Total owed: \$([\d.]+)/);
-  var cost = totalMatch ? parseFloat(totalMatch[1]) : 0;
+  // Cost comes from the loaded bill row, not from scraping the rendered breakdown text.
+  var p = invPricing(woId);
+  var cost = p ? p.totalCost : 0;
   if (cost > 0) {
     var profit = charge - cost;
     var pct = ((profit / cost) * 100).toFixed(0);
     markupEl.innerHTML = profit >= 0
-      ? '<span style="color:var(--accent2)">Vendor bill $' + cost.toFixed(2) + ' · your profit $' + profit.toFixed(2) + ' (' + pct + '% markup)</span>'
+      ? '<span style="color:var(--accent2)">You owe the vendor $' + p.vendorPayable.toFixed(2) + ' · your profit $' + profit.toFixed(2) + ' (' + pct + '% markup)</span>'
       : '<span style="color:var(--danger)">⚠ Below cost by $' + Math.abs(profit).toFixed(2) + ' — you would lose money on this job</span>';
   } else {
     markupEl.innerHTML = '<span style="color:var(--muted)">No vendor bill loaded yet — profit unknown.</span>';
   }
+
+  invRenderSuggestions(woId, p, charge);
+}
+
+// The two prices, side by side, each one tap away.
+function invRenderSuggestions(woId, p, charge) {
+  var box = document.getElementById('inv-suggest-' + woId);
+  if (!box) return;
+  if (!p || !(p.totalCost > 0)) { box.innerHTML = ''; return; }
+
+  function card(label, price, sub, id) {
+    var picked = Math.abs(charge - price) < 0.005;
+    return '<button onclick="invUsePrice(\'' + woId + '\',' + price + ')" ' +
+      'style="flex:1;min-width:150px;text-align:left;cursor:pointer;font-family:var(--font);' +
+      'background:' + (picked ? '#0f2417' : 'var(--surface)') + ';border:1px solid ' + (picked ? 'var(--accent2)' : 'var(--border)') + ';' +
+      'border-radius:6px;padding:9px 11px">' +
+        '<div style="color:var(--muted);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase">' + label + (picked ? ' · using this' : '') + '</div>' +
+        '<div style="color:' + (picked ? 'var(--accent2)' : 'var(--text)') + ';font-size:17px;font-weight:bold;margin:2px 0">$' + price.toFixed(2) + '</div>' +
+        '<div style="color:var(--muted);font-size:10px;line-height:1.4">' + sub + '</div>' +
+      '</button>';
+  }
+
+  var itemSub = 'MAX($75, $35×' + p.hrs + 'h) = $' + p.itemMarkup.toFixed(0) +
+    (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' on-site' : '') +
+    (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : '') + ' + 5%';
+
+  box.innerHTML =
+    '<div style="color:var(--muted);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Suggested prices — tap one, or type your own above</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      card('Tiered', p.tieredPrice, '+' + p.tieredPct + '% on $' + p.totalCost.toFixed(2) + ' + $75 + 5%', 'tiered') +
+      card('Itemized', p.itemizedPrice, itemSub, 'itemized') +
+    '</div>';
+}
+
+// ── Where this bill stands ───────────────────────────────────
+// Approved? Waiting for QuickBooks? Already there? You used to have to leave the work
+// order and read it off two other screens.
+var _invIRRow = {};
+
+function invLoadStatus(woId) {
+  var bill = _invBill[woId];
+  if (!bill) { invRenderStatus(woId, null); return; }
+  if ((bill.Status || '').toLowerCase() !== 'reviewed') { invRenderStatus(woId, { state: 'unapproved' }); return; }
+
+  // Approved. Ask for EVERY Invoice_Review row on this work order, at any status, and
+  // match the one belonging to THIS bill. `all=1` matters: the default queue hides sent
+  // rows, so an absent row would have to be read as "already sent" — inferring success
+  // from an empty read is exactly the mistake FEATURE_LOG rule 16 exists to prevent, and
+  // here it would disable the only button that can bill the job.
+  api('GET', '/qb/ready?all=1&wo_id=' + encodeURIComponent(woId)).then(function(rows) {
+    // Two quick taps on the bill picker can land these out of order. Bail if the panel has
+    // moved on, so bill A's QuickBooks status never gets painted over bill B's numbers.
+    if (_invBill[woId] !== bill) return;
+    if (!Array.isArray(rows)) { invRenderStatus(woId, { state: 'unknown' }); return; }
+    var row = rows.find(function(r) { return String(r.bill_id) === String(bill.ID); })
+           || rows.find(function(r) { return String(r.wo_id) === String(woId); });
+    _invIRRow[woId] = row || null;
+
+    if (!row) {
+      // Marked reviewed, but no Invoice_Review row exists. Nothing was ever queued for
+      // QuickBooks — most likely "Mark Reviewed" was used, or the approval half-failed.
+      invRenderStatus(woId, { state: 'reviewed_no_row' });
+      return;
+    }
+    if (row.qb_invoice_id && row.qb_bill_id) { invRenderStatus(woId, { state: 'sent', row: row }); return; }
+    if (row.qb_invoice_id && !row.qb_bill_id) { invRenderStatus(woId, { state: 'partial', row: row }); return; }
+    invRenderStatus(woId, { state: 'approved', row: row });
+  }).catch(function() { invRenderStatus(woId, { state: 'unknown' }); });
+}
+
+function invRenderStatus(woId, s) {
+  var el  = document.getElementById('inv-status-' + woId);
+  var btn = document.getElementById('inv-bill-btn-' + woId);
+  if (!el) return;
+  if (!s) { el.innerHTML = ''; if (btn) { btn.disabled = true; btn.style.opacity = '.45'; btn.textContent = 'No vendor bill to invoice yet'; } return; }
+  if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+
+  function band(color, bg, html) {
+    return '<div style="background:' + bg + ';border:1px solid ' + color + ';border-radius:6px;padding:9px 11px;font-size:11.5px;color:' + color + ';line-height:1.55">' + html + '</div>';
+  }
+
+  if (s.state === 'unapproved') {
+    el.innerHTML = '';
+    if (btn) btn.textContent = '📤 Approve & send to QuickBooks';
+  } else if (s.state === 'approved') {
+    el.innerHTML = band('var(--accent2)', '#0f2417',
+      '✓ Approved at <b>$' + (parseFloat(s.row.customer_total) || 0).toFixed(2) + '</b> — not in QuickBooks yet.');
+    if (btn) btn.textContent = '📤 Send to QuickBooks — $' + (parseFloat(s.row.customer_total) || 0).toFixed(2);
+  } else if (s.state === 'partial') {
+    el.innerHTML = band('var(--warn)', '#2d1f06',
+      '⚠ Partly sent — customer invoice <b>' + esc(s.row.qb_invoice_id || '?') + '</b> is in QuickBooks, the vendor bill is not. ' +
+      'Sending again creates only the missing vendor bill; it will not duplicate the invoice.');
+    if (btn) btn.textContent = '📤 Finish sending — vendor bill only';
+  } else if (s.state === 'sent') {
+    // Only ever claimed with the QuickBooks ids in hand.
+    el.innerHTML = band('var(--accent2)', '#0f2417',
+      '✓ In QuickBooks — invoice <b>' + esc(s.row.qb_invoice_id) + '</b>, vendor bill <b>' + esc(s.row.qb_bill_id) + '</b>.');
+    if (btn) { btn.textContent = '✓ Already in QuickBooks'; btn.disabled = true; btn.style.opacity = '.5'; }
+  } else if (s.state === 'reviewed_no_row') {
+    el.innerHTML = band('var(--warn)', '#2d1f06',
+      '⚠ This bill is marked reviewed but was <b>never queued for QuickBooks</b> — no invoice exists for it. ' +
+      'That happens when a bill is marked reviewed directly instead of approved. Set the price and send it now.');
+    // Deliberately still enabled: this is the one state where the job needs billing most.
+    if (btn) btn.textContent = '📤 Approve & send to QuickBooks';
+  } else {
+    el.innerHTML = band('var(--muted)', 'var(--surface2)', 'Approved — could not reach the QuickBooks queue to check its status.');
+    if (btn) btn.textContent = '📤 Send to QuickBooks';
+  }
+}
+
+// ── One button: approve the bill, then preview and send it ───
+// This is the whole job now. It used to be: read the bill here, leave for Review Bills to
+// approve it, come back here to send it, with the approved number visible on neither screen.
+function invBillThisJob(woId) {
+  var bill = _invBill[woId];
+  var msg  = document.getElementById('inv-msg-' + woId);
+  var btn  = document.getElementById('inv-bill-btn-' + woId);
+  if (!bill) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">No vendor bill on this job.</span>'; return; }
+
+  var charge = parseFloat((document.getElementById('inv-charge-' + woId) || {}).value || 0);
+  var p = invPricing(woId);
+  if (!p) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">Could not read the bill.</span>'; return; }
+
+  // Already approved AND queued — skip straight to the preview-first send modal.
+  // A bill marked reviewed with no Invoice_Review row behind it is NOT approved in any
+  // meaningful sense (nothing is queued, no invoice exists), so it falls through and gets
+  // approved properly rather than bouncing off a "nothing to send" message.
+  var known = _invIRRow[woId];
+  if ((bill.Status || '').toLowerCase() === 'reviewed' && known && known.id) {
+    closeModal('modal-wo-detail');
+    previewQBSend(known.id);
+    return;
+  }
+
+  if (!(charge > 0)) {
+    if (msg) msg.innerHTML = '<span style="color:var(--danger)">Set the customer price first — that is the amount the invoice is created for.</span>';
+    return;
+  }
+  if (charge < p.totalCost) {
+    if (!confirm('$' + charge.toFixed(2) + ' is BELOW your cost of $' + p.totalCost.toFixed(2) + '.\n\nYou would lose $' +
+                 (p.totalCost - charge).toFixed(2) + ' on this job. Approve it anyway?')) return;
+  }
+
+  var memo = (document.getElementById('inv-memo-' + woId) || {}).value || '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
+  if (msg) msg.innerHTML = '<span style="color:var(--muted)">Approving the bill…</span>';
+
+  // The processing fee is carried as the 5% share of whatever price you settled on, so the
+  // Invoice_Review row reconciles against the number actually being invoiced — not against
+  // whichever formula happened to suggest it.
+  var fee    = +(charge - charge / 1.05).toFixed(2);
+  var markup = +(charge - fee - p.totalCost - p.brettTime - p.travel).toFixed(2);
+
+  api('POST', '/invoice-review/approve', {
+    bill_id: bill.ID,
+    wo_id: woId,
+    vendor_id: bill.Vendor_ID,
+    vendor_name: bill.Vendor_Name,
+    job_type: p.billType === 'flat' ? 'flat' : 'standard',
+    vendor_cost: p.vendorPayable.toFixed(2),
+    brett_time: p.brettTime.toFixed(2),
+    brett_hrs: String(p.brettHrs || 0),
+    travel: p.travel.toFixed(2),
+    markup: markup.toFixed(2),
+    processing_fee: fee.toFixed(2),
+    customer_total: charge.toFixed(2),
+    brett_net: (charge - p.totalCost).toFixed(2),
+    approved_by: 'Brett',
+  }).then(function(res) {
+    if (btn) { btn.disabled = false; btn.textContent = '📤 Approve & send to QuickBooks'; }
+    if (!(res.success || res.id)) {
+      if (msg) msg.innerHTML = '<span style="color:var(--danger)">Approve failed: ' + esc(res.error || '?') + '</span>';
+      return;
+    }
+    // '/update-wo' is not a route — the Worker has '/workorder/update'. Posting to the
+    // wrong path returned a 404 that api() resolves rather than rejects, so the .catch()
+    // never fired and the memo was discarded in silence. That memo is what the owner reads
+    // on the QuickBooks invoice (qbSendInvoice builds CustomerMemo from Invoice_Memo), so
+    // invoices were going out with no description of the work.
+    if (memo) {
+      api('POST', '/workorder/update', { id: woId, fields: { Invoice_Memo: memo, Customer_Charge: charge.toFixed(2) } })
+        .then(function(r) { if (!woUpdateLanded(r)) console.warn('[invBillThisJob] memo save did not land', r); })
+        .catch(function(){});
+    }
+
+    if (res.id) {
+      if (msg) msg.innerHTML = '<span style="color:var(--accent2)">✓ Approved at $' + charge.toFixed(2) + ' — opening the QuickBooks preview…</span>';
+      closeModal('modal-wo-detail');
+      previewQBSend(res.id);            // preview creates nothing; you confirm in the modal
+    } else {
+      // Approved, but no usable row id came back — fall back to resolving it by work order.
+      if (msg) msg.innerHTML = '<span style="color:var(--accent2)">✓ Approved at $' + charge.toFixed(2) + '.</span>';
+      sendWOToQuickBooks(woId);
+    }
+  }).catch(function(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '📤 Approve & send to QuickBooks'; }
+    if (msg) msg.innerHTML = '<span style="color:var(--danger)">Connection error: ' + esc(e.message || '?') + '</span>';
+  });
+}
+
+// updateRow returns {success:true, message:'No matching fields'} when NONE of the fields you
+// sent match a column header — a write that touched nothing, reported as a success. That is
+// the same silent-no-op shape as the WO_ID bug in FEATURE_LOG rule 6, so treat it as the
+// failure it is. (Invoice_Memo and Customer_Charge are real Work_Orders columns — verified
+// against the live sheet at indexes 35 and 34 — but a renamed or reordered header would
+// otherwise fail invisibly again.)
+function woUpdateLanded(r) {
+  return !!(r && r.success && r.message !== 'No matching fields');
 }
 
 // Save invoice draft (charge + memo) to the WO record
@@ -3792,12 +4133,19 @@ function saveDraftInvoice(woId) {
   var memo   = (document.getElementById('inv-memo-'   + woId) || {}).value || '';
   var msgEl  = document.getElementById('inv-msg-' + woId);
   if (msgEl) msgEl.textContent = 'Saving…';
-  api('POST', '/update-wo', { id: woId, fields: { Customer_Charge: charge, Invoice_Memo: memo } })
-    .then(function() {
-      if (msgEl) msgEl.innerHTML = '<span style="color:var(--accent2)">✓ Saved</span>';
-      setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 2000);
-    }).catch(function() {
-      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Save failed</span>';
+  // Was posting to '/update-wo', which is not a route. The 404 resolved as a normal
+  // response, so this reported "✓ Saved" and saved nothing, every time.
+  api('POST', '/workorder/update', { id: woId, fields: { Customer_Charge: charge, Invoice_Memo: memo } })
+    .then(function(r) {
+      if (woUpdateLanded(r)) {
+        if (msgEl) msgEl.innerHTML = '<span style="color:var(--accent2)">✓ Saved</span>';
+        setTimeout(function() { if (msgEl) msgEl.textContent = ''; }, 2000);
+      } else {
+        if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Save failed: ' +
+          esc((r && (r.error || r.message)) || 'nothing was written') + '</span>';
+      }
+    }).catch(function(e) {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Save failed: ' + esc(e.message || '?') + '</span>';
     });
 }
 
@@ -4609,71 +4957,14 @@ function renderIRCard(b, i) {
 
     flagHtml +
 
-    // Markup controls
-    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px">' +
-      '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">MARKUP CONTROLS</div>' +
-
-      // Job type
-      '<div style="margin-bottom:10px">' +
-        '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Job Type</div>' +
-        '<div style="display:flex;gap:4px">' +
-          ['standard','flat','pass-through'].map(function(t) {
-            return '<button onclick="irSetJobType('+i+',\''+t+'\')" id="ir-jt-'+i+'-'+t+'" style="flex:1;padding:7px 4px;border-radius:4px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--border);background:'+(t==='standard'?'var(--accent)':'var(--surface)')+';color:'+(t==='standard'?'#fff':'var(--muted)')+'">'+t.toUpperCase()+'</button>';
-          }).join('') +
-        '</div>' +
-      '</div>' +
-
-      // Flat rate override (only for flat job type)
-      '<div id="ir-flat-override-'+i+'" style="display:none;margin-bottom:10px">' +
-        '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Customer Flat Price (what you charge)</div>' +
-        '<div style="display:flex;align-items:center;gap:6px">' +
-          '<span style="color:var(--muted)">$</span>' +
-          '<input type="number" id="ir-flat-price-'+i+'" min="0" step="1" placeholder="0" oninput="irCalc('+i+')" style="width:120px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:8px;border-radius:6px">' +
-        '</div>' +
-      '</div>' +
-
-      // On-site coordination
-      '<div style="margin-bottom:10px">' +
-        '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text)">' +
-          '<input type="checkbox" id="ir-onsite-'+i+'" onchange="irCalc('+i+')" style="width:auto;padding:0"> On-site coordination (Brett time)' +
-        '</label>' +
-        '<div id="ir-onsite-wrap-'+i+'" style="display:none;margin-top:8px;display:flex;align-items:center;gap:8px">' +
-          '<input type="number" id="ir-brett-hrs-'+i+'" min="0.5" step="0.5" placeholder="hrs" oninput="irCalc('+i+')" style="width:80px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:7px;border-radius:6px;text-align:center">' +
-          '<span style="color:var(--muted);font-size:12px">hrs × $75/hr (min $75)</span>' +
-        '</div>' +
-      '</div>' +
-
-      // Travel surcharge
-      '<div style="margin-bottom:10px">' +
-        '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Out-of-area travel surcharge</div>' +
-        '<div style="display:flex;align-items:center;gap:6px">' +
-          '<span style="color:var(--muted)">$</span>' +
-          '<input type="number" id="ir-travel-'+i+'" min="0" step="5" placeholder="0" oninput="irCalc('+i+')" style="width:100px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:7px;border-radius:6px">' +
-          '<span style="color:var(--muted);font-size:11px">(0 = local, included in labor)</span>' +
-        '</div>' +
-      '</div>' +
+    // Billing itself now happens on the work order — one screen with the job, the vendor
+    // bill, both suggested prices, approve and send. This page is the queue that gets you
+    // there, not a second place to set a price that disagrees with the first.
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button onclick="irOpenWO(\''+esc(woId)+'\',\''+esc(String(b.ID||''))+'\')" style="flex:1;min-width:190px;background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:11px;cursor:pointer">\u2192 Bill this job</button>' +
+      '<button onclick="irSkip('+i+')" title="Hides this card until the next refresh \u2014 the bill stays in the queue" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:11px 16px;cursor:pointer">Hide for now</button>' +
     '</div>' +
 
-    // Calculated summary (suggestion — rewritten by irCalc each keystroke)
-    '<div id="ir-summary-'+i+'" style="background:var(--surface2);border:1px solid var(--accent2);border-radius:6px;padding:12px;margin-bottom:12px"></div>' +
-
-    // Final customer price — persistent (not clobbered by irCalc). You set the real price.
-    '<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:6px;padding:12px;margin-bottom:12px">' +
-      '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">FINAL CUSTOMER PRICE — you decide</div>' +
-      '<div id="ir-price-hint-'+i+'" style="font-size:11px;color:var(--muted);line-height:1.7;margin-bottom:8px"></div>' +
-      '<div id="ir-price-chips-'+i+'" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>' +
-      '<div style="display:flex;align-items:center;gap:6px">' +
-        '<span style="color:var(--muted);font-size:18px">$</span>' +
-        '<input type="number" id="ir-final-price-'+i+'" min="0" step="0.01" placeholder="final price" oninput="irCalc('+i+')" style="width:130px;background:var(--surface);border:1px solid var(--accent2);color:var(--text);font-family:var(--font);font-size:18px;font-weight:bold;padding:9px;border-radius:6px">' +
-        '<button onclick="irResetPrice('+i+')" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:5px;font-family:var(--font);font-size:11px;padding:9px 10px;cursor:pointer">↺ Suggested</button>' +
-      '</div>' +
-    '</div>' +
-
-    // Approve / skip buttons
-    '<div style="display:flex;gap:8px">' +
-      '<button onclick="irApprove('+i+')" id="ir-approve-btn-'+i+'" style="flex:1;background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:11px;cursor:pointer">✓ APPROVE — READY TO INVOICE</button>' +
-      '<button onclick="irSkip('+i+')" title="Hides this card until the next refresh — the bill stays in the queue" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:11px 16px;cursor:pointer">Hide for now</button>' +
-    '</div>' +
     '<div id="ir-msg-'+i+'" style="margin-top:8px"></div>' +
 
   '</div>';
@@ -4907,9 +5198,14 @@ function irClearFromQueue(i) {
 // Open the full work order from a Review Bills card, without losing your place.
 // openWODetail() renders into a modal, so it overlays this page and closing it
 // returns you to the review queue exactly where you were.
-function irOpenWO(woId) {
+function irOpenWO(woId, billId) {
   var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
   if (!wo) { toast('Work order ' + woId + ' not loaded — hit refresh and try again', 'error'); return; }
+  // Carry the specific bill through. A work order can carry bills from two different
+  // vendors; without this the panel always loaded the newest one, so billing from the
+  // older vendor's queue card silently billed the other vendor's job and left the first
+  // stranded in the queue with no way to reach it.
+  if (billId) _invPreferBill[woId] = String(billId);
   openWODetail(woId);
 }
 

@@ -101,7 +101,7 @@ export default {
         if (path === '/qb/test')                return await qbTest(env);
         if (path === '/qb/accounts')            return await qbListAccounts(env);
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
-        if (path === '/qb/ready')               return await qbReadyQueue(env);
+        if (path === '/qb/ready')               return await qbReadyQueue(env, url);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
@@ -1088,6 +1088,15 @@ async function approveInvoiceReview(env, body) {
   } = body;
   if (!bill_id || !customer_total) return json({ error: 'bill_id and customer_total required' }, 400);
   const today = new Date().toISOString().split('T')[0];
+
+  // Approving twice must not create a second Invoice_Review row — the Hub can now approve
+  // straight from the work order, so the same bill is reachable from two places. If this
+  // bill already has a live review row, hand that one back instead of logging another.
+  try {
+    const existingIR = await fetchTab(env, 'Invoice_Review');
+    const already = existingIR.find(r => r.Active !== 'FALSE' && String(r.Bill_ID) === String(bill_id));
+    if (already) return json({ success: true, already_approved: true, id: String(already.ID), qb_status: already.QB_Invoice_Status || 'pending' });
+  } catch (e) { /* tab unreadable — fall through and let the append surface the real error */ }
   // 1. Update Vendor_Bills row: mark reviewed, save markup fields
   await updateRow(env, 'Vendor_Bills', bill_id, {
     Status:         'reviewed',
@@ -1102,7 +1111,12 @@ async function approveInvoiceReview(env, body) {
     Approved_By:    approved_by     || 'Brett',
     Reviewed_Date:  today,
   });
-  // 2. Append to Invoice_Review log (bridge to Session 2 QuickBooks integration)
+  // 2. Append to Invoice_Review log — this row is what /qb/send-invoice acts on.
+  // NOTE: the ID below is a placeholder. addRow overwrites the ID column with its own
+  // auto-increment, so this 'IR-…' value never reaches the sheet. It used to be returned
+  // to the caller anyway, handing back an id that matches no row — which meant the Hub
+  // could not chain "approve" straight into "send to QuickBooks". The real id is read back
+  // out of addRow's response below.
   const reviewRow = {
     ID:                 'IR-' + Date.now(),
     Bill_ID:            bill_id,
@@ -1124,8 +1138,14 @@ async function approveInvoiceReview(env, body) {
     Approved_Date:      today,
     Active:             'TRUE',
   };
-  await addRow(env, 'Invoice_Review', reviewRow);
-  return json({ success: true, id: reviewRow.ID });
+  const addRes = await addRow(env, 'Invoice_Review', reviewRow);
+  let realId = '';
+  try {
+    const parsed = await addRes.clone().json();
+    if (parsed && parsed.error) return addRes;      // missing tab / no header row — surface it
+    realId = String(parsed && parsed.id || '');
+  } catch (e) { /* fall through with an empty id rather than fail the whole approval */ }
+  return json({ success: true, id: realId });
 }
 
 // ── ESTIMATES ────────────────────────────────────────────────
@@ -2500,7 +2520,13 @@ async function qbAttachReceipts(env, qbToken, invoiceId, billId, billRow, warnin
 }
 
 // GET /qb/ready — approved Invoice_Review rows still waiting to go to QuickBooks.
-async function qbReadyQueue(env) {
+// `?all=1` returns rows at ANY status (including already-sent), optionally narrowed by
+// `?wo_id=`. The Hub needs this to state a bill's QuickBooks position from evidence — the
+// row's own QB_Invoice_ID — instead of inferring "already sent" from absence, which is the
+// mistake FEATURE_LOG rule 16 exists to stop.
+async function qbReadyQueue(env, url) {
+  const wantAll = url && url.searchParams.get('all') === '1';
+  const woFilter = (url && url.searchParams.get('wo_id')) || '';
   try {
     const [irRows, wos] = await Promise.all([
       fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders'),
@@ -2513,7 +2539,12 @@ async function qbReadyQueue(env) {
     // reporting "nothing waiting". The resume logic in qbSendInvoice handles a partial row
     // correctly; it just had no way to be reached. A blank status counts as pending too.
     const OPEN_QB = ['pending', 'partial', ''];
-    const pending = irRows.filter(r => r.Active !== 'FALSE' && OPEN_QB.includes((r.QB_Invoice_Status || '').toLowerCase().trim()));
+    const pending = irRows.filter(r => {
+      if (r.Active === 'FALSE') return false;
+      if (woFilter && String(r.WO_ID) !== String(woFilter)) return false;
+      if (wantAll) return true;
+      return OPEN_QB.includes((r.QB_Invoice_Status || '').toLowerCase().trim());
+    });
     const out = pending.map(r => {
       const wo = findWO(wos, r.WO_ID) || {};
       const rawStatus = (r.QB_Invoice_Status || '').toLowerCase().trim();
