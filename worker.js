@@ -102,6 +102,7 @@ export default {
         if (path === '/qb/accounts')            return await qbListAccounts(env);
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
         if (path === '/qb/ready')               return await qbReadyQueue(env, url);
+        if (path === '/qb/entities')            return await qbEntities(env, url);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
@@ -185,6 +186,7 @@ export default {
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
+        if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
@@ -2268,6 +2270,209 @@ async function qbListAccounts(env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+
+// ── QUICKBOOKS: ENTITY LOOKUP + MAPPING ──────────────────────
+// The Hub's owners/vendors and QuickBooks' customers/vendors are two separate lists.
+// Until now nothing connected them except a stored ID column, so an owner with a blank
+// column was ALWAYS created fresh in QuickBooks — even when that customer already existed
+// there under a slightly different name. "Goldszmidt Properties" vs "Goldszmidt Properties
+// LLC" would have quietly become two customers. These helpers read the real QB list so we
+// can match first and create only as a genuine last resort.
+
+// QBO's query language is SQL-ish; a name containing an apostrophe ("O'Brien Plumbing")
+// terminates the string literal early and the query fails. Doubling it is the escape.
+function qbEscape(s) { return String(s == null ? '' : s).replace(/'/g, "''"); }
+
+// The exact DisplayName the send path would use for an owner / a vendor. Extracted so the
+// mapping screen matches on the same string that would actually be sent to QuickBooks —
+// if these two ever drifted, you'd map a name that never gets looked up.
+function qbOwnerDisplayName(o) {
+  if (!o) return '';
+  return (o.Billing_Name || o.Company || ((o.First_Name || '') + ' ' + (o.Last_Name || '')).trim() || '').trim();
+}
+function qbVendorDisplayName(v) {
+  if (!v) return '';
+  return (v.Name || v.Company || ((v.First_Name || '') + ' ' + (v.Last_Name || '')).trim() || '').trim();
+}
+
+// Names differ in punctuation and suffix far more often than in substance. Compare on a
+// stripped form so "Goldszmidt Properties, LLC." and "goldszmidt properties llc" meet.
+function qbNormName(s) {
+  return String(s == null ? '' : s).toLowerCase()
+    .replace(/[.,'"()]/g, ' ')
+    .replace(/\b(llc|l\.l\.c|inc|incorporated|corp|corporation|co|company|ltd|limited|lp|llp|properties|property)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Full customer/vendor lists from QuickBooks. Cached briefly so the mapping screen, the
+// preview, and a batch of sends don't each pay for the same round trip.
+// Each list carries its OWN clock. Sharing one meant fetching vendors refreshed the
+// customer list's timestamp too, so an alternating pattern could serve a stale customer
+// list forever — and a customer renamed in QuickBooks would keep resolving under its old
+// name indefinitely.
+const _qbEntityCache = { customer: null, vendor: null, customerAt: 0, vendorAt: 0 };
+const QB_ENTITY_TTL_MS = 60000;
+
+async function qbListEntities(env, kind, token, force) {
+  const type = kind === 'vendor' ? 'Vendor' : 'Customer';
+  const key  = kind === 'vendor' ? 'vendor' : 'customer';
+  const atKey = key + 'At';
+  const fresh = _qbEntityCache[key] && (Date.now() - _qbEntityCache[atKey]) < QB_ENTITY_TTL_MS;
+  if (fresh && !force) return _qbEntityCache[key];
+  // Active-only, stated explicitly. QBO happens to default to this, but an archived
+  // customer becoming matchable is not something to leave to a default.
+  const q = encodeURIComponent(`select Id, DisplayName, CompanyName, PrimaryEmailAddr, Active from ${type} where Active = true maxresults 1000`);
+  const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+  const rows = (data && data.QueryResponse && data.QueryResponse[type]) || [];
+  const list = rows.map(r => ({
+    id: r.Id,
+    name: r.DisplayName || r.CompanyName || '',
+    company: r.CompanyName || '',
+    email: (r.PrimaryEmailAddr && r.PrimaryEmailAddr.Address) || '',
+    active: r.Active !== false,
+  })).filter(r => r.name && r.active);
+  _qbEntityCache[key] = list;
+  _qbEntityCache[atKey] = Date.now();
+  return list;
+}
+
+// Best match for a name against a QB list. Returns { id, name, confidence } or null.
+// "exact" is a literal DisplayName hit; "strong" survived normalisation (suffix/punctuation
+// only); "weak" is one name containing the other. Weak matches are SUGGESTED to Brett but
+// never acted on automatically — guessing wrong here means an invoice on the wrong customer.
+function qbMatchEntity(list, name, email) {
+  const raw = String(name || '').trim();
+  if (!raw) return null;
+  const arr = Array.isArray(list) ? list : [];
+  const em = String(email || '').trim().toLowerCase();
+
+  // COUNT candidates per tier, never take the first. `.find()` was picking arbitrarily
+  // between real alternatives: with "Smith Inc" and "Smith Properties LLC" both in
+  // QuickBooks, a Hub owner called "Smith Co" normalises to the same "smith" as both, and
+  // whichever QuickBooks happened to return first won. QBO does not guarantee ordering,
+  // so the same owner could resolve to a different customer on a different day.
+  const pick = (matches, confidence) => {
+    if (!matches.length) return null;
+    if (matches.length > 1) {
+      return { id: matches[0].id, name: matches[0].name, confidence: 'ambiguous',
+               candidates: matches.slice(0, 6).map(m => ({ id: m.id, name: m.name })) };
+    }
+    return { id: matches[0].id, name: matches[0].name, confidence };
+  };
+
+  const lower = raw.toLowerCase();
+  const exact = arr.filter(e => e.name.toLowerCase() === lower);
+  if (exact.length) return pick(exact, 'exact');
+
+  const norm = qbNormName(raw);
+  if (norm) {
+    const strong = arr.filter(e => qbNormName(e.name) === norm || (e.company && qbNormName(e.company) === norm));
+    if (strong.length) return pick(strong, 'strong');
+  }
+
+  // Email alone is NOT strong evidence here. One owner contact address across several
+  // single-property LLCs is the normal shape in property management, so an email hit with
+  // nothing corroborating it in the name is a suggestion for Brett, not a decision.
+  if (em) {
+    const byEmail = arr.filter(e => e.email && e.email.toLowerCase() === em);
+    const corroborated = byEmail.filter(e => norm && qbNormName(e.name) === norm);
+    if (corroborated.length) return pick(corroborated, 'strong');
+    if (byEmail.length) return pick(byEmail, 'weak');
+  }
+
+  if (norm && norm.length >= 4) {
+    const weak = arr.filter(e => { const n = qbNormName(e.name); return n && (n.indexOf(norm) === 0 || norm.indexOf(n) === 0); });
+    if (weak.length) return pick(weak, 'weak');
+  }
+  return null;
+}
+
+// GET /qb/entities — the real QuickBooks customer and vendor lists, each Hub owner/vendor
+// paired with its stored mapping and a suggested match for anything unmapped. This is what
+// the mapping screen renders.
+async function qbEntities(env, url) {
+  try {
+    const token = await qbAccessToken(env);
+    const force = url && url.searchParams.get('refresh') === '1';
+    const [customers, vendors, owners, hubVendors] = await Promise.all([
+      qbListEntities(env, 'customer', token, force),
+      qbListEntities(env, 'vendor', token, force),
+      fetchTab(env, 'Owners'),
+      fetchTab(env, 'Vendors'),
+    ]);
+
+    const ownerRows = owners.filter(o => o.Active !== 'FALSE').map(o => {
+      const display = qbOwnerDisplayName(o);
+      const mapped  = (o.QBO_Customer_ID || '').trim();
+      const inQB    = mapped ? customers.find(c => String(c.id) === mapped) : null;
+      return {
+        id: o.ID, display,
+        email: o.Billing_Email || o.Email || '',
+        qb_id: mapped,
+        qb_name: inQB ? inQB.name : '',
+        stale: !!(mapped && !inQB),     // mapped to an id QuickBooks no longer returns
+        suggest: mapped ? null : qbMatchEntity(customers, display, o.Billing_Email || o.Email || ''),
+      };
+    });
+
+    const vendorRows = hubVendors.filter(v => v.Active !== 'FALSE').map(v => {
+      const display = qbVendorDisplayName(v);
+      const mapped  = (v.QBO_Vendor_ID || '').trim();
+      const inQB    = mapped ? vendors.find(c => String(c.id) === mapped) : null;
+      return {
+        id: v.ID, display,
+        email: v.Email || '',
+        qb_id: mapped,
+        qb_name: inQB ? inQB.name : '',
+        stale: !!(mapped && !inQB),
+        suggest: mapped ? null : qbMatchEntity(vendors, display, v.Email || ''),
+      };
+    });
+
+    return json({ ok: true, qb_customers: customers, qb_vendors: vendors, owners: ownerRows, vendors: vendorRows });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
+
+// Is another active Hub record already pointing at this QuickBooks entity? Two Hub owners
+// sharing one QB customer silently merges their invoices into one ledger. Used by BOTH the
+// manual mapping screen and the automatic send-path persistence — the automatic path used
+// to bypass this and could create exactly the state the manual path refuses.
+async function qbMappingClash(env, kind, id, qbId) {
+  if (!qbId) return null;
+  const tab = kind === 'owner' ? 'Owners' : 'Vendors';
+  const col = kind === 'owner' ? 'QBO_Customer_ID' : 'QBO_Vendor_ID';
+  const rows = await fetchTab(env, tab);
+  return rows.find(r => String(r.ID) !== String(id) && (r[col] || '').trim() === String(qbId) && r.Active !== 'FALSE') || null;
+}
+
+// POST /qb/map { kind: 'owner'|'vendor', id, qb_id }
+// Writes the link. qb_id '' clears it, which is how you undo a wrong match.
+async function qbMapEntity(env, body) {
+  const kind = String(body.kind || '').toLowerCase();
+  const id   = String(body.id || '').trim();
+  const qbId = String(body.qb_id == null ? '' : body.qb_id).trim();
+  if (kind !== 'owner' && kind !== 'vendor') return json({ error: 'kind must be owner or vendor' }, 400);
+  if (!id) return json({ error: 'Missing id' }, 400);
+  if (qbId && !/^\d+$/.test(qbId)) return json({ error: 'qb_id must be a QuickBooks numeric id' }, 400);
+
+  // Refuse to point two Hub records at the same QuickBooks entity. Two owners sharing one
+  // customer means their invoices merge into one ledger — silent, and painful to unpick.
+  if (qbId) {
+    const clash = await qbMappingClash(env, kind, id, qbId);
+    if (clash) {
+      const who = kind === 'owner' ? qbOwnerDisplayName(clash) : qbVendorDisplayName(clash);
+      return json({ error: `QuickBooks #${qbId} is already mapped to "${who}". Clear that one first.` }, 409);
+    }
+  }
+
+  if (kind === 'owner') await updateRow(env, 'Owners',  id, { QBO_Customer_ID: qbId });
+  else                  await updateRow(env, 'Vendors', id, { QBO_Vendor_ID:  qbId });
+  return json({ success: true, kind, id, qb_id: qbId });
+}
+
 // Trade → QB accounts/items map. Income created as sub-accounts of "Services" (5).
 // Bills reference the expense account directly; invoices reference the item.
 const QB_INCOME_PARENT = '5'; // Services (Income)
@@ -2356,11 +2561,57 @@ async function qbSetupTrades(env) {
 
 // ── QUICKBOOKS: SEND-TO-QB (invoice + bill, preview-first) ───
 
+// Does this name already exist in QuickBooks? Returns the id or null.
+// Two passes on purpose: the cached list catches suffix/punctuation differences, then a
+// FRESH exact query catches anything created in QuickBooks since the cache was filled.
+// Only exact and strong matches are acted on automatically — a weak match is a guess, and
+// guessing wrong here bills the wrong customer.
+async function qbLookupExisting(env, kind, displayName, email, token) {
+  try {
+    const list = await qbListEntities(env, kind, token, false);
+    const m = qbMatchEntity(list, displayName, email);
+    // ONLY an unambiguous exact name match is acted on without a human. "strong" means the
+    // names merely normalised the same way — "Smith Inc" and "Smith Properties LLC" both
+    // reduce to "smith", and an owner running several LLCs under one family name is the
+    // normal shape here. Choosing between those puts an invoice on the wrong ledger, so
+    // strong is offered as a SUGGESTION on the mapping screen and nothing more.
+    if (m && m.confidence === 'exact') return m.id;
+  } catch (e) { /* fall through to the direct query */ }
+
+  try {
+    const type = kind === 'vendor' ? 'Vendor' : 'Customer';
+    const q = encodeURIComponent(`select Id, DisplayName from ${type} where DisplayName = '${qbEscape(displayName)}'`);
+    const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+    const rows = (data && data.QueryResponse && data.QueryResponse[type]) || [];
+    if (rows.length === 1 && rows[0].Id) return rows[0].Id;   // exactly one, or don't guess
+  } catch (e) { /* fall through to create */ }
+
+  return null;
+}
+
 // Find (by stored id) or create a QB Customer from an Owner row; persists QBO_Customer_ID back.
 async function qbFindOrCreateCustomer(env, owner, displayName, token) {
   if (owner.QBO_Customer_ID && owner.QBO_Customer_ID.trim()) return owner.QBO_Customer_ID.trim();
   const dn = (displayName || '').trim();
   if (!dn) throw new Error('owner has no name for a QB DisplayName');
+
+  // LOOK BEFORE CREATING. This function was named find-or-create but only ever checked the
+  // stored column, so an unmapped owner was always created fresh — duplicating a customer
+  // that was already in QuickBooks under a slightly different name.
+  const found = await qbLookupExisting(env, 'customer', dn, owner.Billing_Email || owner.Email || '', token);
+  if (found) {
+    if (owner.ID) {
+      const clash = await qbMappingClash(env, 'owner', owner.ID, found);
+      if (clash) {
+        // Two owners resolving to one QuickBooks customer means their invoices merge.
+        // Stop rather than guess — the mapping screen is where this gets settled.
+        throw new Error(`"${dn}" matches QuickBooks #${found}, but that customer is already linked to "${qbOwnerDisplayName(clash)}". Sort it out on the QB Mapping screen.`);
+      }
+      try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: found }); } catch (e) {}
+    }
+    return found;
+  }
+
   const payload = { DisplayName: dn };
   if (owner.Company) payload.CompanyName = owner.Company;
   const email = owner.Billing_Email || '';
@@ -2385,6 +2636,19 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
   if (vendor.QBO_Vendor_ID && vendor.QBO_Vendor_ID.trim()) return vendor.QBO_Vendor_ID.trim();
   const dn = (displayName || '').trim();
   if (!dn) throw new Error('vendor has no name for a QB DisplayName');
+
+  const found = await qbLookupExisting(env, 'vendor', dn, vendor.Email || '', token);
+  if (found) {
+    if (vendor.ID) {
+      const clash = await qbMappingClash(env, 'vendor', vendor.ID, found);
+      if (clash) {
+        throw new Error(`"${dn}" matches QuickBooks #${found}, but that vendor is already linked to "${qbVendorDisplayName(clash)}". Sort it out on the QB Mapping screen.`);
+      }
+      try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) {}
+    }
+    return found;
+  }
+
   const payload = { DisplayName: dn };
   const phone = vendor.Phone || '';
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };
@@ -2651,10 +2915,29 @@ async function qbSendInvoice(env, body) {
     };
 
     if (previewOnly) {
+      // For anything not yet mapped, look it up in the real QuickBooks list so the preview
+      // can say "this looks like the customer you already have" instead of flatly claiming
+      // it's new and creating a duplicate on confirm. Best-effort: a QuickBooks outage
+      // must not block the preview, it just means no suggestion.
+      let custSuggest = null, vendSuggest = null, qbCustomers = [], qbVendors = [];
+      try {
+        const ptok = await qbAccessToken(env);
+        if (!(owner && (owner.QBO_Customer_ID || '').trim())) {
+          qbCustomers = await qbListEntities(env, 'customer', ptok, false);
+          custSuggest = qbMatchEntity(qbCustomers, custDisplay, (owner && (owner.Billing_Email || owner.Email)) || '');
+        }
+        if (!(vendor.QBO_Vendor_ID || '').trim()) {
+          qbVendors = await qbListEntities(env, 'vendor', ptok, false);
+          vendSuggest = qbMatchEntity(qbVendors, vendDisplay, vendor.Email || '');
+        }
+      } catch (e) { warnings.push('Could not read the QuickBooks customer/vendor list — no match suggestions.'); }
+
       return json({ preview: {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
-        customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '' },
-        vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '' },
+        customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '',
+                    owner_id: (owner && owner.ID) || '', suggest: custSuggest, qb_list: qbCustomers },
+        vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '',
+                    vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         bill:     { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0, attach_receipts: reimburseWithUrl },
         photo_link: photoFolderUrl,
@@ -2674,6 +2957,39 @@ async function qbSendInvoice(env, body) {
 
     // Share the job-photo folder so the invoice's CustomerMemo link is viewable by the customer.
     if (photoFolderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, photoFolderId); } catch (e) { warnings.push('Photo-link share failed'); } }
+
+    // Batch send skips the preview, so it is the one path where a NEW QuickBooks customer
+    // or vendor could be created without Brett ever seeing the "this looks like one you
+    // already have" suggestion. When we can see a likely match, stop and send him to the
+    // mapping screen rather than quietly creating a second copy of a customer he has.
+    if (body.batch) {
+      const unmapped = [];
+      let checkFailed = '';
+      const needsCust = !!(owner && !(owner.QBO_Customer_ID || '').trim());
+      const needsVend = !!(vendorCost > 0 && vendor && vendor.ID && !(vendor.QBO_Vendor_ID || '').trim());
+      try {
+        if (needsCust) {
+          const m = qbMatchEntity(await qbListEntities(env, 'customer', token, false), custDisplay, owner.Billing_Email || owner.Email || '');
+          if (m && m.confidence !== 'exact') unmapped.push(`customer "${custDisplay}"`);
+        }
+        if (needsVend) {
+          const m = qbMatchEntity(await qbListEntities(env, 'vendor', token, false), vendDisplay, vendor.Email || '');
+          if (m && m.confidence !== 'exact') unmapped.push(`vendor "${vendDisplay}"`);
+        }
+      } catch (e) { checkFailed = e.message || 'could not read the QuickBooks list'; }
+
+      // A failed READ is not permission to proceed. Batch has no preview, so if we could
+      // not verify whether these already exist, the next step would create them with
+      // nobody watching. Stop and let Brett send this one through Preview & Send.
+      if (checkFailed && (needsCust || needsVend)) {
+        return json({ ok: false, needs_mapping: true, warnings,
+          error: `Not sent: couldn't check QuickBooks for an existing customer/vendor (${checkFailed}). Use Preview & Send for this one so nothing gets created twice.` });
+      }
+      if (unmapped.length) {
+        return json({ ok: false, needs_mapping: true, warnings,
+          error: `Not sent: ${unmapped.join(' and ')} may already exist in QuickBooks. Link ${unmapped.length > 1 ? 'them' : 'it'} on the QB Mapping screen, or use Preview & Send to decide.` });
+      }
+    }
 
     let customerId = '';
     try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); }

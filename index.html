@@ -166,6 +166,7 @@
       <button class="nav-btn" onclick="showPage('shopping',this)">🛒 SHOPPING</button>
       <button class="nav-btn" onclick="showPage('invoice-review',this)">💰 REVIEW BILLS</button>
       <button class="nav-btn" onclick="showPage('qb-send',this)">💵 SEND TO QB</button>
+      <button class="nav-btn" onclick="showPage('qb-map',this)">🔗 QB MAPPING</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
     </nav>
@@ -432,6 +433,20 @@
       <div class="share-link-row"><span class="share-label">Owner Portal</span><code class="share-url" onclick="copyLink(this)">ridge-co.github.io/RidgeCo/owner.html</code><span class="copy-hint">click to copy</span></div>
       <div class="share-link-row"><span class="share-label">Vendor Portal</span><code class="share-url" onclick="copyLink(this)">ridge-co.github.io/RidgeCo/vendor.html</code><span class="copy-hint">click to copy</span></div>
     </div>
+  </div>
+
+  <div class="page" id="page-qb-map">
+    <div class="section-title" style="margin-bottom:4px">QUICKBOOKS MAPPING</div>
+    <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:760px">
+      Links each owner and vendor here to the customer or vendor you already have in QuickBooks.
+      Anything left unlinked gets <b>created</b> in QuickBooks the first time you invoice it —
+      which is how you end up with the same customer twice under slightly different names.
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button class="btn small" onclick="loadQBMapping(true)" style="background:var(--info);color:#000">↻ Reload from QuickBooks</button>
+      <button class="btn small" onclick="qbApplyAllSuggestions()" style="background:var(--accent2);color:#000">✓ Accept all confident matches</button>
+    </div>
+    <div id="qb-map-body"><div style="color:var(--muted);font-size:12px">Loading…</div></div>
   </div>
 
   <div class="page" id="page-devlog">
@@ -1022,6 +1037,7 @@ function showPage(name, btn) {
   if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); }
   if (name === 'invoice-review') { loadInvoiceReview(); }
   if (name === 'qb-send') { loadQBQueue(); }
+  if (name === 'qb-map')  { loadQBMapping(false); }
 }
 
 // ── Dashboard ────────────────────────────────────────────────
@@ -5425,6 +5441,209 @@ function irOpenWO(woId, billId) {
 var _qbQueue = [];
 var _qbCurrent = null;
 
+
+// One line of the Send-to-QB preview for the customer or the vendor. When the record is
+// already linked it just states the QuickBooks id. When it ISN'T, this is the last point
+// before a duplicate gets created — so instead of flatly saying "(new)" it shows the match
+// we found and lets you link it right here, or pick from the full list.
+function qbPreviewEntity(label, kind, e) {
+  if (!e) return '';
+  var idKey = kind === 'owner' ? 'owner_id' : 'vendor_id';
+  var recId = e[idKey] || '';
+  var head = '<div><b style="color:var(--accent)">' + label + ':</b> ' + esc(e.display || '—');
+
+  if (e.existing_id) {
+    return head + ' <span style="color:var(--muted)">(QB #' + esc(e.existing_id) + ')</span></div>';
+  }
+
+  var body = head + ' <span style="color:var(--warn)">(not linked)</span></div>';
+  if (!recId) {
+    return body + '<div style="color:var(--warn);font-size:10.5px;margin:2px 0 6px">Will be created in QuickBooks.</div>';
+  }
+
+  var sug = e.suggest;
+  var list = safeArray(e.qb_list);
+  // Only pre-select when there is exactly one credible match. An ambiguous suggestion must
+  // not arrive pre-chosen — that turns a coin flip into something that looks decided.
+  var preselect = (sug && sug.confidence !== 'ambiguous') ? String(sug.id) : '';
+  var opts = ['<option value="">— create new in QuickBooks —</option>'].concat(list.map(function(c) {
+    return '<option value="' + esc(String(c.id)) + '"' + (preselect && String(c.id) === preselect ? ' selected' : '') + '>' +
+      esc(c.name) + ' (#' + esc(String(c.id)) + ')</option>';
+  })).join('');
+
+  var sugLine;
+  if (!sug) {
+    sugLine = '<div style="color:var(--warn);font-size:11px;margin-bottom:5px">No match found in QuickBooks. Leave as-is to create it, or pick the right one below.</div>';
+  } else if (sug.confidence === 'ambiguous') {
+    sugLine = '<div style="color:var(--warn);font-size:11px;margin-bottom:5px">⚠ ' + safeArray(sug.candidates).length +
+      ' QuickBooks records match this name equally well — ' +
+      safeArray(sug.candidates).map(function(c) { return esc(c.name) + ' (#' + esc(String(c.id)) + ')'; }).join(', ') +
+      '. Pick the right one; nothing is chosen for you.</div>';
+  } else {
+    sugLine = '<div style="color:' + (sug.confidence === 'weak' ? 'var(--warn)' : 'var(--accent2)') + ';font-size:11px;margin-bottom:5px">' +
+      (sug.confidence === 'weak' ? '? Possibly ' : '→ This looks like ') + esc(sug.name) + ' (#' + esc(String(sug.id)) + ') — already in QuickBooks.</div>';
+  }
+
+  body += '<div style="background:var(--surface2);border-radius:5px;padding:7px;margin:4px 0 8px">' +
+    sugLine +
+    '<div style="display:flex;gap:6px;align-items:center">' +
+      '<select id="qbpe-' + kind + '" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' + opts + '</select>' +
+      '<button class="btn small" onclick="qbPreviewLink(\'' + kind + '\',\'' + esc(String(recId)) + '\')" style="background:var(--accent2);color:#000;padding:4px 10px;font-size:11px">Link</button>' +
+    '</div>' +
+  '</div>';
+  return body;
+}
+
+// Link from inside the preview, then re-run it.
+function qbPreviewLink(kind, recId) {
+  var sel = document.getElementById('qbpe-' + kind);
+  var qbId = sel ? sel.value : '';
+  if (!qbId) { toast('Pick a QuickBooks record first, or just confirm to create a new one.', 'info'); return; }
+  api('POST', '/qb/map', { kind: kind, id: recId, qb_id: qbId }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); return; }
+    toast('Linked — re-checking the preview', 'success');
+    _qbMap = null;
+    // Re-run the preview so what you're about to confirm reflects the link. Without this
+    // the modal would still show "(not linked)" over a record that IS now linked.
+    if (_qbCurrent) previewQBSend(_qbCurrent);
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+// ── QUICKBOOKS MAPPING SCREEN ────────────────────────────────
+// The Hub's owner/vendor list and the QuickBooks customer/vendor list are two separate
+// things. This screen is where they get tied together. Anything left untied gets CREATED
+// in QuickBooks on first invoice, which is how duplicate customers appear.
+var _qbMap = null;
+
+function loadQBMapping(refresh) {
+  var box = document.getElementById('qb-map-body');
+  if (box) box.innerHTML = '<div style="color:var(--muted);font-size:12px">Reading your QuickBooks lists…</div>';
+  api('GET', '/qb/entities' + (refresh ? '?refresh=1' : '')).then(function(r) {
+    if (!r || r.ok === false) {
+      if (box) box.innerHTML = '<div style="color:var(--danger);font-size:12px">Could not read QuickBooks: ' +
+        esc((r && r.error) || 'no response') + '</div>';
+      return;
+    }
+    _qbMap = r;
+    renderQBMapping();
+  }).catch(function(e) {
+    if (box) box.innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(e.message) + '</div>';
+  });
+}
+
+function qbMapRow(kind, row, qbList) {
+  var opts = ['<option value="">— not linked —</option>'].concat(safeArray(qbList).map(function(c) {
+    return '<option value="' + esc(String(c.id)) + '"' + (row.qb_id && String(c.id) === String(row.qb_id) ? ' selected' : '') + '>' +
+      esc(c.name) + ' (#' + esc(String(c.id)) + ')</option>';
+  })).join('');
+
+  var state;
+  if (row.stale) {
+    state = '<span style="color:var(--danger);font-size:10.5px">⚠ linked to #' + esc(row.qb_id) + ', which QuickBooks no longer returns</span>';
+  } else if (row.qb_id) {
+    state = '<span style="color:var(--accent2);font-size:10.5px">✓ linked to ' + esc(row.qb_name || ('#' + row.qb_id)) + '</span>';
+  } else if (row.suggest && row.suggest.confidence === 'ambiguous') {
+    // Several QuickBooks records matched equally well. Showing one and calling it "the"
+    // match would be a coin flip on which ledger the invoice lands in.
+    state = '<span style="color:var(--warn);font-size:10.5px">⚠ ' +
+      safeArray(row.suggest.candidates).length + ' possible matches — pick the right one: ' +
+      safeArray(row.suggest.candidates).map(function(c) { return esc(c.name) + ' (#' + esc(String(c.id)) + ')'; }).join(', ') +
+      '</span>';
+  } else if (row.suggest) {
+    var conf = row.suggest.confidence;
+    var colour = conf === 'exact' ? 'var(--accent2)' : (conf === 'strong' ? 'var(--info)' : 'var(--warn)');
+    state = '<span style="color:' + colour + ';font-size:10.5px">' +
+      (conf === 'weak' ? '? possible match: ' : '→ looks like: ') + esc(row.suggest.name) + ' (#' + esc(String(row.suggest.id)) + ')</span> ' +
+      '<button class="btn small" onclick="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',\'' + esc(String(row.suggest.id)) + '\')" ' +
+        'style="background:' + colour + ';color:#000;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
+  } else {
+    state = '<span style="color:var(--warn);font-size:10.5px">no match — will be CREATED in QuickBooks on first invoice</span>';
+  }
+
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
+    '<div>' +
+      '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(no name)') + '</div>' +
+      '<div style="margin-top:2px">' + state + '</div>' +
+    '</div>' +
+    '<select onchange="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',this.value)" ' +
+      'style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px">' +
+      opts + '</select>' +
+  '</div>';
+}
+
+function renderQBMapping() {
+  var box = document.getElementById('qb-map-body');
+  if (!box || !_qbMap) return;
+  var owners = safeArray(_qbMap.owners), vendors = safeArray(_qbMap.vendors);
+  var unlinkedO = owners.filter(function(o) { return !o.qb_id; }).length;
+  var unlinkedV = vendors.filter(function(v) { return !v.qb_id; }).length;
+
+  function section(title, count, total, kind, rows, qbList) {
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+        '<span style="color:var(--accent);font-size:11px;letter-spacing:.08em">' + title + '</span>' +
+        '<span style="color:' + (count ? 'var(--warn)' : 'var(--accent2)') + ';font-size:11px">' +
+          (count ? count + ' of ' + total + ' not linked' : 'all ' + total + ' linked') + '</span>' +
+      '</div>' +
+      (rows.length ? rows.map(function(r) { return qbMapRow(kind, r, qbList); }).join('')
+                   : '<div style="color:var(--muted);font-size:11.5px;padding:6px 0">Nothing here yet.</div>') +
+    '</div>';
+  }
+
+  box.innerHTML =
+    section('OWNERS → QUICKBOOKS CUSTOMERS', unlinkedO, owners.length, 'owner', owners, _qbMap.qb_customers) +
+    section('VENDORS → QUICKBOOKS VENDORS', unlinkedV, vendors.length, 'vendor', vendors, _qbMap.qb_vendors);
+}
+
+function qbSetMap(kind, id, qbId) {
+  api('POST', '/qb/map', { kind: kind, id: id, qb_id: qbId || '' }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); loadQBMapping(false); return; }
+    toast(qbId ? 'Linked' : 'Link cleared', 'success');
+    // Patch in place so the screen doesn't flash, then refresh the underlying lists quietly.
+    var list = kind === 'owner' ? safeArray(_qbMap && _qbMap.owners) : safeArray(_qbMap && _qbMap.vendors);
+    var qbList = kind === 'owner' ? safeArray(_qbMap && _qbMap.qb_customers) : safeArray(_qbMap && _qbMap.qb_vendors);
+    var row = list.find(function(x) { return String(x.id) === String(id); });
+    if (row) {
+      row.qb_id = qbId || '';
+      var ent = qbList.find(function(c) { return String(c.id) === String(qbId); });
+      row.qb_name = ent ? ent.name : '';
+      row.stale = false;
+      if (qbId) row.suggest = null;
+    }
+    renderQBMapping();
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+// Accept every exact and strong match in one go. Weak matches are deliberately excluded —
+// they're a guess, and a wrong guess here puts an invoice on the wrong customer's ledger.
+function qbApplyAllSuggestions() {
+  if (!_qbMap) return;
+  var todo = [];
+  safeArray(_qbMap.owners).forEach(function(o) {
+    if (!o.qb_id && o.suggest && (o.suggest.confidence === 'exact' || o.suggest.confidence === 'strong')) todo.push({ kind: 'owner', id: o.id, qb_id: o.suggest.id, name: o.display });
+  });
+  safeArray(_qbMap.vendors).forEach(function(v) {
+    if (!v.qb_id && v.suggest && (v.suggest.confidence === 'exact' || v.suggest.confidence === 'strong')) todo.push({ kind: 'vendor', id: v.id, qb_id: v.suggest.id, name: v.display });
+  });
+  if (!todo.length) { toast('No confident matches to accept — the rest need a manual pick.', 'info'); return; }
+  if (!confirm('Link ' + todo.length + ' record(s) to their matching QuickBooks entry?\n\n' +
+    todo.slice(0, 12).map(function(t) { return '• ' + t.name; }).join('\n') +
+    (todo.length > 12 ? '\n…and ' + (todo.length - 12) + ' more' : ''))) return;
+
+  var done = 0, failed = 0;
+  (function next(i) {
+    if (i >= todo.length) {
+      toast('Linked ' + done + (failed ? ', ' + failed + ' failed' : ''), failed ? 'error' : 'success');
+      loadQBMapping(false);
+      return;
+    }
+    api('POST', '/qb/map', { kind: todo[i].kind, id: todo[i].id, qb_id: todo[i].qb_id })
+      .then(function(r) { if (r && r.error) failed++; else done++; })
+      .catch(function() { failed++; })
+      .then(function() { next(i + 1); });
+  })(0);
+}
+
 function loadQBQueue() {
   var el = document.getElementById('qb-list');
   if (!el) return;
@@ -5528,8 +5747,8 @@ function renderQBPreview(p) {
     '<div style="color:var(--muted);font-size:11px;margin-top:6px">Already in QB → invoice ' + esc(p.already.invoice||'—') + ', bill ' + esc(p.already.bill||'—') + '</div>' : '';
   return '' +
     '<div style="font-size:12px;line-height:1.7">' +
-      '<div><b style="color:var(--accent)">Customer:</b> ' + esc(p.customer.display||'—') + (p.customer.existing_id?' <span style="color:var(--muted)">(QB #'+esc(p.customer.existing_id)+')</span>':' <span style="color:var(--warn)">(new)</span>') + '</div>' +
-      '<div><b style="color:var(--accent)">Vendor:</b> ' + esc(p.vendor.display||'—') + (p.vendor.existing_id?' <span style="color:var(--muted)">(QB #'+esc(p.vendor.existing_id)+')</span>':' <span style="color:var(--warn)">(new)</span>') + '</div>' +
+      qbPreviewEntity('Customer', 'owner', p.customer) +
+      qbPreviewEntity('Vendor',   'vendor', p.vendor) +
       '<div style="margin:6px 0;color:var(--muted)">Trade: ' + esc(p.trade) + '</div>' +
     '</div>' +
     '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
@@ -5612,7 +5831,7 @@ function qbBatchSend() {
     var id = ids[idx++];
     var msgEl = document.getElementById('qb-msg-'+id);
     if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Sending…</span>';
-    api('POST', '/qb/send-invoice', { id: id }).then(function(res){
+    api('POST', '/qb/send-invoice', { id: id, batch: true }).then(function(res){
       if (res.ok || res.already_sent) {
         ok++;
         // Batch send skips the preview entirely, so this was the ONE place warnings could
