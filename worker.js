@@ -187,6 +187,8 @@ export default {
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
+        if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
+        if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
@@ -2322,7 +2324,12 @@ async function qbListEntities(env, kind, token, force) {
   if (fresh && !force) return _qbEntityCache[key];
   // Active-only, stated explicitly. QBO happens to default to this, but an archived
   // customer becoming matchable is not something to leave to a default.
-  const q = encodeURIComponent(`select Id, DisplayName, CompanyName, PrimaryEmailAddr, Active from ${type} where Active = true maxresults 1000`);
+  // FullyQualifiedName and ParentRef are what make sub-customers legible: without them a
+  // property under one owner is indistinguishable from the same address under another.
+  const fields = type === 'Customer'
+    ? 'Id, DisplayName, CompanyName, PrimaryEmailAddr, Active, FullyQualifiedName, ParentRef, Job, Level'
+    : 'Id, DisplayName, CompanyName, PrimaryEmailAddr, Active';
+  const q = encodeURIComponent(`select ${fields} from ${type} where Active = true maxresults 1000`);
   const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
   const rows = (data && data.QueryResponse && data.QueryResponse[type]) || [];
   const list = rows.map(r => ({
@@ -2331,6 +2338,10 @@ async function qbListEntities(env, kind, token, force) {
     company: r.CompanyName || '',
     email: (r.PrimaryEmailAddr && r.PrimaryEmailAddr.Address) || '',
     active: r.Active !== false,
+    parent_id: (r.ParentRef && String(r.ParentRef.value)) || '',
+    path: r.FullyQualifiedName || r.DisplayName || '',
+    is_sub: r.Job === true || !!(r.ParentRef && r.ParentRef.value),
+    level: typeof r.Level === 'number' ? r.Level : 0,
   })).filter(r => r.name && r.active);
   _qbEntityCache[key] = list;
   _qbEntityCache[atKey] = Date.now();
@@ -2395,11 +2406,13 @@ async function qbEntities(env, url) {
   try {
     const token = await qbAccessToken(env);
     const force = url && url.searchParams.get('refresh') === '1';
-    const [customers, vendors, owners, hubVendors] = await Promise.all([
+    const [customers, vendors, owners, hubVendors, properties, units] = await Promise.all([
       qbListEntities(env, 'customer', token, force),
       qbListEntities(env, 'vendor', token, force),
       fetchTab(env, 'Owners'),
       fetchTab(env, 'Vendors'),
+      fetchTab(env, 'Properties'),
+      fetchTab(env, 'Units'),
     ]);
 
     const ownerRows = owners.filter(o => o.Active !== 'FALSE').map(o => {
@@ -2426,15 +2439,63 @@ async function qbEntities(env, url) {
         qb_id: mapped,
         qb_name: inQB ? inQB.name : '',
         stale: !!(mapped && !inQB),
+        in_house: String(v.In_House || '').toUpperCase() === 'TRUE',
         suggest: mapped ? null : qbMatchEntity(vendors, display, v.Email || ''),
       };
     });
 
-    return json({ ok: true, qb_customers: customers, qb_vendors: vendors, owners: ownerRows, vendors: vendorRows });
+    // Properties nest under their owner in QuickBooks, and units under their property, so
+    // each row needs to know whether its parent is linked yet — a sub-customer can't be
+    // created without one.
+    const ownerById = {}; owners.forEach(o => { ownerById[String(o.ID)] = o; });
+    const propRows = properties.filter(p => p.Active !== 'FALSE').map(p => {
+      const owner   = ownerById[String(p.Owner_ID)] || null;
+      const parentQb = owner ? (owner.QBO_Customer_ID || '').trim() : '';
+      const display = qbPropertyDisplayName(p);
+      const mapped  = (p.QBO_Customer_ID || '').trim();
+      const inQB    = mapped ? customers.find(c => String(c.id) === mapped) : null;
+      return {
+        id: p.ID, display,
+        owner_id: p.Owner_ID || '', owner_name: owner ? qbOwnerDisplayName(owner) : '',
+        parent_qb_id: parentQb,
+        qb_id: mapped, qb_name: inQB ? (inQB.path || inQB.name) : '',
+        stale: !!(mapped && !inQB),
+        suggest: mapped ? null : qbMatchAddress(customers, display, parentQb),
+      };
+    });
+
+    const propById = {}; properties.forEach(p => { propById[String(p.ID)] = p; });
+    const unitRows = units.filter(u => u.Active !== 'FALSE').map(u => {
+      const prop    = propById[String(u.Property_ID)] || null;
+      const parentQb = prop ? (prop.QBO_Customer_ID || '').trim() : '';
+      const display = qbUnitDisplayName(u);
+      const mapped  = (u.QBO_Customer_ID || '').trim();
+      const inQB    = mapped ? customers.find(c => String(c.id) === mapped) : null;
+      return {
+        id: u.ID, display,
+        property_id: u.Property_ID || '', property_name: prop ? qbPropertyDisplayName(prop) : '',
+        parent_qb_id: parentQb,
+        qb_id: mapped, qb_name: inQB ? (inQB.path || inQB.name) : '',
+        stale: !!(mapped && !inQB),
+        suggest: mapped ? null : qbMatchAddress(customers, display, parentQb),
+      };
+    });
+
+    return json({ ok: true, qb_customers: customers, qb_vendors: vendors,
+                  owners: ownerRows, vendors: vendorRows, properties: propRows, units: unitRows });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
 }
+
+// Which sheet tab and column a mappable kind lives in. Properties and Units both store a
+// QuickBooks CUSTOMER id, because a sub-customer is still a customer.
+const QB_MAP_KINDS = {
+  owner:    { tab: 'Owners',     col: 'QBO_Customer_ID', label: 'owner' },
+  vendor:   { tab: 'Vendors',    col: 'QBO_Vendor_ID',   label: 'vendor' },
+  property: { tab: 'Properties', col: 'QBO_Customer_ID', label: 'property' },
+  unit:     { tab: 'Units',      col: 'QBO_Customer_ID', label: 'unit' },
+};
 
 // Is another active Hub record already pointing at this QuickBooks entity? Two Hub owners
 // sharing one QB customer silently merges their invoices into one ledger. Used by BOTH the
@@ -2442,10 +2503,10 @@ async function qbEntities(env, url) {
 // to bypass this and could create exactly the state the manual path refuses.
 async function qbMappingClash(env, kind, id, qbId) {
   if (!qbId) return null;
-  const tab = kind === 'owner' ? 'Owners' : 'Vendors';
-  const col = kind === 'owner' ? 'QBO_Customer_ID' : 'QBO_Vendor_ID';
-  const rows = await fetchTab(env, tab);
-  return rows.find(r => String(r.ID) !== String(id) && (r[col] || '').trim() === String(qbId) && r.Active !== 'FALSE') || null;
+  const spec = QB_MAP_KINDS[kind];
+  if (!spec) return null;
+  const rows = await fetchTab(env, spec.tab);
+  return rows.find(r => String(r.ID) !== String(id) && (r[spec.col] || '').trim() === String(qbId) && r.Active !== 'FALSE') || null;
 }
 
 // POST /qb/map { kind: 'owner'|'vendor', id, qb_id }
@@ -2454,7 +2515,8 @@ async function qbMapEntity(env, body) {
   const kind = String(body.kind || '').toLowerCase();
   const id   = String(body.id || '').trim();
   const qbId = String(body.qb_id == null ? '' : body.qb_id).trim();
-  if (kind !== 'owner' && kind !== 'vendor') return json({ error: 'kind must be owner or vendor' }, 400);
+  const spec = QB_MAP_KINDS[kind];
+  if (!spec) return json({ error: 'kind must be owner, vendor, property or unit' }, 400);
   if (!id) return json({ error: 'Missing id' }, 400);
   if (qbId && !/^\d+$/.test(qbId)) return json({ error: 'qb_id must be a QuickBooks numeric id' }, 400);
 
@@ -2463,14 +2525,217 @@ async function qbMapEntity(env, body) {
   if (qbId) {
     const clash = await qbMappingClash(env, kind, id, qbId);
     if (clash) {
-      const who = kind === 'owner' ? qbOwnerDisplayName(clash) : qbVendorDisplayName(clash);
-      return json({ error: `QuickBooks #${qbId} is already mapped to "${who}". Clear that one first.` }, 409);
+      const who = kind === 'owner' ? qbOwnerDisplayName(clash)
+                : kind === 'vendor' ? qbVendorDisplayName(clash)
+                : kind === 'property' ? qbPropertyDisplayName(clash)
+                : qbUnitDisplayName(clash);
+      return json({ error: `QuickBooks #${qbId} is already mapped to "${who || ('#' + clash.ID)}". Clear that one first.` }, 409);
     }
   }
 
-  if (kind === 'owner') await updateRow(env, 'Owners',  id, { QBO_Customer_ID: qbId });
-  else                  await updateRow(env, 'Vendors', id, { QBO_Vendor_ID:  qbId });
+  // Properties and Units have no QuickBooks column until something needs one, and a write
+  // to a column that doesn't exist reports success and stores nothing.
+  if (kind === 'property' || kind === 'unit') await ensureColumns(env, spec.tab, [spec.col]);
+  await updateRow(env, spec.tab, id, { [spec.col]: qbId });
   return json({ success: true, kind, id, qb_id: qbId });
+}
+
+
+// ── QUICKBOOKS SUB-CUSTOMERS: PROPERTY AND UNIT ──────────────
+// Owners bill at the top level, but the money is really earned at an address. QuickBooks
+// models that as sub-customers: Goldszmidt Properties → 928 N Calvert St → Apt 3R. Until
+// now every invoice landed on the owner, so an owner with a dozen buildings had one
+// undifferentiated ledger.
+
+// Properties and Units have no QuickBooks column out of the box, and updateRow maps by
+// header name — writing to a column that doesn't exist succeeds and stores nothing. That
+// silent no-op has bitten this system before, so the column is created before it's used.
+async function ensureColumns(env, tab, columns) {
+  // Read the WHOLE tab, not just row 1. Sheets trims trailing empty cells, so a column with
+  // a blank header but real data underneath makes row 1 look narrower than the sheet is —
+  // and appending at that index would drop a new header on top of live data. The widest row
+  // is the honest width.
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`);
+  const rows = data.values || [];
+  const headers = rows[0] || [];
+  const missing = columns.filter(c => !headers.includes(c));
+  if (!missing.length) return;
+
+  const width = rows.reduce((w, r) => Math.max(w, (r && r.length) || 0), headers.length);
+
+  // Single-cell writes via batchUpdate, the same shape updateRow uses. Rewriting the entire
+  // header row would mean two concurrent calls each read the old headers and the second
+  // write silently drops the first's column.
+  const updates = missing.map((name, i) => ({
+    range: `${tab}!${col(width + i)}1`,
+    values: [[name]],
+  }));
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+  // Deliberately returns nothing. The obvious return — headers.concat(missing) — would have
+  // indices that don't match the sheet whenever a gap was stepped over, which is a trap for
+  // whoever uses it next. Callers that need the headers should re-read them.
+}
+
+// Addresses differ in abbreviation far more than in substance. "928 N. Calvert Street" and
+// "928 N Calvert St" are the same building, and one of them is in QuickBooks already.
+const QB_ADDR_WORDS = {
+  street: 'st', str: 'st', avenue: 'ave', av: 'ave', boulevard: 'blvd', road: 'rd',
+  drive: 'dr', lane: 'ln', court: 'ct', place: 'pl', terrace: 'ter', circle: 'cir',
+  parkway: 'pkwy', highway: 'hwy', square: 'sq', trail: 'trl',
+  north: 'n', south: 's', east: 'e', west: 'w',
+  northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw',
+  apartment: 'apt', unit: 'apt', suite: 'ste', number: '', building: 'bldg', floor: 'fl',
+};
+
+function qbNormAddress(s) {
+  return String(s == null ? '' : s).toLowerCase()
+    .replace(/[.,#]/g, ' ')
+    .split(/\s+/)
+    .map(w => (Object.prototype.hasOwnProperty.call(QB_ADDR_WORDS, w) ? QB_ADDR_WORDS[w] : w))
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+// The name a property / unit gets in QuickBooks. Street address for the building, the unit
+// label nested beneath it — QuickBooks renders the path itself as
+// "Goldszmidt Properties:928 N Calvert St:Apt 3R", so repeating the street on the child
+// would read as "928 N Calvert St:928 N Calvert St Apt 3R".
+function qbPropertyDisplayName(p) {
+  return String((p && p.Address) || '').trim();
+}
+function qbUnitDisplayName(u) {
+  const label = String((u && u.Unit_Label) || '').trim();
+  if (!label) return '';
+  return /^(apt|unit|ste|suite|#|bldg|fl)\b/i.test(label) ? label : ('Apt ' + label);
+}
+
+// Match an address against QuickBooks customers, preferring children of the owner this
+// property actually belongs to. Scoping to the owner's sub-tree is what makes this safe:
+// "100 Main St" under one owner is a different building from "100 Main St" under another.
+function qbMatchAddress(list, name, parentQbId) {
+  const raw = String(name || '').trim();
+  if (!raw) return null;
+  const arr = Array.isArray(list) ? list : [];
+  const norm = qbNormAddress(raw);
+  if (!norm) return null;
+
+  const scoped = parentQbId ? arr.filter(e => String(e.parent_id || '') === String(parentQbId)) : [];
+  const pools = scoped.length ? [scoped, arr] : [arr];
+
+  for (const pool of pools) {
+    // Compare on the leaf name, and also on the full path's last segment, so a QuickBooks
+    // record named with the whole address still meets one named with just the street.
+    const hits = pool.filter(e => qbNormAddress(e.name) === norm);
+    if (hits.length === 1) return { id: hits[0].id, name: hits[0].name, path: hits[0].path || hits[0].name, confidence: pool === scoped ? 'exact' : 'strong' };
+    if (hits.length > 1) {
+      return { id: hits[0].id, name: hits[0].name, confidence: 'ambiguous',
+               candidates: hits.slice(0, 6).map(h => ({ id: h.id, name: h.path || h.name })) };
+    }
+  }
+
+  // Nothing matched outright. Offer a containment hit as a suggestion only — an address
+  // that merely starts the same ("100 Main St" vs "100 Main St Rear") is a different unit.
+  if (norm.length >= 5) {
+    const loose = (scoped.length ? scoped : arr).filter(e => {
+      const n = qbNormAddress(e.name);
+      return n && (n.indexOf(norm) === 0 || norm.indexOf(n) === 0);
+    });
+    if (loose.length === 1) return { id: loose[0].id, name: loose[0].name, path: loose[0].path || loose[0].name, confidence: 'weak' };
+    if (loose.length > 1) return { id: loose[0].id, name: loose[0].name, confidence: 'ambiguous',
+                                   candidates: loose.slice(0, 6).map(h => ({ id: h.id, name: h.path || h.name })) };
+  }
+  return null;
+}
+
+// Walk from the most specific linked level outwards. Returns which level the invoice will
+// land on and why, so the preview can show it rather than leaving Brett to guess.
+function qbResolveBillTo(owner, prop, unit) {
+  const unitId  = unit && (unit.QBO_Customer_ID || '').trim();
+  const propId  = prop && (prop.QBO_Customer_ID || '').trim();
+  const ownerId = owner && (owner.QBO_Customer_ID || '').trim();
+  if (unitId)  return { level: 'unit',     qb_id: unitId,  display: qbUnitDisplayName(unit), row: unit };
+  if (propId)  return { level: 'property', qb_id: propId,  display: qbPropertyDisplayName(prop), row: prop };
+  return { level: 'owner', qb_id: ownerId || '', display: qbOwnerDisplayName(owner), row: owner || null };
+}
+
+// POST /qb/vendor-in-house { id, in_house }
+// Marks a vendor as in-house: the work is yours or an employee's, so no QuickBooks Bill is
+// created and no payable is raised against a person the business doesn't actually owe.
+async function qbSetVendorInHouse(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const on = body.in_house === true || String(body.in_house).toUpperCase() === 'TRUE';
+  await ensureColumns(env, 'Vendors', ['In_House']);
+  await updateRow(env, 'Vendors', id, { In_House: on ? 'TRUE' : 'FALSE' });
+  return json({ success: true, id, in_house: on });
+}
+
+// POST /qb/create-subcustomer { kind: 'property'|'unit', id }
+// Creates the sub-customer under its parent and stores the id. Only ever on request —
+// the same rule as customers: nothing appears in QuickBooks without Brett asking for it.
+async function qbCreateSubCustomer(env, body) {
+  const kind = String(body.kind || '').toLowerCase();
+  const id = String(body.id || '').trim();
+  if (kind !== 'property' && kind !== 'unit') return json({ error: 'kind must be property or unit' }, 400);
+  if (!id) return json({ error: 'Missing id' }, 400);
+
+  const token = await qbAccessToken(env);
+  let displayName = '', parentId = '', tab = '', row = null;
+
+  if (kind === 'property') {
+    const [properties, owners] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Owners')]);
+    row = properties.find(p => String(p.ID) === id);
+    if (!row) return json({ error: 'Property not found' }, 404);
+    if ((row.QBO_Customer_ID || '').trim()) return json({ error: 'Already linked to QuickBooks #' + row.QBO_Customer_ID }, 409);
+    const owner = owners.find(o => String(o.ID) === String(row.Owner_ID));
+    if (!owner) return json({ error: 'This property has no owner — set one first.' }, 400);
+    parentId = (owner.QBO_Customer_ID || '').trim();
+    if (!parentId) return json({ error: `Link the owner "${qbOwnerDisplayName(owner)}" to QuickBooks first — a sub-customer needs a parent.` }, 400);
+    displayName = qbPropertyDisplayName(row);
+    tab = 'Properties';
+  } else {
+    const [units, properties] = await Promise.all([fetchTab(env, 'Units'), fetchTab(env, 'Properties')]);
+    row = units.find(u => String(u.ID) === id);
+    if (!row) return json({ error: 'Unit not found' }, 404);
+    if ((row.QBO_Customer_ID || '').trim()) return json({ error: 'Already linked to QuickBooks #' + row.QBO_Customer_ID }, 409);
+    const prop = properties.find(p => String(p.ID) === String(row.Property_ID));
+    if (!prop) return json({ error: 'This unit has no property.' }, 400);
+    parentId = (prop.QBO_Customer_ID || '').trim();
+    if (!parentId) return json({ error: `Link or create "${qbPropertyDisplayName(prop)}" in QuickBooks first — the unit nests under it.` }, 400);
+    displayName = qbUnitDisplayName(row);
+    tab = 'Units';
+  }
+
+  if (!displayName) return json({ error: 'No address or unit label to name this with.' }, 400);
+
+  // QuickBooks requires DisplayName to be unique across ALL customers, not just within a
+  // parent. Two owners each with a "100 Main St" collide, so fall back to the full path.
+  const payload = { DisplayName: displayName, Job: true, ParentRef: { value: String(parentId) } };
+  let r = await qbApi(env, 'customer?minorversion=73', 'POST', payload, token);
+  let newId = (r && r.Customer && r.Customer.Id) || '';
+
+  if (!newId) {
+    const dup = qbDupId(r);
+    if (dup) {
+      // The name is taken by an existing customer. That is a LINK, not a create — but only
+      // if it actually sits under the right parent. Otherwise it's someone else's address.
+      const all = await qbListEntities(env, 'customer', token, true);
+      const existing = all.find(e => String(e.id) === String(dup));
+      if (existing && String(existing.parent_id || '') === String(parentId)) {
+        await ensureColumns(env, tab, ['QBO_Customer_ID']);
+        await updateRow(env, tab, id, { QBO_Customer_ID: String(dup) });
+        return json({ success: true, id: String(dup), linked_existing: true, name: existing.path || existing.name });
+      }
+      return json({ error: `"${displayName}" already exists in QuickBooks under a different parent. Link it manually if it's the right one.` }, 409);
+    }
+    return json({ error: qbFault(r) || 'QuickBooks would not create that sub-customer' }, 500);
+  }
+
+  await ensureColumns(env, tab, ['QBO_Customer_ID']);
+  await updateRow(env, tab, id, { QBO_Customer_ID: String(newId) });
+  _qbEntityCache.customer = null;          // the tree changed; don't serve a list without it
+  return json({ success: true, id: String(newId), name: displayName, parent_id: parentId });
 }
 
 // Trade → QB accounts/items map. Income created as sub-accounts of "Services" (5).
@@ -2860,15 +3125,22 @@ async function qbSendInvoice(env, body) {
       return json({ ok: true, already_sent: true, invoice_id: ir.QB_Invoice_ID, bill_id: ir.QB_Bill_ID, status: ir.QB_Invoice_Status });
     }
 
-    const [wos, props, owners, vendors, bills] = await Promise.all([
+    const [wos, props, owners, vendors, bills, units] = await Promise.all([
       fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'),
       fetchTab(env, 'Owners'), fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'),
+      fetchTab(env, 'Units'),
     ]);
     const wo      = findWO(wos, ir.WO_ID) || {};
     const prop    = props.find(p => p.ID === wo.Property_ID) || {};
     const owner   = owners.find(o => o.ID === prop.Owner_ID) || null;
+    const unit    = units.find(u => u.ID === wo.Unit_ID) || null;
     const vendor  = vendors.find(v => v.ID === ir.Vendor_ID) || {};
     const billRow = bills.find(b => b.ID === ir.Bill_ID) || {};
+
+    // Bill to the most specific place that's actually linked: the unit if it has its own
+    // sub-customer, else the building, else the owner. An owner with a dozen buildings
+    // otherwise gets one undifferentiated ledger and no way to see which address earns.
+    const billTo = qbResolveBillTo(owner, prop, unit);
 
     const tradeName = (wo.Trade && QB_TRADE_MAP[wo.Trade]) ? wo.Trade : 'General';
     const trade = QB_TRADE_MAP[tradeName];
@@ -2932,14 +3204,24 @@ async function qbSendInvoice(env, body) {
         }
       } catch (e) { warnings.push('Could not read the QuickBooks customer/vendor list — no match suggestions.'); }
 
+      const previewInHouse = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+      if (previewInHouse && vendorCost > 0) {
+        warnings.push(`No vendor bill will be created — ${vendDisplay} is marked in-house.`);
+      }
+
       return json({ preview: {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
+        bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
+                   property: qbPropertyDisplayName(prop), unit: qbUnitDisplayName(unit),
+                   property_id: prop.ID || '', unit_id: (unit && unit.ID) || '' },
+        vendor_in_house: previewInHouse,
         customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '',
                     owner_id: (owner && owner.ID) || '', suggest: custSuggest, qb_list: qbCustomers },
         vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '',
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
-        bill:     { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0, attach_receipts: reimburseWithUrl },
+        bill:     { total: +vendorCost.toFixed(2), account: trade.expense,
+                    skipped: vendorCost <= 0 || previewInHouse, in_house: previewInHouse, attach_receipts: reimburseWithUrl },
         photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
         warnings,
@@ -2966,13 +3248,14 @@ async function qbSendInvoice(env, body) {
       const unmapped = [];
       let checkFailed = '';
       const needsCust = !!(owner && !(owner.QBO_Customer_ID || '').trim());
-      const needsVend = !!(vendorCost > 0 && vendor && vendor.ID && !(vendor.QBO_Vendor_ID || '').trim());
+      const vendorInHouseEarly = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+      const needsVend = !!(vendorCost > 0 && vendor && vendor.ID && !(vendor.QBO_Vendor_ID || '').trim() && !vendorInHouseEarly);
       try {
         if (needsCust) {
           const m = qbMatchEntity(await qbListEntities(env, 'customer', token, false), custDisplay, owner.Billing_Email || owner.Email || '');
           if (m && m.confidence !== 'exact') unmapped.push(`customer "${custDisplay}"`);
         }
-        if (needsVend) {
+        if (needsVend && !vendorInHouseEarly) {
           const m = qbMatchEntity(await qbListEntities(env, 'vendor', token, false), vendDisplay, vendor.Email || '');
           if (m && m.confidence !== 'exact') unmapped.push(`vendor "${vendDisplay}"`);
         }
@@ -2992,8 +3275,13 @@ async function qbSendInvoice(env, body) {
     }
 
     let customerId = '';
-    try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); }
-    catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
+    if (billTo.level !== 'owner' && billTo.qb_id) {
+      // Property or unit is already linked — use it directly. Nothing to find or create.
+      customerId = billTo.qb_id;
+    } else {
+      try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); }
+      catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
+    }
 
     if (!haveInv) {
       invoicePayload.CustomerRef = { value: customerId };
@@ -3002,7 +3290,16 @@ async function qbSendInvoice(env, body) {
       if (!invoiceId) errors.push('Invoice: ' + (qbFault(r) || 'unknown error'));
     }
 
-    if (!haveBill && vendorCost > 0) {
+    // An in-house vendor is you, or someone on the payroll. The work happened, but no money
+    // left the business to a third party, so a QuickBooks Bill would create a payable the
+    // company owes itself. The customer invoice is unaffected — the margin is simply real
+    // rather than netted against a cost that was never paid out.
+    const vendorInHouse = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+    if (vendorInHouse && vendorCost > 0) {
+      warnings.push(`No vendor bill created — ${vendDisplay} is marked in-house, so there's no payable.`);
+    }
+
+    if (!haveBill && vendorCost > 0 && !vendorInHouse) {
       let vendorId = '';
       try { vendorId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token); }
       catch (e) { errors.push('Vendor: ' + e.message); }
@@ -3017,9 +3314,20 @@ async function qbSendInvoice(env, body) {
     // Attach receipts: ALL to the customer invoice; reimburse-the-vendor ones also to the bill.
     if (invoiceId || billId) { try { await qbAttachReceipts(env, token, invoiceId, billId, billRow, warnings); } catch (e) { warnings.push('Attachments error: ' + (e.message || '')); } }
 
-    const status = (invoiceId && (billId || vendorCost <= 0)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
+    // An in-house job is COMPLETE with no bill — treat a deliberately skipped bill the same
+    // as no vendor cost, or the row sits at "partial" forever waiting for a bill that is
+    // never coming, and Review Bills keeps offering to resume it.
+    const billNotOwed = vendorCost <= 0 || vendorInHouse;
+    const status = (invoiceId && (billId || billNotOwed)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
+    // Record WHICH ledger this landed on, and whether a bill was deliberately not raised.
+    // Without these, an owner ledger lighter than expected has no explanation in the sheet,
+    // and in-house rows carry a Vendor_Cost with no matching payable to reconcile against.
+    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House']); }
+    catch (e) { warnings.push('Could not record which ledger this billed to — the invoice and bill ids are still saved.'); }
     await updateRow(env, 'Invoice_Review', ir.ID, {
       QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
+      QB_Bill_To: billTo.level + (billTo.display ? ': ' + billTo.display : ''),
+      QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
     });
     if (status === 'sent' && ir.WO_ID) { try { await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' }); } catch (e) {} }
 

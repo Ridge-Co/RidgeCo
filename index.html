@@ -5779,6 +5779,24 @@ var _qbQueue = [];
 var _qbCurrent = null;
 
 
+// Which ledger this invoice actually lands on. An owner with a dozen buildings wants to see
+// "928 N Calvert St", not just their company name — and if it's going to land on the owner
+// because nothing more specific is linked, that should be visible BEFORE confirming.
+function qbBillToLine(p) {
+  var b = p && p.bill_to;
+  if (!b) return '';
+  if (b.level === 'owner') {
+    var missing = b.property ? esc(b.property) : 'this property';
+    return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">' +
+      '↳ Billing at the owner level — ' + missing + ' isn\'t linked to a QuickBooks sub-customer. ' +
+      'Link or create it on the QB Mapping screen to bill the address instead.</div>';
+  }
+  return '<div style="color:var(--accent2);font-size:11px;margin:2px 0 6px">' +
+    '↳ Billing to ' + (b.level === 'unit' ? 'unit' : 'property') + ': <b>' + esc(b.display || '') + '</b>' +
+    (b.level === 'unit' && b.property ? ' <span style="color:var(--muted)">at ' + esc(b.property) + '</span>' : '') +
+    ' <span style="color:var(--muted)">(QB #' + esc(String(b.qb_id || '')) + ')</span></div>';
+}
+
 // One line of the Send-to-QB preview for the customer or the vendor. When the record is
 // already linked it just states the QuickBooks id. When it ISN'T, this is the last point
 // before a duplicate gets created — so instead of flatly saying "(new)" it shows the match
@@ -5868,6 +5886,78 @@ function loadQBMapping(refresh) {
   });
 }
 
+// A property or unit that has no parent linked yet CANNOT be created in QuickBooks — a
+// sub-customer needs something to nest under. Say that plainly instead of offering a
+// button that would fail.
+function qbSubRow(kind, row, qbList) {
+  var parentMissing = !row.parent_qb_id;
+  var opts = ['<option value="">— not linked —</option>'].concat(safeArray(qbList).map(function(c) {
+    return '<option value="' + esc(String(c.id)) + '"' + (row.qb_id && String(c.id) === String(row.qb_id) ? ' selected' : '') + '>' +
+      esc(c.path || c.name) + ' (#' + esc(String(c.id)) + ')</option>';
+  })).join('');
+
+  var state, action = '';
+  if (row.stale) {
+    state = '<span style="color:var(--danger);font-size:10.5px">⚠ linked to #' + esc(row.qb_id) + ', which QuickBooks no longer returns</span>';
+  } else if (row.qb_id) {
+    state = '<span style="color:var(--accent2);font-size:10.5px">✓ ' + esc(row.qb_name || ('#' + row.qb_id)) + '</span>';
+  } else if (row.suggest && row.suggest.confidence === 'ambiguous') {
+    state = '<span style="color:var(--warn);font-size:10.5px">⚠ ' + safeArray(row.suggest.candidates).length +
+      ' possible matches — pick one: ' + safeArray(row.suggest.candidates).map(function(c) { return esc(c.name); }).join(', ') + '</span>';
+  } else if (row.suggest) {
+    var colour = row.suggest.confidence === 'weak' ? 'var(--warn)' : 'var(--accent2)';
+    state = '<span style="color:' + colour + ';font-size:10.5px">' +
+      (row.suggest.confidence === 'weak' ? '? possibly ' : '→ looks like ') +
+      esc(row.suggest.path || row.suggest.name) + '</span> ' +
+      '<button class="btn small" onclick="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',\'' + esc(String(row.suggest.id)) + '\')" ' +
+        'style="background:' + colour + ';color:#000;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
+  } else if (parentMissing) {
+    state = '<span style="color:var(--muted);font-size:10.5px">' +
+      (kind === 'property' ? 'link its owner first' : 'link its property first') + '</span>';
+  } else {
+    state = '<span style="color:var(--warn);font-size:10.5px">nothing like it in QuickBooks</span>';
+  }
+
+  if (!row.qb_id && !parentMissing) {
+    action = '<button class="btn small" onclick="qbCreateSub(\'' + kind + '\',\'' + esc(String(row.id)) + '\')" ' +
+      'style="background:var(--info);color:#000;padding:2px 8px;font-size:10px;white-space:nowrap">+ Create</button>';
+  }
+
+  var context = kind === 'property'
+    ? (row.owner_name ? esc(row.owner_name) : '<span style="color:var(--danger)">no owner</span>')
+    : (row.property_name ? esc(row.property_name) : '<span style="color:var(--danger)">no property</span>');
+
+  return '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
+    '<div>' +
+      '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(unnamed)') + '</div>' +
+      '<div style="color:var(--muted);font-size:10px;margin:1px 0">under ' + context + '</div>' +
+      '<div>' + state + '</div>' +
+    '</div>' +
+    '<select onchange="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',this.value)" ' +
+      'style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
+      opts + '</select>' +
+    '<div>' + action + '</div>' +
+  '</div>';
+}
+
+function qbCreateSub(kind, id) {
+  api('POST', '/qb/create-subcustomer', { kind: kind, id: id }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); return; }
+    toast(r && r.linked_existing ? 'Already existed — linked it' : 'Created in QuickBooks', 'success');
+    loadQBMapping(true);        // the tree changed, so re-read it
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+function qbToggleInHouse(kind, id, on) {
+  api('POST', '/qb/vendor-in-house', { id: id, in_house: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); loadQBMapping(false); return; }
+    toast(on ? 'Marked in-house — no QuickBooks bill will be raised' : 'Back to a normal vendor', 'success');
+    var v = safeArray(_qbMap && _qbMap.vendors).find(function(x) { return String(x.id) === String(id); });
+    if (v) v.in_house = on;
+    renderQBMapping();
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
 function qbMapRow(kind, row, qbList) {
   var opts = ['<option value="">— not linked —</option>'].concat(safeArray(qbList).map(function(c) {
     return '<option value="' + esc(String(c.id)) + '"' + (row.qb_id && String(c.id) === String(row.qb_id) ? ' selected' : '') + '>' +
@@ -5897,10 +5987,21 @@ function qbMapRow(kind, row, qbList) {
     state = '<span style="color:var(--warn);font-size:10.5px">no match — will be CREATED in QuickBooks on first invoice</span>';
   }
 
+  // In-house means the work was yours or an employee's: no money left the business, so no
+  // QuickBooks bill and no payable against a person you don't actually owe.
+  var inHouse = kind === 'vendor'
+    ? '<label style="display:inline-flex;align-items:center;gap:4px;margin-top:3px;cursor:pointer;color:' +
+        (row.in_house ? 'var(--accent2)' : 'var(--muted)') + ';font-size:10.5px">' +
+        '<input type="checkbox"' + (row.in_house ? ' checked' : '') +
+        ' onchange="qbToggleInHouse(\'vendor\',\'' + esc(String(row.id)) + '\',this.checked)" style="width:auto;padding:0">' +
+        'in-house — raise no bill</label>'
+    : '';
+
   return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
     '<div>' +
       '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(no name)') + '</div>' +
-      '<div style="margin-top:2px">' + state + '</div>' +
+      '<div style="margin-top:2px">' + (row.in_house && kind === 'vendor' ? '<span style="color:var(--accent2);font-size:10.5px">in-house — no QuickBooks bill</span>' : state) + '</div>' +
+      inHouse +
     '</div>' +
     '<select onchange="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',this.value)" ' +
       'style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px">' +
@@ -5927,8 +6028,27 @@ function renderQBMapping() {
     '</div>';
   }
 
+  var props = safeArray(_qbMap.properties), units = safeArray(_qbMap.units);
+  var unlinkedP = props.filter(function(p) { return !p.qb_id; }).length;
+  var unlinkedU = units.filter(function(u) { return !u.qb_id; }).length;
+
+  function subSection(title, blurb, count, total, kind, rows) {
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<span style="color:var(--accent);font-size:11px;letter-spacing:.08em">' + title + '</span>' +
+        '<span style="color:' + (count ? 'var(--warn)' : 'var(--accent2)') + ';font-size:11px">' +
+          (count ? count + ' of ' + total + ' not linked' : 'all ' + total + ' linked') + '</span>' +
+      '</div>' +
+      '<div style="color:var(--muted);font-size:10.5px;line-height:1.45;margin:4px 0 2px">' + blurb + '</div>' +
+      (rows.length ? rows.map(function(r) { return qbSubRow(kind, r, _qbMap.qb_customers); }).join('')
+                   : '<div style="color:var(--muted);font-size:11.5px;padding:6px 0">Nothing here yet.</div>') +
+    '</div>';
+  }
+
   box.innerHTML =
     section('OWNERS → QUICKBOOKS CUSTOMERS', unlinkedO, owners.length, 'owner', owners, _qbMap.qb_customers) +
+    subSection('PROPERTIES → SUB-CUSTOMERS', 'Each building sits under its owner, so an invoice lands on the address that earned it rather than on one shared ledger.', unlinkedP, props.length, 'property', props) +
+    subSection('UNITS → SUB-CUSTOMERS', 'Optional. Link a unit only where you want that apartment tracked separately; otherwise its work bills to the building.', unlinkedU, units.length, 'unit', units) +
     section('VENDORS → QUICKBOOKS VENDORS', unlinkedV, vendors.length, 'vendor', vendors, _qbMap.qb_vendors);
 }
 
@@ -6085,6 +6205,7 @@ function renderQBPreview(p) {
   return '' +
     '<div style="font-size:12px;line-height:1.7">' +
       qbPreviewEntity('Customer', 'owner', p.customer) +
+      qbBillToLine(p) +
       qbPreviewEntity('Vendor',   'vendor', p.vendor) +
       '<div style="margin:6px 0;color:var(--muted)">Trade: ' + esc(p.trade) + '</div>' +
     '</div>' +
@@ -6096,7 +6217,9 @@ function renderQBPreview(p) {
     '</div>' +
     '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
       '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL</div>' +
-      (p.bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
+      (p.bill.in_house ? '<div style="color:var(--accent2)">' + esc(p.vendor.display || 'This vendor') + ' is in-house — no bill, so no payable to you.' +
+        '<div style="color:var(--muted);font-size:10.5px;margin-top:3px">QuickBooks will show the full invoice as income. The Hub still nets your own labour out of job profit, so the two won\'t agree on this job.</div></div>' :
+       p.bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
         '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc(p.vendor.display||'vendor') + '</span><span style="color:var(--warn)">$' + (parseFloat(p.bill.total)||0).toFixed(2) + '</span></div>') +
       ((p.bill && p.bill.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + p.bill.attach_receipts + ' receipt(s) attach to this bill (not shown to customer)</div>' : '') +
     '</div>' +
