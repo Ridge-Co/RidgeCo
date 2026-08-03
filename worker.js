@@ -104,6 +104,7 @@ export default {
         if (path === '/qb/ready')               return await qbReadyQueue(env, url);
         if (path === '/qb/entities')            return await qbEntities(env, url);
         if (path === '/admin/duplicate-properties') return await adminDuplicateProperties(env);
+        if (path === '/qb/trade-map')           return await qbTradeMap(env);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
@@ -159,6 +160,7 @@ export default {
         if (path === '/admin/fix-pins')           return await adminFixPins(env, body);
         if (path === '/admin/fix-stale-tenants')  return await adminFixStaleTenants(env, body);
         if (path === '/admin/merge-property')     return await adminMergeProperty(env, body);
+        if (path === '/admin/migrate-trades')     return await adminMigrateTrades(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
@@ -951,7 +953,22 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
   else if (woAccess === 'FALSE') vendorHasAccess = false;
   else {
     const trade = (wo.Trade || '').trim();
-    const tradeDefault = tradeDefaults[trade];
+    // Check the raw spelling AND the resolved one. A default saved under "Electric" must
+    // keep applying now that the trade resolves to "Electrical" — an unmatched lookup
+    // yields undefined, and `undefined !== 'FALSE'` GRANTS access. A rename must never
+    // quietly turn a no-access trade into an access-granted one.
+    const resolvedName = resolveTrade(trade).name;
+    let tradeDefault = tradeDefaults[trade];
+    if (tradeDefault === undefined) tradeDefault = tradeDefaults[resolvedName];
+    if (tradeDefault === undefined) {
+      // Resolve the CONFIG KEYS too, not just the work order's trade. His access rules were
+      // saved through a dropdown that only offered "Electric", so the keys are the old
+      // spelling while new work orders say "Electrical" — and an unmatched lookup GRANTS
+      // access. A rule he set to no-access must not be silently ignored because the
+      // vocabulary moved underneath it.
+      const key = Object.keys(tradeDefaults).find(kk => resolveTrade(kk).name === resolvedName);
+      if (key !== undefined) tradeDefault = tradeDefaults[key];
+    }
     vendorHasAccess = tradeDefault !== 'FALSE';
   }
   const rawLockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit.Unit_Label||'');
@@ -1636,6 +1653,58 @@ const PROPERTY_REFS = [
 // GET /admin/duplicate-properties
 // Addresses appearing more than once, with a full reference count per ID so you can see
 // which row the work actually lives on before touching anything.
+// POST /admin/migrate-trades { apply?: true }
+// One-time sweep bringing stored trade names onto the canonical list. The worker already
+// aliases on read, so the MONEY was never wrong — but every client-side filter compares
+// raw strings, so a Hub filter set to "Electrical" returns none of the history stored as
+// "Electric". This closes that.
+//
+// Safe to run now in a way it wasn't before: every form writes the canonical list, so
+// nothing is going to reintroduce the old spellings behind the sweep.
+const TRADE_MIGRATION_TABS = [
+  { tab: 'Work_Orders', cols: ['Trade'] },
+  { tab: 'Vendors',     cols: ['Trade', 'Trades'] },
+  { tab: 'Materials',   cols: ['Trade'] },
+  { tab: 'WO_Templates',cols: ['Trade'] },
+];
+
+async function adminMigrateTrades(env, body) {
+  const apply = body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
+  const report = [];
+
+  for (const spec of TRADE_MIGRATION_TABS) {
+    let rows;
+    try { rows = await fetchTab(env, spec.tab); }
+    catch (e) { if (isMissingTabError(e)) continue; report.push({ tab: spec.tab, error: e.message }); continue; }
+
+    for (const col of spec.cols) {
+      const changes = [];
+      for (const r of rows) {
+        const raw = String(r[col] || '').trim();
+        if (!raw) continue;
+        // Trades is a comma list; Trade is a single value. Handle both by splitting.
+        const parts = raw.split(',').map(x => x.trim()).filter(Boolean);
+        const mapped = parts.map(x => { const res = resolveTrade(x); return res.matched ? res.name : x; });
+        const next = mapped.join(', ');
+        if (next !== raw) changes.push({ id: r.ID, from: raw, to: next });
+      }
+      if (!changes.length) continue;
+      if (apply) {
+        for (const c of changes) {
+          try { await updateRow(env, spec.tab, c.id, { [col]: c.to }); c.done = true; }
+          catch (e) { c.done = false; }
+        }
+      }
+      report.push({ tab: spec.tab, col, count: changes.length,
+                    applied: apply ? changes.filter(c => c.done).length : 0,
+                    sample: changes.slice(0, 8) });
+    }
+  }
+
+  const total = report.reduce((n, r) => n + (r.count || 0), 0);
+  return json({ success: true, applied: apply, total, report });
+}
+
 async function adminDuplicateProperties(env) {
   const properties = await fetchTab(env, 'Properties');
   const live = properties.filter(p => p.Active !== 'FALSE');
@@ -1656,8 +1725,11 @@ async function adminDuplicateProperties(env) {
   // Only read the reference tabs when there's actually something to report on.
   const refData = {};
   for (const ref of PROPERTY_REFS) {
-    if (refData[ref.tab]) continue;
-    try { refData[ref.tab] = await fetchTab(env, ref.tab); } catch (e) { refData[ref.tab] = null; }
+    if (refData[ref.tab] !== undefined) continue;
+    // A tab that doesn't exist holds no references — that's an answer, not a failure.
+    // Only a genuine read error is unknown, and that's what null means here.
+    try { refData[ref.tab] = await fetchTab(env, ref.tab); }
+    catch (e) { refData[ref.tab] = isMissingTabError(e) ? [] : null; }
   }
 
   const duplicates = dupeKeys.map(key => ({
@@ -1715,7 +1787,13 @@ async function adminMergeProperty(env, body) {
   for (const ref of PROPERTY_REFS) {
     let rows;
     try { rows = await fetchTab(env, ref.tab); }
-    catch (e) { return json({ error: `Could not read ${ref.tab} — stopping rather than half-merging.` }, 500); }
+    catch (e) {
+      // A tab this system has never created can't be holding references to anything.
+      // Only a real read failure justifies stopping — that one could hide rows that
+      // need moving, and a half-merge is worse than no merge.
+      if (isMissingTabError(e)) continue;
+      return json({ error: `Could not read ${ref.tab} — stopping rather than half-merging.` }, 500);
+    }
     const hits = rows.filter(r => String(r[ref.col] || '') === fromId && r.Active !== 'FALSE');
     if (hits.length) plan.push({ tab: ref.tab, col: ref.col, ids: hits.map(r => r.ID), count: hits.length });
   }
@@ -2558,6 +2636,31 @@ async function qbTest(env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// GET /qb/trade-map — every trade the Hub knows, what QuickBooks account it books to, and
+// the full list of expense accounts available. Two trades currently share the General
+// account because they have none of their own; this is how you see that and pick better.
+async function qbTradeMap(env) {
+  try {
+    const q = encodeURIComponent("select Id,Name,AccountType,AccountSubType,FullyQualifiedName from Account where Active=true maxresults 500");
+    const data = await qbApi(env, `query?query=${q}&minorversion=73`);
+    const all = (data && data.QueryResponse && data.QueryResponse.Account) || [];
+    const byId = {}; all.forEach(a => { byId[String(a.Id)] = a; });
+    const expenses = all.filter(a => /Expense|Cost of Goods Sold/i.test(a.AccountType || ''))
+                        .map(a => ({ id: a.Id, name: a.FullyQualifiedName || a.Name, type: a.AccountSubType || a.AccountType }))
+                        .sort((x, y) => x.name.localeCompare(y.name));
+
+    const trades = Object.keys(QB_TRADE_MAP).map(t => {
+      const m = QB_TRADE_MAP[t];
+      const acct = byId[String(m.expense)];
+      return { trade: t, expense_id: m.expense, income_id: m.income, item_id: m.item,
+               expense_name: acct ? (acct.FullyQualifiedName || acct.Name) : '(not found in QuickBooks)',
+               shares_general: String(m.expense) === '68' && t !== 'General' };
+    });
+    return json({ ok: true, trades, expense_accounts: expenses, aliases: QB_TRADE_ALIASES });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+
 async function qbListAccounts(env) {
   try {
     const q = encodeURIComponent("select Id,Name,AccountType,AccountSubType,Classification from Account where Active=true maxresults 500");
@@ -3063,11 +3166,44 @@ const QB_TRADES = [
   { trade: 'Cleaning',    income: 'Cleaning Income',    expenseId: '282' },
   { trade: 'Appliance',   income: 'Appliance Income',   expenseId: '230' },
   { trade: 'Windows',     incomeId: '204',              expenseId: '249' }, // Window Installation Income exists
+  { trade: 'Locks',       income: 'Locks Income',       expenseId: '68'  }, // no dedicated expense account yet
+  { trade: 'Pest Control',income: 'Pest Control Income',expenseId: '68'  }, // no dedicated expense account yet
   { trade: 'General',     incomeId: '198',              expenseId: '68'  }, // Repairs Income exists
 ];
 
 // Resolved trade → QB ids (created via /qb/setup-trades, July 19, 2026).
 // Invoices reference `item` (income); vendor bills reference `expense` (account).
+// The Hub's dropdowns and the QuickBooks map drifted apart. The work-order form offers
+// "Electric" while the map is keyed "Electrical", so EVERY electrical job has been booking
+// to the General repairs account. Same for "Pest Control" and "Other", which the map never
+// had at all. It warns, but a warning in a batch of eight is a warning nobody reads.
+// Aliases resolve the old spellings; existing rows keep working without a data migration.
+const QB_TRADE_ALIASES = {
+  'electric': 'Electrical', 'electrician': 'Electrical',
+  // 'heating' → HVAC: revisit if a dedicated Heating account is ever created, or this
+  // alias will keep routing past it without saying so.
+  'hvac/heating': 'HVAC', 'heating': 'HVAC', 'ac': 'HVAC', 'a/c': 'HVAC',
+  'paint': 'Painting', 'lock': 'Locks', 'locksmith': 'Locks',
+  'pest': 'Pest Control', 'exterminator': 'Pest Control',
+  'clean': 'Cleaning', 'floor': 'Flooring', 'window': 'Windows',
+  'carpenter': 'Carpentry', 'roof': 'Roofing', 'landscape': 'Landscaping',
+  'appliances': 'Appliance', 'plumber': 'Plumbing',
+  'other': 'General', 'misc': 'General', 'miscellaneous': 'General',
+};
+
+// Resolve a work order's trade to a key the QuickBooks map actually holds.
+function resolveTrade(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return { name: 'General', matched: false };
+  if (QB_TRADE_MAP[t]) return { name: t, matched: true };
+  const alias = QB_TRADE_ALIASES[t.toLowerCase()];
+  if (alias && QB_TRADE_MAP[alias]) return { name: alias, matched: true, via: t };
+  // Case-only difference ("plumbing" vs "Plumbing") shouldn't cost you an account.
+  const ci = Object.keys(QB_TRADE_MAP).find(k => k.toLowerCase() === t.toLowerCase());
+  if (ci) return { name: ci, matched: true, via: t };
+  return { name: 'General', matched: false };
+}
+
 const QB_TRADE_MAP = {
   Plumbing:   { item: '30', income: '287', expense: '245' },
   Electrical: { item: '31', income: '288', expense: '235' },
@@ -3081,6 +3217,11 @@ const QB_TRADE_MAP = {
   Appliance:  { item: '39', income: '296', expense: '230' },
   Windows:    { item: '38', income: '204', expense: '249' },
   General:    { item: '40', income: '198', expense: '68'  },
+  // Locks and Pest Control have no dedicated QuickBooks accounts yet, so they book to the
+  // same General repairs account they already fall back to. Run /qb/setup-trades to create
+  // proper accounts, then point these at the ids it returns.
+  Locks:         { item: '40', income: '198', expense: '68' },
+  'Pest Control':{ item: '40', income: '198', expense: '68' },
 };
 
 // Extract an existing entity Id from a QBO "Duplicate Name Exists" (6240) error.
@@ -3452,12 +3593,20 @@ async function qbSendInvoice(env, body) {
     // otherwise gets one undifferentiated ledger and no way to see which address earns.
     const billTo = qbResolveBillTo(owner, prop, unit);
 
-    const tradeName = (wo.Trade && QB_TRADE_MAP[wo.Trade]) ? wo.Trade : 'General';
+    const resolved = resolveTrade(wo.Trade);
+    const tradeName = resolved.name;
     const trade = QB_TRADE_MAP[tradeName];
 
     const warnings = [];
     if (!wo.WO_ID && !wo.ID) warnings.push('Work order ' + ir.WO_ID + ' not found — trade defaulted to General.');
-    else if (!QB_TRADE_MAP[wo.Trade]) warnings.push('WO trade "' + (wo.Trade || 'blank') + '" not in the QB map — using General.');
+    else if (!resolved.matched) warnings.push('WO trade "' + (wo.Trade || 'blank') + '" is not in the QuickBooks map — booking to General. Add it, or pick a listed trade.');
+    else if (resolved.via) warnings.push('WO trade "' + resolved.via + '" booked as "' + tradeName + '".');
+    // Locks and Pest Control resolve cleanly but share the General repairs account, so
+    // neither branch above fires. Without this they'd send with no warning at all, which
+    // is less honest than the "not in the QB map" message they used to get.
+    if (trade && String(trade.expense) === '68' && tradeName !== 'General') {
+      warnings.push(tradeName + ' has no dedicated QuickBooks account yet — booking to General repairs.');
+    }
     if (!owner) warnings.push('No owner found for this property — set the property owner before sending.');
     const custTotal  = Number(ir.Customer_Total) || 0;
     const vendorCost = Number(ir.Vendor_Cost) || 0;

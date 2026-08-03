@@ -243,11 +243,7 @@
             <option value="">All Vendors</option></select></div>
         <div><label>TRADE</label>
           <select id="f-trade" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
-            <option value="">All Trades</option>
-            <option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option>
-            <option>Landscaping</option><option>Appliance</option><option>Roofing</option>
-            <option>Pest Control</option><option>Other</option>
-          </select></div>
+            <option value="">All Trades</option></select></div>
         <div><label>PRIORITY</label>
           <select id="f-priority" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
             <option value="">All Priorities</option>
@@ -369,11 +365,7 @@
     <div id="spanel-materials">
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         <select id="mat-filter-trade" onchange="renderMaterials()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 10px;border-radius:var(--radius)">
-          <option value="">All Trades</option>
-          <option>Plumbing</option><option>HVAC</option><option>Electric</option>
-          <option>General</option><option>Appliance</option><option>Landscaping</option>
-          <option>Roofing</option><option>Pest Control</option><option>Other</option>
-        </select>
+          <option value="">All Trades</option></select>
         <select id="mat-filter-store" onchange="renderMaterials()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 10px;border-radius:var(--radius)">
           <option value="">All Stores</option>
           <option>Home Depot</option><option>Lowes</option><option>Supplies</option><option>Amazon</option><option>Other</option>
@@ -454,6 +446,7 @@
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn small" onclick="runAdminTool('fix-pins')" style="background:var(--accent2);color:#000">🔑 Fix PINs + Phones</button>
       <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#000">🏠 Check units naming moved-out tenants</button>
+      <button class="btn small" onclick="migrateTrades(false)" style="background:var(--accent)">🔧 Update old trade names</button>
       <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#000">🏢 Find duplicate properties</button>
       <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
     </div>
@@ -464,11 +457,7 @@
     <div id="trade-access-list" style="margin-bottom:10px"><span style="color:var(--muted);font-size:11px">Loading…</span></div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <select id="trade-access-trade" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px">
-        <option value="">Select trade…</option>
-        <option>Plumbing</option><option>HVAC</option><option>Electric</option>
-        <option>General</option><option>Landscaping</option><option>Appliance</option>
-        <option>Roofing</option><option>Pest Control</option><option>Other</option>
-      </select>
+        <option value="">Select trade…</option></select>
       <select id="trade-access-val" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px">
         <option value="TRUE">YES — needs access</option>
         <option value="FALSE">NO — no access needed</option>
@@ -507,7 +496,7 @@
         </select>
       </div>
       <div class="form-group" id="wo-unit-group" style="display:none"><label>Unit</label><select id="wo-unit"><option value="">Whole property</option></select></div>
-      <div class="form-group"><label>Trade</label><select id="wo-trade"><option value="">Select...</option><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
+      <div class="form-group"><label>Trade</label><select id="wo-trade"></select></div>
       <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
       <div class="form-group full"><label>Description</label><textarea id="wo-desc" placeholder="Describe the issue..."></textarea></div>
@@ -603,7 +592,7 @@
       <div class="form-group"><label>Email (optional)</label><input type="email" id="v-email" placeholder="mike@example.com"></div>
       <div class="form-group"><label>Hourly Rate ($)</label><input type="number" id="v-rate" placeholder="40" min="0" step="0.01"></div>
       <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
-      <div class="form-group full"><label>Trades — check all that apply</label><div id="v-trades-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;margin-top:4px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Plumbing" style="width:auto;padding:0"> Plumbing</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="HVAC" style="width:auto;padding:0"> HVAC</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Electric" style="width:auto;padding:0"> Electric</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="General" style="width:auto;padding:0"> General</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Appliance" style="width:auto;padding:0"> Appliance</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Landscaping" style="width:auto;padding:0"> Landscaping</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Roofing" style="width:auto;padding:0"> Roofing</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Pest Control" style="width:auto;padding:0"> Pest Control</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Painting" style="width:auto;padding:0"> Painting</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Carpentry" style="width:auto;padding:0"> Carpentry</label><label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px"><input type="checkbox" class="v-trade-check" value="Other" style="width:auto;padding:0"> Other</label></div></div>
+      <div class="form-group full"><label>Trades — check all that apply</label><div id="v-trades-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;margin-top:4px"></div></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="v-rates" placeholder="Hourly rate, trip charge, etc..."></textarea></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-add-vendor')">Cancel</button><button class="btn" onclick="submitAddVendor()">Add Vendor</button></div>
@@ -651,7 +640,7 @@
         <input type="text" id="ewo-vendor-filter" placeholder="Type name or trade to filter…" oninput="filterEWOVendors()" autocomplete="off" style="margin-bottom:6px">
         <select id="ewo-vendor" size="4" style="height:auto;min-height:80px;font-size:13px;cursor:pointer;width:100%"><option value="">— Unassigned —</option></select>
       </div>
-      <div class="form-group"><label>Trade</label><select id="ewo-trade"><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
+      <div class="form-group"><label>Trade</label><select id="ewo-trade"></select></div>
       <div class="form-group"><label>Priority</label><select id="ewo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Status</label>
         <select id="ewo-status">
@@ -685,7 +674,7 @@
       <div class="form-group"><label>Company</label><input type="text" id="ev-company"></div>
       <div class="form-group"><label>Phone</label><input type="tel" id="ev-phone"></div>
       <div class="form-group"><label>Email</label><input type="email" id="ev-email"></div>
-      <div class="form-group"><label>Trade</label><select id="ev-trade"><option>Plumbing</option><option>HVAC</option><option>Electric</option><option>General</option><option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option><option>Other</option></select></div>
+      <div class="form-group"><label>Trade</label><select id="ev-trade"></select></div>
       <div class="form-group"><label>Markets</label><input type="text" id="ev-markets"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
     </div>
@@ -851,6 +840,52 @@ function calcTieredEstimate(rawCost) {
   var finalPrice = Math.ceil(stepC / 5) * 5;
   return { finalPrice: finalPrice, deposit: finalPrice / 2, markupPct: pct };
 }
+// ── TRADES ───────────────────────────────────────────────────
+// One list, rendered everywhere. There were four hardcoded copies and they had drifted:
+// the work-order form offered "Electric" while the QuickBooks map is keyed "Electrical",
+// so every electrical job quietly booked to the General repairs account. Anything not on
+// this list still books to General — the worker aliases the old spellings so existing
+// rows keep resolving.
+var TRADES = ["Plumbing", "Electrical", "HVAC", "Appliance", "General", "Carpentry", "Painting", "Flooring", "Roofing", "Windows", "Locks", "Landscaping", "Cleaning", "Pest Control"];
+function tradeOptions(selected, includeBlank) {
+  var sel = String(selected == null ? '' : selected);
+  // A value that isn't on the canonical list still has to appear, or assigning it to the
+  // select selects nothing, reading .value back gives '', and saving the form WIPES the
+  // trade. Legacy spellings and anything typed straight into the sheet land here.
+  var extra = (sel && TRADES.indexOf(sel) === -1)
+    ? '<option selected>' + esc(sel) + '</option>'
+    : '';
+  return (includeBlank ? '<option value="">Select...</option>' : '') + extra +
+    TRADES.map(function(t) {
+      return '<option' + (sel === t ? ' selected' : '') + '>' + esc(t) + '</option>';
+    }).join('');
+}
+function tradeCheckboxes(cls) {
+  return TRADES.map(function(t) {
+    return '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text);font-size:12px">' +
+      '<input type="checkbox" class="' + cls + '" value="' + esc(t) + '" style="width:auto;padding:0"> ' + esc(t) + '</label>';
+  }).join('');
+}
+
+// Fill every trade control from TRADES. Selects keep whatever placeholder option their
+// markup already carries ("All Trades", "Select…") and get the real list appended.
+function populateTradeControls() {
+  ['wo-trade', 'f-trade', 'mat-filter-trade', 'trade-access-trade',
+   'ewo-trade', 'ev-trade', 'mat-trade', 'tmpl-trade'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el || el.dataset.tradesFilled === '1') return;
+    el.insertAdjacentHTML('beforeend', tradeOptions('', el.options.length === 0));
+    el.dataset.tradesFilled = '1';
+  });
+  document.querySelectorAll('select[data-trades]').forEach(function(el) {
+    if (el.dataset.tradesFilled === '1') return;
+    el.insertAdjacentHTML('beforeend', tradeOptions('', el.options.length === 0));
+    el.dataset.tradesFilled = '1';
+  });
+  var grid = document.getElementById('v-trades-grid');
+  if (grid && !grid.children.length) grid.innerHTML = tradeCheckboxes('v-trade-check');
+}
+
 function safeArray(v) { return Array.isArray(v) ? v : []; }
 var assignWOId = null;
 var invoiceWOId = null;
@@ -1004,6 +1039,7 @@ function processNotificationsBackground() {
 }
 
 function loadAll() {
+  populateTradeControls();   // idempotent; fills every trade control from the one list
   // Returns the promise. voidVendorBill() does `loadAll().then(...)` to re-open the WO
   // detail after a void — with no return value that was calling .then on undefined and
   // throwing, so the re-render it was supposed to guarantee never ran.
@@ -2156,7 +2192,9 @@ function openEditWOModal(woId) {
   document.getElementById('ewo-vendor-filter').value = '';
   document.getElementById('ewo-vendor').innerHTML = '<option value="">— Unassigned —</option>' +
     safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){return '<option value="'+v.ID+'"'+(v.ID===wo.Vendor_ID?' selected':'')+'>'+v.Name+' — '+v.Trade+'</option>';}).join('');
-  document.getElementById('ewo-trade').value = wo.Trade||'General';
+  var ewoTrade = document.getElementById('ewo-trade');
+  ewoTrade.innerHTML = tradeOptions(wo.Trade || 'General', false);
+  ewoTrade.value = wo.Trade || 'General';
   document.getElementById('ewo-priority').value = wo.Priority||'normal';
   document.getElementById('ewo-status').value = wo.Status||'New';
   document.getElementById('ewo-scheduled').value = wo.Scheduled_Date||'';
@@ -2240,7 +2278,10 @@ function openEditVendorModal(id) {
   document.getElementById('ev-id').value=v.ID; document.getElementById('ev-name').value=v.Name||'';
   document.getElementById('ev-first-name').value=v.First_Name||'';
   document.getElementById('ev-company').value=v.Company||''; document.getElementById('ev-phone').value=v.Phone||'';
-  document.getElementById('ev-email').value=v.Email||''; document.getElementById('ev-trade').value=v.Trade||'General';
+  document.getElementById('ev-email').value=v.Email||'';
+  var evTrade = document.getElementById('ev-trade');
+  evTrade.innerHTML = tradeOptions(v.Trade || 'General', false);
+  evTrade.value = v.Trade || 'General';
   document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
   openModal('modal-edit-vendor');
 }
@@ -6522,10 +6563,7 @@ function qbBatchSend() {
       <div class="form-group"><label>Quantity</label><input type="text" id="mat-qty" placeholder="e.g. 2"></div>
       <div class="form-group"><label>Unit</label><input type="text" id="mat-unit" placeholder="e.g. pcs, ft, bags"></div>
       <div class="form-group"><label>Trade</label>
-        <select id="mat-trade">
-          <option>General</option><option>Plumbing</option><option>HVAC</option><option>Electric</option>
-          <option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option>
-        </select>
+        <select id="mat-trade"></select>
       </div>
       <div class="form-group"><label>Store</label>
         <select id="mat-store-sel">
@@ -6598,10 +6636,7 @@ function qbBatchSend() {
       <div class="form-group full"><label>Template Name *</label><input type="text" id="tmpl-name" placeholder="e.g. Phoenix Inspection, HVAC PM, Pest Control Q"></div>
       <div class="form-group"><label>Owner <span style="font-weight:normal;color:var(--muted)">(blank = global)</span></label><select id="tmpl-owner"><option value="">Global</option></select></div>
       <div class="form-group"><label>Trade</label>
-        <select id="tmpl-trade">
-          <option value="">General</option><option>Plumbing</option><option>HVAC</option><option>Electric</option>
-          <option>Landscaping</option><option>Appliance</option><option>Roofing</option><option>Pest Control</option>
-        </select>
+        <select id="tmpl-trade"></select>
       </div>
       <div class="form-group"><label>Default Priority</label>
         <select id="tmpl-priority"><option value="normal">Normal</option><option value="low">Low</option><option value="urgent">Urgent</option></select>
@@ -7161,6 +7196,35 @@ function checkStaleTenants(apply) {
 // units and keys on the other. This shows what is actually attached to each before you
 // decide anything, because "the one with the right unit count" is a guess and the
 // references are the evidence.
+// Existing rows say "Electric"; every form now writes "Electrical". The money was never
+// affected — the worker aliases on read — but the trade FILTERS compare raw strings, so
+// until this runs, filtering by Electrical shows none of the back catalogue.
+function migrateTrades(apply) {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = apply ? '⏳ Updating…' : '⏳ Checking…';
+  api('POST', '/admin/migrate-trades', { apply: !!apply }).then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    if (!res.total) { if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Every stored trade name is already current.</span>'; return; }
+    if (apply) {
+      var done = safeArray(res.report).reduce(function(n, r) { return n + (r.applied || 0); }, 0);
+      if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Updated ' + done + ' of ' + res.total + '. Trade filters now find the old jobs.</span>';
+      toast('Updated ' + done + ' trade name(s)', 'success');
+      loadAll();
+      return;
+    }
+    if (el) el.innerHTML =
+      '<div style="line-height:1.6">' + res.total + ' row(s) still use an old trade name. ' +
+      'Money was never affected — but the trade filters miss them until this runs.<br>' +
+      safeArray(res.report).map(function(r) {
+        if (r.error) return '· <span style="color:var(--danger)">' + esc(r.tab) + ': ' + esc(r.error) + '</span>';
+        return '· ' + r.count + ' × ' + esc(r.tab.replace(/_/g, ' ')) + ' (' + esc(r.col) + ')' +
+          '<span style="color:var(--muted);font-size:10.5px"> — ' +
+          safeArray(r.sample).slice(0, 3).map(function(c) { return esc(c.from) + ' → ' + esc(c.to); }).join(', ') + '</span>';
+      }).join('<br>') +
+      '<br><button class="btn small" onclick="migrateTrades(true)" style="background:var(--accent);margin-top:6px">Update them</button></div>';
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
 function checkDuplicateProperties() {
   var el = document.getElementById('admin-tool-result');
   if (el) el.textContent = '⏳ Checking…';
