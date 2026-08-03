@@ -987,7 +987,10 @@ function processNotificationsBackground() {
 }
 
 function loadAll() {
-  Promise.allSettled([
+  // Returns the promise. voidVendorBill() does `loadAll().then(...)` to re-open the WO
+  // detail after a void — with no return value that was calling .then on undefined and
+  // throwing, so the re-render it was supposed to guarantee never ran.
+  return Promise.allSettled([
     api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
     api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners'), api('GET','/keys')
   ]).then(function(results) {
@@ -1287,6 +1290,7 @@ function openWODetail(woId) {
     ' oninput="calcInvoiceMarkup(\''+woId+'\')"' +
     ' style="flex:1;background:var(--surface2);border:1px solid var(--accent);color:var(--text);font-family:var(--font);font-size:18px;padding:8px;border-radius:6px">' +
     '</div>' +
+    '<div id="inv-invoice-total-'+woId+'" style="font-size:12px;margin-top:6px;color:var(--muted)"></div>' +
     '<div id="inv-markup-'+woId+'" style="color:var(--accent2);font-size:11px;margin-top:4px"></div>' +
     '</div>' +
     '</div>' +
@@ -1349,7 +1353,21 @@ function openWODetail(woId) {
       '</div>';
     }).join('');
     var db = document.getElementById('detail-body');
-    if (db) db.innerHTML += billsHtml;
+    if (!db) return;
+    // FEATURE_LOG rule 15: never `innerHTML +=` on detail-body. It re-parses the whole
+    // container and destroys every child node the other async passes are still writing
+    // into, so their loaders resolve into detached elements and sit on "Loading…" forever.
+    // Append in place instead.
+    // Second guard: this fetch is unguarded async. Re-opening the same WO (or the
+    // loadAll()+openWODetail() refresh that voiding a bill triggers) queues a second
+    // fetch, and each resolution used to append another full set of bill cards — the
+    // same bill rendered twice with nothing wrong in the sheet. Key the block to the WO
+    // and replace it, and bail if the modal has since moved to a different work order.
+    var openWO = (document.getElementById('detail-wo-id') || {}).textContent;
+    if (openWO !== woId) return;
+    var priorBills = document.getElementById('wo-bills-' + woId);
+    if (priorBills) priorBills.remove();
+    db.insertAdjacentHTML('beforeend', '<div id="wo-bills-' + woId + '">' + billsHtml + '</div>');
   });
 
   // Fetch fresh lockbox/keys data every time WO detail opens
@@ -3713,9 +3731,18 @@ function loadVendorBillForInvoice(woId) {
     var total = parseFloat(bill.Total || 0);
     rows += '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;color:var(--accent2)">Total owed: <b>$' + total.toFixed(2) + '</b></div>';
     el.innerHTML = rows;
-    // Auto-suggest charge = bill total if not set
+    // Auto-suggest charge = tiered price off the bill total, if nothing is set yet.
+    // setAttribute as well as .value: `innerHTML +=` elsewhere in the WO detail used to
+    // re-parse this whole container, and a value set only as a DOM property does not
+    // survive that round-trip — which is how you ended up looking at an empty "$0.00"
+    // charge box sitting directly above a confident "Profit: $345.00". The attribute
+    // survives a re-parse.
     var chargeEl = document.getElementById('inv-charge-' + woId);
-    if (chargeEl && !chargeEl.value && total > 0) chargeEl.value = calcTieredEstimate(total).finalPrice.toFixed(2);
+    if (chargeEl && !chargeEl.value && total > 0) {
+      var suggested = calcTieredEstimate(total).finalPrice.toFixed(2);
+      chargeEl.value = suggested;
+      chargeEl.setAttribute('value', suggested);
+    }
     calcInvoiceMarkup(woId);
   }).catch(function() {
     el.innerHTML = '<span style="color:var(--muted)">No bill submitted yet</span>';
@@ -3726,9 +3753,24 @@ function loadVendorBillForInvoice(woId) {
 function calcInvoiceMarkup(woId) {
   var markupEl = document.getElementById('inv-markup-' + woId);
   if (!markupEl) return;
+  var totalEl  = document.getElementById('inv-invoice-total-' + woId);
   var chargeEl = document.getElementById('inv-charge-' + woId);
   var charge = parseFloat((chargeEl && chargeEl.value) || 0);
-  if (!charge) { markupEl.textContent = ''; return; }
+
+  // Lead with the number that actually gets invoiced. Profit alone told you what you'd
+  // make without ever confirming what the owner would be billed — and when the charge box
+  // was empty, a profit figure was still sitting there, which is worse than useless.
+  // Nothing is stated about an invoice unless there is a real amount to state it about.
+  if (!charge) {
+    markupEl.textContent = '';
+    if (totalEl) totalEl.innerHTML = '<span style="color:var(--warn)">⚠ No amount set — nothing will be invoiced until you enter one.</span>';
+    return;
+  }
+  if (totalEl) {
+    totalEl.innerHTML = '<span style="color:var(--text)">Customer invoice will be created for </span>' +
+      '<b style="color:var(--accent);font-size:14px">$' + charge.toFixed(2) + '</b>';
+  }
+
   var breakdownEl = document.getElementById('inv-vendor-breakdown-' + woId);
   // Try to extract vendor total from breakdown text
   var totalMatch = breakdownEl && breakdownEl.textContent.match(/Total owed: \$([\d.]+)/);
@@ -3737,10 +3779,10 @@ function calcInvoiceMarkup(woId) {
     var profit = charge - cost;
     var pct = ((profit / cost) * 100).toFixed(0);
     markupEl.innerHTML = profit >= 0
-      ? '<span style="color:var(--accent2)">Profit: $' + profit.toFixed(2) + ' (' + pct + '% markup)</span>'
-      : '<span style="color:var(--danger)">Below cost by $' + Math.abs(profit).toFixed(2) + '</span>';
+      ? '<span style="color:var(--accent2)">Vendor bill $' + cost.toFixed(2) + ' · your profit $' + profit.toFixed(2) + ' (' + pct + '% markup)</span>'
+      : '<span style="color:var(--danger)">⚠ Below cost by $' + Math.abs(profit).toFixed(2) + ' — you would lose money on this job</span>';
   } else {
-    markupEl.innerHTML = '<span style="color:var(--muted)">$' + charge.toFixed(2) + ' charge</span>';
+    markupEl.innerHTML = '<span style="color:var(--muted)">No vendor bill loaded yet — profit unknown.</span>';
   }
 }
 
@@ -3771,7 +3813,14 @@ function sendWOToQuickBooks(woId) {
   var msgEl = document.getElementById('inv-msg-' + woId);
   if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted)">Checking for an approved bill…</span>';
   api('GET', '/qb/ready').then(function(rows) {
-    _qbQueue = Array.isArray(rows) ? rows : [];
+    // A failed queue read must not be reported as "no approved bill" — that sends you off
+    // to re-approve a bill that was already approved, and hides a real outage.
+    if (!Array.isArray(rows)) {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">⚠ Could not read the QuickBooks queue — this is an error, not an empty queue. ' +
+        esc((rows && rows.error) || 'Unexpected response') + '</span>';
+      return;
+    }
+    _qbQueue = rows;
     var row = _qbQueue.find(function(r) { return r.wo_id === woId; });
     if (!row) {
       if (msgEl) msgEl.innerHTML = '<span style="color:var(--warn)">No approved bill for this WO yet — approve it in ' +
@@ -4380,7 +4429,24 @@ function loadInvoiceReview() {
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading bills…</div>';
 
-  api('GET', '/vendor-bills?status=submitted').then(function(bills) {
+  // Each card shows WHAT THE JOB WAS, which lives on Work_Orders (+ Properties for the
+  // address), not on Vendor_Bills. If the page is opened before loadAll() finished — or
+  // that call failed — the cards would silently render with no job context and the whole
+  // point of the screen is lost. So top the state up first; never render context-blind.
+  var prep = [];
+  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders').then(function(r) {
+    if (Array.isArray(r)) state.workorders = r;
+  }).catch(function() {}));
+  if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) {
+    if (Array.isArray(r)) state.properties = r;
+  }).catch(function() {}));
+  if (!safeArray(state.units).length) prep.push(api('GET', '/units').then(function(r) {
+    if (Array.isArray(r)) state.units = r;
+  }).catch(function() {}));
+
+  Promise.all(prep).then(function() {
+    return api('GET', '/vendor-bills?status=submitted');
+  }).then(function(bills) {
     _irBills = Array.isArray(bills) ? bills : [];
     if (!_irBills.length) {
       el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ No vendor bills pending review.</div>';
@@ -4421,12 +4487,96 @@ function renderIRCard(b, i) {
     ? '<div>Materials/receipts: <b>$' + materials.toFixed(2) + '</b></div>' : '';
   var noteLine = notes ? '<div style="color:var(--muted);font-style:italic;margin-top:4px">"' + esc(notes) + '"</div>' : '';
 
-  // Work order info from state
-  var wo = safeArray(state.workorders).find(function(w) { return w.ID === woId; });
-  var prop = wo ? safeArray(state.properties).find(function(p) { return p.ID === wo.Property_ID; }) : null;
-  var addr = prop ? prop.Address : (wo ? wo.Property_ID : '—');
+  // Work order info from state. String-compare the property id — Sheets hands numeric-looking
+  // ids back as strings inconsistently, and a strict === silently dropped the address.
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : null;
+  var unitRow = wo ? safeArray(state.units).find(function(u) { return String(u.ID) === String(wo.Unit_ID); }) : null;
+  var unitLabel = unitRow ? (unitRow.Unit_Label || '') : (wo ? (wo.Unit_Label || '') : '');
+  var addr = prop ? prop.Address : (wo ? (wo.Property_Address || wo.Property_ID || '—') : '—');
+  if (addr && unitLabel) addr = addr + ' — Unit ' + unitLabel;
   var ownerRow = wo
     ? '<div style="color:var(--muted);font-size:11px">Owner WO Ref: ' + esc(wo.Owner_WO_Ref || '—') + '</div>' : '';
+
+  // ── ALREADY HANDLED? ─────────────────────────────────────────
+  // A bill only leaves this queue when its Vendor_Bills.Status flips to 'reviewed', which
+  // approving here does. Handling it anywhere else — paying the vendor directly in
+  // QuickBooks and marking the WO paid, for instance — never touches the bill row, so it
+  // sits in the review queue forever looking like outstanding work. WO-1052 did exactly
+  // that. Detect it from the work order's own status and offer a one-tap way out.
+  var woStatus = wo ? String(wo.Status || '').toLowerCase().trim() : '';
+  // 'cancelled' is deliberately NOT here: a cancelled job can still owe the vendor a trip
+  // charge, and this button's whole job is to retire a bill without paying it.
+  var SETTLED_WO_STATUSES = ['invoiced','pending payment','paid by customer','paid','closed'];
+  // The work order's status is a WORK-ORDER fact; being owed money is a BILL fact. A job
+  // with two vendors on it — electrician invoiced, plumber still waiting — would otherwise
+  // show the green "already handled" button on the plumber's unpaid bill, and one tap would
+  // retire it. Only offer this when the WO has exactly one bill in the queue.
+  var siblingBills = safeArray(_irBills).filter(function(x) { return String(x.WO_ID) === String(woId); }).length;
+  var alreadyHandled = SETTLED_WO_STATUSES.indexOf(woStatus) > -1 && siblingBills === 1;
+  var handledHtml = '';
+  if (SETTLED_WO_STATUSES.indexOf(woStatus) > -1 && siblingBills > 1) {
+    handledHtml =
+      '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.55">' +
+        '⚠ This work order is marked ' + esc(String(wo.Status)) + ', but it has ' + siblingBills + ' bills still awaiting review. ' +
+        'One vendor may have been settled while another is still owed — review each bill on its own before clearing anything.' +
+      '</div>';
+  }
+  if (alreadyHandled) {
+    handledHtml =
+      '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:12px;margin-bottom:12px">' +
+        '<div style="color:var(--accent2);font-size:11.5px;font-weight:bold;margin-bottom:4px">✓ This work order is already marked ' + esc(String(wo.Status)) + '</div>' +
+        '<div style="color:var(--muted);font-size:11.5px;line-height:1.6;margin-bottom:10px">' +
+          'It still shows here because the vendor bill itself was never marked reviewed — that only happens when you approve it on this screen. ' +
+          'If you already settled this outside the Hub, clear it. Nothing is sent to QuickBooks and no invoice is created.' +
+        '</div>' +
+        '<button onclick="irClearFromQueue(' + i + ')" id="ir-clear-btn-' + i + '" style="background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:9px 14px;cursor:pointer">✓ Already handled — clear from queue</button>' +
+      '</div>';
+  }
+
+  // ── THE JOB ──────────────────────────────────────────────────
+  // Vendor_Bills carries only WO_ID + Vendor_Name — its Job_Type/Notes columns are empty in
+  // practice — so approving a bill used to mean leaving this screen, looking the work order
+  // up, and coming back. Work_Orders.Description IS populated, so join it in and show it here.
+  var jobHtml = '';
+  if (wo) {
+    var chipDefs = [
+      ['Trade', wo.Trade, 'var(--info)'],
+      ['Type', wo.Type, 'var(--muted)'],
+      ['Priority', wo.Priority, (String(wo.Priority||'').toLowerCase().indexOf('urgent') > -1 || String(wo.Priority||'').toLowerCase().indexOf('emergency') > -1) ? 'var(--danger)' : 'var(--muted)'],
+      ['Status', wo.Status, 'var(--muted)']
+    ];
+    var chips = chipDefs.filter(function(c) { return c[1]; }).map(function(c) {
+      return '<span style="background:var(--surface);border:1px solid var(--border);color:' + c[2] +
+             ';border-radius:4px;padding:2px 7px;font-size:10px;letter-spacing:.04em;white-space:nowrap">' +
+             esc(String(c[1]).toUpperCase()) + '</span>';
+    }).join('');
+
+    var descText = (wo.Description || '').trim();
+    var tenantName = wo.Tenant_Name || '';
+    var schedLine = wo.Scheduled_Date ? ('Scheduled ' + esc(String(wo.Scheduled_Date).split('T')[0])) : '';
+    var completedLine = wo.Completed_Date ? ('Completed ' + esc(String(wo.Completed_Date).split('T')[0])) : '';
+    var dateLine = [schedLine, completedLine].filter(Boolean).join(' · ');
+
+    jobHtml =
+      '<div style="background:#101a24;border:1px solid var(--info);border-radius:6px;padding:12px;margin-bottom:12px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">' +
+          '<span style="color:var(--info);font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:bold">🔧 The job</span>' +
+          '<button onclick="irOpenWO(\'' + esc(woId) + '\')" style="background:var(--surface);border:1px solid var(--border);color:var(--info);border-radius:4px;font-family:var(--font);font-size:10px;padding:4px 8px;cursor:pointer;white-space:nowrap">Full work order ↗</button>' +
+        '</div>' +
+        (chips ? '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">' + chips + '</div>' : '') +
+        (descText
+          ? '<div style="color:var(--text);font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word">' + esc(descText) + '</div>'
+          : '<div style="color:var(--warn);font-size:11.5px;font-style:italic">⚠ No description on this work order — open it to check before approving.</div>') +
+        (tenantName ? '<div style="color:var(--muted);font-size:11px;margin-top:8px">Tenant: ' + esc(tenantName) + '</div>' : '') +
+        (dateLine ? '<div style="color:var(--muted);font-size:11px;margin-top:2px">' + dateLine + '</div>' : '') +
+      '</div>';
+  } else {
+    jobHtml =
+      '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn)">' +
+        '⚠ Work order ' + esc(woId) + ' not found — job details unavailable. Verify this bill before approving.' +
+      '</div>';
+  }
 
   return '<div id="ir-card-'+i+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">' +
 
@@ -4443,6 +4593,12 @@ function renderIRCard(b, i) {
         '<div style="font-size:1.4rem;font-weight:bold;color:var(--warn)">$' + vendorTotal.toFixed(2) + '</div>' +
       '</div>' +
     '</div>' +
+
+    // Already settled outside the Hub? Say so before anything else.
+    handledHtml +
+
+    // What the job actually was — joined from Work_Orders
+    jobHtml +
 
     // Vendor bill breakdown
     '<div style="background:var(--surface2);border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.8">' +
@@ -4516,7 +4672,7 @@ function renderIRCard(b, i) {
     // Approve / skip buttons
     '<div style="display:flex;gap:8px">' +
       '<button onclick="irApprove('+i+')" id="ir-approve-btn-'+i+'" style="flex:1;background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:11px;cursor:pointer">✓ APPROVE — READY TO INVOICE</button>' +
-      '<button onclick="irSkip('+i+')" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:11px 16px;cursor:pointer">Skip</button>' +
+      '<button onclick="irSkip('+i+')" title="Hides this card until the next refresh — the bill stays in the queue" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:11px 16px;cursor:pointer">Hide for now</button>' +
     '</div>' +
     '<div id="ir-msg-'+i+'" style="margin-top:8px"></div>' +
 
@@ -4709,9 +4865,52 @@ function irApprove(i) {
   });
 }
 
+// "Hide for now" — client-side only, the card is back on the next load. Named honestly so
+// it isn't mistaken for clearing the bill (that's irClearFromQueue).
 function irSkip(i) {
   var card = document.getElementById('ir-card-'+i);
   if (card) { card.style.display = 'none'; }
+}
+
+// Retire a bill that was settled outside the Hub — paid straight through QuickBooks, voided
+// against a redo, whatever. Flips Vendor_Bills.Status to 'reviewed', which is the same field
+// approving sets, so it drops out of /vendor-bills?status=submitted for good. It does NOT
+// write an Invoice_Review row, so nothing is queued for QuickBooks — that's the whole point.
+function irClearFromQueue(i) {
+  var b = _irBills[i];
+  if (!b) return;
+  if (!confirm('Clear this bill from the review queue?\n\n' + (b.WO_ID||'') + ' · ' + (b.Vendor_Name||'') + ' · $' + (parseFloat(b.Total)||0).toFixed(2) +
+               '\n\nNo invoice is created and nothing is sent to QuickBooks. Use this only when the bill was already handled elsewhere.')) return;
+
+  var btn = document.getElementById('ir-clear-btn-'+i);
+  var msg = document.getElementById('ir-msg-'+i);
+  if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
+
+  api('POST', '/vendor-bill/update', {
+    id: b.ID,
+    fields: { Status: 'reviewed', Approved_By: 'Handled outside Hub', Reviewed_Date: new Date().toISOString().split('T')[0] }
+  }).then(function(res) {
+    if (res.success || res.id) {
+      if (msg) msg.innerHTML = '<div style="color:var(--accent2);font-size:12px;padding:8px;background:#002d0f;border-radius:6px">✓ Cleared from the queue.</div>';
+      var card = document.getElementById('ir-card-'+i);
+      if (card) { card.style.opacity = '0.4'; card.style.pointerEvents = 'none'; }
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = '✓ Already handled — clear from queue'; }
+      if (msg) msg.innerHTML = '<div style="color:var(--danger);font-size:12px">Error: ' + esc(res.error||'?') + '</div>';
+    }
+  }).catch(function(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Already handled — clear from queue'; }
+    if (msg) msg.innerHTML = '<div style="color:var(--danger);font-size:12px">Connection error: ' + esc(e.message||'?') + '</div>';
+  });
+}
+
+// Open the full work order from a Review Bills card, without losing your place.
+// openWODetail() renders into a modal, so it overlays this page and closing it
+// returns you to the review queue exactly where you were.
+function irOpenWO(woId) {
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  if (!wo) { toast('Work order ' + woId + ' not loaded — hit refresh and try again', 'error'); return; }
+  openWODetail(woId);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -4726,7 +4925,16 @@ function loadQBQueue() {
   if (!el) return;
   el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading approved bills…</div>';
   api('GET', '/qb/ready').then(function(rows) {
-    _qbQueue = Array.isArray(rows) ? rows : [];
+    // Never render a failure as a green all-clear. /qb/ready used to swallow every error
+    // into an empty array, so a Sheets outage looked exactly like an empty queue.
+    if (!Array.isArray(rows)) {
+      el.innerHTML = '<div style="color:var(--danger);font-size:12.5px;padding:16px;background:var(--surface2);border:1px solid var(--danger);border-radius:6px">' +
+        '⚠ Could not read the QuickBooks queue — this is an error, not an empty queue.<br><span style="color:var(--muted);font-size:11px">' +
+        esc((rows && rows.error) || 'Unexpected response') + '</span></div>';
+      _qbQueue = [];
+      return;
+    }
+    _qbQueue = rows;
     if (!_qbQueue.length) {
       el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ Nothing waiting for QuickBooks. Approve bills in Review Bills first.</div>';
       return;
@@ -4745,6 +4953,27 @@ function renderQBCard(r, i) {
   var ct = parseFloat(r.customer_total)||0;
   var vc = parseFloat(r.vendor_cost)||0;
   var trade = r.trade || 'General';
+
+  // A 'partial' row already has an invoice in QuickBooks and is missing its vendor bill.
+  // Sending it again resumes the bill half — it does not create a second invoice — but say
+  // so plainly, because "Preview & Send" on a row that already posted looks alarming.
+  var partialHtml = (r.qb_status === 'partial')
+    ? '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--warn);line-height:1.5">' +
+        '⚠ Partly sent — invoice ' + esc(r.qb_invoice_id || '?') + ' is already in QuickBooks, the vendor bill is not. ' +
+        'Sending again finishes the bill only; it will not duplicate the invoice.' +
+      '</div>' : '';
+
+  // Vendor_Cost of 0 means the bill half gets skipped silently and only the customer
+  // invoice posts — the failure mode that reads as complete success.
+  var zeroCostHtml = (r.vendor_cost_zero && r.qb_status !== 'partial')
+    ? '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--warn);line-height:1.5">' +
+        '⚠ Vendor cost is $0 — no vendor bill will be created in QuickBooks, only the customer invoice.' +
+      '</div>' : '';
+
+  var jobLine = r.description
+    ? '<div style="color:var(--text);font-size:11.5px;line-height:1.55;margin:6px 0 8px;padding:8px;background:var(--surface2);border-radius:5px">' + esc(String(r.description).substring(0, 240)) + (String(r.description).length > 240 ? '…' : '') + '</div>'
+    : '';
+
   return '<div id="qb-card-'+i+'" data-irid="'+esc(r.id)+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">' +
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">' +
       '<div>' +
@@ -4758,6 +4987,7 @@ function renderQBCard(r, i) {
         '<div style="font-size:12px;color:var(--warn)">vendor $' + vc.toFixed(2) + '</div>' +
       '</div>' +
     '</div>' +
+    partialHtml + zeroCostHtml + jobLine +
     '<button onclick="previewQBSend(\''+esc(r.id)+'\')" style="width:100%;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px;cursor:pointer">👁 Preview &amp; Send</button>' +
     '<div id="qb-msg-'+esc(r.id)+'" style="margin-top:6px"></div>' +
   '</div>';
@@ -4822,9 +5052,21 @@ function confirmQBSend() {
   api('POST', '/qb/send-invoice', { id: id }).then(function(res){
     if (res.ok || res.already_sent) {
       var txt = res.already_sent ? 'Already in QuickBooks.' : ('✓ Created — invoice ' + (res.invoice_id||'—') + ', bill ' + (res.bill_id||'—'));
-      document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + esc(txt) + '</div>';
+      // The Worker returns warnings — "Vendor_Cost is 0, the vendor bill will be skipped"
+      // being the important one — and this screen used to drop them on the floor, so a send
+      // that quietly created no vendor bill read as a clean success.
+      var warnHtml = '';
+      if (res.warnings && res.warnings.length) {
+        warnHtml = '<div style="color:var(--warn);font-size:11.5px;margin-top:6px;line-height:1.5">⚠ ' +
+          res.warnings.map(function(w){ return esc(w); }).join('<br>⚠ ') + '</div>';
+      }
+      if (!res.already_sent && !res.bill_id) {
+        warnHtml += '<div style="color:var(--warn);font-size:11.5px;margin-top:6px;line-height:1.5">⚠ No vendor bill was created in QuickBooks — only the customer invoice. Check the vendor cost on this job.</div>';
+      }
+      document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + esc(txt) + '</div>' + warnHtml;
       qbMarkDone(id);
-      setTimeout(function(){ closeModal('modal-qb-send'); }, 1600);
+      // Hold the modal open longer when there's something to read.
+      setTimeout(function(){ closeModal('modal-qb-send'); }, warnHtml ? 6000 : 1600);
     } else {
       btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
       var errs = (res.errors&&res.errors.length) ? res.errors.join('; ') : (res.error||'Error');
@@ -4844,16 +5086,41 @@ function qbMarkDone(id) {
 // Batch: send each queued row sequentially (no preview), report per-row.
 function qbBatchSend() {
   if (!_qbQueue.length) return;
-  if (!confirm('Send all ' + _qbQueue.length + ' approved bills to QuickBooks now? Each creates a customer invoice + vendor bill.')) return;
-  var ids = _qbQueue.map(function(r){ return r.id; });
-  var idx = 0, ok = 0, fail = 0;
+  // Rows with a blank QuickBooks status have no invoice id to protect them, so a bulk send
+  // could create a fresh customer invoice for a job that was already billed by hand. They
+  // go through Preview & Send individually, never behind one blanket confirm.
+  var batchable = _qbQueue.filter(function(r){ return !r.needs_individual_send; });
+  var heldBack = _qbQueue.length - batchable.length;
+  if (!batchable.length) {
+    toast('Nothing can be batch-sent — send these individually with Preview & Send', 'error');
+    return;
+  }
+  if (!confirm('Send ' + batchable.length + ' approved bill' + (batchable.length===1?'':'s') + ' to QuickBooks now? Each creates a customer invoice + vendor bill.' +
+               (heldBack ? '\n\n' + heldBack + ' row' + (heldBack===1?' is':'s are') + ' held back — no QuickBooks status on record, so ' + (heldBack===1?'it needs':'they need') + ' Preview & Send individually.' : ''))) return;
+  var ids = batchable.map(function(r){ return r.id; });
+  var idx = 0, ok = 0, fail = 0, warned = 0;
   (function next(){
-    if (idx >= ids.length) { toast('QB batch done — ' + ok + ' sent, ' + fail + ' failed', fail?'error':'success'); return; }
+    if (idx >= ids.length) {
+      toast('QB batch done — ' + ok + ' sent, ' + fail + ' failed' + (warned ? ', ' + warned + ' with warnings' : ''), (fail||warned)?'error':'success');
+      return;
+    }
     var id = ids[idx++];
     var msgEl = document.getElementById('qb-msg-'+id);
     if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Sending…</span>';
     api('POST', '/qb/send-invoice', { id: id }).then(function(res){
-      if (res.ok || res.already_sent) { ok++; if (msgEl) msgEl.innerHTML = '<span style="color:var(--accent2);font-size:11px">✓ ' + (res.already_sent?'already in QB':'sent') + '</span>'; qbMarkDone(id); }
+      if (res.ok || res.already_sent) {
+        ok++;
+        // Batch send skips the preview entirely, so this was the ONE place warnings could
+        // reach Brett and they were being discarded. A row that posted an invoice with no
+        // vendor bill counted as a clean "sent".
+        var warn = (res.warnings && res.warnings.length) ? res.warnings.join('; ') : '';
+        if (!res.already_sent && !res.bill_id) warn = (warn ? warn + '; ' : '') + 'no vendor bill created — only the customer invoice';
+        if (msgEl) msgEl.innerHTML = warn
+          ? '<span style="color:var(--warn);font-size:11px">✓ sent — ⚠ ' + esc(warn) + '</span>'
+          : '<span style="color:var(--accent2);font-size:11px">✓ ' + (res.already_sent?'already in QB':'sent') + '</span>';
+        if (warn) warned++;
+        qbMarkDone(id);
+      }
       else { fail++; if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">⚠ ' + esc((res.errors&&res.errors.join('; '))||res.error||'failed') + '</span>'; }
     }).catch(function(e){ fail++; if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">⚠ ' + esc(e.message||'?') + '</span>'; })
     .then(function(){ setTimeout(next, 400); });

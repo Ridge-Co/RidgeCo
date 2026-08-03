@@ -606,6 +606,17 @@ async function addReceipt(env, body) {
   if (!amount) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
   if (isNaN(amt) || amt <= 0) return json({ error: 'amount must be a positive number' }, 400);
+
+  // Same receipt, same job, same store, seconds apart = a double-tap, not two purchases.
+  // Added_By_ID and Date are in the signature and the window is short, because two small
+  // identical purchases on one job (two of the same fitting from the same run) is a real
+  // thing and must not be swallowed.
+  const dupe = await findRecentDuplicate(env, 'Receipts', {
+    WO_ID: wo_id, Amount: amt.toFixed(2), Store: store || '', Description: description || '',
+    Added_By_ID: String(added_by_id || ''), Date: date || new Date().toISOString().split('T')[0],
+  }, 30);
+  if (dupe) return json({ success: true, duplicate: true, amount: amt.toFixed(2) });
+
   await addRow(env, 'Receipts', { WO_ID: wo_id, Amount: amt.toFixed(2), Description: description||'', Store: store||'', Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''), Role: role||'hub', Created_Date: new Date().toISOString(), Active: 'TRUE' });
   return json({ success: true, amount: amt.toFixed(2) });
 }
@@ -620,6 +631,20 @@ async function addTimeEntry(env, body) {
   if (durationMinutes <= 0) return json({ error: 'Could not calculate duration' }, 400);
   const rate = parseFloat(hourly_rate || 0);
   const billableAmt = (billable === 'TRUE' || billable === true) ? (durationMinutes / 60) * rate : 0;
+
+  // Same worker, same job, same block of time, seconds apart = a double-tap on Log Time.
+  // Notes and Entry_Type are part of the signature on purpose: on the quick-duration path
+  // there are no start/end times, so without them the signature collapses to
+  // job + person + minutes — and logging two genuine 30-minute blocks back to back is
+  // exactly what those quick buttons are for. The window is deliberately short for the
+  // same reason: catching up on a day's entries in one sitting must not eat any of them.
+  const dupe = await findRecentDuplicate(env, 'Time_Entries', {
+    WO_ID: wo_id, Entered_By_ID: String(entered_by_id||''), Duration_Minutes: String(durationMinutes),
+    Start_DateTime: start_datetime || '', End_DateTime: end_datetime || '',
+    Notes: notes || '', Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'),
+  }, 30);
+  if (dupe) return json({ success: true, duplicate: true, duration_minutes: durationMinutes });
+
   await addRow(env, 'Time_Entries', { WO_ID: wo_id, Entered_By: entered_by||'', Entered_By_ID: String(entered_by_id||''), Role: role, Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'), Start_DateTime: start_datetime||'', End_DateTime: end_datetime||'', Duration_Minutes: String(durationMinutes), Notes: notes||'', Billable: role === 'hub' ? String(billable === 'TRUE' || billable === true) : 'TRUE', Hourly_Rate: String(rate), Billable_Amount: String(billableAmt.toFixed(2)), Created_Date: new Date().toISOString(), Active: 'TRUE' });
   return json({ success: true, duration_minutes: durationMinutes });
 }
@@ -1006,6 +1031,24 @@ async function sendPinMessage(env, body) {
 // ── VENDOR BILLING ───────────────────────────────────────────
 
 async function addVendorBill(env, body) {
+  // Vendor_Bills stores Created_Date as a date only, so the finest duplicate window
+  // available here is the same day: same job, same vendor, same total, same day, still
+  // sitting unreviewed. That is a re-submit, not a second bill. Returned as success with
+  // duplicate:true rather than an error — the vendor's bill IS recorded, and reporting a
+  // failure is what drives the next re-tap in the first place.
+  // Notes, Hours and the receipts subtotal are all in the signature, not just the total.
+  // A same-day window is coarse — two genuine visits to one job in a day can carry the
+  // same trip charge — so the rest of the bill has to match byte-for-byte before this
+  // treats it as a re-submit. An already-reviewed bill never blocks a new one.
+  const dupeKey = body.WO_ID || body.wo_id;
+  if (dupeKey && body.Total) {
+    const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
+      WO_ID: dupeKey, Vendor_ID: String(body.Vendor_ID || ''), Total: String(body.Total),
+      Status: 'submitted', Notes: String(body.Notes || ''), Hours: String(body.Hours || ''),
+      Receipts_Total: String(body.Receipts_Total || ''),
+    }, 86400);
+    if (dupe) return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
+  }
   const res = await addRow(env, 'Vendor_Bills', body);
   // Automation: entering a bill moves the WO to Complete (if still pre-complete).
   try {
@@ -1125,7 +1168,20 @@ async function addEstimateVersion(env, body) {
   const existing = await fetchTab(env, 'Estimates'), priorVersions = existing.filter(e => e.WO_ID === woId);
   const nextVersion = priorVersions.length ? Math.max(...priorVersions.map(e => parseInt(e.Version||'0'))) + 1 : 1;
   const subtotal = body.line_items.reduce((sum, li) => sum + (parseFloat(li.amount)||0), 0);
-  await addRow(env, 'Estimates', { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(body.line_items), Subtotal: subtotal.toFixed(2), Change_Reason: nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised'), Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' });
+  const lineItemsJson = JSON.stringify(body.line_items);
+
+  // WO-1052, WO-1012 and WO-1062 each carry two byte-identical estimates written about a
+  // second apart — a double-tap on the vendor's Submit button. Note the version counter
+  // masked it: the second write read the first row and dutifully incremented 1→2, so the
+  // twins look like a legitimate revision until you compare the line items. Re-submitting
+  // the exact same numbers is never a real revision, so hand back the row that already
+  // exists instead of appending a second one.
+  const dupe = await findRecentDuplicate(env, 'Estimates', {
+    WO_ID: woId, Line_Items: lineItemsJson, Vendor_ID: body.vendor_id || '',
+  }, 120);
+  if (dupe) return json({ success: true, duplicate: true, version: parseInt(dupe.Version || '1'), subtotal: dupe.Subtotal || subtotal.toFixed(2) });
+
+  await addRow(env, 'Estimates', { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: lineItemsJson, Subtotal: subtotal.toFixed(2), Change_Reason: nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised'), Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' });
   try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
   return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
 }
@@ -2043,13 +2099,63 @@ function missingTabResponse(tab) {
   return json({ error: `Sheet tab "${tab}" does not exist`, tab, hint: 'Create it via context/sheet-ops/pending.json' }, 404);
 }
 
+// Server-side backstop against the same submission landing twice.
+//
+// The portals now hold a client-side latch on every submit button, but a latch dies with
+// the page. A dropped connection after the append already committed, a refresh mid-request,
+// or the vendor picking the phone back up and tapping again all still produce a real second
+// row, and the Sheets `:append` API will take it without complaint. So check before writing.
+//
+// `signature` is the set of column→value pairs that make two rows "the same submission".
+// Matching rows are only treated as duplicates if they were written inside `windowSeconds`;
+// tabs that store a full ISO Created_Date get a tight window, tabs that store a date only
+// (Vendor_Bills) get a same-day window because that is the finest resolution available.
+// A failure in this check must never block a legitimate write — it returns null and the
+// caller proceeds to append.
+async function findRecentDuplicate(env, tab, signature, windowSeconds) {
+  try {
+    const rows = await fetchTab(env, tab);
+    const cutoff = Date.now() - (windowSeconds || 120) * 1000;
+    const keys = Object.keys(signature);
+    for (let i = rows.length - 1; i >= 0; i--) {   // newest first — duplicates are recent
+      const r = rows[i];
+      if (!r || r.Active === 'FALSE') continue;
+      if (!keys.every(k => String(r[k] === undefined || r[k] === null ? '' : r[k]) === String(signature[k] === undefined || signature[k] === null ? '' : signature[k]))) continue;
+      const ts = Date.parse(r.Created_Date || '');
+      // An undateable row must NOT count as a duplicate. Getting this backwards meant any
+      // signature-matching row with a blank or hand-typed Created_Date — a bill entered
+      // months ago, a row touched by hand — silently swallowed a brand-new submission and
+      // reported success, at any age. That loses a vendor's work with a green checkmark on
+      // screen, which is far worse than the duplicate this function exists to prevent.
+      // When in doubt, let the write through.
+      if (!Number.isFinite(ts)) continue;
+      if (ts >= cutoff) return r;
+    }
+    return null;
+  } catch (e) { return null; }
+}
+
 async function addRow(env, tab, body) {
   let data;
   try { data = await sheetsRequest(env,'GET',`/values/${tab}`); }
   catch(e) { if(isMissingTabError(e)) return missingTabResponse(tab); throw e; }
   const rows=data.values||[[]], headers=rows[0];
   if(!headers||!headers.length) return json({ error:`Sheet tab "${tab}" has no header row`, tab }, 500);
-  let nextId=1; if(rows.length>1){const existingIds=rows.slice(1).map(r=>parseInt(r[0]||'0')).filter(n=>Number.isFinite(n)&&n>0);if(existingIds.length>0)nextId=Math.max(...existingIds)+1;}
+  // Resolve the key column BY HEADER NAME, never r[0] — FEATURE_LOG rule 6. Work_Orders
+  // proves the point: its column 0 is Vendor_Needs_Access and ID sits at index 1, so
+  // reading r[0] there finds no numbers at all and restarts the sequence from 1 on every
+  // insert. Every other tab happens to have ID at 0 today, which is exactly why this stayed
+  // invisible. Math.max(...arr) is also swapped for a reduce — Attachments is already 160
+  // rows and spreading a large array at the call site is a stack-overflow waiting to happen.
+  const _idc = idColIndex(headers);
+  let nextId = 1;
+  if (rows.length > 1) {
+    const maxId = rows.slice(1).reduce((max, r) => {
+      const n = parseInt((r && r[_idc]) || '0');
+      return (Number.isFinite(n) && n > max) ? n : max;
+    }, 0);
+    if (maxId > 0) nextId = maxId + 1;
+  }
   const PHONE_TABS=['Vendors','Owner_Users','Tenants','Owners']; if(PHONE_TABS.includes(tab)&&body.Phone) body.Phone=normalizePhone(body.Phone);
   const PIN_TABS=['Vendors','Owner_Users','Tenants']; if(PIN_TABS.includes(tab)&&!body.PIN&&body.Phone) body.PIN=generatePIN(body.Phone);
   const newRow=headers.map(h=>{if(h==='ID')return String(nextId);if(h==='Active'&&body[h]===undefined)return 'TRUE';return body[h]!==undefined?String(body[h]):'';});
@@ -2399,20 +2505,46 @@ async function qbReadyQueue(env) {
     const [irRows, wos] = await Promise.all([
       fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders'),
     ]);
-    const pending = irRows.filter(r => r.Active !== 'FALSE' && (r.QB_Invoice_Status || '').toLowerCase() === 'pending');
+    // 'partial' MUST be included. qbSendInvoice stamps that status when the invoice half
+    // posted to QuickBooks but the bill half did not (bad vendor ref, an Intuit hiccup,
+    // Vendor_Cost missing). Nothing anywhere ever writes the status back to 'pending', so
+    // filtering to 'pending' alone made a half-finished row vanish from this queue forever
+    // — invoice in QuickBooks, vendor bill never created, and the screen cheerfully
+    // reporting "nothing waiting". The resume logic in qbSendInvoice handles a partial row
+    // correctly; it just had no way to be reached. A blank status counts as pending too.
+    const OPEN_QB = ['pending', 'partial', ''];
+    const pending = irRows.filter(r => r.Active !== 'FALSE' && OPEN_QB.includes((r.QB_Invoice_Status || '').toLowerCase().trim()));
     const out = pending.map(r => {
       const wo = findWO(wos, r.WO_ID) || {};
+      const rawStatus = (r.QB_Invoice_Status || '').toLowerCase().trim();
+      const status = rawStatus || 'pending';
       return {
         id: r.ID, bill_id: r.Bill_ID, wo_id: r.WO_ID,
         vendor_id: r.Vendor_ID, vendor_name: r.Vendor_Name,
         trade: wo.Trade || '', job_type: r.Job_Type || '',
+        description: wo.Description || '',
         customer_total: r.Customer_Total || '0', vendor_cost: r.Vendor_Cost || '0',
         approved_date: r.Approved_Date || '',
         qb_invoice_id: r.QB_Invoice_ID || '', qb_bill_id: r.QB_Bill_ID || '',
+        qb_status: status,
+        // A blank status is NOT the same as 'pending'. approveInvoiceReview has always
+        // written 'pending', so a blank one is legacy or hand-edited — quite possibly a job
+        // already invoiced by hand before this integration existed. It carries no
+        // QB_Invoice_ID, so nothing stops a send from creating a fresh customer invoice.
+        // Surfaced here so batch send skips it and it has to go through preview one at a time.
+        needs_individual_send: rawStatus === '',
+        // Surfaced so the screen can warn BEFORE sending: a zero vendor cost means the
+        // vendor bill will be skipped and only the customer invoice will post.
+        vendor_cost_zero: !(parseFloat(r.Vendor_Cost) > 0),
       };
     });
     return json(out);
-  } catch (e) { return json([]); }
+  } catch (e) {
+    // Was `return json([])`. A Sheets outage or a renamed tab then rendered as a green
+    // "✓ Nothing waiting for QuickBooks" — a read returning [] is not proof the tab exists
+    // (FEATURE_LOG rule 16). Fail loudly instead.
+    return json({ error: 'Could not read the QuickBooks queue: ' + (e && e.message || 'unknown error') }, 500);
+  }
 }
 
 // POST /qb/send-invoice { id | bill_id, preview_only? }

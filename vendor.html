@@ -208,7 +208,43 @@ function api(path, opts) {
   opts = opts || {};
   opts.headers = opts.headers || {};
   opts.headers['X-Auth-Token'] = SECRET;
+  // Callers using the api(path, {method, body:{…}}) form were handing fetch a raw object,
+  // which stringifies to the literal text "[object Object]" and goes out as text/plain.
+  // The Worker's `await request.json()` then throws and the whole request 500s. Only the
+  // api('POST', path, body) form was being serialised. That silently killed every receipt
+  // add/delete and time-entry add/delete from this portal — which is why the Receipts tab
+  // is empty. Serialise here so BOTH calling styles work.
+  if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
+    opts.body = JSON.stringify(opts.body);
+    if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
+  }
   return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+}
+
+// ── DOUBLE-SUBMIT GUARD ──────────────────────────────────────
+// Every "add" in this portal used to fire straight into an unguarded POST, and the Worker
+// appends unconditionally. On a phone that means one impatient double-tap = two real rows.
+// It was happening: three work orders each ended up with two byte-identical estimates
+// written ~1 second apart. This is the shared latch — claim a key before the request goes
+// out, release it when the request settles.
+//
+// It also disables the button that was tapped and shows a "Saving…" label, because the
+// deeper reason vendors re-tap is that nothing on screen acknowledged the first tap.
+var _inflight = {};
+
+function claimSubmit(key, btn, busyLabel) {
+  if (_inflight[key]) return null;              // already running — swallow the second tap
+  _inflight[key] = true;
+  var restore = null;
+  if (btn && !btn.disabled) {
+    restore = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = busyLabel || 'Saving…';
+  }
+  return function release() {
+    delete _inflight[key];
+    if (btn) { btn.disabled = false; if (restore !== null) btn.textContent = restore; }
+  };
 }
 
 // Applied on successful PIN login AND when restoring a persisted session on load.
@@ -600,7 +636,7 @@ function openEstimateEditor(woId, idx) {
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">' +
       '<span style="font-weight:bold">Total: $<span id="est-total-' + idx + '">0.00</span></span>' +
       '<div><button class="btn btn-sm" onclick="loadEstimateWidget(\'' + woId + '\',' + idx + ')">Cancel</button> ' +
-      '<button class="btn btn-sm btn-green" onclick="submitEstimate(\'' + woId + '\',' + idx + ')">Submit</button></div></div>' +
+      '<button class="btn btn-sm btn-green" id="est-submit-' + idx + '" onclick="submitEstimate(\'' + woId + '\',' + idx + ')">Submit</button></div></div>' +
       '</div>';
     updateEstTotal(idx);
     // Auto-size textareas to existing content on first render
@@ -633,14 +669,23 @@ function submitEstimate(woId, idx) {
   var estimates = (window._estimates && window._estimates[woId]) || [];
   if (estimates.length && !reason) { toast('Reason for change is required when revising', 'error'); return; }
 
+  // This is the one that actually bit us — WO-1052, WO-1012 and WO-1062 each carry two
+  // identical estimates written about a second apart. Nothing was stopping the second tap.
+  var release = claimSubmit('estimate:'+woId, document.getElementById('est-submit-'+idx), 'Saving…');
+  if (!release) return;
+
   api('POST', '/estimate', {
     wo_id: woId, vendor_id: (window.session && session.vendor_id) || '',
     line_items: items.map(function(li) { return { desc: li.desc, amount: parseFloat(li.amount) }; }),
     change_reason: reason, created_by: (window.session && session.vendor_name) || 'vendor',
   }).then(function(res) {
-    if (res.success) { loadEstimateWidget(woId, idx); toast('Estimate saved', 'success'); }
+    release();
+    if (res.success) {
+      loadEstimateWidget(woId, idx);
+      toast(res.duplicate ? 'Already saved — no duplicate created' : 'Estimate saved', 'success');
+    }
     else toast(res.error || 'Failed to save', 'error');
-  }).catch(function(e) { toast(e.message, 'error'); });
+  }).catch(function(e) { release(); toast(e.message, 'error'); });
 }
 
 
@@ -734,7 +779,7 @@ function renderVendorReceipts(woId, idx, receipts) {
         '<input type="number" step="0.01" id="vr-amt-'+idx+'" placeholder="Amount $" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
         '<input type="date" id="vr-date-'+idx+'" value="'+today+'" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
         '<input type="text" id="vr-store-'+idx+'" placeholder="Store / supplier" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
-        '<button class="btn btn-sm btn-green" onclick="submitVendorReceipt(\''+woId+'\','+idx+')">Add</button>' +
+        '<button class="btn btn-sm btn-green" id="vr-add-'+idx+'" onclick="submitVendorReceipt(\''+woId+'\','+idx+')">Add</button>' +
       '</div>' +
       '<textarea id="vr-desc-'+idx+'" rows="2" placeholder="Description: what was purchased" style="width:100%;margin-top:6px;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px"></textarea>' +
       '<div id="vr-msg-'+idx+'"></div>' +
@@ -752,13 +797,31 @@ function submitVendorReceipt(woId, idx) {
     if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">Enter an amount.</span>';
     return;
   }
+
+  var release = claimSubmit('receipt:'+woId, document.getElementById('vr-add-'+idx), 'Adding…');
+  if (!release) return;                       // a submit for this WO is already in flight
+
   api('/receipt/add', { method:'POST', body: {
     wo_id: woId, amount: amt, description: desc, store: store, date: date,
     added_by: session.vendor_name||'Vendor', added_by_id: vendorId, role: 'vendor',
   }}).then(function(res) {
-    if (res.success) { toast('Receipt added', 'success'); loadVendorReceipts(woId, idx); }
+    release();
+    if (res.success) {
+      // Clear the inputs. If the fields stay populated, a second tap re-sends an identical
+      // payload and the Worker appends it as a new receipt.
+      ['vr-amt-','vr-store-','vr-desc-'].forEach(function(p) {
+        var f = document.getElementById(p+idx); if (f) f.value = '';
+      });
+      // Say so when the server recognised this as a re-submit, rather than reporting a
+      // plain success for a write that deliberately did not happen.
+      toast(res.duplicate ? 'Already added — no duplicate created' : 'Receipt added', 'success');
+      loadVendorReceipts(woId, idx);
+    }
     else if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
-  }).catch(function(e){ if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>'; });
+  }).catch(function(e){
+    release();
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>';
+  });
 }
 
 function deleteVendorReceipt(id, woId, idx) {
@@ -862,7 +925,7 @@ function renderVendorTimeSection(woId, idx, entries) {
       '</div>' +
       '<textarea id="vt-notes-'+idx+'" rows="2" placeholder="Notes: picked up materials, took measurements, repaired faucet…" style="width:100%;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
       '<div style="display:flex;justify-content:flex-end">' +
-        '<button class="btn btn-sm btn-green" onclick="submitVendorTime(\''+woId+'\','+idx+')">Log Time</button>' +
+        '<button class="btn btn-sm btn-green" id="vt-add-'+idx+'" onclick="submitVendorTime(\''+woId+'\','+idx+')">Log Time</button>' +
       '</div>' +
       '<div id="vt-msg-'+idx+'" style="margin-top:4px"></div>' +
     '</div>';
@@ -900,6 +963,9 @@ function submitVendorTime(woId, idx) {
     return;
   }
 
+  var release = claimSubmit('time:'+woId, document.getElementById('vt-add-'+idx), 'Saving…');
+  if (!release) return;                       // a time entry for this WO is already in flight
+
   if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Saving…</span>';
   api('/time-entry/add', { method: 'POST', body: {
     wo_id: woId, entered_by: session.vendor_name||'Vendor', entered_by_id: vendorId,
@@ -908,13 +974,23 @@ function submitVendorTime(woId, idx) {
     duration_minutes_raw: durMinRaw,
     notes: notes, billable: 'TRUE', hourly_rate: session.vendor_rate||'0',
   }}).then(function(res) {
+    release();
     if (res.success) {
-      toast('Time logged', 'success');
+      // Clear the entry fields — leaving start/end populated let a second tap log the
+      // same block of time again. (The quick-duration path already self-clears.)
+      ['vt-start-','vt-end-','vt-notes-'].forEach(function(p) {
+        var f = document.getElementById(p+idx); if (f) f.value = '';
+      });
+      if (msgEl) msgEl.innerHTML = '';
+      toast(res.duplicate ? 'Already logged — no duplicate created' : 'Time logged', 'success');
       loadVendorTimeTracking(woId, idx);
     } else if (msgEl) {
       msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
     }
-  }).catch(function(e){ if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>'; });
+  }).catch(function(e){
+    release();
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>';
+  });
 }
 
 function deleteVendorTime(entryId, woId, idx) {
@@ -1132,14 +1208,26 @@ function loadPortalAttachments(woId, opts) {
     });
     ['before','after','report','receipt','other'].forEach(function(type) {
       var el = document.getElementById('uploads-' + type + '-' + woId);
-      if (!el || !byType[type] || !byType[type].length) return;
-      // Remove loading placeholder
+      if (!el) return;
+      // This is the only renderer in the portal that appends instead of replacing, and it
+      // runs once per work order on every renderWOs() pass — including on every keystroke
+      // in the job search box. Overlapping passes each appended the full list again, so a
+      // photo or receipt chip showed up two, three, N times. Nothing was wrong in the
+      // sheet; the list just never got cleared. Clear it, then render.
+      // Clear only the chips this function put there. A blanket innerHTML='' would also
+      // detach the live upload-progress cards that portalUploadFiles appends into this same
+      // container — the upload would still finish, but its progress, its Drive link and any
+      // error would be written into a node that is no longer on the page. A vendor whose
+      // chip vanishes mid-upload uploads again, which is the duplicate we're here to stop.
+      Array.prototype.slice.call(el.querySelectorAll('a[data-att-chip]')).forEach(function(n) { n.remove(); });
       var ph = el.querySelector('.upload-ph');
+      if (!byType[type] || !byType[type].length) return;
       if (ph) ph.remove();
       byType[type].forEach(function(f) {
         var icon = type === 'after' ? '\u2705' : type === 'before' ? '📷' :
                    type === 'receipt' ? '🧾' : type === 'report' ? '\u26a0\ufe0f' : '📎';
         var a = document.createElement('a');
+        a.setAttribute('data-att-chip', '1');   // marks it ours, so the next pass can clear it
         a.href = f.Drive_URL || '#'; a.target = '_blank';
         a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
         a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
@@ -1537,6 +1625,13 @@ function openBillModal(woId, vendorName) {
 
 function closeBillModal() {
   document.getElementById('modal-vendor-bill').style.display = 'none';
+  // The submit guard is held from the moment the POST goes out until right here, so this
+  // is where it gets handed back. openBillModal() also resets it, but closing without
+  // reopening (backdrop tap, Cancel) must not leave the button stuck disabled.
+  _billSubmitting = false;
+  _billWOId = null;
+  var btn = document.getElementById('bill-submit-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'SUBMIT BILL'; }
 }
 
 function setBillType(type) {
@@ -1725,15 +1820,26 @@ async function submitVendorBill() {
     headers: {'X-Auth-Token': SECRET, 'Content-Type': 'application/json'},
     body: JSON.stringify(body)
   }).then(function(r){return r.json();}).then(function(res){
-    _billSubmitting = false;
-    btn.disabled = false; btn.textContent = 'SUBMIT BILL';
     if (res.id || res.success) {
+      // Do NOT release the guard here. The modal stays open and fully populated for another
+      // 2 seconds, so re-enabling the button on success reopened a live window where one
+      // more tap posts the identical bill a second time. The guard stays claimed until
+      // closeBillModal() runs; only the error paths below hand the button back.
       msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#002d0f;border-radius:6px">✓ Bill submitted! Total: $' + total.toFixed(2) + '</div>';
+      btn.textContent = '✓ SUBMITTED';
       setTimeout(function(){ closeBillModal(); loadWorkOrders(); }, 2000);
     } else {
+      _billSubmitting = false;
+      btn.disabled = false; btn.textContent = 'SUBMIT BILL';
       msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + (res.error||'Error submitting') + '</div>';
     }
-  }).catch(function(e){ _billSubmitting=false; btn.disabled=false; btn.textContent='SUBMIT BILL'; msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">Connection error</div>'; });
+  }).catch(function(e){
+    // A dropped connection AFTER the append committed looks identical to a failure from
+    // here, so the vendor's natural move is to tap again. Say so plainly rather than just
+    // "Connection error" — and the Worker now de-dupes an identical bill either way.
+    _billSubmitting=false; btn.disabled=false; btn.textContent='SUBMIT BILL';
+    msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">⚠ Connection error — the bill may still have saved. Close this and check "Bill submitted" on the job before sending it again.</div>';
+  });
 }
 
 // ══════════════════════════════════════════════════════════════
