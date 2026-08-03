@@ -3728,6 +3728,9 @@ function invBuilderHtml(k, woId, wo) {
       '</div>' +
     '</div>' +
 
+    // Logged time on this job that you can put ON the customer invoice.
+    '<div id="inv-time-'+k+'" style="margin-bottom:12px"></div>' +
+
     '<div id="inv-status-'+k+'" style="margin-bottom:12px"></div>' +
     '<div style="margin-bottom:10px">' +
     '<label style="color:var(--muted);font-size:11px;letter-spacing:.06em">MEMO FOR CUSTOMER INVOICE</label>' +
@@ -3746,6 +3749,133 @@ function invBuilderHtml(k, woId, wo) {
 function loadInvoiceBuilder(k, woId) {
   _invWO[k] = woId;
   loadVendorBillForInvoice(k);
+  loadInvoiceTime(k);
+}
+
+// ── TIME ON THE INVOICE ──────────────────────────────────────
+// Hours logged against a job, offered as line items you can put on the customer invoice.
+// Vendor-logged time is UNCHECKED by default: the vendor's own bill already charges for
+// their labour, so billing it again here would double-charge the owner. Your own admin
+// time is in nobody's bill, so it defaults to checked — that is the time that has been
+// quietly going unbilled.
+var _invTime = {};        // scope key → billable entries
+var _invTimePicked = {};  // scope key → { entryId: true }
+
+var _invTimeGen = {};    // per-scope fetch generation, to drop stale responses
+var _invTimeSeen = {};   // entry ids this panel has already offered a default for
+var _invTimeMulti = {};  // is this work order carrying more than one billing panel?
+
+function loadInvoiceTime(k) {
+  var woId = _invWO[k] || k;
+  var box = document.getElementById('inv-time-' + k);
+  if (!box) return;
+  var gen = (_invTimeGen[k] = (_invTimeGen[k] || 0) + 1);
+  api('GET', '/time-entries?wo_id=' + encodeURIComponent(woId)).then(function(entries) {
+    if (_invTimeGen[k] !== gen) return;      // a newer load already won
+    if (!Array.isArray(entries)) { _invTime[k] = []; box.innerHTML = ''; return; }
+    var billable = entries.filter(function(e) {
+      return e.Active !== 'FALSE' && String(e.Billable).toUpperCase() !== 'FALSE' && invTimeAmount(e) > 0;
+    });
+    _invTime[k] = billable;
+
+    // Default-check your own hours — UNLESS this work order has more than one billing
+    // panel open on it. Two vendors on one job means two invoices, and checking the same
+    // hours on both would bill the owner for them twice. Deliberate on one card, never
+    // by default on two.
+    // Count only QUEUE panels. The work-order modal opened over a card is the same job
+    // being inspected, not a second invoice, and counting it produced a warning that
+    // wasn't true.
+    var panelsOnThisWO = Object.keys(_invWO).filter(function(other) {
+      return String(_invWO[other]) === String(woId) && other.indexOf('ir') === 0;
+    }).length;
+    if (k.indexOf('ir') !== 0) panelsOnThisWO = Math.max(1, panelsOnThisWO);
+    var picked = _invTimePicked[k] || {};
+    billable.forEach(function(e) {
+      var id = String(e.ID);
+      if (id in picked || _invTimeSeen[k] && _invTimeSeen[k][id]) return;   // keep your choices
+      if (panelsOnThisWO < 2 && String(e.Role || '').toLowerCase() === 'hub') picked[id] = true;
+    });
+    _invTimePicked[k] = picked;
+    _invTimeSeen[k] = _invTimeSeen[k] || {};
+    billable.forEach(function(e) { _invTimeSeen[k][String(e.ID)] = true; });
+    _invTimeMulti[k] = panelsOnThisWO > 1;
+
+    invRenderTime(k);
+    invAutoPrice(k);
+    calcInvoiceMarkup(k);
+  }).catch(function() { if (_invTimeGen[k] === gen) _invTime[k] = []; });
+}
+
+// Log Time lives in its own section of the work order; the invoice panel is a separate
+// mount. Refresh every panel currently pointing at this work order so time you just logged
+// is immediately available to bill — including the Review Bills card, if it's open.
+function invRefreshTimeForWO(woId) {
+  Object.keys(_invWO).forEach(function(k) {
+    if (String(_invWO[k]) === String(woId)) loadInvoiceTime(k);
+  });
+}
+
+function invToggleTime(k, id) {
+  if (!_invTimePicked[k]) _invTimePicked[k] = {};
+  var key = String(id);
+  if (_invTimePicked[k][key]) delete _invTimePicked[k][key]; else _invTimePicked[k][key] = true;
+  invRenderTime(k);
+  invAutoPrice(k);
+  calcInvoiceMarkup(k);
+}
+
+// Every hub entry written before the rate was fixed carries Billable_Amount '0.00',
+// because the amount is computed and stored at write time. Value those from their hours
+// instead of pretending the work never happened.
+function invTimeAmount(e) {
+  var stored = parseFloat(e.Billable_Amount) || 0;
+  if (stored > 0) return stored;
+  var mins = parseFloat(e.Duration_Minutes) || 0;
+  var rate = parseFloat(e.Hourly_Rate) || 0;
+  // Fall back to your rate only for YOUR OWN entries. A vendor whose profile rate is unset
+  // is a real state, and valuing their hours at your rate would print a number the vendor
+  // never quoted as though it were fact, on a billing screen.
+  if (!(rate > 0) && String(e.Role || '').toLowerCase() === 'hub') rate = HUB_HOURLY_RATE;
+  return +((mins / 60) * rate).toFixed(2);
+}
+
+function invTimeTotal(k) {
+  var picked = _invTimePicked[k] || {};
+  return safeArray(_invTime[k]).reduce(function(sum, e) {
+    return picked[String(e.ID)] ? sum + invTimeAmount(e) : sum;
+  }, 0);
+}
+
+function invRenderTime(k) {
+  var box = document.getElementById('inv-time-' + k);
+  if (!box) return;
+  var list = safeArray(_invTime[k]);
+  if (!list.length) { box.innerHTML = ''; return; }
+  var picked = _invTimePicked[k] || {};
+  var total = invTimeTotal(k);
+
+  box.innerHTML =
+    '<div style="background:var(--surface);border-radius:6px;padding:10px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<span style="color:var(--muted);font-size:10px;letter-spacing:.06em">TIME LOGGED ON THIS JOB — tick what goes on the invoice</span>' +
+        '<span style="color:' + (total > 0 ? 'var(--accent2)' : 'var(--muted)') + ';font-size:12px;font-weight:bold">+$' + total.toFixed(2) + '</span>' +
+      '</div>' +
+      (_invTimeMulti[k] ? '<div style="color:var(--warn);font-size:10.5px;line-height:1.45;margin-bottom:6px">⚠ This job has more than one bill being invoiced. Nothing is ticked by default — put each block of time on ONE invoice only.</div>' : '') +
+      list.map(function(e) {
+        var on = !!picked[String(e.ID)];
+        var mins = parseFloat(e.Duration_Minutes) || 0;
+        var amt = invTimeAmount(e);
+        var isVendor = String(e.Role || '').toLowerCase() === 'vendor';
+        return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:11.5px;border-top:1px solid var(--border)">' +
+          '<input type="checkbox"' + (on ? ' checked' : '') + ' onchange="invToggleTime(\'' + k + '\',\'' + esc(String(e.ID)) + '\')" style="width:auto;padding:0">' +
+          '<span style="color:var(--text);white-space:nowrap">' + (mins / 60).toFixed(2) + 'h × $' + ((parseFloat(e.Hourly_Rate) || 0) || (isVendor ? 0 : HUB_HOURLY_RATE)).toFixed(0) + '</span>' +
+          '<span style="color:var(--muted);font-size:10.5px">' + esc(e.Entered_By || (isVendor ? 'Vendor' : 'You')) +
+            (e.Notes ? ' · ' + esc(String(e.Notes).substring(0, 40)) : '') + '</span>' +
+          (isVendor ? '<span style="color:var(--warn);font-size:9.5px;white-space:nowrap">in vendor bill</span>' : '') +
+          '<span style="margin-left:auto;color:' + (on ? 'var(--accent2)' : 'var(--muted)') + ';font-weight:bold;white-space:nowrap">$' + amt.toFixed(2) + '</span>' +
+        '</label>';
+      }).join('') +
+    '</div>';
 }
 
 function invPickBill(k, billId) {
@@ -3820,12 +3950,7 @@ function loadVendorBillForInvoice(k) {
     // survive that round-trip — which is how you ended up looking at an empty "$0.00"
     // charge box sitting directly above a confident "Profit: $345.00". The attribute
     // survives a re-parse.
-    var chargeEl = document.getElementById('inv-charge-' + k);
-    if (chargeEl && !chargeEl.value && total > 0) {
-      var suggested = calcTieredEstimate(total).finalPrice.toFixed(2);
-      chargeEl.value = suggested;
-      chargeEl.setAttribute('value', suggested);
-    }
+    invAutoPrice(k);
     calcInvoiceMarkup(k);
     invLoadStatus(k);
   }).catch(function() {
@@ -3867,11 +3992,19 @@ function invPricing(k) {
 
   var onsite   = (document.getElementById('inv-onsite-' + k) || {}).checked;
   var brettHrs = onsite ? (parseFloat((document.getElementById('inv-brett-hrs-' + k) || {}).value) || 1) : 0;
-  var brettTime = onsite ? Math.max(75, brettHrs * 75) : 0;
+  // Your time comes from two places and both belong on the invoice: the manual on-site
+  // charge, and whatever logged time entries you ticked above.
+  var loggedTime = invTimeTotal(k);
+  var brettTime = (onsite ? Math.max(75, brettHrs * 75) : 0) + loggedTime;
   var travel    = parseFloat((document.getElementById('inv-travel-' + k) || {}).value) || 0;
 
   // A — tiered: one move off total cost, scales the percentage down as jobs get bigger.
-  var tiered = calcTieredEstimate(totalCost);
+  // Your time and travel are added on top and the result re-rounded. Without this the
+  // DEFAULT price ignored the ticked time while the panel above it displayed "+$150.00
+  // going on the invoice" — the price would have quietly excluded the very thing the
+  // section exists to add.
+  var tieredBase = calcTieredEstimate(totalCost);
+  var tieredWithExtras = Math.ceil((tieredBase.finalPrice + brettTime + travel) / 5) * 5;
 
   // B — itemized: the Review Bills math. Markup is MAX($75, $35/hr), then your on-site
   // time and travel on top, then the 5% processing fee.
@@ -3884,10 +4017,28 @@ function invPricing(k) {
     billType: billType, hrs: hrs, laborTotal: laborTotal, truckStock: truckStock,
     receiptsAll: receiptsAll, reimburse: reimburse, onAccount: onAccount,
     totalCost: totalCost, vendorPayable: vendorPayable,
-    brettTime: brettTime, brettHrs: brettHrs, travel: travel,
-    tieredPrice: tiered.finalPrice, tieredPct: Math.round(tiered.markupPct * 100),
+    brettTime: brettTime, brettHrs: brettHrs, travel: travel, loggedTime: loggedTime,
+    tieredPrice: tieredWithExtras, tieredBase: tieredBase.finalPrice, tieredPct: Math.round(tieredBase.markupPct * 100),
     itemizedPrice: itemized, itemMarkup: itemMarkup,
   };
+}
+
+// The last price we filled in ourselves, per scope. Lets the suggestion follow along as
+// you tick time on and off, while never overwriting a number you typed.
+var _invAutoPrice = {};
+
+function invAutoPrice(k) {
+  var el = document.getElementById('inv-charge-' + k);
+  if (!el) return;
+  var p = invPricing(k);
+  if (!p || !(p.totalCost > 0)) return;
+  var suggested = Number(p.tieredPrice).toFixed(2);
+  var current = String(el.value || '');
+  var isOurs = current === '' || current === _invAutoPrice[k];
+  if (!isOurs) return;                       // Brett typed his own price — leave it alone
+  el.value = suggested;
+  el.setAttribute('value', suggested);
+  _invAutoPrice[k] = suggested;
 }
 
 function invUsePrice(k, amount) {
@@ -3895,6 +4046,7 @@ function invUsePrice(k, amount) {
   if (!el) return;
   el.value = Number(amount).toFixed(2);
   el.setAttribute('value', Number(amount).toFixed(2));
+  _invAutoPrice[k] = Number(amount).toFixed(2);   // a tapped card is still "ours" to update
   calcInvoiceMarkup(k);
 }
 
@@ -3955,13 +4107,15 @@ function invRenderSuggestions(k, p, charge) {
   }
 
   var itemSub = 'MAX($75, $35×' + p.hrs + 'h) = $' + p.itemMarkup.toFixed(0) +
-    (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' on-site' : '') +
+    (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
     (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : '') + ' + 5%';
 
   box.innerHTML =
     '<div style="color:var(--muted);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Suggested prices — tap one, or type your own above</div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-      card('Tiered', p.tieredPrice, '+' + p.tieredPct + '% on $' + p.totalCost.toFixed(2) + ' + $75 + 5%', 'tiered') +
+      card('Tiered', p.tieredPrice, '+' + p.tieredPct + '% on $' + p.totalCost.toFixed(2) + ' + $75 + 5%' +
+        (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
+        (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : ''), 'tiered') +
       card('Itemized', p.itemizedPrice, itemSub, 'itemized') +
     '</div>';
 }
@@ -4490,7 +4644,11 @@ function deleteHubReceipt(id, woId) {
 
 var HUB_ENTRY_TYPES = ['Admin / Coordination', 'Site Visit / Inspection', 'Material Drop', 'Active Labor'];
 var HUB_BILLABLE_DEFAULT = { 'Admin / Coordination': false, 'Site Visit / Inspection': false, 'Material Drop': true, 'Active Labor': true };
-var HUB_HOURLY_RATE = 0; // loaded from Config if set
+// Your own hourly rate for time logged against a job. Was 0 and nothing ever loaded it,
+// so every hub time entry was written with Billable_Amount '0.00' — hours logged, nothing
+// billable, silently. $75 is the same rate the markup formula already charges for your
+// on-site time, so the two agree.
+var HUB_HOURLY_RATE = 75;
 
 function loadHubTimeTracking(woId, detailBody) {
   // Idempotent: reuse existing holder if already appended
@@ -4654,6 +4812,9 @@ function submitHubTimeEntry(woId) {
         var holder = document.getElementById('time-track-' + woId);
         if (holder) renderHubTimeSection(woId, Array.isArray(entries)?entries:[], holder);
       });
+      // …and refresh the invoice panel's time picker, so newly logged time is available to
+      // put on the invoice immediately instead of only after reopening the work order.
+      invRefreshTimeForWO(woId);
     } else {
       if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
     }
@@ -4668,6 +4829,7 @@ function deleteTimeEntry(entryId, woId) {
       var holder = document.getElementById('time-track-' + woId);
       if (holder) renderHubTimeSection(woId, Array.isArray(entries)?entries:[], holder);
     });
+    invRefreshTimeForWO(woId);
   });
 }
 
@@ -4839,7 +5001,7 @@ function loadInvoiceReview() {
     el.innerHTML = _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
     // Card indexes are reused across renders, so clear panel state first — otherwise
     // 'ir0' could still be holding the bill or IR row from a previous load.
-    _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _qbAllPromise = null;
+    _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _invTime = {}; _invTimePicked = {}; _invTimeSeen = {}; _invTimeGen = {}; _invTimeMulti = {}; _invAutoPrice = {}; _qbAllPromise = null;
     // Mount each card's billing panel against the specific bill on that card. Without the
     // preferred-bill hint a work order carrying two vendors' bills would load the newest
     // one into BOTH cards, and you'd bill the same vendor twice.
