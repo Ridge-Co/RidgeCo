@@ -104,6 +104,7 @@ export default {
         if (path === '/qb/ready')               return await qbReadyQueue(env, url);
         if (path === '/qb/entities')            return await qbEntities(env, url);
         if (path === '/admin/duplicate-properties') return await adminDuplicateProperties(env);
+        if (path === '/admin/duplicate-owners')     return await adminDuplicateOwners(env);
         if (path === '/qb/trade-map')           return await qbTradeMap(env);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
@@ -160,6 +161,7 @@ export default {
         if (path === '/admin/fix-pins')           return await adminFixPins(env, body);
         if (path === '/admin/fix-stale-tenants')  return await adminFixStaleTenants(env, body);
         if (path === '/admin/merge-property')     return await adminMergeProperty(env, body);
+        if (path === '/admin/merge-owner')        return await adminMergeOwner(env, body);
         if (path === '/admin/migrate-trades')     return await adminMigrateTrades(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
@@ -1705,6 +1707,121 @@ async function adminMigrateTrades(env, body) {
   return json({ success: true, applied: apply, total, report });
 }
 
+// Owners duplicate the same way properties do — the same company entered twice, each row
+// collecting its own properties and its own portal users. Same treatment: show what is
+// attached to each, repoint everything onto the keeper, deactivate the loser, delete
+// nothing.
+const OWNER_REFS = [
+  { tab: 'Properties',   col: 'Owner_ID' },
+  { tab: 'Owner_Users',  col: 'Owner_ID' },
+  { tab: 'WO_Templates', col: 'Owner_ID' },   // templates can be scoped to one owner
+];
+
+// GET /admin/duplicate-owners
+async function adminDuplicateOwners(env) {
+  const owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE');
+  const groups = {};
+  for (const o of owners) {
+    const key = qbNormName(qbOwnerDisplayName(o));
+    if (!key) continue;
+    (groups[key] = groups[key] || []).push(o);
+  }
+  const dupeKeys = Object.keys(groups).filter(k => groups[k].length > 1);
+  if (!dupeKeys.length) return json({ success: true, duplicates: [] });
+
+  const refData = {};
+  for (const ref of OWNER_REFS) {
+    if (refData[ref.tab] !== undefined) continue;
+    try { refData[ref.tab] = await fetchTab(env, ref.tab); }
+    catch (e) { refData[ref.tab] = isMissingTabError(e) ? [] : null; }
+  }
+
+  const duplicates = dupeKeys.map(key => ({
+    name: qbOwnerDisplayName(groups[key][0]),
+    rows: groups[key].map(o => {
+      const counts = {}; let total = 0;
+      for (const ref of OWNER_REFS) {
+        const rows = refData[ref.tab];
+        if (!rows) { counts[ref.tab] = null; continue; }
+        const n = rows.filter(r => String(r[ref.col] || '') === String(o.ID) && r.Active !== 'FALSE').length;
+        counts[ref.tab] = n; total += n;
+      }
+      return { id: o.ID, display: qbOwnerDisplayName(o),
+               email: o.Billing_Email || o.Email || '', phone: o.Phone || '',
+               // An Owners row with a PIN is somebody's portal login. Deactivating it on
+               // merge takes their access away, so it has to be visible BEFORE the merge.
+               has_login: !!String(o.PIN || '').trim(),
+               qb_id: o.QBO_Customer_ID || '', refs: counts, total_refs: total };
+    }),
+  }));
+  return json({ success: true, duplicates });
+}
+
+// POST /admin/merge-owner { from_id, to_id, apply? }
+async function adminMergeOwner(env, body) {
+  const fromId = String(body.from_id || '').trim();
+  const toId   = String(body.to_id || '').trim();
+  const apply  = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  if (!fromId || !toId) return json({ error: 'from_id and to_id required' }, 400);
+  if (fromId === toId)  return json({ error: 'from_id and to_id are the same row' }, 400);
+
+  const owners = await fetchTab(env, 'Owners');
+  const from = owners.find(o => String(o.ID) === fromId);
+  const to   = owners.find(o => String(o.ID) === toId);
+  if (!from) return json({ error: `No owner ${fromId}` }, 404);
+  if (!to)   return json({ error: `No owner ${toId}` }, 404);
+
+  // Merging two genuinely different owners would move properties onto the wrong ledger.
+  if (qbNormName(qbOwnerDisplayName(from)) !== qbNormName(qbOwnerDisplayName(to))) {
+    return json({ error: `"${qbOwnerDisplayName(from)}" and "${qbOwnerDisplayName(to)}" are not the same name. Refusing to merge.` }, 409);
+  }
+  // Two different QuickBooks customers means two real ledgers with real history.
+  const fq = (from.QBO_Customer_ID || '').trim(), tq = (to.QBO_Customer_ID || '').trim();
+  if (fq && tq && fq !== tq) {
+    return json({ error: `These are linked to different QuickBooks customers (#${fq} and #${tq}). Sort that out first — merging would abandon one ledger.` }, 409);
+  }
+
+  const plan = [];
+  for (const ref of OWNER_REFS) {
+    let rows;
+    try { rows = await fetchTab(env, ref.tab); }
+    catch (e) { if (isMissingTabError(e)) continue; return json({ error: `Could not read ${ref.tab} — stopping rather than half-merging.` }, 500); }
+    const hits = rows.filter(r => String(r[ref.col] || '') === fromId && r.Active !== 'FALSE');
+    if (hits.length) plan.push({ tab: ref.tab, col: ref.col, ids: hits.map(r => r.ID), count: hits.length });
+  }
+
+  if (!apply) {
+    return json({ success: true, applied: false, from: fromId, to: toId, name: qbOwnerDisplayName(from),
+                  plan, total: plan.reduce((n, p) => n + p.count, 0),
+                  // The system already models several people at one company: Owner_Users.
+                  // Two Owners rows each with a login means the second person belongs
+                  // there, not merged away.
+                  loser_has_login: !!String(from.PIN || '').trim(),
+                  loser_phone: from.Phone || '',
+                  qb_note: (!tq && fq) ? `The keeper isn't linked to QuickBooks but #${fromId} is (#${fq}) — that link moves across.` : '' });
+  }
+
+  const moved = [], failed = [];
+  for (const step of plan) {
+    for (const id of step.ids) {
+      try { await updateRow(env, step.tab, id, { [step.col]: toId }); moved.push(step.tab + ':' + id); }
+      catch (e) { failed.push(step.tab + ':' + id); }
+    }
+  }
+  if (failed.length) {
+    return json({ success: false, applied: true, moved: moved.length, failed,
+      error: `Moved ${moved.length} but ${failed.length} failed. Both owners are still active — nothing was hidden. Re-run to finish.` }, 500);
+  }
+
+  // Carry the QuickBooks link over if only the loser had one, so the keeper inherits the
+  // ledger rather than looking unmapped and getting a new customer created for it.
+  if (fq && !tq) { try { await updateRow(env, 'Owners', toId, { QBO_Customer_ID: fq }); } catch (e) {} }
+  await updateRow(env, 'Owners', fromId, { Active: 'FALSE' });
+  return json({ success: true, applied: true, from: fromId, to: toId, moved: moved.length,
+                qb_moved: !!(fq && !tq),
+                note: `Owner ${fromId} is deactivated, not deleted — the row is still in the sheet.` });
+}
+
 async function adminDuplicateProperties(env) {
   const properties = await fetchTab(env, 'Properties');
   const live = properties.filter(p => p.Active !== 'FALSE');
@@ -2818,6 +2935,10 @@ async function qbEntities(env, url) {
       const mapped  = (o.QBO_Customer_ID || '').trim();
       const inQB    = mapped ? customers.find(c => String(c.id) === mapped) : null;
       const subCount = mapped ? customers.filter(c => String(c.parent_id || '') === mapped).length : 0;
+      // Owners live at the TOP of the QuickBooks tree. Matching them against the whole
+      // customer list meant "Phoenix Estates" was being offered six of its own buildings
+      // as candidates — they're sub-customers, and an owner is never one of those.
+      const topLevel = customers.filter(c => !c.parent_id);
       // A person and their company are often BOTH customers in QuickBooks, with the
       // properties hanging off one of them. Surface any same-surname top-level customer
       // that has sub-customers, so "you mapped the company but the buildings are under
@@ -2838,7 +2959,7 @@ async function qbEntities(env, url) {
         sub_count: subCount,
         elsewhere,
         stale: !!(mapped && !inQB),     // mapped to an id QuickBooks no longer returns
-        suggest: mapped ? null : qbMatchEntity(customers, display, o.Billing_Email || o.Email || ''),
+        suggest: mapped ? null : qbMatchEntity(topLevel, display, o.Billing_Email || o.Email || ''),
       };
     });
 
@@ -2933,16 +3054,21 @@ async function qbMapEntity(env, body) {
   if (!id) return json({ error: 'Missing id' }, 400);
   if (qbId && !/^\d+$/.test(qbId)) return json({ error: 'qb_id must be a QuickBooks numeric id' }, 400);
 
-  // Refuse to point two Hub records at the same QuickBooks entity. Two owners sharing one
-  // customer means their invoices merge into one ledger — silent, and painful to unpick.
-  if (qbId) {
+  // Two Hub records pointing at one QuickBooks entity merges their invoices into a single
+  // ledger. Usually that's a mistake. But two owner rows for one company — a second contact
+  // set up with their own portal login — is a real shape, and refusing it outright leaves
+  // no way to express it. So: never by accident, but possible on purpose.
+  if (qbId && !(body.allow_shared === true || String(body.allow_shared).toUpperCase() === 'TRUE')) {
     const clash = await qbMappingClash(env, kind, id, qbId);
     if (clash) {
       const who = kind === 'owner' ? qbOwnerDisplayName(clash)
                 : kind === 'vendor' ? qbVendorDisplayName(clash)
                 : kind === 'property' ? qbPropertyDisplayName(clash)
                 : qbUnitDisplayName(clash);
-      return json({ error: `QuickBooks #${qbId} is already mapped to "${who || ('#' + clash.ID)}". Clear that one first.` }, 409);
+      return json({
+        shared_conflict: true, other_id: clash.ID, other_name: who || ('#' + clash.ID),
+        error: `"${who || ('#' + clash.ID)}" is already linked to QuickBooks #${qbId}. Both would bill to the same ledger.`,
+      }, 409);
     }
   }
 

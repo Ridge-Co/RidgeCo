@@ -448,6 +448,7 @@
       <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#000">🏠 Check units naming moved-out tenants</button>
       <button class="btn small" onclick="migrateTrades(false)" style="background:var(--accent)">🔧 Update old trade names</button>
       <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#000">🏢 Find duplicate properties</button>
+      <button class="btn small" onclick="checkDuplicateOwners()" style="background:var(--info);color:#000">👤 Find duplicate owners</button>
       <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
     </div>
     <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
@@ -6166,8 +6167,24 @@ function qbMapSlices(kind) {
   return { rows: [], qb: [] };
 }
 
-function qbSetMap(kind, id, qbId) {
-  api('POST', '/qb/map', { kind: kind, id: id, qb_id: qbId || '' }).then(function(r) {
+function qbSetMap(kind, id, qbId, allowShared) {
+  api('POST', '/qb/map', { kind: kind, id: id, qb_id: qbId || '', allow_shared: !!allowShared }).then(function(r) {
+    // Two records on one QuickBooks customer is usually a mistake and occasionally the
+    // point — two contacts at one company, each with their own login. Ask rather than
+    // refuse, but make what happens explicit.
+    if (r && r.shared_conflict) {
+      if (confirm(r.error + '\n\n' +
+          'Link it anyway? Do this only if they are the same company — for example a second ' +
+          'contact who needs their own portal login. Invoices for both will land on one ' +
+          'QuickBooks ledger.\n\n' +
+          'If these are actually duplicate owner records, cancel and use ' +
+          '"Find duplicate owners" in Dev tools instead — that merges them properly.')) {
+        qbSetMap(kind, id, qbId, true);
+      } else {
+        loadQBMapping(false);
+      }
+      return;
+    }
     if (r && r.error) { toast(r.error, 'error'); loadQBMapping(false); return; }
     toast(qbId ? 'Linked' : 'Link cleared', 'success');
     // Patch in place so the screen doesn't flash, then refresh the underlying lists quietly.
@@ -7222,6 +7239,76 @@ function migrateTrades(apply) {
           safeArray(r.sample).slice(0, 3).map(function(c) { return esc(c.from) + ' → ' + esc(c.to); }).join(', ') + '</span>';
       }).join('<br>') +
       '<br><button class="btn small" onclick="migrateTrades(true)" style="background:var(--accent);margin-top:6px">Update them</button></div>';
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
+// Two rows for one owner is the same problem as two rows for one building: each collects
+// its own properties and portal users, and neither half is complete. It also blocks the
+// QuickBooks link, because two owners can't share one customer without saying so.
+function checkDuplicateOwners() {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = '⏳ Checking…';
+  api('GET', '/admin/duplicate-owners').then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    var dupes = safeArray(res.duplicates);
+    if (!dupes.length) { if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ No duplicate owners.</span>'; return; }
+
+    if (el) el.innerHTML = dupes.map(function(d) {
+      var rows = safeArray(d.rows).slice().sort(function(a, b) { return b.total_refs - a.total_refs; });
+      var keeper = rows[0];
+      return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px">' +
+        '<div style="color:var(--warn);font-size:12px;margin-bottom:6px">⚠ ' + esc(d.name) + ' appears ' + rows.length + ' times</div>' +
+        rows.map(function(r) {
+          var refs = Object.keys(r.refs || {}).filter(function(t) { return r.refs[t]; })
+            .map(function(t) { return r.refs[t] + ' ' + t.replace(/_/g, ' ').toLowerCase(); }).join(', ');
+          return '<div style="font-size:11.5px;padding:4px 0;border-top:1px solid var(--border)">' +
+            '<b style="color:' + (r === keeper ? 'var(--accent2)' : 'var(--text)') + '">ID ' + esc(String(r.id)) + '</b>' +
+            (r === keeper ? ' <span style="color:var(--accent2);font-size:10px">most attached to</span>' : '') +
+            (r.email ? '<span style="color:var(--muted)"> · ' + esc(r.email) + '</span>' : '') +
+            (r.qb_id ? '<span style="color:var(--info)"> · QuickBooks #' + esc(r.qb_id) + '</span>' : '<span style="color:var(--muted)"> · not linked to QuickBooks</span>') +
+            (r.has_login ? '<span style="color:var(--warn)"> · has its own portal login</span>' : '') +
+            '<div style="color:var(--muted);font-size:10.5px">' + (refs || 'nothing attached') + '</div>' +
+          '</div>';
+        }).join('') +
+        '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+          rows.filter(function(r) { return r !== keeper; }).map(function(r) {
+            return '<button class="btn small" onclick="mergeOwner(\'' + esc(String(r.id)) + '\',\'' + esc(String(keeper.id)) + '\',false)" ' +
+              'style="background:var(--surface2);color:var(--text);font-size:10.5px">Preview: move ID ' + esc(String(r.id)) + ' into ID ' + esc(String(keeper.id)) + '</button>';
+          }).join('') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
+function mergeOwner(fromId, toId, apply) {
+  var el = document.getElementById('admin-tool-result');
+  api('POST', '/admin/merge-owner', { from_id: fromId, to_id: toId, apply: !!apply }).then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    if (apply) {
+      toast('Merged — ' + res.moved + ' reference(s) moved', 'success');
+      if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Moved ' + res.moved + ' onto ID ' + esc(String(toId)) +
+        (res.qb_moved ? ', and carried the QuickBooks link across' : '') + '. ' + esc(res.note || '') + '</span>';
+      loadAll();
+      return;
+    }
+    var plan = safeArray(res.plan);
+    if (el) el.innerHTML =
+      '<div style="line-height:1.6">Moving <b>ID ' + esc(fromId) + '</b> into <b>ID ' + esc(toId) + '</b> (' + esc(res.name || '') + ') would repoint:<br>' +
+      (plan.length ? plan.map(function(pl) { return '· ' + pl.count + ' × ' + esc(pl.tab.replace(/_/g, ' ')); }).join('<br>')
+                   : '· nothing — that row has no properties or users attached') +
+      (res.qb_note ? '<div style="color:var(--info);font-size:10.5px;margin-top:4px">' + esc(res.qb_note) + '</div>' : '') +
+      (res.loser_has_login
+        ? '<div style="color:var(--warn);font-size:11px;margin-top:5px;line-height:1.5">⚠ ID ' + esc(fromId) +
+          ' has its own portal login' + (res.loser_phone ? ' (' + esc(res.loser_phone) + ')' : '') +
+          '. Merging deactivates that row, so that person loses access.<br>' +
+          'If these are two <b>people</b> at one company rather than a duplicate record, add them ' +
+          'as an owner user on ID ' + esc(toId) + ' first — that is what owner users are for, and ' +
+          'it also means one owner row holds one QuickBooks link with no sharing.</div>'
+        : '') +
+      '<br><span style="color:var(--muted);font-size:10.5px">ID ' + esc(fromId) + ' is then deactivated, not deleted.</span>' +
+      '<br><button class="btn small" onclick="mergeOwner(\'' + esc(fromId) + '\',\'' + esc(toId) + '\',true)" ' +
+        'style="background:var(--danger);color:#fff;margin-top:6px">Do it</button></div>';
   }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
 }
 
