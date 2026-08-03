@@ -454,6 +454,7 @@
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn small" onclick="runAdminTool('fix-pins')" style="background:var(--accent2);color:#000">🔑 Fix PINs + Phones</button>
       <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#000">🏠 Check units naming moved-out tenants</button>
+      <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#000">🏢 Find duplicate properties</button>
       <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
     </div>
     <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
@@ -4341,8 +4342,16 @@ function invPricing(k) {
     }
   } catch (e) {}
 
-  var totalCost     = laborTotal + truckStock + receiptsAll;              // out of your pocket
+  var totalCost     = laborTotal + truckStock + receiptsAll;              // the pricing basis
   var vendorPayable = laborTotal + truckStock + reimburse;                // the QuickBooks bill
+
+  // When the vendor on this job is you, the labour on the bill is your own wage — it never
+  // left the business. Pricing still works off the full cost, because that's what the job
+  // is worth; but profit must not subtract money nobody paid out.
+  var vendorRow = safeArray(state.vendors).find(function(v) { return String(v.ID) === String(bill.Vendor_ID); });
+  var vendorInHouse = !!vendorRow && String(vendorRow.In_House || '').toUpperCase() === 'TRUE';
+  var inHouseLabor  = vendorInHouse ? laborTotal : 0;
+  var cashOut       = totalCost - inHouseLabor;                           // actually paid to someone else
 
   var onsite   = (document.getElementById('inv-onsite-' + k) || {}).checked;
   var brettHrs = onsite ? (parseFloat((document.getElementById('inv-brett-hrs-' + k) || {}).value) || 1) : 0;
@@ -4358,7 +4367,11 @@ function invPricing(k) {
   // going on the invoice" — the price would have quietly excluded the very thing the
   // section exists to add.
   var tieredBase = calcTieredEstimate(totalCost);
-  var tieredWithExtras = Math.ceil((tieredBase.finalPrice + brettTime + travel) / 5) * 5;
+  // Your time and travel are added AFTER the markup — they are never marked up, because
+  // your hour is a wage, not a job you're pricing. They DO carry the 5% processing fee:
+  // when the customer pays the whole ticket by card, the processor takes its cut of all
+  // of it, including your hour.
+  var tieredWithExtras = Math.ceil((tieredBase.finalPrice + (brettTime + travel) * 1.05) / 5) * 5;
 
   // B — itemized: the Review Bills math. Markup is MAX($75, $35/hr), then your on-site
   // time and travel on top, then the 5% processing fee.
@@ -4367,10 +4380,15 @@ function invPricing(k) {
   var itemFee      = itemSubtotal * 0.05;
   var itemized     = Math.ceil((itemSubtotal + itemFee) / 5) * 5;
 
+  // Your own hours on this job, whichever hat you were wearing: the whole job when it's
+  // in-house, or the oversight hour when someone else did the work.
+  var ownWage = inHouseLabor + brettTime;
+
   return {
     billType: billType, hrs: hrs, laborTotal: laborTotal, truckStock: truckStock,
     receiptsAll: receiptsAll, reimburse: reimburse, onAccount: onAccount,
     totalCost: totalCost, vendorPayable: vendorPayable,
+    vendorInHouse: vendorInHouse, inHouseLabor: inHouseLabor, cashOut: cashOut, ownWage: ownWage,
     brettTime: brettTime, brettHrs: brettHrs, travel: travel, loggedTime: loggedTime,
     tieredPrice: tieredWithExtras, tieredBase: tieredBase.finalPrice, tieredPct: Math.round(tieredBase.markupPct * 100),
     itemizedPrice: itemized, itemMarkup: itemMarkup,
@@ -4430,11 +4448,31 @@ function calcInvoiceMarkup(k) {
   var p = invPricing(k);
   var cost = p ? p.totalCost : 0;
   if (cost > 0) {
-    var profit = charge - cost;
-    var pct = ((profit / cost) * 100).toFixed(0);
-    markupEl.innerHTML = profit >= 0
-      ? '<span style="color:var(--accent2)">You owe the vendor $' + p.vendorPayable.toFixed(2) + ' · your profit $' + profit.toFixed(2) + ' (' + pct + '% markup)</span>'
-      : '<span style="color:var(--danger)">⚠ Below cost by $' + Math.abs(profit).toFixed(2) + ' — you would lose money on this job</span>';
+    // Split your wage out of the margin. Your hours on a job are money you earn, but they
+    // are not what the BUSINESS made — and the difference matters, because the day you pay
+    // a supervisor to do that hour, the profit line is what's left.
+    var net    = charge - p.cashOut;          // cash in minus cash actually out
+    var wage   = p.ownWage;
+    var profit = net - wage;
+    var basis  = p.cashOut > 0 ? p.cashOut : cost;
+    var pct    = ((profit / basis) * 100).toFixed(0);
+
+    if (net < 0) {
+      markupEl.innerHTML = '<span style="color:var(--danger)">⚠ Below cost by $' + Math.abs(net).toFixed(2) + ' — you would lose money on this job</span>';
+    } else {
+      markupEl.innerHTML =
+        '<span style="color:' + (profit >= 0 ? 'var(--accent2)' : 'var(--warn)') + '">' +
+        (p.vendorInHouse
+          ? 'In-house — no vendor payable'
+          : 'You owe the vendor $' + p.vendorPayable.toFixed(2)) +
+        (wage > 0
+          ? ' · $' + wage.toFixed(2) + ' your time · profit $' + profit.toFixed(2)
+          : ' · your profit $' + profit.toFixed(2) + ' (' + pct + '% markup)') +
+        '</span>' +
+        (wage > 0 && profit < 0
+          ? '<div style="color:var(--warn);font-size:10.5px;margin-top:2px">This job covers your hours but leaves the business nothing — it would not work with a paid supervisor.</div>'
+          : '');
+    }
   } else {
     markupEl.innerHTML = '<span style="color:var(--muted)">No vendor bill loaded yet — profit unknown.</span>';
   }
@@ -4626,7 +4664,11 @@ function invBillThisJob(k) {
     markup: markup.toFixed(2),
     processing_fee: fee.toFixed(2),
     customer_total: charge.toFixed(2),
-    brett_net: (charge - p.totalCost).toFixed(2),
+    // Cash in minus cash OUT — your own hours were never cash out, so they no longer
+    // reduce this. own_wage records how much of it is your wage rather than profit.
+    brett_net: (charge - p.cashOut).toFixed(2),
+    own_wage: p.ownWage.toFixed(2),
+    profit: (charge - p.cashOut - p.ownWage).toFixed(2),
     approved_by: 'Brett',
   }).then(function(res) {
     if (btn) { btn.disabled = false; btn.textContent = '📤 Approve & send to QuickBooks'; }
@@ -5342,6 +5384,12 @@ function loadInvoiceReview() {
   }).catch(function() {}));
   if (!safeArray(state.units).length) prep.push(api('GET', '/units').then(function(r) {
     if (Array.isArray(r)) state.units = r;
+  }).catch(function() {}));
+  // Vendors is load-bearing for the money now, not just for names: the in-house flag lives
+  // there, and without it an in-house job would quietly report the old profit — netting out
+  // labour that never left the business.
+  if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) {
+    if (Array.isArray(r)) state.vendors = r;
   }).catch(function() {}));
 
   Promise.all(prep).then(function() {
@@ -6260,7 +6308,7 @@ function renderQBPreview(p) {
     '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
       '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL</div>' +
       (p.bill.in_house ? '<div style="color:var(--accent2)">' + esc(p.vendor.display || 'This vendor') + ' is in-house — no bill, so no payable to you.' +
-        '<div style="color:var(--muted);font-size:10.5px;margin-top:3px">QuickBooks will show the full invoice as income. The Hub still nets your own labour out of job profit, so the two won\'t agree on this job.</div></div>' :
+        '<div style="color:var(--muted);font-size:10.5px;margin-top:3px">The full invoice is income. Your hours are shown separately as your time, not subtracted as a cost.</div></div>' :
        p.bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
         '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc(p.vendor.display||'vendor') + '</span><span style="color:var(--warn)">$' + (parseFloat(p.bill.total)||0).toFixed(2) + '</span></div>') +
       ((p.bill && p.bill.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + p.bill.attach_receipts + ' receipt(s) attach to this bill (not shown to customer)</div>' : '') +
@@ -7107,6 +7155,73 @@ function checkStaleTenants(apply) {
   }).catch(function(e) {
     if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>';
   });
+}
+
+// The same building entered twice splits its history in two — work orders on one row,
+// units and keys on the other. This shows what is actually attached to each before you
+// decide anything, because "the one with the right unit count" is a guess and the
+// references are the evidence.
+function checkDuplicateProperties() {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = '⏳ Checking…';
+  api('GET', '/admin/duplicate-properties').then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    var dupes = safeArray(res.duplicates);
+    if (!dupes.length) { if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ No duplicate addresses.</span>'; return; }
+
+    if (el) el.innerHTML = dupes.map(function(d) {
+      var rows = safeArray(d.rows).slice().sort(function(a, b) { return b.total_refs - a.total_refs; });
+      var keeper = rows[0];
+      return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px">' +
+        '<div style="color:var(--warn);font-size:12px;margin-bottom:6px">⚠ ' + esc(d.address) + ' appears ' + rows.length + ' times</div>' +
+        rows.map(function(r) {
+          var refs = Object.keys(r.refs || {}).filter(function(t) { return r.refs[t]; })
+            .map(function(t) { return r.refs[t] + ' ' + t.replace(/_/g, ' ').toLowerCase(); }).join(', ');
+          return '<div style="font-size:11.5px;padding:4px 0;border-top:1px solid var(--border)">' +
+            '<b style="color:' + (r === keeper ? 'var(--accent2)' : 'var(--text)') + '">ID ' + esc(String(r.id)) + '</b>' +
+            (r === keeper ? ' <span style="color:var(--accent2);font-size:10px">most attached to</span>' : '') +
+            '<span style="color:var(--muted)"> · Unit_Count field says ' + esc(String(r.unit_count_field || '—')) + '</span>' +
+            (r.lockbox ? '<span style="color:var(--muted)"> · lockbox ' + esc(r.lockbox) + '</span>' : '') +
+            (r.qb_id ? '<span style="color:var(--info)"> · linked to QuickBooks</span>' : '') +
+            '<div style="color:var(--muted);font-size:10.5px">' + (refs || 'nothing attached') + '</div>' +
+          '</div>';
+        }).join('') +
+        '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+          rows.filter(function(r) { return r !== keeper; }).map(function(r) {
+            return '<button class="btn small" onclick="mergeProperty(\'' + esc(String(r.id)) + '\',\'' + esc(String(keeper.id)) + '\',false)" ' +
+              'style="background:var(--surface2);color:var(--text);font-size:10.5px">Preview: move ID ' + esc(String(r.id)) + ' into ID ' + esc(String(keeper.id)) + '</button>';
+          }).join('') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
+function mergeProperty(fromId, toId, apply) {
+  var el = document.getElementById('admin-tool-result');
+  api('POST', '/admin/merge-property', { from_id: fromId, to_id: toId, apply: !!apply }).then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    if (apply) {
+      toast('Merged — ' + res.moved + ' reference(s) moved', 'success');
+      if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Moved ' + res.moved + ' reference(s) onto ID ' + esc(String(toId)) +
+        '. ' + esc(res.note || '') + '</span>';
+      loadAll();
+      return;
+    }
+    var plan = safeArray(res.plan);
+    if (el) el.innerHTML =
+      '<div style="line-height:1.6">Moving <b>ID ' + esc(fromId) + '</b> into <b>ID ' + esc(toId) + '</b> (' + esc(res.address || '') + ') would repoint:<br>' +
+      (plan.length ? plan.map(function(pl) { return '· ' + pl.count + ' × ' + esc(pl.tab.replace(/_/g, ' ')); }).join('<br>')
+                   : '· nothing — that row has no references at all') +
+      (safeArray(res.label_clashes).length
+        ? '<div style="color:var(--warn);font-size:10.5px;margin-top:5px">⚠ Both rows have a unit called ' +
+          safeArray(res.label_clashes).map(function(l) { return '"' + esc(l) + '"'; }).join(', ') +
+          '. After merging you would have two of each — sort those out before linking any unit to QuickBooks, or both will bill to one ledger.</div>'
+        : '') +
+      '<br><span style="color:var(--muted);font-size:10.5px">ID ' + esc(fromId) + ' is then deactivated, not deleted. Its row stays in the sheet.</span>' +
+      '<br><button class="btn small" onclick="mergeProperty(\'' + esc(fromId) + '\',\'' + esc(toId) + '\',true)" ' +
+        'style="background:var(--danger);color:#fff;margin-top:6px">Do it</button></div>';
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
 }
 
 function runAdminTool(tool) {

@@ -103,6 +103,7 @@ export default {
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
         if (path === '/qb/ready')               return await qbReadyQueue(env, url);
         if (path === '/qb/entities')            return await qbEntities(env, url);
+        if (path === '/admin/duplicate-properties') return await adminDuplicateProperties(env);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
@@ -157,6 +158,7 @@ export default {
         if (path === '/regenerate-pin')           return await regeneratePIN(env, body);
         if (path === '/admin/fix-pins')           return await adminFixPins(env, body);
         if (path === '/admin/fix-stale-tenants')  return await adminFixStaleTenants(env, body);
+        if (path === '/admin/merge-property')     return await adminMergeProperty(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
@@ -1149,6 +1151,7 @@ async function approveInvoiceReview(env, body) {
     bill_id, wo_id, vendor_id, vendor_name,
     job_type, vendor_cost, brett_time, brett_hrs, travel,
     markup, processing_fee, customer_total, brett_net, approved_by,
+    own_wage, profit,
   } = body;
   if (!bill_id || !customer_total) return json({ error: 'bill_id and customer_total required' }, 400);
   const today = new Date().toISOString().split('T')[0];
@@ -1161,6 +1164,15 @@ async function approveInvoiceReview(env, body) {
     const already = existingIR.find(r => r.Active !== 'FALSE' && String(r.Bill_ID) === String(bill_id));
     if (already) return json({ success: true, already_approved: true, id: String(already.ID), qb_status: already.QB_Invoice_Status || 'pending' });
   } catch (e) { /* tab unreadable — fall through and let the append surface the real error */ }
+  // Neither tab has these columns yet, and updateRow/addRow map by header — a write to a
+  // column that isn't there reports success and stores nothing.
+  try {
+    await Promise.all([
+      ensureColumns(env, 'Vendor_Bills',   ['Own_Wage', 'Profit']),
+      ensureColumns(env, 'Invoice_Review', ['Own_Wage', 'Profit']),
+    ]);
+  } catch (e) { /* the money fields below still land; only the split is lost */ }
+
   // 1. Update Vendor_Bills row: mark reviewed, save markup fields
   await updateRow(env, 'Vendor_Bills', bill_id, {
     Status:         'reviewed',
@@ -1172,6 +1184,8 @@ async function approveInvoiceReview(env, body) {
     Processing_Fee: processing_fee  || '0',
     Customer_Total: customer_total,
     Brett_Net:      brett_net       || '0',
+    Own_Wage:       own_wage        || '0',
+    Profit:         profit          || '0',
     Approved_By:    approved_by     || 'Brett',
     Reviewed_Date:  today,
   });
@@ -1195,6 +1209,11 @@ async function approveInvoiceReview(env, body) {
     Processing_Fee:     processing_fee,
     Customer_Total:     customer_total,
     Brett_Net:          brett_net,
+    // Brett_Net is cash in minus cash OUT. Own_Wage is how much of it is his own hours
+    // rather than what the business made — the two are different questions, and a job that
+    // only covers his wage is not a job that works once he pays someone else to do it.
+    Own_Wage:           own_wage || '0',
+    Profit:             profit   || '0',
     QB_Invoice_Status:  'pending',
     QB_Invoice_ID:      '',
     QB_Bill_ID:         '',
@@ -1591,6 +1610,155 @@ async function getOwnerBilling(env, url) {
 // this backlog exists in the live sheet right now — and every one of them is a former
 // tenant's phone number waiting to be texted to a vendor. Reports by default; only
 // writes when explicitly told to.
+// ── DUPLICATE PROPERTIES: INSPECT, THEN MERGE ────────────────
+// The same building entered twice is not a cosmetic problem. Work orders, units, keys,
+// tenants and receipts each attach to whichever ID they happened to be created against,
+// so the history splits in two and neither half is complete. Deleting the wrong one
+// silently orphans everything pointing at it.
+//
+// Nothing here deletes. The loser is deactivated, and every reference is repointed first.
+
+// Every tab that stores a Property_ID, and what else needs repointing alongside it.
+const PROPERTY_REFS = [
+  { tab: 'Work_Orders',  col: 'Property_ID' },
+  { tab: 'Units',        col: 'Property_ID' },
+  { tab: 'Keys',         col: 'Property_ID' },
+  { tab: 'Tenants',      col: 'Property_ID' },
+  { tab: 'Attachments',  col: 'Property_ID' },
+  { tab: 'Receipts',     col: 'Property_ID' },
+  { tab: 'Estimates',    col: 'Property_ID' },
+  { tab: 'Materials',    col: 'Property_ID' },
+  // Not called Property_ID. A queued receipt auto-linked to the losing row would otherwise
+  // stay pointed at a property that no longer exists as far as the Hub is concerned.
+  { tab: 'Receipts_Queue', col: 'Suggested_Property_ID' },
+];
+
+// GET /admin/duplicate-properties
+// Addresses appearing more than once, with a full reference count per ID so you can see
+// which row the work actually lives on before touching anything.
+async function adminDuplicateProperties(env) {
+  const properties = await fetchTab(env, 'Properties');
+  const live = properties.filter(p => p.Active !== 'FALSE');
+
+  // Group on address AND city. Same street number and name in two different towns is a
+  // realistic shape in a Baltimore-area portfolio, and presenting those as duplicates with
+  // a proposed keeper is how you'd merge two genuinely different buildings.
+  const groups = {};
+  for (const p of live) {
+    const addr = qbNormAddress(p.Address || '');
+    if (!addr) continue;
+    const key = addr + '|' + qbNormAddress(p.City || '');
+    (groups[key] = groups[key] || []).push(p);
+  }
+  const dupeKeys = Object.keys(groups).filter(k => groups[k].length > 1);
+  if (!dupeKeys.length) return json({ success: true, duplicates: [] });
+
+  // Only read the reference tabs when there's actually something to report on.
+  const refData = {};
+  for (const ref of PROPERTY_REFS) {
+    if (refData[ref.tab]) continue;
+    try { refData[ref.tab] = await fetchTab(env, ref.tab); } catch (e) { refData[ref.tab] = null; }
+  }
+
+  const duplicates = dupeKeys.map(key => ({
+    address: groups[key][0].Address,
+    rows: groups[key].map(p => {
+      const counts = {}; let total = 0;
+      for (const ref of PROPERTY_REFS) {
+        const rows = refData[ref.tab];
+        if (!rows) { counts[ref.tab] = null; continue; }   // unreadable, not zero
+        const n = rows.filter(r => String(r[ref.col] || '') === String(p.ID) && r.Active !== 'FALSE').length;
+        counts[ref.tab] = n; total += n;
+      }
+      return {
+        id: p.ID,
+        unit_count_field: p.Unit_Count || '',
+        owner_id: p.Owner_ID || '',
+        lockbox: p.Lockbox_Code || '',
+        qb_id: p.QBO_Customer_ID || '',
+        refs: counts,
+        total_refs: total,
+      };
+    }),
+  }));
+  return json({ success: true, duplicates });
+}
+
+// POST /admin/merge-property { from_id, to_id, apply? }
+// Repoints every reference from the duplicate onto the keeper, then deactivates the
+// duplicate. Reports what it WOULD do unless apply is explicitly true.
+async function adminMergeProperty(env, body) {
+  const fromId = String(body.from_id || '').trim();
+  const toId   = String(body.to_id || '').trim();
+  const apply  = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  if (!fromId || !toId) return json({ error: 'from_id and to_id required' }, 400);
+  if (fromId === toId)  return json({ error: 'from_id and to_id are the same row' }, 400);
+
+  const properties = await fetchTab(env, 'Properties');
+  const from = properties.find(p => String(p.ID) === fromId);
+  const to   = properties.find(p => String(p.ID) === toId);
+  if (!from) return json({ error: `No property ${fromId}` }, 404);
+  if (!to)   return json({ error: `No property ${toId}` }, 404);
+
+  // Merging two genuinely different buildings would be far worse than the duplicate.
+  if (qbNormAddress(from.Address || '') !== qbNormAddress(to.Address || '')) {
+    return json({ error: `"${from.Address}" and "${to.Address}" are not the same address. Refusing to merge.` }, 409);
+  }
+  if (qbNormAddress(from.City || '') !== qbNormAddress(to.City || '')) {
+    return json({ error: `Same street address but different cities (${from.City || 'blank'} vs ${to.City || 'blank'}). Those are two different buildings.` }, 409);
+  }
+  if (String(from.Owner_ID || '') !== String(to.Owner_ID || '')) {
+    return json({ error: `Those two rows have different owners (${from.Owner_ID || 'none'} vs ${to.Owner_ID || 'none'}). Fix the owner first — merging would move work onto the wrong ledger.` }, 409);
+  }
+
+  const plan = [];
+  for (const ref of PROPERTY_REFS) {
+    let rows;
+    try { rows = await fetchTab(env, ref.tab); }
+    catch (e) { return json({ error: `Could not read ${ref.tab} — stopping rather than half-merging.` }, 500); }
+    const hits = rows.filter(r => String(r[ref.col] || '') === fromId && r.Active !== 'FALSE');
+    if (hits.length) plan.push({ tab: ref.tab, col: ref.col, ids: hits.map(r => r.ID), count: hits.length });
+  }
+
+  // Two units called "Apt 1" on one property will collide when they're linked to
+  // QuickBooks: the second create hits a duplicate-name fault, resolves to the SAME
+  // sub-customer, and both units end up billing to one ledger. Worth knowing before the
+  // merge, not after.
+  let labelClashes = [];
+  try {
+    const units = await fetchTab(env, 'Units');
+    const labelOf = u => String(u.Unit_Label || '').trim().toLowerCase();
+    const toLabels = new Set(units.filter(u => String(u.Property_ID) === toId && u.Active !== 'FALSE').map(labelOf).filter(Boolean));
+    labelClashes = units.filter(u => String(u.Property_ID) === fromId && u.Active !== 'FALSE' && toLabels.has(labelOf(u)))
+                        .map(u => u.Unit_Label);
+  } catch (e) { /* advisory only */ }
+
+  if (!apply) {
+    return json({ success: true, applied: false, from: fromId, to: toId, address: from.Address,
+                  plan, total: plan.reduce((n, p) => n + p.count, 0), label_clashes: labelClashes });
+  }
+
+  // Repoint everything BEFORE deactivating, so a failure part-way leaves both rows live
+  // and the references still resolve. A half-merge that has already hidden the source
+  // would strand whatever hadn't moved yet.
+  const moved = [], failed = [];
+  for (const step of plan) {
+    for (const id of step.ids) {
+      try { await updateRow(env, step.tab, id, { [step.col]: toId }); moved.push(step.tab + ':' + id); }
+      catch (e) { failed.push(step.tab + ':' + id); }
+    }
+  }
+  if (failed.length) {
+    return json({ success: false, applied: true, moved: moved.length, failed,
+      error: `Moved ${moved.length} reference(s) but ${failed.length} failed. Both properties are still active — nothing was hidden. Re-run to finish.` }, 500);
+  }
+
+  await updateRow(env, 'Properties', fromId, { Active: 'FALSE' });
+  return json({ success: true, applied: true, from: fromId, to: toId, moved: moved.length,
+                label_clashes: labelClashes,
+                note: `Property ${fromId} is deactivated, not deleted — its row is still in the sheet if you need to look at it.` });
+}
+
 async function adminFixStaleTenants(env, body) {
   const apply = body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
   const [units, tenants] = await Promise.all([fetchTab(env, 'Units'), fetchTab(env, 'Tenants')]);
