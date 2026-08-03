@@ -156,6 +156,7 @@ export default {
         if (path === '/send-pin')                 return await sendPinMessage(env, body);
         if (path === '/regenerate-pin')           return await regeneratePIN(env, body);
         if (path === '/admin/fix-pins')           return await adminFixPins(env, body);
+        if (path === '/admin/fix-stale-tenants')  return await adminFixStaleTenants(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
@@ -571,11 +572,35 @@ async function handlePhotoUploadClean(env, request) {
 
 // ── WO HELPERS ───────────────────────────────────────────────
 
+// Is this tenant still living there? Used by every path that decides whether to hand a
+// tenant's contact details to anyone. One predicate on purpose — three near-copies of this
+// check in three files is how one of them ends up not being applied.
+function isTenantCurrent(t) {
+  if (!t || !t.ID) return false;
+  if (String(t.Active || '').toUpperCase() === 'FALSE') return false;
+  if (t.Move_Out_Date) {
+    const out = new Date(t.Move_Out_Date + 'T23:59:59');
+    if (!isNaN(out) && out < new Date()) return false;
+  }
+  return true;
+}
+
+// The tenant to hand a VENDOR. Deliberately stricter than "whoever the work order names":
+// a vendor going to an address today needs the person living there today. A moved-out
+// tenant's name and phone must not travel out to a third party — they no longer live
+// there, and it's their personal contact detail being passed to a stranger.
+function currentTenantForDispatch(tenants, unit, wo) {
+  const id = (unit && unit.Tenant_ID) || (wo && wo.Tenant_ID) || '';
+  if (!id) return null;
+  const t = (tenants || []).find(x => String(x.ID) === String(id));
+  return isTenantCurrent(t) ? t : null;
+}
+
 function isTenantNotifiable(tenant, wo) {
   if (!tenant || !tenant.Phone) return false;
-  if (tenant.Active === 'FALSE') return false;
-  const now = new Date();
-  if (tenant.Move_Out_Date) { const moveOut = new Date(tenant.Move_Out_Date + 'T23:59:59'); if (moveOut < now) return false; }
+  // Delegates the "do they still live there" question rather than restating it. Three
+  // near-copies of this check is why one of them ended up not being applied.
+  if (!isTenantCurrent(tenant)) return false;
   if (tenant.Move_In_Date && wo && wo.Created_Date) { if (new Date(tenant.Move_In_Date) > new Date(wo.Created_Date)) return false; }
   return true;
 }
@@ -683,7 +708,26 @@ async function processMoveOut(env, body) {
   if (!tenant_id) return json({ error: 'tenant_id required' }, 400);
   const moveOutDate = move_out_date || new Date().toISOString().split('T')[0];
   const moveOutDt = new Date(moveOutDate + 'T23:59:59');
+
+  // The tenant's own row is left intact on purpose — same ID, same Unit_ID and
+  // Property_ID, now carrying a move-out date. That row IS the history: their work
+  // orders, their contact record, everything logged while they lived there stays
+  // attached to it. A new tenant gets a new row and a new ID; nothing is reused.
   await updateRow(env, 'Tenants', tenant_id, { Active: 'FALSE', Move_Out_Date: moveOutDate, PIN: '' });
+
+  // What DOES have to change is the unit's pointer to its CURRENT tenant. Move-out
+  // never cleared it, so the unit went on naming someone who had left — and because
+  // vendor dispatch reads the unit's tenant, vendors were being texted a former
+  // tenant's name and phone number when they took a new job at that address.
+  let unitsCleared = [], unitsFailed = false;
+  try {
+    const units = await fetchTab(env, 'Units');
+    for (const u of units.filter(x => String(x.Tenant_ID || '') === String(tenant_id))) {
+      await updateRow(env, 'Units', u.ID, { Tenant_ID: '' });
+      unitsCleared.push(u.Unit_Label || u.ID);
+    }
+  } catch (e) { unitsFailed = true; }
+
   let retroCount = 0;
   try {
     const [wos, woTenants] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'WO_Tenants')]);
@@ -693,7 +737,12 @@ async function processMoveOut(env, body) {
       if (new Date(wo.Created_Date) > moveOutDt) { await updateRow(env, 'WO_Tenants', link.ID, { Active: 'FALSE' }); retroCount++; }
     }
   } catch(e) {}
-  return json({ success: true, move_out_date: moveOutDate, retro_wos_cleaned: retroCount });
+  return json({ success: true, move_out_date: moveOutDate, retro_wos_cleaned: retroCount,
+                units_unlinked: unitsCleared.length, units: unitsCleared,
+                // Say so loudly. A half-cleared pointer means a former tenant's number is
+                // still reachable, which is the whole thing this is meant to prevent.
+                units_incomplete: unitsFailed,
+                warning: unitsFailed ? 'Some unit links could not be cleared — run "Check units naming moved-out tenants" in Dev tools.' : '' });
 }
 
 async function createWorkOrder(env, body) {
@@ -744,7 +793,7 @@ async function assignVendor(env, body) {
   const vendor = vendors.find(v => v.ID === body.vendor_id); if (!vendor) return json({ error: 'Vendor not found' }, 404);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const unit     = units.find(u => u.ID === wo.Unit_ID);
-  const tenant   = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID));
+  const tenant   = currentTenantForDispatch(tenants, unit, wo);
   const address  = property ? `${property.Address}${unit ? ' Unit '+unit.Unit_Label : ''}` : 'the property';
   let accessInfo = '';
   const lockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID);
@@ -885,6 +934,14 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
   if (tenantId) tenant = tenants.find(t => t.ID === tenantId) || {};
   if (!tenant.ID && wo.Unit_ID)       tenant = tenants.find(t => t.Unit_ID === wo.Unit_ID && t.Active !== 'FALSE') || {};
   if (!tenant.ID && wo.Property_ID && !wo.Unit_ID) tenant = tenants.find(t => t.Property_ID === wo.Property_ID && !t.Unit_ID && t.Active !== 'FALSE') || {};
+
+  // Work orders keep their original Tenant_ID forever — that IS the history, and clearing
+  // it would destroy the record of who reported what. But a work order raised while
+  // someone lived here does not entitle a vendor to their phone number today. The unit
+  // pointer being cleaned on move-out cannot help here, because this reads wo.Tenant_ID
+  // first. So the person's number is withheld once they've gone, while the name stays for
+  // the Hub's own records.
+  const tenantIsFormer = !!tenant.ID && !isTenantCurrent(tenant);
   const tradeDefaults = opts.tradeAccessDefaults || {};
   const woAccess = (wo.Vendor_Needs_Access || 'auto').trim();
   let vendorHasAccess;
@@ -903,9 +960,12 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
     ...wo,
     property_address: property.Address||'', property_city: property.City||'', unit_label: unit.Unit_Label||'',
     tenant_name:  wo.WO_Contact_Name || (tenant.First_Name ? `${tenant.First_Name} ${tenant.Last_Name||''}`.trim() : ''),
-    tenant_phone: opts.omitTenantPhone ? '' : (wo.WO_Contact_Phone || tenant.Phone||''),
+    // A named WO contact is a deliberate override and stands on its own; the TENANT's
+    // number is what gets withheld once they've moved out.
+    tenant_phone: opts.omitTenantPhone ? '' : (wo.WO_Contact_Phone || (tenantIsFormer ? '' : (tenant.Phone||''))),
+    tenant_former: tenantIsFormer,
     tenant_record_name:  tenant.First_Name ? `${tenant.First_Name} ${tenant.Last_Name||''}`.trim() : '',
-    tenant_record_phone: opts.omitTenantPhone ? '' : (tenant.Phone||''),
+    tenant_record_phone: (opts.omitTenantPhone || tenantIsFormer) ? '' : (tenant.Phone||''),
     lockboxes,
     legacy_lockbox: legacyLockbox,
     access_notes: accessNotes,
@@ -1231,7 +1291,7 @@ async function listNearbyWOs(env, url) {
   props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const pTags = [(p.Location_Cluster||'').trim(), ...(p.Location_Overlap||'').split(',').map(s=>s.trim())].filter(Boolean); if (pTags.some(t => allTags.includes(t))) nearbyPropIds.add(String(p.ID)); });
   if (!nearbyPropIds.size) return json({ nearby: [], message: 'no_nearby', primary_cluster: primary });
   const OPEN = new Set(['New','Assigned','Accepted','In Progress','On Hold']);
-  const nearby = wos.filter(w => w.ID !== woId && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: t ? (t.Phone||'') : '' }; });
+  const nearby = wos.filter(w => w.ID !== woId && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
   return json({ nearby, primary_cluster: primary, overlap_clusters: overlap });
 }
 
@@ -1525,6 +1585,73 @@ async function getOwnerBilling(env, url) {
 }
 
 // ── ADMIN TOOLS ──────────────────────────────────────────────
+
+// POST /admin/fix-stale-tenants { apply?: true }
+// Units still naming a tenant who has moved out. Move-out never cleared the pointer, so
+// this backlog exists in the live sheet right now — and every one of them is a former
+// tenant's phone number waiting to be texted to a vendor. Reports by default; only
+// writes when explicitly told to.
+async function adminFixStaleTenants(env, body) {
+  const apply = body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
+  const [units, tenants] = await Promise.all([fetchTab(env, 'Units'), fetchTab(env, 'Tenants')]);
+  // A Tenants read that succeeds but returns nothing would classify EVERY linked unit as
+  // an orphan, and one click would wipe the portfolio. Refuse before doing any work.
+  if (apply && !tenants.length) {
+    return json({ error: 'Refusing to clear: the Tenants tab came back empty, which is a read problem rather than a real backlog.' }, 409);
+  }
+  const now = new Date();
+  const stale = [];
+
+  for (const u of units) {
+    const tid = String(u.Tenant_ID || '').trim();
+    if (!tid) continue;
+    const t = tenants.find(x => String(x.ID) === tid);
+    if (!t) { stale.push({ unit: u.ID, label: u.Unit_Label || '', tenant: tid, why: 'tenant record no longer exists' }); continue; }
+    const inactive = String(t.Active || '').toUpperCase() === 'FALSE';
+    const movedOut = t.Move_Out_Date && !isNaN(new Date(t.Move_Out_Date + 'T23:59:59')) && new Date(t.Move_Out_Date + 'T23:59:59') < now;
+    if (inactive || movedOut) {
+      stale.push({ unit: u.ID, label: u.Unit_Label || '', tenant: tid,
+                   name: ((t.First_Name || '') + ' ' + (t.Last_Name || '')).trim(),
+                   why: movedOut ? ('moved out ' + t.Move_Out_Date) : 'marked inactive' });
+    }
+  }
+
+  // A missing tenant ROW is a data anomaly that deserves a human look, not an automatic
+  // clear — the link may be the only remaining evidence of who lived there.
+  const clearable = stale.filter(r => r.why !== 'tenant record no longer exists');
+  const needsReview = stale.filter(r => r.why === 'tenant record no longer exists');
+
+  if (apply) {
+    for (const row of clearable) { try { await updateRow(env, 'Units', row.unit, { Tenant_ID: '' }); row.cleared = true; } catch (e) { row.cleared = false; } }
+  }
+  // Clearing unit pointers doesn't end the exposure. Work orders keep their Tenant_ID by
+  // design — that's the history — so count how many still name someone who has left. Those
+  // are now phone-suppressed rather than cleared, and this is how you see the size of it.
+  let woExposed = 0, contactExposed = 0;
+  try {
+    const wos = await fetchTab(env, 'Work_Orders');
+    const gone = tenants.filter(t => !isTenantCurrent(t));
+    const goneIds = new Set(gone.map(t => String(t.ID)));
+    woExposed = wos.filter(w => w.Tenant_ID && goneIds.has(String(w.Tenant_ID))).length;
+
+    // A WO_Contact_Phone typed by hand is a deliberate override and is never suppressed —
+    // it's usually a super or a family member, which is the point of the field. But if
+    // someone typed the TENANT's own number in there and that tenant has since left, it
+    // stays reachable to vendors and no gate can tell. Detectable, so report it.
+    // Compare on the last 10 digits. Tenants sits in PHONE_TABS so its numbers are stored
+    // normalised as +1XXXXXXXXXX (11 digits), while WO_Contact_Phone is free text and is
+    // usually typed as 10. Comparing the full strings would have matched nothing and
+    // reported a reassuring zero on exactly the data this exists to find.
+    const last10 = v => { const n = String(v || '').replace(/\D/g, ''); return n.length >= 10 ? n.slice(-10) : ''; };
+    const goneNumbers = new Set(gone.map(t => last10(t.Phone)).filter(Boolean));
+    contactExposed = wos.filter(w => { const n = last10(w.WO_Contact_Phone); return n && goneNumbers.has(n); }).length;
+  } catch (e) { woExposed = -1; }
+
+  return json({ success: true, applied: apply, count: stale.length,
+                clearable: clearable.length, needs_review: needsReview.length,
+                wos_naming_former_tenants: woExposed,
+                wos_with_former_tenant_contact_phone: contactExposed, stale });
+}
 
 async function adminFixPins(env, body) {
   const results=[], batchData=[];
@@ -2419,11 +2546,26 @@ async function qbEntities(env, url) {
       const display = qbOwnerDisplayName(o);
       const mapped  = (o.QBO_Customer_ID || '').trim();
       const inQB    = mapped ? customers.find(c => String(c.id) === mapped) : null;
+      const subCount = mapped ? customers.filter(c => String(c.parent_id || '') === mapped).length : 0;
+      // A person and their company are often BOTH customers in QuickBooks, with the
+      // properties hanging off one of them. Surface any same-surname top-level customer
+      // that has sub-customers, so "you mapped the company but the buildings are under
+      // the person" is visible here rather than only inside QuickBooks.
+      const surname = String(o.Last_Name || '').trim().toLowerCase();
+      const elsewhere = (!mapped || subCount === 0) && surname.length > 2
+        ? customers.filter(c => !c.parent_id && String(c.id) !== mapped &&
+            new RegExp('\\b' + surname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(c.name) &&
+            customers.some(x => String(x.parent_id || '') === String(c.id)))
+            .map(c => ({ id: c.id, name: c.name, subs: customers.filter(x => String(x.parent_id || '') === String(c.id)).length }))
+            .slice(0, 3)
+        : [];
       return {
         id: o.ID, display,
         email: o.Billing_Email || o.Email || '',
         qb_id: mapped,
         qb_name: inQB ? inQB.name : '',
+        sub_count: subCount,
+        elsewhere,
         stale: !!(mapped && !inQB),     // mapped to an id QuickBooks no longer returns
         suggest: mapped ? null : qbMatchEntity(customers, display, o.Billing_Email || o.Email || ''),
       };

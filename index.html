@@ -453,6 +453,7 @@
     <div class="section-title" style="margin-bottom:10px">DATA TOOLS</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn small" onclick="runAdminTool('fix-pins')" style="background:var(--accent2);color:#000">🔑 Fix PINs + Phones</button>
+      <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#000">🏠 Check units naming moved-out tenants</button>
       <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
     </div>
     <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
@@ -5997,10 +5998,22 @@ function qbMapRow(kind, row, qbList) {
         'in-house — raise no bill</label>'
     : '';
 
+  // QuickBooks often holds both a person and their company as separate customers, with the
+  // buildings nested under whichever one they were first created against. If a same-surname
+  // top-level customer has sub-customers and this one doesn't, that's almost certainly where
+  // the properties actually live — invisible unless you go looking in QuickBooks itself.
+  var elsewhere = (kind === 'owner' && safeArray(row.elsewhere).length)
+    ? '<div style="color:var(--info);font-size:10.5px;margin-top:2px">↳ ' +
+        safeArray(row.elsewhere).map(function(e) {
+          return esc(e.name) + ' has ' + e.subs + ' propert' + (e.subs === 1 ? 'y' : 'ies') + ' under it';
+        }).join(', ') + ' — is that where these belong?</div>'
+    : '';
+
   return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
     '<div>' +
       '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(no name)') + '</div>' +
       '<div style="margin-top:2px">' + (row.in_house && kind === 'vendor' ? '<span style="color:var(--accent2);font-size:10.5px">in-house — no QuickBooks bill</span>' : state) + '</div>' +
+      elsewhere +
       inHouse +
     '</div>' +
     '<select onchange="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',this.value)" ' +
@@ -6052,20 +6065,49 @@ function renderQBMapping() {
     section('VENDORS → QUICKBOOKS VENDORS', unlinkedV, vendors.length, 'vendor', vendors, _qbMap.qb_vendors);
 }
 
+// Which slice of the loaded map a kind lives in. This used to be a two-way ternary that
+// assumed anything not an owner was a vendor — so picking a property or a unit looked up
+// the wrong list, found no row to patch, and re-rendered from unchanged state. The write
+// had actually succeeded; the screen just blinked and showed the old value back.
+function qbMapSlices(kind) {
+  if (kind === 'owner')    return { rows: _qbMap && _qbMap.owners,     qb: _qbMap && _qbMap.qb_customers };
+  if (kind === 'vendor')   return { rows: _qbMap && _qbMap.vendors,    qb: _qbMap && _qbMap.qb_vendors };
+  if (kind === 'property') return { rows: _qbMap && _qbMap.properties, qb: _qbMap && _qbMap.qb_customers };
+  if (kind === 'unit')     return { rows: _qbMap && _qbMap.units,      qb: _qbMap && _qbMap.qb_customers };
+  return { rows: [], qb: [] };
+}
+
 function qbSetMap(kind, id, qbId) {
   api('POST', '/qb/map', { kind: kind, id: id, qb_id: qbId || '' }).then(function(r) {
     if (r && r.error) { toast(r.error, 'error'); loadQBMapping(false); return; }
     toast(qbId ? 'Linked' : 'Link cleared', 'success');
     // Patch in place so the screen doesn't flash, then refresh the underlying lists quietly.
-    var list = kind === 'owner' ? safeArray(_qbMap && _qbMap.owners) : safeArray(_qbMap && _qbMap.vendors);
-    var qbList = kind === 'owner' ? safeArray(_qbMap && _qbMap.qb_customers) : safeArray(_qbMap && _qbMap.qb_vendors);
+    var slice = qbMapSlices(kind);
+    var list = safeArray(slice.rows), qbList = safeArray(slice.qb);
     var row = list.find(function(x) { return String(x.id) === String(id); });
     if (row) {
       row.qb_id = qbId || '';
       var ent = qbList.find(function(c) { return String(c.id) === String(qbId); });
-      row.qb_name = ent ? ent.name : '';
+      row.qb_name = ent ? (ent.path || ent.name) : '';
       row.stale = false;
       if (qbId) row.suggest = null;
+    } else {
+      // Couldn't find the row to patch — reload rather than re-render stale state, so the
+      // screen can never disagree with what was just written.
+      loadQBMapping(false);
+      return;
+    }
+
+    // Linking a property changes what its units can nest under, so their rows are now out
+    // of date. Same for an owner and its properties.
+    if (kind === 'property') {
+      safeArray(_qbMap && _qbMap.units).forEach(function(u) {
+        if (String(u.property_id) === String(id)) u.parent_qb_id = qbId || '';
+      });
+    } else if (kind === 'owner') {
+      safeArray(_qbMap && _qbMap.properties).forEach(function(p) {
+        if (String(p.owner_id) === String(id)) p.parent_qb_id = qbId || '';
+      });
     }
     renderQBMapping();
   }).catch(function(e) { toast(e.message, 'error'); });
@@ -7021,6 +7063,51 @@ function bulkSendPins(type) {
   });
 }
 
+
+// Units still pointing at a tenant who has moved out. Reports first — this writes to live
+// tenant links, so it shows you the list and makes you ask for the fix.
+function checkStaleTenants(apply) {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = apply ? '⏳ Clearing…' : '⏳ Checking…';
+  api('POST', '/admin/fix-stale-tenants', { apply: !!apply }).then(function(res) {
+    if (!res || res.error) {
+      if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>';
+      return;
+    }
+    var woNote = (res.wos_naming_former_tenants > 0)
+      ? '<div style="color:var(--muted);font-size:10.5px;margin-top:5px">' + res.wos_naming_former_tenants +
+        ' work order(s) still name a tenant who has left. Those keep the name as history, but their phone number is no longer sent to vendors.</div>'
+      : '';
+    if (res.wos_with_former_tenant_contact_phone > 0) {
+      woNote += '<div style="color:var(--warn);font-size:10.5px;margin-top:4px">⚠ ' + res.wos_with_former_tenant_contact_phone +
+        ' work order(s) have a former tenant\'s number typed into the WO contact field. That is a manual override so it is still sent — worth clearing by hand.</div>';
+    }
+    if (!res.count) {
+      if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ No units are naming a moved-out tenant.</span>' + woNote;
+      return;
+    }
+    if (apply) {
+      var done = safeArray(res.stale).filter(function(r) { return r.cleared; }).length;
+      if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Cleared ' + done + ' of ' + res.count + '.</span>';
+      toast('Cleared ' + done + ' stale tenant link(s)', 'success');
+      loadAll();
+      return;
+    }
+    if (el) el.innerHTML =
+      '<div style="color:var(--warn);line-height:1.6">⚠ ' + res.count + ' unit(s) still name a tenant who has left. ' +
+      'Vendors sent to these addresses would get that person\'s name and phone.<br>' +
+      safeArray(res.stale).slice(0, 15).map(function(r) {
+        return '· Unit ' + esc(r.label || r.unit) + ' → ' + esc(r.name || ('tenant ' + r.tenant)) + ' <span style="color:var(--muted)">(' + esc(r.why) + ')</span>';
+      }).join('<br>') +
+      (res.count > 15 ? '<br>…and ' + (res.count - 15) + ' more' : '') +
+      (res.needs_review ? '<br><span style="color:var(--muted);font-size:10.5px">' + res.needs_review +
+        ' of these point at a tenant record that no longer exists — those are left alone for you to look at.</span>' : '') +
+      '<br><button class="btn small" onclick="checkStaleTenants(true)" style="background:var(--danger);color:#fff;margin-top:6px">Clear ' +
+      (res.clearable != null ? res.clearable : res.count) + '</button></div>' + woNote;
+  }).catch(function(e) {
+    if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>';
+  });
+}
 
 function runAdminTool(tool) {
   var resultEl = document.getElementById('admin-tool-result');
