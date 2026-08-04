@@ -107,6 +107,7 @@ export default {
         if (path === '/admin/duplicate-properties') return await adminDuplicateProperties(env);
         if (path === '/admin/duplicate-owners')     return await adminDuplicateOwners(env);
         if (path === '/qb/trade-map')           return await qbTradeMap(env);
+        if (path === '/qb/unit-audit')          return await qbUnitAudit(env, url);
         if (path === '/qb/repairable')          return await qbRepairable(env, url);
         if (path === '/qb/payables')            return await qbPayables(env, url);
         if (path === '/daily-digest')           return await digestResponse(env, url);
@@ -3787,6 +3788,69 @@ async function qbSetVendorInHouse(env, body) {
 // "Apt 1" collided with another building's flat. Moves the existing customer under the
 // right property rather than making yet another one, and optionally renames it so the
 // collision can't recur.
+// GET /qb/unit-audit — every unit, what state it's actually in, and what to do about it.
+// The mapping screen only ever flagged ONE failure (linked under the wrong parent) and
+// showed a green tick for everything else — including states that are not fine at all,
+// like a unit linked while its own property isn't. Hence "it's a little confusing".
+async function qbUnitAudit(env, url) {
+  try {
+    const token = await qbAccessToken(env);
+    const force = !url || url.searchParams.get('refresh') !== '0';
+    const [customers, units, properties, owners] = await Promise.all([
+      qbListEntities(env, 'customer', token, force),
+      fetchTab(env, 'Units'), fetchTab(env, 'Properties'), fetchTab(env, 'Owners'),
+    ]);
+    const byId = {}; customers.forEach(c => { byId[String(c.id)] = c; });
+
+    const rows = units.filter(u => u.Active !== 'FALSE').map(u => {
+      const prop = properties.find(p => String(p.ID) === String(u.Property_ID)) || null;
+      const owner = prop ? owners.find(o => String(o.ID) === String(prop.Owner_ID)) : null;
+      const unitQb = String(u.QBO_Customer_ID || '').trim();
+      const propQb = prop ? String(prop.QBO_Customer_ID || '').trim() : '';
+      const ownerQb = owner ? String(owner.QBO_Customer_ID || '').trim() : '';
+      const inQB = unitQb ? byId[unitQb] : null;
+      const propInQB = propQb ? byId[propQb] : null;
+      const wantName = qbUnitDisplayName(u, prop);
+
+      let state, why, fix;
+      if (!prop) {
+        state = 'no property'; why = 'This unit has no property in the sheet, so there is nothing for it to nest under.'; fix = 'Set its Property_ID in the Units tab.';
+      } else if (!ownerQb) {
+        state = 'blocked'; why = `The owner (${owner ? qbOwnerDisplayName(owner) : 'none set'}) isn't linked to QuickBooks, so neither the property nor the unit can be.`; fix = 'Link the owner first.';
+      } else if (!propQb) {
+        state = 'blocked'; why = `"${qbPropertyDisplayName(prop)}" isn't linked to QuickBooks. Nothing can nest under a property that doesn't exist there — which is why this unit shows no problem and can't be moved.`; fix = 'Link or create the property, then come back to this unit.';
+      } else if (propQb && !propInQB) {
+        state = 'property stale'; why = `The property is linked to QuickBooks #${propQb}, which QuickBooks no longer returns as an active customer.`; fix = 'Re-link the property.';
+      } else if (!unitQb) {
+        state = 'not linked'; why = 'This unit has no QuickBooks sub-customer yet.'; fix = `Create it — it will be named "${wantName}" under ${qbPropertyDisplayName(prop)}.`;
+      } else if (!inQB) {
+        state = 'stale'; why = `Linked to QuickBooks #${unitQb}, which QuickBooks no longer returns. It may have been deleted or made inactive.`; fix = 'Clear the link and create it again.';
+      } else if (String(inQB.parent_id || '') !== propQb) {
+        const actual = inQB.parent_id ? (byId[String(inQB.parent_id)] || {}).name || ('#' + inQB.parent_id) : 'nothing (it is top-level)';
+        state = 'wrong parent'; why = `Linked to "${inQB.name}", which sits under ${actual} rather than under ${qbPropertyDisplayName(prop)}.`; fix = 'Move it.';
+      } else if (inQB.name !== wantName) {
+        state = 'nested, name is ambiguous'; why = `Correctly under ${qbPropertyDisplayName(prop)}, but named "${inQB.name}". QuickBooks names are unique across the whole file, so a bare unit label will collide with another building's.`; fix = `Rename to "${wantName}".`;
+      } else {
+        state = 'ok'; why = `Nested under ${qbPropertyDisplayName(prop)} and named correctly.`; fix = '';
+      }
+
+      return {
+        unit_id: u.ID, label: qbUnitLabel(u), want_name: wantName,
+        property: prop ? qbPropertyDisplayName(prop) : '', property_id: u.Property_ID || '',
+        owner: owner ? qbOwnerDisplayName(owner) : '',
+        unit_qb_id: unitQb, unit_qb_name: inQB ? inQB.name : '', unit_qb_path: inQB ? (inQB.path || inQB.name) : '',
+        property_qb_id: propQb, owner_qb_id: ownerQb,
+        state, why, fix,
+        movable: state === 'wrong parent' || state === 'nested, name is ambiguous',
+      };
+    });
+
+    const counts = {};
+    rows.forEach(r => { counts[r.state] = (counts[r.state] || 0) + 1; });
+    return json({ ok: true, total: rows.length, counts, rows });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 async function qbReparentUnit(env, body) {
   const unitId = String(body.unit_id || '').trim();
   const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
@@ -3818,6 +3882,9 @@ async function qbReparentUnit(env, body) {
     return json({ ok: true, applied: false, nothing_to_do: true,
       message: `"${cust.DisplayName}" is already under ${qbPropertyDisplayName(prop)} with the right name.` });
   }
+  // A rename with no move is a legitimate fix on its own: correctly nested, but named
+  // something that will collide with another building's unit.
+
 
   if (!apply) {
     return json({ ok: true, applied: false, qb_id: qbId,
