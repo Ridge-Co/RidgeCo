@@ -1558,6 +1558,14 @@ function submitVendorSched(modalId) {
       <div id="bill-receipts-list" style="display:flex;flex-direction:column;gap:8px"></div>
     </div>
 
+    <!-- VENDOR'S OWN INVOICE NUMBER -->
+    <div style="margin-bottom:14px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">YOUR INVOICE NUMBER (optional)</label>
+      <input type="text" id="bill-invoice-no" placeholder="If you have one — otherwise we use the job number"
+        style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px">
+      <div style="color:var(--muted);font-size:11px;margin-top:4px">This is what we'll reference when we pay you.</div>
+    </div>
+
     <!-- NOTES -->
     <div style="margin-bottom:14px">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">NOTES (optional)</label>
@@ -1811,6 +1819,7 @@ async function submitVendorBill() {
     Total: String(total.toFixed(2)),
     Status: 'submitted',
     Created_Date: new Date().toISOString().split('T')[0],
+    Vendor_Invoice_No: (document.getElementById('bill-invoice-no') || {}).value || '',
     Notes: document.getElementById('bill-notes').value,
     Active: 'TRUE',
   };

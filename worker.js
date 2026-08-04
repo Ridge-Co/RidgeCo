@@ -1137,6 +1137,9 @@ async function addVendorBill(env, body) {
     }, 86400);
     if (dupe) return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
   }
+  // Vendor_Bills has no column for the vendor's own invoice number until something needs
+  // one, and addRow maps by header — a write to a missing column stores nothing silently.
+  if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) {} }
   const res = await addRow(env, 'Vendor_Bills', body);
   // Automation: entering a bill moves the WO to Complete (if still pre-complete).
   try {
@@ -2494,12 +2497,12 @@ async function receiptExtract(env, bytes, mime) {
   const media = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
-  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
   const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 600, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }) });
   const data = await resp.json();
   const txt = (data.content?.[0]?.text || '').trim();
   try { return JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim()); }
-  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', suggested_category: '', confidence: 0 }; }
+  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', suggested_category: '', confidence: 0 }; }
 }
 
 // Best-effort auto-link to a WO (by "WO-1234" in the note) or a property (address token).
@@ -2534,7 +2537,8 @@ async function receiptIntake(env, body) {
   const row = {
     Source: body.source || 'manual', Source_File_ID: fileId || '', Source_File_URL: fileUrl || '', Received_Date: new Date().toISOString(),
     Vendor: ex.vendor || '', Receipt_Date: ex.date || '', Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
-    Category: category, Handwritten_Note: ex.handwritten_note || '', PO_Reference: ex.po_reference || '', Suggested_WO_ID: link.wo_id || '', Suggested_Property_ID: link.property_id || '',
+    Category: category, Handwritten_Note: ex.handwritten_note || '', PO_Reference: ex.po_reference || '',
+    Invoice_Number: ex.invoice_number || '', Suggested_WO_ID: link.wo_id || '', Suggested_Property_ID: link.property_id || '',
     Confidence: String(ex.confidence ?? ''), Status: 'pending', Filed_File_URL: '', Raw_Extract: JSON.stringify(ex).slice(0, 900), Notes: '', Active: 'TRUE',
   };
   const appended = await addRow(env, 'Receipts_Queue', row);
@@ -3789,6 +3793,48 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
   return id;
 }
 
+
+// Did QuickBooks reject this specifically because of the document number? Only then is a
+// retry safe — a validation fault is raised before anything is persisted, so nothing was
+// created. Any other failure could mean the transaction went through despite the error.
+function qbIsDocNumberFault(r) {
+  const e = r && r.Fault && r.Fault.Error && r.Fault.Error[0];
+  if (!e) return false;                       // not a fault we can read — never retry
+  if (String(e.code) === '6140') return true; // duplicate document number
+  const text = ((e.Message || '') + ' ' + (e.Detail || '')).toLowerCase();
+  return text.indexOf('docnumber') !== -1 || text.indexOf('document number') !== -1;
+}
+
+// The number that goes on the QuickBooks BILL. A vendor's own invoice number is the right
+// answer when there is one — it's what they'll quote when chasing payment, and what the
+// bill needs to be matched against. Plenty of Brett's vendors hand over a scrawled note
+// with no number at all, and OCR can't invent one. For those, the work order number is
+// the next best reference: it's unique, it's already on the job, and it points both
+// people at the same thing.
+//
+// QuickBooks caps this field, and the commonly-documented limit is 21 characters. Intuit's
+// own docs wouldn't load to confirm it, so this trims to 21 and the caller handles a
+// rejection rather than assuming.
+const QB_DOCNUMBER_MAX = 21;
+
+function qbBillDocNumber(billRow, ir, siblingIndex) {
+  const own = String((billRow && (billRow.Vendor_Invoice_No || billRow.Invoice_Number)) || '').trim();
+  const wo  = String((ir && ir.WO_ID) || '').trim();
+  // Same vendor billing the same job twice is the only real collision — two DIFFERENT
+  // vendors both referencing WO-1062 is correct, since a bill number is scoped to the
+  // vendor it came from.
+  const suffix = siblingIndex > 0 ? ('-' + (siblingIndex + 1)) : '';
+  const woNumber = wo ? (wo + suffix).slice(0, QB_DOCNUMBER_MAX) : '';
+
+  if (own && own.length <= QB_DOCNUMBER_MAX) return { number: own, source: 'vendor', overlong: '' };
+  // Don't truncate. A cut-off invoice number looks authoritative and reconciles against
+  // nothing — and the slice would keep the head, while the part that distinguishes one
+  // invoice from another is usually the tail. Fall back to the job number and say what
+  // the vendor actually wrote.
+  if (own) return { number: woNumber, source: 'work order', overlong: own };
+  return { number: woNumber, source: woNumber ? 'work order' : '', overlong: '' };
+}
+
 // Build customer-invoice lines: one line per receipt (materials) + one line for
 // truck/shop stock (if any) + a single labor summary line. Materials show at cost;
 // the labor line absorbs the remainder so the lines always sum to Customer_Total —
@@ -4075,6 +4121,18 @@ async function qbSendInvoice(env, body) {
       TxnDate: txnDate, PrivateNote: note,
     };
 
+    // How many earlier bills THIS vendor already has on this job — only that combination
+    // can genuinely collide on a bill number.
+    const priorSameVendor = bills.filter(b =>
+      b.Active !== 'FALSE' && String(b.WO_ID) === String(ir.WO_ID) &&
+      String(b.Vendor_ID) === String(ir.Vendor_ID) && String(b.ID) !== String(ir.Bill_ID) &&
+      Number(b.ID) < Number(ir.Bill_ID)).length;
+    const billDoc = qbBillDocNumber(billRow, ir, priorSameVendor);
+    if (billDoc.number) billPayload.DocNumber = billDoc.number;
+    if (billDoc.overlong) {
+      warnings.push(`Vendor invoice number "${billDoc.overlong}" is too long for QuickBooks (${QB_DOCNUMBER_MAX} characters), so the bill is numbered ${billDoc.number} instead.`);
+    }
+
     if (previewOnly) {
       // For anything not yet mapped, look it up in the real QuickBooks list so the preview
       // can say "this looks like the customer you already have" instead of flatly claiming
@@ -4114,6 +4172,8 @@ async function qbSendInvoice(env, body) {
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         bill:     { total: +vendorCost.toFixed(2), account: trade.expense,
+                    doc_number: qbBillDocNumber(billRow, ir, 0).number,
+                    doc_from: qbBillDocNumber(billRow, ir, 0).source,
                     skipped: vendorCost <= 0 || previewInHouse, in_house: previewInHouse, attach_receipts: reimburseWithUrl },
         photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
@@ -4129,7 +4189,7 @@ async function qbSendInvoice(env, body) {
     const errors = [];
     let invoiceId = ir.QB_Invoice_ID || '';
     let billId    = ir.QB_Bill_ID || '';
-    let invoiceDocNumber = '';
+    let invoiceDocNumber = '', billDocAssigned = '';
 
     // Share the job-photo folder so the invoice's CustomerMemo link is viewable by the customer.
     if (photoFolderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, photoFolderId); } catch (e) { warnings.push('Photo-link share failed'); } }
@@ -4208,9 +4268,22 @@ async function qbSendInvoice(env, body) {
       catch (e) { errors.push('Vendor: ' + e.message); }
       if (vendorId) {
         billPayload.VendorRef = { value: vendorId };
-        const r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+        let r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (r && r.Bill && r.Bill.Id) || '';
+        // A rejected bill number should not cost you the bill. Drop it and retry once,
+        // rather than failing the whole send over a reference field.
+        if (!billId && billPayload.DocNumber && qbIsDocNumberFault(r)) {
+          // Only retry on a fault QuickBooks clearly attributes to the bill number. Those
+          // are rejected before anything is written, so a second attempt is safe. Any
+          // other failure — or a response we can't read as a fault at all — might mean the
+          // bill WAS created, and retrying would double-bill the vendor.
+          warnings.push('QuickBooks would not accept bill number "' + billPayload.DocNumber + '" (' + (qbFault(r) || '') + ') — created without one.');
+          delete billPayload.DocNumber;
+          r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+          billId = (r && r.Bill && r.Bill.Id) || '';
+        }
         if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+        else billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
       }
     }
 
@@ -4235,7 +4308,8 @@ async function qbSendInvoice(env, body) {
     if (status === 'sent' && ir.WO_ID) { try { await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' }); } catch (e) {} }
 
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId,
-                  invoice_number: invoiceDocNumber, status, errors, warnings });
+                  invoice_number: invoiceDocNumber, bill_number: billDocAssigned,
+                  status, errors, warnings });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }

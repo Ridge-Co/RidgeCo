@@ -3852,6 +3852,11 @@ function hubBillHtml(k, woId, wo) {
       '<button class="btn small" onclick="hubBillAddReceipt(\'' + k + '\')" style="background:var(--surface);color:var(--muted);font-size:11px;padding:3px 10px;margin-top:4px">+ Add a line</button>' +
 
       '<div style="margin-top:10px">' +
+        '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px">VENDOR\'S INVOICE NUMBER</label>' +
+        '<input type="text" id="hb-invno-' + k + '" placeholder="Leave blank to use the work order number" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px">' +
+      '</div>' +
+
+      '<div style="margin-top:10px">' +
         '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px">NOTES</label>' +
         '<textarea id="hb-notes-' + k + '" rows="2" placeholder="What was done" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px;resize:vertical"></textarea>' +
       '</div>' +
@@ -4062,6 +4067,7 @@ function hubBillSubmit(k, woId) {
     Total: String(total.toFixed(2)),
     Status: 'submitted',
     Created_Date: new Date().toISOString().split('T')[0],
+    Vendor_Invoice_No: (document.getElementById('hb-invno-' + k) || {}).value || '',
     Notes: (document.getElementById('hb-notes-' + k) || {}).value || '',
     Entered_By: 'hub',
     Active: 'TRUE',
@@ -4082,7 +4088,7 @@ function hubBillSubmit(k, woId) {
     // Clear the inputs as well as the state. Resetting only the state left a saved flat
     // amount sitting in a now-hidden field, ready to reappear on the next bill.
     _hubBill[k] = null;
-    ['hb-hours', 'hb-rate', 'hb-flatamt', 'hb-truck', 'hb-truckdesc', 'hb-notes'].forEach(function(id) {
+    ['hb-hours', 'hb-rate', 'hb-flatamt', 'hb-truck', 'hb-truckdesc', 'hb-notes', 'hb-invno'].forEach(function(id) {
       var e = document.getElementById(id + '-' + k);
       if (e) { e.value = ''; if (id === 'hb-rate') e.dataset.auto = '1'; }
     });
@@ -6400,6 +6406,10 @@ function renderQBPreview(p) {
     '</div>' +
     '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
       '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL</div>' +
+      ((p.bill.doc_number && !p.bill.skipped)
+        ? '<div style="color:var(--muted);font-size:11px;margin-bottom:3px">Bill number: <b style="color:var(--text)">' + esc(p.bill.doc_number) + '</b>' +
+          (p.bill.doc_from === 'vendor' ? ' (their invoice number)' : ' (no vendor invoice number — using the job number)') + '</div>'
+        : '') +
       (p.bill.in_house ? '<div style="color:var(--accent2)">' + esc(p.vendor.display || 'This vendor') + ' is in-house — no bill, so no payable to you.' +
         '<div style="color:var(--muted);font-size:10.5px;margin-top:3px">The full invoice is income. Your hours are shown separately as your time, not subtracted as a cost.</div></div>' :
        p.bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
