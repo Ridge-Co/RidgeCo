@@ -66,6 +66,7 @@ export default {
         if (path === '/wo-tenants')             return await listWOTenants(env, url);
         if (path === '/time-entries')           return await listTimeEntries(env, url);
         if (path === '/receipts')               return await listReceipts(env, url);
+        if (path === '/receipts-billed')        return await listBilledReceipts(env, url);
         if (path === '/invoices')               return await getSheet(env, 'Invoices');
         if (path === '/templates')              return await getSheet(env, 'Recurring_Templates');
         if (path === '/smslog')                 return await getSheet(env, 'SMS_Logs');
@@ -169,6 +170,7 @@ export default {
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
+        if (path === '/estimate/unapprove')       return await unapproveEstimate(env, body);
         if (path === '/geocode-property')         return await geocodeProperty(env, body);
         if (path === '/save-property-clusters')   return await savePropertyClusters(env, body);
         if (path === '/import-key-registry')      return await importKeyRegistry(env, body);
@@ -195,6 +197,7 @@ export default {
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
+        if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
@@ -625,6 +628,24 @@ async function listTimeEntries(env, url) {
     if (vendorId) results = results.filter(r => r.Role === 'vendor' && r.Entered_By_ID === vendorId);
     return json(results.sort((a, b) => new Date(a.Created_Date) - new Date(b.Created_Date)));
   } catch(e) { return json([]); }
+}
+
+// GET /receipts-billed?wo_id=  — receipt ids already committed to an approved invoice on
+// this job. A receipt can be charged to the owner exactly once, and two vendors' bills on
+// one job means two invoices that would otherwise each pick up the same materials. Panel
+// heuristics only work while both panels happen to be open; this survives reloads.
+async function listBilledReceipts(env, url) {
+  const woId = url.searchParams.get('wo_id') || '';
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  try {
+    const irs = await fetchTab(env, 'Invoice_Review');
+    const billed = {};
+    irs.filter(r => r.Active !== 'FALSE' && String(r.WO_ID) === String(woId)).forEach(r => {
+      String(r.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean)
+        .forEach(id => { billed[id] = String(r.ID); });
+    });
+    return json({ ok: true, wo_id: woId, billed });
+  } catch (e) { return json({ ok: false, error: e.message, billed: {} }); }
 }
 
 async function listReceipts(env, url) {
@@ -1171,12 +1192,63 @@ async function listVendorBills(env, url) {
   } catch(e) { return json([]); }
 }
 
+// POST /invoice-review/unapprove { id }
+// Approving a bill locks the price in, and there was no way back — a second approve just
+// handed back the existing row, so a bill approved at $185 stayed $185 no matter what
+// happened to the number afterwards. Withdrawing puts the bill back in Review Bills to be
+// priced again.
+//
+// Only ever before it reaches QuickBooks. Once an invoice or bill exists there, the Hub
+// row is the record of what was actually sent, and quietly retiring it would leave the two
+// systems disagreeing with nothing to reconcile against.
+async function unapproveInvoiceReview(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'id required' }, 400);
+
+  const irs = await fetchTab(env, 'Invoice_Review');
+  const ir = irs.find(r => String(r.ID) === id);
+  if (!ir) return json({ error: `No approval row ${id}` }, 404);
+  if (ir.Active === 'FALSE') return json({ success: true, already_withdrawn: true });
+
+  const sentInv  = (ir.QB_Invoice_ID || '').trim();
+  const sentBill = (ir.QB_Bill_ID || '').trim();
+  if (sentInv || sentBill) {
+    return json({
+      error: `This one is already in QuickBooks (${sentInv ? 'invoice ' + sentInv : ''}${sentInv && sentBill ? ', ' : ''}${sentBill ? 'bill ' + sentBill : ''}). Withdrawing the approval here would leave the Hub and QuickBooks disagreeing. Void or edit it in QuickBooks instead.`,
+      qb_invoice_id: sentInv, qb_bill_id: sentBill,
+    }, 409);
+  }
+
+  await updateRow(env, 'Invoice_Review', id, {
+    Active: 'FALSE',
+    QB_Invoice_Status: 'withdrawn',
+  });
+
+  // Put the bill back where it came from, or it won't reappear in Review Bills to be
+  // priced again — which would leave the job stuck with no way to invoice it.
+  let billRestored = false;
+  if (ir.Bill_ID) {
+    try {
+      const res = await updateRow(env, 'Vendor_Bills', ir.Bill_ID, { Status: 'submitted' });
+      const parsed = await res.clone().json();
+      billRestored = !!(parsed && parsed.success);
+    } catch (e) { billRestored = false; }
+  }
+
+  return json({
+    success: true, id, wo_id: ir.WO_ID || '', bill_id: ir.Bill_ID || '',
+    customer_total: ir.Customer_Total || '',
+    bill_restored: billRestored,
+    warning: billRestored ? '' : 'The approval is withdrawn, but the vendor bill could not be set back to submitted — it may not reappear in Review Bills. Check the Vendor_Bills row.',
+  });
+}
+
 async function approveInvoiceReview(env, body) {
   const {
     bill_id, wo_id, vendor_id, vendor_name,
     job_type, vendor_cost, brett_time, brett_hrs, travel,
     markup, processing_fee, customer_total, brett_net, approved_by,
-    own_wage, profit,
+    own_wage, profit, own_materials, own_material_ids,
   } = body;
   if (!bill_id || !customer_total) return json({ error: 'bill_id and customer_total required' }, 400);
   const today = new Date().toISOString().split('T')[0];
@@ -1187,14 +1259,22 @@ async function approveInvoiceReview(env, body) {
   try {
     const existingIR = await fetchTab(env, 'Invoice_Review');
     const already = existingIR.find(r => r.Active !== 'FALSE' && String(r.Bill_ID) === String(bill_id));
-    if (already) return json({ success: true, already_approved: true, id: String(already.ID), qb_status: already.QB_Invoice_Status || 'pending' });
+    if (already) {
+      // Hand back the existing row rather than logging a second one — but say what it's
+      // for. Approving again at a different number used to look like it worked while the
+      // original amount quietly stood.
+      return json({ success: true, already_approved: true, id: String(already.ID),
+        approved_total: already.Customer_Total || '',
+        differs: String(already.Customer_Total || '') !== String(customer_total || ''),
+        qb_status: already.QB_Invoice_Status || 'pending' });
+    }
   } catch (e) { /* tab unreadable — fall through and let the append surface the real error */ }
   // Neither tab has these columns yet, and updateRow/addRow map by header — a write to a
   // column that isn't there reports success and stores nothing.
   try {
     await Promise.all([
-      ensureColumns(env, 'Vendor_Bills',   ['Own_Wage', 'Profit']),
-      ensureColumns(env, 'Invoice_Review', ['Own_Wage', 'Profit']),
+      ensureColumns(env, 'Vendor_Bills',   ['Own_Wage', 'Profit', 'Own_Materials']),
+      ensureColumns(env, 'Invoice_Review', ['Own_Wage', 'Profit', 'Own_Materials', 'Own_Material_IDs']),
     ]);
   } catch (e) { /* the money fields below still land; only the split is lost */ }
 
@@ -1202,6 +1282,7 @@ async function approveInvoiceReview(env, body) {
   await updateRow(env, 'Vendor_Bills', bill_id, {
     Status:         'reviewed',
     Job_Type:       job_type        || 'standard',
+    Own_Materials:  own_materials   || '0',
     Brett_Time:     brett_time      || '0',
     Brett_Hrs:      brett_hrs       || '0',
     Travel:         travel          || '0',
@@ -1229,6 +1310,11 @@ async function approveInvoiceReview(env, body) {
     Job_Type:           job_type,
     Vendor_Cost:        vendor_cost,
     Brett_Time:         brett_time,
+    // Which receipts from the Receipts tab the customer is paying for. Recorded by id so
+    // the send builds exactly the lines that were approved, not whatever is on the job by
+    // the time it goes out.
+    Own_Materials:      own_materials || '0',
+    Own_Material_IDs:   own_material_ids || '',
     Travel:             travel,
     Markup:             markup,
     Processing_Fee:     processing_fee,
@@ -1264,6 +1350,53 @@ async function listEstimates(env, url) {
   const all = await fetchTab(env, 'Estimates');
   const results = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE').sort((a, b) => parseInt(a.Version||'1') - parseInt(b.Version||'1')).map(e => { try { e.Line_Items = JSON.parse(e.Line_Items||'[]'); } catch { e.Line_Items = []; } return e; });
   return json(results);
+}
+
+// POST /estimate/unapprove { wo_id, reason? }
+// An approved estimate is a commitment the vendor has been told to proceed on, so taking
+// it back has to tell them — otherwise they carry on working to a number that no longer
+// stands.
+async function unapproveEstimate(env, body) {
+  const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
+  const all = await fetchTab(env, 'Estimates');
+  const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
+  if (!versions.length) return json({ error: 'No estimate found for this WO' }, 404);
+  const latest = versions.reduce((a, b) => parseInt(a.Version) > parseInt(b.Version) ? a : b);
+  if (String(latest.Status || '') !== 'Approved') {
+    return json({ error: `That estimate is "${latest.Status || 'Pending'}", not approved — nothing to withdraw.` }, 409);
+  }
+
+  const data = await sheetsRequest(env, 'GET', '/values/Estimates');
+  const rows = data.values || [], headers = rows[0] || [];
+  const idCol = headers.indexOf('ID'), statusCol = headers.indexOf('Status');
+  if (idCol === -1 || statusCol === -1) return json({ error: 'Estimates tab missing ID or Status column' }, 500);
+  const rowIdx = rows.findIndex((r, i) => i > 0 && r[idCol] === latest.ID);
+  if (rowIdx === -1) return json({ error: 'Could not locate estimate row' }, 404);
+  const sheetRow = rowIdx + 1;
+
+  const batch = [{ range: `Estimates!${col(statusCol)}${sheetRow}`, values: [['Pending']] }];
+  const note = body.reason ? ('Approval withdrawn: ' + body.reason) : 'Approval withdrawn';
+  const noteCol = headers.indexOf('Approval_Note');
+  if (noteCol > -1) batch.push({ range: `Estimates!${col(noteCol)}${sheetRow}`, values: [[note]] });
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batch });
+
+  // Tell the vendor. They were told to proceed; they need to know that's paused.
+  let vendorTold = false;
+  if (latest.Vendor_ID) {
+    try {
+      const vendors = await fetchTab(env, 'Vendors');
+      const vendor = vendors.find(v => v.ID === latest.Vendor_ID);
+      if (vendor?.Phone) {
+        const msg = `Hold on WO ${woId} — the approved estimate ($${latest.Subtotal}) has been put back on hold${body.reason ? ': ' + body.reason : ''}. Please don't proceed until we confirm the revised number.`;
+        await sendSMS(env, vendor.Phone, msg);
+        await logSMS(env, woId, 'estimate_unapproved', vendor.ID, vendor.Phone, msg);
+        vendorTold = true;
+      }
+    } catch (e) { /* status is already back to Pending; the SMS is best-effort */ }
+  }
+  return json({ success: true, wo_id: woId, version: latest.Version, subtotal: latest.Subtotal,
+                vendor_notified: vendorTold,
+                warning: (latest.Vendor_ID && !vendorTold) ? 'Estimate is back on hold, but the vendor could not be texted — tell them directly.' : '' });
 }
 
 async function approveEstimate(env, body) {
@@ -2896,6 +3029,18 @@ async function qbTest(env) {
 // Rebuilds the lines from exactly the same inputs the original send used, so the totals
 // cannot drift: the customer still owes the same Customer_Total, to the cent.
 
+// The receipts an invoice was approved with, read back by id. The repair path needs the
+// same set the send used, or its rebuilt lines would be missing them and the total check
+// would fail — or worse, pass while silently dropping a materials line.
+async function qbApprovedReceipts(env, ir) {
+  const ids = String((ir && ir.Own_Material_IDs) || '').split(',').map(x => x.trim()).filter(Boolean);
+  if (!ids.length) return [];
+  try {
+    const rows = await fetchTab(env, 'Receipts');
+    return rows.filter(r => ids.includes(String(r.ID)) && r.Active !== 'FALSE');
+  } catch (e) { return []; }
+}
+
 // The item an invoice was originally posted against. Reused when repairing so the wording
 // changes and the accounting doesn't.
 function qbOriginalItemRef(inv) {
@@ -2929,7 +3074,7 @@ async function qbRepairable(env, url) {
       const resolved = resolveTrade(wo.Trade);
       const trade = QB_TRADE_MAP[resolved.name];
       const origItemRef = qbOriginalItemRef(q);
-      const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origItemRef);
+      const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir));
 
       const folderId  = wo.Drive_Folder_ID || '';
       const folderUrl = wo.Drive_Folder_URL || (folderId ? ('https://drive.google.com/drive/folders/' + folderId) : '');
@@ -2984,7 +3129,7 @@ async function qbRepairInvoice(env, body) {
     const resolved = resolveTrade(wo.Trade);
     const trade = QB_TRADE_MAP[resolved.name];
     const origRef = qbOriginalItemRef(existing);
-    const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origRef);
+    const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir));
     // Without the original item we'd fall back to the freshly-resolved trade, which could
     // move posted revenue to a different income account. Say so rather than doing it.
     const itemWarning = origRef ? '' : 'Could not read the income account this invoice posted to, so it would be re-derived from the trade. Check it in QuickBooks afterwards.';
@@ -3839,7 +3984,7 @@ function qbBillDocNumber(billRow, ir, siblingIndex) {
 // truck/shop stock (if any) + a single labor summary line. Materials show at cost;
 // the labor line absorbs the remainder so the lines always sum to Customer_Total —
 // keeping the internal $75 first-hour / markup off the customer's invoice.
-function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride) {
+function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts) {
   // An override is used when REPAIRING an existing invoice: the wording changes, the
   // account it posted to must not. Trade resolution has changed since some invoices were
   // sent, and moving posted revenue between income accounts is a separate decision.
@@ -3861,6 +4006,23 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride) {
       });
     }
   }
+  // Materials bought outside the vendor's bill — Brett's own receipts, approved onto this
+  // invoice. They were previously invisible here, so they never appeared on the invoice at
+  // all even though the customer was meant to pay for them.
+  if (Array.isArray(ownReceipts)) {
+    for (const rc of ownReceipts) {
+      const amt = +(Number(rc && rc.Amount) || 0).toFixed(2);
+      if (amt <= 0) continue;
+      materialsTotal += amt;
+      lines.push({
+        DetailType: 'SalesItemLineDetail',
+        Amount: amt,
+        Description: ('Materials — ' + ((rc && (rc.Description || rc.Store)) || 'receipt')).slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: amt },
+      });
+    }
+  }
+
   const truck = +(Number(billRow && billRow.Truck_Stock) || 0).toFixed(2);
   if (truck > 0) {
     materialsTotal += truck;
@@ -4083,7 +4245,21 @@ async function qbSendInvoice(env, body) {
     if (custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
     if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
 
-    const inv = buildInvoiceLines(ir, billRow, trade, tradeName, wo);
+    // Exactly the receipts that were ticked at approval — read by id, so adding a receipt
+    // to the job afterwards can't quietly change what the customer is billed.
+    let ownReceipts = [];
+    const ownIds = String(ir.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
+    if (ownIds.length) {
+      try {
+        const allReceipts = await fetchTab(env, 'Receipts');
+        ownReceipts = allReceipts.filter(r => ownIds.includes(String(r.ID)) && r.Active !== 'FALSE');
+        if (ownReceipts.length !== ownIds.length) {
+          warnings.push(`${ownIds.length - ownReceipts.length} approved receipt(s) are no longer on this job — the invoice total still stands, but a materials line is missing.`);
+        }
+      } catch (e) { warnings.push('Could not read the Receipts tab — materials you bought are not itemised on this invoice.'); }
+    }
+
+    const inv = buildInvoiceLines(ir, billRow, trade, tradeName, wo, null, ownReceipts);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';

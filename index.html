@@ -4157,6 +4157,7 @@ function invBuilderHtml(k, woId, wo) {
     '</div>' +
 
     // Logged time on this job that you can put ON the customer invoice.
+    '<div id="inv-materials-'+k+'" style="margin-bottom:12px"></div>' +
     '<div id="inv-time-'+k+'" style="margin-bottom:12px"></div>' +
 
     '<div id="inv-status-'+k+'" style="margin-bottom:12px"></div>' +
@@ -4178,6 +4179,160 @@ function loadInvoiceBuilder(k, woId) {
   _invWO[k] = woId;
   loadVendorBillForInvoice(k);
   loadInvoiceTime(k);
+  loadInvoiceMaterials(k);
+}
+
+
+// ── MATERIALS YOU BOUGHT ─────────────────────────────────────
+// Receipts logged against a job in the Receipts tab were invisible to this panel, which
+// only ever read the vendor's own receipts off their bill. So materials Brett bought
+// himself never reached the invoice at all — no line, no markup, no 5%, nothing.
+//
+// Vendor-logged receipts are deliberately excluded here: those already arrive through the
+// vendor's bill, and counting them twice would bill the owner for the same materials
+// twice. Same reasoning as the time picker.
+var _invMat = {};        // scope key → receipts logged outside the vendor bill
+var _invMatPicked = {};  // scope key → { receiptId: true }
+var _invMatGen = {};
+var _invMatSeen = {};
+var _invMatBilled = {};   // receipt id → the Invoice_Review row already charging it
+var _invMatMulti = {};
+var _invMatUnknown = {};  // couldn't read what's already invoiced — don't assume nothing is
+
+function loadInvoiceMaterials(k) {
+  var woId = _invWO[k] || k;
+  var box = document.getElementById('inv-materials-' + k);
+  if (!box) return;
+  var gen = (_invMatGen[k] = (_invMatGen[k] || 0) + 1);
+
+  // Ask what's already been billed at the same time. A receipt goes on exactly one
+  // invoice, and two vendors on one job means two invoices that would each otherwise pick
+  // up the same materials — the owner would see $100 of screws itemised twice.
+  Promise.all([
+    api('GET', '/receipts?wo_id=' + encodeURIComponent(woId)),
+    api('GET', '/receipts-billed?wo_id=' + encodeURIComponent(woId)).catch(function() { return { failed: true, billed: {} }; }),
+  ]).then(function(both) {
+    var rows = both[0];
+    var billed = (both[1] && both[1].billed) || {};
+    // If we couldn't find out what's already been invoiced, don't tick anything by
+    // default. Not knowing is not the same as nothing being billed.
+    var billedUnknown = !!(both[1] && (both[1].failed || both[1].ok === false));
+    if (_invMatGen[k] !== gen) return;
+    if (!Array.isArray(rows)) { _invMat[k] = []; box.innerHTML = ''; return; }
+    _invMatBilled[k] = billed;
+
+    // A vendor's receipt reaches the invoice through their bill. Only what someone on
+    // this side bought needs adding here.
+    var mine = rows.filter(function(r) {
+      return r.Active !== 'FALSE' &&
+             String(r.Role || '').toLowerCase() !== 'vendor' &&
+             (parseFloat(r.Amount) || 0) > 0;
+    });
+    _invMat[k] = mine;
+
+    // Same guard the time picker uses: with two billing panels open on one job, nothing is
+    // ticked by default, because deciding for him which invoice carries the materials is
+    // exactly the mistake to avoid.
+    var panelsOnThisWO = Object.keys(_invWO).filter(function(other) {
+      return String(_invWO[other]) === String(woId) && other.indexOf('ir') === 0;
+    }).length;
+    if (k.indexOf('ir') !== 0) panelsOnThisWO = Math.max(1, panelsOnThisWO);
+
+    var picked = _invMatPicked[k] || {};
+    _invMatSeen[k] = _invMatSeen[k] || {};
+    mine.forEach(function(r) {
+      var id = String(r.ID);
+      // Never re-tick something already invoiced, whatever else is going on.
+      if (billed[id]) { delete picked[id]; _invMatSeen[k][id] = true; return; }
+      // Default to charging it on — it was logged against this job, which is the whole
+      // reason it exists. Unticking survives a reload.
+      if (!(id in picked) && !_invMatSeen[k][id] && panelsOnThisWO < 2 && !billedUnknown) picked[id] = true;
+      _invMatSeen[k][id] = true;
+    });
+    _invMatPicked[k] = picked;
+    _invMatMulti[k] = panelsOnThisWO > 1;
+    _invMatUnknown[k] = billedUnknown;
+
+    invRenderMaterials(k);
+    invAutoPrice(k);
+    calcInvoiceMarkup(k);
+  }).catch(function() { if (_invMatGen[k] === gen) _invMat[k] = []; });
+}
+
+function invToggleMat(k, id) {
+  if (!_invMatPicked[k]) _invMatPicked[k] = {};
+  var key = String(id);
+  if ((_invMatBilled[k] || {})[key]) {
+    toast('That receipt is already on invoice ' + (_invMatBilled[k] || {})[key] + ' for this job.', 'error');
+    invRenderMaterials(k);
+    return;
+  }
+  if (_invMatPicked[k][key]) delete _invMatPicked[k][key]; else _invMatPicked[k][key] = true;
+  invRenderMaterials(k);
+  invAutoPrice(k);
+  calcInvoiceMarkup(k);
+}
+
+function invMatTotal(k) {
+  var picked = _invMatPicked[k] || {};
+  var billed = _invMatBilled[k] || {};
+  return safeArray(_invMat[k]).reduce(function(sum, r) {
+    var id = String(r.ID);
+    return (picked[id] && !billed[id]) ? sum + (parseFloat(r.Amount) || 0) : sum;
+  }, 0);
+}
+
+// The ids actually going on the invoice, so the send path bills exactly what was ticked.
+function invMatPickedIds(k) {
+  var picked = _invMatPicked[k] || {};
+  var billed = _invMatBilled[k] || {};
+  return safeArray(_invMat[k]).filter(function(r) {
+    var id = String(r.ID); return picked[id] && !billed[id];
+  }).map(function(r) { return String(r.ID); });
+}
+
+function invRenderMaterials(k) {
+  var box = document.getElementById('inv-materials-' + k);
+  if (!box) return;
+  var list = safeArray(_invMat[k]);
+  if (!list.length) { box.innerHTML = ''; return; }
+  var picked = _invMatPicked[k] || {};
+  var billedMap = _invMatBilled[k] || {};
+  var total = invMatTotal(k);
+
+  box.innerHTML =
+    '<div style="background:var(--surface);border-radius:6px;padding:10px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<span style="color:var(--muted);font-size:10px;letter-spacing:.06em">MATERIALS YOU BOUGHT — tick what the customer pays for</span>' +
+        '<span style="color:' + (total > 0 ? 'var(--accent2)' : 'var(--muted)') + ';font-size:12px;font-weight:bold">+$' + total.toFixed(2) + '</span>' +
+      '</div>' +
+      (_invMatUnknown[k] ? '<div style="color:var(--warn);font-size:10.5px;line-height:1.45;margin-bottom:6px">⚠ Couldn\'t check which of these are already on an invoice, so nothing is ticked. Tick only what you know hasn\'t been billed.</div>' : '') +
+      (_invMatMulti[k] ? '<div style="color:var(--warn);font-size:10.5px;line-height:1.45;margin-bottom:6px">⚠ This job has more than one bill being invoiced. Nothing is ticked by default — a receipt goes on ONE invoice only.</div>' : '') +
+      list.map(function(r) {
+        var id = String(r.ID);
+        var alreadyBilled = !!billedMap[id];
+        var on = !alreadyBilled && !!picked[id];
+        var amt = parseFloat(r.Amount) || 0;
+        return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:' + (alreadyBilled ? 'default' : 'pointer') + ';font-size:11.5px;border-top:1px solid var(--border);opacity:' + (alreadyBilled ? '0.55' : '1') + '">' +
+          '<input type="checkbox"' + (on ? ' checked' : '') + (alreadyBilled ? ' disabled' : '') +
+            ' onchange="invToggleMat(\'' + k + '\',\'' + esc(id) + '\')" style="width:auto;padding:0">' +
+          '<span style="color:var(--text)">' + esc(r.Store || 'Receipt') + '</span>' +
+          '<span style="color:var(--muted);font-size:10.5px">' + esc(String(r.Description || '').substring(0, 44)) +
+            (r.Date ? ' · ' + esc(r.Date) : '') + '</span>' +
+          (alreadyBilled ? '<span style="color:var(--warn);font-size:9.5px;white-space:nowrap">already invoiced</span>' : '') +
+          '<span style="margin-left:auto;color:' + (on ? 'var(--accent2)' : 'var(--muted)') + ';font-weight:bold;white-space:nowrap">$' + amt.toFixed(2) + '</span>' +
+        '</label>';
+      }).join('') +
+      '<div style="color:var(--muted);font-size:10px;margin-top:5px;line-height:1.45">These are marked up and carry the 5% like the rest of the job. Anything the vendor bought is already on their bill and is not listed here.</div>' +
+    '</div>';
+}
+
+// Materials logged against this job refresh the panel straight away, so a receipt added
+// while the work order is open doesn't need a reload to be billable.
+function invRefreshMaterialsForWO(woId) {
+  Object.keys(_invWO).forEach(function(k) {
+    if (String(_invWO[k]) === String(woId)) loadInvoiceMaterials(k);
+  });
 }
 
 // ── TIME ON THE INVOICE ──────────────────────────────────────
@@ -4343,6 +4498,11 @@ function loadVendorBillForInvoice(k) {
       _invTimePicked[k] = null;
       _invTimeSeen[k] = null;
       loadInvoiceTime(k);
+      // Materials belong to the JOB, but a receipt still goes on exactly ONE invoice —
+      // so switching which bill this panel is pricing must re-decide them too.
+      _invMatPicked[k] = null;
+      _invMatSeen[k] = null;
+      loadInvoiceMaterials(k);
     }
     _invBill[k] = bill;
 
@@ -4425,8 +4585,13 @@ function invPricing(k) {
     }
   } catch (e) {}
 
-  var totalCost     = laborTotal + truckStock + receiptsAll;              // the pricing basis
-  var vendorPayable = laborTotal + truckStock + reimburse;                // the QuickBooks bill
+  // Materials bought outside the vendor's bill. Money out of the business, so they belong
+  // in the pricing basis — which is what makes the markup and the 5% apply to them, the
+  // same as everything else on the job.
+  var ownMaterials = invMatTotal(k);
+
+  var totalCost     = laborTotal + truckStock + receiptsAll + ownMaterials;   // the pricing basis
+  var vendorPayable = laborTotal + truckStock + reimburse;                    // the QuickBooks bill (unchanged)
 
   // When the vendor on this job is you, the labour on the bill is your own wage — it never
   // left the business. Pricing still works off the full cost, because that's what the job
@@ -4434,7 +4599,8 @@ function invPricing(k) {
   var vendorRow = safeArray(state.vendors).find(function(v) { return String(v.ID) === String(bill.Vendor_ID); });
   var vendorInHouse = !!vendorRow && String(vendorRow.In_House || '').toUpperCase() === 'TRUE';
   var inHouseLabor  = vendorInHouse ? laborTotal : 0;
-  var cashOut       = totalCost - inHouseLabor;                           // actually paid to someone else
+  // Materials you bought ARE cash out — they stay in cashOut even on an in-house job.
+  var cashOut       = totalCost - inHouseLabor;                           // actually paid out
 
   var onsite   = (document.getElementById('inv-onsite-' + k) || {}).checked;
   var brettHrs = onsite ? (parseFloat((document.getElementById('inv-brett-hrs-' + k) || {}).value) || 1) : 0;
@@ -4470,7 +4636,7 @@ function invPricing(k) {
   return {
     billType: billType, hrs: hrs, laborTotal: laborTotal, truckStock: truckStock,
     receiptsAll: receiptsAll, reimburse: reimburse, onAccount: onAccount,
-    totalCost: totalCost, vendorPayable: vendorPayable,
+    totalCost: totalCost, vendorPayable: vendorPayable, ownMaterials: ownMaterials,
     vendorInHouse: vendorInHouse, inHouseLabor: inHouseLabor, cashOut: cashOut, ownWage: ownWage,
     brettTime: brettTime, brettHrs: brettHrs, travel: travel, loggedTime: loggedTime,
     tieredPrice: tieredWithExtras, tieredBase: tieredBase.finalPrice, tieredPct: Math.round(tieredBase.markupPct * 100),
@@ -4741,6 +4907,8 @@ function invBillThisJob(k) {
     vendor_name: bill.Vendor_Name,
     job_type: p.billType === 'flat' ? 'flat' : 'standard',
     vendor_cost: p.vendorPayable.toFixed(2),
+    own_materials: p.ownMaterials.toFixed(2),
+    own_material_ids: invMatPickedIds(k).join(','),
     brett_time: p.brettTime.toFixed(2),
     brett_hrs: String(p.brettHrs || 0),
     travel: p.travel.toFixed(2),
@@ -4759,6 +4927,14 @@ function invBillThisJob(k) {
       if (msg) msg.innerHTML = '<span style="color:var(--danger)">Approve failed: ' + esc(res.error || '?') + '</span>';
       return;
     }
+    // Approving a second time hands back the FIRST approval — it doesn't reprice it. If
+    // the number has moved since, say so plainly instead of looking like it took.
+    if (res.already_approved && res.differs) {
+      if (msg) msg.innerHTML = '<div style="color:var(--warn);font-size:12px;line-height:1.5">' +
+        '⚠ This job is already approved at <b>$' + esc(res.approved_total) + '</b>, and that is what will go to QuickBooks — not the amount you just entered.<br>' +
+        'Withdraw the approval on the Send to QB screen, then price it again.</div>';
+      return;
+    }
     // '/update-wo' is not a route — the Worker has '/workorder/update'. Posting to the
     // wrong path returned a 404 that api() resolves rather than rejects, so the .catch()
     // never fired and the memo was discarded in silence. That memo is what the owner reads
@@ -4772,11 +4948,17 @@ function invBillThisJob(k) {
 
     if (res.id) {
       if (msg) msg.innerHTML = '<span style="color:var(--accent2)">✓ Approved at $' + charge.toFixed(2) + ' — opening the QuickBooks preview…</span>';
+      // Those receipts are now committed to this invoice. Re-read the billed map so a
+      // second bill on the same job can't pick them up again in the same sitting.
+      invRefreshMaterialsForWO(_invWO[k] || k);
       if (inWOModal) closeModal('modal-wo-detail');
       previewQBSend(res.id);            // preview creates nothing; you confirm in the modal
     } else {
       // Approved, but no usable row id came back — fall back to resolving it by work order.
       if (msg) msg.innerHTML = '<span style="color:var(--accent2)">✓ Approved at $' + charge.toFixed(2) + '.</span>';
+      // Those receipts are now committed to this invoice. Re-read the billed map so a
+      // second bill on the same job can't pick them up again in the same sitting.
+      invRefreshMaterialsForWO(_invWO[k] || k);
       sendWOToQuickBooks(woId);
     }
   }).catch(function(e) {
@@ -5102,6 +5284,9 @@ function submitHubReceipt(woId) {
         var holder = document.getElementById('receipts-' + woId);
         if (holder) renderHubReceipts(woId, Array.isArray(receipts)?receipts:[], holder);
       });
+      // …and into the billing panel, so a receipt logged with the job open is billable
+      // straight away rather than after a reload.
+      invRefreshMaterialsForWO(woId);
     } else if (msgEl) {
       msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
     }
@@ -5111,6 +5296,7 @@ function submitHubReceipt(woId) {
 function deleteHubReceipt(id, woId) {
   if (!confirm('Delete this receipt entry?')) return;
   api('POST', '/receipt/delete', { id: id }).then(function() {
+    invRefreshMaterialsForWO(woId);
     toast('Receipt deleted', 'success');
     api('GET', '/receipts?wo_id=' + woId).then(function(receipts) {
       var holder = document.getElementById('receipts-' + woId);
@@ -5486,7 +5672,7 @@ function loadInvoiceReview() {
     el.innerHTML = _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
     // Card indexes are reused across renders, so clear panel state first — otherwise
     // 'ir0' could still be holding the bill or IR row from a previous load.
-    _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _invTime = {}; _invTimePicked = {}; _invTimeSeen = {}; _invTimeGen = {}; _invTimeMulti = {}; _invAutoPrice = {}; _qbAllPromise = null;
+    _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _invTime = {}; _invTimePicked = {}; _invTimeSeen = {}; _invTimeGen = {}; _invTimeMulti = {}; _invAutoPrice = {}; _invMat = {}; _invMatPicked = {}; _invMatSeen = {}; _invMatGen = {}; _invMatBilled = {}; _invMatMulti = {}; _invMatUnknown = {}; _qbAllPromise = null;
     // Mount each card's billing panel against the specific bill on that card. Without the
     // preferred-bill hint a work order carrying two vendors' bills would load the newest
     // one into BOTH cards, and you'd bill the same vendor twice.
@@ -6319,6 +6505,44 @@ function loadQBQueue() {
   });
 }
 
+// Approving locked the price in with no way back: approving again just handed back the
+// existing row, so a bill approved at $185 stayed $185 however the number changed
+// afterwards. This puts it back in Review Bills to be priced again.
+function withdrawApproval(irId, amount) {
+  if (!confirm('Withdraw the approval for $' + (parseFloat(amount) || 0).toFixed(2) + '?\n\n' +
+    'Nothing has gone to QuickBooks yet, so nothing there changes. The bill goes back to ' +
+    'Review Bills where you can set a different price and approve it again.')) return;
+
+  var msgEl = document.getElementById('qb-msg-' + irId);
+  if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Withdrawing…</span>';
+
+  api('POST', '/invoice-review/unapprove', { id: irId }).then(function(res) {
+    if (!res || res.error) {
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">⚠ ' + esc((res && res.error) || 'failed') + '</span>';
+      return;
+    }
+    toast('Approval withdrawn — ' + (res.wo_id || 'the job') + ' is back in Review Bills', 'success');
+    if (res.warning) toast(res.warning, 'error');
+    loadQBQueue();
+  }).catch(function(e) {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">⚠ ' + esc(e.message) + '</span>';
+  });
+}
+
+// An approved estimate is something the vendor has been told to start on, so withdrawing
+// it texts them rather than just flipping a status behind their back.
+function withdrawEstimate(woId) {
+  var reason = prompt('Putting the approved estimate back on hold for ' + woId + '.\n\n' +
+    'Why? (the vendor gets told — leave blank to just say it is on hold)');
+  if (reason === null) return;
+  api('POST', '/estimate/unapprove', { wo_id: woId, reason: reason.trim() }).then(function(res) {
+    if (!res || res.error) { toast((res && res.error) || 'Could not withdraw', 'error'); return; }
+    toast('Estimate back on hold' + (res.vendor_notified ? ' — vendor told' : ''), 'success');
+    if (res.warning) toast(res.warning, 'error');
+    loadAll();
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
 function renderQBCard(r, i) {
   var ct = parseFloat(r.customer_total)||0;
   var vc = parseFloat(r.vendor_cost)||0;
@@ -6359,6 +6583,7 @@ function renderQBCard(r, i) {
     '</div>' +
     partialHtml + zeroCostHtml + jobLine +
     '<button onclick="previewQBSend(\''+esc(r.id)+'\')" style="width:100%;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px;cursor:pointer">👁 Preview &amp; Send</button>' +
+    '<button onclick="withdrawApproval(\''+esc(r.id)+'\','+ct.toFixed(2)+')" style="width:100%;margin-top:5px;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:11.5px;padding:6px;cursor:pointer">↩ Withdraw approval — reprice this job</button>' +
     '<div id="qb-msg-'+esc(r.id)+'" style="margin-top:6px"></div>' +
   '</div>';
 }

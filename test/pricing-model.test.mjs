@@ -27,10 +27,11 @@ const { calcTieredEstimate, invPricing, setup } = new Function(
 
 function price(bill, fields, vendors){
   const state={vendors:vendors||[]}, _invBill={k:bill};
-  const f=Object.assign({onsite:false,brettHrs:0,travel:0,loggedTime:0},fields);
+  const f=Object.assign({onsite:false,brettHrs:0,travel:0,loggedTime:0,ownMaterials:0},fields);
   const mod = new Function('state','_invBill','fields',
     'function safeArray(v){return Array.isArray(v)?v:[];}\n' +
     'function invTimeTotal(k){return fields.loggedTime||0;}\n' +
+    'function invMatTotal(k){return fields.ownMaterials||0;}\n' +
     'var document={getElementById:function(id){\n' +
     '  if(id.indexOf("inv-onsite-")===0) return {checked:!!fields.onsite};\n' +
     '  if(id.indexOf("inv-brett-hrs-")===0) return {value:String(fields.brettHrs||0)};\n' +
@@ -81,6 +82,36 @@ t('lowercase true still counts as in-house', price(own, {}, [{ID:'1', In_House:'
 const p5 = price(ext, {}, [{ID:'9'}]);
 t('no wage means profit is the whole margin', p5.ownWage === 0 && p5.cashOut === 200);
 t('and the tiered price is the plain tiered price', p5.tieredPrice === Math.ceil(calcTieredEstimate(200).finalPrice/5)*5);
+
+
+// ── Materials Brett buys himself: they were invisible to this panel entirely, so they
+// reached no invoice, carried no markup and no 5%. Both of those are the same fix.
+const noMat  = price(ext, {}, [{ID:'9'}]);
+const withMat = price(ext, { ownMaterials: 100 }, [{ID:'9'}]);
+
+t('materials you bought join the pricing basis',
+  withMat.totalCost === noMat.totalCost + 100, [noMat.totalCost, withMat.totalCost]);
+// The two pricing paths treat materials differently, and that is worth pinning rather
+// than discovering later:
+//   TIERED   — markup is a percentage of total cost, so materials get the markup AND the 5%
+//   ITEMIZED — markup is labour-hours based ($35/hr, min $75), so materials pass through
+//              at cost and pick up only the 5%
+t('tiered marks materials up as well as adding the 5%',
+  (withMat.tieredPrice - noMat.tieredPrice) > 100 * 1.05,
+  { added: withMat.tieredPrice - noMat.tieredPrice });
+t('itemized passes materials at cost plus the 5%',
+  Math.abs((withMat.itemizedPrice - noMat.itemizedPrice) - 105) < 0.01,
+  { added: withMat.itemizedPrice - noMat.itemizedPrice });
+t('either way the 5% definitely reaches them',
+  (withMat.itemizedPrice - noMat.itemizedPrice) >= 105 &&
+  (withMat.tieredPrice - noMat.tieredPrice) >= 105);
+t('they are exposed for the invoice lines', withMat.ownMaterials === 100);
+
+// they are real cash out, so they reduce profit even on an in-house job
+const ownJob = price(own, { ownMaterials: 80 }, [{ID:'1', In_House:'TRUE'}]);
+t('materials you bought are cash out even when the labour is yours',
+  ownJob.cashOut === 80, ownJob.cashOut);
+t('and your own labour still is not', ownJob.ownWage === 200);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
