@@ -3768,6 +3768,25 @@ function qbResolveBillTo(owner, prop, unit) {
   return { level: 'owner', qb_id: ownerId || '', display: qbOwnerDisplayName(owner), row: owner || null };
 }
 
+// Falling back to the owner is not a failure — the invoice sends and the money is right.
+// But it is silent, and it does NOT fix itself. Sending an invoice creates the OWNER in
+// QuickBooks; it never creates the property beneath them. So a new address invoices at
+// owner level the first time, and every time after that, until someone links the property.
+// This is the sentence that says so, and it is the only place that says it.
+function qbBillToNote(billTo, prop, unit) {
+  if (!billTo || billTo.level !== 'owner') return '';
+  const addr = qbPropertyDisplayName(prop);
+  if (!addr) return '';                       // no address on file — nothing to nest under
+  const label = qbUnitLabel(unit);
+  const where = label ? (addr + ' ' + label) : addr;
+  const ownerLinked = !!(billTo.qb_id || '').trim();
+  return `This lands on ${billTo.display || 'the owner'}'s top-level ledger, not ${where} — ` +
+    (ownerLinked
+      ? 'that property has no QuickBooks sub-customer yet. '
+      : 'the owner gets created in QuickBooks by this send, but the property does not. ') +
+    'Create it on QB Mapping and later invoices will nest under the building. Sending it now is fine.';
+}
+
 // POST /qb/vendor-in-house { id, in_house }
 // Marks a vendor as in-house: the work is yours or an employee's, so no QuickBooks Bill is
 // created and no payable is raised against a person the business doesn't actually owe.
@@ -4573,6 +4592,8 @@ async function qbSendInvoice(env, body) {
       warnings.push(tradeName + ' has no dedicated QuickBooks account yet — booking to General repairs.');
     }
     if (!owner) warnings.push('No owner found for this property — set the property owner before sending.');
+    const billToNote = qbBillToNote(billTo, prop, unit);
+    if (billToNote) warnings.push(billToNote);
     const custTotal  = Number(ir.Customer_Total) || 0;
     const vendorCost = Number(ir.Vendor_Cost) || 0;
     if (custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
@@ -4682,7 +4703,11 @@ async function qbSendInvoice(env, body) {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
                    property: qbPropertyDisplayName(prop), unit: qbUnitLabel(unit),
-                   property_id: prop.ID || '', unit_id: (unit && unit.ID) || '' },
+                   property_id: prop.ID || '', unit_id: (unit && unit.ID) || '',
+                   // Same string as the warning above, deliberately: the preview shows it on
+                   // the bill-to line and drops it from the warning list, so it reads once.
+                   note: billToNote,
+                   owner_linked: !!((owner && owner.QBO_Customer_ID) || '').trim() },
         vendor_in_house: previewInHouse,
         customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '',
                     owner_id: (owner && owner.ID) || '', suggest: custSuggest, qb_list: qbCustomers },

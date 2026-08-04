@@ -6121,6 +6121,16 @@ function qbBillToLine(p) {
   var b = p && p.bill_to;
   if (!b) return '';
   if (b.level === 'owner') {
+    // The Worker writes this sentence, because it is the one that has to be right: sending
+    // creates the OWNER in QuickBooks and never the property beneath them, so this does not
+    // settle itself on first invoice the way an unlinked owner does.
+    if (b.note) {
+      return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">↳ ' + esc(b.note) +
+        (b.property_id && b.owner_linked
+          ? ' <button class="btn small" onclick="qbMakeSubFromPreview(\'' + esc(String(b.property_id)) + '\',this)" ' +
+            'style="background:var(--warn);color:#000;padding:1px 7px;font-size:10px;margin-left:4px">Create it now</button>'
+          : '') + '</div>';
+    }
     var missing = b.property ? esc(b.property) : 'this property';
     return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">' +
       '↳ Billing at the owner level — ' + missing + ' isn\'t linked to a QuickBooks sub-customer. ' +
@@ -6760,6 +6770,26 @@ function renderQBCard(r, i) {
   '</div>';
 }
 
+// Create the property's QuickBooks sub-customer without leaving the preview. Only offered
+// when the owner is already linked — a sub-customer needs a parent, and the Worker refuses
+// otherwise. On success the preview is re-read so the bill-to line shows the new nesting
+// before anything is sent; nothing is created in QuickBooks until this button is pressed.
+function qbMakeSubFromPreview(propertyId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  api('POST', '/qb/create-subcustomer', { kind: 'property', id: propertyId }).then(function(r) {
+    if (r && r.error) {
+      toast(r.error, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Create it now'; }
+      return;
+    }
+    toast(r && r.linked_existing ? 'Linked to the existing sub-customer' : 'Created in QuickBooks', 'success');
+    if (_qbCurrent) previewQBSend(_qbCurrent);
+  }).catch(function(e) {
+    toast(e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Create it now'; }
+  });
+}
+
 function previewQBSend(id) {
   _qbCurrent = id;
   document.getElementById('qb-send-title-sub').textContent = 'IR ' + id;
@@ -6784,8 +6814,13 @@ function renderQBPreview(p) {
   var lines = (p.invoice.lines||[]).map(function(l){
     return '<div style="display:flex;justify-content:space-between;gap:8px"><span style="color:var(--muted)">' + esc(l.desc) + '</span><span style="color:var(--text)">$' + (parseFloat(l.amount)||0).toFixed(2) + '</span></div>';
   }).join('');
-  var warns = (p.warnings&&p.warnings.length) ?
-    '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:8px;font-size:11px;color:var(--warn)">' + p.warnings.map(function(w){return '⚠ '+esc(w);}).join('<br>') + '</div>' : '';
+  // The bill-to note is already on its own line above, with its own button. Same string,
+  // so drop it here rather than saying it twice — the other paths (batch, confirm) have no
+  // bill-to line and still get it from the warnings array.
+  var note = (p.bill_to && p.bill_to.note) || '';
+  var wlist = safeArray(p.warnings).filter(function(w){ return w !== note; });
+  var warns = wlist.length ?
+    '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:8px;font-size:11px;color:var(--warn)">' + wlist.map(function(w){return '⚠ '+esc(w);}).join('<br>') + '</div>' : '';
   var already = (p.already && (p.already.invoice||p.already.bill)) ?
     '<div style="color:var(--muted);font-size:11px;margin-top:6px">Already in QB → invoice ' + esc(p.already.invoice||'—') + ', bill ' + esc(p.already.bill||'—') + '</div>' : '';
   return '' +

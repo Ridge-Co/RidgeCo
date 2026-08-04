@@ -22,6 +22,15 @@ one owner is a different building from the same address under another.
 **27. Owner suggestions only consider top-level customers.** Matching an owner against the
 whole list offered it its own buildings as candidates.
 
+**38. Sending an invoice creates the OWNER in QuickBooks, never the property.** So an
+unlinked owner *does* settle itself on first invoice — and an unlinked property does NOT.
+It quietly falls back to owner-level billing on that invoice and on every one after it,
+which is exactly the undifferentiated ledger rule 26 exists to prevent. `qbBillToNote` says
+so on the preview's bill-to line, in the confirm response, and in a batch send (where there
+is no preview at all), with a "Create it now" button when the owner is linked and the
+property isn't. Sub-customers are still only ever created on request — the button IS the
+request. (Aug 4, 2026.)
+
 ### Money (rules 28–31)
 **28. Brett's hours are a WAGE, not a cost.** Added AFTER the markup so they're never marked
 up; they DO carry the 5% processing fee. A job he does himself is worth its full ticket —
