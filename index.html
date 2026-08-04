@@ -6294,9 +6294,16 @@ function qbSubRow(kind, row, qbList) {
       esc(c.path || c.name) + ' (#' + esc(String(c.id)) + ')</option>';
   })).join('');
 
-  var state, action = '';
+  var action = '';
+  var state;
   if (row.stale) {
     state = '<span style="color:var(--danger);font-size:10.5px">⚠ linked to #' + esc(row.qb_id) + ', which QuickBooks no longer returns</span>';
+  } else if (row.qb_id && row.misparented) {
+    // Linked, but sitting under the wrong building in QuickBooks — the "Apt 1" collision.
+    state = '<span style="color:var(--danger);font-size:10.5px">⚠ linked to ' + esc(row.qb_name || ('#' + row.qb_id)) +
+      ', which sits under ' + esc(row.actual_parent || 'nothing') + ' rather than this property</span>';
+    action = '<button class="btn small" onclick="reparentUnit(\'' + esc(String(row.id)) + '\',false)" ' +
+      'style="background:var(--danger);color:#fff;padding:2px 8px;font-size:10px;white-space:nowrap">Move it here</button>';
   } else if (row.qb_id) {
     state = '<span style="color:var(--accent2);font-size:10.5px">✓ ' + esc(row.qb_name || ('#' + row.qb_id)) + '</span>';
   } else if (row.suggest && row.suggest.confidence === 'ambiguous') {
@@ -6336,6 +6343,32 @@ function qbSubRow(kind, row, qbList) {
       opts + '</select>' +
     '<div>' + action + '</div>' +
   '</div>';
+}
+
+// Move a unit under the property it belongs to. These went wrong because every building has
+// an "Apt 1" and QuickBooks names have to be unique across the whole file — so the second
+// one collided with the first and got linked to another building's flat.
+function reparentUnit(unitId, apply) {
+  var el = document.getElementById('qb-map-body');
+  api('POST', '/qb/reparent-unit', { unit_id: unitId, apply: !!apply, rename: true }).then(function(res) {
+    if (!res || res.ok === false || res.error) { toast((res && res.error) || 'Could not move it', 'error'); return; }
+    if (res.nothing_to_do) { toast(res.message, 'info'); return; }
+    if (apply) {
+      toast('Moved — now "' + res.name + '" under ' + res.parent_name, 'success');
+      loadQBMapping(true);
+      return;
+    }
+    if (confirm(
+      'Move this unit in QuickBooks?\n\n' +
+      'Now:  ' + (res.current_name || '(unnamed)') + (res.current_parent ? '' : '  (not nested under anything)') + '\n' +
+      'After: ' + res.new_name + '\n' +
+      '       under ' + res.new_parent_name + '\n\n' +
+      'The customer itself moves — any invoice already on it goes with it, so nothing is lost. ' +
+      'The name gains the street address because QuickBooks names must be unique across the ' +
+      'whole file, and "Apt 1" is not.')) {
+      reparentUnit(unitId, true);
+    }
+  }).catch(function(e) { toast(e.message, 'error'); });
 }
 
 function qbCreateSub(kind, id) {

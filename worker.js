@@ -203,6 +203,7 @@ export default {
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
+        if (path === '/qb/reparent-unit')         return await qbReparentUnit(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
@@ -3550,16 +3551,23 @@ async function qbEntities(env, url) {
     const unitRows = units.filter(u => u.Active !== 'FALSE').map(u => {
       const prop    = propById[String(u.Property_ID)] || null;
       const parentQb = prop ? (prop.QBO_Customer_ID || '').trim() : '';
-      const display = qbUnitDisplayName(u);
+      const display = qbUnitDisplayName(u, prop);
       const mapped  = (u.QBO_Customer_ID || '').trim();
       const inQB    = mapped ? customers.find(c => String(c.id) === mapped) : null;
+      // Only ever consider this property's own children. Matching a unit label against the
+      // whole customer list is how "Apt 1" ended up pointing at another building's flat.
+      const siblings = parentQb ? customers.filter(c => String(c.parent_id || '') === String(parentQb)) : [];
+      const misparented = !!(inQB && parentQb && String(inQB.parent_id || '') !== String(parentQb));
       return {
         id: u.ID, display,
         property_id: u.Property_ID || '', property_name: prop ? qbPropertyDisplayName(prop) : '',
         parent_qb_id: parentQb,
         qb_id: mapped, qb_name: inQB ? (inQB.path || inQB.name) : '',
         stale: !!(mapped && !inQB),
-        suggest: mapped ? null : qbMatchAddress(customers, display, parentQb),
+        // Linked, but sitting under the wrong parent in QuickBooks — or under none.
+        misparented,
+        actual_parent: misparented ? (customers.find(c => String(c.id) === String(inQB.parent_id)) || {}).name || 'nothing' : '',
+        suggest: (mapped || !parentQb) ? null : qbMatchAddress(siblings, display, parentQb),
       };
     });
 
@@ -3612,7 +3620,7 @@ async function qbMapEntity(env, body) {
       const who = kind === 'owner' ? qbOwnerDisplayName(clash)
                 : kind === 'vendor' ? qbVendorDisplayName(clash)
                 : kind === 'property' ? qbPropertyDisplayName(clash)
-                : qbUnitDisplayName(clash);
+                : qbUnitLabel(clash);
       return json({
         shared_conflict: true, other_id: clash.ID, other_name: who || ('#' + clash.ID),
         error: `"${who || ('#' + clash.ID)}" is already linked to QuickBooks #${qbId}. Both would bill to the same ledger.`,
@@ -3691,10 +3699,23 @@ function qbNormAddress(s) {
 function qbPropertyDisplayName(p) {
   return String((p && p.Address) || '').trim();
 }
-function qbUnitDisplayName(u) {
+function qbUnitLabel(u) {
   const label = String((u && u.Unit_Label) || '').trim();
   if (!label) return '';
   return /^(apt|unit|ste|suite|#|bldg|fl)\b/i.test(label) ? label : ('Apt ' + label);
+}
+
+// The name a unit gets in QuickBooks. It has to carry the building, because DisplayName is
+// unique across the WHOLE file — "Apt 1" is not a name, every property has one. Naming them
+// all "Apt 1" meant the second one collided with the first and got linked to a unit of a
+// different building. QuickBooks still shows the nesting as
+// "Goldszmidt Properties:151 W Lanvale St:151 W Lanvale St Apt 1", so the address repeats
+// in the path — but a name that's ambiguous on its own is worse than one that's verbose.
+function qbUnitDisplayName(u, prop) {
+  const label = qbUnitLabel(u);
+  if (!label) return '';
+  const addr = qbPropertyDisplayName(prop);
+  return addr ? (addr + ' ' + label) : label;
 }
 
 // Match an address against QuickBooks customers, preferring children of the owner this
@@ -3741,7 +3762,7 @@ function qbResolveBillTo(owner, prop, unit) {
   const unitId  = unit && (unit.QBO_Customer_ID || '').trim();
   const propId  = prop && (prop.QBO_Customer_ID || '').trim();
   const ownerId = owner && (owner.QBO_Customer_ID || '').trim();
-  if (unitId)  return { level: 'unit',     qb_id: unitId,  display: qbUnitDisplayName(unit), row: unit };
+  if (unitId)  return { level: 'unit',     qb_id: unitId,  display: qbUnitDisplayName(unit, prop), row: unit };
   if (propId)  return { level: 'property', qb_id: propId,  display: qbPropertyDisplayName(prop), row: prop };
   return { level: 'owner', qb_id: ownerId || '', display: qbOwnerDisplayName(owner), row: owner || null };
 }
@@ -3761,6 +3782,67 @@ async function qbSetVendorInHouse(env, body) {
 // POST /qb/create-subcustomer { kind: 'property'|'unit', id }
 // Creates the sub-customer under its parent and stores the id. Only ever on request —
 // the same rule as customers: nothing appears in QuickBooks without Brett asking for it.
+// POST /qb/reparent-unit { unit_id, apply?, rename? }
+// Units already created in QuickBooks under the wrong parent — or under none — because
+// "Apt 1" collided with another building's flat. Moves the existing customer under the
+// right property rather than making yet another one, and optionally renames it so the
+// collision can't recur.
+async function qbReparentUnit(env, body) {
+  const unitId = String(body.unit_id || '').trim();
+  const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  const rename = body.rename !== false;
+  if (!unitId) return json({ error: 'unit_id required' }, 400);
+
+  const [units, properties] = await Promise.all([fetchTab(env, 'Units'), fetchTab(env, 'Properties')]);
+  const unit = units.find(u => String(u.ID) === unitId);
+  if (!unit) return json({ error: `No unit ${unitId}` }, 404);
+  const qbId = (unit.QBO_Customer_ID || '').trim();
+  if (!qbId) return json({ error: 'That unit is not linked to QuickBooks yet — create it instead.' }, 400);
+
+  const prop = properties.find(p => String(p.ID) === String(unit.Property_ID));
+  if (!prop) return json({ error: 'That unit has no property.' }, 400);
+  const parentId = (prop.QBO_Customer_ID || '').trim();
+  if (!parentId) return json({ error: `Link "${qbPropertyDisplayName(prop)}" to QuickBooks first — a unit nests under it.` }, 400);
+
+  const token = await qbAccessToken(env);
+  const got = await qbApi(env, `customer/${encodeURIComponent(qbId)}?minorversion=73`, 'GET', null, token);
+  const cust = got && got.Customer;
+  if (!cust) return json({ error: qbFault(got) || 'Could not read that customer from QuickBooks.' }, 404);
+
+  const currentParent = (cust.ParentRef && String(cust.ParentRef.value)) || '';
+  const wantName = qbUnitDisplayName(unit, prop);
+  const needsMove = currentParent !== String(parentId);
+  const needsRename = rename && String(cust.DisplayName || '') !== wantName;
+
+  if (!needsMove && !needsRename) {
+    return json({ ok: true, applied: false, nothing_to_do: true,
+      message: `"${cust.DisplayName}" is already under ${qbPropertyDisplayName(prop)} with the right name.` });
+  }
+
+  if (!apply) {
+    return json({ ok: true, applied: false, qb_id: qbId,
+      current_name: cust.DisplayName || '', current_parent: currentParent,
+      new_name: needsRename ? wantName : (cust.DisplayName || ''),
+      new_parent: parentId, new_parent_name: qbPropertyDisplayName(prop),
+      needs_move: needsMove, needs_rename: needsRename });
+  }
+
+  // Sparse update: move it and rename it in one call. QuickBooks keeps the customer's
+  // history, so any invoice already on it follows the customer to its new home.
+  const patch = { Id: qbId, SyncToken: cust.SyncToken, sparse: true, ParentRef: { value: String(parentId) }, Job: true };
+  if (needsRename) patch.DisplayName = wantName;
+
+  const r = await qbApi(env, 'customer?minorversion=73', 'POST', patch, token);
+  const updated = r && r.Customer;
+  if (!updated) return json({ error: qbFault(r) || 'QuickBooks refused the change.' }, 500);
+
+  _qbEntityCache.customer = null;   // the tree changed
+  return json({ ok: true, applied: true, qb_id: qbId,
+    name: updated.DisplayName || wantName,
+    parent_name: qbPropertyDisplayName(prop),
+    note: 'Any invoice already on this customer moved with it — QuickBooks keeps the history.' });
+}
+
 async function qbCreateSubCustomer(env, body) {
   const kind = String(body.kind || '').toLowerCase();
   const id = String(body.id || '').trim();
@@ -3790,7 +3872,7 @@ async function qbCreateSubCustomer(env, body) {
     if (!prop) return json({ error: 'This unit has no property.' }, 400);
     parentId = (prop.QBO_Customer_ID || '').trim();
     if (!parentId) return json({ error: `Link or create "${qbPropertyDisplayName(prop)}" in QuickBooks first — the unit nests under it.` }, 400);
-    displayName = qbUnitDisplayName(row);
+    displayName = qbUnitDisplayName(row, prop);
     tab = 'Units';
   }
 
@@ -4532,7 +4614,7 @@ async function qbSendInvoice(env, body) {
       return json({ preview: {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
-                   property: qbPropertyDisplayName(prop), unit: qbUnitDisplayName(unit),
+                   property: qbPropertyDisplayName(prop), unit: qbUnitLabel(unit),
                    property_id: prop.ID || '', unit_id: (unit && unit.ID) || '' },
         vendor_in_house: previewInHouse,
         customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '',
@@ -4615,10 +4697,22 @@ async function qbSendInvoice(env, body) {
       else {
         // QuickBooks assigns the invoice number itself — UNLESS "Custom transaction
         // numbers" is on in its settings, in which case an omitted number stays blank.
-        // Report it back so a blank one is caught here rather than found weeks later.
         invoiceDocNumber = (r.Invoice && r.Invoice.DocNumber) || '';
         if (!invoiceDocNumber) {
           warnings.push('QuickBooks left the invoice number blank. Turn OFF Settings → Sales → Sales form content → Custom transaction numbers, and it will number them itself.');
+        } else {
+          // QuickBooks' own counter can fall behind invoices entered by hand, and it will
+          // happily reuse a number that already exists. Two invoices sharing a number is
+          // the kind of thing that surfaces at reconciliation, months later.
+          try {
+            const dupQ = encodeURIComponent(`select Id, DocNumber from Invoice where DocNumber = '${qbEscape(invoiceDocNumber)}'`);
+            const dupR = await qbApi(env, `query?query=${dupQ}&minorversion=73`, 'GET', null, token);
+            const hits = (dupR && dupR.QueryResponse && dupR.QueryResponse.Invoice) || [];
+            const others = hits.filter(x => String(x.Id) !== String(invoiceId));
+            if (others.length) {
+              warnings.push(`Invoice number ${invoiceDocNumber} is already used by invoice ${others.map(o => o.Id).join(', ')}. QuickBooks' counter has fallen behind your manual invoices — set the next number in QuickBooks or you'll keep getting duplicates.`);
+            }
+          } catch (e) { /* the invoice exists; the duplicate check is advisory */ }
         }
       }
     }
@@ -4673,14 +4767,24 @@ async function qbSendInvoice(env, body) {
     // Record WHICH ledger this landed on, and whether a bill was deliberately not raised.
     // Without these, an owner ledger lighter than expected has no explanation in the sheet,
     // and in-house rows carry a Vendor_Cost with no matching payable to reconcile against.
-    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House']); }
+    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); }
     catch (e) { warnings.push('Could not record which ledger this billed to — the invoice and bill ids are still saved.'); }
     await updateRow(env, 'Invoice_Review', ir.ID, {
       QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
+      // The NUMBER, kept apart from the internal id. Screens were showing the id
+      // (a five-digit QuickBooks key) under the label "invoice number".
+      QB_Invoice_Number: invoiceDocNumber,
+      QB_Bill_Number: billDocAssigned,
       QB_Bill_To: billTo.level + (billTo.display ? ': ' + billTo.display : ''),
       QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
     });
-    if (status === 'sent' && ir.WO_ID) { try { await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' }); } catch (e) {} }
+    if (status === 'sent' && ir.WO_ID) {
+      try {
+        await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' });
+        // The work order screen reads QBO_Invoice_Number and nothing ever wrote it.
+        if (invoiceDocNumber) await updateWOFields(env, ir.WO_ID, { QBO_Invoice_Number: invoiceDocNumber });
+      } catch (e) {}
+    }
 
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId,
                   invoice_number: invoiceDocNumber, bill_number: billDocAssigned,

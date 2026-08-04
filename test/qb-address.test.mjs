@@ -9,9 +9,10 @@ function grab(name, kind='function'){
   for(;j<src.length;j++){ if(src[j]==='{')d++; else if(src[j]==='}'){d--; if(!d)break;} }
   return src.slice(i, j+1) + (kind==='const'?';':'');
 }
-const { qbNormAddress, qbMatchAddress, qbUnitDisplayName } = new Function(
-  grab('QB_ADDR_WORDS','const') + '\n' + grab('qbNormAddress') + '\n' + grab('qbMatchAddress') + '\n' + grab('qbUnitDisplayName') +
-  '\nreturn { qbNormAddress, qbMatchAddress, qbUnitDisplayName };')();
+const { qbNormAddress, qbMatchAddress, qbUnitLabel, qbUnitDisplayName, qbPropertyDisplayName } = new Function(
+  grab('QB_ADDR_WORDS','const') + '\n' + grab('qbNormAddress') + '\n' + grab('qbMatchAddress') + '\n' +
+  grab('qbPropertyDisplayName') + '\n' + grab('qbUnitLabel') + '\n' + grab('qbUnitDisplayName') +
+  '\nreturn { qbNormAddress, qbMatchAddress, qbUnitLabel, qbUnitDisplayName, qbPropertyDisplayName };')();
 
 let pass=0,fail=0;
 const t=(n,c)=>{ if(c){pass++;} else {fail++; console.log('FAIL:',n);} };
@@ -45,11 +46,25 @@ t('100 Main St vs 100 Main St Rear is only weak', m4 && m4.confidence==='weak');
 t('no candidates returns null', qbMatchAddress([],'928 N Calvert St','100')===null);
 t('blank address returns null', qbMatchAddress(QB,'','100')===null);
 
-// unit naming
-t('bare label gets Apt prefix', qbUnitDisplayName({Unit_Label:'3R'})==='Apt 3R');
-t('already-prefixed label kept as-is', qbUnitDisplayName({Unit_Label:'Apt 3R'})==='Apt 3R');
-t('Unit prefix kept', qbUnitDisplayName({Unit_Label:'Unit B'})==='Unit B');
-t('blank label yields blank', qbUnitDisplayName({Unit_Label:''})==='');
+// unit naming — the label alone, for display
+t('bare label gets Apt prefix', qbUnitLabel({Unit_Label:'3R'})==='Apt 3R');
+t('already-prefixed label kept as-is', qbUnitLabel({Unit_Label:'Apt 3R'})==='Apt 3R');
+t('Unit prefix kept', qbUnitLabel({Unit_Label:'Unit B'})==='Unit B');
+t('blank label yields blank', qbUnitLabel({Unit_Label:''})==='');
+
+// ── The QuickBooks NAME must carry the building. DisplayName is unique across the whole
+// file, so "Apt 1" is not a name — every property has one, and the second collided with
+// the first and got linked to another building's flat.
+const lanvale = {Address:'151 W Lanvale St'};
+t('the QuickBooks name carries the address',
+  qbUnitDisplayName({Unit_Label:'1'}, lanvale)==='151 W Lanvale St Apt 1');
+t('two buildings\' Apt 1 are now different names',
+  qbUnitDisplayName({Unit_Label:'1'}, lanvale) !== qbUnitDisplayName({Unit_Label:'1'}, {Address:'928 N Calvert St'}));
+t('an already-prefixed label is not double-prefixed',
+  qbUnitDisplayName({Unit_Label:'Apt 3R'}, lanvale)==='151 W Lanvale St Apt 3R');
+t('no property falls back to the bare label rather than nothing',
+  qbUnitDisplayName({Unit_Label:'1'}, null)==='Apt 1');
+t('a blank label still yields blank', qbUnitDisplayName({Unit_Label:''}, lanvale)==='');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
