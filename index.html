@@ -446,6 +446,7 @@
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn small" onclick="runAdminTool('fix-pins')" style="background:var(--accent2);color:#000">🔑 Fix PINs + Phones</button>
       <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#000">🏠 Check units naming moved-out tenants</button>
+      <button class="btn small" onclick="findRepairableInvoices()" style="background:var(--accent2);color:#000">🧾 Fix invoices already in QuickBooks</button>
       <button class="btn small" onclick="migrateTrades(false)" style="background:var(--accent)">🔧 Update old trade names</button>
       <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#000">🏢 Find duplicate properties</button>
       <button class="btn small" onclick="checkDuplicateOwners()" style="background:var(--info);color:#000">👤 Find duplicate owners</button>
@@ -7250,6 +7251,71 @@ function checkStaleTenants(apply) {
 // Existing rows say "Electric"; every form now writes "Electrical". The money was never
 // affected — the worker aliases on read — but the trade FILTERS compare raw strings, so
 // until this runs, filtering by Electrical shows none of the back catalogue.
+// Invoices sent before today's fixes are already in QuickBooks with the description in a
+// note, no photo link, and possibly no number. This patches them in place rather than
+// voiding and re-creating — the customer keeps the same invoice and the same total.
+function findRepairableInvoices() {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = '⏳ Reading QuickBooks…';
+  api('GET', '/qb/repairable?days=7').then(function(res) {
+    if (!res || res.ok === false) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    var list = safeArray(res.invoices);
+    if (!list.length) { if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Nothing to fix — every recent invoice already reads correctly.</span>'; return; }
+
+    if (el) el.innerHTML =
+      '<div style="color:var(--warn);font-size:12px;margin-bottom:8px">' + list.length + ' invoice(s) from the last 7 days need fixing.</div>' +
+      list.map(function(v) {
+        return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:9px;margin-bottom:7px;font-size:11.5px">' +
+          '<div><b>' + esc(v.wo_id || '') + '</b> · ' + esc(v.customer || '') +
+            ' · $' + (parseFloat(v.total) || 0).toFixed(2) +
+            (v.doc_number ? ' · invoice #' + esc(v.doc_number) : ' · <span style="color:var(--warn)">no number</span>') + '</div>' +
+          '<div style="color:var(--warn);font-size:10.5px;margin:2px 0">needs: ' + safeArray(v.issues).map(esc).join(', ') + '</div>' +
+          (v.paid ? '<div style="color:var(--muted);font-size:10.5px">⛔ has a payment against it (balance $' +
+            (parseFloat(v.balance) || 0).toFixed(2) + ') — left alone</div>' : '') +
+          '<div style="color:var(--muted);font-size:10.5px">new line: ' + esc(v.new_description || '') + '</div>' +
+          (v.photo_url ? '<div style="color:var(--accent2);font-size:10.5px">photo link will be added</div>'
+                       : '<div style="color:var(--muted);font-size:10.5px">no photo folder on this job</div>') +
+          (v.paid ? ''
+            : '<button class="btn small" onclick="repairInvoice(\'' + esc(String(v.ir_id)) + '\',false)" ' +
+              'style="background:var(--surface2);color:var(--text);font-size:10.5px;margin-top:5px">Preview the fix</button>') +
+        '</div>';
+      }).join('') +
+      '<div style="color:var(--muted);font-size:10.5px;line-height:1.5">Each keeps its existing invoice, its existing total, and the income account it already posted to — ' +
+      'only the wording, the photo link and (where blank) the number change. Anything with a payment against it is left alone. ' +
+      'Turning off Custom transaction numbers in QuickBooks does not retroactively number these, so type the number you want.</div>';
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
+function repairInvoice(irId, apply, docNumber) {
+  var el = document.getElementById('admin-tool-result');
+  api('POST', '/qb/repair-invoice', { ir_id: irId, apply: !!apply, doc_number: docNumber || '' }).then(function(res) {
+    if (!res || res.ok === false || res.error) {
+      if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>';
+      return;
+    }
+    if (apply) {
+      toast('Invoice updated in QuickBooks', 'success');
+      if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ ' + esc(res.wo_id || '') + ' updated' +
+        (res.doc_number ? ' — invoice #' + esc(res.doc_number) : '') +
+        (res.photo_linked ? ', photo link added' : '') +
+        '. <button class="btn small" onclick="findRepairableInvoices()" style="background:var(--surface2);color:var(--text);font-size:10.5px;margin-left:6px">Next</button></span>';
+      return;
+    }
+    var lines = safeArray(res.new_lines);
+    if (el) el.innerHTML =
+      '<div style="line-height:1.6;font-size:11.5px">Invoice for <b>' + esc(res.wo_id || '') + '</b> — total stays $' + (parseFloat(res.total) || 0).toFixed(2) + '.<br>' +
+      lines.map(function(l) { return '· ' + esc(l.desc) + ' — $' + (parseFloat(l.amount) || 0).toFixed(2); }).join('<br>') +
+      (res.photo_url ? '<div style="color:var(--accent2);margin-top:4px">Photo link: ' + esc(res.photo_url) + '</div>' : '') +
+      (res.item_warning ? '<div style="color:var(--warn);margin-top:4px">⚠ ' + esc(res.item_warning) + '</div>' : '') +
+      (res.current_number
+        ? '<div style="color:var(--muted);margin-top:4px">Keeps invoice #' + esc(res.current_number) + '.</div>'
+        : '<div style="color:var(--warn);margin-top:4px">This invoice has no number. Leave the box blank to leave it unnumbered, ' +
+          'or type the number you want:<br><input id="repair-doc" placeholder="e.g. 1042" style="width:140px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px;margin-top:3px"></div>') +
+      '<button class="btn small" onclick="repairInvoice(\'' + esc(irId) + '\',true,(document.getElementById(\'repair-doc\')||{}).value)" ' +
+        'style="background:var(--accent2);color:#000;margin-top:7px">Update it in QuickBooks</button></div>';
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
 function migrateTrades(apply) {
   var el = document.getElementById('admin-tool-result');
   if (el) el.textContent = apply ? '⏳ Updating…' : '⏳ Checking…';
@@ -7330,6 +7396,11 @@ function checkDuplicateOwners() {
       var keeper = rows[0];
       return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:10px">' +
         '<div style="color:var(--warn);font-size:12px;margin-bottom:6px">⚠ ' + esc(d.name) + ' appears ' + rows.length + ' times</div>' +
+        (d.shared_id
+          ? '<div style="color:var(--danger);font-size:11px;margin-bottom:6px;line-height:1.5">Both rows carry the SAME ID in the Owners tab. ' +
+            'That is a spreadsheet problem rather than a duplicate — nothing here can fix it, because every lookup by that ID finds ' +
+            'whichever row comes first. Give one of them a unique ID in the sheet, then come back.</div>'
+          : '') +
         rows.map(function(r) {
           var refs = Object.keys(r.refs || {}).filter(function(t) { return r.refs[t]; })
             .map(function(t) { return r.refs[t] + ' ' + t.replace(/_/g, ' ').toLowerCase(); }).join(', ');

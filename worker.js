@@ -106,6 +106,7 @@ export default {
         if (path === '/admin/duplicate-properties') return await adminDuplicateProperties(env);
         if (path === '/admin/duplicate-owners')     return await adminDuplicateOwners(env);
         if (path === '/qb/trade-map')           return await qbTradeMap(env);
+        if (path === '/qb/repairable')          return await qbRepairable(env, url);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
@@ -195,6 +196,7 @@ export default {
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
+        if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
@@ -1733,7 +1735,9 @@ async function adminOwnerToUser(env, body) {
   const toId   = String(body.to_id || '').trim();
   const apply  = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
   if (!fromId || !toId) return json({ error: 'from_id and to_id required' }, 400);
-  if (fromId === toId)  return json({ error: 'from_id and to_id are the same row' }, 400);
+  if (fromId === toId) {
+    return json({ error: 'Those two rows carry the SAME ID in the Owners tab. That is a data problem, not a duplicate — give one of them a unique ID in the sheet first, or every lookup will keep finding whichever comes first.' }, 400);
+  }
 
   const [owners, ownerUsers] = await Promise.all([fetchTab(env, 'Owners'), fetchTab(env, 'Owner_Users')]);
   const from = owners.find(o => String(o.ID) === fromId);
@@ -1850,8 +1854,16 @@ async function adminDuplicateOwners(env) {
     catch (e) { refData[ref.tab] = isMissingTabError(e) ? [] : null; }
   }
 
+  // Two rows sharing an ID is a different and worse problem than two rows for one company:
+  // every lookup by id takes whichever comes first, so half the system sees one row and
+  // half sees the other. Surface it rather than letting a merge fail with a confusing error.
+  const idCounts = {};
+  owners.forEach(o => { const k = String(o.ID || ''); idCounts[k] = (idCounts[k] || 0) + 1; });
+  const sharedIds = Object.keys(idCounts).filter(k => k && idCounts[k] > 1);
+
   const duplicates = dupeKeys.map(key => ({
     name: qbOwnerDisplayName(groups[key][0]),
+    shared_id: groups[key].length > 1 && new Set(groups[key].map(o => String(o.ID))).size === 1,
     rows: groups[key].map(o => {
       const counts = {}; let total = 0;
       for (const ref of OWNER_REFS) {
@@ -1868,7 +1880,7 @@ async function adminDuplicateOwners(env) {
                qb_id: o.QBO_Customer_ID || '', refs: counts, total_refs: total };
     }),
   }));
-  return json({ success: true, duplicates });
+  return json({ success: true, duplicates, shared_ids: sharedIds });
 }
 
 // POST /admin/merge-owner { from_id, to_id, apply? }
@@ -1877,7 +1889,9 @@ async function adminMergeOwner(env, body) {
   const toId   = String(body.to_id || '').trim();
   const apply  = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
   if (!fromId || !toId) return json({ error: 'from_id and to_id required' }, 400);
-  if (fromId === toId)  return json({ error: 'from_id and to_id are the same row' }, 400);
+  if (fromId === toId) {
+    return json({ error: 'Those two rows carry the SAME ID in the Owners tab. Give one of them a unique ID in the sheet first — with a shared ID, every lookup finds whichever comes first.' }, 400);
+  }
 
   const owners = await fetchTab(env, 'Owners');
   const from = owners.find(o => String(o.ID) === fromId);
@@ -2870,6 +2884,164 @@ async function qbTest(env) {
 // GET /qb/trade-map — every trade the Hub knows, what QuickBooks account it books to, and
 // the full list of expense accounts available. Two trades currently share the General
 // account because they have none of their own; this is how you see that and pick better.
+// ── REPAIR INVOICES ALREADY IN QUICKBOOKS ────────────────────
+// Invoices sent before the line-description and photo-link fixes are already in QuickBooks
+// with the description buried in a note, no photo link, and — where custom numbering was
+// on — no number. Rather than void and re-create, patch them in place.
+//
+// Rebuilds the lines from exactly the same inputs the original send used, so the totals
+// cannot drift: the customer still owes the same Customer_Total, to the cent.
+
+// The item an invoice was originally posted against. Reused when repairing so the wording
+// changes and the accounting doesn't.
+function qbOriginalItemRef(inv) {
+  const line = ((inv && inv.Line) || []).find(l => l && l.DetailType === 'SalesItemLineDetail' &&
+    l.SalesItemLineDetail && l.SalesItemLineDetail.ItemRef);
+  return line ? { value: line.SalesItemLineDetail.ItemRef.value } : null;
+}
+
+// GET /qb/repairable?days=N — invoices we can fix, with what's wrong with each.
+async function qbRepairable(env, url) {
+  try {
+    const days = Math.max(1, Math.min(90, parseInt(url && url.searchParams.get('days')) || 7));
+    const cutoff = new Date(Date.now() - days * 86400000);
+    const token = await qbAccessToken(env);
+    const [irs, wos, bills] = await Promise.all([
+      fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendor_Bills'),
+    ]);
+
+    const sent = irs.filter(r => r.Active !== 'FALSE' && (r.QB_Invoice_ID || '').trim());
+    const out = [];
+    for (const ir of sent) {
+      const when = new Date(ir.Approved_Date || 0);
+      if (!isNaN(when) && when < cutoff) continue;
+
+      const inv = await qbApi(env, `invoice/${encodeURIComponent(ir.QB_Invoice_ID)}?minorversion=73`, 'GET', null, token);
+      const q = inv && inv.Invoice;
+      if (!q) continue;
+
+      const wo = findWO(wos, ir.WO_ID) || {};
+      const billRow = bills.find(b => String(b.ID) === String(ir.Bill_ID)) || {};
+      const resolved = resolveTrade(wo.Trade);
+      const trade = QB_TRADE_MAP[resolved.name];
+      const origItemRef = qbOriginalItemRef(q);
+      const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origItemRef);
+
+      const folderId  = wo.Drive_Folder_ID || '';
+      const folderUrl = wo.Drive_Folder_URL || (folderId ? ('https://drive.google.com/drive/folders/' + folderId) : '');
+      const currentDesc = (q.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail').map(l => l.Description || '').join(' | ');
+      const currentMemo = (q.CustomerMemo && q.CustomerMemo.value) || '';
+
+      const qBal = Number(q.Balance);
+      const paid = !isNaN(qBal) && Math.abs(qBal - Number(q.TotalAmt || 0)) > 0.005;
+
+      const issues = [];
+      if (!q.DocNumber) issues.push('no invoice number');
+      if (currentDesc !== rebuilt.lines.map(l => l.Description).join(' | ')) issues.push('line description');
+      if (folderUrl && currentMemo.indexOf(folderUrl) === -1) issues.push('photo link missing');
+      if (!issues.length) continue;
+
+      out.push({
+        ir_id: ir.ID, wo_id: ir.WO_ID, invoice_id: ir.QB_Invoice_ID,
+        doc_number: q.DocNumber || '', total: q.TotalAmt,
+        paid, balance: isNaN(qBal) ? null : qBal,
+        customer: (q.CustomerRef && q.CustomerRef.name) || '',
+        issues,
+        new_description: rebuilt.lines[0] ? rebuilt.lines[0].Description : '',
+        photo_url: folderUrl,
+      });
+    }
+    return json({ ok: true, count: out.length, invoices: out });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/repair-invoice { ir_id, apply?, doc_number? }
+async function qbRepairInvoice(env, body) {
+  try {
+    const irId = String(body.ir_id || '').trim();
+    const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+    if (!irId) return json({ error: 'ir_id required' }, 400);
+
+    const [irs, wos, bills] = await Promise.all([
+      fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendor_Bills'),
+    ]);
+    const ir = irs.find(r => String(r.ID) === irId);
+    if (!ir) return json({ error: `No Invoice_Review row ${irId}` }, 404);
+    const qbInvId = (ir.QB_Invoice_ID || '').trim();
+    if (!qbInvId) return json({ error: 'That row has no QuickBooks invoice to repair.' }, 400);
+
+    const token = await qbAccessToken(env);
+    const got = await qbApi(env, `invoice/${encodeURIComponent(qbInvId)}?minorversion=73`, 'GET', null, token);
+    const existing = got && got.Invoice;
+    if (!existing) return json({ error: qbFault(got) || 'Could not read that invoice from QuickBooks.' }, 404);
+
+    const wo = findWO(wos, ir.WO_ID) || {};
+    const billRow = bills.find(b => String(b.ID) === String(ir.Bill_ID)) || {};
+    const resolved = resolveTrade(wo.Trade);
+    const trade = QB_TRADE_MAP[resolved.name];
+    const origRef = qbOriginalItemRef(existing);
+    const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origRef);
+    // Without the original item we'd fall back to the freshly-resolved trade, which could
+    // move posted revenue to a different income account. Say so rather than doing it.
+    const itemWarning = origRef ? '' : 'Could not read the income account this invoice posted to, so it would be re-derived from the trade. Check it in QuickBooks afterwards.';
+
+    // The rebuilt lines MUST still sum to what the customer was told they owe. If they
+    // don't, something upstream changed and this stops rather than silently re-pricing
+    // an invoice that has already gone out.
+    const rebuiltTotal = rebuilt.lines.reduce((n, l) => n + (Number(l.Amount) || 0), 0);
+    const owedTotal = Number(ir.Customer_Total) || 0;
+    if (Math.abs(rebuiltTotal - owedTotal) > 0.005) {
+      return json({ error: `Rebuilt lines total $${rebuiltTotal.toFixed(2)} but the invoice is for $${owedTotal.toFixed(2)}. Not touching it.` }, 409);
+    }
+    if (Math.abs(Number(existing.TotalAmt || 0) - owedTotal) > 0.005) {
+      return json({ error: `The QuickBooks invoice is $${Number(existing.TotalAmt || 0).toFixed(2)} but this row says $${owedTotal.toFixed(2)}. It may have been edited in QuickBooks — sort that out first.` }, 409);
+    }
+    // A paid invoice keeps its TotalAmt — only the Balance drops — so neither check above
+    // catches one. Replacing the lines on a transaction that already has a payment against
+    // it is not worth the risk for better wording, and an invoice the customer has already
+    // paid doesn't need a photo link.
+    const bal = Number(existing.Balance);
+    if (isNaN(bal)) {
+      return json({ error: 'QuickBooks did not report a balance for that invoice, so there is no way to tell whether it has been paid. Not touching it.' }, 409);
+    }
+    if (Math.abs(bal - Number(existing.TotalAmt || 0)) > 0.005) {
+      return json({ error: `That invoice has a payment against it (balance $${bal.toFixed(2)} of $${Number(existing.TotalAmt || 0).toFixed(2)}). Not touching a paid invoice.` }, 409);
+    }
+
+    const folderId  = wo.Drive_Folder_ID || '';
+    const folderUrl = wo.Drive_Folder_URL || (folderId ? ('https://drive.google.com/drive/folders/' + folderId) : '');
+    const docNumber = String(body.doc_number || '').trim();
+
+    const patch = {
+      Id: qbInvId, SyncToken: existing.SyncToken, sparse: true,
+      Line: rebuilt.lines,
+    };
+    if (folderUrl) patch.CustomerMemo = { value: ('View job photos: ' + folderUrl).slice(0, 1000) };
+    if (docNumber && !existing.DocNumber) patch.DocNumber = docNumber;
+
+    if (!apply) {
+      return json({ ok: true, applied: false, invoice_id: qbInvId, wo_id: ir.WO_ID,
+        current_number: existing.DocNumber || '',
+        will_set_number: (docNumber && !existing.DocNumber) ? docNumber : '',
+        total: owedTotal,
+        new_lines: rebuilt.lines.map(l => ({ desc: l.Description, amount: l.Amount })),
+        item_warning: itemWarning,
+        photo_url: folderUrl });
+    }
+
+    // Share the photo folder so the link in the memo actually opens for the customer.
+    if (folderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, folderId); } catch (e) {} }
+
+    const r = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
+    const updated = r && r.Invoice;
+    if (!updated) return json({ error: qbFault(r) || 'QuickBooks refused the update.' }, 500);
+
+    return json({ ok: true, applied: true, invoice_id: qbInvId, wo_id: ir.WO_ID,
+      doc_number: updated.DocNumber || '', total: updated.TotalAmt,
+      photo_linked: !!folderUrl });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 async function qbTradeMap(env) {
   try {
     const q = encodeURIComponent("select Id,Name,AccountType,AccountSubType,FullyQualifiedName from Account where Active=true maxresults 500");
@@ -3621,8 +3793,11 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
 // truck/shop stock (if any) + a single labor summary line. Materials show at cost;
 // the labor line absorbs the remainder so the lines always sum to Customer_Total —
 // keeping the internal $75 first-hour / markup off the customer's invoice.
-function buildInvoiceLines(ir, billRow, trade, tradeName, wo) {
-  const itemRef = { value: trade.item };
+function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride) {
+  // An override is used when REPAIRING an existing invoice: the wording changes, the
+  // account it posted to must not. Trade resolution has changed since some invoices were
+  // sent, and moving posted revenue between income accounts is a separate decision.
+  const itemRef = itemRefOverride || { value: trade.item };
   const lines = [];
   let materialsTotal = 0;
   let receipts = [];
