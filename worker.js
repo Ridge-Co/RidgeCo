@@ -3950,6 +3950,37 @@ function qbIsDocNumberFault(r) {
   return text.indexOf('docnumber') !== -1 || text.indexOf('document number') !== -1;
 }
 
+
+// ── VENDOR BILL TERMS ────────────────────────────────────────
+// Bills were landing on whatever QuickBooks defaults to — Net 30 — regardless of what the
+// vendor's own terms say. These are small trade bills that get paid as they come in, and a
+// 30-day due date makes the payables report describe money that isn't actually owed later.
+//
+// SalesTermRef is the right lever rather than a bare DueDate: QuickBooks then shows "Due on
+// receipt" as the terms and derives the date itself, so the bill reads correctly instead of
+// showing Net 30 with a contradictory date.
+let _qbDueOnReceiptId = null;      // '' means looked and QuickBooks has no such term
+let _qbTermCheckedAt = 0;
+
+async function qbDueOnReceiptTerm(env, token) {
+  if (_qbDueOnReceiptId !== null && (Date.now() - _qbTermCheckedAt) < 600000) return _qbDueOnReceiptId;
+  try {
+    const q = encodeURIComponent("select Id, Name, DueDays from Term where Active = true maxresults 100");
+    const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+    const terms = (data && data.QueryResponse && data.QueryResponse.Term) || [];
+    // Match on the name QuickBooks ships with, then on any zero-day term — some files have
+    // it renamed ("Due Upon Receipt", "COD") but the meaning is carried by DueDays 0.
+    const byName = terms.find(t => /due\s*(up)?on\s*receipt/i.test(String(t.Name || '')));
+    const byDays = terms.find(t => Number(t.DueDays) === 0);
+    _qbDueOnReceiptId = String((byName || byDays || {}).Id || '');
+    _qbTermCheckedAt = Date.now();
+  } catch (e) {
+    _qbDueOnReceiptId = '';       // couldn't ask — the DueDate fallback still applies
+    _qbTermCheckedAt = Date.now();
+  }
+  return _qbDueOnReceiptId;
+}
+
 // The number that goes on the QuickBooks BILL. A vendor's own invoice number is the right
 // answer when there is one — it's what they'll quote when chasing payment, and what the
 // bill needs to be matched against. Plenty of Brett's vendors hand over a scrawled note
@@ -4303,6 +4334,11 @@ async function qbSendInvoice(env, body) {
       b.Active !== 'FALSE' && String(b.WO_ID) === String(ir.WO_ID) &&
       String(b.Vendor_ID) === String(ir.Vendor_ID) && String(b.ID) !== String(ir.Bill_ID) &&
       Number(b.ID) < Number(ir.Bill_ID)).length;
+    // Due on receipt on every vendor bill. The date is pinned here — it costs nothing and
+    // needs no round trip. The Terms field itself is set just before the POST, where a
+    // token already exists, so the preview doesn't pay for a lookup it can't use.
+    billPayload.DueDate = txnDate;
+
     const billDoc = qbBillDocNumber(billRow, ir, priorSameVendor);
     if (billDoc.number) billPayload.DocNumber = billDoc.number;
     if (billDoc.overlong) {
@@ -4348,6 +4384,7 @@ async function qbSendInvoice(env, body) {
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         bill:     { total: +vendorCost.toFixed(2), account: trade.expense,
+                    terms: 'Due on receipt',
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
                     skipped: vendorCost <= 0 || previewInHouse, in_house: previewInHouse, attach_receipts: reimburseWithUrl },
@@ -4444,6 +4481,11 @@ async function qbSendInvoice(env, body) {
       catch (e) { errors.push('Vendor: ' + e.message); }
       if (vendorId) {
         billPayload.VendorRef = { value: vendorId };
+        // Terms, so the bill reads "Due on receipt" rather than showing a blank term
+        // alongside a same-day due date.
+        const dueTermId = await qbDueOnReceiptTerm(env, token);
+        if (dueTermId) billPayload.SalesTermRef = { value: dueTermId };
+        else warnings.push('No "Due on receipt" term exists in QuickBooks, so the bill is dated due today but its Terms field is blank. Add that term in QuickBooks and it will be used from then on.');
         let r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (r && r.Bill && r.Bill.Id) || '';
         // A rejected bill number should not cost you the bill. Drop it and retry once,

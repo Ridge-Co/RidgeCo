@@ -6631,6 +6631,9 @@ function renderQBPreview(p) {
     '</div>' +
     '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
       '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL</div>' +
+      ((p.bill.terms && !p.bill.skipped)
+        ? '<div style="color:var(--muted);font-size:11px;margin-bottom:3px">Terms: <b style="color:var(--text)">' + esc(p.bill.terms) + '</b></div>'
+        : '') +
       ((p.bill.doc_number && !p.bill.skipped)
         ? '<div style="color:var(--muted);font-size:11px;margin-bottom:3px">Bill number: <b style="color:var(--text)">' + esc(p.bill.doc_number) + '</b>' +
           (p.bill.doc_from === 'vendor' ? ' (their invoice number)' : ' (no vendor invoice number — using the job number)') + '</div>'

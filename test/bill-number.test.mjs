@@ -66,5 +66,22 @@ t('an empty response is NOT retryable', qbIsDocNumberFault(null) === false);
 t('no WO and no vendor number yields nothing rather than a bad guess',
   num({}, { WO_ID: '' }, 0) === '');
 
+
+// ── Terms: every vendor bill is due on receipt, not on QuickBooks' 30-day default.
+const worker = fs.readFileSync('worker.js','utf8');
+t('the bill payload pins a same-day due date', /billPayload\.DueDate = txnDate/.test(worker));
+t('and sets the Terms field so it reads correctly', /billPayload\.SalesTermRef = \{ value: dueTermId \}/.test(worker));
+t('the term is looked up, never hardcoded to an id', /select Id, Name, DueDays from Term/.test(worker));
+t('it matches a renamed term by its zero due-days',
+  /Number\(t\.DueDays\) === 0/.test(worker));
+t('and warns rather than failing when no such term exists',
+  /No "Due on receipt" term exists in QuickBooks/.test(worker));
+// indexOf would match the function DEFINITION, which sits above everything — look for the
+// awaited call site specifically.
+t('the lookup runs on the send path, not the preview',
+  worker.indexOf('await qbDueOnReceiptTerm(env, token)') > worker.indexOf('if (previewOnly)'));
+t('invoices are left alone — this is bills only',
+  !/invoicePayload\.SalesTermRef/.test(worker) && !/invoicePayload\.DueDate/.test(worker));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
