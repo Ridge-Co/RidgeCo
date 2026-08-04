@@ -67,19 +67,34 @@ t('no WO and no vendor number yields nothing rather than a bad guess',
   num({}, { WO_ID: '' }, 0) === '');
 
 
-// ── Terms: every vendor bill is due on receipt, not on QuickBooks' 30-day default.
+// ── Terms: a vendor's own terms if the sheet gives any, otherwise due on receipt.
 const worker = fs.readFileSync('worker.js','utf8');
-t('the bill payload pins a same-day due date', /billPayload\.DueDate = txnDate/.test(worker));
-t('and sets the Terms field so it reads correctly', /billPayload\.SalesTermRef = \{ value: dueTermId \}/.test(worker));
-t('the term is looked up, never hardcoded to an id', /select Id, Name, DueDays from Term/.test(worker));
-t('it matches a renamed term by its zero due-days',
-  /Number\(t\.DueDays\) === 0/.test(worker));
-t('and warns rather than failing when no such term exists',
-  /No "Due on receipt" term exists in QuickBooks/.test(worker));
-// indexOf would match the function DEFINITION, which sits above everything — look for the
-// awaited call site specifically.
+const { vendorTermDays, vendorTermLabel } = new Function(
+  grab('vendorTermDays') + '\n' + grab('vendorTermLabel') +
+  '\nreturn { vendorTermDays, vendorTermLabel };')();
+
+t('no terms on the vendor means due on receipt', vendorTermDays({}) === 0);
+t('and it says so', vendorTermLabel({}) === 'Due on receipt');
+t('"Net 7" is honoured', vendorTermDays({ Payment_Terms: 'Net 7' }) === 7);
+t('"net10" without a space still parses', vendorTermDays({ Payment_Terms: 'net10' }) === 10);
+t('"Net 30" is honoured', vendorTermLabel({ Payment_Terms: 'Net 30' }) === 'Net 30');
+t('an explicit "Due on receipt" stays at zero', vendorTermDays({ Payment_Terms: 'Due on Receipt' }) === 0);
+t('COD counts as due on receipt', vendorTermDays({ Payment_Terms: 'COD' }) === 0);
+t('a Terms column works as well as Payment_Terms', vendorTermDays({ Terms: 'Net 15' }) === 15);
+t('nonsense falls back to due on receipt rather than guessing',
+  vendorTermDays({ Payment_Terms: 'whenever' }) === 0);
+t('an absurd number is rejected', vendorTermDays({ Payment_Terms: 'Net 9999' }) === 0);
+
+t('the due date is derived from the term', /dueDate\.setDate\(dueDate\.getDate\(\) \+ termDays\)/.test(worker));
+t('and defaults to the transaction date when there is no term',
+  /termDays > 0 \? dueDate\.toISOString\(\)\.split\('T'\)\[0\] : txnDate/.test(worker));
+t('the Terms field is set, not just the date', /billPayload\.SalesTermRef = \{ value: dueTermId \}/.test(worker));
+t('terms are looked up in the file, never hardcoded', /select Id, Name, DueDays from Term/.test(worker));
+t('a renamed due-on-receipt term is matched by its zero days', /Number\(t\.DueDays\) === 0/.test(worker));
+t('and it warns rather than failing when the term is missing',
+  /has no "\$\{vendorTermLabel\(vendor\)\}" term|QuickBooks has no /.test(worker));
 t('the lookup runs on the send path, not the preview',
-  worker.indexOf('await qbDueOnReceiptTerm(env, token)') > worker.indexOf('if (previewOnly)'));
+  worker.indexOf('await qbTermForDays(env, token, termDays)') > worker.indexOf('if (previewOnly)'));
 t('invoices are left alone — this is bills only',
   !/invoicePayload\.SalesTermRef/.test(worker) && !/invoicePayload\.DueDate/.test(worker));
 

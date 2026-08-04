@@ -108,6 +108,7 @@ export default {
         if (path === '/admin/duplicate-owners')     return await adminDuplicateOwners(env);
         if (path === '/qb/trade-map')           return await qbTradeMap(env);
         if (path === '/qb/repairable')          return await qbRepairable(env, url);
+        if (path === '/qb/payables')            return await qbPayables(env, url);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
@@ -200,6 +201,7 @@ export default {
         if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
+        if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
@@ -3191,6 +3193,117 @@ async function qbRepairInvoice(env, body) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// ── WHO DO I NEED TO PAY ─────────────────────────────────────
+// The cash-flow question this business actually runs on: the owner pays the invoice, and
+// THEN the vendor gets paid. Nothing connected those two facts — the invoice was paid in
+// QuickBooks and the Hub had no idea, so knowing who was owed meant cross-checking two
+// systems by hand.
+//
+// Reads the balance on each sent invoice and its bill, and works out where each job sits.
+// Read-only against QuickBooks; the only writes are status columns on rows the Hub owns.
+
+// GET /qb/payables?days=N — every sent job with who has paid and who is owed.
+async function qbPayables(env, url) {
+  try {
+    const days = Math.max(1, Math.min(365, parseInt(url && url.searchParams.get('days')) || 90));
+    const cutoff = new Date(Date.now() - days * 86400000);
+    const token = await qbAccessToken(env);
+    const [irs, vendors] = await Promise.all([fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Vendors')]);
+
+    const rows = [];
+    for (const ir of irs) {
+      if (ir.Active === 'FALSE') continue;
+      const invId = (ir.QB_Invoice_ID || '').trim();
+      if (!invId) continue;
+      const when = new Date(ir.Approved_Date || 0);
+      if (!isNaN(when) && when < cutoff) continue;
+
+      let customerPaid = null, customerBalance = null, invNumber = '';
+      try {
+        const r = await qbApi(env, `invoice/${encodeURIComponent(invId)}?minorversion=73`, 'GET', null, token);
+        const q = r && r.Invoice;
+        if (q) {
+          customerBalance = Number(q.Balance);
+          customerPaid = !isNaN(customerBalance) && customerBalance <= 0.005;
+          invNumber = q.DocNumber || '';
+        }
+      } catch (e) { /* leave null — unknown, not paid */ }
+
+      const billId = (ir.QB_Bill_ID || '').trim();
+      let vendorPaid = null, vendorBalance = null, billDue = '';
+      if (billId) {
+        try {
+          const r = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
+          const b = r && r.Bill;
+          if (b) {
+            vendorBalance = Number(b.Balance);
+            vendorPaid = !isNaN(vendorBalance) && vendorBalance <= 0.005;
+            billDue = b.DueDate || '';
+          }
+        } catch (e) { /* unknown */ }
+      }
+
+      const vendor = vendors.find(v => String(v.ID) === String(ir.Vendor_ID));
+      const inHouse = String(ir.QB_In_House || '').toUpperCase() === 'TRUE';
+
+      // The state that matters: money in, money not yet out.
+      let state;
+      if (inHouse || !billId)        state = 'nothing to pay';
+      else if (vendorPaid)           state = 'vendor paid';
+      else if (customerPaid)         state = 'PAY THE VENDOR';        // owner has paid, vendor hasn't
+      else if (customerPaid === false) state = 'waiting on the owner';
+      else                           state = 'unknown';
+
+      rows.push({
+        ir_id: ir.ID, wo_id: ir.WO_ID,
+        vendor_id: ir.Vendor_ID || '', vendor_name: ir.Vendor_Name || (vendor ? qbVendorDisplayName(vendor) : ''),
+        terms: vendorTermLabel(vendor),
+        invoice_id: invId, invoice_number: invNumber,
+        customer_total: Number(ir.Customer_Total) || 0, customer_balance: customerBalance, customer_paid: customerPaid,
+        bill_id: billId, vendor_cost: Number(ir.Vendor_Cost) || 0, vendor_balance: vendorBalance, vendor_paid: vendorPaid,
+        bill_due: billDue, in_house: inHouse, state,
+      });
+    }
+
+    const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
+    return json({
+      ok: true, count: rows.length,
+      owed_now: owed.length,
+      owed_total: +owed.reduce((n, r) => n + (r.vendor_balance != null ? r.vendor_balance : r.vendor_cost), 0).toFixed(2),
+      rows,
+    });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/sync-payments { days? }
+// Writes what QuickBooks says back onto the Hub's own rows, so the payable state is
+// visible without going and asking QuickBooks every time.
+async function qbSyncPayments(env, body) {
+  const url = { searchParams: { get: (k) => (k === 'days' ? String((body && body.days) || 90) : null) } };
+  const res = await qbPayables(env, url);
+  const data = await res.clone().json();
+  if (!data.ok) return res;
+
+  try { await ensureColumns(env, 'Invoice_Review', ['Customer_Paid', 'Vendor_Paid', 'Payable_State', 'Payment_Checked']); }
+  catch (e) { /* the report below still stands; only the stored copy is lost */ }
+
+  const now = new Date().toISOString();
+  let written = 0, failed = 0;
+  for (const r of data.rows) {
+    try {
+      await updateRow(env, 'Invoice_Review', r.ir_id, {
+        Customer_Paid: r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'),
+        Vendor_Paid:   r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'),
+        Payable_State: r.state,
+        Payment_Checked: now,
+      });
+      written++;
+    } catch (e) { failed++; }
+  }
+  return json({ ok: true, checked: data.count, written, failed,
+                owed_now: data.owed_now, owed_total: data.owed_total, rows: data.rows });
+}
+
 async function qbTradeMap(env) {
   try {
     const q = encodeURIComponent("select Id,Name,AccountType,AccountSubType,FullyQualifiedName from Account where Active=true maxresults 500");
@@ -3962,6 +4075,46 @@ function qbIsDocNumberFault(r) {
 let _qbDueOnReceiptId = null;      // '' means looked and QuickBooks has no such term
 let _qbTermCheckedAt = 0;
 
+// A vendor's own terms, from the Vendors sheet. Blank means due on receipt — most of these
+// are small trade bills paid as they come in, and that should stay the default rather than
+// something to configure for every vendor. "Net 7", "Net 10", "Net 30" set a real term.
+function vendorTermDays(vendor) {
+  const raw = String((vendor && (vendor.Payment_Terms || vendor.Terms)) || '').trim();
+  if (!raw) return 0;
+  if (/due\s*(up)?on\s*receipt|^dor$|^cod$/i.test(raw)) return 0;
+  const m = raw.match(/(\d{1,3})/);
+  const n = m ? parseInt(m[1], 10) : 0;
+  return (Number.isFinite(n) && n > 0 && n <= 365) ? n : 0;
+}
+
+function vendorTermLabel(vendor) {
+  const d = vendorTermDays(vendor);
+  return d > 0 ? ('Net ' + d) : 'Due on receipt';
+}
+
+// The QuickBooks Term matching a number of days, so the bill shows real terms rather than a
+// bare date. Cached per-file; falls back to just setting the due date.
+let _qbTermsByDays = null;
+let _qbTermsAt = 0;
+
+async function qbTermForDays(env, token, days) {
+  if (!_qbTermsByDays || (Date.now() - _qbTermsAt) > 600000) {
+    _qbTermsByDays = {};
+    try {
+      const q = encodeURIComponent("select Id, Name, DueDays from Term where Active = true maxresults 100");
+      const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+      ((data && data.QueryResponse && data.QueryResponse.Term) || []).forEach(t => {
+        const d = Number(t.DueDays);
+        // Zero days is due-on-receipt however the file has it named.
+        const key = Number.isFinite(d) ? d : (/due\s*(up)?on\s*receipt/i.test(String(t.Name || '')) ? 0 : null);
+        if (key !== null && _qbTermsByDays[key] === undefined) _qbTermsByDays[key] = String(t.Id);
+      });
+    } catch (e) { /* leave empty — the due date still gets set */ }
+    _qbTermsAt = Date.now();
+  }
+  return _qbTermsByDays[days] || '';
+}
+
 async function qbDueOnReceiptTerm(env, token) {
   if (_qbDueOnReceiptId !== null && (Date.now() - _qbTermCheckedAt) < 600000) return _qbDueOnReceiptId;
   try {
@@ -4337,7 +4490,11 @@ async function qbSendInvoice(env, body) {
     // Due on receipt on every vendor bill. The date is pinned here — it costs nothing and
     // needs no round trip. The Terms field itself is set just before the POST, where a
     // token already exists, so the preview doesn't pay for a lookup it can't use.
-    billPayload.DueDate = txnDate;
+    // The vendor's own terms if the sheet gives any, otherwise due on receipt.
+    const termDays = vendorTermDays(vendor);
+    const dueDate = new Date(txnDate + 'T12:00:00');
+    dueDate.setDate(dueDate.getDate() + termDays);
+    billPayload.DueDate = termDays > 0 ? dueDate.toISOString().split('T')[0] : txnDate;
 
     const billDoc = qbBillDocNumber(billRow, ir, priorSameVendor);
     if (billDoc.number) billPayload.DocNumber = billDoc.number;
@@ -4384,7 +4541,7 @@ async function qbSendInvoice(env, body) {
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         bill:     { total: +vendorCost.toFixed(2), account: trade.expense,
-                    terms: 'Due on receipt',
+                    terms: vendorTermLabel(vendor),
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
                     skipped: vendorCost <= 0 || previewInHouse, in_house: previewInHouse, attach_receipts: reimburseWithUrl },
@@ -4483,9 +4640,9 @@ async function qbSendInvoice(env, body) {
         billPayload.VendorRef = { value: vendorId };
         // Terms, so the bill reads "Due on receipt" rather than showing a blank term
         // alongside a same-day due date.
-        const dueTermId = await qbDueOnReceiptTerm(env, token);
+        const dueTermId = await qbTermForDays(env, token, termDays);
         if (dueTermId) billPayload.SalesTermRef = { value: dueTermId };
-        else warnings.push('No "Due on receipt" term exists in QuickBooks, so the bill is dated due today but its Terms field is blank. Add that term in QuickBooks and it will be used from then on.');
+        else warnings.push(`QuickBooks has no "${vendorTermLabel(vendor)}" term, so the bill carries the right due date but a blank Terms field. Add that term in QuickBooks and it will be used from then on.`);
         let r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (r && r.Bill && r.Bill.Id) || '';
         // A rejected bill number should not cost you the bill. Drop it and retry once,

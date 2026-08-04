@@ -1,5 +1,83 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.10 | **Last Updated:** August 3, 2026
+**Version:** v1.11 | **Last Updated:** August 4, 2026
+
+## QUICKBOOKS — THE WHOLE PIPELINE (shipped Aug 3–4, 2026)
+
+### Entity mapping (rules 24–27)
+**24. Look before creating.** `qbFindOrCreateCustomer`/`Vendor` never actually looked — they
+checked one stored column and created. Now they query QuickBooks first. Only an
+*unambiguous exact* name match auto-links; a suffix-only match ("Goldszmidt Properties" vs
+"…LLC") is a SUGGESTION. An owner running several LLCs under one family name is normal, and
+"Smith Inc" / "Smith Properties LLC" normalise identically.
+
+**25. Never guess between candidates.** When more than one QuickBooks record matches equally
+well, nothing is chosen — it says so and lists them. The old code took whichever QuickBooks
+returned first, which is not stable between calls.
+
+**26. Owners are top-level; properties and units nest under them.** Property → sub-customer
+of the owner; unit → sub-customer of the property. Invoices bill the most specific level
+that's linked. Address matching is scoped to the owner's own sub-tree — "100 Main St" under
+one owner is a different building from the same address under another.
+
+**27. Owner suggestions only consider top-level customers.** Matching an owner against the
+whole list offered it its own buildings as candidates.
+
+### Money (rules 28–31)
+**28. Brett's hours are a WAGE, not a cost.** Added AFTER the markup so they're never marked
+up; they DO carry the 5% processing fee. A job he does himself is worth its full ticket —
+profit no longer subtracts labour that never left the business. `Own_Wage` and `Profit`
+are recorded separately on Invoice_Review.
+
+**29. In-house vendors raise no QuickBooks bill.** Flag on the vendor record. No payable
+against a person the business doesn't owe. Status still reaches `sent`, not `partial`.
+
+**30. Materials bought outside the vendor's bill were invisible.** Receipts logged against a
+job never reached the panel, the cost basis, the markup, the 5%, or the invoice lines. Now
+ticked per receipt, and a receipt is billable exactly ONCE — `/receipts-billed` checks the
+sheet, not what happens to be open.
+
+**31. Approval is reversible until it reaches QuickBooks.** Approving used to lock the price
+in with no way back; re-approving silently returned the first approval. Withdrawing refuses
+once a QuickBooks invoice or bill exists, including a partial send.
+
+### Documents (rules 32–34)
+**32. The work description belongs on the LINE ITEM,** not in the note under the total.
+
+**33. Bill numbers: the vendor's own, else the work order number.** Never truncated — a
+cut-off invoice number looks authoritative and reconciles against nothing. Retry on a
+rejected number ONLY when QuickBooks blames the number; any other failure might mean the
+bill already exists, and retrying would double-bill.
+
+**34. Vendor bill terms come from the Vendors sheet.** `Payment_Terms` / `Terms` — blank
+means due on receipt, "Net 7"/"Net 10"/"Net 30" set a real term. Sets the Terms FIELD, not
+just a date, so the bill doesn't read Net 30 next to a same-day due date.
+
+### Trades (rule 35)
+**35. ONE trade list.** There were EIGHT hardcoded lists across five files and they had all
+drifted — the form offered "Electric" while the QuickBooks map is keyed "Electrical", so
+every electrical job booked to General repairs. `resolveTrade` aliases old spellings.
+test/trade-map.test.mjs fails if any select grows its own list again.
+
+### Tenants (rule 36)
+**36. A former tenant's phone number does not travel.** Move-out never cleared
+`Units.Tenant_ID`, and work orders keep theirs by design — so the vendor portal served a
+departed tenant's name and a tap-to-call link on every load. `isTenantCurrent` is the single
+predicate; three near-copies is why one was never applied. The NAME survives everywhere; the
+number stops.
+
+### Sheets (rule 37)
+**37. `ensureColumns` before writing a new column.** `updateRow`/`addRow` map by header — a
+write to a column that doesn't exist reports success and stores nothing. New headers are
+placed past the WIDEST row, so a blank-header column with live data underneath is stepped
+over rather than written on top of.
+
+---
+
+## WHO DO I NEED TO PAY (shipped Aug 4, 2026)
+`/qb/payables` reads both balances from QuickBooks per job and states where it sits. The one
+that matters is **PAY THE VENDOR** — the owner has paid, the vendor hasn't. `/qb/sync-payments`
+writes `Customer_Paid` / `Vendor_Paid` / `Payable_State` back to Invoice_Review. On demand,
+not on page load: it's one API call per invoice and one per bill.
 
 ---
 

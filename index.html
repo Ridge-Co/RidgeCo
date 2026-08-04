@@ -167,6 +167,7 @@
       <button class="nav-btn" onclick="showPage('invoice-review',this)">💰 REVIEW BILLS</button>
       <button class="nav-btn" onclick="showPage('qb-send',this)">💵 SEND TO QB</button>
       <button class="nav-btn" onclick="showPage('qb-map',this)">🔗 QB MAPPING</button>
+      <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
     </nav>
@@ -425,6 +426,20 @@
       <div class="share-link-row"><span class="share-label">Owner Portal</span><code class="share-url" onclick="copyLink(this)">ridge-co.github.io/RidgeCo/owner.html</code><span class="copy-hint">click to copy</span></div>
       <div class="share-link-row"><span class="share-label">Vendor Portal</span><code class="share-url" onclick="copyLink(this)">ridge-co.github.io/RidgeCo/vendor.html</code><span class="copy-hint">click to copy</span></div>
     </div>
+  </div>
+
+  <div class="page" id="page-payables">
+    <div class="section-title" style="margin-bottom:4px">WHO DO I NEED TO PAY</div>
+    <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:780px">
+      The owner pays the invoice, then the vendor gets paid. This reads both balances straight from
+      QuickBooks and shows where each job sits — so a vendor waiting on money you've already collected
+      is the top of the list rather than something you find out about when they call.
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button class="btn small" onclick="loadPayables(false)" style="background:var(--info);color:#000">↻ Check QuickBooks</button>
+      <button class="btn small" onclick="loadPayables(true)" style="background:var(--surface2);color:var(--text)">↻ Check and save to the sheet</button>
+    </div>
+    <div id="payables-body"><div style="color:var(--muted);font-size:12px">Hit "Check QuickBooks" to pull the current balances.</div></div>
   </div>
 
   <div class="page" id="page-qb-map">
@@ -1078,6 +1093,7 @@ function showPage(name, btn) {
   if (name === 'invoice-review') { loadInvoiceReview(); }
   if (name === 'qb-send') { loadQBQueue(); }
   if (name === 'qb-map')  { loadQBMapping(false); }
+  if (name === 'payables') { /* read on demand — it costs a QuickBooks call per job */ }
 }
 
 // ── Dashboard ────────────────────────────────────────────────
@@ -6180,6 +6196,70 @@ function qbPreviewLink(kind, recId) {
     // the modal would still show "(not linked)" over a record that IS now linked.
     if (_qbCurrent) previewQBSend(_qbCurrent);
   }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+// ── WHO DO I NEED TO PAY ─────────────────────────────────────
+// Reads both balances from QuickBooks per job. Deliberately on demand rather than on page
+// load: it's one API call per invoice and one per bill, and it's a question you ask a few
+// times a week, not every time you click a tab.
+function loadPayables(save) {
+  var el = document.getElementById('payables-body');
+  if (el) el.innerHTML = '<div style="color:var(--muted);font-size:12px">Reading QuickBooks…</div>';
+  var call = save ? api('POST', '/qb/sync-payments', { days: 90 })
+                  : api('GET', '/qb/payables?days=90');
+  call.then(function(res) {
+    if (!res || res.ok === false) {
+      if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'failed') + '</div>';
+      return;
+    }
+    var rows = safeArray(res.rows);
+    if (!rows.length) { if (el) el.innerHTML = '<div style="color:var(--muted);font-size:12px">Nothing sent to QuickBooks in the last 90 days.</div>'; return; }
+
+    var order = { 'PAY THE VENDOR': 0, 'waiting on the owner': 1, 'unknown': 2, 'vendor paid': 3, 'nothing to pay': 4 };
+    rows.sort(function(a, b) { return (order[a.state] ?? 9) - (order[b.state] ?? 9); });
+
+    function card(r) {
+      var colour = r.state === 'PAY THE VENDOR' ? 'var(--accent2)'
+                 : r.state === 'waiting on the owner' ? 'var(--warn)'
+                 : r.state === 'unknown' ? 'var(--danger)' : 'var(--muted)';
+      var owe = r.vendor_balance != null ? r.vendor_balance : r.vendor_cost;
+      return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + colour + ';border-radius:6px;padding:10px;margin-bottom:7px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
+          '<div>' +
+            '<b style="font-size:12.5px">' + esc(r.wo_id || '') + '</b>' +
+            '<span style="color:var(--muted);font-size:11.5px"> · ' + esc(r.vendor_name || 'no vendor') + '</span>' +
+            (r.invoice_number ? '<span style="color:var(--muted);font-size:10.5px"> · invoice #' + esc(r.invoice_number) + '</span>' : '') +
+          '</div>' +
+          '<div style="color:' + colour + ';font-size:11.5px;font-weight:bold;text-transform:uppercase;letter-spacing:.04em">' + esc(r.state) + '</div>' +
+        '</div>' +
+        '<div style="color:var(--muted);font-size:11px;margin-top:4px">' +
+          'Owner billed $' + (parseFloat(r.customer_total) || 0).toFixed(2) +
+          (r.customer_paid === true ? ' — <span style="color:var(--accent2)">paid</span>'
+            : r.customer_paid === false ? ' — <span style="color:var(--warn)">$' + (parseFloat(r.customer_balance) || 0).toFixed(2) + ' outstanding</span>'
+            : ' — <span style="color:var(--danger)">balance unknown</span>') +
+          (r.bill_id
+            ? ' · Vendor owed $' + (parseFloat(owe) || 0).toFixed(2) +
+              (r.vendor_paid === true ? ' — <span style="color:var(--muted)">paid</span>' : '') +
+              ' <span style="color:var(--muted)">(' + esc(r.terms || '') + (r.bill_due ? ', due ' + esc(r.bill_due) : '') + ')</span>'
+            : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
+        '</div>' +
+      '</div>';
+    }
+
+    var toPay = rows.filter(function(r) { return r.state === 'PAY THE VENDOR'; });
+    if (el) el.innerHTML =
+      (toPay.length
+        ? '<div style="background:#002d0f;border:1px solid var(--accent2);border-radius:8px;padding:12px;margin-bottom:14px">' +
+          '<div style="color:var(--accent2);font-size:13px;font-weight:bold">' + toPay.length +
+          ' vendor' + (toPay.length === 1 ? '' : 's') + ' waiting on $' + (parseFloat(res.owed_total) || 0).toFixed(2) +
+          ' you have already collected</div>' +
+          '<div style="color:var(--muted);font-size:11px;margin-top:3px">The owner has paid these. Pay these first.</div></div>'
+        : '<div style="color:var(--accent2);font-size:12px;margin-bottom:12px">✓ Nobody is waiting on money you have already been paid.</div>') +
+      (save && res.written != null ? '<div style="color:var(--muted);font-size:10.5px;margin-bottom:8px">Saved to the sheet: ' + res.written + ' row(s)' + (res.failed ? ', ' + res.failed + ' failed' : '') + '.</div>' : '') +
+      rows.map(card).join('');
+  }).catch(function(e) {
+    if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
+  });
 }
 
 // ── QUICKBOOKS MAPPING SCREEN ────────────────────────────────

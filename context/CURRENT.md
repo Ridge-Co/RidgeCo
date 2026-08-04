@@ -1,3 +1,44 @@
+# WHERE THINGS STAND — Aug 4, 2026
+
+## Do these first, in this order
+
+1. **Sheet: add `Payment_Terms` to the Vendors tab.** Blank = due on receipt (the default,
+   and right for most). Put "Net 7" / "Net 10" / "Net 30" on the few vendors who really have
+   terms. Nothing breaks if it stays empty.
+2. **Sheet: two Owners rows share the same ID** (the Goldszmidt pair). Give one a unique ID
+   or the convert/merge tools can't touch them — every lookup by that ID finds whichever
+   comes first.
+3. **Hub → Dev Log → 🔧 Update old trade names.** Existing rows say "Electric"; every form
+   now writes "Electrical". Money was never wrong (the worker aliases on read) but the trade
+   FILTERS compare raw strings, so filtering by Electrical finds none of the history.
+4. **Hub → Dev Log → 🏠 Check units naming moved-out tenants.** Live backlog; each one is a
+   former tenant's number that was reaching vendors.
+5. **Convert Adrian and Amanda to owner users** (Dev Log → Find duplicate owners → "Make ID X
+   a second login"). Do this AFTER fixing the shared ID above.
+
+## Verified working
+- QuickBooks entity mapping, sub-customers per property/unit, invoice + bill send
+- Billing panel on both the work order and Review Bills, from one implementation
+- Bill entry from the Hub for any vendor
+- Invoice repair for anything already sent
+
+## Not yet verified against live data
+Everything from Aug 4 shipped on my own checks — the independent reviewer was interrupted
+partway through the last three pushes. Treat the payables screen and the withdraw button as
+"test one before trusting the batch".
+
+## Still owed
+- **Notes system** — timestamped contact log, per-note sharing, vendors post-only. Specced
+  and agreed, not built. This is the biggest outstanding item.
+- **Tiered vs itemized disagree by $75 on oversight jobs.** Tiered has a flat $75 built in
+  AND adds the logged hour, so it charges supervision twice ($445 vs $370). Needs a decision,
+  not a fix.
+- **Materials markup is asymmetric.** Tiered marks them up and adds 5%; itemized passes them
+  at cost + 5%. Both defensible; pick one.
+- **Bills already in QuickBooks still say Net 30.** Only new sends get the terms.
+
+---
+
 # Current Context Files — Ridge Co / Brett AI
 
 These are the authoritative context files. As of July 21, 2026 the `brett-context` loader is **two-tier**
