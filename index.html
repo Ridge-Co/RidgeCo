@@ -9,10 +9,18 @@
     --bg: #040810; --surface: #0d1c38; --surface2: #172d4e; --border: #2e4578;
     --text: #edf2ff; --muted: #8aaed4; --accent: #4d7de8; --accent2: #4ade80;
     --danger: #f87171; --warn: #f59e0b; --info: #7ab4f0; --radius: 6px;
-    --font: 'Courier New', monospace;
+    /* Retired 'Courier New' monospace (HUB_UX v1.1) for a proportional system
+       stack — narrower glyphs that fit a phone and wrap cleanly. --font-mono is
+       kept for anything that genuinely needs fixed-width (codes, raw logs). */
+    --font: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'Courier New', monospace;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; min-height: 100vh; }
+  html { max-width: 100%; overflow-x: hidden; }
+  /* overflow-x:hidden kills the horizontal drift when a fixed element or a long
+     unbreakable token (URLs, project_number:… in an API error) is wider than the
+     phone; overflow-wrap makes those long tokens wrap instead of pushing right. */
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; min-height: 100vh; max-width: 100%; overflow-x: hidden; overflow-wrap: break-word; }
   #login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; flex-direction: column; gap: 16px; }
   #login-screen h1 { font-size: 1.4rem; letter-spacing: 0.15em; color: var(--accent); }
   #login-screen p { color: var(--muted); font-size: 0.8rem; letter-spacing: 0.1em; }
