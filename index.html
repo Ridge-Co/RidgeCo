@@ -2782,7 +2782,7 @@ function renderOwnersPage() {
     'A second owner row splits the properties and only one of them can hold the QuickBooks link.</div>';
   html += '<table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'owners-action-bar\')"></th>' +
-    '<th>Name / Company</th><th>Phone</th><th>Properties</th><th>PIN</th><th></th></tr></thead><tbody>';
+    '<th>Name / Company</th><th>Phone</th><th>Properties</th><th title="Your hourly rate for this customer\'s jobs — blank follows the $85 default">Rate $/hr</th><th>PIN</th><th></th></tr></thead><tbody>';
 
   html += owners.map(function(o) {
     var propCount = safeArray(state.properties).filter(function(p){return p.Owner_ID===o.ID;}).length;
@@ -2794,6 +2794,7 @@ function renderOwnersPage() {
       '<td>'+display+'</td>' +
       '<td>'+(o.Phone||'—')+'</td>' +
       '<td>'+propCount+' propert'+(propCount===1?'y':'ies')+'</td>' +
+      '<td><input type="number" step="5" min="0" '+(parseFloat(o.Hourly_Rate)>0?'value="'+parseFloat(o.Hourly_Rate)+'"':'')+' placeholder="85" onchange="setOwnerRate(\''+o.ID+'\',this.value)" title="Your hourly rate for this customer (blank = $85 default)" style="width:52px;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:12px"></td>' +
       '<td style="color:'+(o.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(o.PIN||'—')+'</td>' +
       '<td style="display:flex;gap:4px">' +
       '<button class="btn small secondary" onclick="toast(\'Edit owners via Sheet for now\',\'info\')">Edit</button>' +
@@ -2804,6 +2805,23 @@ function renderOwnersPage() {
 
   html += '</tbody></table>';
   el.innerHTML = html;
+}
+
+// Set (or clear) a customer's hourly rate for Brett's own time. Blank/0 clears it back to
+// the $85 default (stored as ''), any positive number pins that customer's rate. Saved
+// straight to the Owners row; resolveHubHourlyRate() on the Worker reads it at billing time.
+function setOwnerRate(id, val) {
+  var rate = parseFloat(val);
+  var stored = rate > 0 ? String(rate) : '';
+  api('POST', '/owner/update', { id: id, fields: { Hourly_Rate: stored } }).then(function(res){
+    if (res && res.success !== false && !res.error) {
+      toast(rate > 0 ? ('Rate saved: $' + rate + '/hr') : 'Rate cleared — this customer follows the $85 default', 'success');
+      var o = safeArray(state.owners).find(function(x){ return String(x.ID) === String(id); });
+      if (o) o.Hourly_Rate = stored;
+    } else {
+      toast((res && res.error) || 'Could not save rate', 'error');
+    }
+  }).catch(function(){ toast('Could not save rate', 'error'); });
 }
 
 // ── Move In Tenant ────────────────────────────────────────────
@@ -3935,7 +3953,8 @@ function hubBillUseLoggedTime(k) {
 
   var mins = free.reduce(function(s, e) { return s + (parseFloat(e.Duration_Minutes) || 0); }, 0);
   var amt  = free.reduce(function(s, e) { return s + invTimeAmount(e); }, 0);
-  var hrs  = mins / 60;
+  var pulledHrs = mins / 60;
+  var hrs  = pulledHrs;
   // One rate across every entry means it can be billed as hours × rate, which reconciles
   // against the time log line by line. Mixed rates cannot be expressed that way without
   // inventing a blended rate that matches no entry, so those bill as a flat amount.
@@ -3946,8 +3965,15 @@ function hubBillUseLoggedTime(k) {
   var st = hubBillState(k);
   st.timeIds = free.map(function(e) { return String(e.ID); });
 
+  var svcAdded = false;
   if (oneRate > 0 && hrs > 0) {
     hubBillType(k, 'hourly');
+    // Service charge: Brett's first billed half-hour is a service charge he normally adds by
+    // hand and sometimes forgets. Ask once for the WHOLE job (not per entry), and add the
+    // half hour if the logged time doesn't already include it. It bills at the same rate, so
+    // it flows straight through hours × rate onto the invoice as extra time.
+    var includesSvc = confirm('Does this ' + pulledHrs.toFixed(2) + 'h already include your first half-hour service charge?\n\nOK = yes, bill as logged.\nCancel = no, add 30 minutes.');
+    if (!includesSvc) { hrs += 0.5; svcAdded = true; }
     var hEl = document.getElementById('hb-hours-' + k), rEl = document.getElementById('hb-rate-' + k);
     if (hEl) hEl.value = hrs.toFixed(2);
     if (rEl) { rEl.value = String(oneRate); rEl.dataset.auto = '0'; }
@@ -3961,12 +3987,13 @@ function hubBillUseLoggedTime(k) {
   if (notes && !notes.value) {
     notes.value = free.map(function(e) {
       return ((parseFloat(e.Duration_Minutes) || 0) / 60).toFixed(2) + 'h' + (e.Notes ? ' — ' + e.Notes : '');
-    }).join('; ');
+    }).join('; ') + (svcAdded ? '; +0.5h service charge' : '');
   }
 
   var msg = document.getElementById('hb-msg-' + k);
   if (msg) msg.innerHTML = '<div style="color:var(--info);font-size:11.5px">' +
-    esc(free.length + ' time ' + (free.length === 1 ? 'entry' : 'entries') + ' pulled in (' + hrs.toFixed(2) + 'h). ') +
+    esc(free.length + ' time ' + (free.length === 1 ? 'entry' : 'entries') + ' pulled in (' + pulledHrs.toFixed(2) + 'h). ') +
+    (svcAdded ? esc('Added a 0.5h service charge → ' + hrs.toFixed(2) + 'h billed. ') : '') +
     'Adjust anything, add receipts, then save. These hours will be marked as billed so they can\'t also be charged on top as supervision.</div>';
   hubBillCalc(k);
 }
@@ -5465,11 +5492,13 @@ function deleteHubReceipt(id, woId) {
 
 var HUB_ENTRY_TYPES = ['Admin / Coordination', 'Site Visit / Inspection', 'Material Drop', 'Active Labor'];
 var HUB_BILLABLE_DEFAULT = { 'Admin / Coordination': false, 'Site Visit / Inspection': false, 'Material Drop': true, 'Active Labor': true };
-// Your own hourly rate for time logged against a job. Was 0 and nothing ever loaded it,
-// so every hub time entry was written with Billable_Amount '0.00' — hours logged, nothing
-// billable, silently. $75 is the same rate the markup formula already charges for your
-// on-site time, so the two agree.
-var HUB_HOURLY_RATE = 75;
+// Your own hourly rate for time logged against a job — the CLIENT-SIDE FALLBACK only.
+// The authoritative rate is now resolved on the server per customer (Owners.Hourly_Rate,
+// else the default) when a hub time entry is saved, so this constant is used only for
+// display math (e.g. detecting a single rate across entries) when a stored rate is missing.
+// Kept in step with the server default. NOTE: the $75 in the tiered/itemized markup formula
+// is a separate coordination markup, not this billing rate — it is intentionally unchanged.
+var HUB_HOURLY_RATE = 85;
 
 function loadHubTimeTracking(woId, detailBody) {
   // Idempotent: reuse existing holder if already appended
@@ -5678,7 +5707,9 @@ function submitHubTimeEntry(woId) {
     start_datetime: startDT, end_datetime: endDT,
     duration_minutes_raw: durMinRaw,
     notes: notes, billable: bill ? 'TRUE' : 'FALSE',
-    hourly_rate: String(HUB_HOURLY_RATE),
+    // Send no rate: the server resolves this customer's rate from Owners.Hourly_Rate (else
+    // the default) so a per-customer price is applied without the Hub having to know it.
+    hourly_rate: '',
   }).then(function(res) {
     if (res.success) {
       toast('Time logged: ' + (res.duration_minutes >= 60
@@ -7354,6 +7385,7 @@ function qbBatchSend() {
       <div class="form-group"><label>Last Name</label><input type="text" id="ao-last" placeholder=""></div>
       <div class="form-group"><label>Phone</label><input type="tel" id="ao-phone" placeholder="(443) 555-1234"></div>
       <div class="form-group"><label>Email</label><input type="email" id="ao-email"></div>
+      <div class="form-group"><label>Your Rate $/hr <span style="font-weight:normal;color:var(--muted)">(blank = $85)</span></label><input type="number" step="5" min="0" id="ao-rate" placeholder="85"></div>
       <div class="form-group full"><label>PIN <span style="font-weight:normal;color:var(--muted)">(3 letters + last 5 of phone, e.g. ABC58842)</span></label><input type="text" id="ao-pin" placeholder="ABC58842" maxlength="8"></div>
     </div>
     <p style="color:var(--muted);font-size:11px;margin-top:8px">After adding the owner, go to Properties → Edit each property to link them to this owner. Or use a property's Owner ID field.</p>
@@ -7445,7 +7477,7 @@ function qbBatchSend() {
 </div>
 <script>
 function openAddOwnerModal() {
-  ['ao-company','ao-first','ao-last','ao-phone','ao-email','ao-pin'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['ao-company','ao-first','ao-last','ao-phone','ao-email','ao-pin','ao-rate'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   document.getElementById('ao-msg').innerHTML = '';
   openModal('modal-add-owner');
 }
@@ -7453,11 +7485,14 @@ function submitAddOwner() {
   var first = document.getElementById('ao-first').value.trim();
   var comp  = document.getElementById('ao-company').value.trim();
   if (!first && !comp) { document.getElementById('ao-msg').innerHTML='<div style="color:var(--danger);font-size:12px">Enter a name or company.</div>'; return; }
+  var aoRate = parseFloat((document.getElementById('ao-rate')||{}).value);
   api('POST','/owner/add',{
     First_Name: first, Last_Name: document.getElementById('ao-last').value.trim(),
     Company: comp, Phone: document.getElementById('ao-phone').value.trim(),
     Email: document.getElementById('ao-email').value.trim(),
     PIN: document.getElementById('ao-pin').value.trim().toUpperCase(),
+    // Blank = follow the default ($85). Only a real number pins a per-customer rate.
+    Hourly_Rate: (aoRate > 0 ? String(aoRate) : ''),
     Active: 'TRUE',
   }).then(function(res){
     if (res.id) { toast('Owner added — ID: '+res.id,'success'); closeModal('modal-add-owner'); loadAll(); renderOwnersPage(); }

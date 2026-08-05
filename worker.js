@@ -734,6 +734,28 @@ async function addReceipt(env, body) {
   return json({ success: true, amount: amt.toFixed(2) });
 }
 
+// Brett's default hourly rate for his own (hub) time when a customer has no specific rate on
+// the Owners tab. Per-customer overrides live in Owners.Hourly_Rate (blank = this default).
+const DEFAULT_HUB_RATE = 85;
+
+// Resolve the hourly rate for Brett's own time on a job: the owner's Owners.Hourly_Rate if
+// they have one set, otherwise DEFAULT_HUB_RATE. Follows WO → Property → Owner, the same
+// chain the invoice path uses. Falls back to the default on any read miss rather than
+// billing $0 (a missing rate must never silently zero out the time).
+async function resolveHubHourlyRate(env, woId) {
+  try {
+    const [wos, props, owners] = await fetchTabs(env, ['Work_Orders', 'Properties', 'Owners']);
+    const wo = findWO(wos, woId);
+    if (!wo) return DEFAULT_HUB_RATE;
+    const prop = props.find(p => p.ID === wo.Property_ID);
+    const owner = prop ? owners.find(o => o.ID === prop.Owner_ID) : null;
+    const r = owner ? parseFloat(owner.Hourly_Rate || 0) : 0;
+    return r > 0 ? r : DEFAULT_HUB_RATE;
+  } catch (e) {
+    return DEFAULT_HUB_RATE;
+  }
+}
+
 async function addTimeEntry(env, body) {
   const { wo_id, entered_by, entered_by_id, role, entry_type, start_datetime, end_datetime, duration_minutes_raw, notes, billable, hourly_rate } = body;
   if (!wo_id) return json({ error: 'wo_id required' }, 400);
@@ -742,7 +764,13 @@ async function addTimeEntry(env, body) {
   if (start_datetime && end_datetime) { durationMinutes = roundUpTo15((new Date(end_datetime) - new Date(start_datetime)) / 60000); }
   else if (duration_minutes_raw) { durationMinutes = roundUpTo15(parseFloat(duration_minutes_raw) || 0); }
   if (durationMinutes <= 0) return json({ error: 'Could not calculate duration' }, 400);
-  const rate = parseFloat(hourly_rate || 0);
+  let rate = parseFloat(hourly_rate || 0);
+  // Brett's own (hub) time bills at a per-customer rate. When the Hub sends no explicit rate,
+  // resolve it from the job's owner (Owners.Hourly_Rate, else the default). Vendor entries
+  // always carry their own rate and are left untouched.
+  if (role === 'hub' && !(rate > 0)) {
+    rate = await resolveHubHourlyRate(env, wo_id);
+  }
   const billableAmt = (billable === 'TRUE' || billable === true) ? (durationMinutes / 60) * rate : 0;
 
   // Same worker, same job, same block of time, seconds apart = a double-tap on Log Time.
@@ -759,7 +787,7 @@ async function addTimeEntry(env, body) {
   if (dupe) return json({ success: true, duplicate: true, duration_minutes: durationMinutes });
 
   await addRow(env, 'Time_Entries', { WO_ID: wo_id, Entered_By: entered_by||'', Entered_By_ID: String(entered_by_id||''), Role: role, Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'), Start_DateTime: start_datetime||'', End_DateTime: end_datetime||'', Duration_Minutes: String(durationMinutes), Notes: notes||'', Billable: role === 'hub' ? String(billable === 'TRUE' || billable === true) : 'TRUE', Hourly_Rate: String(rate), Billable_Amount: String(billableAmt.toFixed(2)), Created_Date: new Date().toISOString(), Active: 'TRUE' });
-  return json({ success: true, duration_minutes: durationMinutes });
+  return json({ success: true, duration_minutes: durationMinutes, hourly_rate: rate });
 }
 
 async function listWOTenants(env, url) {
@@ -4636,11 +4664,36 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   const labelParts = [tradeName];
   if (workDesc) labelParts.push(workDesc);
   labelParts.push('WO ' + (ir.WO_ID || ''));
+  // Show the labor line as hours × rate, not a flat "1 × $total". A 2-hour, $150 job was
+  // going to QuickBooks as Qty 1 / UnitPrice 150, so the customer read it as $150/hr — the
+  // opposite of the transparency Brett wants (they should see the time that built the price).
+  //
+  // CRITICAL: only split when the bill is genuinely hourly AND its STORED rate reconciles
+  // with the labor amount to the cent. `laborAmt` is Customer_Total − materials, which on a
+  // marked-up vendor bill carries markup + on-site time + the 5% fee — so hours × the
+  // vendor's rate would NOT tie out, and deriving a rate from laborAmt/hours would print a
+  // fabricated $/hr that quietly exposes the markup. Reconciling against the bill's own
+  // stored Rate (hrs × Rate === Labor_Total === laborAmt) is true only when the labor passes
+  // straight through — Brett's own time — and false for every marked-up bill, which falls
+  // back to the single combined line. Either way the invoice TOTAL is untouched (Amount is
+  // always laborAmt).
+  const billedHours = +(Number(billRow && billRow.Hours) || 0).toFixed(2);
+  const storedRate  = +(Number(billRow && billRow.Rate) || 0).toFixed(2);
+  const isHourlyBill = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'hourly';
+  let laborLineDetail = { ItemRef: itemRef, Qty: 1, UnitPrice: laborAmt };
+  let laborLineLabel = labelParts.join(' — ');
+  if (isHourlyBill && billedHours > 0 && storedRate > 0 &&
+      Math.abs(+(storedRate * billedHours).toFixed(2) - laborAmt) < 0.01) {
+    laborLineDetail = { ItemRef: itemRef, Qty: billedHours, UnitPrice: storedRate };
+    // Put the breakdown in the description too — some QuickBooks invoice styles hide the
+    // Qty/Rate columns, and the whole point is that the customer sees the hours.
+    laborLineLabel = labelParts.join(' — ') + ' — ' + billedHours + ' hr' + (billedHours === 1 ? '' : 's') + ' × $' + storedRate.toFixed(2) + '/hr';
+  }
   lines.unshift({
     DetailType: 'SalesItemLineDetail',
     Amount: laborAmt,
-    Description: labelParts.join(' — ').slice(0, 4000),
-    SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: laborAmt },
+    Description: laborLineLabel.slice(0, 4000),
+    SalesItemLineDetail: laborLineDetail,
   });
   return { lines, materialsTotal: +materialsTotal.toFixed(2), laborAmt, total };
 }

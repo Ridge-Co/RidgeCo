@@ -1,0 +1,11 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Per-customer hourly rate for Brett's own (hub) time. Adds Hourly_Rate to the Owners tab. Blank = the code default ($85); a positive number pins that customer's rate ($75 for Goldszmidt, Phoenix, Casey Properties). resolveHubHourlyRate() in worker.js reads this column (WO -> Property -> Owner) when a hub time entry is saved, and the Hub owner setup UI writes it via /owner/update. A missing/blank cell safely falls back to the default, so this is non-breaking on its own.",
+  "ops": [
+    {
+      "type": "add_column_header",
+      "tab": "Owners",
+      "header": "Hourly_Rate"
+    }
+  ]
+}
