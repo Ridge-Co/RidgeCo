@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — QuickBooks Email Backfill</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--radius:6px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1000px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.12em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;line-height:1.5;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .btn.success{background:var(--accent2);color:#000;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  input{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+  .row label{color:var(--muted);font-size:11px;min-width:100px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border);}
+  td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  tr:hover td{background:var(--surface2);}
+  .ok{color:var(--accent2);}
+  .err{color:var(--danger);}
+  .info{color:var(--muted);}
+  .warn{color:var(--warn);}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;}
+  .pill.count{background:#1a3320;color:var(--accent2);}
+  .pill.skip{background:#2d2006;color:var(--warn);}
+  #log{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:260px;overflow-y:auto;font-size:11px;margin-top:10px;display:none;}
+  .mono-email{color:var(--accent2);}
+  .arrow{color:var(--muted);padding:0 4px;}
+  .empty{padding:20px;text-align:center;color:var(--muted);}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — QUICKBOOKS EMAIL BACKFILL</h1>
+<p class="sub">
+  Units and properties created in QuickBooks as sub-customers were saved without an email, so an
+  invoice sent for a unit like "3014 N Calvert St Apt B" has nowhere to go. This copies each blank
+  sub-customer's email down from its parent (a unit from its property, a property from its owner).
+  <b>Preview first — nothing is written until you tap Apply.</b> Safe to re-run: anything that already
+  has an email is left alone.
+</p>
+
+<div class="section">
+  <div class="section-title">Connection</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
+  <div class="row"><label>Admin token</label><input id="auth-token" type="password" placeholder="paste if not remembered" style="flex:1"></div>
+  <button class="btn" id="preview-btn" onclick="preview()">Preview changes</button>
+  <span id="conn-status" style="margin-left:10px;font-size:11px;color:var(--muted)"></span>
+</div>
+
+<div class="section">
+  <div class="section-title">Sub-customers missing an email</div>
+  <div id="summary" style="margin-bottom:10px;color:var(--muted);font-size:11px"></div>
+  <div id="to-set"><div class="empty">Tap “Preview changes” to see what would be updated.</div></div>
+  <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+    <button class="btn success" id="apply-btn" onclick="apply()" disabled>Apply selected</button>
+    <button class="btn secondary" onclick="preview()">Refresh preview</button>
+    <span id="sel-count" style="color:var(--muted);font-size:11px"></span>
+  </div>
+  <div id="log"></div>
+</div>
+
+<div class="section" id="skipped-section" style="display:none">
+  <div class="section-title">Skipped — no parent email to copy</div>
+  <p class="sub" style="margin-bottom:10px">These have no email anywhere above them in QuickBooks. Give the property or owner an email first, then re-run.</p>
+  <div id="skipped"></div>
+</div>
+
+<script>
+let plan = { to_set: [], skipped: [] };
+
+function worker(){ return document.getElementById('worker-url').value.trim(); }
+function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
+
+// Prefill the token from the Hub's stored admin token if it's there.
+(function(){ const t = localStorage.getItem('mh_auth'); if(t){ document.getElementById('auth-token').value = t; } })();
+
+async function post(path, body){
+  const r = await fetch(worker()+path, {
+    method:'POST',
+    headers:{'X-Auth-Token':token(),'Content-Type':'application/json'},
+    body: JSON.stringify(body||{})
+  });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
+  if (r.status === 403) throw new Error('403 — the deployed Worker rejected the admin token for this endpoint.');
+  return data;
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function preview(){
+  const status = document.getElementById('conn-status');
+  status.textContent = 'Loading from QuickBooks…';
+  document.getElementById('apply-btn').disabled = true;
+  try {
+    const res = await post('/qb/backfill-emails', { apply:false });
+    if (!res.ok) throw new Error(res.error || 'Preview failed');
+    plan = res;
+    status.textContent = '✅ '+res.total_customers+' QuickBooks customers scanned';
+    renderToSet();
+    renderSkipped();
+  } catch(e){
+    status.textContent = '❌ '+e.message;
+  }
+}
+
+function renderToSet(){
+  const rows = plan.to_set || [];
+  document.getElementById('summary').innerHTML =
+    '<span class="pill count">'+rows.length+' to update</span> &nbsp; '+
+    '<span class="pill skip">'+((plan.skipped||[]).length)+' skipped</span>';
+  const box = document.getElementById('to-set');
+  if (!rows.length){
+    box.innerHTML = '<div class="empty">Nothing to fix — every sub-customer already has an email. 🎉</div>';
+    document.getElementById('apply-btn').disabled = true;
+    updateSel();
+    return;
+  }
+  let html = '<table><thead><tr>'+
+    '<th style="width:28px"><input type="checkbox" id="all" checked onchange="toggleAll()"></th>'+
+    '<th>Sub-customer</th><th>Email to set</th><th>Copied from</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    html += '<tr>'+
+      '<td><input type="checkbox" class="pick" value="'+esc(r.id)+'" checked onchange="updateSel()"></td>'+
+      '<td>'+esc(r.name)+(r.inherited_from_grandparent?' <span class="pill skip">via owner</span>':'')+'</td>'+
+      '<td><span class="mono-email">'+esc(r.email)+'</span></td>'+
+      '<td class="info">'+esc(r.source_name)+'</td>'+
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  box.innerHTML = html;
+  document.getElementById('apply-btn').disabled = false;
+  updateSel();
+}
+
+function renderSkipped(){
+  const rows = plan.skipped || [];
+  const sec = document.getElementById('skipped-section');
+  if (!rows.length){ sec.style.display='none'; return; }
+  sec.style.display='block';
+  let html = '<table><thead><tr><th>Sub-customer</th><th>Why</th></tr></thead><tbody>';
+  rows.forEach(r => { html += '<tr><td>'+esc(r.name)+'</td><td class="warn">'+esc(r.reason)+'</td></tr>'; });
+  html += '</tbody></table>';
+  document.getElementById('skipped').innerHTML = html;
+}
+
+function toggleAll(){
+  const on = document.getElementById('all').checked;
+  document.querySelectorAll('.pick').forEach(c => c.checked = on);
+  updateSel();
+}
+function selectedIds(){ return Array.from(document.querySelectorAll('.pick')).filter(c=>c.checked).map(c=>c.value); }
+function updateSel(){
+  const n = selectedIds().length;
+  document.getElementById('sel-count').textContent = n+' selected';
+  document.getElementById('apply-btn').disabled = n===0;
+}
+
+async function apply(){
+  const ids = selectedIds();
+  if (!ids.length) return;
+  if (!confirm('Set the email on '+ids.length+' QuickBooks customer'+(ids.length>1?'s':'')+'? This writes to QuickBooks.')) return;
+  const log = document.getElementById('log');
+  log.style.display='block';
+  log.innerHTML = '<div class="info">Applying to '+ids.length+' customer(s)…</div>';
+  document.getElementById('apply-btn').disabled = true;
+  try {
+    const res = await post('/qb/backfill-emails', { apply:true, ids });
+    if (!res.ok) throw new Error(res.error || 'Apply failed');
+    let html = '<div class="ok" style="font-weight:bold">✅ '+res.updated+' updated'+
+      (res.failed_count? ' · <span class="err">'+res.failed_count+' failed</span>':'')+'</div>';
+    (res.updated_list||[]).forEach(u => {
+      html += '<div class="ok">✅ '+esc(u.name)+' → '+esc(u.email)+(u.already_had?' (already had one)':'')+'</div>';
+    });
+    (res.failed||[]).forEach(f => { html += '<div class="err">❌ '+esc(f.name)+': '+esc(f.error)+'</div>'; });
+    log.innerHTML = html;
+    // Re-preview so applied rows drop off the list.
+    setTimeout(preview, 800);
+  } catch(e){
+    log.innerHTML = '<div class="err">❌ '+e.message+'</div>';
+    document.getElementById('apply-btn').disabled = false;
+  }
+}
+</script>
+</body>
+</html>

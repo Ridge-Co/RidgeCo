@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-07-23.1';
+const BUILD_VERSION = '2026-08-05.2';
 
 export default {
   async fetch(request, env) {
@@ -204,6 +204,7 @@ export default {
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
+        if (path === '/qb/backfill-emails')       return await qbBackfillEmails(env, body);
         if (path === '/qb/reparent-unit')         return await qbReparentUnit(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
@@ -4041,6 +4042,121 @@ async function qbReparentUnit(env, body) {
     note: 'Any invoice already on this customer moved with it — QuickBooks keeps the history.' });
 }
 
+// Pure planner for the email backfill. Given the full QuickBooks customer list (as
+// qbListEntities returns it — id, name, path, email, parent_id, is_sub), work out which
+// sub-customers have no email and what to copy onto each. A unit inherits its property's
+// email; a property inherits its owner's. Walk UP the tree to the nearest ancestor that
+// actually has an email, so a unit is still fixed even when its property is also blank but
+// the owner above it is not. Anything with no email anywhere above it is reported as
+// skipped rather than guessed — the fix there is to give the property/owner an email first.
+// Kept pure (no env, no I/O) so the test harness can exercise it directly.
+function qbResolveEmailBackfill(customers) {
+  const list = Array.isArray(customers) ? customers : [];
+  const byId = {};
+  for (const c of list) byId[String(c.id)] = c;
+
+  const norm = e => String(e || '').trim();
+  const toSet = [], skipped = [];
+
+  for (const c of list) {
+    const isSub = c.is_sub === true || !!(c.parent_id);
+    if (!isSub) continue;                 // owners sit at the top; nothing to inherit
+    if (norm(c.email)) continue;          // already has one — never overwrite
+
+    // Climb to the first ancestor carrying an email. Guard against a parent cycle so a bad
+    // tree can never spin here.
+    let anc = byId[String(c.parent_id)];
+    const seen = new Set([String(c.id)]);
+    while (anc && !norm(anc.email)) {
+      if (seen.has(String(anc.id))) { anc = null; break; }
+      seen.add(String(anc.id));
+      anc = byId[String(anc.parent_id)];
+    }
+
+    if (anc && norm(anc.email)) {
+      toSet.push({
+        id: String(c.id), name: c.name || c.path || ('#' + c.id),
+        path: c.path || c.name || '', current_email: norm(c.email),
+        email: norm(anc.email), source_id: String(anc.id),
+        source_name: anc.name || anc.path || ('#' + anc.id),
+        inherited_from_grandparent: String(anc.id) !== String(c.parent_id),
+      });
+    } else {
+      skipped.push({
+        id: String(c.id), name: c.name || c.path || ('#' + c.id),
+        path: c.path || c.name || '',
+        reason: 'no parent or ancestor in QuickBooks has an email to copy down',
+      });
+    }
+  }
+  return { toSet, skipped };
+}
+
+// POST /qb/backfill-emails { apply?, ids? }
+// Preview-first. With apply falsey it only reports what it WOULD change. With apply true it
+// sets PrimaryEmailAddr on each sub-customer that has none, copying the nearest ancestor's
+// email down via a sparse update (QuickBooks keeps every other field and all history). An
+// optional ids array restricts the write to just those sub-customer ids, so the Hub page
+// can let a row be unticked. Idempotent: a sub-customer that already has an email is never
+// touched, so re-running only ever fills the ones still blank.
+async function qbBackfillEmails(env, body) {
+  body = body || {};
+  const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  const onlyIds = Array.isArray(body.ids) ? body.ids.map(x => String(x).trim()).filter(Boolean) : null;
+
+  try {
+    const token = await qbAccessToken(env);
+    const customers = await qbListEntities(env, 'customer', token, true); // force fresh — the tree matters
+    const { toSet, skipped } = qbResolveEmailBackfill(customers);
+
+    if (!apply) {
+      return json({
+        ok: true, applied: false,
+        total_customers: customers.length,
+        to_set_count: toSet.length, skipped_count: skipped.length,
+        to_set: toSet, skipped,
+      });
+    }
+
+    const targets = onlyIds ? toSet.filter(t => onlyIds.includes(String(t.id))) : toSet;
+    const updated = [], failed = [];
+
+    for (const t of targets) {
+      try {
+        // A sparse update needs the current SyncToken, so read the customer first.
+        const got = await qbApi(env, `customer/${encodeURIComponent(t.id)}?minorversion=73`, 'GET', null, token);
+        const cust = got && got.Customer;
+        if (!cust) { failed.push({ id: t.id, name: t.name, error: qbFault(got) || 'could not read customer from QuickBooks' }); continue; }
+
+        // Guard the race: if it already picked up an email since the preview, leave it.
+        if (cust.PrimaryEmailAddr && cust.PrimaryEmailAddr.Address) {
+          updated.push({ id: t.id, name: t.name, email: cust.PrimaryEmailAddr.Address, already_had: true });
+          continue;
+        }
+
+        const patch = { Id: String(t.id), SyncToken: cust.SyncToken, sparse: true, PrimaryEmailAddr: { Address: t.email } };
+        const r = await qbApi(env, 'customer?minorversion=73', 'POST', patch, token);
+        if (r && r.Customer) {
+          updated.push({ id: t.id, name: t.name, email: t.email, source_name: t.source_name });
+        } else {
+          failed.push({ id: t.id, name: t.name, error: qbFault(r) || 'QuickBooks refused the update' });
+        }
+      } catch (e) {
+        failed.push({ id: t.id, name: t.name, error: e.message });
+      }
+    }
+
+    _qbEntityCache.customer = null; // emails changed; don't serve a stale list
+    return json({
+      ok: true, applied: true,
+      requested: targets.length, updated: updated.length, failed_count: failed.length,
+      updated_list: updated, failed, skipped,
+    });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
+
 async function qbCreateSubCustomer(env, body) {
   const kind = String(body.kind || '').toLowerCase();
   const id = String(body.id || '').trim();
@@ -4076,9 +4192,21 @@ async function qbCreateSubCustomer(env, body) {
 
   if (!displayName) return json({ error: 'No address or unit label to name this with.' }, 400);
 
+  // Carry the parent's billing email down onto the new sub-customer. Without this a unit
+  // is created with a blank email, so an invoice sent for it has nobody to go to — the
+  // exact gap the email backfill was built to clean up. Read it from the parent in QB so
+  // a property inherits the owner's email and a unit inherits the property's. Best-effort:
+  // a missing parent email just means the sub-customer starts blank, same as before.
+  let parentEmail = '';
+  try {
+    const pg = await qbApi(env, `customer/${encodeURIComponent(parentId)}?minorversion=73`, 'GET', null, token);
+    parentEmail = (pg && pg.Customer && pg.Customer.PrimaryEmailAddr && pg.Customer.PrimaryEmailAddr.Address) || '';
+  } catch (e) {}
+
   // QuickBooks requires DisplayName to be unique across ALL customers, not just within a
   // parent. Two owners each with a "100 Main St" collide, so fall back to the full path.
   const payload = { DisplayName: displayName, Job: true, ParentRef: { value: String(parentId) } };
+  if (parentEmail) payload.PrimaryEmailAddr = { Address: parentEmail };
   let r = await qbApi(env, 'customer?minorversion=73', 'POST', payload, token);
   let newId = (r && r.Customer && r.Customer.Id) || '';
 
