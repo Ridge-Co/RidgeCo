@@ -30,6 +30,7 @@ function price(bill, fields, vendors){
   const f=Object.assign({onsite:false,brettHrs:0,travel:0,loggedTime:0,ownMaterials:0},fields);
   const mod = new Function('state','_invBill','fields',
     'function safeArray(v){return Array.isArray(v)?v:[];}\n' +
+    'var _invPass5=fields&&fields._invPass5?{k:true}:{};\n' +
     'function invTimeTotal(k){return fields.loggedTime||0;}\n' +
     'function invMatTotal(k){return fields.ownMaterials||0;}\n' +
     'var document={getElementById:function(id){\n' +
@@ -112,6 +113,38 @@ const ownJob = price(own, { ownMaterials: 80 }, [{ID:'1', In_House:'TRUE'}]);
 t('materials you bought are cash out even when the labour is yours',
   ownJob.cashOut === 80, ownJob.cashOut);
 t('and your own labour still is not', ownJob.ownWage === 200);
+
+// ── Pass-through: labor + materials at cost, no markup, no $75 (the new default) ──
+// vendor labor 200 + own materials 100, no on-site time, no travel
+const ptBill = { Bill_Type:'hourly', Hours:'2', Labor_Total:'200', Truck_Stock:'0', Receipts_Total:'0', Vendor_ID:'9' };
+const pt = price(ptBill, { ownMaterials: 100 }, [{ID:'9'}]);
+t('pass-through (5% off) = total cost exactly, no markup',
+  pt.passthroughPrice === 300 && pt.passFeeOn === false, pt.passthroughPrice);
+t('pass-through sits below the tiered price (no markup, no $75)',
+  pt.passthroughPrice < pt.tieredPrice && pt.passthroughPrice < pt.itemizedPrice,
+  [pt.passthroughPrice, pt.tieredPrice, pt.itemizedPrice]);
+
+// with logged time + travel, they ride on top at cost (never marked up)
+const pt2 = price(ptBill, { ownMaterials: 100, loggedTime: 75, travel: 20 }, [{ID:'9'}]);
+t('pass-through adds your time and travel at cost',
+  pt2.passthroughPrice === 300 + 75 + 20, pt2.passthroughPrice);
+
+// 5% toggle ON multiplies the whole ticket by 1.05
+const pt3 = price(ptBill, { ownMaterials: 100, _invPass5: true }, [{ID:'9'}]);
+t('pass-through (5% on) = base * 1.05',
+  pt3.passthroughPrice === +(300*1.05).toFixed(2) && pt3.passFeeOn === true, pt3.passthroughPrice);
+
+// the approve-time split must not invent a card fee on a no-surcharge pass-through
+function approveSplit(charge, totalCost, brettTime, travel, mode, pass5){
+  const carries5 = (mode==='tiered'||mode==='itemized') || (mode==='passthrough' && !!pass5);
+  const fee = carries5 ? +(charge - charge/1.05).toFixed(2) : 0;
+  const markup = +(charge - fee - totalCost - brettTime - travel).toFixed(2);
+  return { fee, markup };
+}
+const sOff = approveSplit(pt.passthroughPrice, pt.totalCost, 0, 0, 'passthrough', false);
+t('pass-through off reports NO processing fee', sOff.fee === 0 && sOff.markup === 0, sOff);
+const sOn = approveSplit(pt3.passthroughPrice, pt.totalCost, 0, 0, 'passthrough', true);
+t('pass-through on reports the real 5% share', Math.abs(sOn.fee - 300*0.05) < 0.02 && Math.abs(sOn.markup) < 0.02, sOn);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);

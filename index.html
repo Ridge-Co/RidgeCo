@@ -4345,11 +4345,14 @@ function loadInvoiceMaterials(k) {
     if (!Array.isArray(rows)) { _invMat[k] = []; box.innerHTML = ''; return; }
     _invMatBilled[k] = billed;
 
-    // A vendor's receipt reaches the invoice through their bill. Only what someone on
-    // this side bought needs adding here.
+    // Every receipt logged against this job is a candidate for the invoice — including one
+    // logged from the vendor side. Excluding vendor-role receipts assumed they always
+    // arrive on the vendor's BILL, but when the vendor is in-house (Brett as his own
+    // vendor) the bill is built from logged time and carries no receipt, so the receipt
+    // fell into a gap: off the picker AND off the bill. Now it shows here; vendor-logged
+    // ones just aren't ticked by default (see below), so nothing is double-billed silently.
     var mine = rows.filter(function(r) {
       return r.Active !== 'FALSE' &&
-             String(r.Role || '').toLowerCase() !== 'vendor' &&
              (parseFloat(r.Amount) || 0) > 0;
     });
     _invMat[k] = mine;
@@ -4369,8 +4372,11 @@ function loadInvoiceMaterials(k) {
       // Never re-tick something already invoiced, whatever else is going on.
       if (billed[id]) { delete picked[id]; _invMatSeen[k][id] = true; return; }
       // Default to charging it on — it was logged against this job, which is the whole
-      // reason it exists. Unticking survives a reload.
-      if (!(id in picked) && !_invMatSeen[k][id] && panelsOnThisWO < 2 && !billedUnknown) picked[id] = true;
+      // reason it exists. Unticking survives a reload. A vendor-logged receipt is the one
+      // exception: it MIGHT already be on that vendor's bill, so it shows but stays
+      // unticked until Brett confirms it isn't, one tap — never a silent double-charge.
+      var isVendorReceipt = String(r.Role || '').toLowerCase() === 'vendor';
+      if (!(id in picked) && !_invMatSeen[k][id] && panelsOnThisWO < 2 && !billedUnknown && !isVendorReceipt) picked[id] = true;
       _invMatSeen[k][id] = true;
     });
     _invMatPicked[k] = picked;
@@ -4437,17 +4443,19 @@ function invRenderMaterials(k) {
         var alreadyBilled = !!billedMap[id];
         var on = !alreadyBilled && !!picked[id];
         var amt = parseFloat(r.Amount) || 0;
+        var isVendorReceipt = String(r.Role || '').toLowerCase() === 'vendor';
         return '<label style="display:flex;align-items:center;gap:8px;padding:5px 0;cursor:' + (alreadyBilled ? 'default' : 'pointer') + ';font-size:11.5px;border-top:1px solid var(--border);opacity:' + (alreadyBilled ? '0.55' : '1') + '">' +
           '<input type="checkbox"' + (on ? ' checked' : '') + (alreadyBilled ? ' disabled' : '') +
             ' onchange="invToggleMat(\'' + k + '\',\'' + esc(id) + '\')" style="width:auto;padding:0">' +
           '<span style="color:var(--text)">' + esc(r.Store || 'Receipt') + '</span>' +
           '<span style="color:var(--muted);font-size:10.5px">' + esc(String(r.Description || '').substring(0, 44)) +
             (r.Date ? ' · ' + esc(r.Date) : '') + '</span>' +
+          (isVendorReceipt && !alreadyBilled ? '<span style="color:var(--muted);font-size:9px;white-space:nowrap;border:1px solid var(--border);border-radius:3px;padding:0 4px">vendor-logged</span>' : '') +
           (alreadyBilled ? '<span style="color:var(--warn);font-size:9.5px;white-space:nowrap">already invoiced</span>' : '') +
           '<span style="margin-left:auto;color:' + (on ? 'var(--accent2)' : 'var(--muted)') + ';font-weight:bold;white-space:nowrap">$' + amt.toFixed(2) + '</span>' +
         '</label>';
       }).join('') +
-      '<div style="color:var(--muted);font-size:10px;margin-top:5px;line-height:1.45">These are marked up and carry the 5% like the rest of the job. Anything the vendor bought is already on their bill and is not listed here.</div>' +
+      '<div style="color:var(--muted);font-size:10px;margin-top:5px;line-height:1.45">Ticked receipts become materials lines on the invoice, at cost. A "vendor-logged" receipt is shown but left unticked — tick it only if it isn\'t already on that vendor\'s bill.</div>' +
     '</div>';
 }
 
@@ -4812,6 +4820,14 @@ function invPricing(k) {
   var itemFee      = itemSubtotal * 0.05;
   var itemized     = Math.ceil((itemSubtotal + itemFee) / 5) * 5;
 
+  // C — pass-through: labor + materials at cost, plus your time and travel. NO markup,
+  // NO $75 admin. This is the starting point for hourly customers, who pay a rate plus
+  // materials without a surcharge. The 5% card-processing fee is OPTIONAL here (default
+  // off) and toggled per panel — when on, it rides on the whole ticket like the others.
+  var passFeeOn   = !!_invPass5[k];
+  var passBase    = totalCost + brettTime + travel;
+  var passthrough = +(passFeeOn ? passBase * 1.05 : passBase).toFixed(2);
+
   // Your own hours on this job, whichever hat you were wearing: the whole job when it's
   // in-house, or the oversight hour when someone else did the work.
   var ownWage = inHouseLabor + brettTime;
@@ -4824,34 +4840,56 @@ function invPricing(k) {
     brettTime: brettTime, brettHrs: brettHrs, travel: travel, loggedTime: loggedTime,
     tieredPrice: tieredWithExtras, tieredBase: tieredBase.finalPrice, tieredPct: Math.round(tieredBase.markupPct * 100),
     itemizedPrice: itemized, itemMarkup: itemMarkup,
+    passthroughPrice: passthrough, passBase: passBase, passFeeOn: passFeeOn,
   };
 }
 
 // The last price we filled in ourselves, per scope. Lets the suggestion follow along as
 // you tick time on and off, while never overwriting a number you typed.
 var _invAutoPrice = {};
+// Which pricing basis is in play per scope — so the approve step knows whether the price
+// carries a 5% card fee (tiered/itemized always do; pass-through only if toggled on) and
+// reports the split honestly instead of assuming a fee that was never charged.
+var _invMode  = {};   // scope key → 'passthrough' | 'tiered' | 'itemized'
+var _invPass5 = {};   // scope key → is the optional 5% ON for pass-through
 
+// Pass-through is the default starting point — labor + materials at cost. Hourly customers
+// are used to a rate plus materials with no surcharge, so that is what the box pre-fills to;
+// Tiered and Itemized are still one tap away.
 function invAutoPrice(k) {
   var el = document.getElementById('inv-charge-' + k);
   if (!el) return;
   var p = invPricing(k);
   if (!p || !(p.totalCost > 0)) return;
-  var suggested = Number(p.tieredPrice).toFixed(2);
+  var mode = _invMode[k] || 'passthrough';
+  var basis = mode === 'tiered' ? p.tieredPrice : mode === 'itemized' ? p.itemizedPrice : p.passthroughPrice;
+  var suggested = Number(basis).toFixed(2);
   var current = String(el.value || '');
   var isOurs = current === '' || current === _invAutoPrice[k];
   if (!isOurs) return;                       // Brett typed his own price — leave it alone
+  if (!(_invMode[k])) _invMode[k] = 'passthrough';
   el.value = suggested;
   el.setAttribute('value', suggested);
   _invAutoPrice[k] = suggested;
 }
 
-function invUsePrice(k, amount) {
+function invUsePrice(k, amount, mode) {
   var el = document.getElementById('inv-charge-' + k);
   if (!el) return;
+  if (mode) _invMode[k] = mode;
   el.value = Number(amount).toFixed(2);
   el.setAttribute('value', Number(amount).toFixed(2));
   _invAutoPrice[k] = Number(amount).toFixed(2);   // a tapped card is still "ours" to update
   calcInvoiceMarkup(k);
+}
+
+// Flip the optional 5% card fee on the pass-through price. If pass-through is the price in
+// play, follow the charge box along; otherwise just re-render the cards.
+function invTogglePass5(k) {
+  _invPass5[k] = !_invPass5[k];
+  var p = invPricing(k);
+  if (p && (_invMode[k] || 'passthrough') === 'passthrough') invUsePrice(k, p.passthroughPrice, 'passthrough');
+  else calcInvoiceMarkup(k);
 }
 
 // Calculate markup % between vendor cost and customer charge
@@ -4918,9 +4956,9 @@ function invRenderSuggestions(k, p, charge) {
   if (!box) return;
   if (!p || !(p.totalCost > 0)) { box.innerHTML = ''; return; }
 
-  function card(label, price, sub, id) {
+  function card(label, price, sub, mode) {
     var picked = Math.abs(charge - price) < 0.005;
-    return '<button onclick="invUsePrice(\'' + k + '\',' + price + ')" ' +
+    return '<button onclick="invUsePrice(\'' + k + '\',' + price + ',\'' + mode + '\')" ' +
       'style="flex:1;min-width:150px;text-align:left;cursor:pointer;font-family:var(--font);' +
       'background:' + (picked ? '#0f2417' : 'var(--surface)') + ';border:1px solid ' + (picked ? 'var(--accent2)' : 'var(--border)') + ';' +
       'border-radius:6px;padding:9px 11px">' +
@@ -4934,14 +4972,24 @@ function invRenderSuggestions(k, p, charge) {
     (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
     (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : '') + ' + 5%';
 
+  var passSub = 'Cost $' + p.totalCost.toFixed(2) +
+    (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
+    (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : '') +
+    (p.passFeeOn ? ' + 5%' : ' · no markup');
+
   box.innerHTML =
     '<div style="color:var(--muted);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Suggested prices — tap one, or type your own above</div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      card('Pass-through', p.passthroughPrice, passSub, 'passthrough') +
       card('Tiered', p.tieredPrice, '+' + p.tieredPct + '% on $' + p.totalCost.toFixed(2) + ' + $75 + 5%' +
         (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
         (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : ''), 'tiered') +
       card('Itemized', p.itemizedPrice, itemSub, 'itemized') +
-    '</div>';
+    '</div>' +
+    '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);cursor:pointer;margin-top:7px">' +
+      '<input type="checkbox"' + (p.passFeeOn ? ' checked' : '') + ' onchange="invTogglePass5(\'' + k + '\')" style="width:auto;padding:0">' +
+      'Add 5% card-processing to the pass-through price' +
+    '</label>';
 }
 
 // ── Where this bill stands ───────────────────────────────────
@@ -5079,8 +5127,13 @@ function invBillThisJob(k) {
 
   // The processing fee is carried as the 5% share of whatever price you settled on, so the
   // Invoice_Review row reconciles against the number actually being invoiced — not against
-  // whichever formula happened to suggest it.
-  var fee    = +(charge - charge / 1.05).toFixed(2);
+  // whichever formula happened to suggest it. A pass-through price with the 5% toggle OFF
+  // carries NO card fee, so reporting one would invent money that was never charged; in that
+  // case the fee is zero and the whole gap over cost is markup (zero at true pass-through,
+  // or whatever Brett typed above cost).
+  var mode    = _invMode[k] || 'passthrough';
+  var carries5 = (mode === 'tiered' || mode === 'itemized') || (mode === 'passthrough' && !!_invPass5[k]);
+  var fee    = carries5 ? +(charge - charge / 1.05).toFixed(2) : 0;
   var markup = +(charge - fee - p.totalCost - p.brettTime - p.travel).toFixed(2);
 
   api('POST', '/invoice-review/approve', {
@@ -5915,7 +5968,7 @@ function loadInvoiceReview() {
     el.innerHTML = _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
     // Card indexes are reused across renders, so clear panel state first — otherwise
     // 'ir0' could still be holding the bill or IR row from a previous load.
-    _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _invTime = {}; _invTimePicked = {}; _invTimeSeen = {}; _invTimeGen = {}; _invTimeMulti = {}; _invAutoPrice = {}; _invMat = {}; _invMatPicked = {}; _invMatSeen = {}; _invMatGen = {}; _invMatBilled = {}; _invMatMulti = {}; _invMatUnknown = {}; _qbAllPromise = null;
+    _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _invTime = {}; _invTimePicked = {}; _invTimeSeen = {}; _invTimeGen = {}; _invTimeMulti = {}; _invAutoPrice = {}; _invMode = {}; _invPass5 = {}; _invMat = {}; _invMatPicked = {}; _invMatSeen = {}; _invMatGen = {}; _invMatBilled = {}; _invMatMulti = {}; _invMatUnknown = {}; _qbAllPromise = null;
     // Mount each card's billing panel against the specific bill on that card. Without the
     // preferred-bill hint a work order carrying two vendors' bills would load the newest
     // one into BOTH cards, and you'd bill the same vendor twice.
