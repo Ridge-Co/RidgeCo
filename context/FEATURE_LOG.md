@@ -71,6 +71,23 @@ offering them on top as supervision. Only a LIVE bill consumes hours: voiding on
 them, and an unreadable bill list reports `null` (≠ `''`) so "don't know" never reads as
 "safe to charge again" — rule 16 applied to time. (Aug 5, 2026.)
 
+**40. Every receipt on a job can reach the invoice, and cost pass-through is the default
+price.** Two gaps closed on the invoice builder. (a) The own-materials picker
+(`loadInvoiceMaterials`) excluded any `Role=vendor` receipt on the theory it arrives on the
+vendor's bill — but an in-house vendor's bill is built from logged TIME (rule 39) and carries
+no receipt, so the receipt reached no invoice line and had to be typed by hand. Now ALL active
+receipts on the job show; vendor-logged ones stay UNTICKED by default (one tap to add, tagged
+"vendor-logged") so a receipt that IS on a 3rd-party bill's `Receipts_JSON` isn't double-billed
+silently — the `/receipts-billed` already-invoiced guard is unchanged. Known residual: no hard
+programmatic block if the same physical receipt sits in BOTH the Receipts tab and a bill's
+`Receipts_JSON` (non-silent — unticked + warning). (b) **Pass-through pricing is now the
+pre-selected default:** labor + materials at cost, no markup, no $75 admin, 5% card fee an
+OPTIONAL toggle (default OFF) — the right starting point for hourly customers (rate + materials,
+no surcharge). Tiered and Itemized unchanged, one tap away. The approve split
+(`invBillThisJob`) is mode-aware (`_invMode`/`_invPass5`, cleared in the Review-Bills reset) so
+a no-surcharge pass-through reports fee `0` and markup `0` instead of inventing a phantom 5%
+split. `pricing-model.test.mjs` +8 assertions (29 total). (Aug 5, 2026.)
+
 ### Money (rules 28–31)
 **28. Brett's hours are a WAGE, not a cost.** Added AFTER the markup so they're never marked
 up; they DO carry the 5% processing fee. A job he does himself is worth its full ticket —
