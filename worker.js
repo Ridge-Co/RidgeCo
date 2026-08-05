@@ -623,6 +623,37 @@ function isTenantNotifiable(tenant, wo) {
 
 function roundUpTo15(minutes) { if (minutes <= 0) return 15; return Math.ceil(minutes / 15) * 15; }
 
+// Ids arrive as an array from the Hub and as a comma string from anything hand-rolled.
+// Accept both rather than silently doing nothing to one of them.
+function parseIdList(v) {
+  const arr = Array.isArray(v) ? v : String(v == null ? '' : v).split(',');
+  const out = [];
+  arr.map(x => String(x == null ? '' : x).trim()).forEach(x => { if (x && out.indexOf(x) < 0) out.push(x); });
+  return out;
+}
+
+// Stamp the bill onto the hours it was built from. Bill_ID is not an original Time_Entries
+// column and addRow/updateRow map by header — writing it without this reports success and
+// stores nothing (rule 37).
+async function linkTimeEntriesToBill(env, entryIds, billId, woId) {
+  const ids = parseIdList(entryIds);
+  if (!ids.length || !billId) return 0;
+  await ensureColumns(env, 'Time_Entries', ['Bill_ID']);
+  const rows = await fetchTab(env, 'Time_Entries');
+  let linked = 0;
+  for (const id of ids) {
+    const row = rows.find(r => String(r.ID) === String(id));
+    // Only hours on THIS job, and never re-point an entry that is already inside a bill —
+    // that would move money from one invoice to another without either one changing.
+    if (!row) continue;
+    if (woId && String(row.WO_ID) !== String(woId)) continue;
+    if (String(row.Bill_ID || '').trim()) continue;
+    await updateRow(env, 'Time_Entries', id, { Bill_ID: String(billId) });
+    linked++;
+  }
+  return linked;
+}
+
 async function listTimeEntries(env, url) {
   const woId = url.searchParams.get('wo_id') || '', vendorId = url.searchParams.get('vendor_id') || '';
   if (!woId) return json({ error: 'wo_id required' }, 400);
@@ -630,6 +661,24 @@ async function listTimeEntries(env, url) {
     const rows = await fetchTab(env, 'Time_Entries');
     let results = rows.filter(r => r.WO_ID === woId && r.Active !== 'FALSE');
     if (vendorId) results = results.filter(r => r.Role === 'vendor' && r.Entered_By_ID === vendorId);
+
+    // Hours rolled into a vendor bill are already being charged as that bill's labour.
+    // Say so, so the billing panel doesn't add them a second time on top. A VOIDED bill
+    // releases them again — otherwise voiding a mistake would strand the time forever.
+    let live = null;
+    try {
+      const bills = await fetchTab(env, 'Vendor_Bills');
+      live = new Set(bills.filter(b => b.Active !== 'FALSE').map(b => String(b.ID)));
+    } catch (e) { live = null; }
+    results = results.map(r => {
+      const billId = String(r.Bill_ID || '').trim();
+      return Object.assign({}, r, {
+        // null (couldn't read the bills) is deliberately different from '' (read them, not
+        // billed) — the panel must not treat "don't know" as "safe to charge again".
+        Billed_Bill_ID: live === null ? null : (billId && live.has(billId) ? billId : ''),
+      });
+    });
+
     return json(results.sort((a, b) => new Date(a.Created_Date) - new Date(b.Created_Date)));
   } catch(e) { return json([]); }
 }
@@ -1160,12 +1209,34 @@ async function addVendorBill(env, body) {
       Status: 'submitted', Notes: String(body.Notes || ''), Hours: String(body.Hours || ''),
       Receipts_Total: String(body.Receipts_Total || ''),
     }, 86400);
-    if (dupe) return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
+    if (dupe) {
+      // A re-submit didn't create a second bill, but the hours it was built from still
+      // belong to the bill that DID get created. Link them to that one rather than leaving
+      // them loose and billable a second time.
+      try { await linkTimeEntriesToBill(env, body.time_entry_ids, String(dupe.ID || ''), dupeKey); } catch (e) {}
+      return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
+    }
   }
   // Vendor_Bills has no column for the vendor's own invoice number until something needs
   // one, and addRow maps by header — a write to a missing column stores nothing silently.
   if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) {} }
+
+  // Hours logged on the job can BE the bill — that is the whole point when Brett is the
+  // vendor. The ids ride in on the body but are not a Vendor_Bills column, so they come
+  // out before the row is written and get stamped onto the time rows afterwards instead.
+  const timeIds = parseIdList(body.time_entry_ids);
+  delete body.time_entry_ids;
+
   const res = await addRow(env, 'Vendor_Bills', body);
+  if (timeIds.length) {
+    // Link AFTER the bill exists. If this half fails the bill is still right — the hours
+    // simply stay available, which is recoverable. The reverse (hours marked spent against
+    // a bill that was never created) is not.
+    try {
+      const created = await res.clone().json();
+      if (created && created.id) await linkTimeEntriesToBill(env, timeIds, String(created.id), body.WO_ID || body.wo_id);
+    } catch (e) { /* the bill is saved; the link is not worth losing it over */ }
+  }
   // Automation: entering a bill moves the WO to Complete (if still pre-complete).
   try {
     const woKey = body.WO_ID || body.wo_id;

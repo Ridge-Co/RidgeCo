@@ -31,6 +31,20 @@ is no preview at all), with a "Create it now" button when the owner is linked an
 property isn't. Sub-customers are still only ever created on request — the button IS the
 request. (Aug 4, 2026.)
 
+**39. Logged time is a record, not a charge — the invoice is built from a BILL.** Hours
+logged on a job reached nothing on their own, and every downstream step (price, approve,
+send) is gated on a `Vendor_Bills` row. When Brett is the vendor there is nobody left to
+submit one, so "Log Time" looked broken when it was working exactly as built. The hours can
+now BE the bill: `hubBillUseLoggedTime` fills the Hub bill form from them (hours × rate when
+every entry shares a rate, flat when they don't — never a blended rate that matches no
+entry), and `/vendor-bill/add` takes `time_entry_ids`, strips them off the row, and stamps
+`Bill_ID` onto those entries after the bill exists. **Order matters:** bill first, link
+second — hours marked spent against a bill that was never created is unrecoverable, hours
+left free is not. `/time-entries` then reports `Billed_Bill_ID` so the billing panel stops
+offering them on top as supervision. Only a LIVE bill consumes hours: voiding one releases
+them, and an unreadable bill list reports `null` (≠ `''`) so "don't know" never reads as
+"safe to charge again" — rule 16 applied to time. (Aug 5, 2026.)
+
 ### Money (rules 28–31)
 **28. Brett's hours are a WAGE, not a cost.** Added AFTER the markup so they're never marked
 up; they DO carry the 5% processing fee. A job he does himself is worth its full ticket —

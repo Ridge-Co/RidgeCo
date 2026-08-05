@@ -3901,6 +3901,68 @@ function hubBillToggle(k) {
   hubBillVendorChanged(k); hubBillRenderReceipts(k); hubBillType(k, hubBillState(k).type);
 }
 
+// Open the panel and scroll to it, without toggling it shut if it's already open. Called
+// from the billing panel below, which is where you find out you need a bill.
+function hubBillOpen(k) {
+  var f = document.getElementById('hubbill-form-' + k);
+  if (!f) return false;
+  if (f.style.display === 'none') hubBillToggle(k);
+  var box = document.getElementById('hubbill-' + k);
+  if (box && box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  return true;
+}
+
+// Turn the hours logged on this job into the bill. This is the missing link: logging time
+// recorded it and stopped there, and everything downstream needs a BILL. When Brett is the
+// vendor there was nobody left to submit one.
+//
+// It fills the form rather than saving silently — the numbers are a starting point, the
+// same way a vendor's bill is, and he reprices jobs after seeing them. Saving is still a
+// deliberate press of "Save this bill", and the ids ride along so the hours are marked as
+// spent and can't also be charged on top as supervision.
+function hubBillUseLoggedTime(k) {
+  if (!hubBillOpen(k)) { toast('Open the work order to enter a bill.', 'error'); return; }
+  var free = safeArray(_invTime[k]);
+  if (!free.length) { toast('No unbilled time logged on this job.', 'info'); return; }
+
+  var mins = free.reduce(function(s, e) { return s + (parseFloat(e.Duration_Minutes) || 0); }, 0);
+  var amt  = free.reduce(function(s, e) { return s + invTimeAmount(e); }, 0);
+  var hrs  = mins / 60;
+  // One rate across every entry means it can be billed as hours × rate, which reconciles
+  // against the time log line by line. Mixed rates cannot be expressed that way without
+  // inventing a blended rate that matches no entry, so those bill as a flat amount.
+  var rates = {};
+  free.forEach(function(e) { rates[((parseFloat(e.Hourly_Rate) || 0) || HUB_HOURLY_RATE).toFixed(2)] = true; });
+  var oneRate = Object.keys(rates).length === 1 ? parseFloat(Object.keys(rates)[0]) : 0;
+
+  var st = hubBillState(k);
+  st.timeIds = free.map(function(e) { return String(e.ID); });
+
+  if (oneRate > 0 && hrs > 0) {
+    hubBillType(k, 'hourly');
+    var hEl = document.getElementById('hb-hours-' + k), rEl = document.getElementById('hb-rate-' + k);
+    if (hEl) hEl.value = hrs.toFixed(2);
+    if (rEl) { rEl.value = String(oneRate); rEl.dataset.auto = '0'; }
+  } else {
+    hubBillType(k, 'flat');
+    var fEl = document.getElementById('hb-flatamt-' + k);
+    if (fEl) fEl.value = amt.toFixed(2);
+  }
+
+  var notes = document.getElementById('hb-notes-' + k);
+  if (notes && !notes.value) {
+    notes.value = free.map(function(e) {
+      return ((parseFloat(e.Duration_Minutes) || 0) / 60).toFixed(2) + 'h' + (e.Notes ? ' — ' + e.Notes : '');
+    }).join('; ');
+  }
+
+  var msg = document.getElementById('hb-msg-' + k);
+  if (msg) msg.innerHTML = '<div style="color:var(--info);font-size:11.5px">' +
+    esc(free.length + ' time ' + (free.length === 1 ? 'entry' : 'entries') + ' pulled in (' + hrs.toFixed(2) + 'h). ') +
+    'Adjust anything, add receipts, then save. These hours will be marked as billed so they can\'t also be charged on top as supervision.</div>';
+  hubBillCalc(k);
+}
+
 // Pull the vendor's stored rate in as a starting point. Editable — a vendor can agree a
 // different rate for one job, and Brett's own rate is not always the same either.
 function hubBillVendorChanged(k) {
@@ -4088,6 +4150,10 @@ function hubBillSubmit(k, woId) {
     Notes: (document.getElementById('hb-notes-' + k) || {}).value || '',
     Entered_By: 'hub',
     Active: 'TRUE',
+    // Not a Vendor_Bills column — the Worker strips it off and stamps these time entries
+    // with the new bill's id, so the hours count as this bill's labour and stop being
+    // offered as supervision to charge on top. Only sent when the hours were pulled in.
+    time_entry_ids: safeArray(st.timeIds),
   };
 
   var woNow = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
@@ -4110,6 +4176,12 @@ function hubBillSubmit(k, woId) {
       if (e) { e.value = ''; if (id === 'hb-rate') e.dataset.auto = '1'; }
     });
     loadVendorBillForInvoice(k);                       // the billing panel picks it up
+    // The hours that became this bill are now inside it. Re-read so they move out of the
+    // "tick to add on top" list — leaving them there is how the same hour gets billed twice.
+    invRefreshTimeForWO(woId);
+    // And re-read the time log itself, so those entries show which bill swallowed them
+    // rather than still reading BILLABLE with no sign anything happened.
+    if (document.getElementById('time-track-' + woId)) loadHubTimeTracking(woId, null);
 
     // Entering a bill also moves a not-yet-complete job to Complete. That happens server
     // side, so say so rather than leaving the status badge above showing the old value.
@@ -4364,6 +4436,8 @@ var _invTimePicked = {};  // scope key → { entryId: true }
 var _invTimeGen = {};    // per-scope fetch generation, to drop stale responses
 var _invTimeSeen = {};   // entry ids this panel has already offered a default for
 var _invTimeMulti = {};  // is this work order carrying more than one billing panel?
+var _invTimeInBill = {}; // hours already rolled into a live vendor bill — shown, not charged again
+var _invTimeFree = {};   // scope key → billable hours not yet inside any bill
 
 function loadInvoiceTime(k) {
   var woId = _invWO[k] || k;
@@ -4373,9 +4447,17 @@ function loadInvoiceTime(k) {
   api('GET', '/time-entries?wo_id=' + encodeURIComponent(woId)).then(function(entries) {
     if (_invTimeGen[k] !== gen) return;      // a newer load already won
     if (!Array.isArray(entries)) { _invTime[k] = []; box.innerHTML = ''; return; }
-    var billable = entries.filter(function(e) {
+    var live = entries.filter(function(e) {
       return e.Active !== 'FALSE' && String(e.Billable).toUpperCase() !== 'FALSE' && invTimeAmount(e) > 0;
     });
+    // Hours already rolled into a vendor bill are being charged as that bill's LABOUR.
+    // Adding them here too would put the same hour on the invoice twice — once inside the
+    // cost, once on top as a wage. They're shown separately so the money isn't invisible.
+    _invTimeInBill[k] = live.filter(function(e) { return e.Billed_Bill_ID; });
+    var billable = live.filter(function(e) { return !e.Billed_Bill_ID; });
+    // Billed_Bill_ID === null means we could not read the bills. Not knowing is not the
+    // same as knowing they're free, so nothing gets ticked for you in that case.
+    var billedUnknown = live.some(function(e) { return e.Billed_Bill_ID === null; });
     _invTime[k] = billable;
 
     // Default-check your own hours — UNLESS this work order has more than one billing
@@ -4393,7 +4475,7 @@ function loadInvoiceTime(k) {
     billable.forEach(function(e) {
       var id = String(e.ID);
       if (id in picked || _invTimeSeen[k] && _invTimeSeen[k][id]) return;   // keep your choices
-      if (panelsOnThisWO < 2 && String(e.Role || '').toLowerCase() === 'hub') picked[id] = true;
+      if (panelsOnThisWO < 2 && !billedUnknown && String(e.Role || '').toLowerCase() === 'hub') picked[id] = true;
     });
     _invTimePicked[k] = picked;
     _invTimeSeen[k] = _invTimeSeen[k] || {};
@@ -4450,11 +4532,27 @@ function invRenderTime(k) {
   var box = document.getElementById('inv-time-' + k);
   if (!box) return;
   var list = safeArray(_invTime[k]);
-  if (!list.length) { box.innerHTML = ''; return; }
+  var inBill = safeArray(_invTimeInBill[k]);
+  if (!list.length && !inBill.length) { box.innerHTML = ''; return; }
   var picked = _invTimePicked[k] || {};
   var total = invTimeTotal(k);
 
-  box.innerHTML =
+  // Hours that BECAME a bill are not missing — they're the labour line in the vendor cost
+  // above. Showing them greyed out is the difference between "handled" and "vanished".
+  var inBillHtml = inBill.length ? '<div style="background:var(--surface);border-radius:6px;padding:8px;margin-bottom:6px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.06em;margin-bottom:4px">ALREADY BILLED AS LABOUR — counted in the vendor cost above</div>' +
+    inBill.map(function(e) {
+      var mins = parseFloat(e.Duration_Minutes) || 0;
+      return '<div style="display:flex;gap:8px;font-size:11px;color:var(--muted);padding:3px 0;border-top:1px solid var(--border)">' +
+        '<span style="white-space:nowrap">' + (mins / 60).toFixed(2) + 'h</span>' +
+        '<span>' + esc(e.Entered_By || 'You') + (e.Notes ? ' · ' + esc(String(e.Notes).substring(0, 36)) : '') + '</span>' +
+        '<span style="margin-left:auto;white-space:nowrap">on bill #' + esc(String(e.Billed_Bill_ID)) + ' · $' + invTimeAmount(e).toFixed(2) + '</span>' +
+      '</div>';
+    }).join('') + '</div>' : '';
+
+  if (!list.length) { box.innerHTML = inBillHtml; return; }
+
+  box.innerHTML = inBillHtml +
     '<div style="background:var(--surface);border-radius:6px;padding:10px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
         '<span style="color:var(--muted);font-size:10px;letter-spacing:.06em">TIME LOGGED ON THIS JOB — tick what goes on the invoice</span>' +
@@ -4478,6 +4576,29 @@ function invRenderTime(k) {
     '</div>';
 }
 
+// "No bill submitted yet" was a dead end: it stated a fact and offered no way out, and
+// everything downstream — pricing, approve, send — is gated on a bill existing. When the
+// vendor is you, waiting for a vendor to submit one is waiting for yourself. So this says
+// what it blocks and puts the way through it right here.
+function invNoBillHtml(k, headline) {
+  var canEnter = !!document.getElementById('hubbill-form-' + k);
+  var free = safeArray(_invTime[k]);
+  var hrs = free.reduce(function(s, e) { return s + (parseFloat(e.Duration_Minutes) || 0) / 60; }, 0);
+  var amt = free.reduce(function(s, e) { return s + invTimeAmount(e); }, 0);
+
+  return '<div style="color:var(--warn);font-size:11.5px;line-height:1.5">' + esc(headline) +
+    ' Nothing can be priced, approved or invoiced until there is one — the bill is what the invoice is built from.</div>' +
+    (canEnter
+      ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">' +
+          (hrs > 0
+            ? '<button class="btn small" onclick="hubBillUseLoggedTime(\'' + k + '\')" style="background:var(--accent);color:#fff;font-size:11px;padding:4px 10px">' +
+              '⏱ Bill my ' + hrs.toFixed(2) + 'h ($' + amt.toFixed(2) + ')</button>'
+            : '') +
+          '<button class="btn small" onclick="hubBillOpen(\'' + k + '\')" style="background:var(--surface);color:var(--muted);font-size:11px;padding:4px 10px">✍ Enter a bill by hand</button>' +
+        '</div>'
+      : '<div style="color:var(--muted);font-size:10.5px;margin-top:5px">Open the work order to enter one.</div>');
+}
+
 function invPickBill(k, billId) {
   _invPreferBill[k] = String(billId);
   loadVendorBillForInvoice(k);   // resets the time picks when the bill actually changes
@@ -4488,8 +4609,11 @@ function loadVendorBillForInvoice(k) {
   var el = document.getElementById('inv-vendor-breakdown-' + k);
   if (!el) return;
   api('GET', '/vendor-bills?wo_id=' + woId).then(function(bills) {
+    // Whatever the answer, it's now known — the time section stays quiet until it is.
+    _invBillLoaded[woId] = true;
+    setTimeout(function() { hubTimeRenderNextStep(woId); }, 0);
     if (!Array.isArray(bills) || !bills.length) {
-      el.innerHTML = '<span style="color:var(--muted)">No bill submitted yet</span>';
+      el.innerHTML = invNoBillHtml(k, 'No bill on this job yet.');
       _invBill[k] = null;
       invRenderStatus(k, null);
       return;
@@ -4497,7 +4621,7 @@ function loadVendorBillForInvoice(k) {
     // Ignore voided bills, and bill against the newest live one.
     var live = bills.filter(function(b) { return b.Active !== 'FALSE'; });
     if (!live.length) {
-      el.innerHTML = '<span style="color:var(--muted)">All bills on this job are voided</span>';
+      el.innerHTML = invNoBillHtml(k, 'Every bill on this job is voided.');
       _invBill[k] = null;
       invRenderStatus(k, null);
       return;
@@ -4568,9 +4692,16 @@ function loadVendorBillForInvoice(k) {
     invAutoPrice(k);
     calcInvoiceMarkup(k);
     invLoadStatus(k);
-  }).catch(function() {
-    el.innerHTML = '<span style="color:var(--muted)">No bill submitted yet</span>';
+  }).catch(function(err) {
+    // A failed READ is not proof there is no bill (rule 16). Saying "no bill submitted yet"
+    // here would invite a second bill on a job that already has one, so it says what
+    // actually happened and offers the read again instead.
+    _invBillLoaded[woId] = false;
     _invBill[k] = null;
+    el.innerHTML = '<div style="color:var(--danger);font-size:11.5px;line-height:1.5">Could not read this job\'s bills — ' +
+      esc((err && err.message) || 'no response') + '. This is not the same as there being none, so nothing is offered here until it reads.</div>' +
+      '<button class="btn small" onclick="loadVendorBillForInvoice(\'' + k + '\')" style="background:var(--surface);color:var(--muted);font-size:11px;padding:4px 10px;margin-top:6px">Try again</button>';
+    setTimeout(function() { hubTimeRenderNextStep(woId); }, 0);
   });
 }
 
@@ -5370,9 +5501,14 @@ function renderHubTimeSection(woId, entries, holder) {
     var type  = esc(e.Entry_Type || '');
     var dur   = minToStr(e.Duration_Minutes);
     var note  = esc(e.Notes || '');
-    var billBadge = (e.Billable==='TRUE'||e.Billable===true)
-      ? '<span style="background:#14532d;color:#4ade80;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
-      : '';
+    // "BILLABLE" only ever meant "allowed to be charged", never "will be". Once the hours
+    // are inside a bill they say so, because that is the answer to "did logging this do
+    // anything" — and until then, saying BILLABLE alone is what made it look like it had.
+    var billBadge = e.Billed_Bill_ID
+      ? '<span style="background:#1e3a5f;color:#7dd3fc;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">ON BILL #' + esc(String(e.Billed_Bill_ID)) + '</span>'
+      : ((e.Billable==='TRUE'||e.Billable===true)
+        ? '<span style="background:#14532d;color:#4ade80;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
+        : '');
     var dateStr = e.Start_DateTime ? esc(e.Start_DateTime.split('T')[0]) : (e.Created_Date||'').split('T')[0];
     return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
       '<div style="flex:1">' +
@@ -5396,8 +5532,59 @@ function renderHubTimeSection(woId, entries, holder) {
         '</div>' +
       '</div>' +
       (entries.length ? entryRows : '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No time logged yet.</div>') +
+      '<div id="time-next-' + esc(String(woId)) + '"></div>' +
       buildHubTimeForm(woId) +
     '</div>';
+
+  _hubTimeEntries[woId] = entries;
+  hubTimeRenderNextStep(woId);
+}
+
+// The entries are in hand as soon as /time-entries lands, but whether this job HAS a bill
+// arrives on a separate request. Telling him to make one before that answer is back is how
+// he'd end up with two bills on one job, so this renders into its own slot and is called
+// again the moment the bill state is known.
+var _hubTimeEntries = {};
+var _invBillLoaded = {};
+
+function hubTimeRenderNextStep(woId) {
+  var slot = document.getElementById('time-next-' + woId);
+  if (!slot) return;
+  slot.innerHTML = hubTimeNextStep(woId, safeArray(_hubTimeEntries[woId]));
+}
+
+// What logging time actually DOES, said out loud. Hours on their own are a record and
+// nothing more — the invoice is built from a BILL, so billable time that is in no bill is
+// money sitting still. When Brett does the work himself there is no vendor left to submit
+// one, which is exactly the gap this closes.
+function hubTimeNextStep(woId, entries) {
+  // Say nothing until we know whether this job has a bill. Guessing "no bill" while the
+  // answer is still in flight is what would produce a second bill on a job that has one.
+  if (!_invBillLoaded[woId]) return '';
+
+  // Exactly the test the billing panel uses, so the button can never offer hours that
+  // hubBillUseLoggedTime would then refuse to find.
+  var free = safeArray(entries).filter(function(e) {
+    return e.Active !== 'FALSE' && String(e.Billable).toUpperCase() !== 'FALSE' &&
+           !e.Billed_Bill_ID && invTimeAmount(e) > 0;
+  });
+  if (!free.length) return '';
+  var hrs = free.reduce(function(s, e) { return s + (parseFloat(e.Duration_Minutes) || 0) / 60; }, 0);
+
+  // With a bill already on the job, these hours go on top of it as supervision — which the
+  // billing panel already offers. Don't send him to make a second bill for the same job.
+  if (_invBill[woId]) {
+    return '<div style="color:var(--muted);font-size:10.5px;line-height:1.45;margin:8px 0 0">' +
+      hrs.toFixed(2) + 'h billable and not in a bill — tick it in the invoice builder below to add it on top of the vendor\'s bill as your time.</div>';
+  }
+
+  return '<div style="background:var(--surface);border:1px solid var(--warn);border-radius:6px;padding:9px;margin-top:10px">' +
+    '<div style="color:var(--warn);font-size:11px;line-height:1.5">' +
+      hrs.toFixed(2) + 'h billable, but there is no bill on this job — so none of it reaches an invoice yet. ' +
+      'If this was your work, bill it as your own.</div>' +
+    '<button class="btn small" onclick="hubBillUseLoggedTime(\'' + esc(String(woId)) + '\')" ' +
+      'style="background:var(--accent);color:#fff;font-size:11px;padding:4px 10px;margin-top:7px">⏱ Turn these hours into a bill</button>' +
+  '</div>';
 }
 
 function buildHubTimeForm(woId) {
