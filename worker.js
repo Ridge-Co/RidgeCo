@@ -368,7 +368,7 @@ async function tenantByPin(env, url) {
     }
     const tFirst = (tenant.First_Name||'').toLowerCase();
     if (tFirst !== name && !tFirst.startsWith(name)) return null;
-    const [props, units] = await Promise.all([fetchTab(env,'Properties'), fetchTab(env,'Units')]);
+    const [props, units] = await fetchTabs(env, ['Properties','Units']);
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
     const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
     return json({
@@ -389,7 +389,7 @@ async function ownerByPin(env, url) {
   const _ownerName = (url.searchParams.get('name') || '').trim();
   if (!_ownerName) return json({ error: 'First name is required', name_required: true }, 400);
   return await pinLookup(env, pin, async (p) => {
-    const [ownerUsers, owners] = await Promise.all([fetchTab(env, 'Owner_Users'), fetchTab(env, 'Owners')]);
+    const [ownerUsers, owners] = await fetchTabs(env, ['Owner_Users','Owners']);
     const enteredName = (url?.searchParams?.get('name')||'').trim().toLowerCase();
     if (!enteredName) return null;
     const user = ownerUsers.find(u => u.PIN && u.PIN.toLowerCase() === p.toLowerCase() && u.Active !== 'FALSE');
@@ -813,7 +813,7 @@ async function processMoveOut(env, body) {
 
   let retroCount = 0;
   try {
-    const [wos, woTenants] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'WO_Tenants')]);
+    const [wos, woTenants] = await fetchTabs(env, ['Work_Orders','WO_Tenants']);
     for (const link of woTenants.filter(r => r.Tenant_ID === tenant_id && r.Active !== 'FALSE')) {
       const wo = wos.find(w => w.ID === link.WO_ID);
       if (!wo || !wo.Created_Date) continue;
@@ -868,9 +868,8 @@ async function appendWONotes(env, body) {
   return json({ success: true });
 }
 async function assignVendor(env, body) {
-  const [workorders, vendors, tenants, units, properties, keys] = await Promise.all([
-    fetchTab(env,'Work_Orders'), fetchTab(env,'Vendors'), fetchTab(env,'Tenants'),
-    fetchTab(env,'Units'), fetchTab(env,'Properties'), fetchTab(env,'Keys'),
+  const [workorders, vendors, tenants, units, properties, keys] = await fetchTabs(env, [
+    'Work_Orders','Vendors','Tenants','Units','Properties','Keys',
   ]);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const vendor = vendors.find(v => v.ID === body.vendor_id); if (!vendor) return json({ error: 'Vendor not found' }, 404);
@@ -931,7 +930,7 @@ async function updateStatus(env, body) {
   await logWOAudit(env, body.wo_id, changedBy, changedRole, 'Status', wo.Status||'', body.status, body.notes||'');
   const config = await fetchConfig(env);
   if (body.status === 'Complete') {
-    const [units, tenants, properties] = await Promise.all([fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Properties')]);
+    const [units, tenants, properties] = await fetchTabs(env, ['Units','Tenants','Properties']);
     const unit = units.find(u => u.ID === wo.Unit_ID), tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID)), property = properties.find(p => p.ID === wo.Property_ID);
     const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
@@ -945,7 +944,7 @@ async function updateStatus(env, body) {
   if (notifyStatuses.includes(body.status)) {
     const notify = await shouldNotifyOwner(env, wo, body.status);
     if (notify) {
-      const [properties, owners] = await Promise.all([fetchTab(env,'Properties'), fetchTab(env,'Owners')]);
+      const [properties, owners] = await fetchTabs(env, ['Properties','Owners']);
       const property = properties.find(p => p.ID === wo.Property_ID), owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
       if (owner?.Phone) {
         const statusMsgs = { Assigned: `Hi ${owner.First_Name}, a technician has been assigned to the ${wo.Trade} job at ${property.Address}. Ref: ${body.wo_id}.`, Scheduled: `Hi ${owner.First_Name}, the ${wo.Trade} job at ${property.Address} has been scheduled. Ref: ${body.wo_id}.`, Complete: `Hi ${owner.First_Name}, the ${wo.Trade} work at ${property.Address} is complete. An invoice will follow. Ref: ${body.wo_id}.`, Invoiced: `Hi ${owner.First_Name}, an invoice has been submitted for ${wo.Trade} at ${property.Address}. Ref: ${body.wo_id}. Contact us with any questions.` };
@@ -973,9 +972,9 @@ async function vendorWorkorders(env, url) {
   const vendorId = url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys, config] = await Promise.all([
-    fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'),
-    fetchTab(env,'Tenants'), fetchTab(env,'Keys'), fetchConfig(env),
+  const [[workorders, properties, units, tenants, keys], config] = await Promise.all([
+    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys']),
+    fetchConfig(env),
   ]);
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
@@ -989,7 +988,7 @@ async function tenantWorkorders(env, url) {
   const tenantId = url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys')]);
+  const [workorders, properties, units, tenants, keys] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys']);
   const tenant = tenants.find(t => t.ID === tenantId); if (!tenant) return json([]);
   const wos = workorders.filter(w => { if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
   const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true }));
@@ -1001,7 +1000,7 @@ async function ownerWorkorders(env, url) {
   const ownerId = url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys')]);
+  const [workorders, properties, units, tenants, keys] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys']);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
   const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true }));
@@ -1077,7 +1076,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
 async function getPropertyFull(env, url) {
   const id = url.searchParams.get('id');
   if (!id) return json({ error: 'Missing id' }, 400);
-  const [props, units, tenants, keys] = await Promise.all([fetchTab(env,'Properties'), fetchTab(env,'Units'), fetchTab(env,'Tenants'), fetchTab(env,'Keys')]);
+  const [props, units, tenants, keys] = await fetchTabs(env, ['Properties','Units','Tenants','Keys']);
   const property = props.find(p => p.ID === id);
   if (!property) return json({ error: 'Property not found' }, 404);
   const propUnits = units.filter(u => u.Property_ID === id).map(unit => ({ ...unit, tenant: tenants.find(t => t.ID === unit.Tenant_ID)||null, keys: keys.filter(k => k.Unit_ID === unit.ID && k.Active !== 'FALSE') }));
@@ -1087,7 +1086,7 @@ async function getPropertyFull(env, url) {
 async function getBuildingInfo(env, url) {
   const propId = url.searchParams.get('property_id'), unitId = url.searchParams.get('unit_id') || '';
   if (!propId) return json({ error: 'Missing property_id' }, 400);
-  const [properties, units] = await Promise.all([fetchTab(env,'Properties'), fetchTab(env,'Units')]);
+  const [properties, units] = await fetchTabs(env, ['Properties','Units']);
   const prop = properties.find(p => p.ID === propId);
   if (!prop) return json({ error: 'Property not found' }, 404);
   return json({ property: prop, unit: unitId ? (units.find(u => u.ID === unitId)||null) : null, units: units.filter(u => u.Property_ID === propId) });
@@ -1103,7 +1102,7 @@ async function saveBuildingInfo(env, body) {
 async function ownerProperties(env, url) {
   const ownerId = url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
-  const [properties, units] = await Promise.all([fetchTab(env,'Properties'), fetchTab(env,'Units')]);
+  const [properties, units] = await fetchTabs(env, ['Properties','Units']);
   return json(properties.filter(p => p.Owner_ID === ownerId && p.Active !== 'FALSE').map(p => ({ ...p, units: units.filter(u => u.Property_ID === p.ID) })));
 }
 
@@ -1534,7 +1533,7 @@ function calcTieredEstimate(rawCost) {
 async function listNearbyWOs(env, url) {
   const woId = url.searchParams.get('wo_id')||'', vendorId = url.searchParams.get('vendor_id')||'';
   if (!woId) return json({ error: 'wo_id required' }, 400);
-  const [wos, props, tenants] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties'), fetchTab(env,'Tenants')]);
+  const [wos, props, tenants] = await fetchTabs(env, ['Work_Orders','Properties','Tenants']);
   const wo = wos.find(w => w.ID === woId); if (!wo) return json({ error: 'WO not found' }, 404);
   const prop = props.find(p => String(p.ID) === String(wo.Property_ID)); if (!prop) return json({ nearby: [], message: 'Property not found' });
   const primary = (prop.Location_Cluster||'').trim(), overlap = (prop.Location_Overlap||'').split(',').map(s=>s.trim()).filter(Boolean), allTags = [primary, ...overlap].filter(Boolean);
@@ -1692,7 +1691,7 @@ async function addWONote(env, body) {
 
   if (body.notify_owner_status_note === true) {
     try {
-      const [properties, owners] = await Promise.all([fetchTab(env,'Properties'), fetchTab(env,'Owners')]);
+      const [properties, owners] = await fetchTabs(env, ['Properties','Owners']);
       const noteProp = properties.find(p => p.ID === wo.Property_ID);
       const noteOwner = noteProp ? owners.find(o => o.ID === noteProp.Owner_ID) : null;
       if (noteOwner?.Phone) {
@@ -1711,7 +1710,7 @@ const OWNER_EDITABLE_FIELDS = ['Owner_WO_Ref','Priority','Scheduled_Date'];
 async function ownerUpdateWO(env, body) {
   const allowed = {}; for (const [k,v] of Object.entries(body.fields||{})) { if (OWNER_EDITABLE_FIELDS.includes(k)) allowed[k]=v; }
   if (!Object.keys(allowed).length) return json({ error: 'No owner-editable fields provided' }, 400);
-  const [workorders, properties] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties')]);
+  const [workorders, properties] = await fetchTabs(env, ['Work_Orders','Properties']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const prop = properties.find(p => p.ID === wo.Property_ID);
   if (!prop || String(prop.Owner_ID) !== String(body.owner_id)) return json({ error: 'Unauthorized' }, 403);
@@ -1730,7 +1729,7 @@ async function adminUpdateWO(env, body) {
 
 async function appendDescription(env, body) {
   if (!body.wo_id||!body.text) return json({ error: 'Missing wo_id or text' }, 400);
-  const [workorders, properties] = await Promise.all([fetchTab(env,'Work_Orders'), fetchTab(env,'Properties')]);
+  const [workorders, properties] = await fetchTabs(env, ['Work_Orders','Properties']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   if (body.author_role === 'owner' && body.owner_id) { const prop = properties.find(p => p.ID === wo.Property_ID); if (!prop || String(prop.Owner_ID) !== String(body.owner_id)) return json({ error: 'Unauthorized' }, 403); }
   const ts = new Date().toLocaleString('en-US', { timeZone:'America/New_York', month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' });
@@ -1950,7 +1949,7 @@ async function adminOwnerToUser(env, body) {
     return json({ error: 'Those two rows carry the SAME ID in the Owners tab. That is a data problem, not a duplicate — give one of them a unique ID in the sheet first, or every lookup will keep finding whichever comes first.' }, 400);
   }
 
-  const [owners, ownerUsers] = await Promise.all([fetchTab(env, 'Owners'), fetchTab(env, 'Owner_Users')]);
+  const [owners, ownerUsers] = await fetchTabs(env, ['Owners','Owner_Users']);
   const from = owners.find(o => String(o.ID) === fromId);
   const to   = owners.find(o => String(o.ID) === toId);
   if (!from) return json({ error: `No owner ${fromId}` }, 404);
@@ -2295,7 +2294,7 @@ async function adminMergeProperty(env, body) {
 
 async function adminFixStaleTenants(env, body) {
   const apply = body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
-  const [units, tenants] = await Promise.all([fetchTab(env, 'Units'), fetchTab(env, 'Tenants')]);
+  const [units, tenants] = await fetchTabs(env, ['Units','Tenants']);
   // A Tenants read that succeeds but returns nothing would classify EVERY linked unit as
   // an orphan, and one click would wipe the portfolio. Refuse before doing any work.
   if (apply && !tenants.length) {
@@ -2469,7 +2468,7 @@ async function scheduleWO(env, body) {
   await logWOAudit(env,body.wo_id,body.updated_by||'admin',body.updated_by_role||'admin','Scheduled',wo.Scheduled_Date||'',schedDate+' '+(body.window||''),isWithinHour?'On my way notification':'Appointment scheduled');
   let tenantSMSSent=false, notifyQueued=false;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
-    const [units,tenants,properties]=await Promise.all([fetchTab(env,'Units'),fetchTab(env,'Tenants'),fetchTab(env,'Properties')]);
+    const [units,tenants,properties]=await fetchTabs(env, ['Units','Tenants','Properties']);
     const unit=units.find(u=>u.ID===wo.Unit_ID), tenant=tenants.find(t=>t.ID===(unit?.Tenant_ID||wo.Tenant_ID)), property=properties.find(p=>p.ID===wo.Property_ID);
     const address=property?property.Address+(unit?' Unit '+unit.Unit_Label:''):'your address';
     if(isTenantNotifiable(tenant,wo)){
@@ -2525,7 +2524,7 @@ async function saveOwnerNotifications(env, body) {
 }
 
 async function shouldNotifyOwner(env, wo, statusEvent) {
-  const [properties,owners]=await Promise.all([fetchTab(env,'Properties'),fetchTab(env,'Owners')]);
+  const [properties,owners]=await fetchTabs(env, ['Properties','Owners']);
   const prop=properties.find(p=>p.ID===wo.Property_ID); if(!prop) return false;
   const owner=owners.find(o=>o.ID===prop.Owner_ID); if(!owner||!owner.Phone) return false;
   if((owner.Notify_Method||'sms')==='none') return false;
@@ -2832,14 +2831,24 @@ const ROLE_SCOPES = {
 };
 function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !!(s && s.includes(path)); }
 
+// The service-account token is valid for an hour. Minting a fresh one on every
+// Sheets call doubled the outbound requests (a token POST per read) and added
+// latency for nothing. Cache it in the isolate and reuse until it is about to
+// expire. Keyed by SA email so a staging/prod env swap can never reuse the wrong
+// credential. This is an app credential, not user data — safe to share across
+// requests in the same isolate.
+let __sheetsToken = { key: '', token: '', exp: 0 };
 async function getAccessToken(env) {
   const now=Math.floor(Date.now()/1000);
+  const cacheKey=env.GOOGLE_SA_EMAIL||'';
+  if(__sheetsToken.token && __sheetsToken.key===cacheKey && __sheetsToken.exp>now+60) return __sheetsToken.token;
   const header=b64url(JSON.stringify({alg:'RS256',typ:'JWT'}));
   const claim=b64url(JSON.stringify({iss:env.GOOGLE_SA_EMAIL,scope:'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',aud:'https://oauth2.googleapis.com/token',exp:now+3600,iat:now}));
   const sigInput=`${header}.${claim}`, key=await importPrivateKey(env.GOOGLE_SA_KEY);
   const jwt=`${sigInput}.${await signRS256(sigInput,key)}`;
   const resp=await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:`grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`});
   const data=await resp.json(); if(!data.access_token) throw new Error('Google auth failed: '+JSON.stringify(data));
+  __sheetsToken={key:cacheKey, token:data.access_token, exp:now+3600};
   return data.access_token;
 }
 
@@ -2854,14 +2863,34 @@ async function signRS256(input, key) {
   return btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
 
+// Google throttles Sheets reads on a "read requests per minute per user" quota,
+// and the whole Hub shares ONE service-account identity, so every user's reads
+// pile onto the same per-user bucket. When it trips, Google returns a 429 and the
+// old code threw it straight onto the user's screen. Now a 429 is waited out and
+// retried with exponential backoff so a brief throttle self-heals instead of
+// erroring. Retry safety by method: a 429 means the request was rate-limited and
+// NEVER applied, so it is safe to retry any method (including an append). A 500/503
+// is ambiguous — the write may have landed — so those are retried ONLY for GET,
+// never for a POST/PUT that could double-write a bill or row.
 async function sheetsRequest(env, method, path, body) {
-  const token=await getAccessToken(env);
-  const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
-  if(body) opts.body=JSON.stringify(body);
-  const res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts);
-  const data=await res.json();
-  if(data.error) throw new Error(`Sheets API error on ${method} ${path}: ${data.error.message||JSON.stringify(data.error)}`);
-  return data;
+  const MAX_ATTEMPTS=4;
+  for(let attempt=1;;attempt++){
+    const token=await getAccessToken(env);
+    const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
+    if(body) opts.body=JSON.stringify(body);
+    const res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts);
+    const data=await res.json();
+    if(data.error){
+      const code=data.error.code||res.status;
+      const retryable = code===429 || ((code===500||code===503) && method==='GET');
+      if(retryable && attempt<MAX_ATTEMPTS){
+        await new Promise(r=>setTimeout(r, 300*Math.pow(2,attempt-1)+Math.floor(Math.random()*120)));
+        continue;
+      }
+      throw new Error(`Sheets API error on ${method} ${path}: ${data.error.message||JSON.stringify(data.error)}`);
+    }
+    return data;
+  }
 }
 
 async function getSheet(env, tab) {
@@ -2872,6 +2901,25 @@ async function getSheet(env, tab) {
 async function fetchTab(env, tab) {
   const data=await sheetsRequest(env,'GET',`/values/${tab}`); if(!data.values||data.values.length<2) return [];
   const [headers,...rows]=data.values; return rows.map(row=>{const o={};headers.forEach((h,i)=>o[h]=row[i]||'');return o;});
+}
+
+// Read several tabs in ONE HTTP request via values:batchGet instead of one GET
+// per tab. A screen that used to fire 5 separate reads (each counted against the
+// per-minute quota) now costs a single read. Returns an array of row-object lists
+// in the SAME ORDER as `tabs` (batchGet preserves request order), each parsed
+// exactly like fetchTab — so callers just swap `Promise.all([fetchTab,...])` for
+// `fetchTabs(env,[...])` with no change to the data shape. Still a fresh read
+// every time: no caching, no staleness risk to money data.
+async function fetchTabs(env, tabs) {
+  if(!tabs||!tabs.length) return [];
+  const qs=tabs.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
+  const data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
+  const ranges=data.valueRanges||[];
+  return tabs.map((_,i)=>{
+    const values=(ranges[i]&&ranges[i].values)||[];
+    if(values.length<2) return [];
+    const [headers,...rows]=values; return rows.map(row=>{const o={};headers.forEach((h,idx)=>o[h]=row[idx]||'');return o;});
+  });
 }
 
 async function health(env) {
@@ -3130,9 +3178,7 @@ async function qbRepairable(env, url) {
     const days = Math.max(1, Math.min(90, parseInt(url && url.searchParams.get('days')) || 7));
     const cutoff = new Date(Date.now() - days * 86400000);
     const token = await qbAccessToken(env);
-    const [irs, wos, bills] = await Promise.all([
-      fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendor_Bills'),
-    ]);
+    const [irs, wos, bills] = await fetchTabs(env, ['Invoice_Review','Work_Orders','Vendor_Bills']);
 
     const sent = irs.filter(r => r.Active !== 'FALSE' && (r.QB_Invoice_ID || '').trim());
     const out = [];
@@ -3186,9 +3232,7 @@ async function qbRepairInvoice(env, body) {
     const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
     if (!irId) return json({ error: 'ir_id required' }, 400);
 
-    const [irs, wos, bills] = await Promise.all([
-      fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendor_Bills'),
-    ]);
+    const [irs, wos, bills] = await fetchTabs(env, ['Invoice_Review','Work_Orders','Vendor_Bills']);
     const ir = irs.find(r => String(r.ID) === irId);
     if (!ir) return json({ error: `No Invoice_Review row ${irId}` }, 404);
     const qbInvId = (ir.QB_Invoice_ID || '').trim();
@@ -3281,7 +3325,7 @@ async function qbPayables(env, url) {
     const days = Math.max(1, Math.min(365, parseInt(url && url.searchParams.get('days')) || 90));
     const cutoff = new Date(Date.now() - days * 86400000);
     const token = await qbAccessToken(env);
-    const [irs, vendors] = await Promise.all([fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Vendors')]);
+    const [irs, vendors] = await fetchTabs(env, ['Invoice_Review','Vendors']);
 
     const rows = [];
     for (const ir of irs) {
@@ -3542,13 +3586,10 @@ async function qbEntities(env, url) {
   try {
     const token = await qbAccessToken(env);
     const force = url && url.searchParams.get('refresh') === '1';
-    const [customers, vendors, owners, hubVendors, properties, units] = await Promise.all([
+    const [customers, vendors, [owners, hubVendors, properties, units]] = await Promise.all([
       qbListEntities(env, 'customer', token, force),
       qbListEntities(env, 'vendor', token, force),
-      fetchTab(env, 'Owners'),
-      fetchTab(env, 'Vendors'),
-      fetchTab(env, 'Properties'),
-      fetchTab(env, 'Units'),
+      fetchTabs(env, ['Owners','Vendors','Properties','Units']),
     ]);
 
     const ownerRows = owners.filter(o => o.Active !== 'FALSE').map(o => {
@@ -3886,9 +3927,9 @@ async function qbUnitAudit(env, url) {
   try {
     const token = await qbAccessToken(env);
     const force = !url || url.searchParams.get('refresh') !== '0';
-    const [customers, units, properties, owners] = await Promise.all([
+    const [customers, [units, properties, owners]] = await Promise.all([
       qbListEntities(env, 'customer', token, force),
-      fetchTab(env, 'Units'), fetchTab(env, 'Properties'), fetchTab(env, 'Owners'),
+      fetchTabs(env, ['Units','Properties','Owners']),
     ]);
     const byId = {}; customers.forEach(c => { byId[String(c.id)] = c; });
 
@@ -3947,7 +3988,7 @@ async function qbReparentUnit(env, body) {
   const rename = body.rename !== false;
   if (!unitId) return json({ error: 'unit_id required' }, 400);
 
-  const [units, properties] = await Promise.all([fetchTab(env, 'Units'), fetchTab(env, 'Properties')]);
+  const [units, properties] = await fetchTabs(env, ['Units','Properties']);
   const unit = units.find(u => String(u.ID) === unitId);
   if (!unit) return json({ error: `No unit ${unitId}` }, 404);
   const qbId = (unit.QBO_Customer_ID || '').trim();
@@ -4010,7 +4051,7 @@ async function qbCreateSubCustomer(env, body) {
   let displayName = '', parentId = '', tab = '', row = null;
 
   if (kind === 'property') {
-    const [properties, owners] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Owners')]);
+    const [properties, owners] = await fetchTabs(env, ['Properties','Owners']);
     row = properties.find(p => String(p.ID) === id);
     if (!row) return json({ error: 'Property not found' }, 404);
     if ((row.QBO_Customer_ID || '').trim()) return json({ error: 'Already linked to QuickBooks #' + row.QBO_Customer_ID }, 409);
@@ -4021,7 +4062,7 @@ async function qbCreateSubCustomer(env, body) {
     displayName = qbPropertyDisplayName(row);
     tab = 'Properties';
   } else {
-    const [units, properties] = await Promise.all([fetchTab(env, 'Units'), fetchTab(env, 'Properties')]);
+    const [units, properties] = await fetchTabs(env, ['Units','Properties']);
     row = units.find(u => String(u.ID) === id);
     if (!row) return json({ error: 'Unit not found' }, 404);
     if ((row.QBO_Customer_ID || '').trim()) return json({ error: 'Already linked to QuickBooks #' + row.QBO_Customer_ID }, 409);
@@ -4563,9 +4604,7 @@ async function qbReadyQueue(env, url) {
   const wantAll = url && url.searchParams.get('all') === '1';
   const woFilter = (url && url.searchParams.get('wo_id')) || '';
   try {
-    const [irRows, wos] = await Promise.all([
-      fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders'),
-    ]);
+    const [irRows, wos] = await fetchTabs(env, ['Invoice_Review','Work_Orders']);
     // 'partial' MUST be included. qbSendInvoice stamps that status when the invoice half
     // posted to QuickBooks but the bill half did not (bad vendor ref, an Intuit hiccup,
     // Vendor_Cost missing). Nothing anywhere ever writes the status back to 'pending', so
@@ -4631,10 +4670,8 @@ async function qbSendInvoice(env, body) {
       return json({ ok: true, already_sent: true, invoice_id: ir.QB_Invoice_ID, bill_id: ir.QB_Bill_ID, status: ir.QB_Invoice_Status });
     }
 
-    const [wos, props, owners, vendors, bills, units] = await Promise.all([
-      fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'),
-      fetchTab(env, 'Owners'), fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'),
-      fetchTab(env, 'Units'),
+    const [wos, props, owners, vendors, bills, units] = await fetchTabs(env, [
+      'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units',
     ]);
     const wo      = findWO(wos, ir.WO_ID) || {};
     const prop    = props.find(p => p.ID === wo.Property_ID) || {};
