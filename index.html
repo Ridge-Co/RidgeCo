@@ -3968,12 +3968,10 @@ function hubBillUseLoggedTime(k) {
   var svcAdded = false;
   if (oneRate > 0 && hrs > 0) {
     hubBillType(k, 'hourly');
-    // Service charge: Brett's first billed half-hour is a service charge he normally adds by
-    // hand and sometimes forgets. Ask once for the WHOLE job (not per entry), and add the
-    // half hour if the logged time doesn't already include it. It bills at the same rate, so
-    // it flows straight through hours × rate onto the invoice as extra time.
-    var includesSvc = confirm('Does this ' + pulledHrs.toFixed(2) + 'h already include your first half-hour service charge?\n\nOK = yes, bill as logged.\nCancel = no, add 30 minutes.');
-    if (!includesSvc) { hrs += 0.5; svcAdded = true; }
+    // Bill exactly the hours logged. The half-hour service charge is an add-on, and add-ons
+    // are off by default (Brett's rule) — a forced dialog that silently turned 1.5h into
+    // 2.0h is exactly the surprise to avoid. If Brett wants the service charge he bumps the
+    // hours in the box himself; the number in front of him always matches what he logged.
     var hEl = document.getElementById('hb-hours-' + k), rEl = document.getElementById('hb-rate-' + k);
     if (hEl) hEl.value = hrs.toFixed(2);
     if (rEl) { rEl.value = String(oneRate); rEl.dataset.auto = '0'; }
@@ -4372,11 +4370,12 @@ function loadInvoiceMaterials(k) {
       // Never re-tick something already invoiced, whatever else is going on.
       if (billed[id]) { delete picked[id]; _invMatSeen[k][id] = true; return; }
       // Default to charging it on — it was logged against this job, which is the whole
-      // reason it exists. Unticking survives a reload. A vendor-logged receipt is the one
-      // exception: it MIGHT already be on that vendor's bill, so it shows but stays
-      // unticked until Brett confirms it isn't, one tap — never a silent double-charge.
-      var isVendorReceipt = String(r.Role || '').toLowerCase() === 'vendor';
-      if (!(id in picked) && !_invMatSeen[k][id] && panelsOnThisWO < 2 && !billedUnknown && !isVendorReceipt) picked[id] = true;
+      // reason it exists, and a receipt that shows up UNTICKED reads as "not added yet"
+      // and invites re-entering it by hand (the near-double-bill Brett hit). So every
+      // receipt on the job is ticked by default and shown boldly as ON the invoice; a
+      // vendor-logged one keeps its tag + caption so the rare "already on the vendor's
+      // bill" case is still visible and one tap to remove. Unticking survives a reload.
+      if (!(id in picked) && !_invMatSeen[k][id] && panelsOnThisWO < 2 && !billedUnknown) picked[id] = true;
       _invMatSeen[k][id] = true;
     });
     _invMatPicked[k] = picked;
@@ -4431,10 +4430,11 @@ function invRenderMaterials(k) {
   var total = invMatTotal(k);
 
   box.innerHTML =
-    '<div style="background:var(--surface);border-radius:6px;padding:10px">' +
+    '<div style="background:var(--surface);border-radius:6px;padding:10px;' + (total > 0 ? 'border:1px solid var(--accent2)' : 'border:1px solid var(--border)') + '">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-        '<span style="color:var(--muted);font-size:10px;letter-spacing:.06em">MATERIALS YOU BOUGHT — tick what the customer pays for</span>' +
-        '<span style="color:' + (total > 0 ? 'var(--accent2)' : 'var(--muted)') + ';font-size:12px;font-weight:bold">+$' + total.toFixed(2) + '</span>' +
+        '<span style="color:' + (total > 0 ? 'var(--accent2)' : 'var(--muted)') + ';font-size:10px;letter-spacing:.06em;font-weight:bold">' +
+          (total > 0 ? '✓ MATERIALS ON THIS INVOICE' : 'MATERIALS YOU BOUGHT — tick to add') + '</span>' +
+        '<span style="color:' + (total > 0 ? 'var(--accent2)' : 'var(--muted)') + ';font-size:14px;font-weight:bold">+$' + total.toFixed(2) + '</span>' +
       '</div>' +
       (_invMatUnknown[k] ? '<div style="color:var(--warn);font-size:10.5px;line-height:1.45;margin-bottom:6px">⚠ Couldn\'t check which of these are already on an invoice, so nothing is ticked. Tick only what you know hasn\'t been billed.</div>' : '') +
       (_invMatMulti[k] ? '<div style="color:var(--warn);font-size:10.5px;line-height:1.45;margin-bottom:6px">⚠ This job has more than one bill being invoiced. Nothing is ticked by default — a receipt goes on ONE invoice only.</div>' : '') +
@@ -4452,10 +4452,11 @@ function invRenderMaterials(k) {
             (r.Date ? ' · ' + esc(r.Date) : '') + '</span>' +
           (isVendorReceipt && !alreadyBilled ? '<span style="color:var(--muted);font-size:9px;white-space:nowrap;border:1px solid var(--border);border-radius:3px;padding:0 4px">vendor-logged</span>' : '') +
           (alreadyBilled ? '<span style="color:var(--warn);font-size:9.5px;white-space:nowrap">already invoiced</span>' : '') +
+          (on ? '<span style="color:var(--accent2);font-size:9px;white-space:nowrap">on invoice</span>' : (!alreadyBilled ? '<span style="color:var(--muted);font-size:9px;white-space:nowrap">not added</span>' : '')) +
           '<span style="margin-left:auto;color:' + (on ? 'var(--accent2)' : 'var(--muted)') + ';font-weight:bold;white-space:nowrap">$' + amt.toFixed(2) + '</span>' +
         '</label>';
       }).join('') +
-      '<div style="color:var(--muted);font-size:10px;margin-top:5px;line-height:1.45">Ticked receipts become materials lines on the invoice, at cost. A "vendor-logged" receipt is shown but left unticked — tick it only if it isn\'t already on that vendor\'s bill.</div>' +
+      '<div style="color:var(--muted);font-size:10px;margin-top:5px;line-height:1.45">Every receipt logged on this job is added to the invoice at cost by default — untick any you are not charging. A "vendor-logged" receipt already on that vendor\'s bill should be unticked so it isn\'t billed twice.</div>' +
     '</div>';
 }
 
@@ -4910,8 +4911,23 @@ function calcInvoiceMarkup(k) {
     return;
   }
   if (totalEl) {
+    // Say plainly which basis this number is on, so "no markup" is never a guess. Pass-through
+    // is the default; if the charge still matches the pass-through price, label it as cost.
+    var pForLabel = invPricing(k);
+    var modeLabel = '';
+    if (pForLabel) {
+      var m = _invMode[k] || 'passthrough';
+      if (m === 'passthrough' && Math.abs(charge - pForLabel.passthroughPrice) < 0.005) {
+        modeLabel = pForLabel.passFeeOn ? ' · pass-through + 5%, no markup' : ' · pass-through at cost — no markup';
+      } else if (m === 'tiered' && Math.abs(charge - pForLabel.tieredPrice) < 0.005) {
+        modeLabel = ' · tiered markup';
+      } else if (m === 'itemized' && Math.abs(charge - pForLabel.itemizedPrice) < 0.005) {
+        modeLabel = ' · itemized markup';
+      }
+    }
     totalEl.innerHTML = '<span style="color:var(--text)">Customer invoice will be created for </span>' +
-      '<b style="color:var(--accent);font-size:14px">$' + charge.toFixed(2) + '</b>';
+      '<b style="color:var(--accent);font-size:14px">$' + charge.toFixed(2) + '</b>' +
+      (modeLabel ? '<span style="color:var(--muted);font-size:11px">' + modeLabel + '</span>' : '');
   }
 
   // Cost comes from the loaded bill row, not from scraping the rendered breakdown text.
