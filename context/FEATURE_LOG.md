@@ -1,5 +1,31 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.11 | **Last Updated:** August 4, 2026
+**Version:** v1.12 | **Last Updated:** August 5, 2026
+
+## TIME BILLING — hours × rate, per customer, service charge (shipped Aug 5, 2026)
+
+**40. The QuickBooks labor line shows hours × rate, not "1 × $total".** `buildInvoiceLines`
+was sending every labor line as `Qty:1, UnitPrice:laborAmt`, so a 2h/$150 job read as
+$150/hr to the customer. It now splits into `Qty:hours, UnitPrice:Rate` — but ONLY when the
+bill's `Bill_Type==='hourly'` AND its stored `Rate × Hours` reconciles with `laborAmt` to the
+cent. **Do not loosen that gate.** On a marked-up vendor bill `laborAmt` (= Customer_Total −
+materials) carries markup + on-site + the 5% fee, so hours × the vendor rate will not tie out
+and it MUST fall back to the single combined line — deriving a rate from `laborAmt/hours`
+would print a fabricated $/hr and expose the markup. `Amount` is always `laborAmt`, so the
+invoice total is preserved either way. Pinned by `test/invoice-hours.test.mjs`.
+
+**41. Brett's own time bills at a per-customer rate, resolved on the server.** New
+`Owners.Hourly_Rate` column (blank = the $85 default; a number pins that customer, e.g. $75
+for Goldszmidt / Phoenix / Casey Properties). `resolveHubHourlyRate()` resolves it
+WO→Property→Owner when a `role:'hub'` time entry is saved with no explicit rate; the Hub owner
+setup sets it (add-owner field + inline box on the owners list, via `/owner/update`).
+`HUB_HOURLY_RATE` client constant is now 85 and is a display fallback only. **The
+tiered/itemized markup's separate $75 on-site coordination rate is deliberately NOT this
+rate — leave it unless Brett asks.** Vendor time entries keep their own rate.
+
+**42. Half-hour service charge on turning logged time into a bill.** `hubBillUseLoggedTime`
+asks once per job whether the pulled hours already include the first-half-hour service charge;
+"no" adds 0.5h at the same rate (flows through hours × rate to the invoice). Hourly path only;
+does NOT stack with the tiered pricing's built-in $75. Applied once per job, not per entry.
 
 ## QUICKBOOKS — THE WHOLE PIPELINE (shipped Aug 3–4, 2026)
 

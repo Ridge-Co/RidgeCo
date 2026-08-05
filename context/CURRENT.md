@@ -23,6 +23,11 @@ source; attaching it after the container is up does not work.
 
 ## Do these first, in this order
 
+0. **Set per-customer hourly rates (Aug 5, shipped).** Hub → Owners: the new **Rate $/hr**
+   box. Type **75** for Goldszmidt, Phoenix, and Casey Properties; leave everyone else blank
+   (= the $85 default). The `Owners.Hourly_Rate` column is added automatically by the queued
+   sheet-op on this push — give the GitHub Action a minute before the box will save. Then log
+   one hub time entry and confirm the invoice reads "N hrs × $rate" (rule 40–41).
 1. **Sheet: add `Payment_Terms` to the Vendors tab.** Blank = due on receipt (the default,
    and right for most). Put "Net 7" / "Net 10" / "Net 30" on the few vendors who really have
    terms. Nothing breaks if it stays empty.
@@ -38,6 +43,7 @@ source; attaching it after the container is up does not work.
    a second login"). Do this AFTER fixing the shared ID above.
 
 ## Verified working
+- **Time billed as hours × rate, per customer, with a service charge (Aug 5, pushed — commit `ab99b18`).** QB labor line now reads "N hrs × $rate" not "1 × $total" (rule 40); per-customer rate resolved server-side from `Owners.Hourly_Rate`, default $85, set in Hub → Owners (rule 41); turning logged time into a bill asks about the first-half-hour service charge (rule 42). 15-assertion `test/invoice-hours.test.mjs` + full suite green + adversarial review passed. **Not yet run against live QB** — do the one-bill check in step 0 above.
 - QuickBooks entity mapping, sub-customers per property/unit, invoice + bill send
 - Billing panel on both the work order and Review Bills, from one implementation
 - Bill entry from the Hub for any vendor
