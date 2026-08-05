@@ -71,8 +71,9 @@ offering them on top as supervision. Only a LIVE bill consumes hours: voiding on
 them, and an unreadable bill list reports `null` (≠ `''`) so "don't know" never reads as
 "safe to charge again" — rule 16 applied to time. (Aug 5, 2026.)
 
-**40. Every receipt on a job can reach the invoice, and cost pass-through is the default
-price.** Two gaps closed on the invoice builder. (a) The own-materials picker
+**43. Every receipt on a job can reach the invoice, and cost pass-through is the default
+price.** (Numbered after the Aug-5 time-billing rules 40–42, which landed concurrently.)
+Two gaps closed on the invoice builder. (a) The own-materials picker
 (`loadInvoiceMaterials`) excluded any `Role=vendor` receipt on the theory it arrives on the
 vendor's bill — but an in-house vendor's bill is built from logged TIME (rule 39) and carries
 no receipt, so the receipt reached no invoice line and had to be typed by hand. Now ALL active
