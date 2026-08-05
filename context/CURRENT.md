@@ -1,4 +1,25 @@
-# WHERE THINGS STAND — Aug 4, 2026
+# WHERE THINGS STAND — Aug 5, 2026
+
+## ⚠️ READ FIRST — three commits may not be on `main` yet
+
+Aug 4–5 produced three commits that the session could not push (the Cowork git proxy binds an
+authorized repo list at container start, and that session started without `Ridge-Co/RidgeCo`
+on it — read access worked, writes were refused). They were handed to Brett as
+`ridgeco-3-commits.patch`.
+
+| Commit | What it is |
+|---|---|
+| `6c0bd5f` | An unlinked property does not settle itself on first invoice |
+| `4eaba73` | Logged hours can be the bill |
+| _(this one)_ | Context update — Aug 5 |
+
+**Check before doing anything else:** `git log --oneline -3`. If you do not see "Logged hours
+can be the bill", the patch was never applied and the code below is NOT live. Ask Brett for the
+patch file rather than rebuilding it — the work is done and tested, it is only stranded.
+
+**To stop this recurring:** the Claude GitHub App is now installed on the `Ridge-Co` org
+(done Aug 5). A session must additionally be *created* with `Ridge-Co/RidgeCo` selected as a
+source; attaching it after the container is up does not work.
 
 ## Do these first, in this order
 
@@ -21,11 +42,34 @@
 - Billing panel on both the work order and Review Bills, from one implementation
 - Bill entry from the Hub for any vendor
 - Invoice repair for anything already sent
+- **Owner-level billing is now announced, not silent** (Aug 5). Sending an invoice for a
+  property with no QuickBooks sub-customer lands it on the owner's top-level ledger. That
+  never fixed itself — nothing in the send path creates a property sub-customer — and nothing
+  said so. The preview, the confirm response and batch send now all say where it is actually
+  landing, and offer a "Create it now" button. The invoice itself was always correct; only
+  the nesting was wrong.
+- **Logged hours can become the bill** (Aug 5). This closes the hole Brett hit as his own
+  vendor: everything downstream (pricing, approve, send to QuickBooks) is gated on a
+  `Vendor_Bills` row, and when he is the vendor there was nobody to submit one — so "Log
+  Time" recorded hours that could never reach an invoice. "No bill submitted yet" is no longer
+  a dead end; it offers **"Turn these hours into a bill"**, which fills the Hub bill form from
+  the logged time. The entry IDs ride along on `/vendor-bill/add`, and once the bill saves
+  those entries are stamped with `Bill_ID` so the same hour cannot also be charged on top as
+  $75 supervision. Voiding a bill releases its hours again.
 
 ## Not yet verified against live data
 Everything from Aug 4 shipped on my own checks — the independent reviewer was interrupted
 partway through the last three pushes. Treat the payables screen and the withdraw button as
 "test one before trusting the batch".
+
+The two Aug 5 features have **65 passing assertions** (`test/bill-to-note.test.mjs` 17,
+`test/time-to-bill.test.mjs` 48) run against the real functions pulled out of `worker.js` and
+`index.html`, including a fake-sheet harness — but **zero live runs**, because they were never
+deployed. First real use should be one work order, checked end to end, before trusting it.
+
+**The one to watch:** double-billing. The whole design rests on `Bill_ID` on `Time_Entries`
+correctly marking an hour as spent. Log an hour, turn it into a bill, then confirm that hour
+is greyed out as "already billed as labour" and does NOT appear in the supervision picker.
 
 ## Still owed
 - **Notes system** — timestamped contact log, per-note sharing, vendors post-only. Specced
@@ -56,7 +100,7 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 | Brett_Cowork_Best_Practices_v1.3.md | v1.3 | ✅ ALWAYS | Session workflow, common mistakes, how to work with Brett |
 | CREDENTIALS_MAP.md | v1.3 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality. **v1.3: two-service-accounts correction (Worker runtime = maintenance-hub-498819, NOT brett-os-sheets) + Worker var list + STAGING=1 warning** |
 | VENTURES.md | v1.0 | ✅ ALWAYS | Every venture — current state, stack, Claude access level, automation gaps |
-| FEATURE_LOG.md | v1.10 | ✅ ALWAYS | What's working — check before every code change to prevent regressions. **v1.10 (Aug 3): billing consolidated onto the work order (one pricing surface); duplicate-submission guards; rules 19-23 — silent no-ops from a wrong route AND a wrong column, vendor.html api() serialization (receipts/time entries had never worked), never infer 'sent to QuickBooks' from an absent row, multi-vendor bills per WO, dedupe must fail open.** v1.7: daily digest shipped. v1.6: rule 18 — the July 21 non-prod-branch-build → production deploy incident. Keep Cloudflare non-prod branch builds OFF until reconfigured to `wrangler versions upload`. |
+| FEATURE_LOG.md | **v1.11** | ✅ ALWAYS | What's working — check before every code change to prevent regressions. **v1.11 (Aug 4–5): rules 35–39 — one trade list, a former tenant's phone does not travel, `ensureColumns` before writing a new column (rule 37, the silent-no-op that keeps recurring), sending an invoice creates the OWNER not the property (38), logged time is a record not a charge — the invoice is built from a BILL (39).** v1.10 (Aug 3): billing consolidated onto the work order (one pricing surface); duplicate-submission guards; rules 19-23 — silent no-ops from a wrong route AND a wrong column, vendor.html api() serialization (receipts/time entries had never worked), never infer 'sent to QuickBooks' from an absent row, multi-vendor bills per WO, dedupe must fail open.** v1.7: daily digest shipped. v1.6: rule 18 — the July 21 non-prod-branch-build → production deploy incident. Keep Cloudflare non-prod branch builds OFF until reconfigured to `wrangler versions upload`. |
 | BACKLOG.md | v1.23 | ⏳ index always, detail on-demand | Master backlog across all ventures. Quick Index block at top (always-load); full entries on demand. |
 | CAPTURE_INBOX.md | v1.22 | ⏳ index always, detail on-demand | Brett's brain-dump inbox — CAP items. Quick Index block at top (always-load); full entries on demand. |
 | HANDWRITING_KEY.md | v1.10 | ⏳ ON-DEMAND | Reference for reading Brett's handwritten-note photos (load only for handwriting tasks). Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338 + Scanned_202607211020/1341. |
@@ -92,6 +136,7 @@ When a new version is needed (new PAT, new project details, etc.):
 
 | Version | Date | Change |
 |---|---|---|
+| CURRENT.md + FEATURE_LOG v1.11 (rules 38–39) | Aug 5, 2026 | **Two fixes, both about something being silently true.** (1) An invoice for a property with no QuickBooks sub-customer lands on the OWNER's top-level ledger and never self-corrects — now stated in the preview, the confirm response and batch send, with a "Create it now" button (`qbBillToNote`, 17 assertions). (2) **Logged hours can now BE the bill.** Everything downstream is gated on a `Vendor_Bills` row, so when Brett is his own vendor "Log Time" recorded hours that reached nothing — the dead-end "No bill submitted yet" now offers "Turn these hours into a bill", entry IDs ride along on `/vendor-bill/add`, and saved entries are stamped `Bill_ID` so an hour cannot be charged twice (once as labour, once as $75 supervision). Voiding a bill frees its hours. New: `parseIdList`, `linkTimeEntriesToBill`; `listTimeEntries` annotates `Billed_Bill_ID` (`null` = could not read, `''` = definitely free — the distinction is what stops a failed read reading as "safe to charge again"). 48 assertions incl. a fake-sheet harness. **Not deployed** — see the ⚠️ block at the top of this file. |
 | Context v1.8 | July 16, 2026 | PAT-026 added, full Ridge Co Session 1 details |
 | Best Practices v1.3 | July 16, 2026 | Section 11 (PAT-026 version naming) added |
 | CREDENTIALS_MAP v1.0 | July 17, 2026 | Initial credentials map — Sheets, GitHub, Cloudflare, QB, Drive |
