@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-06.3';
+const BUILD_VERSION = '2026-08-06.4';
 
 export default {
   async fetch(request, env) {
@@ -4442,7 +4442,7 @@ const QB_TRADE_MAP = {
   Carpentry:  { item: '35', income: '292', expense: '218' },
   Roofing:    { item: '36', income: '293', expense: '246' },
   Landscaping:{ item: '37', income: '294', expense: '220' },
-  Cleaning:   { item: '22', income: '295', expense: '282' },
+  Cleaning:   { item: '43', income: '295', expense: '282' }, // item 43 = "Cleaning Service" (a real Service item -> Cleaning Income 295); item 22 is the "Cleaning" CATEGORY and cannot be used on an invoice line
   Appliance:  { item: '39', income: '296', expense: '230' },
   Windows:    { item: '38', income: '204', expense: '249' },
   General:    { item: '40', income: '198', expense: '68'  },
