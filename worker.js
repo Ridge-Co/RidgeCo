@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-05.2';
+const BUILD_VERSION = '2026-08-06.1';
 
 export default {
   async fetch(request, env) {
@@ -47,9 +47,21 @@ export default {
       // lockout) so a portal can log in without ever carrying the admin secret.
       const _tok = request.headers.get('X-Auth-Token') || '';
       if (_tok !== env.WORKER_SECRET) {
-        const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
-        if (!_session || !isPathAllowedForRole(path, _session.role))
-          return json({ error: 'Unauthorized' }, 401);
+        // Dedicated READ-ONLY contacts-sync token (Google Contacts sync). Accepted
+        // ONLY for GET on the list endpoints the sync reads — never writes, never
+        // any other path. Fully inert unless env.CONTACTS_SYNC_TOKEN is set, so
+        // deploying this change has zero effect until the secret is added. Does
+        // not touch WORKER_SECRET or the PIN/session auth below.
+        const SYNC_READ_PATHS = ['/tenants','/owners','/vendors','/properties','/units'];
+        const _syncOk = !!env.CONTACTS_SYNC_TOKEN
+          && _tok === env.CONTACTS_SYNC_TOKEN
+          && request.method === 'GET'
+          && SYNC_READ_PATHS.includes(path);
+        if (!_syncOk) {
+          const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
+          if (!_session || !isPathAllowedForRole(path, _session.role))
+            return json({ error: 'Unauthorized' }, 401);
+        }
       }
     }
     try {
