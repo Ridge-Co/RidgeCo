@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-06.1';
+const BUILD_VERSION = '2026-08-06.2';
 
 export default {
   async fetch(request, env) {
@@ -47,16 +47,20 @@ export default {
       // lockout) so a portal can log in without ever carrying the admin secret.
       const _tok = request.headers.get('X-Auth-Token') || '';
       if (_tok !== env.WORKER_SECRET) {
-        // Dedicated READ-ONLY contacts-sync token (Google Contacts sync). Accepted
-        // ONLY for GET on the list endpoints the sync reads — never writes, never
-        // any other path. Fully inert unless env.CONTACTS_SYNC_TOKEN is set, so
-        // deploying this change has zero effect until the secret is added. Does
-        // not touch WORKER_SECRET or the PIN/session auth below.
+        // Dedicated contacts-sync token (Google Contacts sync). Accepted ONLY for:
+        //   • GET on the list endpoints the sync reads, and
+        //   • POST /contact/augment — an augment-ONLY write (fills blank fields
+        //     from an allow-list, never overwrites, never touches phone/ID).
+        // Nothing else. Fully inert unless env.CONTACTS_SYNC_TOKEN is set, so
+        // deploying this has zero effect until the secret is added. Does not
+        // touch WORKER_SECRET or the PIN/session auth below.
         const SYNC_READ_PATHS = ['/tenants','/owners','/vendors','/properties','/units'];
         const _syncOk = !!env.CONTACTS_SYNC_TOKEN
           && _tok === env.CONTACTS_SYNC_TOKEN
-          && request.method === 'GET'
-          && SYNC_READ_PATHS.includes(path);
+          && (
+            (request.method === 'GET'  && SYNC_READ_PATHS.includes(path)) ||
+            (request.method === 'POST' && path === '/contact/augment')
+          );
         if (!_syncOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
@@ -129,6 +133,7 @@ export default {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
         const body = await request.json();
+        if (path === '/contact/augment')          return await augmentContact(env, body);
         if (path === '/workorder')                return await createWorkOrder(env, body);
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
@@ -3123,6 +3128,108 @@ async function updateRow(env, tab, id, fields) {
   if(!updates.length) return json({success:true,message:'No matching fields'});
   await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:updates});
   return json({success:true});
+}
+
+// ── Contacts sync: augment-ONLY write-back ─────────────────────────────────
+// Fills BLANK Hub fields from the operator's Google Contacts. Hard rules:
+//   • Only the allow-listed fields below are ever writable (never Phone, ID, PIN…).
+//   • A field is written ONLY when its current cell is blank — never overwrites.
+//   • preview:true reports what WOULD be written without writing.
+//   • Every real write is logged to Contact_Augment_Log (best-effort).
+const AUGMENT_ALLOWED_FIELDS = ['Email'];
+const AUGMENT_TYPE_TAB = { tenant: 'Tenants', owner: 'Owners', vendor: 'Vendors' };
+
+async function augmentContact(env, body) {
+  const type = String((body && body.type) || '').toLowerCase();
+  const tab = AUGMENT_TYPE_TAB[type];
+  if (!tab) return json({ error: 'type must be tenant|owner|vendor' }, 400);
+  const id = body.id;
+  if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
+  const preview = body.preview === true || body.preview === '1';
+  const inFields = (body.fields && typeof body.fields === 'object') ? body.fields : {};
+
+  // Allow-list filter — anything not explicitly allowed (Phone, ID, PIN, …) is dropped.
+  const fields = {};
+  for (const k of AUGMENT_ALLOWED_FIELDS) {
+    if (inFields[k] !== undefined && String(inFields[k]).trim() !== '') fields[k] = String(inFields[k]).trim();
+  }
+  const rejected = Object.keys(inFields).filter(k => !AUGMENT_ALLOWED_FIELDS.includes(k));
+  if (!Object.keys(fields).length)
+    return json({ ok: true, type, id, preview, results: [], rejected, message: 'No allow-listed non-empty fields' });
+
+  // Make sure the target column exists (Tenants may not have Email yet). FL rule 37.
+  // Skipped in preview so a preview writes NOTHING at all — not even a header.
+  if (!preview) await ensureColumns(env, tab, Object.keys(fields));
+
+  let data;
+  try { data = await sheetsRequest(env, 'GET', `/values/${tab}`); }
+  catch (e) { if (isMissingTabError(e)) return missingTabResponse(tab); throw e; }
+  if (!data.values) return json({ error: 'Tab not found' }, 404);
+  const [headers, ...rows] = data.values;
+  const idc = idColIndex(headers);
+  const rowIndex = rows.findIndex(r => r[idc] === String(id));
+  if (rowIndex === -1) return json({ error: 'Row not found', type, id }, 404);
+  const sheetRow = rowIndex + 2;
+  const row = rows[rowIndex];
+
+  const results = [], updates = [];
+  for (const [field, value] of Object.entries(fields)) {
+    const colIndex = headers.indexOf(field);
+    if (colIndex === -1) {
+      // Column not present yet. In preview, a new column is definitionally blank.
+      if (preview) results.push({ field, written: false, newValue: value, reason: 'would add column + fill blank' });
+      else results.push({ field, written: false, reason: 'column missing after ensureColumns' });
+      continue;
+    }
+    const current = (row[colIndex] !== undefined ? String(row[colIndex]) : '').trim();
+    if (current !== '') { results.push({ field, written: false, reason: 'already set', current }); continue; } // NEVER overwrite
+    results.push({ field, written: !preview, newValue: value, reason: preview ? 'would fill blank' : 'filled blank' });
+    updates.push({ range: `${tab}!${col(colIndex)}${sheetRow}`, values: [[value]] });
+  }
+
+  if (preview) return json({ ok: true, type, id, preview: true, results, rejected });
+
+  if (updates.length) {
+    await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
+    for (const r of results) { if (r.written) await logAugment(env, type, id, r.field, '', r.newValue); }
+  }
+  return json({ ok: true, type, id, preview: false, results, rejected });
+}
+
+// Self-creating audit log for augment writes. Never throws into the caller.
+async function ensureAugmentLog(env) {
+  const TAB = 'Contact_Augment_Log';
+  const HEADERS = ['ID', 'Timestamp', 'Type', 'Row_ID', 'Field', 'Old_Value', 'New_Value', 'Written', 'Source'];
+  try {
+    const data = await sheetsRequest(env, 'GET', `/values/${TAB}`);
+    if (data.values && data.values.length) return TAB;
+    await sheetsRequest(env, 'POST', `/values/${TAB}:append?valueInputOption=RAW`, { values: [HEADERS] });
+    return TAB;
+  } catch (e) {
+    if (isMissingTabError(e)) {
+      await sheetsRequest(env, 'POST', `:batchUpdate`, { requests: [{ addSheet: { properties: { title: TAB } } }] });
+      await sheetsRequest(env, 'POST', `/values/${TAB}:append?valueInputOption=RAW`, { values: [HEADERS] });
+      return TAB;
+    }
+    throw e;
+  }
+}
+
+async function logAugment(env, type, id, field, oldVal, newVal) {
+  try {
+    const TAB = await ensureAugmentLog(env);
+    const data = await sheetsRequest(env, 'GET', `/values/${TAB}`);
+    const rows = data.values || [];
+    if (!rows.length) return;
+    const headers = rows[0];
+    const rec = {
+      ID: String(nextSafeId(rows)), Timestamp: new Date().toISOString(), Type: type,
+      Row_ID: String(id), Field: field, Old_Value: String(oldVal ?? ''),
+      New_Value: String(newVal ?? ''), Written: 'TRUE', Source: 'contacts-sync'
+    };
+    const newRow = headers.map(h => rec[h] ?? '');
+    await sheetsRequest(env, 'POST', `/values/${TAB}:append?valueInputOption=RAW`, { values: [newRow] });
+  } catch (e) { /* audit must never break the write */ }
 }
 
 async function updateWOFields(env, woId, fields) {
