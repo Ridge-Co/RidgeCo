@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-06.2';
+const BUILD_VERSION = '2026-08-06.3';
 
 export default {
   async fetch(request, env) {
@@ -4392,7 +4392,7 @@ const QB_TRADES = [
   { trade: 'Carpentry',   income: 'Carpentry Income',   expenseId: '218' },
   { trade: 'Roofing',     income: 'Roofing Income',     expenseId: '246' },
   { trade: 'Landscaping', income: 'Landscaping Income', expenseId: '220' },
-  { trade: 'Cleaning',    income: 'Cleaning Income',    expenseId: '282' },
+  { trade: 'Cleaning',    income: 'Cleaning Income',    expenseId: '282', itemName: 'Cleaning Service' }, // a QB *category* already owns the name "Cleaning" (item 22, unusable on invoice lines); the sellable service item is created as "Cleaning Service"
   { trade: 'Appliance',   income: 'Appliance Income',   expenseId: '230' },
   { trade: 'Windows',     incomeId: '204',              expenseId: '249' }, // Window Installation Income exists
   { trade: 'Locks',       income: 'Locks Income',       expenseId: '68'  }, // no dedicated expense account yet
@@ -4490,14 +4490,15 @@ async function qbSetupTrades(env) {
           log.push(`${r?.Account?.Id ? 'created' : 'exists'} income: ${t.income} (${incomeId})`);
         }
       }
-      let itemId = itemByName[t.trade.toLowerCase()];
+      const itemLabel = t.itemName || t.trade;
+      let itemId = itemByName[itemLabel.toLowerCase()];
       if (!itemId) {
         const r = await qbApi(env, 'item?minorversion=73', 'POST',
-          { Name: t.trade, Type: 'Service', IncomeAccountRef: { value: incomeId } }, token);
+          { Name: itemLabel, Type: 'Service', IncomeAccountRef: { value: incomeId } }, token);
         itemId = r?.Item?.Id || qbDupId(r);
-        if (!itemId) { log.push(`FAIL item ${t.trade}: ${JSON.stringify(r).slice(0,140)}`); continue; }
-        log.push(`${r?.Item?.Id ? 'created' : 'exists'} item: ${t.trade} (${itemId})`);
-      } else log.push(`item exists: ${t.trade} (${itemId})`);
+        if (!itemId) { log.push(`FAIL item ${itemLabel}: ${JSON.stringify(r).slice(0,140)}`); continue; }
+        log.push(`${r?.Item?.Id ? 'created' : 'exists'} item: ${itemLabel} (${itemId})`);
+      } else log.push(`item exists: ${itemLabel} (${itemId})`);
       map[t.trade] = { income_acct_id: incomeId, item_id: itemId, expense_acct_id: t.expenseId };
     }
     return json({ ok: true, map, log });
