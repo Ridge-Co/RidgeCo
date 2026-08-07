@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.2';
+const BUILD_VERSION = '2026-08-07.3';
 
 export default {
   async fetch(request, env) {
@@ -226,6 +226,7 @@ export default {
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
         if (path === '/qb/clear-ir-bill')         return await qbClearIrBill(env, body);
+        if (path === '/qb/reprice-invoice')       return await qbRepriceInvoice(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
@@ -4804,6 +4805,58 @@ async function qbClearIrBill(env, body) {
     return json({ ok: true, ir_id: irId, wo_id: ir.WO_ID || '',
       cleared: { qb_bill_id: prevBill, qb_bill_number: prevBillNum },
       kept: { qb_invoice_id: ir.QB_Invoice_ID || '', status: ir.QB_Invoice_Status || '' } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/reprice-invoice  { ir_id, new_total, new_markup?, new_fee? }
+// Changes the dollar amount of an ALREADY-SENT customer invoice (unlike /qb/repair-invoice,
+// which preserves the total and only fixes wording). Rewrites the single sales line to the new
+// total, preserving its item (income account) and description, and writes the new
+// Customer_Total / Markup / Processing_Fee back to the Invoice_Review row. Refuses if the
+// invoice has any payment against it, or if it isn't a single-line invoice (use QuickBooks).
+async function qbRepriceInvoice(env, body) {
+  try {
+    const irId = String(body.ir_id || '').trim();
+    const newTotal = Number(body.new_total) || 0;
+    if (!irId || newTotal <= 0) return json({ ok: false, error: 'ir_id and a positive new_total are required' }, 400);
+    const irs = await fetchTab(env, 'Invoice_Review');
+    const ir = irs.find(r => String(r.ID) === irId);
+    if (!ir) return json({ ok: false, error: 'Invoice_Review row ' + irId + ' not found' }, 404);
+    const qbInvId = String(ir.QB_Invoice_ID || '').trim();
+    if (!qbInvId) return json({ ok: false, error: 'That row has no QuickBooks invoice to reprice.' }, 400);
+
+    const token = await qbAccessToken(env);
+    const got = await qbApi(env, `invoice/${encodeURIComponent(qbInvId)}?minorversion=73`, 'GET', null, token);
+    const inv = got && got.Invoice;
+    if (!inv) return json({ ok: false, error: qbFault(got) || 'Could not read that invoice from QuickBooks.' }, 404);
+
+    const totalAmt = Number(inv.TotalAmt || 0), bal = Number(inv.Balance);
+    if (isNaN(bal)) return json({ ok: false, error: 'QuickBooks reported no balance, so there is no way to tell if it is paid. Not touching it.' }, 409);
+    if (Math.abs(bal - totalAmt) > 0.005)
+      return json({ ok: false, error: `That invoice has a payment against it (balance $${bal.toFixed(2)} of $${totalAmt.toFixed(2)}). Not repricing a paid invoice.` }, 409);
+
+    const itemLines = (inv.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
+    if (itemLines.length !== 1)
+      return json({ ok: false, error: `Expected one sales line, found ${itemLines.length}. Reprice this one in QuickBooks instead.` }, 409);
+    const line = itemLines[0];
+    const amt = +newTotal.toFixed(2);
+    const newLine = {
+      Id: line.Id, DetailType: 'SalesItemLineDetail', Amount: amt,
+      Description: line.Description,
+      SalesItemLineDetail: Object.assign({}, line.SalesItemLineDetail, { Qty: 1, UnitPrice: amt }),
+    };
+    const patch = { Id: qbInvId, SyncToken: inv.SyncToken, sparse: true, Line: [newLine] };
+    const upd = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
+    const updated = upd && upd.Invoice;
+    if (!updated) return json({ ok: false, error: 'Invoice update failed: ' + (qbFault(upd) || 'unknown error') }, 502);
+
+    const fields = { Customer_Total: String(amt) };
+    if (body.new_markup != null) fields.Markup = String(body.new_markup);
+    if (body.new_fee != null) fields.Processing_Fee = String(body.new_fee);
+    await updateRow(env, 'Invoice_Review', irId, fields);
+
+    return json({ ok: true, ir_id: irId, wo_id: ir.WO_ID || '', invoice_id: qbInvId,
+      old_total: +totalAmt.toFixed(2), new_total: amt, qb_confirms: Number(updated.TotalAmt || 0) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
