@@ -103,7 +103,7 @@ Google, where the business already lives). Requires a one-time OAuth client + re
 account, stored as Worker secrets (`GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` /
 `GMAIL_SENDER`). **Never store the token here — Worker secrets only.** Free-Gmail send cap ≈500/day.
 Scope internal-first (digest / weekly review / agent output → Brett's inbox); owner/tenant/vendor +
-Hive/van sends stay MANUAL until Brett enables. Build tracked as B-210.
+owner/tenant/vendor sends via this Gmail stay MANUAL until Brett enables. **Hive / CHEP fleet-and-van comms stay on `brett@bmoremanagement.com`** (Brett's directive, Aug 7) — do NOT route them through the RidgeCo Gmail. Build tracked as B-210.
 
 ---
 
