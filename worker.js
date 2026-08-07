@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.6';
+const BUILD_VERSION = '2026-08-07.7';
 
 export default {
   async fetch(request, env) {
@@ -242,6 +242,9 @@ export default {
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
         if (path === '/qb/clear-ir-bill')         return await qbClearIrBill(env, body);
         if (path === '/qb/reprice-invoice')       return await qbRepriceInvoice(env, body);
+        if (path === '/qb/relabel-invoice')       return await qbRelabelInvoice(env, body);
+        if (path === '/qb/set-bill-docnumber')    return await qbSetBillDocNumber(env, body);
+        if (path === '/qb/attach-to-bill')        return await qbAttachToBill(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
@@ -5107,6 +5110,88 @@ async function qbRepriceInvoice(env, body) {
 
     return json({ ok: true, ir_id: irId, wo_id: ir.WO_ID || '', invoice_id: qbInvId,
       old_total: +totalAmt.toFixed(2), new_total: amt, qb_confirms: Number(updated.TotalAmt || 0) });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/relabel-invoice  { ir_id, description }
+// Rewrites the DESCRIPTION of a sent customer invoice's single sales line without changing the
+// amount — e.g. to make clear a job was a one-time comprehensive deep clean. Refuses a paid or
+// multi-line invoice.
+async function qbRelabelInvoice(env, body) {
+  try {
+    const irId = String(body.ir_id || '').trim();
+    const desc = String(body.description || '').slice(0, 4000);
+    if (!irId || !desc) return json({ ok: false, error: 'ir_id and description are required' }, 400);
+    const irs = await fetchTab(env, 'Invoice_Review');
+    const ir = irs.find(r => String(r.ID) === irId);
+    if (!ir) return json({ ok: false, error: 'Invoice_Review row ' + irId + ' not found' }, 404);
+    const qbInvId = String(ir.QB_Invoice_ID || '').trim();
+    if (!qbInvId) return json({ ok: false, error: 'That row has no QuickBooks invoice.' }, 400);
+    const token = await qbAccessToken(env);
+    const got = await qbApi(env, `invoice/${encodeURIComponent(qbInvId)}?minorversion=73`, 'GET', null, token);
+    const inv = got && got.Invoice;
+    if (!inv) return json({ ok: false, error: qbFault(got) || 'Could not read that invoice.' }, 404);
+    const totalAmt = Number(inv.TotalAmt || 0), bal = Number(inv.Balance);
+    if (isNaN(bal)) return json({ ok: false, error: 'No balance reported; cannot tell if paid.' }, 409);
+    if (Math.abs(bal - totalAmt) > 0.005) return json({ ok: false, error: 'That invoice has a payment against it. Not touching it.' }, 409);
+    const itemLines = (inv.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
+    if (itemLines.length !== 1) return json({ ok: false, error: `Expected one sales line, found ${itemLines.length}.` }, 409);
+    const line = itemLines[0];
+    const newLine = { Id: line.Id, DetailType: 'SalesItemLineDetail', Amount: line.Amount,
+      Description: desc, SalesItemLineDetail: line.SalesItemLineDetail };
+    const patch = { Id: qbInvId, SyncToken: inv.SyncToken, sparse: true, Line: [newLine] };
+    const upd = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
+    if (!(upd && upd.Invoice)) return json({ ok: false, error: 'Update failed: ' + (qbFault(upd) || 'unknown') }, 502);
+    return json({ ok: true, ir_id: irId, invoice_id: qbInvId, description: desc });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/set-bill-docnumber  { qb_bill_id, doc_number }
+// Sets the reference number (DocNumber) on a QuickBooks vendor bill — e.g. to carry the vendor's
+// own invoice number instead of the WO number the Hub falls back to.
+async function qbSetBillDocNumber(env, body) {
+  try {
+    const billId = String(body.qb_bill_id || '').trim();
+    const docNum = String(body.doc_number || '').trim();
+    if (!billId || !docNum) return json({ ok: false, error: 'qb_bill_id and doc_number are required' }, 400);
+    const token = await qbAccessToken(env);
+    const got = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
+    const bill = got && got.Bill;
+    if (!bill) return json({ ok: false, error: qbFault(got) || 'Could not read that bill.' }, 404);
+    const prev = bill.DocNumber || '';
+    const patch = { Id: billId, SyncToken: bill.SyncToken, sparse: true, DocNumber: docNum };
+    const upd = await qbApi(env, 'bill?minorversion=73', 'POST', patch, token);
+    if (!(upd && upd.Bill)) return json({ ok: false, error: 'Update failed: ' + (qbFault(upd) || 'unknown') }, 502);
+    return json({ ok: true, qb_bill_id: billId, was: prev, now: docNum });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/attach-to-bill  { qb_txn_id, qb_txn_type?, drive_file_id, file_name? }
+// Downloads a file from Google Drive and attaches it to a QuickBooks transaction (default Bill),
+// so the original vendor invoice PDF is one click away from the bill.
+async function qbAttachToBill(env, body) {
+  try {
+    const txnType = String(body.qb_txn_type || 'Bill').trim();
+    const txnId   = String(body.qb_txn_id || '').trim();
+    const fileId  = String(body.drive_file_id || '').trim();
+    const fileName = String(body.file_name || 'invoice.pdf').trim();
+    if (!txnId || !fileId) return json({ ok: false, error: 'qb_txn_id and drive_file_id are required' }, 400);
+    const gtok = await getAccessToken(env);
+    const dl = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${gtok}` } });
+    if (!dl.ok) return json({ ok: false, error: 'Drive download failed (HTTP ' + dl.status + ')' }, 502);
+    const bytes = await dl.arrayBuffer();
+    const qtok = await qbAccessToken(env);
+    const meta = { AttachableRef: [{ EntityRef: { type: txnType, value: txnId } }], FileName: fileName, ContentType: 'application/pdf' };
+    const fd = new FormData();
+    fd.append('file_metadata_01', new Blob([JSON.stringify(meta)], { type: 'application/json' }), 'metadata.json');
+    fd.append('file_content_01', new Blob([bytes], { type: 'application/pdf' }), fileName);
+    const up = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/upload?minorversion=73`, {
+      method: 'POST', headers: { Authorization: `Bearer ${qtok}`, Accept: 'application/json' }, body: fd });
+    const jr = await up.json();
+    const resp = jr && jr.AttachableResponse && jr.AttachableResponse[0];
+    const att = resp && resp.Attachable;
+    if (!(att && att.Id)) return json({ ok: false, error: 'QB attach failed: ' + JSON.stringify(resp || jr).slice(0, 300) }, 502);
+    return json({ ok: true, attachable_id: String(att.Id), txn_type: txnType, txn_id: txnId, file_name: fileName });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
