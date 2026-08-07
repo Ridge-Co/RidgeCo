@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.3';
+const BUILD_VERSION = '2026-08-07.4';
 
 export default {
   async fetch(request, env) {
@@ -214,6 +214,7 @@ export default {
         if (path === '/wishlist/add')             return await addWishlistItem(env, body);
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
         if (path === '/config/set')               return await setConfigKey(env, body);
+        if (path === '/telemetry/log')            return await telemetryLog(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
@@ -2714,9 +2715,19 @@ async function deliverDigestEmail(env, to, subject, text) {
 }
 
 async function digestResponse(env, url) {
+  const _t0 = Date.now();
   const digest = await buildDigest(env);
   let delivery = { delivered:false, reason:'preview only (add ?deliver=1 to send)' };
   if (url.searchParams.get('deliver') === '1') delivery = await deliverDigest(env, digest);
+  // Best-effort telemetry (B-128). MUST never break the digest — the digest is the
+  // product, the telemetry row is a side-effect. Any failure is swallowed on purpose.
+  try {
+    await logTelemetry(env, {
+      Source: 'worker', Job_Type: 'daily_digest', Skill_Or_Endpoint: '/daily-digest',
+      Success: 'TRUE', Latency_ms: Date.now() - _t0,
+      Notes: (delivery && delivery.delivered) ? 'delivered' : 'preview',
+    });
+  } catch (_) { /* telemetry is best-effort; never let it take down the host job */ }
   return json({ ok:true, text: formatDigestText(digest), digest, delivery });
 }
 
@@ -2737,6 +2748,70 @@ async function ensureTab(env, name, headers) {
     if (!isMissingTabError(e)) throw e;
     await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: name } } }] });
     await sheetsRequest(env, 'POST', `/values/${name}:append?valueInputOption=RAW`, { values: [headers] });
+  }
+}
+
+// ── TELEMETRY SPINE (B-128) ──────────────────────────────────────────────────
+// The measurable "state" the Optimizer's outer loop reads (see CONTINUOUS_IMPROVEMENT_
+// STRATEGY_v1.0 + TELEMETRY_SPINE_BUILD_BRIEF_v1.0). One tab, two feeders: Worker jobs
+// call logTelemetry() directly; Cowork sessions/skills POST /telemetry/log (gated
+// by WORKER_SECRET at the top auth gate) at session close. Design rules, load-bearing:
+//   (1) `Success` is written by a verifier/caller from the REAL outcome, never a handler's
+//       own optimism (the "verifier, not self-agreement" rule).
+//   (2) For host endpoints telemetry is BEST-EFFORT — a failed telemetry write must never
+//       break the job it measures (see digestResponse: the whole call is try/swallowed).
+//   (3) The /telemetry/log endpoint is FAIL-LOUD (500 on write failure) so a broken pipe
+//       is visible, not a silent gap the Optimizer would read as "nothing happened".
+// Self-provisions its tab via ensureTab — no sheet-op needed; first write creates it.
+const TELEMETRY_TAB  = 'Ops_Telemetry';
+const TELEMETRY_COLS = ['ID','Timestamp','Source','Session_Id','Job_Type','Skill_Or_Endpoint','Tier_Requested','Model_Used','Escalated','Tokens_In','Tokens_Out','Est_Cost','Latency_ms','Success','Confidence','Human_Corrected','Notes'];
+let _telemetryTabReady = false;
+
+async function logTelemetry(env, rec) {
+  rec = rec || {};
+  // Self-provision the tab (behind an isolate flag), then ensureColumns on EVERY write —
+  // FEATURE_LOG rule 37: ensureTab only writes a header to an EMPTY tab, so a pre-existing
+  // tab with a drifted/partial header would silently drop fields on append. ensureColumns
+  // backfills any missing header before addRow maps values by header name.
+  if (!_telemetryTabReady) { await ensureTab(env, TELEMETRY_TAB, TELEMETRY_COLS); _telemetryTabReady = true; }
+  await ensureColumns(env, TELEMETRY_TAB, TELEMETRY_COLS);
+  const S = (v) => (v === undefined || v === null) ? '' : String(v);
+  const row = {
+    Timestamp:         rec.Timestamp || new Date().toISOString(),
+    Source:            rec.Source || 'worker',
+    Session_Id:        S(rec.Session_Id),
+    Job_Type:          S(rec.Job_Type),
+    Skill_Or_Endpoint: S(rec.Skill_Or_Endpoint),
+    Tier_Requested:    S(rec.Tier_Requested),
+    Model_Used:        S(rec.Model_Used),
+    Escalated:         S(rec.Escalated),
+    Tokens_In:         S(rec.Tokens_In),
+    Tokens_Out:        S(rec.Tokens_Out),
+    Est_Cost:          S(rec.Est_Cost),
+    Latency_ms:        S(rec.Latency_ms),
+    Success:           S(rec.Success),
+    Confidence:        S(rec.Confidence),
+    Human_Corrected:   S(rec.Human_Corrected),
+    Notes:             S(rec.Notes),
+  };
+  const res = await addRow(env, TELEMETRY_TAB, row);  // addRow assigns the next ID + appends
+  // Landed-guard — FEATURE_LOG rule 19: a write can "succeed" without landing a row. addRow
+  // returns a 4xx Response on a missing tab/header and only json({success:true,id}) on a real
+  // append. Treat anything else as a failed write and THROW, so /telemetry/log 500s (fail-loud)
+  // and host callers swallow a genuine error rather than the Optimizer reading a silent hole.
+  let landed = !!res && res.status === 200;
+  if (landed) { try { const j = await res.clone().json(); landed = !!(j && j.success === true && j.id); } catch (_) { landed = false; } }
+  if (!landed) throw new Error(`telemetry row did not land (addRow status ${res && res.status})`);
+  return res;
+}
+
+// POST /telemetry/log — the Cowork/skill feeder. Not in PUBLIC_PATHS and no role scope
+// allows it, so the top auth gate already pins it to WORKER_SECRET. Fail-loud by design.
+async function telemetryLog(env, body) {
+  try {
+    return await logTelemetry(env, body || {});
+  } catch (e) {
+    return json({ error: 'telemetry write failed', detail: String((e && e.message) || e) }, 500);
   }
 }
 

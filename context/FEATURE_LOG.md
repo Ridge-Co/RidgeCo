@@ -1,5 +1,27 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.13 | **Last Updated:** August 7, 2026
+**Version:** v1.14 | **Last Updated:** August 7, 2026
+
+## TELEMETRY SPINE — Ops_Telemetry (B-128, shipped Aug 7, 2026)
+
+**50. Telemetry is logged through ONE chokepoint, `logTelemetry(env, rec)`, and it self-provisions.**
+The measurable state the Optimizer reads (`CONTINUOUS_IMPROVEMENT_STRATEGY_v1.0` +
+`TELEMETRY_SPINE_BUILD_BRIEF_v1.0`). One tab `Ops_Telemetry` (17 cols), two feeders: Worker jobs call
+`logTelemetry` directly; Cowork sessions/skills `POST /telemetry/log` (WORKER_SECRET-gated by the top
+auth gate — it's not in `PUBLIC_PATHS` and no role scope allows it). Self-provisions via `ensureTab`;
+calls `ensureColumns` on **every** write (rule 37 — `ensureTab` only writes a header to an *empty* tab,
+so a drifted header would silently drop fields). **When B-127's `routeAI` lands it MUST call this same
+`logTelemetry`** — one write path, never two. Don't rename it (cross-brief callers resolve by this name).
+
+**51. Two load-bearing telemetry rules — do not loosen.** (a) **Best-effort for host endpoints:** a
+telemetry write must NEVER break the job it measures. `digestResponse` wraps the whole `logTelemetry`
+call in `try/catch(_){}` — the digest is the product, the row is a side-effect. (b) **Fail-loud on the
+endpoint + landed-guard:** `logTelemetry` throws unless `addRow` returns a real `{success:true,id}`
+(rule 19 — a write can "succeed" without landing a row), so `POST /telemetry/log` 500s on a broken pipe
+instead of the Optimizer reading a silent hole. (c) **`Success` is written by the verifier/caller from
+the REAL outcome, never a handler's own optimism** — the "verifier, not self-agreement" rule (H1). The
+same rule binds the verifier skills: `test-verified-builds` / `ridgeco-validate` judge against the
+brief's acceptance criteria + live state (deployed-Worker responses, actual Sheet read-backs) and
+**never** read or restate the builder agent's "done"/"success" claim.
 
 ## TIME BILLING — hours × rate, per customer, service charge (shipped Aug 5, 2026)
 
