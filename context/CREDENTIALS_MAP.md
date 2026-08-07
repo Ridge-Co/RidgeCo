@@ -95,6 +95,16 @@
 **Access status:** ✅ Active (via MCP)
 **Capabilities:** Read, search, draft, label threads
 
+**RidgeCo ops email — `ridgecomaintenance@gmail.com` (created Aug 7, 2026).** The operational address
+for all Ridge Co activity (kept separate from `brett@bmoremanagement.com` on purpose). Receive + manual
+send work today with no setup. **Automated sending** is planned via the **Gmail API (OAuth refresh
+token)** called directly from the Worker — **no domain, no ESP middleman** (fits security-first: it's
+Google, where the business already lives). Requires a one-time OAuth client + refresh token for this
+account, stored as Worker secrets (`GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` / `GMAIL_REFRESH_TOKEN` /
+`GMAIL_SENDER`). **Never store the token here — Worker secrets only.** Free-Gmail send cap ≈500/day.
+Scope internal-first (digest / weekly review / agent output → Brett's inbox); owner/tenant/vendor +
+Hive/van sends stay MANUAL until Brett enables. Build tracked as B-210.
+
 ---
 
 ## GOOGLE CALENDAR
