@@ -327,3 +327,27 @@ their route.)
 | **Config** | /config | /config/set | QB refresh-token persisted here (FL rule 8) |
 | **Troubleshooting_Cache** | /cache | /cache/save, /cache/flag, /cache/refresh | |
 | **Wishlist** | /wishlist | /wishlist/add, /wishlist/delete | Dev Log tab (PAT-008) |
+
+---
+
+## 6. Trash Service (B-205, added Aug 7, 2026 — worker.js + trash.html)
+
+New standalone page `trash.html` (Pages `/RidgeCo/trash.html`; `mh_auth` code). All endpoints secret-gated except the narrow read-only `TRASH_NUDGE_TOKEN` accepted ONLY for `GET /trash/unbilled` (inert unless the env var is set).
+
+| METHOD PATH | Handler | Purpose | Sheet tab(s) · R/W · QB |
+|---|---|---|---|
+| GET /trash/properties | trashListProperties | List active trash properties | Trash_Properties · R |
+| GET /trash/week | trashWeek | Per-property status for one week | Trash_Properties, Trash_Visits · R |
+| GET /trash/unbilled | trashUnbilled | Missed/unbilled list (powers push nudge) | Trash_Properties, Trash_Visits · R |
+| GET /trash/qb-customers | trashQbCustomers | QB customers for add-property dropdown | QB API |
+| GET /trash/qb-items | trashQbItems | QB Service/NonInventory items dropdown | QB API |
+| POST /trash/property/add | trashAddProperty | Add a trash property (self-provisions tabs) | Trash_Properties · W |
+| POST /trash/property/update | updateRow | Update a trash property | Trash_Properties · W |
+| POST /trash/log-visit | trashLogVisit | Log/merge a visit (photos+extra) | Trash_Properties · R, Trash_Visits · W |
+| POST /trash/invoice | trashInvoice | Preview-first weekly QB invoice + photo attach | Trash_Properties, Trash_Visits · R/W · QB API |
+
+Helpers: `ensureTrashTabs` (create tabs+headers via `:batchUpdate` addSheet + ensureColumns), `trashWeekKey` (Monday-anchored, UTC-noon), `trashPastDeadline` (nudge deadline), `buildTrashInvoiceLines` (PURE — one flat line per visit + one extra line; item fallback `40`). Reuses qbApi / qbAccessToken / qbListEntities / qbUploadAttachable / driveDownload / addRow / updateRow / fetchTab / ensureColumns.
+
+Tabs (both **ID at column 0**, unlike Work_Orders):
+- **Trash_Properties**: ID, Label, QBO_Customer_ID, Customer_Name, QBO_Item_ID, Item_Name, Flat_Rate, Visits_Per_Week, Nudge_Day, Grace_Days, Active, Created_Date
+- **Trash_Visits**: ID, Property_ID, Label, Visit_Date, Week_Key, Photo_Folder_ID, Photo_Folder_URL, Photo_File_IDs, Base_Rate, Extra_Amount, Extra_Reason, QB_Invoice_ID, QB_Invoice_Number, Invoice_Status, Created_Date, Active

@@ -1,5 +1,20 @@
 # WHERE THINGS STAND — Aug 7, 2026
 
+## Trash Service shipped — needs first live send + push nudge (Aug 7)
+
+New one-tap recurring billing for the twice-weekly $40 trash service (B-205). Page:
+`ridge-co.github.io/RidgeCo/trash.html` (Hub `mh_auth` code). Worker `2026-08-07.6`.
+Tap a property → before/after photos → optional $20-increment extra → Save logs the visit;
+one weekly QB invoice per property, **preview-first**, photos attached. In-app "Needs
+attention" nudge is live. **Two things left for Brett:**
+1. **First real invoice send** — add the 3 properties (115 W 29th; 151 & 153 W Lanvale) via
+   the page's "+ Add a property" (pick the existing QB customer + item), log a visit, then
+   Preview & send ONE invoice and check it in QuickBooks. Never run against live QB yet.
+2. **Phone push nudge** — set Cloudflare env `TRASH_NUDGE_TOKEN` (any random string), tell
+   Claude the value, and it'll create the scheduled task that polls `/trash/unbilled` and
+   pushes. The endpoint gate is already deployed (inert until the env var exists).
+   See FEATURE_LOG rules 50–53.
+
 ## Cleaning-vendor invoicing — DONE + reconciled (Aug 6–7)
 
 The Andrea + Michelle cleaning invoices are all in production QuickBooks and reconciled.
