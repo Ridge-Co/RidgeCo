@@ -245,6 +245,8 @@ export default {
         if (path === '/qb/relabel-invoice')       return await qbRelabelInvoice(env, body);
         if (path === '/qb/set-bill-docnumber')    return await qbSetBillDocNumber(env, body);
         if (path === '/qb/attach-to-bill')        return await qbAttachToBill(env, body);
+        if (path === '/qb/find-bills')            return await qbFindBills(env, body);
+        if (path === '/qb/delete-bill')           return await qbDeleteBill(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
@@ -5193,6 +5195,48 @@ async function qbAttachToBill(env, body) {
     const att = resp && resp.Attachable;
     if (!(att && att.Id)) return json({ ok: false, error: 'QB attach failed: ' + JSON.stringify(resp || jr).slice(0, 300) }, 502);
     return json({ ok: true, attachable_id: String(att.Id), txn_type: txnType, txn_id: txnId, file_name: fileName });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/find-bills  { vendor_qbo_id, doc_number? }
+// Read-only lookup of a vendor's bills in QuickBooks (id, DocNumber, date, total, balance) — so a
+// bill can be matched by amount/date when its reference number is blank, instead of blindly
+// creating a duplicate. Exists because record-paid-bill matches ONLY by DocNumber, and bills
+// entered with no number can't be found that way (that's how the #0017/#0021 dupes happened).
+async function qbFindBills(env, body) {
+  try {
+    const vendorId = String(body.vendor_qbo_id || '').trim();
+    if (!vendorId) return json({ ok: false, error: 'vendor_qbo_id required' }, 400);
+    const token = await qbAccessToken(env);
+    let where = `VendorRef = '${qbEscape(vendorId)}'`;
+    if (body.doc_number) where += ` and DocNumber = '${qbEscape(String(body.doc_number))}'`;
+    const q = encodeURIComponent(`select Id, DocNumber, TxnDate, TotalAmt, Balance from Bill where ${where} maxresults 500`);
+    const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+    const bills = (r && r.QueryResponse && r.QueryResponse.Bill) || [];
+    return json({ ok: true, count: bills.length,
+      bills: bills.map(b => ({ id: String(b.Id), doc: b.DocNumber || '', date: b.TxnDate,
+        total: Number(b.TotalAmt || 0), balance: Number(b.Balance != null ? b.Balance : b.TotalAmt) })) });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/delete-bill  { qb_bill_id }
+// Deletes a QuickBooks vendor bill. REFUSES a bill that has a payment against it (balance != total)
+// — deleting a paid bill is destructive. For removing an accidental duplicate before it's paid.
+async function qbDeleteBill(env, body) {
+  try {
+    const billId = String(body.qb_bill_id || '').trim();
+    if (!billId) return json({ ok: false, error: 'qb_bill_id required' }, 400);
+    const token = await qbAccessToken(env);
+    const got = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
+    const bill = got && got.Bill;
+    if (!bill) return json({ ok: false, error: qbFault(got) || 'Could not read that bill.' }, 404);
+    const bal = Number(bill.Balance), tot = Number(bill.TotalAmt);
+    if (!isNaN(bal) && !isNaN(tot) && Math.abs(bal - tot) > 0.005)
+      return json({ ok: false, error: `Bill ${billId} has a payment against it (balance $${bal.toFixed(2)} of $${tot.toFixed(2)}). Not deleting.` }, 409);
+    const del = await qbApi(env, 'bill?operation=delete&minorversion=73', 'POST', { Id: billId, SyncToken: bill.SyncToken }, token);
+    const done = del && del.Bill && (del.Bill.status === 'Deleted' || del.Bill.Id);
+    if (!done) return json({ ok: false, error: 'Delete failed: ' + (qbFault(del) || JSON.stringify(del).slice(0, 200)) }, 502);
+    return json({ ok: true, deleted_bill_id: billId, doc: bill.DocNumber || '', total: Number(bill.TotalAmt || 0) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
