@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-06.4';
+const BUILD_VERSION = '2026-08-07.1';
 
 export default {
   async fetch(request, env) {
@@ -224,6 +224,7 @@ export default {
         if (path === '/qb/backfill-emails')       return await qbBackfillEmails(env, body);
         if (path === '/qb/reparent-unit')         return await qbReparentUnit(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
+        if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
@@ -4701,6 +4702,88 @@ async function qbDueOnReceiptTerm(env, token) {
 // own docs wouldn't load to confirm it, so this trims to 21 and the caller handles a
 // rejection rather than assuming.
 const QB_DOCNUMBER_MAX = 21;
+
+// POST /qb/record-paid-bill  { vendor_qbo_id, amount, expense_account_id, pay_account_id?,
+//   doc_number?, txn_date?, pay_date?, memo? }
+// Records a vendor bill that has ALREADY been paid outside the Hub (e.g. a PayPal-paid cleaning
+// invoice that never had a customer invoice, so /qb/send-invoice — which requires a customer
+// total — cannot post it). Creates the QB Bill and, if pay_account_id is given, a Bill Payment
+// that clears it. Idempotent: a Bill with the same DocNumber already on this vendor is reused,
+// not duplicated, and a bill with no remaining balance is not paid again.
+async function qbRecordPaidBill(env, body) {
+  try {
+    const vendorId    = String(body.vendor_qbo_id || '').trim();
+    const amount      = Number(body.amount) || 0;
+    const expenseAcct = String(body.expense_account_id || '').trim();
+    const payAcct     = String(body.pay_account_id || '').trim();
+    const docNum      = String(body.doc_number || '').trim();
+    const txnDate     = String(body.txn_date || '').trim() || new Date().toISOString().split('T')[0];
+    const payDate     = String(body.pay_date || '').trim() || txnDate;
+    const memo        = String(body.memo || '').slice(0, 1000);
+    if (!vendorId || amount <= 0 || !expenseAcct)
+      return json({ ok: false, error: 'vendor_qbo_id, amount and expense_account_id are required' }, 400);
+
+    const token = await qbAccessToken(env);
+
+    // Idempotency: reuse an existing same-numbered bill on this vendor rather than double-posting.
+    let bill = null;
+    if (docNum) {
+      try {
+        const q = encodeURIComponent(`select Id, DocNumber, TotalAmt, Balance, VendorRef from Bill where DocNumber = '${qbEscape(docNum)}'`);
+        const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+        const hits = (r && r.QueryResponse && r.QueryResponse.Bill) || [];
+        bill = hits.find(b => String(b.VendorRef && b.VendorRef.value) === vendorId) || null;
+      } catch (e) { /* fall through to create */ }
+    }
+
+    let billCreated = false;
+    if (!bill) {
+      const billPayload = {
+        VendorRef: { value: vendorId },
+        TxnDate: txnDate,
+        PrivateNote: memo,
+        Line: [{
+          DetailType: 'AccountBasedExpenseLineDetail',
+          Amount: +amount.toFixed(2),
+          Description: memo || undefined,
+          AccountBasedExpenseLineDetail: { AccountRef: { value: expenseAcct } },
+        }],
+      };
+      if (docNum) billPayload.DocNumber = docNum;
+      const br = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+      bill = br && br.Bill;
+      if (!bill || !bill.Id) return json({ ok: false, error: 'Bill: ' + (qbFault(br) || 'unknown error') }, 502);
+      billCreated = true;
+    }
+
+    // Pay it, unless already settled or no pay account was given.
+    let paymentId = '', paid = false;
+    const balance = Number(bill.Balance != null ? bill.Balance : bill.TotalAmt != null ? bill.TotalAmt : amount);
+    if (payAcct && balance > 0) {
+      const amt = +Number(bill.TotalAmt || amount).toFixed(2);
+      const payPayload = {
+        VendorRef: { value: vendorId },
+        TotalAmt: amt,
+        PayType: 'Check',
+        CheckPayment: { BankAccountRef: { value: payAcct } },
+        TxnDate: payDate,
+        PrivateNote: memo,
+        Line: [{ Amount: amt, LinkedTxn: [{ TxnId: String(bill.Id), TxnType: 'Bill' }] }],
+      };
+      const pr = await qbApi(env, 'billpayment?minorversion=73', 'POST', payPayload, token);
+      const pay = pr && pr.BillPayment;
+      if (!pay || !pay.Id)
+        return json({ ok: false, bill_id: String(bill.Id), bill_created: billCreated,
+          error: 'Bill is recorded but the payment failed: ' + (qbFault(pr) || 'unknown error') }, 502);
+      paymentId = String(pay.Id); paid = true;
+    } else if (payAcct && balance <= 0) {
+      paid = true; // already had no balance
+    }
+
+    return json({ ok: true, bill_id: String(bill.Id), bill_created: billCreated,
+      bill_reused: !billCreated, payment_id: paymentId, paid, doc_number: docNum });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
 
 function qbBillDocNumber(billRow, ir, siblingIndex) {
   const own = String((billRow && (billRow.Vendor_Invoice_No || billRow.Invoice_Number)) || '').trim();
