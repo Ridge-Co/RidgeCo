@@ -52,3 +52,26 @@ Plus below-the-line watchlist (didn't make Top-10 this round, still tracked): Ve
 3. **brett-flow lean loading** — already active (~95% fewer tokens/build).
 
 **Router (B-127):** stays queued for run-time savings as automations scale — NOT the weekly-limit fix.
+
+---
+
+## ROUND 1 — Aug 7, 2026 (first Scout+Reuse-Radar scan; in-session, PAT-filed)
+
+> First run of the two-lens Optimizer opportunity engine (outward web research + inward Reuse-Radar), fanned to 2 research subagents + inward analysis. Telemetry is now live (B-128) but near-empty, so ranking is context-informed, not yet data-heavy — that sharpens as `Ops_Telemetry` fills. Ranking below is Claude's honest impact call, authorship-blind.
+
+| # | Opportunity | Lens | Tag | Impact | Effort | Notes |
+|---|---|---|---|---|---|---|
+| 1 | **Email delivery path** — Cloudflare Email Routing `send_email` binding (free, verified-recipient only) for self-digests NOW; Resend (100/day free, custom domain) for customer-facing later; Cloudflare Email Service binding = own-the-Worker long-term (paid beta) | Outward | FIXES EXISTING | T H · E H | S | Digest + weekly Reviewer are stubbed (`deliverDigestEmail` no-ops). This is what makes "check in once in a while" real — the loop can't reach Brett without it. **MailChannels dead (EOL 2024); SendGrid free tier killed.** → B-205 |
+| 2 | **Independent verifier write-gate (`judge()`)** — cheap-model LLM-as-judge returns `{verdict,confidence,reason}` before any consequential write; fails closed → escalate | Outward | BIG GAIN | E H · T M | M | The mechanism that lets autonomy graduate from Rung-1 (prepare) to Rung-2 (auto-ship) safely. Direct fix for both past burns. Ties AUTONOMY_GUARDRAILS. → B-206 |
+| 3 | **WO-lifecycle telemetry** — instrument create/assign/status/schedule | Inward | FIXES EXISTING ✅ SHIPPED | E H · T M | S | **Done Aug 7 (`2026-08-07.6`).** Feeds B-129 so the Reviewer stops being data-starved. Metadata-only, best-effort, validator-passed. |
+| 4 | **Calendar invite on WO scheduling** (B-204) — verified path: single-user **OAuth refresh token** (NOT service account — SA can't invite attendees), `events.insert/patch` + `sendUpdates:"all"` | Inward | BIG GAIN | E H · T M | M | GATED (customer-facing send) → greenlit build with Brett, not autonomous. Research resolved the exact API path + the SA gotcha. |
+| 5 | **Golden-set regression gate on deploy** — 20–50 cases re-run vs the deployed Worker on push; pairs with `test-verified-builds` | Outward | BIG GAIN | E H | M | Catches silent quality regressions before the live Hub. The Rung-2 safety earn-in. → B-207 |
+| 6 | **Cloudflare Queues (free since Feb 2026) + D1** — durable state/queue for the overnight Prepare agent + telemetry (Sheets is slow/rate-limited) | Outward | BIG GAIN | T M · E M | M | Infra that makes the overnight loop restart-safe. 10k ops/day free. → B-208 |
+| 7 | **Overnight Rung-1 Prepare agent** — the engine: drafts + validates a greenlit item nightly, never deploys | Both | BIG GAIN | T H · E H | M | Brett's core ask. Unblocked now that AUTONOMY_GUARDRAILS is locked; needs a delivery channel (#1) to surface its output. → B-209 |
+
+**Dedup — already on the roadmap, not re-proposed:** multi-model cost router = **B-127**; agentic memory / self-writing context in a Sheet tab = **B-134/B-135**; parallel read-only subagents + context compaction = already in **brett-flow / agent-parallelism** (2026 refinement: enforce the isolated-context + condensed-return contract — minor skill tweak).
+
+**Honest priority call (Claude, truth-mode):** the sequence that makes "improve while I sleep, I just look in" real is **#1 email delivery (small) → #7 overnight Prepare agent (the engine) → #2 verifier write-gate (graduates to auto-ship)**. Delivery first because a loop that can't reach Brett makes him go hunt for its output — the opposite of "look in once in a while." Do NOT stand up auto-ship (#2/Rung-2) before the golden-set gate (#5) earns it.
+
+### Bench (carry-forward — re-score next round)
+Receipt OCR→QuickBooks (ties B-084, human-approve gate) · context-compaction refinement for long cron sessions · SMS: **fix Twilio** rather than email-to-SMS gateways (carrier gateways are shutting down + fail silently — disqualifying for alerts) · Round-0 bench still live (Email→WO B-103, QB Send flow, Toll auto-invoice, Voice-to-sheet, Cabin dashboard, Driver payments).
