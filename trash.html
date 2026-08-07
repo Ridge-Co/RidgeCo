@@ -85,7 +85,7 @@
         <input id="af-label" placeholder="e.g. 151 W Lanvale (Wed)">
         <label class="fld">QuickBooks customer to bill</label>
         <select id="af-customer"><option value="">Loading…</option></select>
-        <label class="fld">QuickBooks item (the charge line)</label>
+        <label class="fld">QuickBooks item <span class="muted">(optional — leave blank for the shared generic "Trash Service" charge, no address)</span></label>
         <select id="af-item"><option value="">Loading…</option></select>
         <div style="display:flex;gap:8px">
           <div style="flex:1"><label class="fld">Flat rate ($/visit)</label><input id="af-rate" type="number" inputmode="decimal" value="40"></div>
@@ -100,7 +100,42 @@
         <button class="btn primary" style="width:100%;margin-top:14px" onclick="addProperty(this)">Save property</button>
       </div>
     </div>
+
+    <div class="card">
+      <div class="row" onclick="toggleManage()" style="cursor:pointer"><b>Manage properties</b><span class="muted" id="manage-caret">show</span></div>
+      <div id="manage-list" class="hide" style="margin-top:10px"></div>
+    </div>
   </main>
+</div>
+
+<!-- Edit property sheet -->
+<div class="modal" id="edit-modal">
+  <div class="sheet">
+    <h2>Edit property</h2>
+    <input type="hidden" id="ef-id">
+    <label class="fld">Label</label>
+    <input id="ef-label">
+    <label class="fld">QuickBooks customer to bill</label>
+    <select id="ef-customer"><option value="">Loading…</option></select>
+    <label class="fld">QuickBooks item <span class="muted">(leave blank = shared generic "Trash Service", no address)</span></label>
+    <select id="ef-item"><option value="">Loading…</option></select>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label class="fld">Flat rate ($)</label><input id="ef-rate" type="number" inputmode="decimal"></div>
+      <div style="flex:1"><label class="fld">Visits / week</label><input id="ef-vpw" type="number" inputmode="numeric"></div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label class="fld">Nudge day</label>
+        <select id="ef-nudge"><option>Mon</option><option>Tue</option><option>Wed</option><option>Thu</option><option>Fri</option><option>Sat</option><option>Sun</option></select>
+      </div>
+      <div style="flex:1"><label class="fld">Grace days</label><input id="ef-grace" type="number" inputmode="numeric"></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeEdit()">Cancel</button>
+      <button class="btn primary" style="flex:2" id="ef-save" onclick="saveEdit(this)">Save changes</button>
+    </div>
+    <button class="btn" style="width:100%;margin-top:10px;color:var(--danger);border-color:var(--danger)" onclick="removeProperty()">Remove this property</button>
+    <p class="muted" style="margin-top:6px">Removing hides it from the buttons; logged visits and any invoices stay intact.</p>
+  </div>
 </div>
 
 <!-- Visit sheet -->
@@ -109,18 +144,11 @@
     <h2 id="vm-title">Log visit</h2>
     <input type="hidden" id="vm-prop-id">
     <div class="photo-group">
-      <label class="fld">Before photos</label>
-      <label class="cam-btn">📷 Add before photos
-        <input type="file" accept="image/*,video/*" capture="environment" multiple class="hide" onchange="pickPhotos(this,'before')">
+      <label class="fld">Photos</label>
+      <label class="cam-btn">📷 Add photos
+        <input type="file" accept="image/*,video/*" capture="environment" multiple class="hide" onchange="pickPhotos(this)">
       </label>
-      <div class="thumbs" id="thumbs-before"></div>
-    </div>
-    <div class="photo-group">
-      <label class="fld">After photos</label>
-      <label class="cam-btn">✅ Add after photos
-        <input type="file" accept="image/*,video/*" capture="environment" multiple class="hide" onchange="pickPhotos(this,'after')">
-      </label>
-      <div class="thumbs" id="thumbs-after"></div>
+      <div class="thumbs" id="thumbs-photos"></div>
     </div>
 
     <label class="fld">Extra charge (bulk / furniture / cleanup)</label>
@@ -161,7 +189,7 @@ var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
 var SECRET_KEY = 'mh_auth';                 // shared with the Hub — same access code
 var AUTH_TOKEN = '';
 var props = [];                              // trash properties
-var pending = { before: [], after: [] };     // uploaded Drive file ids for the open visit
+var pendingPhotos = [];                       // uploaded Drive file ids for the open visit
 var pendingFolder = null;                     // {id,url} reused across a visit's uploads
 var extraAmt = 0;
 var curInvoice = null;                        // {property_id, week} for the send step
@@ -203,11 +231,30 @@ function loadProperties(){
   return api('GET','/trash/properties').then(function(list){
     props = Array.isArray(list)?list:[];
     var el=document.getElementById('buttons');
-    if(!props.length){ el.innerHTML='<p class="muted">No properties yet. Add one below.</p>'; return; }
-    el.innerHTML = props.map(function(p){
+    if(!props.length){ el.innerHTML='<p class="muted">No properties yet. Add one below.</p>'; }
+    else el.innerHTML = props.map(function(p){
       return '<button class="big-btn" onclick="openVisit(\''+p.id+'\')">'+esc(p.label)+'<div style="font-size:12px;font-weight:400;opacity:.85;margin-top:3px">'+money(p.flat_rate)+' / visit · '+p.visits_per_week+'×/wk</div></button>';
     }).join('');
+    renderManage();
   });
+}
+function renderManage(){
+  var el=document.getElementById('manage-list');
+  if(!props.length){ el.innerHTML='<p class="muted">No properties yet.</p>'; return; }
+  el.innerHTML = props.map(function(p){
+    var cust = p.customer_name ? esc(p.customer_name) : (p.customer_id ? ('customer '+esc(p.customer_id)) : '<span style="color:var(--danger)">⚠ no customer</span>');
+    var item = p.item_name ? esc(p.item_name) : 'generic Trash Service';
+    return '<div style="border-top:1px solid var(--border);padding:10px 0">'
+      + '<div class="row"><b>'+esc(p.label)+'</b><button class="btn" style="padding:6px 12px" onclick="openEdit(\''+p.id+'\')">Edit</button></div>'
+      + '<div class="muted" style="margin-top:3px">bills to: '+cust+'</div>'
+      + '<div class="muted">item: '+item+' · '+money(p.flat_rate)+'/visit · '+p.visits_per_week+'×/wk · nudge '+esc(p.nudge_day||'Thu')+'</div>'
+      + '</div>';
+  }).join('');
+}
+function toggleManage(){
+  var f=document.getElementById('manage-list'); var open=f.classList.toggle('hide')===false;
+  document.getElementById('manage-caret').textContent=open?'hide':'show';
+  if(open){ ensureQbLists(); }  // warm the dropdowns so Edit opens instantly
 }
 function loadWeek(){
   return api('GET','/trash/week').then(function(d){
@@ -242,9 +289,8 @@ function openVisit(pid){
   var p=props.find(function(x){return x.id===pid;}); if(!p) return;
   document.getElementById('vm-prop-id').value=pid;
   document.getElementById('vm-title').textContent='Log visit — '+p.label;
-  pending={before:[],after:[]}; pendingFolder=null; extraAmt=0;
-  document.getElementById('thumbs-before').innerHTML='';
-  document.getElementById('thumbs-after').innerHTML='';
+  pendingPhotos=[]; pendingFolder=null; extraAmt=0;
+  document.getElementById('thumbs-photos').innerHTML='';
   document.getElementById('vm-extra-custom').classList.add('hide');
   document.getElementById('vm-extra-reason').classList.add('hide');
   document.getElementById('vm-extra-custom').value=''; document.getElementById('vm-extra-reason').value='';
@@ -269,15 +315,15 @@ function setExtraCustom(btn){
 }
 
 // Photo upload: Drive resumable session from the Worker, then PUT straight to Drive.
-function pickPhotos(input, kind){
+function pickPhotos(input){
   var files=Array.prototype.slice.call(input.files||[]); if(!files.length) return;
   var pid=document.getElementById('vm-prop-id').value;
   var p=props.find(function(x){return x.id===pid;})||{label:'Trash'};
-  var cont=document.getElementById('thumbs-'+kind);
+  var cont=document.getElementById('thumbs-photos');
   files.forEach(function(file){
     var chip=document.createElement('span'); chip.className='thumb'; chip.innerHTML='<span class="spin"></span> '+esc(file.name.slice(0,14));
     cont.appendChild(chip);
-    var reqBody={ wo_id:'TRASH-'+pid, property:p.label, file_name:file.name, file_type:kind, mime_type:file.type||'application/octet-stream', origin:window.location.origin };
+    var reqBody={ wo_id:'TRASH-'+pid, property:p.label, file_name:file.name, file_type:'photo', mime_type:file.type||'application/octet-stream', origin:window.location.origin };
     if(pendingFolder){ reqBody.folder_id=pendingFolder.id; reqBody.folder_url=pendingFolder.url; }
     api('POST','/create-upload-session',reqBody).then(function(res){
       if(!res.success||!res.upload_url){ chip.innerHTML='⚠ '+esc(res.error||'session failed'); return; }
@@ -286,8 +332,8 @@ function pickPhotos(input, kind){
         .then(function(r){ return r.json(); })
         .then(function(fd){
           if(!fd||!fd.id){ chip.innerHTML='⚠ upload failed'; return; }
-          pending[kind].push(fd.id);
-          chip.innerHTML=(kind==='after'?'✅ ':'📷 ')+esc(file.name.slice(0,14));
+          pendingPhotos.push(fd.id);
+          chip.innerHTML='📷 '+esc(file.name.slice(0,14));
         });
     }).catch(function(e){ chip.innerHTML='⚠ '+esc(e.message||'error'); });
   });
@@ -299,7 +345,7 @@ function saveVisit(btn){
   var ci=document.getElementById('vm-extra-custom');
   if(!ci.classList.contains('hide')) extraAmt=Number(ci.value||0);
   var reason=document.getElementById('vm-extra-reason').value.trim();
-  var allPhotos=pending.before.concat(pending.after);
+  var allPhotos=pendingPhotos.slice();
   btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
   var body={ property_id:pid, photo_file_ids:allPhotos, extra_amount:extraAmt>0?extraAmt:0 };
   if(pendingFolder){ body.photo_folder_id=pendingFolder.id; body.photo_folder_url=pendingFolder.url; }
@@ -356,17 +402,71 @@ function toggleAdd(){
   document.getElementById('add-caret').textContent=open?'hide':'show';
   if(open && document.getElementById('af-customer').children.length<=1) loadQbLists();
 }
+var qbCustCache=null, qbItemCache=null;
+function ensureQbLists(){
+  var pc = (qbCustCache!==null) ? Promise.resolve(qbCustCache)
+    : api('GET','/trash/qb-customers').then(function(l){ qbCustCache=(l&&l.error)?[]:(Array.isArray(l)?l:[]); return qbCustCache; }).catch(function(){ qbCustCache=[]; return []; });
+  var pi = (qbItemCache!==null) ? Promise.resolve(qbItemCache)
+    : api('GET','/trash/qb-items').then(function(l){ qbItemCache=(l&&l.error)?[]:(Array.isArray(l)?l:[]); return qbItemCache; }).catch(function(){ qbItemCache=[]; return []; });
+  return Promise.all([pc,pi]);
+}
+function fillSelect(sel, list, placeholder, selectedId){
+  sel.innerHTML='<option value="">'+placeholder+'</option>'+(list||[]).map(function(o){
+    return '<option value="'+esc(o.id)+'" data-name="'+esc(o.name)+'"'+(String(o.id)===String(selectedId||'')?' selected':'')+'>'+esc(o.path||o.name)+'</option>';
+  }).join('');
+}
 function loadQbLists(){
-  api('GET','/trash/qb-customers').then(function(list){
-    var s=document.getElementById('af-customer');
-    if(list&&list.error){ s.innerHTML='<option value="">(QB error: '+esc(list.error)+')</option>'; return; }
-    s.innerHTML='<option value="">— pick customer —</option>'+(list||[]).map(function(c){ return '<option value="'+esc(c.id)+'" data-name="'+esc(c.name)+'">'+esc(c.path||c.name)+'</option>'; }).join('');
-  }).catch(function(){ document.getElementById('af-customer').innerHTML='<option value="">(could not load)</option>'; });
-  api('GET','/trash/qb-items').then(function(list){
-    var s=document.getElementById('af-item');
-    if(list&&list.error){ s.innerHTML='<option value="">(QB error: '+esc(list.error)+')</option>'; return; }
-    s.innerHTML='<option value="">— pick item —</option>'+(list||[]).map(function(i){ return '<option value="'+esc(i.id)+'" data-name="'+esc(i.name)+'">'+esc(i.name)+'</option>'; }).join('');
-  }).catch(function(){ document.getElementById('af-item').innerHTML='<option value="">(could not load)</option>'; });
+  ensureQbLists().then(function(r){
+    fillSelect(document.getElementById('af-customer'), r[0], '— pick customer —', '');
+    fillSelect(document.getElementById('af-item'), r[1], '— pick item (optional) —', '');
+  });
+}
+
+// ── Edit / remove property ───────────────────────────────────
+function openEdit(id){
+  var p=props.find(function(x){return x.id===id;}); if(!p) return;
+  document.getElementById('ef-id').value=p.id;
+  document.getElementById('ef-label').value=p.label||'';
+  document.getElementById('ef-rate').value=p.flat_rate!=null?p.flat_rate:40;
+  document.getElementById('ef-vpw').value=p.visits_per_week!=null?p.visits_per_week:2;
+  document.getElementById('ef-nudge').value=p.nudge_day||'Thu';
+  document.getElementById('ef-grace').value=p.grace_days!=null?p.grace_days:1;
+  var cs=document.getElementById('ef-customer'), is=document.getElementById('ef-item');
+  cs.innerHTML='<option>Loading…</option>'; is.innerHTML='<option>Loading…</option>';
+  document.getElementById('edit-modal').classList.add('open');
+  ensureQbLists().then(function(r){
+    fillSelect(cs, r[0], '— pick customer —', p.customer_id);
+    fillSelect(is, r[1], '— generic Trash Service —', p.item_id);
+  });
+}
+function closeEdit(){ document.getElementById('edit-modal').classList.remove('open'); }
+function saveEdit(btn){
+  var id=document.getElementById('ef-id').value;
+  var cs=document.getElementById('ef-customer'), is=document.getElementById('ef-item');
+  var cOpt=cs.options[cs.selectedIndex], iOpt=is.options[is.selectedIndex];
+  var fields={
+    Label:document.getElementById('ef-label').value.trim(),
+    QBO_Customer_ID:cs.value, Customer_Name:(cOpt&&cs.value)?cOpt.getAttribute('data-name'):'',
+    QBO_Item_ID:is.value, Item_Name:(iOpt&&is.value)?iOpt.getAttribute('data-name'):'',
+    Flat_Rate:document.getElementById('ef-rate').value||40,
+    Visits_Per_Week:document.getElementById('ef-vpw').value||2,
+    Nudge_Day:document.getElementById('ef-nudge').value,
+    Grace_Days:document.getElementById('ef-grace').value||1
+  };
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
+  api('POST','/trash/property/update',{ id:id, fields:fields }).then(function(r){
+    btn.disabled=false; btn.textContent='Save changes';
+    if(r&&r.success){ toast('Saved'); closeEdit(); loadProperties(); loadWeek(); }
+    else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save changes'; toast('Error: '+e.message); });
+}
+function removeProperty(){
+  var id=document.getElementById('ef-id').value;
+  if(!confirm('Remove this property from the buttons? Logged visits and invoices stay intact.')) return;
+  api('POST','/trash/property/update',{ id:id, fields:{ Active:'FALSE' } }).then(function(r){
+    if(r&&r.success){ toast('Removed'); closeEdit(); loadProperties(); loadWeek(); }
+    else toast((r&&r.error)||'Could not remove');
+  }).catch(function(e){ toast('Error: '+e.message); });
 }
 function addProperty(btn){
   var label=document.getElementById('af-label').value.trim();

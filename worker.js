@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.8';
+const BUILD_VERSION = '2026-08-07.9';
 
 export default {
   async fetch(request, env) {
@@ -5913,6 +5913,32 @@ function buildTrashInvoiceLines(property, visits) {
   return { lines, total: +total.toFixed(2) };
 }
 
+// The ONE generic QuickBooks item every trash property bills against unless it has
+// its own. A single shared "Trash Service" item means new properties reuse the exact
+// same charge with NO address in the Product/Service column — the address lives only
+// on the customer. Find-or-create once, then cached in Config so it costs nothing after.
+async function trashDefaultItem(env, token) {
+  try {
+    const cfg = await fetchConfig(env);
+    if (cfg.trash_qb_item_id) return { id: String(cfg.trash_qb_item_id), name: cfg.trash_qb_item_name || 'Trash Service' };
+  } catch (e) {}
+  // Look for an existing item by name first (don't duplicate one Brett already made).
+  try {
+    const q = encodeURIComponent("select Id, Name from Item where Name = 'Trash Service'");
+    const d = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+    let it = ((d && d.QueryResponse && d.QueryResponse.Item) || [])[0];
+    if (!it) {
+      const r = await qbApi(env, 'item?minorversion=73', 'POST', { Name: 'Trash Service', Type: 'Service', IncomeAccountRef: { value: '198' } }, token);
+      it = (r && r.Item) || (qbDupId(r) ? { Id: qbDupId(r), Name: 'Trash Service' } : null);
+    }
+    if (it && it.Id) {
+      try { await setConfigKey(env, { key: 'trash_qb_item_id', value: String(it.Id) }); await setConfigKey(env, { key: 'trash_qb_item_name', value: it.Name || 'Trash Service' }); } catch (e) {}
+      return { id: String(it.Id), name: it.Name || 'Trash Service' };
+    }
+  } catch (e) {}
+  return { id: '40', name: 'General' }; // ultimate fallback: the existing General item
+}
+
 // Create the two tabs + headers if missing. Runtime SA has edit on both prod and
 // staging sheets, so this provisions each environment on first write — no
 // sheet-op round trip, no cross-account sharing to remember.
@@ -6104,26 +6130,39 @@ async function trashInvoice(env, body) {
     }
 
     const warnings = [];
-    const { lines, total } = buildTrashInvoiceLines(p, toBill);
-    if (total <= 0) return json({ ok: false, error: 'Nothing to invoice (total is 0)' }, 400);
-    if (!p.QBO_Item_ID) warnings.push('No QuickBooks item set on this property — using the General item (40).');
+    const hasOwnItem = !!String(p.QBO_Item_ID || '').trim();
     const photoCount = toBill.reduce((s, v) => s + String(v.Photo_File_IDs || '').split(',').filter(Boolean).length, 0);
 
     if (previewOnly) {
+      // Preview writes NOTHING (no item creation). Line descriptions don't depend on the item
+      // id, so build with the property as-is purely for display of amounts.
+      const pv = buildTrashInvoiceLines(p, toBill);
+      if (pv.total <= 0) return json({ ok: false, error: 'Nothing to invoice (total is 0)' }, 400);
       if (!p.QBO_Customer_ID) warnings.push('No QuickBooks customer set on this property — set one before sending.');
-      if (!photoCount) warnings.push('No photos on these visits — the invoice will carry no before/after proof.');
+      if (!hasOwnItem) warnings.push('Will bill the shared generic "Trash Service" item — keeps the invoice free of any address.');
+      if (!photoCount) warnings.push('No photos on these visits — the invoice will carry no photo proof.');
       return json({ preview: {
         property: p.Label, week,
         customer: { id: p.QBO_Customer_ID || '', name: p.Customer_Name || '' },
         visits: toBill.map(v => ({ date: v.Visit_Date, base: Number(v.Base_Rate || p.Flat_Rate || 40) || 0, extra: Number(v.Extra_Amount || 0) || 0, reason: v.Extra_Reason || '' })),
-        lines: lines.map(l => ({ desc: l.Description, amount: l.Amount })),
-        total: +total.toFixed(2), attach_photos: photoCount, warnings,
+        lines: pv.lines.map(l => ({ desc: l.Description, amount: l.Amount })),
+        total: +pv.total.toFixed(2), attach_photos: photoCount, warnings,
       }});
     }
 
     // ---- CONFIRM (writes to QuickBooks) ----
     if (!p.QBO_Customer_ID) return json({ ok: false, error: 'No QuickBooks customer set on this property.', warnings });
     const token = await qbAccessToken(env);
+    // Resolve the billing item: the property's own, else the shared generic "Trash Service"
+    // item (find-or-created ONCE here — never during preview). Keeps every property's invoice
+    // free of any address in the Product/Service column.
+    let itemId = String(p.QBO_Item_ID || '').trim();
+    if (!itemId) {
+      try { const gi = await trashDefaultItem(env, token); itemId = gi.id; }
+      catch (e) { itemId = '40'; warnings.push('Could not resolve the generic Trash Service item — billed to General (40).'); }
+    }
+    const { lines, total } = buildTrashInvoiceLines(Object.assign({}, p, { QBO_Item_ID: itemId }), toBill);
+    if (total <= 0) return json({ ok: false, error: 'Nothing to invoice (total is 0)' }, 400);
     const txnDate = String((toBill[toBill.length - 1].Visit_Date) || new Date().toISOString().slice(0,10)).slice(0,10);
     const payload = {
       CustomerRef: { value: String(p.QBO_Customer_ID) },
