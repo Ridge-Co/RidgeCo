@@ -1,25 +1,25 @@
-# WHERE THINGS STAND — Aug 5, 2026
+# WHERE THINGS STAND — Aug 7, 2026
 
-## ⚠️ READ FIRST — three commits may not be on `main` yet
+## Cleaning-vendor invoicing — DONE + reconciled (Aug 6–7)
 
-Aug 4–5 produced three commits that the session could not push (the Cowork git proxy binds an
-authorized repo list at container start, and that session started without `Ridge-Co/RidgeCo`
-on it — read access worked, writes were refused). They were handed to Brett as
-`ridgeco-3-commits.patch`.
+The Andrea + Michelle cleaning invoices are all in production QuickBooks and reconciled.
+Deployed Worker is `2026-08-07.3`.
 
-| Commit | What it is |
-|---|---|
-| `6c0bd5f` | An unlinked property does not settle itself on first invoice |
-| `4eaba73` | Logged hours can be the bill |
-| _(this one)_ | Context update — Aug 5 |
-
-**Check before doing anything else:** `git log --oneline -3`. If you do not see "Logged hours
-can be the bill", the patch was never applied and the code below is NOT live. Ask Brett for the
-patch file rather than rebuilding it — the work is done and tested, it is only stranded.
-
-**To stop this recurring:** the Claude GitHub App is now installed on the `Ridge-Co` org
-(done Aug 5). A session must additionally be *created* with `Ridge-Co/RidgeCo` selected as a
-source; attaching it after the container is up does not work.
+- **Deploys work from Cowork now.** GitHub push-to-`main` → Cloudflare Workers Builds. The old
+  "three stranded commits / apply the patch" warning is retired — writes to `Ridge-Co/RidgeCo`
+  succeed from this session. (Seven deploys landed Aug 6–7.)
+- **13 customer invoices** to Goldszmidt (8 Andrea + 5 Michelle) posted, all verified. Andrea's
+  seven over-$200 invoices were then **rescaled to a $35 markup + 5%** at Brett's direction →
+  Andrea customer total **$1,980.27**; Michelle 5 × $288.75 = $1,443.75. #31 stayed $168.
+- **Duplicate-bill lesson:** the push double-created Andrea's #24/#30/#31 vendor bills — they
+  were already in QB (#0024/#0013/#0030). Brett deleted the 3 dupes; their Hub refs were scrubbed
+  (`/qb/clear-ir-bill`). See FEATURE_LOG rule 45 — query existing QB bills before a vendor-bill batch.
+- **New QB write-back endpoints** (FEATURE_LOG 46–48): `/qb/record-paid-bill` (paid bill w/ no
+  customer invoice — Andrea #0020), `/qb/clear-ir-bill`, `/qb/reprice-invoice`. Cleaning trade now
+  books to the real Service item **43** ("Cleaning Service"), not the category item 22 (rule 44).
+- **Andrea AP open balance = $1,241.34** (#0024 $460 partial + #0013 $110 + #0030 $671.34).
+  Reconciliation sheet delivered to Brett. Michelle square.
+- **Left for Brett:** confirm the $344.80 bank payment sits on Andrea #0024 (leaves $460 open).
 
 ## Do these first, in this order
 
@@ -106,7 +106,7 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 | Brett_Cowork_Best_Practices_v1.3.md | v1.3 | ✅ ALWAYS | Session workflow, common mistakes, how to work with Brett |
 | CREDENTIALS_MAP.md | v1.3 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality. **v1.3: two-service-accounts correction (Worker runtime = maintenance-hub-498819, NOT brett-os-sheets) + Worker var list + STAGING=1 warning** |
 | VENTURES.md | v1.0 | ✅ ALWAYS | Every venture — current state, stack, Claude access level, automation gaps |
-| FEATURE_LOG.md | **v1.11** | ✅ ALWAYS | What's working — check before every code change to prevent regressions. **v1.11 (Aug 4–5): rules 35–39 — one trade list, a former tenant's phone does not travel, `ensureColumns` before writing a new column (rule 37, the silent-no-op that keeps recurring), sending an invoice creates the OWNER not the property (38), logged time is a record not a charge — the invoice is built from a BILL (39).** v1.10 (Aug 3): billing consolidated onto the work order (one pricing surface); duplicate-submission guards; rules 19-23 — silent no-ops from a wrong route AND a wrong column, vendor.html api() serialization (receipts/time entries had never worked), never infer 'sent to QuickBooks' from an absent row, multi-vendor bills per WO, dedupe must fail open.** v1.7: daily digest shipped. v1.6: rule 18 — the July 21 non-prod-branch-build → production deploy incident. Keep Cloudflare non-prod branch builds OFF until reconfigured to `wrangler versions upload`. |
+| FEATURE_LOG.md | **v1.13** | ✅ ALWAYS | What's working — check before every code change to prevent regressions. **v1.13 (Aug 6–7): rules 44–49 — Cleaning books to Service item 43 not the category (44); query existing QB bills before a vendor-bill batch, the dup-bill lesson (45); new `/qb/record-paid-bill`, `/qb/clear-ir-bill`, `/qb/reprice-invoice` (46–48); Cowork deploys the Worker now, urllib-403 + Sheets-quota gotchas (49).** v1.11 (Aug 4–5): rules 35–39 — one trade list, a former tenant's phone does not travel, `ensureColumns` before writing a new column (rule 37, the silent-no-op that keeps recurring), sending an invoice creates the OWNER not the property (38), logged time is a record not a charge — the invoice is built from a BILL (39).** v1.10 (Aug 3): billing consolidated onto the work order (one pricing surface); duplicate-submission guards; rules 19-23 — silent no-ops from a wrong route AND a wrong column, vendor.html api() serialization (receipts/time entries had never worked), never infer 'sent to QuickBooks' from an absent row, multi-vendor bills per WO, dedupe must fail open.** v1.7: daily digest shipped. v1.6: rule 18 — the July 21 non-prod-branch-build → production deploy incident. Keep Cloudflare non-prod branch builds OFF until reconfigured to `wrangler versions upload`. |
 | BACKLOG.md | v1.23 | ⏳ index always, detail on-demand | Master backlog across all ventures. Quick Index block at top (always-load); full entries on demand. |
 | CAPTURE_INBOX.md | v1.22 | ⏳ index always, detail on-demand | Brett's brain-dump inbox — CAP items. Quick Index block at top (always-load); full entries on demand. |
 | HANDWRITING_KEY.md | v1.10 | ⏳ ON-DEMAND | Reference for reading Brett's handwritten-note photos (load only for handwriting tasks). Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338 + Scanned_202607211020/1341. |

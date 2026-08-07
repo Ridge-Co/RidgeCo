@@ -1,5 +1,5 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.12 | **Last Updated:** August 5, 2026
+**Version:** v1.13 | **Last Updated:** August 7, 2026
 
 ## TIME BILLING — hours × rate, per customer, service charge (shipped Aug 5, 2026)
 
@@ -324,6 +324,20 @@ Own-purchase receipts ONLY (business / owned-property / personal-HSA). **WO/vend
 21. **Never infer "already sent to QuickBooks" from an absent row.** `/qb/ready` hides sent rows, so "not in the queue" was being read as "already invoiced" — and it disabled the only button that could bill the job. A bill marked `reviewed` with no Invoice_Review row behind it is NOT approved: nothing was queued and no invoice exists (the `reviewed_no_row` state). Claim "in QuickBooks" only when `QB_Invoice_ID` and `QB_Bill_ID` are both in hand. This is rule 16 applied to money.
 22. **A work order can carry bills from more than one vendor, and each needs its own invoice.** Anything that picks "the bill" for a WO must carry a specific `Bill_ID`, never just take the newest — and "Mark Reviewed" writes no Invoice_Review row, so it retires a bill from the queue WITHOUT invoicing the customer or paying the vendor. Do not offer it as a way to clear a bill you actually intend to bill.
 23. **The duplicate-submission backstop must fail OPEN.** `findRecentDuplicate` returns null on any error, and skips rows whose `Created_Date` will not parse. An early version treated an undateable row as a match at any age, which silently swallowed real submissions behind a success message. Losing a vendor's work is strictly worse than the duplicate row it prevents.
+
+## CLEANING-VENDOR RECONCILIATION + QB WRITE-BACK ENDPOINTS (Aug 6–7, 2026)
+
+**44. "Cleaning" books to the QB Service item 43 ("Cleaning Service"), NOT item 22.** Item 22 named "Cleaning" is a QuickBooks *category*, which QBO rejects on an invoice line ("QBO 2500 — an item in this transaction is set up as a category instead of a product or service"). `qbSetupTrades` now honors an optional `itemName` on a `QB_TRADES` entry, so the sellable Service item is created as "Cleaning Service" (id 43 → Cleaning Income 295); `QB_TRADE_MAP.Cleaning.item = 43`. Vendor bills were unaffected — bills reference the expense *account* (282) directly, not an item.
+
+**45. Before creating vendor bills in QB, query for EXISTING bills — the invoice may already be entered.** The Aug 6 cleaning push assumed Andrea's #24/#30/#31 were un-entered and created them; they were already in QB (bills #0024/#0013/#0030), so it double-posted **$1,590.97** of payables (later deleted). Read-verify confirmed the vendors/customers *existed* but never queried their open *bills*. For any vendor-bill batch, `select … from Bill where VendorRef = …` first. (The customer invoices and Michelle's #9908–9912 were genuinely new — those were correct.)
+
+**46. `POST /qb/record-paid-bill`** (secret) — records an already-paid vendor bill (+ optional Bill Payment that clears it) directly in QB, for an invoice paid outside the Hub with NO customer invoice (which `/qb/send-invoice` cannot post — it requires a customer total). Body: `{vendor_qbo_id, amount, expense_account_id, pay_account_id?, doc_number?, txn_date?, pay_date?, memo?}`. Idempotent: reuses a same-`DocNumber` bill on that vendor and won't re-pay a zero-balance bill. (Andrea #0020 → bill 7538 + payment 7539; MandT Rental Trust 6287 = acct 155, Cleaning expense = 282.)
+
+**47. `POST /qb/clear-ir-bill`** (secret) — clears `QB_Bill_ID`/`QB_Bill_Number` on an Invoice_Review row whose vendor bill was later deleted in QB, leaving the customer invoice id/number/status intact. Body: `{ir_id}`. Used after deleting the 3 duplicate Andrea bills (IR 10/11/14 → WO-1102/1103/1107) so the Hub stopped showing phantom payables.
+
+**48. `POST /qb/reprice-invoice`** (secret) — changes the dollar amount of an ALREADY-SENT customer invoice (unlike `/qb/repair-invoice`, which preserves the total and only fixes wording — it hard-refuses a total change). Rewrites the single sales line to a new amount, preserving its item/income account + description, and writes the new `Customer_Total`/`Markup`/`Processing_Fee` back to Invoice_Review. **Refuses a paid or multi-line invoice.** Body: `{ir_id, new_total, new_markup?, new_fee?}`. Used to rescale the 7 Andrea customer invoices over $200 to a $35 markup + 5% (new Andrea customer total $1,980.27).
+
+**49. Cowork can now deploy the Worker (GitHub push-to-`main` → Cloudflare Workers Builds).** Verified across seven deploys Aug 6–7 (`2026-08-06.3` → `2026-08-07.3`). The "three stranded commits / apply this patch" warning that used to head CURRENT.md is obsolete — writes to `Ridge-Co/RidgeCo` succeed from this session. Two operational gotchas: Cloudflare's edge 403s a `Python-urllib` user-agent (scripted Worker calls must send a normal `User-Agent`), and the Sheets API has a per-minute read quota (space out large Hub batches or they fail mid-run).
 
 ## HOW TO UPDATE THIS LOG
 
