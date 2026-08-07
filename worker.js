@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.4';
+const BUILD_VERSION = '2026-08-07.5';
 
 export default {
   async fetch(request, env) {
@@ -127,6 +127,7 @@ export default {
         if (path === '/qb/repairable')          return await qbRepairable(env, url);
         if (path === '/qb/payables')            return await qbPayables(env, url);
         if (path === '/daily-digest')           return await digestResponse(env, url);
+        if (path === '/ops-telemetry')          return await opsTelemetryRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
       }
       if (request.method === 'POST') {
@@ -215,6 +216,7 @@ export default {
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
+        if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
@@ -242,9 +244,21 @@ export default {
   // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
   // with delivery off just builds the digest and returns — no messages, negligible cost.
   async scheduled(event, env, ctx) {
+    const cron = event && event.cron;
+    // Weekly Optimizer Reviewer (B-129) — Mondays 12:00 UTC (8am ET). Reads the last 7 days
+    // of Ops_Telemetry, computes metrics, asks Claude for a ranked proposal, logs it to
+    // Ops_Review_Log, and delivers IF digest delivery is enabled. Isolated from the digest.
+    if (cron === '0 12 * * 1') {
+      try { await runWeeklyReview(env, { deliver: true, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
+      return;
+    }
+    // Daily digest (existing) — 11:00 UTC. Now self-instruments a telemetry row so the
+    // Ops_Telemetry tab self-creates and gets a heartbeat row every morning (best-effort).
     try {
+      const _t0 = Date.now();
       const digest = await buildDigest(env);
-      await deliverDigest(env, digest);
+      const delivery = await deliverDigest(env, digest);
+      try { await logTelemetry(env, { Source:'worker', Job_Type:'daily_digest', Skill_Or_Endpoint:'scheduled/daily-digest', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes: (delivery&&delivery.delivered)?'delivered':'dormant' }); } catch (_) { /* telemetry best-effort */ }
     } catch (e) { /* non-fatal: a digest error must never affect anything else */ }
     // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
     // the confirm-first queue. Read + queue only; no money, no customer contact.
@@ -2813,6 +2827,147 @@ async function telemetryLog(env, body) {
   } catch (e) {
     return json({ error: 'telemetry write failed', detail: String((e && e.message) || e) }, 500);
   }
+}
+
+// ── OPTIMIZER: WEEKLY REVIEWER (B-129) ───────────────────────────────────────
+// The "Review" step of CONTINUOUS_IMPROVEMENT_STRATEGY_v1.0, running where it can
+// actually authenticate: a Worker cron (Mondays 8am ET) with full env access —
+// Sheets + ANTHROPIC_API_KEY. A fresh Cowork scheduled session can't do this yet
+// (no WORKER_SECRET / no BRETT_GH_PAT in a headless run), so the Worker is the home.
+// Reads the last 7d of Ops_Telemetry → deterministic metrics + stuck-pattern flags
+// (H2) → a ranked, telemetry-grounded proposal from Claude → Ops_Review_Log tab, and
+// delivers only if digest delivery is enabled. Also exposed on-demand at GET /ops-review
+// so Brett can run + read it now (the model call is best-effort; metrics never depend on it).
+const OPS_REVIEW_TAB  = 'Ops_Review_Log';
+const OPS_REVIEW_COLS = ['ID','Timestamp','Window_Days','Total_Jobs','Success_Rate','Escalation_Rate','Human_Corrected','Est_Cost','Stuck_Patterns','Proposal','Trigger','Delivered'];
+
+async function readTelemetryRows(env, days) {
+  let data;
+  try { data = await sheetsRequest(env, 'GET', `/values/${TELEMETRY_TAB}`); }
+  catch (e) { if (isMissingTabError(e)) return []; throw e; }   // no tab yet = no data, not an error
+  const rows = data.values || [];
+  if (rows.length < 2) return [];
+  const headers = rows[0];
+  const objs = rows.slice(1).map(r => { const o = {}; headers.forEach((h, i) => { o[h] = (r[i] !== undefined) ? r[i] : ''; }); return o; });
+  if (!days) return objs;
+  const cutoff = Date.now() - days * 86400000;
+  // Drop rows with an unparseable timestamp from a WINDOWED query — an undated stale row
+  // must not inflate metrics.total or skew rates (reviewer LOW-3).
+  return objs.filter(o => { const t = Date.parse(o.Timestamp || ''); return isNaN(t) ? false : t >= cutoff; });
+}
+
+function computeTelemetryMetrics(rows) {
+  const isTrue  = v => String(v).toUpperCase() === 'TRUE';
+  const isFalse = v => String(v).toUpperCase() === 'FALSE';
+  const bySource = {}, byJob = {};
+  let escalated = 0, humanCorrected = 0, cost = 0, latSum = 0, latN = 0, successKnown = 0, successTrue = 0;
+  for (const r of rows) {
+    bySource[r.Source || '(none)'] = (bySource[r.Source || '(none)'] || 0) + 1;
+    const jt = r.Job_Type || '(none)';
+    byJob[jt] = byJob[jt] || { count: 0, fail: 0, corrected: 0 };
+    byJob[jt].count++;
+    if (isTrue(r.Escalated)) escalated++;
+    if (isTrue(r.Human_Corrected)) { humanCorrected++; byJob[jt].corrected++; }
+    if (isFalse(r.Success)) byJob[jt].fail++;
+    if (r.Success !== undefined && r.Success !== '') { successKnown++; if (isTrue(r.Success)) successTrue++; }
+    const c = parseFloat(r.Est_Cost);   if (Number.isFinite(c)) cost += c;
+    const l = parseFloat(r.Latency_ms); if (Number.isFinite(l)) { latSum += l; latN++; }
+  }
+  // Stuck-pattern flags (H2): a job type looping on the same failure or repeatedly corrected.
+  const stuck = [];
+  for (const [jt, m] of Object.entries(byJob)) {
+    if (m.fail >= 2)      stuck.push(`${jt}: ${m.fail} failures`);
+    if (m.corrected >= 2) stuck.push(`${jt}: ${m.corrected} human-corrections`);
+  }
+  return {
+    total: rows.length, bySource, byJob,
+    escalated, escalation_rate: rows.length ? +(escalated / rows.length).toFixed(3) : 0,
+    human_corrected: humanCorrected,
+    success_rate: successKnown ? +(successTrue / successKnown).toFixed(3) : null,
+    est_cost_total: +cost.toFixed(4), avg_latency_ms: latN ? Math.round(latSum / latN) : null,
+    stuck_patterns: stuck,
+  };
+}
+
+async function llmReviewProposal(env, metrics, days) {
+  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  const prompt = `You are "The Optimizer" — a supervisory continuous-improvement reviewer for Brett's property-maintenance automation (BrettOS). You are given ${days} days of operational telemetry metrics as JSON. Produce a SHORT, ranked improvement proposal in Brett's style: direct, scannable, no cheerleading; each item is one concrete next action with payoff / effort / risk.
+
+Rules:
+- Rank by impact (recurring time or cost saved, or an effectiveness/accuracy gain), highest first. Max 5 items.
+- Ground EVERY item in the metrics — cite the number that motivates it. No generic advice.
+- If a job_type shows repeated failures or human-corrections (see stuck_patterns), call it out as a stuck loop to fix by CHANGING approach, not retrying the same thing.
+- If escalation_rate is high, flag likely model mis-tiering. If one job_type dominates cost, flag it.
+- End with exactly one line: the single highest-leverage action for this week.
+Return plain text, no markdown headers.
+
+TELEMETRY METRICS (${days}d):
+${JSON.stringify(metrics, null, 2)}`;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 900, messages: [{ role: 'user', content: prompt }] }) });
+  const data = await resp.json();
+  const txt = (data.content && data.content[0] && data.content[0].text || '').trim();
+  if (!txt) throw new Error('empty LLM response');
+  return txt;
+}
+
+async function deliverReview(env, metrics, proposal, days) {
+  const cfg = await fetchConfig(env);
+  if (String(cfg.digest_enabled || '').toUpperCase() !== 'TRUE') return { delivered: false, reason: 'digest_enabled not TRUE (dormant)' };
+  const pct = (x) => (x == null ? 'n/a' : Math.round(x * 100) + '%');
+  const text = `Ridge Co — Weekly Ops Review (${days}d)\n${metrics.total} jobs · success ${pct(metrics.success_rate)} · escalation ${pct(metrics.escalation_rate)} · $${metrics.est_cost_total}\n\n${proposal}`;
+  const out = {};
+  if (String(cfg.digest_sms_enabled || '').toUpperCase() === 'TRUE' && cfg.digest_sms_to && env.TWILIO_FROM) out.sms = await sendSMS(env, cfg.digest_sms_to, text.slice(0, 1400));
+  if (String(cfg.digest_email_enabled || '').toUpperCase() === 'TRUE' && cfg.digest_email_to) out.email = await deliverDigestEmail(env, cfg.digest_email_to, 'Ridge Co — Weekly Ops Review', text);
+  return { delivered: true, out };
+}
+
+async function runWeeklyReview(env, opts) {
+  opts = opts || {};
+  const days = opts.days || 7;
+  const rows = await readTelemetryRows(env, days);
+  const metrics = computeTelemetryMetrics(rows);
+  let proposal;
+  if (metrics.total < 5) {
+    proposal = `Not enough telemetry yet (${metrics.total} row(s) in ${days}d). The spine is collecting — a data-backed ranked proposal needs a bit more history. This will get sharper every week as jobs accrue.`;
+  } else {
+    try { proposal = await llmReviewProposal(env, metrics, days); }
+    catch (e) { proposal = `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
+  }
+  // Deliver first (gated), so the history row records the REAL outcome (reviewer NIT-1).
+  let delivery = null;
+  if (opts.deliver) { try { delivery = await deliverReview(env, metrics, proposal, days); } catch (_) { delivery = { delivered: false, reason: 'error' }; } }
+  const deliveredCol = !opts.deliver ? 'no' : (delivery && delivery.delivered) ? 'yes' : ('attempted:' + ((delivery && delivery.reason) || 'failed'));
+  let logged = false;
+  try {
+    await ensureTab(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
+    await ensureColumns(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
+    await addRow(env, OPS_REVIEW_TAB, {
+      Timestamp: new Date().toISOString(), Window_Days: String(days), Total_Jobs: String(metrics.total),
+      Success_Rate: metrics.success_rate == null ? '' : String(metrics.success_rate),
+      Escalation_Rate: String(metrics.escalation_rate), Human_Corrected: String(metrics.human_corrected),
+      Est_Cost: String(metrics.est_cost_total), Stuck_Patterns: (metrics.stuck_patterns || []).join(' | '),
+      Proposal: proposal, Trigger: opts.trigger || 'manual', Delivered: deliveredCol,
+    });
+    logged = true;
+  } catch (_) { /* history write is best-effort; the review still returns */ }
+  // Self-instrument (PAT-031): the reviewer is itself a measured job.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Notes: `${metrics.total} rows/${days}d` }); } catch (_) {}
+  return { ok: true, window_days: days, metrics, proposal, logged, delivery };
+}
+
+// GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
+async function opsTelemetryRead(env, url) {
+  const days = parseInt(url.searchParams.get('days') || '7') || 7;
+  const rows = await readTelemetryRows(env, days);
+  return json({ ok: true, window_days: days, count: rows.length, metrics: computeTelemetryMetrics(rows), rows: rows.slice(-200) });
+}
+
+// POST /ops-review {days?} — run the weekly review on demand (test + read). POST because
+// it spends (LLM) and writes rows — not idempotent (reviewer LOW-1). Manual runs NEVER
+// deliver (LOW-2); only the Monday cron path delivers, by calling runWeeklyReview directly.
+async function opsReviewRun(env, body) {
+  const days = parseInt((body && body.days) || '7') || 7;
+  return json(await runWeeklyReview(env, { days, deliver: false, trigger: 'manual' }));
 }
 
 function bytesToB64(buf) {

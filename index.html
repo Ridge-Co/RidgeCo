@@ -475,6 +475,8 @@
       <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#000">🏢 Find duplicate properties</button>
       <button class="btn small" onclick="checkDuplicateOwners()" style="background:var(--info);color:#000">👤 Find duplicate owners</button>
       <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
+      <button class="btn small" onclick="runOpsReview()" style="background:var(--accent)">🔎 Run Ops Review (test)</button>
+      <button class="btn small" onclick="logTestTelemetry()" style="background:var(--info);color:#000">📊 Log test telemetry row</button>
     </div>
     <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
 
@@ -7942,6 +7944,35 @@ function bulkSendPins(type) {
   });
 }
 
+
+// Optimizer weekly reviewer (B-129) — run on demand. Reads Ops_Telemetry, ranks a
+// proposal, logs to Ops_Review_Log. Uses the Hub's admin token automatically via api().
+function runOpsReview() {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = '⏳ Running the weekly Optimizer review (reads telemetry, may call the model)…';
+  api('POST', '/ops-review', {}).then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    var m = res.metrics || {};
+    var pct = function(x) { return (x == null) ? 'n/a' : Math.round(x * 100) + '%'; };
+    var head = '<div style="color:var(--accent2);margin-bottom:6px">✓ Review ran — ' + esc(String(m.total || 0)) + ' job(s) / ' + esc(String(res.window_days || 7)) + 'd'
+      + ' · success ' + pct(m.success_rate) + ' · escalation ' + pct(m.escalation_rate)
+      + ' · $' + esc(String(m.est_cost_total || 0)) + '</div>';
+    var prop = '<div style="white-space:pre-wrap;color:var(--text);font-size:11px;border-left:2px solid var(--accent);padding-left:8px">' + esc(res.proposal || '') + '</div>';
+    if (el) el.innerHTML = head + prop;
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(String(e)) + '</span>'; });
+}
+
+// Log one telemetry row from the Hub — the one-tap way to verify the B-128 spine end to
+// end (self-creates Ops_Telemetry if it doesn't exist yet, then lands a row).
+function logTestTelemetry() {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = '⏳ Logging a test telemetry row…';
+  api('POST', '/telemetry/log', { Source: 'cowork', Job_Type: 'hub_test', Skill_Or_Endpoint: 'devlog-button', Success: 'TRUE', Notes: 'manual test from Dev Log' }).then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Telemetry row #' + esc(String(res.id || '?')) + ' landed in Ops_Telemetry (tab self-created if needed).</span>';
+    toast('Telemetry row logged', 'success');
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(String(e)) + '</span>'; });
+}
 
 // Units still pointing at a tenant who has moved out. Reports first — this writes to live
 // tenant links, so it shows you the list and makes you ask for the fix.

@@ -1,5 +1,17 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.14 | **Last Updated:** August 7, 2026
+**Version:** v1.15 | **Last Updated:** August 7, 2026
+
+**52. The weekly Optimizer Reviewer (B-129) runs as a WORKER CRON, not a Cowork task.** A fresh
+scheduled Cowork session has no `WORKER_SECRET` and no `BRETT_GH_PAT` (verified Aug 7 — headless env
+has only the permissionless GitHub tokens), so it can't read authed telemetry or the private repo.
+The Worker cron can — it has Sheets + `ANTHROPIC_API_KEY` in env. Cron `"0 12 * * 1"` (Mon 12:00 UTC)
+→ `scheduled()` branches on `event.cron` → `runWeeklyReview`: reads 7d of `Ops_Telemetry` → metrics +
+stuck-pattern flags (H2) → `claude-sonnet-4-6` ranked proposal (best-effort; skipped under 5 rows) →
+`Ops_Review_Log` tab → delivers ONLY if `digest_enabled=TRUE` (email still a stub, SMS needs Twilio,
+so dormant today). **Do not** route `/ops-review` as GET (it spends + writes — it's `POST`, admin-gated)
+and manual runs never deliver (only the cron delivers). On-demand: **Hub → Dev Log → 🔎 Run Ops Review**
+(and 📊 Log test telemetry row to verify B-128 in one tap). The daily digest cron now also logs a
+telemetry heartbeat row, so `Ops_Telemetry` self-creates every morning at 7am ET.
 
 ## TELEMETRY SPINE — Ops_Telemetry (B-128, shipped Aug 7, 2026)
 

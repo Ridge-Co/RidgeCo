@@ -14,8 +14,11 @@ workers_dev = true
 # it lands at 6:00 AM during EST (winter) — refine with DST logic later if needed.
 # The scheduled() handler builds the digest but sends nothing until Config
 # digest_enabled=TRUE, so this trigger is harmless until Brett turns delivery on.
+# Second cron: weekly Optimizer Reviewer (B-129), Mondays 12:00 UTC (8am ET). The
+# scheduled() handler branches on event.cron; the weekly run reads Ops_Telemetry,
+# ranks a proposal, logs to Ops_Review_Log, and delivers only if digest_enabled=TRUE.
 [triggers]
-crons = ["0 11 * * *"]
+crons = ["0 11 * * *", "0 12 * * 1"]
 
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 
