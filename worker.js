@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.7';
+const BUILD_VERSION = '2026-08-07.8';
 
 export default {
   async fetch(request, env) {
@@ -5159,7 +5159,8 @@ async function qbSetBillDocNumber(env, body) {
     const bill = got && got.Bill;
     if (!bill) return json({ ok: false, error: qbFault(got) || 'Could not read that bill.' }, 404);
     const prev = bill.DocNumber || '';
-    const patch = { Id: billId, SyncToken: bill.SyncToken, sparse: true, DocNumber: docNum };
+    // QB requires VendorRef on a Bill update even in sparse mode (unlike Invoice/CustomerRef).
+    const patch = { Id: billId, SyncToken: bill.SyncToken, sparse: true, DocNumber: docNum, VendorRef: bill.VendorRef };
     const upd = await qbApi(env, 'bill?minorversion=73', 'POST', patch, token);
     if (!(upd && upd.Bill)) return json({ ok: false, error: 'Update failed: ' + (qbFault(upd) || 'unknown') }, 502);
     return json({ ok: true, qb_bill_id: billId, was: prev, now: docNum });
