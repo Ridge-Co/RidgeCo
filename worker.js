@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.5';
+const BUILD_VERSION = '2026-08-07.6';
 
 export default {
   async fetch(request, env) {
@@ -61,7 +61,14 @@ export default {
             (request.method === 'GET'  && SYNC_READ_PATHS.includes(path)) ||
             (request.method === 'POST' && path === '/contact/augment')
           );
-        if (!_syncOk) {
+        // Narrow read-only token for the trash push-nudge: accepted ONLY for
+        // GET /trash/unbilled (a list of property labels + missed/unbilled counts —
+        // no money, no PII, no writes). Lets a scheduled task poll for the nudge
+        // without carrying the full admin secret. Fully inert unless env.TRASH_NUDGE_TOKEN is set.
+        const _nudgeOk = !!env.TRASH_NUDGE_TOKEN
+          && _tok === env.TRASH_NUDGE_TOKEN
+          && request.method === 'GET' && path === '/trash/unbilled';
+        if (!_syncOk && !_nudgeOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -129,6 +136,11 @@ export default {
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/ops-telemetry')          return await opsTelemetryRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
+        if (path === '/trash/properties')       return await trashListProperties(env);
+        if (path === '/trash/week')             return await trashWeek(env, url);
+        if (path === '/trash/unbilled')         return await trashUnbilled(env, url);
+        if (path === '/trash/qb-customers')     return await trashQbCustomers(env);
+        if (path === '/trash/qb-items')         return await trashQbItems(env);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -233,6 +245,10 @@ export default {
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
+        if (path === '/trash/property/add')       return await trashAddProperty(env, body);
+        if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
+        if (path === '/trash/log-visit')          return await trashLogVisit(env, body);
+        if (path === '/trash/invoice')            return await trashInvoice(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -5678,6 +5694,349 @@ async function qbSendInvoice(env, body) {
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId,
                   invoice_number: invoiceDocNumber, bill_number: billDocAssigned,
                   status, errors, warnings });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TRASH SERVICE — one-tap recurring flat-rate billing (B-203)
+// ══════════════════════════════════════════════════════════════
+// Brett services trash areas 2×/week at a handful of side-by-side rental
+// buildings for a flat $40/visit, plus occasional $20-increment extras for
+// bulk/cleanup. Two layers, deliberately separate:
+//   • Trash_Visits  = PROOF + tracking. One row per trip (photos, date, extra).
+//                     This is what the nudge watches and what proves he went.
+//   • the QB invoice = MONEY. One invoice per property per WEEK, assembled from
+//                     that week's visits. A property doing 2 visits/week bills
+//                     one invoice covering both; a property doing 1 (the Lanvale
+//                     151/153 split) bills one visit.
+// QB customer + item are chosen once per property (existing QB records — no
+// find-or-create, so no duplicate customers). Preview-first on every send
+// (FL rule 10). Tabs self-provision so this works identically on prod + staging.
+
+const TRASH_PROP_HEADERS  = ['ID','Label','QBO_Customer_ID','Customer_Name','QBO_Item_ID','Item_Name','Flat_Rate','Visits_Per_Week','Nudge_Day','Grace_Days','Active','Created_Date'];
+const TRASH_VISIT_HEADERS = ['ID','Property_ID','Label','Visit_Date','Week_Key','Photo_Folder_ID','Photo_Folder_URL','Photo_File_IDs','Base_Rate','Extra_Amount','Extra_Reason','QB_Invoice_ID','QB_Invoice_Number','Invoice_Status','Created_Date','Active'];
+const TRASH_DOW = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sat:5, Sun:6 };
+
+// Monday-anchored week key (YYYY-MM-DD of that week's Monday). Date-only + UTC
+// noon so a Baltimore evening never rolls into the next day's bucket.
+function trashWeekKey(dateStr) {
+  const base = (dateStr && String(dateStr).slice(0,10)) || new Date().toISOString().slice(0,10);
+  const d = new Date(base + 'T12:00:00Z');
+  const day = d.getUTCDay();            // 0 Sun .. 6 Sat
+  const back = day === 0 ? 6 : day - 1; // days since Monday
+  d.setUTCDate(d.getUTCDate() - back);
+  return d.toISOString().slice(0,10);
+}
+
+// Is `today` at/after this property's nudge deadline for `week`?
+// Deadline = (week Monday) + nudge-day offset + grace days.
+function trashPastDeadline(p, week, today) {
+  const off = TRASH_DOW[String(p.Nudge_Day || 'Thu').slice(0,3)];
+  const dayOff = (off === undefined ? 3 : off);
+  // Grace defaults to 1 only when unset — an explicit 0 (nudge exactly on the day) must hold.
+  const grace = (p.Grace_Days === '' || p.Grace_Days == null) ? 1 : (Number(p.Grace_Days) || 0);
+  const dl = new Date(week + 'T12:00:00Z');
+  dl.setUTCDate(dl.getUTCDate() + dayOff + grace);
+  return today >= dl;
+}
+
+// PURE — build QB invoice lines for a set of visits. One flat-rate line per
+// visit + one extra line per visit that carried an extra charge. Returns
+// { lines, total }. Unit-tested in test/trash.test.mjs.
+function buildTrashInvoiceLines(property, visits) {
+  const itemRef = { value: String((property && property.QBO_Item_ID) || '40') }; // 40 = General item fallback
+  const rate = Number((property && property.Flat_Rate) || 40) || 0;
+  const lines = [];
+  let total = 0;
+  for (const v of (visits || [])) {
+    // Blank/missing Base_Rate falls back to the property rate; an explicit 0 stays 0
+    // (a visit logged with no base, only an extra). `|| rate` would wrongly bill $40 on a 0.
+    const rawBase = (v && v.Base_Rate !== '' && v.Base_Rate != null) ? Number(v.Base_Rate) : rate;
+    const base = +(Number(rawBase) || 0).toFixed(2);
+    if (base > 0) {
+      total += base;
+      lines.push({
+        DetailType: 'SalesItemLineDetail',
+        Amount: base,
+        Description: ('Trash service — ' + ((v && v.Visit_Date) || '')).slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: base },
+      });
+    }
+    const extra = +(Number(v && v.Extra_Amount) || 0).toFixed(2);
+    if (extra > 0) {
+      total += extra;
+      const reason = String((v && v.Extra_Reason) || 'extra cleanup');
+      lines.push({
+        DetailType: 'SalesItemLineDetail',
+        Amount: extra,
+        Description: ('Extra — ' + reason + ' (' + ((v && v.Visit_Date) || '') + ')').slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: extra },
+      });
+    }
+  }
+  return { lines, total: +total.toFixed(2) };
+}
+
+// Create the two tabs + headers if missing. Runtime SA has edit on both prod and
+// staging sheets, so this provisions each environment on first write — no
+// sheet-op round trip, no cross-account sharing to remember.
+async function ensureTrashTabs(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  const need = [];
+  if (!titles.includes('Trash_Properties')) need.push('Trash_Properties');
+  if (!titles.includes('Trash_Visits'))     need.push('Trash_Visits');
+  if (need.length) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  }
+  await ensureColumns(env, 'Trash_Properties', TRASH_PROP_HEADERS);
+  await ensureColumns(env, 'Trash_Visits', TRASH_VISIT_HEADERS);
+}
+
+async function trashListProperties(env) {
+  let rows = [];
+  try { rows = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
+  const out = rows.filter(r => r.Active !== 'FALSE').map(r => ({
+    id: r.ID, label: r.Label,
+    customer_id: r.QBO_Customer_ID || '', customer_name: r.Customer_Name || '',
+    item_id: r.QBO_Item_ID || '', item_name: r.Item_Name || '',
+    flat_rate: Number(r.Flat_Rate || 40) || 40,
+    visits_per_week: Number(r.Visits_Per_Week || 2) || 2,
+    nudge_day: r.Nudge_Day || 'Thu', grace_days: Number(r.Grace_Days || 1) || 1,
+  }));
+  return json(out);
+}
+
+async function trashAddProperty(env, body) {
+  if (!body || !body.label) return json({ error: 'label required' }, 400);
+  await ensureTrashTabs(env);
+  return await addRow(env, 'Trash_Properties', {
+    Label: body.label,
+    QBO_Customer_ID: body.qbo_customer_id || '', Customer_Name: body.customer_name || '',
+    QBO_Item_ID: body.qbo_item_id || '', Item_Name: body.item_name || '',
+    Flat_Rate: (body.flat_rate != null && body.flat_rate !== '') ? body.flat_rate : 40,
+    Visits_Per_Week: (body.visits_per_week != null && body.visits_per_week !== '') ? body.visits_per_week : 2,
+    Nudge_Day: body.nudge_day || 'Thu',
+    Grace_Days: (body.grace_days != null && body.grace_days !== '') ? body.grace_days : 1,
+    Active: 'TRUE', Created_Date: new Date().toISOString().slice(0,10),
+  });
+}
+
+// GET /trash/qb-customers — existing QB customers for the add-property dropdown.
+async function trashQbCustomers(env) {
+  try {
+    const token = await qbAccessToken(env);
+    const list = await qbListEntities(env, 'customer', token, false);
+    return json(list.map(c => ({ id: c.id, name: c.name, path: c.path || c.name })));
+  } catch (e) { return json({ error: e.message }, 500); }
+}
+
+// GET /trash/qb-items — active Service/NonInventory items for the item dropdown.
+async function trashQbItems(env) {
+  try {
+    const token = await qbAccessToken(env);
+    const q = encodeURIComponent('select Id, Name, Type, Active from Item where Active = true maxresults 500');
+    const d = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+    const items = ((d && d.QueryResponse && d.QueryResponse.Item) || [])
+      .filter(i => i.Type === 'Service' || i.Type === 'NonInventory')
+      .map(i => ({ id: i.Id, name: i.Name }));
+    return json(items);
+  } catch (e) { return json({ error: e.message }, 500); }
+}
+
+// POST /trash/log-visit — record ONE trip. Idempotent per property+date: a second
+// tap the same day merges photos/extra into the existing row instead of duplicating.
+async function trashLogVisit(env, body) {
+  if (!body || !body.property_id) return json({ error: 'property_id required' }, 400);
+  await ensureTrashTabs(env);
+  const props = await fetchTab(env, 'Trash_Properties');
+  const p = props.find(r => r.ID === String(body.property_id));
+  if (!p) return json({ error: 'property not found' }, 404);
+
+  const visitDate = String(body.visit_date || new Date().toISOString().slice(0,10)).slice(0,10);
+  const weekKey = trashWeekKey(visitDate);
+  const photoIds = Array.isArray(body.photo_file_ids) ? body.photo_file_ids.filter(Boolean).join(',') : String(body.photo_file_ids || '');
+  const extraAmt = +(Number(body.extra_amount || 0) || 0).toFixed(2);
+
+  const visits = await fetchTab(env, 'Trash_Visits');
+  const existing = visits.find(v => v.Active !== 'FALSE' && v.Property_ID === String(body.property_id) && v.Visit_Date === visitDate);
+  if (existing) {
+    const fields = {};
+    if (photoIds) fields.Photo_File_IDs = [existing.Photo_File_IDs, photoIds].filter(Boolean).join(',');
+    if (body.photo_folder_id)  fields.Photo_Folder_ID  = body.photo_folder_id;
+    if (body.photo_folder_url) fields.Photo_Folder_URL = body.photo_folder_url;
+    if (extraAmt > 0) {
+      fields.Extra_Amount = String(+((Number(existing.Extra_Amount || 0) || 0) + extraAmt).toFixed(2));
+      if (body.extra_reason) fields.Extra_Reason = [existing.Extra_Reason, body.extra_reason].filter(Boolean).join('; ');
+    }
+    if (Object.keys(fields).length) await updateRow(env, 'Trash_Visits', existing.ID, fields);
+    return json({ success: true, visit_id: existing.ID, week_key: weekKey, merged: true });
+  }
+
+  await addRow(env, 'Trash_Visits', {
+    Property_ID: String(body.property_id), Label: p.Label,
+    Visit_Date: visitDate, Week_Key: weekKey,
+    Photo_Folder_ID: body.photo_folder_id || '', Photo_Folder_URL: body.photo_folder_url || '',
+    Photo_File_IDs: photoIds,
+    Base_Rate: (p.Flat_Rate || 40),
+    Extra_Amount: extraAmt > 0 ? String(extraAmt) : '',
+    Extra_Reason: extraAmt > 0 ? (body.extra_reason || '') : '',
+    QB_Invoice_ID: '', QB_Invoice_Number: '', Invoice_Status: 'unbilled',
+    Created_Date: new Date().toISOString(), Active: 'TRUE',
+  });
+  return json({ success: true, week_key: weekKey, merged: false });
+}
+
+// GET /trash/week?week=YYYY-MM-DD&property_id= — per-property status for one week.
+async function trashWeek(env, url) {
+  const week = (url && url.searchParams.get('week')) || trashWeekKey(null);
+  const pid  = (url && url.searchParams.get('property_id')) || '';
+  let props = [], visits = [];
+  try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
+  try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
+  props = props.filter(p => p.Active !== 'FALSE' && (!pid || p.ID === pid));
+  const out = props.map(p => {
+    const vs = visits.filter(v => v.Active !== 'FALSE' && v.Property_ID === p.ID && v.Week_Key === week);
+    const expected = Number(p.Visits_Per_Week || 2) || 2;
+    const billed = vs.filter(v => v.QB_Invoice_ID);
+    const base  = vs.reduce((s, v) => s + (Number(v.Base_Rate || p.Flat_Rate || 40) || 0), 0);
+    const extra = vs.reduce((s, v) => s + (Number(v.Extra_Amount || 0) || 0), 0);
+    return {
+      property_id: p.ID, label: p.Label, week, expected, logged: vs.length,
+      visits: vs.map(v => ({ id: v.ID, date: v.Visit_Date, extra: Number(v.Extra_Amount || 0) || 0, reason: v.Extra_Reason || '', billed: !!v.QB_Invoice_ID })),
+      base_total: +base.toFixed(2), extra_total: +extra.toFixed(2), total: +(base + extra).toFixed(2),
+      invoiced: billed.length > 0 && billed.length === vs.length,
+      qb_invoice_id: (billed[0] && billed[0].QB_Invoice_ID) || '',
+      qb_invoice_number: (billed[0] && billed[0].QB_Invoice_Number) || '',
+      ready_to_invoice: vs.length > 0 && billed.length < vs.length,
+    };
+  });
+  return json({ week, properties: out });
+}
+
+// GET /trash/unbilled — what needs Brett's attention. Powers the push nudge.
+// Last week: any shortfall OR any logged-but-uninvoiced visit. This week: a
+// shortfall only once past the property's nudge deadline (so a day-late trip
+// never false-alarms).
+async function trashUnbilled(env, url) {
+  const today = new Date();
+  const thisWeek = trashWeekKey(today.toISOString().slice(0,10));
+  const prevD = new Date(thisWeek + 'T12:00:00Z'); prevD.setUTCDate(prevD.getUTCDate() - 7);
+  const prevWeek = prevD.toISOString().slice(0,10);
+  let props = [], visits = [];
+  try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
+  try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
+  props = props.filter(p => p.Active !== 'FALSE');
+  const items = [];
+  for (const week of [prevWeek, thisWeek]) {
+    for (const p of props) {
+      const vs = visits.filter(v => v.Active !== 'FALSE' && v.Property_ID === p.ID && v.Week_Key === week);
+      const expected = Number(p.Visits_Per_Week || 2) || 2;
+      const missed = Math.max(0, expected - vs.length);
+      const unbilled = vs.filter(v => !v.QB_Invoice_ID);
+      if (week === prevWeek) {
+        if (missed > 0)        items.push({ property_id: p.ID, label: p.Label, week, type: 'missed',   missing: missed,        message: `${p.Label}: ${missed} of ${expected} visits not logged for last week.` });
+        if (unbilled.length)   items.push({ property_id: p.ID, label: p.Label, week, type: 'unbilled', count: unbilled.length, message: `${p.Label}: ${unbilled.length} logged visit(s) from last week not invoiced yet.` });
+      } else if (missed > 0 && trashPastDeadline(p, week, today)) {
+        items.push({ property_id: p.ID, label: p.Label, week, type: 'missed', missing: missed, message: `${p.Label}: ${missed} of ${expected} visits still not logged this week.` });
+      }
+    }
+  }
+  return json({ generated_at: new Date().toISOString(), this_week: thisWeek, prev_week: prevWeek, count: items.length, items });
+}
+
+// POST /trash/invoice { property_id, week?, preview_only? } — assemble + send the
+// weekly QB invoice for the visits not yet billed. Preview writes nothing.
+async function trashInvoice(env, body) {
+  try {
+    const previewOnly = !!(body && body.preview_only);
+    if (!body || !body.property_id) return json({ ok: false, error: 'property_id required' }, 400);
+    const week = body.week || trashWeekKey(null);
+    await ensureTrashTabs(env);
+    const props = await fetchTab(env, 'Trash_Properties');
+    const p = props.find(r => r.ID === String(body.property_id));
+    if (!p) return json({ ok: false, error: 'property not found' }, 404);
+
+    const allVisits = await fetchTab(env, 'Trash_Visits');
+    const weekVisits = allVisits.filter(v => v.Active !== 'FALSE' && v.Property_ID === p.ID && v.Week_Key === week);
+    if (!weekVisits.length) return json({ ok: false, error: 'No visits logged for this property/week' }, 400);
+
+    const toBill = weekVisits.filter(v => !v.QB_Invoice_ID);
+    const alreadyBilled = weekVisits.filter(v => v.QB_Invoice_ID);
+    if (!toBill.length) {
+      return json({ ok: true, already_sent: true, invoice_id: alreadyBilled[0].QB_Invoice_ID, invoice_number: alreadyBilled[0].QB_Invoice_Number });
+    }
+
+    const warnings = [];
+    const { lines, total } = buildTrashInvoiceLines(p, toBill);
+    if (total <= 0) return json({ ok: false, error: 'Nothing to invoice (total is 0)' }, 400);
+    if (!p.QBO_Item_ID) warnings.push('No QuickBooks item set on this property — using the General item (40).');
+    const photoCount = toBill.reduce((s, v) => s + String(v.Photo_File_IDs || '').split(',').filter(Boolean).length, 0);
+
+    if (previewOnly) {
+      if (!p.QBO_Customer_ID) warnings.push('No QuickBooks customer set on this property — set one before sending.');
+      if (!photoCount) warnings.push('No photos on these visits — the invoice will carry no before/after proof.');
+      return json({ preview: {
+        property: p.Label, week,
+        customer: { id: p.QBO_Customer_ID || '', name: p.Customer_Name || '' },
+        visits: toBill.map(v => ({ date: v.Visit_Date, base: Number(v.Base_Rate || p.Flat_Rate || 40) || 0, extra: Number(v.Extra_Amount || 0) || 0, reason: v.Extra_Reason || '' })),
+        lines: lines.map(l => ({ desc: l.Description, amount: l.Amount })),
+        total: +total.toFixed(2), attach_photos: photoCount, warnings,
+      }});
+    }
+
+    // ---- CONFIRM (writes to QuickBooks) ----
+    if (!p.QBO_Customer_ID) return json({ ok: false, error: 'No QuickBooks customer set on this property.', warnings });
+    const token = await qbAccessToken(env);
+    const txnDate = String((toBill[toBill.length - 1].Visit_Date) || new Date().toISOString().slice(0,10)).slice(0,10);
+    const payload = {
+      CustomerRef: { value: String(p.QBO_Customer_ID) },
+      Line: lines, TxnDate: txnDate,
+      PrivateNote: `RidgeCo Trash — ${p.Label} — week ${week}`,
+    };
+    const r = await qbApi(env, 'invoice?minorversion=73', 'POST', payload, token);
+    const invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    const invoiceNumber = (r && r.Invoice && r.Invoice.DocNumber) || '';
+    if (!invoiceId) return json({ ok: false, error: 'Invoice: ' + (qbFault(r) || 'unknown error'), warnings }, 500);
+
+    // Stamp every billed visit IMMEDIATELY — before the slower photo attach — so a crash or
+    // a Sheets write error mid-attach can never leave the invoice created in QuickBooks while
+    // the visits still read as unbilled, which is exactly what would double-bill on a re-send.
+    const stampFail = [];
+    for (const v of toBill) {
+      try {
+        const resp = await updateRow(env, 'Trash_Visits', v.ID, { QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber, Invoice_Status: 'invoiced' });
+        if (!resp || !resp.ok) stampFail.push(v.ID);
+      } catch (e) { stampFail.push(v.ID); }
+    }
+    if (stampFail.length) {
+      // The invoice IS in QuickBooks. Tell the truth and stop a retry cold — a second send
+      // would create a duplicate. Brett fixes the tracking by hand rather than re-billing.
+      return json({ ok: false, invoice_created: true, invoice_id: invoiceId, invoice_number: invoiceNumber,
+        error: `Invoice ${invoiceNumber || invoiceId} WAS created in QuickBooks, but ${stampFail.length} visit(s) could not be marked as billed (ids ${stampFail.join(', ')}). DO NOT resend — that would duplicate the invoice. The invoice is correct; only the Hub's record of it needs a manual fix.`,
+        warnings }, 500);
+    }
+
+    // Attach before/after photos to the invoice — best-effort, never blocks the send.
+    let attached = 0;
+    try {
+      const gtok = await getAccessToken(env);
+      for (const v of toBill) {
+        for (const fid of String(v.Photo_File_IDs || '').split(',').filter(Boolean)) {
+          try {
+            const dl = await driveDownload(gtok, fid);
+            const ext = dl.mime.includes('pdf') ? '.pdf' : dl.mime.includes('png') ? '.png' : '.jpg';
+            const name = (p.Label + ' ' + v.Visit_Date + ' ' + fid.slice(-4) + ext).replace(/[^\w .-]/g, '_');
+            await qbUploadAttachable(env, token, 'Invoice', invoiceId, name, dl.mime, dl.bytes, true);
+            attached++;
+          } catch (e) { warnings.push('Photo attach failed: ' + (e.message || '')); }
+        }
+      }
+    } catch (e) { warnings.push('Photo attach skipped: ' + (e.message || '')); }
+
+    return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, total: +total.toFixed(2), photos_attached: attached, warnings });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }

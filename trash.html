@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Trash Service — Ridge Co</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --surface:#fff; --border:#dfe3e8; --text:#1c2430; --muted:#6b7684;
+    --accent:#1f6feb; --accent2:#1a7f4b; --danger:#c0392b; --warn:#b8860b; --chip:#eef2f7;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px}
+  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;z-index:10}
+  header h1{font-size:18px;margin:0}
+  header .ver{font-size:11px;color:var(--muted)}
+  main{padding:14px 14px 60px;max-width:640px;margin:0 auto}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .muted{color:var(--muted);font-size:13px}
+  .big-btn{display:block;width:100%;padding:18px 16px;border:none;border-radius:12px;background:var(--accent);color:#fff;font-size:18px;font-weight:600;margin-bottom:10px;cursor:pointer}
+  .big-btn:active{opacity:.85}
+  .btn{padding:11px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:15px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.go{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+  .btn.ghost{background:transparent}
+  .btn:active{opacity:.85}
+  .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--chip);color:var(--muted)}
+  .pill.ok{background:#e7f6ec;color:var(--accent2)} .pill.due{background:#fdf3e0;color:var(--warn)} .pill.new{background:#eaf1fd;color:var(--accent)}
+  input,select{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text)}
+  label.fld{display:block;margin:10px 0 4px;font-size:13px;color:var(--muted);font-weight:600}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center;z-index:50}
+  .modal.open{display:flex}
+  .sheet{background:var(--surface);width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:16px;max-height:92vh;overflow:auto}
+  .sheet h2{margin:2px 0 12px;font-size:18px}
+  .extra-row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
+  .extra-row button{flex:1;min-width:60px;padding:14px 0;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:15px;font-weight:600;cursor:pointer}
+  .extra-row button.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .thumb{display:inline-flex;align-items:center;gap:4px;background:var(--chip);border:1px solid var(--border);border-radius:8px;padding:4px 8px;font-size:12px;color:var(--muted)}
+  .banner{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+  .banner b{color:#5c4410}
+  .line{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);font-size:14px}
+  .line:last-child{border-bottom:none}
+  .total{font-size:20px;font-weight:700;margin-top:8px}
+  .warn{color:var(--warn);font-size:13px;margin-top:6px}
+  .hide{display:none}
+  .photo-group{margin:10px 0}
+  .cam-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:16px;border:2px dashed var(--border);border-radius:12px;background:var(--surface);font-size:16px;font-weight:600;color:var(--accent);cursor:pointer}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>Trash Service</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized — try again.</p>
+  <button class="btn primary" style="width:100%;margin-top:12px" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <header>
+    <h1>Trash Service</h1>
+    <span class="ver" id="ver"></span>
+  </header>
+  <main>
+    <div id="nudge"></div>
+    <div id="week"></div>
+
+    <div class="card">
+      <div class="row"><b>Log a visit</b><span class="muted">tap a property</span></div>
+      <div id="buttons" style="margin-top:12px"><p class="muted">Loading…</p></div>
+    </div>
+
+    <div class="card">
+      <div class="row" onclick="toggleAdd()" style="cursor:pointer"><b>+ Add a property</b><span class="muted" id="add-caret">show</span></div>
+      <div id="add-form" class="hide" style="margin-top:10px">
+        <label class="fld">Label (what you'll see on the button)</label>
+        <input id="af-label" placeholder="e.g. 151 W Lanvale (Wed)">
+        <label class="fld">QuickBooks customer to bill</label>
+        <select id="af-customer"><option value="">Loading…</option></select>
+        <label class="fld">QuickBooks item (the charge line)</label>
+        <select id="af-item"><option value="">Loading…</option></select>
+        <div style="display:flex;gap:8px">
+          <div style="flex:1"><label class="fld">Flat rate ($/visit)</label><input id="af-rate" type="number" inputmode="decimal" value="40"></div>
+          <div style="flex:1"><label class="fld">Visits / week</label><input id="af-vpw" type="number" inputmode="numeric" value="2"></div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <div style="flex:1"><label class="fld">Nudge day</label>
+            <select id="af-nudge"><option>Mon</option><option>Tue</option><option>Wed</option><option selected>Thu</option><option>Fri</option><option>Sat</option><option>Sun</option></select>
+          </div>
+          <div style="flex:1"><label class="fld">Grace days</label><input id="af-grace" type="number" inputmode="numeric" value="1"></div>
+        </div>
+        <button class="btn primary" style="width:100%;margin-top:14px" onclick="addProperty(this)">Save property</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Visit sheet -->
+<div class="modal" id="visit-modal">
+  <div class="sheet">
+    <h2 id="vm-title">Log visit</h2>
+    <input type="hidden" id="vm-prop-id">
+    <div class="photo-group">
+      <label class="fld">Before photos</label>
+      <label class="cam-btn">📷 Add before photos
+        <input type="file" accept="image/*,video/*" capture="environment" multiple class="hide" onchange="pickPhotos(this,'before')">
+      </label>
+      <div class="thumbs" id="thumbs-before"></div>
+    </div>
+    <div class="photo-group">
+      <label class="fld">After photos</label>
+      <label class="cam-btn">✅ Add after photos
+        <input type="file" accept="image/*,video/*" capture="environment" multiple class="hide" onchange="pickPhotos(this,'after')">
+      </label>
+      <div class="thumbs" id="thumbs-after"></div>
+    </div>
+
+    <label class="fld">Extra charge (bulk / furniture / cleanup)</label>
+    <div class="extra-row" id="extra-row">
+      <button data-amt="0" class="sel" onclick="setExtra(0,this)">None</button>
+      <button data-amt="20" onclick="setExtra(20,this)">+$20</button>
+      <button data-amt="40" onclick="setExtra(40,this)">+$40</button>
+      <button data-amt="60" onclick="setExtra(60,this)">+$60</button>
+      <button data-amt="custom" onclick="setExtraCustom(this)">Custom</button>
+    </div>
+    <input id="vm-extra-custom" class="hide" type="number" inputmode="decimal" placeholder="Extra amount $" oninput="extraAmt=Number(this.value||0)">
+    <input id="vm-extra-reason" class="hide" placeholder="What was it? (e.g. mattress haul)" style="margin-top:8px">
+
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeVisit()">Cancel</button>
+      <button class="btn go" style="flex:2" id="vm-save" onclick="saveVisit(this)">Save visit</button>
+    </div>
+    <p class="muted" style="margin-top:8px">Photos upload as you add them. Save when you're done.</p>
+  </div>
+</div>
+
+<!-- Invoice preview sheet -->
+<div class="modal" id="inv-modal">
+  <div class="sheet">
+    <h2 id="im-title">Invoice preview</h2>
+    <div id="im-body"><p class="muted">Loading…</p></div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeInv()">Close</button>
+      <button class="btn primary hide" style="flex:2" id="im-send" onclick="sendInvoice(this)">Send invoice</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';                 // shared with the Hub — same access code
+var AUTH_TOKEN = '';
+var props = [];                              // trash properties
+var pending = { before: [], after: [] };     // uploaded Drive file ids for the open visit
+var pendingFolder = null;                     // {id,url} reused across a visit's uploads
+var extraAmt = 0;
+var curInvoice = null;                        // {property_id, week} for the send step
+
+function api(method, path, body){
+  var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.json().then(function(data){
+      if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
+      return data;
+    });
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';},2200); }
+function money(n){ return '$'+(Number(n||0)).toFixed(2); }
+
+// ── Login (shares the Hub's stored code) ─────────────────────
+function doLogin(){
+  var v=document.getElementById('login-input').value.trim(); AUTH_TOKEN=v;
+  api('GET','/trash/properties').then(function(){ localStorage.setItem(SECRET_KEY,v); enterApp(); })
+    .catch(function(){ AUTH_TOKEN=''; document.getElementById('login-error').classList.remove('hide'); });
+}
+document.getElementById('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored=localStorage.getItem(SECRET_KEY);
+  if(stored){ AUTH_TOKEN=stored; api('GET','/trash/properties').then(enterApp).catch(function(){ AUTH_TOKEN=''; }); }
+})();
+function enterApp(){
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').classList.remove('hide');
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  loadProperties(); loadWeek(); loadNudge();
+}
+
+// ── Load + render ────────────────────────────────────────────
+function loadProperties(){
+  return api('GET','/trash/properties').then(function(list){
+    props = Array.isArray(list)?list:[];
+    var el=document.getElementById('buttons');
+    if(!props.length){ el.innerHTML='<p class="muted">No properties yet. Add one below.</p>'; return; }
+    el.innerHTML = props.map(function(p){
+      return '<button class="big-btn" onclick="openVisit(\''+p.id+'\')">'+esc(p.label)+'<div style="font-size:12px;font-weight:400;opacity:.85;margin-top:3px">'+money(p.flat_rate)+' / visit · '+p.visits_per_week+'×/wk</div></button>';
+    }).join('');
+  });
+}
+function loadWeek(){
+  return api('GET','/trash/week').then(function(d){
+    var el=document.getElementById('week');
+    var wk=(d&&d.week)||''; var list=(d&&d.properties)||[];
+    if(!list.length){ el.innerHTML=''; return; }
+    el.innerHTML = '<div class="card"><div class="row"><b>This week</b><span class="muted">'+esc(wk)+'</span></div>'
+      + list.map(function(p){
+          var status;
+          if(p.invoiced) status='<span class="pill ok">✓ Invoiced'+(p.qb_invoice_number?(' #'+esc(p.qb_invoice_number)):'')+'</span>';
+          else if(p.ready_to_invoice) status='<button class="btn primary" style="padding:7px 12px" onclick="previewInvoice(\''+p.property_id+'\',\''+esc(wk)+'\')">Preview &amp; send '+money(p.total)+'</button>';
+          else status='<span class="pill new">'+p.logged+' / '+p.expected+' visits</span>';
+          var extra=p.extra_total>0?(' · +'+money(p.extra_total)+' extra'):'';
+          return '<div class="row" style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">'
+               + '<div><div><b>'+esc(p.label)+'</b></div><div class="muted">'+p.logged+' logged'+extra+'</div></div>'
+               + '<div>'+status+'</div></div>';
+        }).join('')
+      + '</div>';
+  });
+}
+function loadNudge(){
+  return api('GET','/trash/unbilled').then(function(d){
+    var el=document.getElementById('nudge'); var items=(d&&d.items)||[];
+    if(!items.length){ el.innerHTML=''; return; }
+    el.innerHTML='<div class="banner"><b>Needs attention</b><ul style="margin:8px 0 0;padding-left:18px">'
+      + items.map(function(i){ return '<li>'+esc(i.message)+'</li>'; }).join('')+'</ul></div>';
+  }).catch(function(){});
+}
+
+// ── Visit sheet ──────────────────────────────────────────────
+function openVisit(pid){
+  var p=props.find(function(x){return x.id===pid;}); if(!p) return;
+  document.getElementById('vm-prop-id').value=pid;
+  document.getElementById('vm-title').textContent='Log visit — '+p.label;
+  pending={before:[],after:[]}; pendingFolder=null; extraAmt=0;
+  document.getElementById('thumbs-before').innerHTML='';
+  document.getElementById('thumbs-after').innerHTML='';
+  document.getElementById('vm-extra-custom').classList.add('hide');
+  document.getElementById('vm-extra-reason').classList.add('hide');
+  document.getElementById('vm-extra-custom').value=''; document.getElementById('vm-extra-reason').value='';
+  Array.prototype.forEach.call(document.querySelectorAll('#extra-row button'),function(b){ b.classList.toggle('sel', b.getAttribute('data-amt')==='0'); });
+  document.getElementById('visit-modal').classList.add('open');
+}
+function closeVisit(){ document.getElementById('visit-modal').classList.remove('open'); }
+
+function setExtra(amt,btn){
+  extraAmt=amt;
+  Array.prototype.forEach.call(document.querySelectorAll('#extra-row button'),function(b){ b.classList.remove('sel'); });
+  btn.classList.add('sel');
+  document.getElementById('vm-extra-custom').classList.add('hide');
+  document.getElementById('vm-extra-reason').classList.toggle('hide', amt===0);
+}
+function setExtraCustom(btn){
+  Array.prototype.forEach.call(document.querySelectorAll('#extra-row button'),function(b){ b.classList.remove('sel'); });
+  btn.classList.add('sel');
+  var ci=document.getElementById('vm-extra-custom'); ci.classList.remove('hide'); ci.focus();
+  extraAmt=Number(ci.value||0);
+  document.getElementById('vm-extra-reason').classList.remove('hide');
+}
+
+// Photo upload: Drive resumable session from the Worker, then PUT straight to Drive.
+function pickPhotos(input, kind){
+  var files=Array.prototype.slice.call(input.files||[]); if(!files.length) return;
+  var pid=document.getElementById('vm-prop-id').value;
+  var p=props.find(function(x){return x.id===pid;})||{label:'Trash'};
+  var cont=document.getElementById('thumbs-'+kind);
+  files.forEach(function(file){
+    var chip=document.createElement('span'); chip.className='thumb'; chip.innerHTML='<span class="spin"></span> '+esc(file.name.slice(0,14));
+    cont.appendChild(chip);
+    var reqBody={ wo_id:'TRASH-'+pid, property:p.label, file_name:file.name, file_type:kind, mime_type:file.type||'application/octet-stream', origin:window.location.origin };
+    if(pendingFolder){ reqBody.folder_id=pendingFolder.id; reqBody.folder_url=pendingFolder.url; }
+    api('POST','/create-upload-session',reqBody).then(function(res){
+      if(!res.success||!res.upload_url){ chip.innerHTML='⚠ '+esc(res.error||'session failed'); return; }
+      pendingFolder={ id:res.wo_folder_id, url:res.wo_folder_url };
+      return fetch(res.upload_url,{ method:'PUT', headers:{'Content-Type':file.type||'application/octet-stream'}, body:file })
+        .then(function(r){ return r.json(); })
+        .then(function(fd){
+          if(!fd||!fd.id){ chip.innerHTML='⚠ upload failed'; return; }
+          pending[kind].push(fd.id);
+          chip.innerHTML=(kind==='after'?'✅ ':'📷 ')+esc(file.name.slice(0,14));
+        });
+    }).catch(function(e){ chip.innerHTML='⚠ '+esc(e.message||'error'); });
+  });
+  input.value='';
+}
+
+function saveVisit(btn){
+  var pid=document.getElementById('vm-prop-id').value;
+  var ci=document.getElementById('vm-extra-custom');
+  if(!ci.classList.contains('hide')) extraAmt=Number(ci.value||0);
+  var reason=document.getElementById('vm-extra-reason').value.trim();
+  var allPhotos=pending.before.concat(pending.after);
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
+  var body={ property_id:pid, photo_file_ids:allPhotos, extra_amount:extraAmt>0?extraAmt:0 };
+  if(pendingFolder){ body.photo_folder_id=pendingFolder.id; body.photo_folder_url=pendingFolder.url; }
+  if(extraAmt>0 && reason) body.extra_reason=reason;
+  api('POST','/trash/log-visit',body).then(function(r){
+    btn.disabled=false; btn.textContent='Save visit';
+    if(r&&r.success){ closeVisit(); toast('Visit logged'+(r.merged?' (added to today)':'')); loadWeek(); loadNudge(); }
+    else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save visit'; toast('Error: '+e.message); });
+}
+
+// ── Invoice preview + send ───────────────────────────────────
+function previewInvoice(pid, week){
+  curInvoice={ property_id:pid, week:week };
+  document.getElementById('im-title').textContent='Invoice preview';
+  document.getElementById('im-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
+  document.getElementById('im-send').classList.add('hide');
+  document.getElementById('inv-modal').classList.add('open');
+  api('POST','/trash/invoice',{ property_id:pid, week:week, preview_only:true }).then(function(r){
+    if(r&&r.already_sent){ document.getElementById('im-body').innerHTML='<p>Already invoiced'+(r.invoice_number?(' (#'+esc(r.invoice_number)+')'):'')+'.</p>'; return; }
+    if(!r||!r.preview){ document.getElementById('im-body').innerHTML='<p class="warn">'+esc((r&&r.error)||'Could not build preview')+'</p>'; return; }
+    var p=r.preview;
+    var html='<div class="muted">'+esc(p.property)+' · week '+esc(p.week)+'</div>';
+    html+='<div class="muted">Bill to: '+esc(p.customer.name||('customer '+p.customer.id))+'</div><div style="margin-top:10px">';
+    p.lines.forEach(function(l){ html+='<div class="line"><span>'+esc(l.desc)+'</span><span>'+money(l.amount)+'</span></div>'; });
+    html+='</div><div class="total">Total '+money(p.total)+'</div>';
+    html+='<div class="muted" style="margin-top:6px">'+p.attach_photos+' photo(s) will attach.</div>';
+    if(p.warnings&&p.warnings.length) html+='<div class="warn">⚠ '+p.warnings.map(esc).join('<br>⚠ ')+'</div>';
+    document.getElementById('im-body').innerHTML=html;
+    var sendBtn=document.getElementById('im-send');
+    sendBtn.classList.remove('hide'); sendBtn.textContent='Send '+money(p.total);
+  }).catch(function(e){ document.getElementById('im-body').innerHTML='<p class="warn">'+esc(e.message)+'</p>'; });
+}
+function sendInvoice(btn){
+  if(!curInvoice) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Sending…';
+  api('POST','/trash/invoice',{ property_id:curInvoice.property_id, week:curInvoice.week }).then(function(r){
+    btn.disabled=false;
+    if(r&&r.ok){
+      var msg='Invoice sent'+(r.invoice_number?(' #'+r.invoice_number):'')+' — '+money(r.total);
+      document.getElementById('im-body').innerHTML='<p>✅ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');
+      btn.classList.add('hide'); toast(msg); loadWeek(); loadNudge();
+    } else {
+      btn.textContent='Send invoice';
+      document.getElementById('im-body').innerHTML+='<div class="warn">⚠ '+esc((r&&r.error)||'Send failed')+'</div>';
+    }
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Send invoice'; toast('Error: '+e.message); });
+}
+function closeInv(){ document.getElementById('inv-modal').classList.remove('open'); curInvoice=null; }
+
+// ── Add property ─────────────────────────────────────────────
+function toggleAdd(){
+  var f=document.getElementById('add-form'); var open=f.classList.toggle('hide')===false;
+  document.getElementById('add-caret').textContent=open?'hide':'show';
+  if(open && document.getElementById('af-customer').children.length<=1) loadQbLists();
+}
+function loadQbLists(){
+  api('GET','/trash/qb-customers').then(function(list){
+    var s=document.getElementById('af-customer');
+    if(list&&list.error){ s.innerHTML='<option value="">(QB error: '+esc(list.error)+')</option>'; return; }
+    s.innerHTML='<option value="">— pick customer —</option>'+(list||[]).map(function(c){ return '<option value="'+esc(c.id)+'" data-name="'+esc(c.name)+'">'+esc(c.path||c.name)+'</option>'; }).join('');
+  }).catch(function(){ document.getElementById('af-customer').innerHTML='<option value="">(could not load)</option>'; });
+  api('GET','/trash/qb-items').then(function(list){
+    var s=document.getElementById('af-item');
+    if(list&&list.error){ s.innerHTML='<option value="">(QB error: '+esc(list.error)+')</option>'; return; }
+    s.innerHTML='<option value="">— pick item —</option>'+(list||[]).map(function(i){ return '<option value="'+esc(i.id)+'" data-name="'+esc(i.name)+'">'+esc(i.name)+'</option>'; }).join('');
+  }).catch(function(){ document.getElementById('af-item').innerHTML='<option value="">(could not load)</option>'; });
+}
+function addProperty(btn){
+  var label=document.getElementById('af-label').value.trim();
+  if(!label){ toast('Enter a label'); return; }
+  var custSel=document.getElementById('af-customer'), itemSel=document.getElementById('af-item');
+  var custOpt=custSel.options[custSel.selectedIndex], itemOpt=itemSel.options[itemSel.selectedIndex];
+  var body={
+    label:label,
+    qbo_customer_id:custSel.value, customer_name:custOpt?custOpt.getAttribute('data-name'):'',
+    qbo_item_id:itemSel.value, item_name:itemOpt?itemOpt.getAttribute('data-name'):'',
+    flat_rate:document.getElementById('af-rate').value||40,
+    visits_per_week:document.getElementById('af-vpw').value||2,
+    nudge_day:document.getElementById('af-nudge').value,
+    grace_days:document.getElementById('af-grace').value||1
+  };
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
+  api('POST','/trash/property/add',body).then(function(r){
+    btn.disabled=false; btn.textContent='Save property';
+    if(r&&r.success){ toast('Property added'); document.getElementById('af-label').value=''; toggleAdd(); loadProperties(); loadWeek(); }
+    else toast((r&&r.error)||'Could not add');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save property'; toast('Error: '+e.message); });
+}
+</script>
+</body>
+</html>
