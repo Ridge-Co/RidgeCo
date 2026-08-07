@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.10';
+const BUILD_VERSION = '2026-08-07.11';
 
 export default {
   async fetch(request, env) {
@@ -284,6 +284,10 @@ export default {
     // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
     // the confirm-first queue. Read + queue only; no money, no customer contact.
     try { await receiptScan(env); } catch (e) { /* non-fatal */ }
+    // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
+    // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
+    // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
+    try { await qbSyncPayments(env, {}); } catch (e) { /* non-fatal: never breaks the digest run */ }
   }
 };
 
@@ -3824,7 +3828,13 @@ async function qbSyncPayments(env, body) {
   catch (e) { /* the report below still stands; only the stored copy is lost */ }
 
   const now = new Date().toISOString();
-  let written = 0, failed = 0;
+  // Auto-close needs the current WO status so we never overwrite one already finished.
+  const WO_DONE = ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'];
+  let workorders = [];
+  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { /* flip step just no-ops */ }
+
+  let written = 0, failed = 0, closed = 0;
+  const closedWOs = [];
   for (const r of data.rows) {
     try {
       await updateRow(env, 'Invoice_Review', r.ir_id, {
@@ -3835,8 +3845,24 @@ async function qbSyncPayments(env, body) {
       });
       written++;
     } catch (e) { failed++; }
+
+    // When QuickBooks POSITIVELY reports the vendor bill paid, mark the work order Paid so it
+    // drops off the active work list. Strictly === true (never on an unknown/null read), and
+    // never over a WO already in a done state — so re-running is a safe no-op.
+    if (r.vendor_paid === true && r.wo_id) {
+      try {
+        const wo = findWO(workorders, r.wo_id);
+        const cur = wo ? String(wo.Status || '') : '';
+        if (wo && !WO_DONE.includes(cur)) {
+          await updateWOFields(env, r.wo_id, { Status: 'Paid' });
+          try { await logWOAudit(env, r.wo_id, 'system-qb', 'system', 'Status', cur, 'Paid',
+            'Vendor bill paid in QuickBooks (' + (r.vendor_ref || ('bill ' + r.bill_id)) + ')'); } catch (e2) {}
+          closed++; closedWOs.push({ wo_id: r.wo_id, from: cur, vendor_ref: r.vendor_ref || '' });
+        }
+      } catch (e) { /* non-fatal: the payable state still saved above */ }
+    }
   }
-  return json({ ok: true, checked: data.count, written, failed,
+  return json({ ok: true, checked: data.count, written, failed, closed, closed_wos: closedWOs,
                 owed_now: data.owed_now, owed_total: data.owed_total, rows: data.rows });
 }
 
