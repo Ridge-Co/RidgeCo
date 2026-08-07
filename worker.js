@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.1';
+const BUILD_VERSION = '2026-08-07.2';
 
 export default {
   async fetch(request, env) {
@@ -225,6 +225,7 @@ export default {
         if (path === '/qb/reparent-unit')         return await qbReparentUnit(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
+        if (path === '/qb/clear-ir-bill')         return await qbClearIrBill(env, body);
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
@@ -4782,6 +4783,27 @@ async function qbRecordPaidBill(env, body) {
 
     return json({ ok: true, bill_id: String(bill.Id), bill_created: billCreated,
       bill_reused: !billCreated, payment_id: paymentId, paid, doc_number: docNum });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/clear-ir-bill  { ir_id }
+// Clears the QuickBooks bill reference from an Invoice_Review row whose vendor bill was later
+// deleted in QuickBooks (leaving the customer invoice intact). Without this the Hub keeps
+// showing a vendor bill that no longer exists. Only the bill fields are touched — the customer
+// invoice id/number and status are left exactly as they were.
+async function qbClearIrBill(env, body) {
+  try {
+    const irId = String(body.ir_id || '').trim();
+    if (!irId) return json({ ok: false, error: 'ir_id required' }, 400);
+    const irs = await fetchTab(env, 'Invoice_Review');
+    const ir = irs.find(r => String(r.ID) === irId);
+    if (!ir) return json({ ok: false, error: 'Invoice_Review row ' + irId + ' not found' }, 404);
+    const prevBill = ir.QB_Bill_ID || '';
+    const prevBillNum = ir.QB_Bill_Number || '';
+    await updateRow(env, 'Invoice_Review', irId, { QB_Bill_ID: '', QB_Bill_Number: '' });
+    return json({ ok: true, ir_id: irId, wo_id: ir.WO_ID || '',
+      cleared: { qb_bill_id: prevBill, qb_bill_number: prevBillNum },
+      kept: { qb_invoice_id: ir.QB_Invoice_ID || '', status: ir.QB_Invoice_Status || '' } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
