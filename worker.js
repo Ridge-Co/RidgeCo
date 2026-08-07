@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.9';
+const BUILD_VERSION = '2026-08-07.10';
 
 export default {
   async fetch(request, env) {
@@ -3753,15 +3753,20 @@ async function qbPayables(env, url) {
       } catch (e) { /* leave null — unknown, not paid */ }
 
       const billId = (ir.QB_Bill_ID || '').trim();
-      let vendorPaid = null, vendorBalance = null, billDue = '';
+      let vendorPaid = null, vendorBalance = null, billDue = '', vendorRef = '', vendorTotal = null;
       if (billId) {
         try {
           const r = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
           const b = r && r.Bill;
           if (b) {
             vendorBalance = Number(b.Balance);
+            vendorTotal = Number(b.TotalAmt);
             vendorPaid = !isNaN(vendorBalance) && vendorBalance <= 0.005;
             billDue = b.DueDate || '';
+            // The vendor's own reference number (what shows in QuickBooks' Pay Bills "REF NO").
+            // Blank when the vendor gave no number — the card falls back to the WO number, which
+            // is also what QuickBooks shows in that case, so the two views still line up.
+            vendorRef = b.DocNumber || '';
           }
         } catch (e) { /* unknown */ }
       }
@@ -3769,13 +3774,19 @@ async function qbPayables(env, url) {
       const vendor = vendors.find(v => String(v.ID) === String(ir.Vendor_ID));
       const inHouse = String(ir.QB_In_House || '').toUpperCase() === 'TRUE';
 
+      // Partial detection: a balance that is neither zero nor the whole amount means part-paid.
+      const custTotal = Number(ir.Customer_Total) || 0;
+      const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
+      const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
+
       // The state that matters: money in, money not yet out.
       let state;
-      if (inHouse || !billId)        state = 'nothing to pay';
-      else if (vendorPaid)           state = 'vendor paid';
-      else if (customerPaid)         state = 'PAY THE VENDOR';        // owner has paid, vendor hasn't
+      if (inHouse || !billId)          state = 'nothing to pay';
+      else if (vendorPaid)             state = 'vendor paid';
+      else if (customerPaid)           state = 'PAY THE VENDOR';        // owner has paid in full, vendor hasn't
+      else if (customerPartial)        state = 'owner paid in part';    // some money in, not all
       else if (customerPaid === false) state = 'waiting on the owner';
-      else                           state = 'unknown';
+      else                             state = 'unknown';
 
       rows.push({
         ir_id: ir.ID, wo_id: ir.WO_ID,
@@ -3783,7 +3794,9 @@ async function qbPayables(env, url) {
         terms: vendorTermLabel(vendor),
         invoice_id: invId, invoice_number: invNumber,
         customer_total: Number(ir.Customer_Total) || 0, customer_balance: customerBalance, customer_paid: customerPaid,
-        bill_id: billId, vendor_cost: Number(ir.Vendor_Cost) || 0, vendor_balance: vendorBalance, vendor_paid: vendorPaid,
+        customer_partial: customerPartial,
+        bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
+        vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
         bill_due: billDue, in_house: inHouse, state,
       });
     }
