@@ -1,5 +1,7 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.15 | **Last Updated:** August 7, 2026
+**Version:** v1.16 | **Last Updated:** August 8, 2026
+
+**55. The Optimizer loop's output reaches Brett via the BrettOS Command Center (pull), not push.** Scheduled-task push notifications don't surface on mobile yet, so background-agent output was landing in invisible sessions ("nothing popped up"). Fix: `command-center.html` now has an **Optimizer card** that pulls **read-only** `GET /ops-review-log?limit=N` (latest weekly-review rows) + `GET /ops-telemetry?days=7` and renders the review + telemetry. Both are admin-gated (WORKER_SECRET), read-only (no spend/write). The card fetch is best-effort + concurrent — it can NEVER trip the Command Center into sample mode or gate first paint; all dynamic text escaped via `h()`. **Delivery model of record:** the **Worker-cron Reviewer writes → Command Center reads** (reliable, mobile-friendly). **Scout & Prepare are Cowork sessions** with no secret/PAT and no reliable push — they surface **in-session** ("ask in chat: what've you got"), NOT via notification. Don't rebuild on push notifications until that surface works on mobile. Deployed `2026-08-07.12`.
 
 **52. The weekly Optimizer Reviewer (B-129) runs as a WORKER CRON, not a Cowork task.** A fresh
 scheduled Cowork session has no `WORKER_SECRET` and no `BRETT_GH_PAT` (verified Aug 7 — headless env
