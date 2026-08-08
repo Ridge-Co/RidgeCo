@@ -150,10 +150,8 @@ async function loadOptimizer(){
   }catch(e){ return null; }
 }
 function optCard(opt){
-  if(!opt) return '';
-  const rev=opt.rev&&opt.rev.rows&&opt.rev.rows[0];
-  const tel=opt.tel&&opt.tel.metrics;
-  if(!rev&&!tel) return '';
+  const rev=opt&&opt.rev&&opt.rev.rows&&opt.rev.rows[0];
+  const tel=opt&&opt.tel&&opt.tel.metrics;
   const pct=x=>{const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';};
   let html='<div class="card"><h2>Optimizer <small style="font-weight:600;color:var(--muted)">· self-improvement loop</small></h2>';
   if(tel){
@@ -170,10 +168,22 @@ function optCard(opt){
       +'<div class="kick" style="color:var(--blue)">LATEST REVIEW'+(when?' · '+h(when):'')+'</div>'
       +'<p class="plain" style="white-space:pre-wrap">'+h((rev.Proposal||'').slice(0,900))+'</p></div>';
   } else {
-    html+='<p class="note">No weekly review yet — the first lands Monday. Telemetry is collecting now.</p>';
+    html+='<p class="note">No review yet — tap below to run one now, or it runs automatically Monday.</p>';
   }
+  if(TOKEN) html+='<button id="optbtn" onclick="runReview()" style="width:100%;margin-top:10px;border:none;border-radius:11px;padding:13px;font-size:14px;font-weight:800;background:var(--blue);color:#fff;cursor:pointer">▶ Run review now</button>';
   html+='<p class="note">Scout ideas &amp; build-ready briefs run in-session — ask in chat: “what’ve you got.”</p></div>';
   return html;
+}
+// Run the weekly review on demand from the Command Center (admin-gated POST; ~15s, spends
+// a little model + writes one Ops_Review_Log row — no money/PII/auth). Then refresh the view.
+async function runReview(){
+  const el=document.getElementById('optbtn'); if(el){el.textContent='Running… (~15s)';el.disabled=true;}
+  try{
+    const r=await fetch(WORKER+'/ops-review',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:'{}'});
+    const d=await r.json().catch(()=>null);
+    if(!r.ok||!d||d.ok!==true) throw new Error((d&&d.error)||('HTTP '+r.status));
+    load();
+  }catch(e){ if(el){el.textContent='Run failed — '+(e&&e.message||e);el.disabled=false;} }
 }
 
 function sampleMode(reason,opt){
