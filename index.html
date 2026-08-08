@@ -475,6 +475,7 @@
       <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#000">🏢 Find duplicate properties</button>
       <button class="btn small" onclick="checkDuplicateOwners()" style="background:var(--info);color:#000">👤 Find duplicate owners</button>
       <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
+      <button class="btn small" onclick="shareAttachments(false)" style="background:var(--accent2);color:#000">🖼 Fix photo/video sharing</button>
       <button class="btn small" onclick="runOpsReview()" style="background:var(--accent)">🔎 Run Ops Review (test)</button>
       <button class="btn small" onclick="logTestTelemetry()" style="background:var(--info);color:#000">📊 Log test telemetry row</button>
     </div>
@@ -8098,6 +8099,29 @@ function repairInvoice(irId, apply, docNumber) {
           'or type the number you want:<br><input id="repair-doc" placeholder="e.g. 1042" style="width:140px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px;margin-top:3px"></div>') +
       '<button class="btn small" onclick="repairInvoice(\'' + esc(irId) + '\',true,(document.getElementById(\'repair-doc\')||{}).value)" ' +
         'style="background:var(--accent2);color:#000;margin-top:7px">Update it in QuickBooks</button></div>';
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
+// Backfill: make every existing job photo/video anyone-with-link viewable so vendors/tenants/owners
+// can open them in the portal without a Google login. New uploads are shared automatically now; this
+// catches media uploaded before that fix. Vendor cost docs (receipt/bill/invoice) are left private.
+function shareAttachments(apply) {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = apply ? '⏳ Sharing photos & videos…' : '⏳ Checking…';
+  api('POST', '/admin/share-attachments', { dry_run: !apply }).then(function(res) {
+    if (!res || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    if (!res.shareable) { if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ No job photos/videos need sharing.</span>'; return; }
+    if (apply) {
+      var msg = '✓ Shared ' + res.shared + ' of ' + res.shareable + ' photo(s)/video(s). They now open without a Google login.';
+      if (res.failed) msg += ' ' + res.failed + ' could not be shared — tap again to retry.';
+      if (el) el.innerHTML = '<span style="color:' + (res.failed ? 'var(--warn)' : 'var(--accent2)') + '">' + esc(msg) + '</span>';
+      toast('Shared ' + res.shared + ' file(s)', res.failed ? 'warn' : 'success');
+      return;
+    }
+    if (el) el.innerHTML =
+      '<div style="line-height:1.6">' + res.shareable + ' job photo(s)/video(s) on past work orders are still private ' +
+      '(receipts &amp; bills are left alone). Sharing them lets vendors open them in the portal without signing into Google.' +
+      '<br><button class="btn small" onclick="shareAttachments(true)" style="background:var(--accent2);color:#000;margin-top:6px">Share them all</button></div>';
   }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
 }
 
