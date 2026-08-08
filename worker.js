@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-07.11';
+const BUILD_VERSION = '2026-08-07.12';
 
 export default {
   async fetch(request, env) {
@@ -135,6 +135,7 @@ export default {
         if (path === '/qb/payables')            return await qbPayables(env, url);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/ops-telemetry')          return await opsTelemetryRead(env, url);
+        if (path === '/ops-review-log')         return await opsReviewLogRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/trash/properties')       return await trashListProperties(env);
         if (path === '/trash/week')             return await trashWeek(env, url);
@@ -2989,6 +2990,21 @@ async function opsTelemetryRead(env, url) {
   const days = parseInt(url.searchParams.get('days') || '7') || 7;
   const rows = await readTelemetryRows(env, days);
   return json({ ok: true, window_days: days, count: rows.length, metrics: computeTelemetryMetrics(rows), rows: rows.slice(-200) });
+}
+
+// GET /ops-review-log?limit=N — READ-ONLY latest weekly-review rows (most recent first).
+// For the BrettOS Command Center to pull the Optimizer's output. Never spends or writes.
+async function opsReviewLogRead(env, url) {
+  const limit = Math.max(1, Math.min(50, parseInt(url.searchParams.get('limit') || '5') || 5));
+  let data;
+  try { data = await sheetsRequest(env, 'GET', `/values/${OPS_REVIEW_TAB}`); }
+  catch (e) { if (isMissingTabError(e)) return json({ ok: true, rows: [] }); throw e; }
+  const rows = data.values || [];
+  if (rows.length < 2) return json({ ok: true, rows: [] });
+  const headers = rows[0];
+  const objs = rows.slice(1).map(r => { const o = {}; headers.forEach((hh, i) => { o[hh] = (r[i] !== undefined) ? r[i] : ''; }); return o; });
+  objs.reverse(); // most recent first
+  return json({ ok: true, rows: objs.slice(0, limit) });
 }
 
 // POST /ops-review {days?} — run the weekly review on demand (test + read). POST because

@@ -131,14 +131,52 @@ function daysSince(s){const t=Date.parse(s);if(isNaN(t))return null;return Math.
 
 async function load(){
   if(!TOKEN){return sampleMode('no token yet')}
+  const optP=loadOptimizer();   // best-effort, runs concurrently; never throws, never gates first paint
   try{
     const [wos,inv,bills,vendors,props,units]=await Promise.all(
       ['/workorders','/invoices','/vendor-bills?status=submitted','/vendors','/properties','/units'].map(getJSON));
-    render({wos,inv,bills,vendors,props,units,live:true});
-  }catch(e){ sampleMode('DIAGNOSTIC → '+e.message); }
+    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP});
+  }catch(e){ sampleMode('DIAGNOSTIC → '+e.message, await optP); }
+}
+// Optimizer / Ops feed — the autonomous loop's output (weekly review + live telemetry),
+// pulled READ-ONLY. Best-effort: any failure just omits the card, never trips sample mode.
+async function loadOptimizer(){
+  try{
+    const [rev,tel]=await Promise.all([
+      getJSON('/ops-review-log?limit=1').catch(()=>null),
+      getJSON('/ops-telemetry?days=7').catch(()=>null)
+    ]);
+    return {rev,tel};
+  }catch(e){ return null; }
+}
+function optCard(opt){
+  if(!opt) return '';
+  const rev=opt.rev&&opt.rev.rows&&opt.rev.rows[0];
+  const tel=opt.tel&&opt.tel.metrics;
+  if(!rev&&!tel) return '';
+  const pct=x=>{const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';};
+  let html='<div class="card"><h2>Optimizer <small style="font-weight:600;color:var(--muted)">· self-improvement loop</small></h2>';
+  if(tel){
+    html+='<div class="counts">'
+      +'<div class="count"><b>'+h(tel.total||0)+'</b><small>jobs (7d)</small></div>'
+      +'<div class="count"><b>'+pct(tel.success_rate)+'</b><small>success</small></div>'
+      +'<div class="count"><b>'+pct(tel.escalation_rate)+'</b><small>escalation</small></div></div>';
+    if(tel.stuck_patterns&&tel.stuck_patterns.length)
+      html+='<p class="note" style="color:var(--red)">⚠ Stuck pattern: '+h(tel.stuck_patterns.join(' · '))+'</p>';
+  }
+  if(rev){
+    const ds=daysSince(rev.Timestamp);const when=ds==null?'':(ds<=0?'today':ds+'d ago');
+    html+='<div style="margin-top:8px;border-left:3px solid var(--blue);padding-left:9px">'
+      +'<div class="kick" style="color:var(--blue)">LATEST REVIEW'+(when?' · '+h(when):'')+'</div>'
+      +'<p class="plain" style="white-space:pre-wrap">'+h((rev.Proposal||'').slice(0,900))+'</p></div>';
+  } else {
+    html+='<p class="note">No weekly review yet — the first lands Monday. Telemetry is collecting now.</p>';
+  }
+  html+='<p class="note">Scout ideas &amp; build-ready briefs run in-session — ask in chat: “what’ve you got.”</p></div>';
+  return html;
 }
 
-function sampleMode(reason){
+function sampleMode(reason,opt){
   const wos=[
     {ID:'WO-1061',Status:'New',Priority:'urgent',Property_ID:'P1',Unit_ID:'U1',Vendor_ID:'',Trade:'Plumbing',Description:'No hot water',Created_Date:'2026-07-16'},
     {ID:'WO-1058',Status:'Complete',Priority:'high',Property_ID:'P2',Unit_ID:'U2',Vendor_ID:'V1',Trade:'HVAC',Description:'Mini-split leak',Created_Date:'2026-07-11'},
@@ -152,7 +190,7 @@ function sampleMode(reason){
   const vendors=[{ID:'V1',Name:'Cesar'},{ID:'V2',Name:'Oscar'}];
   const props=[{ID:'P1',Address:'56 S Culver St'},{ID:'P2',Address:'807 N Calvert St'},{ID:'P3',Address:'153 Ashburton'}];
   const units=[{ID:'U1',Unit_Label:'Apt 2'},{ID:'U2',Unit_Label:'Apt 1'},{ID:'U3',Unit_Label:'Unit B'}];
-  render({wos,inv,bills,vendors,props,units,live:false,reason});
+  render({wos,inv,bills,vendors,props,units,live:false,reason,opt});
 }
 
 function render(d){
@@ -195,6 +233,8 @@ function render(d){
       +'<div class="count"><b>'+(waiting.length+outInv.length)+'</b><small>waiting on others</small></div>'
       +'<div class="count" style="border-color:#ecc3c3;background:var(--redbg)"><b style="color:var(--red)">'+overdue.length+'</b><small>aging 7d+</small></div></div>'
       +'<p class="note">Ranked by who’s waiting on you, then priority, then how long it’s been sitting.</p></div>';
+
+  html+=optCard(d.opt);
 
   // vendor bills to review
   if(bills.length){
