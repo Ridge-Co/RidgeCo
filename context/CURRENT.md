@@ -1,4 +1,14 @@
-# WHERE THINGS STAND — Aug 7, 2026
+# WHERE THINGS STAND — Aug 8, 2026
+
+## Vendor photo/video access fixed (Aug 8) — one backfill tap left for Brett
+
+Vendors couldn't open job photos/videos in the portal — they hit a Google sign-in wall.
+Root cause: uploaded WO media was private to the service account and only ever shared on a
+QB invoice send. Now every job photo/video is shared **anyone-with-link at upload** (both
+upload paths); vendor cost docs (receipt/bill/invoice) stay private. Deployed `2026-08-08.1`.
+**One tap left for Brett:** Hub → Dev Log → **🖼 Fix photo/video sharing** → it shows a count,
+then **Share them all** to backfill media uploaded before the fix. (I can't run it from Cowork —
+it needs the admin token, which only lives in your browser.) See FEATURE_LOG rule 56.
 
 ## Trash Service shipped — needs first live send + push nudge (Aug 7)
 
