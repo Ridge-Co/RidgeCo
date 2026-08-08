@@ -199,6 +199,7 @@ export default {
         if (path === '/admin/merge-owner')        return await adminMergeOwner(env, body);
         if (path === '/admin/owner-to-user')      return await adminOwnerToUser(env, body);
         if (path === '/admin/migrate-trades')     return await adminMigrateTrades(env, body);
+        if (path === '/admin/share-attachments')  return await adminShareAttachments(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
@@ -630,6 +631,10 @@ async function handlePhotoUploadClean(env, request) {
     const arrayBuffer = await file.arrayBuffer();
     const uploaded = await uploadFileToDrive(token, arrayBuffer, filename, mimeType, woFolder.id, propsRoot);
     if (!uploaded || !uploaded.id) return json({ error: 'Drive upload failed', step: step.current }, 500);
+    // Make customer/job-facing media (before/after/report/photo/video) anyone-with-link readable so
+    // vendors/tenants/owners can open it in the portal without a Google login. Internal cost docs
+    // (receipt/bill/invoice → _Internal — Vendor Bills) are NEVER shared (FEATURE_LOG rule 13).
+    if (!isInternal) { try { await driveShareAnyone(token, uploaded.id); } catch(_) { /* non-fatal */ } }
     step.current = 'log_attachments';
     try {
       await addRow(env, 'Attachments', { WO_ID: woId, File_Name: filename, File_Type: fileType, Drive_File_ID: uploaded.id, Drive_URL: uploaded.webViewLink || uploaded.id, Mime_Type: mimeType, Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE' });
@@ -2542,12 +2547,51 @@ async function createUploadSession(env, body) {
   } catch(e){return json({error:e.message,step:'create_upload_session'},500);}
 }
 
+// File types whose media stays PRIVATE — vendor cost docs never go anyone-with-link (FEATURE_LOG rule 13).
+const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice'];
+
 async function logAttachment(env, body) {
   try {
     await addRow(env,'Attachments',{WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE'});
+    // Share the just-uploaded job media anyone-with-link so it opens in the portal without a Google
+    // login. This is the resumable-upload path the vendor portal uses (createUploadSession → PUT → here).
+    const ft=(body.file_type||'').toLowerCase();
+    if(body.file_id && !NON_SHARE_FILE_TYPES.includes(ft)){ try{ const tok=await getAccessToken(env); await driveShareAnyone(tok, body.file_id); }catch(_){ /* non-fatal */ } }
     if(body.wo_folder_url){await updateWOField(env,body.wo_id,'Drive_Folder_URL',body.wo_folder_url);await updateWOField(env,body.wo_id,'Drive_Folder_ID',body.wo_folder_id||'');}
     return json({success:true});
   } catch(e){return json({error:e.message},500);}
+}
+
+// One-time backfill: share every existing job-media attachment anyone-with-link so photos/videos on
+// past work orders open in the portal without a Google login. Skips vendor cost docs (receipt/bill/
+// invoice — FEATURE_LOG rule 13). Idempotent: re-sharing an already-public file is harmless.
+// Body: { dry_run?:true, limit?:N }. Secret-gated (admin).
+async function adminShareAttachments(env, body) {
+  body = body || {};
+  const dryRun = body.dry_run === true;
+  const limit = Number.isInteger(body.limit) && body.limit > 0 ? body.limit : 0;
+  try {
+    const rows = await fetchTab(env, 'Attachments');
+    const token = await getAccessToken(env);
+    if (!token) return json({ error: 'Failed to get Google access token' }, 500);
+    let scanned = 0, shareable = 0, shared = 0, skippedInternal = 0, skippedNoId = 0, failed = 0;
+    const failures = [];
+    for (const r of rows) {
+      scanned++;
+      if (r.Active === 'FALSE') continue;
+      const ft = (r.File_Type || '').toLowerCase();
+      if (NON_SHARE_FILE_TYPES.includes(ft)) { skippedInternal++; continue; }
+      const fileId = r.Drive_File_ID || '';
+      if (!fileId) { skippedNoId++; continue; }
+      shareable++;
+      if (limit && shared >= limit) continue;
+      if (dryRun) continue;
+      const ok = await driveShareAnyone(token, fileId);
+      if (ok) shared++; else { failed++; if (failures.length < 25) failures.push({ wo: r.WO_ID || '', file: r.File_Name || '', id: fileId }); }
+    }
+    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Notes:`dry_run=${dryRun} shareable=${shareable} shared=${shared} failed=${failed}` }); } catch(_){}
+    return json({ success: true, dry_run: dryRun, scanned, shareable, shared, skipped_internal: skippedInternal, skipped_no_id: skippedNoId, failed, failures });
+  } catch (e) { return json({ error: e.message }, 500); }
 }
 
 // ── SCHEDULING ───────────────────────────────────────────────
