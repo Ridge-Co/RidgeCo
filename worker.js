@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-08.1';
+const BUILD_VERSION = '2026-08-08.2';
 
 export default {
   async fetch(request, env) {
@@ -136,6 +136,7 @@ export default {
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/ops-telemetry')          return await opsTelemetryRead(env, url);
         if (path === '/ops-review-log')         return await opsReviewLogRead(env, url);
+        if (path === '/ar/aging')               return await arAging(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/trash/properties')       return await trashListProperties(env);
         if (path === '/trash/week')             return await trashWeek(env, url);
@@ -3057,6 +3058,44 @@ async function opsReviewLogRead(env, url) {
 async function opsReviewRun(env, body) {
   const days = parseInt((body && body.days) || '7') || 7;
   return json(await runWeeklyReview(env, { days, deliver: false, trigger: 'manual' }));
+}
+
+// GET /ar/aging — READ-ONLY accounts-receivable aging, straight from QuickBooks (source of
+// truth for real balances/dates). Buckets open invoices by days-past-due, rolls up by
+// customer (oldest first), so Brett can see who to chase. No writes, no sends (Phase 2 =
+// a gated QuickBooks re-send). Admin-gated by the top auth gate.
+async function arAging(env, url) {
+  const token = await qbAccessToken(env);
+  // No numeric WHERE (QBO query is finicky about `Balance > 0`); pull recent invoices and
+  // filter Balance>0 in code — guaranteed-valid syntax, and 1000 rows covers Brett's scale.
+  const q = "SELECT Id,DocNumber,TxnDate,DueDate,TotalAmt,Balance,CustomerRef FROM Invoice ORDERBY TxnDate DESC MAXRESULTS 1000";
+  const r = await qbApi(env, `query?query=${encodeURIComponent(q)}&minorversion=73`, 'GET', null, token);
+  // A QB Fault (throttle/5xx/bad query) still returns JSON — treat it as failure, not "$0 owed".
+  // Throwing routes to the 500 handler → getJSON throws → loadAR()=null → Command Center falls
+  // back to the Sheet card, instead of falsely rendering "nothing past due" on a money view.
+  if (r && r.Fault) throw new Error('QB query fault: ' + JSON.stringify(r.Fault).slice(0, 200));
+  const invs = (r && r.QueryResponse && r.QueryResponse.Invoice) || [];
+  const now = Date.now();
+  const buckets = { current:{count:0,total:0}, d30:{count:0,total:0}, d60:{count:0,total:0}, d90:{count:0,total:0}, d90plus:{count:0,total:0} };
+  const byCust = {}; let totalOpen = 0; const list = [];
+  for (const inv of invs) {
+    const bal = Number(inv.Balance) || 0; if (bal <= 0.005) continue;
+    totalOpen += bal;
+    const due = inv.DueDate || inv.TxnDate || '';
+    const dueT = Date.parse(due);
+    const age = isNaN(dueT) ? 0 : Math.floor((now - dueT) / 86400000);
+    const bkt = age <= 0 ? 'current' : age <= 30 ? 'd30' : age <= 60 ? 'd60' : age <= 90 ? 'd90' : 'd90plus';
+    buckets[bkt].count++; buckets[bkt].total += bal;
+    const cust = (inv.CustomerRef && (inv.CustomerRef.name || inv.CustomerRef.value)) || 'Unknown';
+    (byCust[cust] = byCust[cust] || { customer: cust, total: 0, count: 0, oldest_days: 0 });
+    byCust[cust].total += bal; byCust[cust].count++; if (age > byCust[cust].oldest_days) byCust[cust].oldest_days = age;
+    list.push({ id: inv.Id, doc: inv.DocNumber || '', customer: cust, balance: +bal.toFixed(2), due, age_days: age, bucket: bkt });
+  }
+  Object.values(buckets).forEach(b => b.total = +b.total.toFixed(2));
+  const customers = Object.values(byCust).map(c => ({ ...c, total: +c.total.toFixed(2) }))
+    .sort((a, b) => b.oldest_days - a.oldest_days || b.total - a.total);
+  list.sort((a, b) => b.age_days - a.age_days || b.balance - a.balance);
+  return json({ ok: true, as_of: new Date(now).toISOString().slice(0, 10), total_open: +totalOpen.toFixed(2), open_count: list.length, buckets, by_customer: customers, invoices: list.slice(0, 100) });
 }
 
 function bytesToB64(buf) {

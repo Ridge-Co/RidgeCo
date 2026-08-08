@@ -132,11 +132,12 @@ function daysSince(s){const t=Date.parse(s);if(isNaN(t))return null;return Math.
 async function load(){
   if(!TOKEN){return sampleMode('no token yet')}
   const optP=loadOptimizer();   // best-effort, runs concurrently; never throws, never gates first paint
+  const arP=loadAR();           // best-effort AR aging (QuickBooks)
   try{
     const [wos,inv,bills,vendors,props,units]=await Promise.all(
       ['/workorders','/invoices','/vendor-bills?status=submitted','/vendors','/properties','/units'].map(getJSON));
-    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP});
-  }catch(e){ sampleMode('DIAGNOSTIC → '+e.message, await optP); }
+    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP,ar:await arP});
+  }catch(e){ sampleMode('DIAGNOSTIC → '+e.message, await optP, null); }
 }
 // Optimizer / Ops feed — the autonomous loop's output (weekly review + live telemetry),
 // pulled READ-ONLY. Best-effort: any failure just omits the card, never trips sample mode.
@@ -185,8 +186,30 @@ async function runReview(){
     load();
   }catch(e){ if(el){el.textContent='Run failed — '+(e&&e.message||e);el.disabled=false;} }
 }
+// AR aging — best-effort read from QuickBooks; null on any failure (card falls back to Sheet).
+async function loadAR(){ try{ return await getJSON('/ar/aging'); }catch(e){ return null; } }
+function arCard(ar){
+  const b=ar.buckets||{}; const bk=k=>(b[k]||{count:0,total:0});
+  const money=n=>'$'+Math.round(n||0).toLocaleString();
+  let html='<div class="card"><h2>Money owed to you <small style="font-weight:600;color:var(--muted)">· QuickBooks</small></h2>';
+  html+='<p class="plain" style="margin:2px 0 8px"><b style="font-size:19px">'+money(ar.total_open)+'</b> open · '+(ar.open_count||0)+' invoice'+((ar.open_count||0)===1?'':'s')+'</p>';
+  html+='<div class="counts">'
+    +'<div class="count"><b>'+money(bk("current").total)+'</b><small>current</small></div>'
+    +'<div class="count"><b>'+money(bk("d30").total)+'</b><small>1-30d</small></div>'
+    +'<div class="count" style="border-color:#f0d9a8;background:var(--amberbg)"><b style="color:var(--amber)">'+money(bk("d60").total+bk("d90").total)+'</b><small>31-90d</small></div>'
+    +'<div class="count" style="border-color:#ecc3c3;background:var(--redbg)"><b style="color:var(--red)">'+money(bk("d90plus").total)+'</b><small>90d+</small></div></div>';
+  const cust=(ar.by_customer||[]).filter(c=>c.oldest_days>0).slice(0,6);
+  if(cust.length){
+    html+='<p class="note" style="margin-top:10px">Oldest first — chase these:</p>';
+    cust.forEach(c=>{const dc=c.oldest_days>90?'r':(c.oldest_days>30?'a':'y');
+      html+='<div class="row2"><span class="pdot '+dc+'"></span><div class="t">'+h(c.customer)
+        +'<small>'+money(c.total)+' · '+c.count+' invoice'+(c.count===1?'':'s')+' · oldest '+c.oldest_days+'d past due</small></div><span class="vtag">RIDGE CO</span></div>';});
+  } else { html+='<p class="note">Nothing past due — everything owed is still current. 🎉</p>'; }
+  html+='<p class="note">One-tap reminders (re-send via QuickBooks) are Phase 2 — ask to turn them on.</p></div>';
+  return html;
+}
 
-function sampleMode(reason,opt){
+function sampleMode(reason,opt,ar){
   const wos=[
     {ID:'WO-1061',Status:'New',Priority:'urgent',Property_ID:'P1',Unit_ID:'U1',Vendor_ID:'',Trade:'Plumbing',Description:'No hot water',Created_Date:'2026-07-16'},
     {ID:'WO-1058',Status:'Complete',Priority:'high',Property_ID:'P2',Unit_ID:'U2',Vendor_ID:'V1',Trade:'HVAC',Description:'Mini-split leak',Created_Date:'2026-07-11'},
@@ -200,7 +223,7 @@ function sampleMode(reason,opt){
   const vendors=[{ID:'V1',Name:'Cesar'},{ID:'V2',Name:'Oscar'}];
   const props=[{ID:'P1',Address:'56 S Culver St'},{ID:'P2',Address:'807 N Calvert St'},{ID:'P3',Address:'153 Ashburton'}];
   const units=[{ID:'U1',Unit_Label:'Apt 2'},{ID:'U2',Unit_Label:'Apt 1'},{ID:'U3',Unit_Label:'Unit B'}];
-  render({wos,inv,bills,vendors,props,units,live:false,reason,opt});
+  render({wos,inv,bills,vendors,props,units,live:false,reason,opt,ar});
 }
 
 function render(d){
@@ -271,8 +294,9 @@ function render(d){
   if(open.length>14)html+='<p class="note">+ '+(open.length-14)+' more open</p>';
   html+='</div>';
 
-  // outstanding money in
-  if(outInv.length){
+  // outstanding money in — QuickBooks AR aging (source of truth) with a Sheet fallback
+  if(d.ar&&d.ar.ok){ html+=arCard(d.ar); }
+  else if(outInv.length){
     let total=outInv.reduce((s,i)=>s+(parseFloat(i.Amount)||0),0);
     html+='<div class="card"><h2>Money owed to you</h2><div class="row2"><span class="pdot b"></span><div class="t">'
       +'<span class="rtag cash">$'+total.toLocaleString()+'</span><br>'+outInv.length+' invoice'+(outInv.length>1?'s':'')+' not yet paid'
