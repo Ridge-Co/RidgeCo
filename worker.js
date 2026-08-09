@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-08.3';
+const BUILD_VERSION = '2026-08-08.4';
 
 export default {
   async fetch(request, env) {
@@ -137,6 +137,7 @@ export default {
         if (path === '/ops-telemetry')          return await opsTelemetryRead(env, url);
         if (path === '/ops-review-log')         return await opsReviewLogRead(env, url);
         if (path === '/ar/aging')               return await arAging(env, url);
+        if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/trash/properties')       return await trashListProperties(env);
         if (path === '/trash/week')             return await trashWeek(env, url);
@@ -232,6 +233,7 @@ export default {
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
+        if (path === '/ops-approve')              return await opsApprove(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
@@ -2915,7 +2917,7 @@ async function telemetryLog(env, body) {
 // delivers only if digest delivery is enabled. Also exposed on-demand at GET /ops-review
 // so Brett can run + read it now (the model call is best-effort; metrics never depend on it).
 const OPS_REVIEW_TAB  = 'Ops_Review_Log';
-const OPS_REVIEW_COLS = ['ID','Timestamp','Window_Days','Total_Jobs','Success_Rate','Escalation_Rate','Human_Corrected','Est_Cost','Stuck_Patterns','Proposal','Trigger','Delivered'];
+const OPS_REVIEW_COLS = ['ID','Timestamp','Window_Days','Total_Jobs','Success_Rate','Escalation_Rate','Human_Corrected','Est_Cost','Stuck_Patterns','Proposal','Proposal_JSON','Trigger','Delivered'];
 
 async function readTelemetryRows(env, days) {
   let data;
@@ -2967,23 +2969,37 @@ function computeTelemetryMetrics(rows) {
 
 async function llmReviewProposal(env, metrics, days) {
   if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
-  const prompt = `You are "The Optimizer" — a supervisory continuous-improvement reviewer for Brett's property-maintenance automation (BrettOS). You are given ${days} days of operational telemetry metrics as JSON. Produce a SHORT, ranked improvement proposal in Brett's style: direct, scannable, no cheerleading; each item is one concrete next action with payoff / effort / risk.
+  const prompt = `You are "The Optimizer" — a continuous-improvement reviewer for Brett's property-maintenance automation (BrettOS). Given ${days} days of operational telemetry, produce a RANKED improvement proposal.
 
-Rules:
-- Rank by impact (recurring time or cost saved, or an effectiveness/accuracy gain), highest first. Max 5 items.
-- Ground EVERY item in the metrics — cite the number that motivates it. No generic advice.
-- If a job_type shows repeated failures or human-corrections (see stuck_patterns), call it out as a stuck loop to fix by CHANGING approach, not retrying the same thing.
-- If escalation_rate is high, flag likely model mis-tiering. If one job_type dominates cost, flag it.
-- End with exactly one line: the single highest-leverage action for this week.
-Return plain text, no markdown headers.
+Return ONLY strict minified JSON: {"proposals":[{"title","problem","action","impact","effort","tag"}]}. Ranked highest-impact first, MAX 5. Field rules:
+- title: short imperative, <= 8 words.
+- problem: the issue in one sentence, citing the metric NUMBER that motivates it. No generic advice.
+- action: the concrete first build step.
+- impact: one line — the recurring time/cost saved or effectiveness gain.
+- effort: exactly "S", "M", or "L".
+- tag: exactly "BIG GAIN", "QUICK WIN", or "FIXES EXISTING".
+Ground every item in the metrics. If a job_type shows repeated failures or human-corrections (stuck_patterns), include an item to fix it by CHANGING approach, not retrying. If escalation_rate is high, flag likely model mis-tiering. JSON only — no prose, no markdown fences.
 
 TELEMETRY METRICS (${days}d):
 ${JSON.stringify(metrics, null, 2)}`;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 900, messages: [{ role: 'user', content: prompt }] }) });
+  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1200, messages: [{ role: 'user', content: prompt }] }) });
   const data = await resp.json();
-  const txt = (data.content && data.content[0] && data.content[0].text || '').trim();
+  let txt = (data.content && data.content[0] && data.content[0].text || '').trim();
   if (!txt) throw new Error('empty LLM response');
-  return txt;
+  txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  let items = [];
+  try { const p = JSON.parse(txt); items = Array.isArray(p) ? p : (p.proposals || []); } catch (e) { items = []; }
+  items = (items || []).slice(0, 5).map((it, i) => ({
+    rank: i + 1, title: String(it.title || ('Item ' + (i + 1))), problem: String(it.problem || ''),
+    action: String(it.action || it.first_step || ''), impact: String(it.impact || ''),
+    effort: String(it.effort || ''), tag: String(it.tag || ''),
+  }));
+  // Human-readable rendering (for the card summary + any delivery). Falls back to raw model
+  // text if JSON parsing failed, so a malformed response still shows something useful.
+  const text = items.length
+    ? items.map(it => `${it.rank}. ${it.title}${it.tag ? ' [' + it.tag + (it.effort ? ' · ' + it.effort : '') + ']' : ''}\n   ${it.problem}\n   → ${it.action}${it.impact ? '\n   Impact: ' + it.impact : ''}`).join('\n\n')
+    : txt;
+  return { text, items };
 }
 
 async function deliverReview(env, metrics, proposal, days) {
@@ -3002,11 +3018,11 @@ async function runWeeklyReview(env, opts) {
   const days = opts.days || 7;
   const rows = await readTelemetryRows(env, days);
   const metrics = computeTelemetryMetrics(rows);
-  let proposal;
+  let proposal, proposalItems = [];
   if (metrics.total < 5) {
     proposal = `Not enough telemetry yet (${metrics.total} row(s) in ${days}d). The spine is collecting — a data-backed ranked proposal needs a bit more history. This will get sharper every week as jobs accrue.`;
   } else {
-    try { proposal = await llmReviewProposal(env, metrics, days); }
+    try { const pr = await llmReviewProposal(env, metrics, days); proposal = pr.text; proposalItems = pr.items || []; }
     catch (e) { proposal = `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
   }
   // Deliver first (gated), so the history row records the REAL outcome (reviewer NIT-1).
@@ -3022,13 +3038,50 @@ async function runWeeklyReview(env, opts) {
       Success_Rate: metrics.success_rate == null ? '' : String(metrics.success_rate),
       Escalation_Rate: String(metrics.escalation_rate), Human_Corrected: String(metrics.human_corrected),
       Est_Cost: String(metrics.est_cost_total), Stuck_Patterns: (metrics.stuck_patterns || []).join(' | '),
-      Proposal: proposal, Trigger: opts.trigger || 'manual', Delivered: deliveredCol,
+      Proposal: proposal, Proposal_JSON: JSON.stringify(proposalItems || []), Trigger: opts.trigger || 'manual', Delivered: deliveredCol,
     });
     logged = true;
   } catch (_) { /* history write is best-effort; the review still returns */ }
   // Self-instrument (PAT-031): the reviewer is itself a measured job.
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Notes: `${metrics.total} rows/${days}d` }); } catch (_) {}
-  return { ok: true, window_days: days, metrics, proposal, logged, delivery };
+  return { ok: true, window_days: days, metrics, proposal, items: proposalItems, logged, delivery };
+}
+
+// ── OPTIMIZER BUILD QUEUE (approve proposals → queue for the Prepare agent) ────
+// Brett selects proposals on proposals.html; approving drops them here as "greenlit".
+// The Rung-1 Prepare agent reads this queue first. Nothing auto-builds — this is the
+// human gate that turns a proposal into a queued build. Admin-gated; internal tab only.
+const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By'];
+
+async function opsApprove(env, body) {
+  const items = Array.isArray(body && body.items) ? body.items : [];
+  if (!items.length) return json({ error: 'items required' }, 400);
+  if (items.length > 20) return json({ error: 'too many at once (max 20)' }, 400);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  const now = new Date().toISOString(); let queued = 0;
+  for (const it of items) {
+    await addRow(env, OPS_QUEUE_TAB, {
+      Timestamp: now, Title: String(it.title || '').slice(0, 200), Rank: String(it.rank || ''),
+      Impact: String(it.impact || '').slice(0, 300), Effort: String(it.effort || ''), Tag: String(it.tag || ''),
+      First_Step: String(it.action || it.first_step || '').slice(0, 500),
+      Review_TS: String((body && body.review_ts) || ''), Status: 'greenlit', Approved_By: String((body && body.by) || 'command-center'),
+    });
+    queued++;
+  }
+  return json({ ok: true, queued });
+}
+
+async function opsQueueRead(env, url) {
+  let rows = [];
+  try {
+    const d = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const v = d.values || [];
+    if (v.length > 1) { const hs = v[0]; rows = v.slice(1).map(r => { const o = {}; hs.forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }); }
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const active = rows.filter(r => r.Status && r.Status !== 'done' && r.Status !== 'dropped');
+  return json({ ok: true, count: active.length, queue: active.reverse().slice(0, 50) });
 }
 
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).

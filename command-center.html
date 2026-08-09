@@ -165,9 +165,11 @@ function optCard(opt){
   }
   if(rev){
     const ds=daysSince(rev.Timestamp);const when=ds==null?'':(ds<=0?'today':ds+'d ago');
+    const teaser=(rev.Proposal||'').replace(/\s+/g,' ').trim().slice(0,240);
     html+='<div style="margin-top:8px;border-left:3px solid var(--blue);padding-left:9px">'
       +'<div class="kick" style="color:var(--blue)">LATEST REVIEW'+(when?' · '+h(when):'')+'</div>'
-      +'<p class="plain" style="white-space:pre-wrap;max-height:60vh;overflow:auto">'+h((rev.Proposal||'').slice(0,8000))+'</p></div>';
+      +'<p class="plain">'+h(teaser)+(teaser.length>=240?'…':'')+'</p>'
+      +'<a href="proposals.html" style="display:inline-block;margin-top:6px;color:var(--blue);font-weight:800;font-size:13px;text-decoration:none">Open full proposals → read, select &amp; approve</a></div>';
   } else {
     html+='<p class="note">No review yet — tap below to run one now, or it runs automatically Monday.</p>';
   }
