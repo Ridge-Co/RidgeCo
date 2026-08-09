@@ -600,6 +600,41 @@
   </div>
 </div>
 
+<!-- SEND WORK ORDER TO VENDOR (B-117 shareable WO) -->
+<div class="modal-overlay" id="modal-share-wo">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">📤 SEND WORK ORDER TO VENDOR</div><button class="modal-close" onclick="closeModal('modal-share-wo')">✕</button></div>
+    <div id="share-body" style="padding:4px 2px">
+      <div id="share-loading" style="color:var(--muted);font-size:13px;padding:10px 0">Generating link…</div>
+      <div id="share-content" style="display:none">
+        <div id="share-warn" style="display:none;background:#3a2a00;border:1px solid var(--warn);border-radius:6px;padding:10px;font-size:12px;margin-bottom:12px"></div>
+        <div style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">Vendor</div>
+        <div id="share-vendor" style="font-size:14px;margin-bottom:12px"></div>
+
+        <div style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">Link</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px">
+          <input id="share-link" readonly style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px">
+          <button class="btn btn-sm" onclick="copyShare('link')">Copy</button>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 4px">
+          <span style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase">Ready-to-send message</span>
+          <span style="font-size:11px"><label style="cursor:pointer"><input type="radio" name="share-lang" value="en" checked onchange="renderShareMsg()"> EN</label>
+          &nbsp;<label style="cursor:pointer"><input type="radio" name="share-lang" value="es" onchange="renderShareMsg()"> ES</label></span>
+        </div>
+        <textarea id="share-msg" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:110px;resize:vertical"></textarea>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="copyShare('msg')">Copy message</button>
+          <button class="btn btn-sm secondary" onclick="revokeShare()">🚫 Turn off old links</button>
+        </div>
+        <div id="share-status" style="font-size:12px;margin-top:10px"></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px">Copy the message and send it to the vendor however you normally reach them (text, email, WhatsApp). They open it, enter the last 4 digits of their phone once, and it stays open on their device for 24 hours. The link works until you turn it off.</div>
+      </div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-share-wo')">Close</button></div>
+  </div>
+</div>
+
 <!-- ADD PROPERTY MODAL -->
 <div class="modal-overlay" id="modal-add-property">
   <div class="modal">
@@ -1550,6 +1585,7 @@ function openWODetail(woId) {
     '</select>';
   actions.appendChild(qsDiv);
   addBtn(wo.Vendor_ID ? '🔄 Change Vendor' : 'Assign Vendor', wo.Vendor_ID ? 'secondary' : '', function(){openAssignModal(woId);});
+  addBtn('📤 Send to Vendor','secondary',function(){openShareWO(woId);});
   if (['Assigned','Accepted'].includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
   if (['In Progress','Accepted','On Hold'].includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
   if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
@@ -1682,6 +1718,57 @@ function updateWOStatus(woId,status) {
 }
 
 function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
+
+// ── Send Work Order to Vendor (B-117 shareable WO) ────────────
+var _shareData = null, _shareWOId = null;
+function openShareWO(woId){
+  _shareWOId = woId; _shareData = null;
+  document.getElementById('share-loading').style.display='';
+  document.getElementById('share-content').style.display='none';
+  document.getElementById('share-status').textContent='';
+  openModal('modal-share-wo');
+  // page_base = wherever the Hub is served from (GitHub Pages), so the link matches the host
+  var base = (location.origin + location.pathname.replace(/\/[^\/]*$/,'')).replace(/\/+$/,'');
+  api('POST','/wo/share-link',{wo_id:woId, page_base:base}).then(function(res){
+    if(!res || !res.success){ document.getElementById('share-loading').textContent = (res&&res.error)||'Could not generate link'; return; }
+    _shareData = res;
+    document.getElementById('share-loading').style.display='none';
+    document.getElementById('share-content').style.display='';
+    document.getElementById('share-link').value = res.link;
+    var v = document.getElementById('share-vendor');
+    v.innerHTML = res.assigned
+      ? (esc(res.vendor_name||'(unnamed)') + (res.vendor_phone?(' · '+esc(res.vendor_phone)):''))
+      : '<span style="color:var(--warn)">No vendor assigned to this WO yet</span>';
+    var warn = document.getElementById('share-warn');
+    if(!res.assigned){
+      warn.style.display=''; warn.innerHTML='⚠ Assign a vendor first — the last-4-of-phone gate uses the assigned vendor\'s number.';
+    } else if(!res.vendor_has_phone){
+      warn.style.display=''; warn.innerHTML='⚠ '+esc(res.vendor_name||'This vendor')+' has no phone on file. Add one on the Vendors page, or they can\'t pass the last-4 gate.';
+    } else { warn.style.display='none'; }
+    // default message language to the vendor's language
+    var langEs = document.querySelector('input[name="share-lang"][value="es"]');
+    var langEn = document.querySelector('input[name="share-lang"][value="en"]');
+    if(res.language==='es'){ langEs.checked=true; } else { langEn.checked=true; }
+    renderShareMsg();
+  }).catch(function(e){ document.getElementById('share-loading').textContent='Error: '+e.message; });
+}
+function renderShareMsg(){
+  if(!_shareData) return;
+  var lang = (document.querySelector('input[name="share-lang"]:checked')||{}).value || 'en';
+  document.getElementById('share-msg').value = lang==='es' ? _shareData.message_es : _shareData.message_en;
+}
+function copyShare(which){
+  var text = which==='link' ? document.getElementById('share-link').value : document.getElementById('share-msg').value;
+  navigator.clipboard.writeText(text).then(function(){ toast('Copied','success'); }).catch(function(){ toast('Copy failed — select manually','warn'); });
+}
+function revokeShare(){
+  if(!_shareWOId) return;
+  if(!confirm('Turn off every existing link for this work order? Anyone you sent it to will need a new link.')) return;
+  api('POST','/wo/share-revoke',{wo_id:_shareWOId}).then(function(res){
+    if(res && res.success){ toast('Old links turned off','success'); openShareWO(_shareWOId); }
+    else toast('Could not revoke','error');
+  }).catch(function(){ toast('Could not revoke','error'); });
+}
 function submitInvoice(){
   var amount=document.getElementById('inv-amount').value;
   if(!amount){toast('Enter amount','error');return;}

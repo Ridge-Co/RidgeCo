@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Ridge Co — Work Order</title>
+<style>
+  :root{
+    --bg:#eceef1; --paper:#ffffff; --ink:#1b1f24; --muted:#66707c; --line:#dce0e6;
+    --accent:#0b6b3a; --accent-dk:#095c31; --navy:#1f2d3d; --warn:#b45309; --danger:#b42318;
+    --info:#1d4ed8; --chip:#f3f5f8; --radius:10px;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.5;-webkit-text-size-adjust:100%}
+  a{color:var(--info)}
+  .wrap{max-width:760px;margin:0 auto;padding:50px 14px 14px}
+  .lang{position:absolute;top:12px;right:14px;z-index:5}
+  .lang button{background:#fff;border:1px solid var(--line);color:var(--muted);font-family:var(--font);font-size:12px;padding:6px 9px;border-radius:8px;cursor:pointer}
+  .lang button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+
+  /* ── GATE ── */
+  #gate,#err{max-width:440px;margin:8vh auto;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:28px 24px;box-shadow:0 6px 24px rgba(20,30,45,.08);text-align:center}
+  .gate-logo{font-weight:800;letter-spacing:.12em;color:var(--navy);font-size:15px}
+  .gate-sub{color:var(--muted);font-size:12px;letter-spacing:.14em;text-transform:uppercase;margin-top:2px}
+  .gate-wo{font-size:26px;font-weight:800;color:var(--ink);margin:18px 0 4px}
+  .gate-addr{color:var(--muted);font-size:14px;margin-bottom:20px}
+  .gate-label{font-size:13px;color:var(--ink);margin-bottom:10px}
+  #last4{width:170px;text-align:center;letter-spacing:.5em;font-size:26px;padding:12px;border:2px solid var(--line);border-radius:10px;font-family:var(--font);outline:none}
+  #last4:focus{border-color:var(--accent)}
+  .btn{background:var(--accent);color:#fff;border:none;border-radius:9px;padding:12px 18px;font-size:15px;font-weight:600;font-family:var(--font);cursor:pointer}
+  .btn:disabled{opacity:.6}
+  .btn.block{display:block;width:100%}
+  .btn.sec{background:#fff;color:var(--ink);border:1px solid var(--line);font-weight:500}
+  .btn.nav{background:var(--navy)}
+  .gate-msg{min-height:20px;margin-top:12px;font-size:13px}
+  .err-red{color:var(--danger)}
+
+  /* ── DOCUMENT ── */
+  #doc{display:none}
+  .paper{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 6px 24px rgba(20,30,45,.07);overflow:hidden;margin-bottom:16px}
+  .doc-head{background:var(--navy);color:#fff;padding:16px 20px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .doc-head .brand{font-weight:800;letter-spacing:.12em;font-size:14px}
+  .doc-head .brand small{display:block;font-weight:500;letter-spacing:.18em;opacity:.7;font-size:10px;margin-top:2px}
+  .doc-head .wo-no{text-align:right}
+  .doc-head .wo-no .n{font-size:22px;font-weight:800;line-height:1}
+  .doc-head .wo-no .d{font-size:11px;opacity:.75;margin-top:3px}
+  .badge{display:inline-block;padding:4px 11px;border-radius:20px;font-size:12px;font-weight:700;letter-spacing:.02em}
+  .statusbar{padding:12px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--chip)}
+  .statusbar .lbl{color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+  .prio{font-size:12px;font-weight:700}
+  .body{padding:6px 20px 20px}
+  .row{padding:14px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:none}
+  .k{color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:5px}
+  .v{font-size:16px;color:var(--ink)}
+  .v.big{font-size:20px;font-weight:700}
+  .v a{text-decoration:none}
+  .desc{white-space:pre-wrap;font-size:15px}
+  .access-box{background:#f6faf7;border:1px solid #cfe6d8;border-radius:8px;padding:12px 14px}
+  .access-box .code{font-size:20px;font-weight:800;letter-spacing:.05em;color:var(--accent-dk);font-family:ui-monospace,Menlo,Consolas,monospace}
+  .lb{padding:8px 0;border-bottom:1px dashed var(--line)}
+  .lb:last-child{border-bottom:none}
+  .lb .t{font-size:12px;color:var(--muted)}
+  .photos{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .pchip{display:inline-flex;align-items:center;gap:6px;background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:7px 11px;font-size:13px;color:var(--info);text-decoration:none;max-width:100%}
+  .pgroup-lbl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:10px 0 4px}
+  .none{color:var(--muted);font-size:13px}
+
+  /* ── ACTION BAR ── */
+  .actions{position:sticky;bottom:0;background:rgba(255,255,255,.97);backdrop-filter:blur(6px);border-top:1px solid var(--line);padding:10px;display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:0 -14px;border-radius:0}
+  .actions .btn{font-size:14px;padding:12px 10px}
+  .actwrap{margin-bottom:10px}
+  .foot{text-align:center;color:var(--muted);font-size:11px;padding:8px 0 28px}
+
+  /* ── PANELS / MODALS ── */
+  .overlay{display:none;position:fixed;inset:0;background:rgba(20,30,45,.55);z-index:60;align-items:flex-end;justify-content:center}
+  .overlay.open{display:flex}
+  .sheet{background:var(--paper);width:100%;max-width:560px;max-height:92vh;overflow-y:auto;border-radius:16px 16px 0 0;padding:18px 18px 26px}
+  @media(min-width:600px){.overlay{align-items:center}.sheet{border-radius:16px}}
+  .sheet h3{margin:0 0 4px;font-size:17px}
+  .sheet .sub{color:var(--muted);font-size:12px;margin-bottom:14px}
+  label.fl{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px;letter-spacing:.02em}
+  input.ff,textarea.ff,select.ff{width:100%;border:1px solid var(--line);border-radius:8px;padding:11px;font-family:var(--font);font-size:16px;color:var(--ink);background:#fff}
+  textarea.ff{min-height:80px;resize:vertical}
+  .seg{display:flex;gap:8px}
+  .seg button{flex:1;padding:10px;border:1px solid var(--line);background:#fff;border-radius:8px;font-family:var(--font);font-size:14px;cursor:pointer;color:var(--muted)}
+  .seg button.on{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
+  .stbtns{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .stbtns button{padding:13px;border:1px solid var(--line);background:#fff;border-radius:9px;font-family:var(--font);font-size:15px;cursor:pointer;color:var(--ink)}
+  .stbtns button.on{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:700}
+  .rcpt{background:var(--chip);border:1px solid var(--line);border-radius:9px;padding:11px;margin-top:8px}
+  .total{display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:12px;border-top:2px solid var(--line)}
+  .total .amt{font-size:24px;font-weight:800;color:var(--accent-dk)}
+  .brk{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.6}
+  .sheet-msg{min-height:18px;margin-top:10px;font-size:13px}
+  .ok{color:var(--accent-dk)} .bad{color:var(--danger)}
+  .sheet-actions{display:flex;gap:8px;margin-top:16px}
+  .sheet-actions .btn{flex:1}
+  .updbanner{position:fixed;left:0;right:0;bottom:0;z-index:99999;background:var(--accent);color:#fff;padding:13px;text-align:center;font-weight:600;cursor:pointer}
+
+  @media print{
+    body{background:#fff}
+    .lang,.actions,.no-print,.updbanner{display:none !important}
+    .paper{box-shadow:none;border:none;margin:0}
+    .doc-head{background:#fff !important;color:#000 !important;border-bottom:2px solid #000}
+    .doc-head .brand,.doc-head .wo-no .n{color:#000 !important}
+    .wrap{padding:0}
+    a{color:#000;text-decoration:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="lang no-print">
+  <button id="lang-en" class="on" onclick="setLang('en')">EN</button>
+  <button id="lang-es" onclick="setLang('es')">ES</button>
+</div>
+
+<!-- ── ERROR SCREEN ── -->
+<div id="err" style="display:none">
+  <div class="gate-logo">RIDGE CO</div>
+  <div class="gate-wo" style="font-size:20px;margin-top:20px" id="err-title">Link problem</div>
+  <div class="gate-addr err-red" id="err-msg" style="margin-bottom:0"></div>
+</div>
+
+<!-- ── GATE SCREEN ── -->
+<div id="gate" style="display:none">
+  <div class="gate-logo">RIDGE CO</div>
+  <div class="gate-sub" data-i18n="WORK ORDER">WORK ORDER</div>
+  <div class="gate-wo" id="gate-wo">#—</div>
+  <div class="gate-addr" id="gate-addr"></div>
+  <div class="gate-label" data-i18n="Enter the last 4 digits of your phone number to view this work order.">Enter the last 4 digits of your phone number to view this work order.</div>
+  <input id="last4" type="tel" inputmode="numeric" maxlength="4" placeholder="••••" autocomplete="off">
+  <div class="gate-msg" id="gate-msg"></div>
+  <div style="margin-top:16px"><button class="btn block nav" id="gate-btn" onclick="unlock()" data-i18n="View Work Order">View Work Order</button></div>
+  <div style="margin-top:14px;color:var(--muted);font-size:11px" data-i18n="You'll stay signed in on this device for 24 hours.">You'll stay signed in on this device for 24 hours.</div>
+</div>
+
+<!-- ── DOCUMENT ── -->
+<div id="doc">
+  <div class="wrap">
+    <div class="paper">
+      <div class="doc-head">
+        <div class="brand">RIDGE CO<small data-i18n="WORK ORDER">WORK ORDER</small></div>
+        <div class="wo-no"><div class="n" id="d-wono">#—</div><div class="d" id="d-date"></div></div>
+      </div>
+      <div class="statusbar">
+        <span class="lbl" data-i18n="Status">Status</span>
+        <span class="badge" id="d-status">—</span>
+        <span class="prio" id="d-prio"></span>
+      </div>
+      <div class="body" id="d-body"><!-- filled by JS --></div>
+    </div>
+
+    <div class="actwrap">
+      <div class="actions no-print">
+        <button class="btn" onclick="openStatus()">🔄 <span data-i18n="Update Status">Update Status</span></button>
+        <button class="btn" onclick="openPhotos()">📷 <span data-i18n="Add Photos">Add Photos</span></button>
+        <button class="btn" onclick="openBill()">💵 <span data-i18n="Submit Bill">Submit Bill</span></button>
+        <button class="btn sec" onclick="openNote()">📝 <span data-i18n="Add Note">Add Note</span></button>
+        <button class="btn sec" onclick="window.print()">🖨 <span data-i18n="Print / Save PDF">Print / Save PDF</span></button>
+        <button class="btn sec" onclick="reload()">↻ <span data-i18n="Refresh">Refresh</span></button>
+      </div>
+    </div>
+    <div class="foot">Ridge Co · <span id="d-actas"></span></div>
+  </div>
+</div>
+
+<!-- ── STATUS PANEL ── -->
+<div class="overlay" id="ov-status"><div class="sheet">
+  <h3 data-i18n="Update Status">Update Status</h3>
+  <div class="sub" data-i18n="Tap where the job stands right now.">Tap where the job stands right now.</div>
+  <div class="stbtns" id="status-btns"></div>
+  <label class="fl" data-i18n="Note (optional)">Note (optional)</label>
+  <textarea class="ff" id="st-note" placeholder="…"></textarea>
+  <div class="sheet-msg" id="st-msg"></div>
+  <div class="sheet-actions">
+    <button class="btn sec" onclick="close_('ov-status')" data-i18n="Cancel">Cancel</button>
+    <button class="btn" id="st-save" onclick="saveStatus()" data-i18n="Save">Save</button>
+  </div>
+</div></div>
+
+<!-- ── PHOTOS PANEL ── -->
+<div class="overlay" id="ov-photos"><div class="sheet">
+  <h3 data-i18n="Add Photos & Videos">Add Photos & Videos</h3>
+  <div class="sub" data-i18n="Add before/after photos, videos, or flag a problem.">Add before/after photos, videos, or flag a problem.</div>
+  <div id="ph-uploads"></div>
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+    <label class="btn sec" style="cursor:pointer">📷 <span data-i18n="Before">Before</span><input type="file" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'before')"></label>
+    <label class="btn sec" style="cursor:pointer">✅ <span data-i18n="After">After</span><input type="file" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'after')"></label>
+    <label class="btn sec" style="cursor:pointer">⚠️ <span data-i18n="Problem">Problem</span><input type="file" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'report')"></label>
+  </div>
+  <div class="sheet-msg" id="ph-msg"></div>
+  <div class="sheet-actions"><button class="btn" onclick="close_('ov-photos');reload()" data-i18n="Done">Done</button></div>
+</div></div>
+
+<!-- ── NOTE PANEL ── -->
+<div class="overlay" id="ov-note"><div class="sheet">
+  <h3 data-i18n="Add Note">Add Note</h3>
+  <div class="sub" data-i18n="This is added to the job log for the office.">This is added to the job log for the office.</div>
+  <textarea class="ff" id="note-text" placeholder="…"></textarea>
+  <div class="sheet-msg" id="note-msg"></div>
+  <div class="sheet-actions">
+    <button class="btn sec" onclick="close_('ov-note')" data-i18n="Cancel">Cancel</button>
+    <button class="btn" id="note-save" onclick="saveNote()" data-i18n="Save">Save</button>
+  </div>
+</div></div>
+
+<!-- ── BILL PANEL ── -->
+<div class="overlay" id="ov-bill"><div class="sheet">
+  <h3 data-i18n="Submit Bill">Submit Bill</h3>
+  <div class="sub"><span data-i18n="Work Order">Work Order</span> <span id="bill-wono"></span></div>
+  <div class="seg" style="margin-bottom:4px">
+    <button id="bt-hourly" class="on" onclick="setBillType('hourly')" data-i18n="By the Hour">By the Hour</button>
+    <button id="bt-flat" onclick="setBillType('flat')" data-i18n="Flat Price">Flat Price</button>
+  </div>
+
+  <div id="sec-hourly">
+    <label class="fl" data-i18n="Hours worked">Hours worked</label>
+    <div style="display:flex;gap:10px;align-items:center">
+      <input class="ff" id="b-hours" type="number" min="0" step="0.25" placeholder="0" oninput="calcBill()" style="flex:1">
+      <div style="font-size:13px;color:var(--muted);white-space:nowrap">× <span id="b-rate">$0</span>/hr</div>
+    </div>
+  </div>
+  <div id="sec-flat" style="display:none">
+    <label class="fl" data-i18n="Flat price ($)">Flat price ($)</label>
+    <input class="ff" id="b-flat" type="number" min="0" step="0.01" placeholder="0.00" oninput="calcBill()">
+  </div>
+
+  <label class="fl" style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="b-truck-on" onchange="toggleTruck()" style="width:auto"> <span data-i18n="Used truck stock / my own materials">Used truck stock / my own materials</span></label>
+  <div id="sec-truck" style="display:none">
+    <input class="ff" id="b-truck-desc" placeholder="What (e.g. fittings, wire)" style="margin-bottom:8px">
+    <input class="ff" id="b-truck-amt" type="number" min="0" step="0.01" placeholder="estimated value $" oninput="calcBill()">
+  </div>
+
+  <label class="fl" style="display:flex;justify-content:space-between;align-items:center"><span data-i18n="Receipts & purchases">Receipts & purchases</span>
+    <button class="btn sec" style="padding:5px 10px;font-size:13px" onclick="addRcpt()">+ <span data-i18n="Add">Add</span></button></label>
+  <div id="b-rcpts"></div>
+
+  <label class="fl" data-i18n="Notes (optional)">Notes (optional)</label>
+  <textarea class="ff" id="b-notes" placeholder="…"></textarea>
+  <label class="fl" data-i18n="Your invoice # (optional)">Your invoice # (optional)</label>
+  <input class="ff" id="b-invno" placeholder="">
+
+  <div class="total"><span data-i18n="TOTAL">TOTAL</span><span class="amt" id="b-total">$0.00</span></div>
+  <div class="brk" id="b-brk"></div>
+  <div class="sheet-msg" id="b-msg"></div>
+  <div class="sheet-actions">
+    <button class="btn sec" onclick="close_('ov-bill')" data-i18n="Cancel">Cancel</button>
+    <button class="btn" id="b-submit" onclick="submitBill()" data-i18n="Submit Bill">Submit Bill</button>
+  </div>
+</div></div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var params = new URLSearchParams(location.search);
+var WO = (params.get('wo')||'').trim();
+var LINK = (params.get('t')||'').trim();
+var SESS_KEY = 'mh_wo_share_' + WO;
+var VIEW = '';            // 24h view token
+var DATA = null;          // last read payload
+var LANG = 'en';
+var VRATE = 0;
+
+// ── i18n ──────────────────────────────────────────────────────
+var ES = {
+  'WORK ORDER':'ORDEN DE TRABAJO','Work Order':'Orden de Trabajo','Status':'Estado',
+  'Enter the last 4 digits of your phone number to view this work order.':'Ingrese los últimos 4 dígitos de su teléfono para ver esta orden de trabajo.',
+  'View Work Order':'Ver Orden de Trabajo',
+  "You'll stay signed in on this device for 24 hours.":'Permanecerá conectado en este dispositivo por 24 horas.',
+  'Update Status':'Actualizar Estado','Add Photos':'Agregar Fotos','Submit Bill':'Enviar Factura',
+  'Add Note':'Agregar Nota','Print / Save PDF':'Imprimir / Guardar PDF','Refresh':'Actualizar',
+  'Property':'Propiedad','Unit':'Unidad','Tenant / Contact':'Inquilino / Contacto',
+  'Access':'Acceso','Job Description':'Descripción del Trabajo','Trade':'Oficio',
+  'Scheduled':'Programado','Photos & Files':'Fotos y Archivos','Recent Notes':'Notas Recientes',
+  'Billing':'Facturación','No photos yet.':'Aún no hay fotos.','No access codes on file — contact the office.':'No hay códigos de acceso — contacte a la oficina.',
+  'Call / Text':'Llamar / Mensaje','Tap where the job stands right now.':'Toque dónde está el trabajo ahora.',
+  'Note (optional)':'Nota (opcional)','Cancel':'Cancelar','Save':'Guardar','Done':'Listo',
+  'Add Photos & Videos':'Agregar Fotos y Videos','Add before/after photos, videos, or flag a problem.':'Agregue fotos antes/después, videos, o reporte un problema.',
+  'Before':'Antes','After':'Después','Problem':'Problema',
+  'This is added to the job log for the office.':'Se agrega al registro del trabajo para la oficina.',
+  'By the Hour':'Por Hora','Flat Price':'Precio Fijo','Hours worked':'Horas trabajadas',
+  'Flat price ($)':'Precio fijo ($)','Used truck stock / my own materials':'Usé materiales del camión / míos',
+  'Receipts & purchases':'Recibos y compras','Add':'Agregar','Notes (optional)':'Notas (opcional)',
+  'Your invoice # (optional)':'Su # de factura (opcional)','TOTAL':'TOTAL',
+  'Reimburse me':'Reembólsenme','On company account':'Cuenta de la empresa','What was purchased':'Qué se compró',
+  'Enter hours or an item above.':'Ingrese horas o un artículo arriba.',
+  'New':'Nuevo','Assigned':'Asignado','Accepted':'Aceptado','In Progress':'En Progreso',
+  'On Hold':'En Espera','Complete':'Completado','Pending Invoice':'Factura Pendiente',
+  'Invoiced':'Facturado','Paid':'Pagado','Declined':'Rechazado','Cancelled':'Cancelado',
+  'Urgent':'Urgente','High':'Alto','Normal':'Normal','Low':'Bajo',
+  'Loading…':'Cargando…','Saved ✓':'Guardado ✓','Bill submitted ✓':'Factura enviada ✓',
+  'Something went wrong. Try again.':'Algo salió mal. Intente de nuevo.',
+  'Uploading…':'Subiendo…','Those 4 digits don’t match. Please try again.':'Esos 4 dígitos no coinciden. Intente de nuevo.',
+  'previously':'anteriormente','Contact the office for access.':'Contacte a la oficina para el acceso.',
+  'Prepared for':'Preparado para','Lockbox':'Caja de seguridad','Notes':'Notas'
+};
+function t(s){ return (LANG==='es' && ES[s]!==undefined) ? ES[s] : s; }
+// Localize the structured access-label tokens (server sends them in English). Longest
+// phrases first so "Building Code" isn't half-translated by the "Building" rule.
+var _LB_TOKENS=[['Electronic Code','Código electrónico'],['Building Code','Código del edificio'],['Door Code','Código de puerta'],['Gate Code','Código de reja'],['Front Door','Puerta principal'],['Unit Key','Llave de unidad'],['Lockbox','Caja de seguridad'],['Building','Edificio'],['Unit','Unidad'],['Access','Acceso'],['Key','Llave']];
+function locLabel(s){ if(LANG!=='es'||!s) return s; var out=String(s); _LB_TOKENS.forEach(function(p){ out=out.replace(new RegExp('\\b'+p[0]+'\\b','g'), p[1]); }); return out; }
+var _TRADES_ES={'Plumbing':'Plomería','Electrical':'Eléctrico','HVAC':'Climatización (HVAC)','Handyman':'Reparaciones generales','Carpentry':'Carpintería','Painting':'Pintura','Roofing':'Techado','Appliance':'Electrodomésticos','Appliance Repair':'Reparación de electrodomésticos','Cleaning':'Limpieza','Landscaping':'Jardinería','Pest Control':'Control de plagas','Locksmith':'Cerrajería','Flooring':'Pisos','Drywall':'Panel de yeso','General':'General','Masonry':'Albañilería','Gutters':'Canaletas','Windows':'Ventanas','Doors':'Puertas'};
+function trTrade(s){ if(LANG!=='es'||!s) return s; return _TRADES_ES[s]!==undefined?_TRADES_ES[s]:s; }
+function setLang(l){
+  LANG=l; document.documentElement.lang=l;
+  document.getElementById('lang-en').className = l==='en'?'on':'';
+  document.getElementById('lang-es').className = l==='es'?'on':'';
+  document.querySelectorAll('[data-i18n]').forEach(function(el){ el.textContent = t(el.getAttribute('data-i18n')); });
+  try{ localStorage.setItem('mh_wo_lang', l); }catch(e){}
+  if(DATA) renderDoc();
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function post(path, body){ return fetch(WORKER+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();}); }
+function show(id,on){ var el=document.getElementById(id); if(el) el.style.display = on?'block':'none'; }
+function close_(id){ document.getElementById(id).classList.remove('open'); }
+function open_(id){ document.getElementById(id).classList.add('open'); }
+
+// ── boot ──────────────────────────────────────────────────────
+(function boot(){
+  try{ var sl=localStorage.getItem('mh_wo_lang'); if(sl==='es') setLang('es'); }catch(e){}
+  if(!WO || !LINK){ showErr(t('Link problem'), 'This link is missing information. Please ask for a new one.'); return; }
+  // existing 24h session?
+  var saved=null; try{ saved=JSON.parse(localStorage.getItem(SESS_KEY)||'null'); }catch(e){}
+  if(saved && saved.token && saved.exp && saved.exp*1000 > Date.now()){
+    VIEW = saved.token; loadDoc(); return;
+  }
+  showGate();
+})();
+
+function showErr(title,msg){ show('gate',false); show('doc',false); show('err',true);
+  document.getElementById('err-title').textContent=title; document.getElementById('err-msg').textContent=t(msg)||msg; }
+
+function showGate(){
+  show('err',false); show('doc',false); show('gate',true);
+  document.getElementById('gate-wo').textContent = '#'+WO;
+  var l4=document.getElementById('last4');
+  l4.addEventListener('input',function(){ this.value=this.value.replace(/\D/g,''); });
+  l4.addEventListener('keydown',function(e){ if(e.key==='Enter') unlock(); });
+  setTimeout(function(){ l4.focus(); },200);
+}
+
+function unlock(){
+  var msg=document.getElementById('gate-msg'); var btn=document.getElementById('gate-btn');
+  var v=document.getElementById('last4').value.replace(/\D/g,'');
+  if(v.length!==4){ msg.className='gate-msg err-red'; msg.textContent=t('Enter the last 4 digits of your phone number to view this work order.'); return; }
+  btn.disabled=true; msg.className='gate-msg'; msg.textContent=t('Loading…');
+  post('/wo/shared/unlock',{wo:WO,t:LINK,last4:v}).then(function(res){
+    btn.disabled=false;
+    if(res && res.success && res.token){
+      VIEW=res.token;
+      var exp=Math.floor(Date.now()/1000)+(res.expires_in||86400);
+      try{ localStorage.setItem(SESS_KEY, JSON.stringify({token:res.token,exp:exp})); }catch(e){}
+      if(res.language==='es') setLang('es');
+      msg.textContent=''; loadDoc();
+    } else if(res && (res.error==='invalid_link'||res.error==='revoked'||res.error==='not_found'||res.error==='no_phone')){
+      showErr(t('Link problem'), res.message||'This link is no longer valid.');
+    } else {
+      msg.className='gate-msg err-red';
+      msg.textContent = (res && res.message) ? res.message : t('Those 4 digits don’t match. Please try again.');
+    }
+  }).catch(function(){ btn.disabled=false; msg.className='gate-msg err-red'; msg.textContent=t('Something went wrong. Try again.'); });
+}
+
+// ── load + render document ────────────────────────────────────
+function loadDoc(){
+  fetch(WORKER+'/wo/shared?wo='+encodeURIComponent(WO)+'&st='+encodeURIComponent(VIEW))
+    .then(function(r){return r.json();})
+    .then(function(res){
+      if(!res || !res.success){
+        // token expired / invalid → back to gate
+        try{ localStorage.removeItem(SESS_KEY); }catch(e){}
+        VIEW=''; showGate();
+        var m=document.getElementById('gate-msg'); if(res && res.message){ m.className='gate-msg err-red'; m.textContent=res.message; }
+        return;
+      }
+      DATA=res; VRATE=parseFloat(res.vendor_rate)||0;
+      if(res.language==='es' && LANG!=='es') setLang('es');
+      renderDoc();
+      show('gate',false); show('err',false); show('doc',true);
+    }).catch(function(){ showErr(t('Link problem'), t('Something went wrong. Try again.')); });
+}
+function reload(){ loadDoc(); }
+
+var STATUS_COLORS = {'New':'#6b7280','Assigned':'#1d4ed8','Accepted':'#1d4ed8','In Progress':'#b45309','On Hold':'#b42318','Complete':'#0b6b3a','Pending Invoice':'#0b6b3a','Invoiced':'#0b6b3a','Paid':'#0b6b3a','Cancelled':'#6b7280','Declined':'#b42318'};
+var PRIO_COLORS = {'Urgent':'#b42318','High':'#b45309','Normal':'#0b6b3a','Low':'#6b7280'};
+
+function renderDoc(){
+  var wo=DATA.wo;
+  document.getElementById('d-wono').textContent='#'+wo.ID;
+  document.getElementById('gate-wo').textContent='#'+wo.ID;
+  var dt = wo.Scheduled_Date || (wo.Created_Date||'').split('T')[0] || '';
+  document.getElementById('d-date').textContent = dt;
+  var sb=document.getElementById('d-status');
+  sb.textContent=t(wo.Status||'—'); sb.style.background=(STATUS_COLORS[wo.Status]||'#6b7280'); sb.style.color='#fff';
+  var pr=document.getElementById('d-prio');
+  if(wo.Priority){ pr.textContent='• '+t(wo.Priority); pr.style.color=(PRIO_COLORS[wo.Priority]||'#6b7280'); } else pr.textContent='';
+  document.getElementById('d-actas').textContent = DATA.vendor_name ? (t('Prepared for')||'Prepared for')+' '+DATA.vendor_name : '';
+
+  var addr = wo.property_address + (wo.property_city?(', '+wo.property_city):'');
+  var mapUrl = 'https://maps.google.com/?q='+encodeURIComponent(wo.property_address+' '+(wo.property_city||''));
+  var h='';
+  h += row(t('Property'), '<span class="v big"><a href="'+esc(mapUrl)+'" target="_blank">'+esc(addr||'—')+'</a></span>'+(wo.unit_label?('<div class="v" style="margin-top:4px">'+t('Unit')+' '+esc(wo.unit_label)+'</div>'):''));
+
+  // tenant / contact
+  var contact='';
+  if(wo.tenant_name){
+    contact = '<span class="v">'+esc(wo.tenant_name)+(wo.tenant_former?(' <span class="none">('+t('previously')+')</span>'):'')+'</span>';
+    if(wo.tenant_phone){ var ph=String(wo.tenant_phone); contact += '<div style="margin-top:6px"><a class="pchip" href="tel:'+esc(ph.replace(/[^0-9+]/g,''))+'">📞 '+esc(ph)+'</a> <a class="pchip" href="sms:'+esc(ph.replace(/[^0-9+]/g,''))+'">💬 '+t('Call / Text')+'</a></div>'; }
+  } else contact='<span class="none">—</span>';
+  h += row(t('Tenant / Contact'), contact);
+
+  // access
+  var acc='';
+  if(!wo.vendor_has_access){
+    acc = '<span class="none">'+t('Contact the office for access.')+'</span>';
+  } else if((wo.lockboxes&&wo.lockboxes.length) || wo.legacy_lockbox || wo.access_notes){
+    acc='<div class="access-box">';
+    (wo.lockboxes||[]).forEach(function(k){
+      acc += '<div class="lb"><div class="t">'+esc(locLabel(k.label||'Access'))+(k.location?(' · '+esc(k.location)):'')+'</div>'+(k.code?('<div class="code">'+esc(k.code)+'</div>'):'')+'</div>';
+    });
+    if(wo.legacy_lockbox) acc += '<div class="lb"><div class="t">'+esc(t('Lockbox'))+'</div><div class="code">'+esc(wo.legacy_lockbox)+'</div></div>';
+    if(wo.access_notes) acc += '<div class="lb"><div class="t">'+esc(t('Notes'))+'</div><div class="v" style="font-size:14px">'+esc(wo.access_notes)+'</div></div>';
+    acc += '</div>';
+  } else acc='<span class="none">'+t('No access codes on file — contact the office.')+'</span>';
+  h += row(t('Access'), acc);
+
+  // job
+  h += row(t('Trade'), '<span class="v">'+esc(trTrade(wo.Trade)||'—')+'</span>');
+  h += row(t('Job Description'), '<div class="v desc">'+esc(wo.Description||'—')+'</div>');
+  if(wo.Scheduled_Date) h += row(t('Scheduled'), '<span class="v">'+esc(wo.Scheduled_Date)+(wo.Scheduled_Window?(' · '+esc(wo.Scheduled_Window)):'')+'</span>');
+
+  // photos
+  h += row(t('Photos & Files'), renderPhotos());
+
+  // recent notes
+  if(wo.Notes){
+    var lines = String(wo.Notes).split('\n').slice(-6).join('\n');
+    h += row(t('Recent Notes'), '<div class="v desc" style="font-size:13px;color:var(--muted)">'+esc(lines)+'</div>');
+  }
+
+  // billing
+  if(DATA.bills && DATA.bills.length){
+    var bh = DATA.bills.map(function(b){ return '<div class="v" style="font-size:14px">$'+esc(b.Total||'0')+' — '+esc(t(b.Status||''))+(b.Created_Date?(' · '+esc(b.Created_Date)):'')+'</div>'; }).join('');
+    h += row(t('Billing'), bh);
+  }
+
+  document.getElementById('d-body').innerHTML=h;
+  document.getElementById('bill-wono').textContent='#'+wo.ID;
+}
+function row(k,v){ return '<div class="row"><div class="k">'+esc(k)+'</div>'+v+'</div>'; }
+
+function renderPhotos(){
+  var at=DATA.attachments||[];
+  if(!at.length) return '<span class="none">'+t('No photos yet.')+'</span>';
+  var groups={before:[],after:[],report:[],other:[],photo:[]};
+  at.forEach(function(a){ (groups[a.File_Type]||groups.other).push(a); });
+  var order=[['before','📷 '+t('Before')],['after','✅ '+t('After')],['report','⚠️ '+t('Problem')],['photo','📷'],['other','📎']];
+  var out='';
+  order.forEach(function(g){
+    var arr=groups[g[0]]; if(!arr||!arr.length) return;
+    out += '<div class="pgroup-lbl">'+g[1]+'</div><div class="photos">';
+    arr.forEach(function(a){ var isVid=(a.Mime_Type||'').indexOf('video')===0; out += '<a class="pchip" href="'+esc(a.Drive_URL||'#')+'" target="_blank">'+(isVid?'🎥':'📷')+' '+esc((a.File_Name||'file').substring(0,20))+'</a>'; });
+    out += '</div>';
+  });
+  return out;
+}
+
+// ── STATUS ────────────────────────────────────────────────────
+var STATUSES=['Accepted','In Progress','On Hold','Complete'];
+var _stPick='';
+function openStatus(){
+  _stPick=''; document.getElementById('st-note').value=''; document.getElementById('st-msg').textContent='';
+  var box=document.getElementById('status-btns'); box.innerHTML='';
+  STATUSES.forEach(function(s){ var b=document.createElement('button'); b.textContent=t(s); b.onclick=function(){ _stPick=s; Array.prototype.forEach.call(box.children,function(c){c.className='';}); b.className='on'; }; box.appendChild(b); });
+  open_('ov-status');
+}
+function saveStatus(){
+  if(!_stPick){ msg('st-msg',t('Tap where the job stands right now.'),'bad'); return; }
+  var btn=document.getElementById('st-save'); btn.disabled=true;
+  post('/wo/shared/status',{st:VIEW,wo:WO,status:_stPick,notes:document.getElementById('st-note').value.trim()}).then(function(res){
+    btn.disabled=false;
+    if(res && res.success){ msg('st-msg',t('Saved ✓'),'ok'); setTimeout(function(){ close_('ov-status'); reload(); },900); }
+    else msg('st-msg', (res&&res.message)||t('Something went wrong. Try again.'),'bad');
+  }).catch(function(){ btn.disabled=false; msg('st-msg',t('Something went wrong. Try again.'),'bad'); });
+}
+
+// ── NOTE ──────────────────────────────────────────────────────
+function openNote(){ document.getElementById('note-text').value=''; document.getElementById('note-msg').textContent=''; open_('ov-note'); }
+function saveNote(){
+  var v=document.getElementById('note-text').value.trim(); if(!v) return;
+  var btn=document.getElementById('note-save'); btn.disabled=true;
+  post('/wo/shared/note',{st:VIEW,wo:WO,note:v}).then(function(res){
+    btn.disabled=false;
+    if(res && res.success){ msg('note-msg',t('Saved ✓'),'ok'); setTimeout(function(){ close_('ov-note'); reload(); },900); }
+    else msg('note-msg',(res&&res.message)||t('Something went wrong. Try again.'),'bad');
+  }).catch(function(){ btn.disabled=false; msg('note-msg',t('Something went wrong. Try again.'),'bad'); });
+}
+
+// ── PHOTOS UPLOAD ─────────────────────────────────────────────
+function openPhotos(){ document.getElementById('ph-uploads').innerHTML=''; document.getElementById('ph-msg').textContent=''; open_('ov-photos'); }
+function pickPhotos(input,type){
+  var files=Array.prototype.slice.call(input.files); input.value='';
+  var box=document.getElementById('ph-uploads');
+  files.forEach(function(f){
+    var chip=document.createElement('div'); chip.className='pchip'; chip.style.marginTop='6px'; chip.textContent='⏳ '+f.name.substring(0,22);
+    box.appendChild(chip);
+    shareUpload(f,type).then(function(r){ chip.innerHTML='✅ <a href="'+esc(r.url||'#')+'" target="_blank">'+esc(f.name.substring(0,22))+'</a>'; })
+      .catch(function(){ chip.textContent='⚠ '+f.name.substring(0,22); chip.style.color='var(--danger)'; });
+  });
+}
+function shareUpload(file,fileType){
+  return post('/wo/shared/upload-session',{st:VIEW,wo:WO,file_name:file.name,file_type:fileType,mime_type:file.type||'application/octet-stream',origin:location.origin})
+    .then(function(res){
+      if(!res.success||!res.upload_url) throw new Error(res.error||'session');
+      return fetch(res.upload_url,{method:'PUT',headers:{'Content-Type':file.type||'application/octet-stream'},body:file})
+        .then(function(r){return r.json();})
+        .then(function(fd){
+          if(!fd||!fd.id) throw new Error('upload');
+          return post('/wo/shared/log-attachment',{st:VIEW,wo:WO,file_id:fd.id,file_url:fd.webViewLink||'',file_name:file.name,file_type:fileType,mime_type:file.type||'',wo_folder_id:res.wo_folder_id,wo_folder_url:res.wo_folder_url})
+            .then(function(){ return {id:fd.id,url:fd.webViewLink||''}; });
+        });
+    });
+}
+
+// ── BILL ──────────────────────────────────────────────────────
+var _btype='hourly', _rc=0, _rpay={}, _rurl={};
+function openBill(){
+  _btype='hourly'; _rc=0; _rpay={}; _rurl={};
+  document.getElementById('b-hours').value=''; document.getElementById('b-flat').value='';
+  document.getElementById('b-truck-desc').value=''; document.getElementById('b-truck-amt').value='';
+  document.getElementById('b-truck-on').checked=false; document.getElementById('sec-truck').style.display='none';
+  document.getElementById('b-notes').value=''; document.getElementById('b-invno').value='';
+  document.getElementById('b-rcpts').innerHTML=''; document.getElementById('b-msg').textContent='';
+  document.getElementById('b-rate').textContent = VRATE>0 ? ('$'+VRATE) : '⚠ $0';
+  setBillType('hourly'); calcBill(); open_('ov-bill');
+}
+function setBillType(tp){ _btype=tp;
+  document.getElementById('bt-hourly').className = tp==='hourly'?'on':'';
+  document.getElementById('bt-flat').className = tp==='flat'?'on':'';
+  document.getElementById('sec-hourly').style.display = tp==='hourly'?'':'none';
+  document.getElementById('sec-flat').style.display = tp==='flat'?'':'none';
+  calcBill();
+}
+function toggleTruck(){ var on=document.getElementById('b-truck-on').checked; document.getElementById('sec-truck').style.display=on?'':'none'; if(!on) document.getElementById('b-truck-amt').value=''; calcBill(); }
+function addRcpt(){ _rc++; var n=_rc; _rpay[n]='reimburse';
+  var d=document.createElement('div'); d.className='rcpt'; d.id='rc-'+n;
+  d.innerHTML='<div style="display:flex;gap:8px;align-items:center">'+
+    '<span style="color:var(--muted)">$</span>'+
+    '<input class="ff" id="rc-amt-'+n+'" type="number" min="0" step="0.01" placeholder="0.00" oninput="calcBill()" style="width:100px">'+
+    '<input class="ff" id="rc-desc-'+n+'" placeholder="'+t('What was purchased')+'" style="flex:1">'+
+    '<button onclick="rmRcpt('+n+')" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">×</button></div>'+
+    '<div style="display:flex;align-items:center;gap:8px;margin-top:8px">'+
+      '<label class="btn sec" style="cursor:pointer;padding:6px 10px;font-size:12px">📷<input type="file" accept="image/*,application/pdf" style="display:none" onchange="rcptPhoto('+n+',this)"></label>'+
+      '<span id="rc-ph-'+n+'" style="font-size:11px;color:var(--muted)"></span></div>'+
+    '<div class="seg" style="margin-top:8px">'+
+      '<button type="button" id="rp-re-'+n+'" class="on" onclick="setPay('+n+",'reimburse')\" style=\"font-size:12px;padding:7px\">"+t('Reimburse me')+'</button>'+
+      '<button type="button" id="rp-ac-'+n+'" onclick="setPay('+n+",'account')\" style=\"font-size:12px;padding:7px\">"+t('On company account')+'</button>'+
+    '</div>';
+  document.getElementById('b-rcpts').appendChild(d);
+}
+function rmRcpt(n){ var e=document.getElementById('rc-'+n); if(e)e.remove(); delete _rurl[n]; calcBill(); }
+function setPay(n,mode){ _rpay[n]=mode;
+  document.getElementById('rp-re-'+n).className = mode==='reimburse'?'on':'';
+  document.getElementById('rp-ac-'+n).className = mode==='account'?'on':'';
+  calcBill();
+}
+function rcptPhoto(n,input){ var f=input.files[0]; if(!f) return; var s=document.getElementById('rc-ph-'+n); s.textContent=t('Uploading…');
+  shareUpload(f,'receipt').then(function(r){ _rurl[n]=r.url; s.textContent='✓'; s.style.color='var(--accent-dk)'; }).catch(function(){ s.textContent='⚠'; s.style.color='var(--danger)'; });
+}
+function calcBill(){
+  var labor=0,flat=0,truck=0,reimb=0,brk=[];
+  if(_btype==='hourly'){ var hrs=parseFloat(document.getElementById('b-hours').value)||0; labor=hrs*VRATE; if(hrs>0) brk.push(hrs+' hrs × $'+VRATE+' = $'+labor.toFixed(2)); }
+  else { flat=parseFloat(document.getElementById('b-flat').value)||0; if(flat>0) brk.push(t('Flat Price')+': $'+flat.toFixed(2)); }
+  if(document.getElementById('b-truck-on').checked){ truck=parseFloat(document.getElementById('b-truck-amt').value)||0; if(truck>0) brk.push('Truck stock: $'+truck.toFixed(2)); }
+  var rtotal=0;
+  for(var i=1;i<=_rc;i++){ var a=document.getElementById('rc-amt-'+i); if(!a) continue; var amt=parseFloat(a.value)||0; if(amt>0){ rtotal+=amt; var onAcct=(_rpay[i]==='account'); if(!onAcct) reimb+=amt; brk.push('Receipt: $'+amt.toFixed(2)+(onAcct?' ('+t('On company account')+')':'')); } }
+  var total=labor+flat+truck+reimb;
+  document.getElementById('b-total').textContent='$'+total.toFixed(2);
+  document.getElementById('b-brk').innerHTML = brk.join('<br>') || ('<span class="none">'+t('Enter hours or an item above.')+'</span>');
+  return {labor:labor,flat:flat,truck:truck,reimb:reimb,rtotal:rtotal,total:total};
+}
+function submitBill(){
+  var c=calcBill();
+  if(c.total<=0){ msg('b-msg',t('Enter hours or an item above.'),'bad'); return; }
+  var btn=document.getElementById('b-submit'); btn.disabled=true; btn.textContent=t('Uploading…');
+  var items=[];
+  for(var i=1;i<=_rc;i++){ var a=document.getElementById('rc-amt-'+i); if(!a) continue; var amt=parseFloat(a.value)||0; var de=(document.getElementById('rc-desc-'+i)||{}).value||''; if(amt>0||de) items.push({amount:amt,desc:de,url:_rurl[i]||'',pay:(_rpay[i]==='account'?'account':'reimburse')}); }
+  var hrs=_btype==='hourly'?(parseFloat(document.getElementById('b-hours').value)||0):0;
+  var flat=_btype==='flat'?(parseFloat(document.getElementById('b-flat').value)||0):0;
+  var truckOn=document.getElementById('b-truck-on').checked;
+  var truckAmt=truckOn?(parseFloat(document.getElementById('b-truck-amt').value)||0):0;
+  var truckDesc=truckOn?document.getElementById('b-truck-desc').value:'';
+  var bill={
+    Bill_Type:_btype, Hours:String(hrs), Rate:String(VRATE), Labor_Total:String((hrs*VRATE).toFixed(2)),
+    Truck_Desc:truckDesc, Truck_Stock:String(truckAmt.toFixed(2)),
+    Receipts_JSON:JSON.stringify(items), Receipts_Total:String(c.rtotal.toFixed(2)), Receipts_Reimburse_Total:String(c.reimb.toFixed(2)),
+    Flat_Rate:String(flat.toFixed(2)), Total:String(c.total.toFixed(2)),
+    Vendor_Invoice_No:document.getElementById('b-invno').value||'', Notes:document.getElementById('b-notes').value||'',
+  };
+  post('/wo/shared/bill',{st:VIEW,wo:WO,bill:bill}).then(function(res){
+    if(res && (res.success||res.id)){ msg('b-msg',t('Bill submitted ✓'),'ok'); btn.textContent='✓'; setTimeout(function(){ close_('ov-bill'); reload(); },1400); }
+    else { btn.disabled=false; btn.textContent=t('Submit Bill'); msg('b-msg',(res&&res.message)||(res&&res.error)||t('Something went wrong. Try again.'),'bad'); }
+  }).catch(function(){ btn.disabled=false; btn.textContent=t('Submit Bill'); msg('b-msg',t('Something went wrong. Try again.'),'bad'); });
+}
+
+function msg(id,text,cls){ var el=document.getElementById(id); el.textContent=text; el.className='sheet-msg '+(cls||''); }
+</script>
+
+<!-- auto-refresh onto new Worker code (idle only) -->
+<script>
+(function(){ var V=WORKER+'/version',booted=null;
+  function chk(){ fetch(V,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){ if(!d||!d.version)return; if(booted===null){booted=d.version;return;} if(d.version!==booted){ var el=document.activeElement; var busy=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')&&el.value; if(!busy) location.reload(true); } }).catch(function(){}); }
+  chk(); setInterval(chk,60000);
+})();
+</script>
+</body>
+</html>

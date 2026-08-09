@@ -31,14 +31,18 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.9';
+const BUILD_VERSION = '2026-08-09.10';
 
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
-    const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook'];
+    const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
+      // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
+      // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
+      // last-4-of-phone gate + per-WO lockout live INSIDE these handlers, not here.
+      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/receipt','/wo/shared/note'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -154,12 +158,22 @@ export default {
         if (path === '/trash/unbilled')         return await trashUnbilled(env, url);
         if (path === '/trash/qb-customers')     return await trashQbCustomers(env);
         if (path === '/trash/qb-items')         return await trashQbItems(env);
+        if (path === '/wo/shared')              return await woSharedRead(env, url);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
         const body = await request.json();
         if (path === '/contact/augment')          return await augmentContact(env, body);
+        if (path === '/wo/shared/unlock')         return await woSharedUnlock(env, body);
+        if (path === '/wo/shared/upload-session') return await woSharedUploadSession(env, body);
+        if (path === '/wo/shared/log-attachment') return await woSharedLogAttachment(env, body);
+        if (path === '/wo/shared/status')         return await woSharedStatus(env, body);
+        if (path === '/wo/shared/bill')           return await woSharedBill(env, body);
+        if (path === '/wo/shared/receipt')        return await woSharedReceipt(env, body);
+        if (path === '/wo/shared/note')           return await woSharedNote(env, body);
+        if (path === '/wo/share-link')            return await woShareLink(env, body);
+        if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
         if (path === '/workorder')                return await createWorkOrder(env, body);
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
@@ -1783,6 +1797,17 @@ async function translateToEnglish(env, text) {
   } catch(e) { return text; }
 }
 
+// Generic one-shot translation used by the Shareable WO (B-117) to show the vendor the job
+// details in Spanish. Keeps proper nouns / addresses / codes intact; returns the source
+// text unchanged on any miss so a translation outage never blanks the work order.
+async function translateText(env, text, fromLabel, toLabel) {
+  if (!env.ANTHROPIC_API_KEY || !text || !String(text).trim()) return text;
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written. Return only the translation, nothing else:\n\n${text}`}] }) });
+    const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
+  } catch(e) { return text; }
+}
+
 // ── WO NOTES ─────────────────────────────────────────────────
 
 async function addWONote(env, body) {
@@ -3385,6 +3410,269 @@ function b64url(str) { return btoa(unescape(encodeURIComponent(str))).replace(/\
 // PIN login issues a signed, role-scoped token so portals never carry the admin
 // secret. HMAC-SHA256 over the payload; integrity-protected (not secret). Same code
 // is offline-tested in test/session-auth.test.mjs.
+// ══════════════════════════════════════════════════════════════
+//  SHAREABLE WORK ORDER  (B-117)
+//  A paper-style single-WO page any vendor can open from a link Brett sends — job
+//  details, access, photos, and billing — WITHOUT a portal PIN. Two signed layers,
+//  both HMAC off WORKER_SECRET (reusing make/verifySessionToken):
+//    • LINK token  {scope:'wo-share-link', wo, rev}  — long-lived, lives in the URL.
+//    • VIEW token  {scope:'wo-share', wo, vid}        — 24h, issued after the last-4 gate.
+//  Privacy gate = last 4 of the ASSIGNED vendor's phone, brute-force-locked per WO via
+//  the existing PIN_Lockout table. Revoke = bump Work_Orders.Share_Rev; a link whose
+//  rev no longer matches the WO's current rev is dead. Owner data is NEVER exposed.
+// ══════════════════════════════════════════════════════════════
+const WO_SHARE_LINK_TTL = 60*60*24*180;   // 180 days — set-and-forget; revoke any time
+const WO_SHARE_VIEW_TTL = 60*60*24;       // 24 hours — one last-4 entry covers a full day
+const WO_SHARE_STATUSES = ['Accepted','In Progress','On Hold','Complete'];
+
+// Last 4 digits of a phone, canonicalised. '' if there aren't 4.
+function _last4(phone){ const d = String(phone||'').replace(/\D/g,''); return d.length>=4 ? d.slice(-4) : ''; }
+
+// Verify a 24h VIEW token carried on a shared-page request. Returns the payload
+// ({wo, vid, …}) only if it is a genuine wo-share token for the WO in question.
+async function woShareAuth(env, tok, woWanted){
+  const payload = await verifySessionToken(String(tok||''), env.WORKER_SECRET);
+  if(!payload || payload.scope!=='wo-share') return null;
+  if(woWanted!==undefined && String(payload.wo)!==String(woWanted)) return null;
+  return payload;
+}
+
+// ADMIN (secret-gated): mint a share link + a ready-to-send message for one WO.
+async function woShareLink(env, body){
+  const woId = String((body && (body.wo_id||body.wo))||'').trim();
+  if(!woId) return json({ error:'wo_id required' }, 400);
+  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){}
+  const [wos, props, units, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Vendors']);
+  const wo = findWO(wos, woId);
+  if(!wo) return json({ error:'WO not found' }, 404);
+  const rev = String(wo.Share_Rev||'0');
+  const prop = props.find(p=>p.ID===wo.Property_ID)||{};
+  const unit = units.find(u=>u.ID===wo.Unit_ID)||{};
+  const vendor = vendors.find(v=>v.ID===wo.Vendor_ID)||{};
+  const last4 = _last4(vendor.Phone);
+  const token = await makeSessionToken({ scope:'wo-share-link', wo:woId, rev }, env.WORKER_SECRET, WO_SHARE_LINK_TTL);
+  const base = (body.page_base || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/,'');
+  const link = `${base}/wo.html?wo=${encodeURIComponent(woId)}&t=${encodeURIComponent(token)}`;
+  const addr = (prop.Address||'the property') + (unit.Unit_Label?(' Unit '+unit.Unit_Label):'');
+  const lang = (vendor.Language==='es') ? 'es' : 'en';
+  const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || '').trim();
+  const msgEn = `Hi${vname?' '+vname:''}, here's the work order for ${addr}. Everything you need — job details, access, photos, and billing — is here:\n${link}\nTo open it, enter the last 4 digits of your phone (one time per day).`;
+  const msgEs = `Hola${vname?' '+vname:''}, aquí está la orden de trabajo para ${addr}. Todo lo que necesita — detalles del trabajo, acceso, fotos y facturación — está aquí:\n${link}\nPara abrirla, ingrese los últimos 4 dígitos de su teléfono (una vez por día).`;
+  return json({
+    success:true, link, wo_id:woId, rev,
+    assigned: !!wo.Vendor_ID,
+    vendor_id: wo.Vendor_ID||'',
+    vendor_name: vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim(),
+    vendor_phone: vendor.Phone||'',
+    vendor_has_phone: !!last4,
+    language: lang,
+    message: lang==='es' ? msgEs : msgEn,
+    message_en: msgEn, message_es: msgEs,
+  });
+}
+
+// ADMIN (secret-gated): revoke every existing link for a WO by bumping its Share_Rev.
+async function woShareRevoke(env, body){
+  const woId = String((body && (body.wo_id||body.wo))||'').trim();
+  if(!woId) return json({ error:'wo_id required' }, 400);
+  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){}
+  const wos = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(wos, woId);
+  if(!wo) return json({ error:'WO not found' }, 404);
+  const next = String((parseInt(wo.Share_Rev||'0',10)||0) + 1);
+  await updateWOFields(env, woId, { Share_Rev: next });
+  return json({ success:true, wo_id:woId, rev:next });
+}
+
+// PUBLIC: verify a link + the last 4 of the assigned vendor's phone → 24h view token.
+async function woSharedUnlock(env, body){
+  const woId = String((body && (body.wo||body.wo_id))||'').trim();
+  const linkTok = String((body && body.t)||'').trim();
+  const last4 = String((body && body.last4)||'').replace(/\D/g,'');
+  if(!woId || !linkTok) return json({ error:'bad_request', message:'Missing link details.' }, 400);
+  const payload = await verifySessionToken(linkTok, env.WORKER_SECRET);
+  if(!payload || payload.scope!=='wo-share-link' || String(payload.wo)!==woId)
+    return json({ error:'invalid_link', message:'This link is invalid or has expired.' }, 401);
+  const [wos, vendors] = await fetchTabs(env, ['Work_Orders','Vendors']);
+  const wo = findWO(wos, woId);
+  if(!wo) return json({ error:'not_found', message:'Work order not found.' }, 404);
+  if(String(wo.Share_Rev||'0')!==String(payload.rev))
+    return json({ error:'revoked', message:'This link has been turned off. Please ask for a new one.' }, 401);
+  const vendor = vendors.find(v=>v.ID===wo.Vendor_ID);
+  const realLast4 = vendor ? _last4(vendor.Phone) : '';
+  if(!realLast4)
+    return json({ error:'no_phone', message:'No phone number is on file for this job yet. Please contact the office.' }, 400);
+  const lockKey = 'share:'+woId;   // per-WO brute-force lock via PIN_Lockout
+  const lock = await checkPinLockout(env, lockKey);
+  if(lock.locked) return json({ error:'locked', message:`Too many attempts. Please try again in ${lock.minutes_remaining} minutes.` }, 429);
+  if(last4.length!==4 || last4!==realLast4){
+    const r = await recordPinFailure(env, lockKey);
+    return json({ error:'bad_last4', locked:!!r.locked,
+      message: r.locked ? `Too many attempts. Locked for ${PIN_LOCKOUT_MIN} minutes.` : 'Those 4 digits don’t match. Please try again.' }, 401);
+  }
+  await clearPinLockout(env, lockKey);
+  const viewTok = await makeSessionToken({ scope:'wo-share', wo:woId, vid: wo.Vendor_ID||'' }, env.WORKER_SECRET, WO_SHARE_VIEW_TTL);
+  return json({ success:true, token:viewTok, expires_in: WO_SHARE_VIEW_TTL,
+    language: (vendor && vendor.Language==='es') ? 'es' : 'en',
+    vendor_name: vendor ? (vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim()) : '' });
+}
+
+// PUBLIC (view-token gated): the vendor-safe WO payload the paper page renders.
+async function woSharedRead(env, url){
+  const woId = url.searchParams.get('wo')||'';
+  const auth = await woShareAuth(env, url.searchParams.get('st'), woId);
+  if(!auth) return json({ error:'Unauthorized', message:'Please re-enter the last 4 digits of your phone.' }, 401);
+  const [[workorders, properties, units, tenants, keys, vendors], config] = await Promise.all([
+    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']),
+    fetchConfig(env),
+  ]);
+  const wo = findWO(workorders, woId);
+  if(!wo) return json({ error:'WO not found' }, 404);
+  const vendorRec = vendors.find(v=>v.ID===auth.vid)||{};
+  let tradeAccessDefaults = {};
+  try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e){}
+  const e = enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults });
+  // Explicit vendor-safe whitelist — never spread the raw WO (that would leak owner ids,
+  // QB refs, internal flags). Owner data is omitted entirely.
+  const safe = {
+    ID: e.ID, Trade: e.Trade||'', Priority: e.Priority||'', Status: e.Status||'',
+    Description: e.Description||'', Notes: e.Notes||'',
+    Scheduled_Date: e.Scheduled_Date||'', Scheduled_Window: e.Scheduled_Window||'',
+    Created_Date: e.Created_Date||'', Owner_WO_Ref: e.Owner_WO_Ref||'',
+    property_address: e.property_address||'', property_city: e.property_city||'', unit_label: e.unit_label||'',
+    tenant_name: e.tenant_name||'', tenant_phone: e.tenant_phone||'', tenant_former: !!e.tenant_former,
+    lockboxes: e.lockboxes||[], legacy_lockbox: e.legacy_lockbox||'', access_notes: e.access_notes||'',
+    vendor_has_access: !!e.vendor_has_access, Vendor_ID: e.Vendor_ID||'',
+  };
+  let attachments = [];
+  try {
+    const at = await fetchTab(env, 'Attachments');
+    attachments = at.filter(a => a.Active!=='FALSE' && a.WO_ID===woId && !NON_SHARE_FILE_TYPES.includes((a.File_Type||'').toLowerCase()))
+      .map(a => ({ File_Name:a.File_Name||'file', File_Type:(a.File_Type||'other').toLowerCase(), Drive_URL:a.Drive_URL||'', Mime_Type:a.Mime_Type||'' }));
+  } catch(e2){}
+  let bills = [];
+  try {
+    const vb = await fetchTab(env, 'Vendor_Bills');
+    bills = vb.filter(b => b.Active!=='FALSE' && b.WO_ID===woId && String(b.Vendor_ID||'')===String(auth.vid||''))
+      .map(b => ({ Total:b.Total||'', Status:b.Status||'', Created_Date:b.Created_Date||'', Notes:b.Notes||'' }));
+  } catch(e3){}
+  // Spanish-speaking vendor → translate the free-text JOB CONTENT (not just the UI) so the
+  // whole sheet reads in Spanish. Concurrent calls keep it to ~one round-trip of latency;
+  // any failure leaves the English text in place (translateText returns its input on a miss).
+  if (vendorRec.Language === 'es') {
+    const jobs = [];
+    if (safe.Description) jobs.push(translateText(env, safe.Description, 'English', 'Spanish').then(function(v){ safe.Description = v; }));
+    if (safe.access_notes) jobs.push(translateText(env, safe.access_notes, 'English', 'Spanish').then(function(v){ safe.access_notes = v; }));
+    if (safe.Notes) jobs.push(translateText(env, safe.Notes, 'English', 'Spanish (keep the [date — name (role)] tags and any names/dates unchanged)').then(function(v){ safe.Notes = v; }));
+    (safe.lockboxes||[]).forEach(function(k){ if (k.location) jobs.push(translateText(env, k.location, 'English', 'Spanish').then(function(v){ k.location = v; })); });
+    try { await Promise.all(jobs); } catch(e){}
+  }
+  return json({ success:true, wo:safe, attachments, bills, vendor_id: auth.vid||'',
+    vendor_name: vendorRec.Name || `${vendorRec.First_Name||''} ${vendorRec.Last_Name||''}`.trim(),
+    vendor_rate: vendorRec.Hourly_Rate || '',
+    language: (vendorRec.Language==='es') ? 'es' : 'en' });
+}
+
+// PUBLIC (view-token gated): start a Drive upload for THIS WO. wo + folder come from the
+// token/WO, never from the client, so a token can only ever add media to its own job.
+async function woSharedUploadSession(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  const wos = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(wos, auth.wo);
+  if(!wo) return json({ error:'WO not found' }, 404);
+  const props = await fetchTab(env, 'Properties');
+  const prop = props.find(p=>p.ID===wo.Property_ID)||{};
+  const ft = (body.file_type||'photo').toLowerCase();
+  // Vendors on the shared page may add job media (before/after/report) + their own
+  // receipts. They cannot post internal bill/invoice docs through this door.
+  const allowed = ['before','after','report','receipt','photo','other'];
+  return await createUploadSession(env, {
+    wo_id: auth.wo,
+    property: prop.Address || 'Unknown Property',
+    file_name: body.file_name, mime_type: body.mime_type,
+    file_type: allowed.includes(ft) ? ft : 'other',
+    folder_id: body.folder_id, folder_url: body.folder_url,
+    origin: body.origin,
+  });
+}
+
+// PUBLIC (view-token gated): record an uploaded file against THIS WO.
+async function woSharedLogAttachment(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  const ft = (body.file_type||'photo').toLowerCase();
+  const allowed = ['before','after','report','receipt','photo','other'];
+  return await logAttachment(env, {
+    wo_id: auth.wo, file_id: body.file_id, file_url: body.file_url,
+    file_name: body.file_name, file_type: allowed.includes(ft) ? ft : 'other',
+    mime_type: body.mime_type, wo_folder_id: body.wo_folder_id, wo_folder_url: body.wo_folder_url,
+  });
+}
+
+// PUBLIC (view-token gated): update status for THIS WO, attributed to the token's vendor.
+async function woSharedStatus(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  if(!WO_SHARE_STATUSES.includes(body.status)) return json({ error:'status not allowed' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v=>v.ID===auth.vid)||{};
+  return await updateStatus(env, {
+    wo_id: auth.wo, status: body.status, notes: body.notes||'',
+    vendor_id: auth.vid||'', updated_by: vendor.Name || vendor.First_Name || 'Vendor', updated_by_role: 'vendor',
+  });
+}
+
+// PUBLIC (view-token gated): submit a bill for THIS WO as the token's vendor. WO + vendor
+// are forced from the token; everything downstream (Review Bills, QB preview) is unchanged.
+async function woSharedBill(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v=>v.ID===auth.vid)||{};
+  const bill = Object.assign({}, body.bill||{});
+  bill.WO_ID = auth.wo; delete bill.wo_id;
+  bill.Vendor_ID = auth.vid||'';
+  bill.Vendor_Name = vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim();
+  bill.Status = 'submitted';
+  bill.Active = 'TRUE';
+  if(!bill.Created_Date) bill.Created_Date = new Date().toISOString().split('T')[0];
+  // Two-way: a Spanish vendor's free-text reaches Brett in English. Keep the original too so
+  // nothing is lost, mirroring the status/note pattern ([ES] … / [EN] …).
+  if (vendor.Language === 'es') {
+    if (bill.Notes && String(bill.Notes).trim()) { const en = await translateText(env, bill.Notes, 'Spanish', 'English'); if (en && en !== bill.Notes) bill.Notes = `[ES] ${bill.Notes}\n[EN] ${en}`; }
+    if (bill.Truck_Desc && String(bill.Truck_Desc).trim()) { const en = await translateText(env, bill.Truck_Desc, 'Spanish', 'English'); if (en && en !== bill.Truck_Desc) bill.Truck_Desc = en; }
+  }
+  return await addVendorBill(env, bill);
+}
+
+// PUBLIC (view-token gated): add a receipt to THIS WO as the token's vendor.
+async function woSharedReceipt(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v=>v.ID===auth.vid)||{};
+  let desc = body.description||'';
+  if (vendor.Language === 'es' && desc.trim()) { const en = await translateText(env, desc, 'Spanish', 'English'); if (en && en !== desc) desc = `[ES] ${desc} [EN] ${en}`; }
+  return await addReceipt(env, {
+    wo_id: auth.wo, amount: body.amount, description: desc, store: body.store||'',
+    date: body.date||'', added_by: vendor.Name || vendor.First_Name || 'Vendor', added_by_id: auth.vid||'', role: 'vendor',
+  });
+}
+
+// PUBLIC (view-token gated): add a note to THIS WO as the token's vendor.
+async function woSharedNote(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  if(!body.note || !String(body.note).trim()) return json({ error:'note required' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v=>v.ID===auth.vid)||{};
+  return await addWONote(env, {
+    wo_id: auth.wo, note: body.note, author: vendor.Name || vendor.First_Name || 'Vendor',
+    author_role: 'vendor', vendor_id: auth.vid||'',
+  });
+}
+
 const _tenc = new TextEncoder(), _tdec = new TextDecoder();
 function _b64urlBytes(bytes){ let s=''; for(const b of bytes) s+=String.fromCharCode(b); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function _b64urlToBytes(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while(str.length%4) str+='='; const bin=atob(str); const out=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; }
