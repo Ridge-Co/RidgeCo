@@ -66,6 +66,17 @@
   <div id="log"></div>
 </div>
 
+<div class="section" id="already-section" style="display:none">
+  <div class="section-title">Already has an email — not changed</div>
+  <p class="sub" style="margin-bottom:10px">These sub-customers already carry an email, so the backfill leaves them alone. If one is <b>wrong or stale</b> (e.g. a property that should bill to its owner's address), tick it and tap <b>Force the parent's email</b> — that OVERWRITES the existing address with the one from its parent in QuickBooks (a property → its owner; a unit → its property). The "Will copy from" column names the exact source. Rows whose parent has no email can't be forced.</p>
+  <div id="already"></div>
+  <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+    <button class="btn" id="force-btn" onclick="forceApply()" disabled style="background:var(--danger);color:#000">Force the parent's email onto selected</button>
+    <span id="force-count" style="color:var(--muted);font-size:11px"></span>
+  </div>
+  <div id="force-log"></div>
+</div>
+
 <div class="section" id="skipped-section" style="display:none">
   <div class="section-title">Skipped — no parent email to copy</div>
   <p class="sub" style="margin-bottom:10px">These have no email anywhere above them in QuickBooks. Give the property or owner an email first, then re-run.</p>
@@ -73,7 +84,8 @@
 </div>
 
 <script>
-let plan = { to_set: [], skipped: [] };
+const CHUNK = 8; // QuickBooks writes per request — 2 subrequests each; keeps each Worker call well under Cloudflare's subrequest cap
+let plan = { to_set: [], skipped: [], already: [] };
 
 function worker(){ return document.getElementById('worker-url').value.trim(); }
 function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
@@ -106,6 +118,7 @@ async function preview(){
     plan = res;
     status.textContent = '✅ '+res.total_customers+' QuickBooks customers scanned';
     renderToSet();
+    renderAlready();
     renderSkipped();
   } catch(e){
     status.textContent = '❌ '+e.message;
@@ -164,30 +177,82 @@ function updateSel(){
   document.getElementById('apply-btn').disabled = n===0;
 }
 
+// Write ids in small chunks so each Worker call stays under Cloudflare's per-invocation
+// subrequest cap (2 QB calls per id). This is the fix for the "Too many subrequests" wall
+// that made a large Apply silently fail on all but the first rows.
+async function applyIds(ids, opts){
+  opts = opts || {};
+  const logEl = document.getElementById(opts.logId || 'log');
+  logEl.style.display = 'block';
+  const updated = [], failed = [];
+  let done = 0;
+  for (let i = 0; i < ids.length; i += CHUNK){
+    const slice = ids.slice(i, i+CHUNK);
+    logEl.innerHTML = '<div class="info">Writing to QuickBooks… '+done+'/'+ids.length+' done</div>';
+    const body = { apply:true, ids: slice };
+    if (opts.force) body.force = true;
+    let res;
+    try { res = await post('/qb/backfill-emails', body); }
+    catch(e){ slice.forEach(id => failed.push({ name:id, error:e.message })); done += slice.length; continue; }
+    if (!res || !res.ok){ slice.forEach(id => failed.push({ name:id, error:(res&&res.error)||'Apply failed' })); done += slice.length; continue; }
+    (res.updated_list||[]).forEach(u => updated.push(u));
+    (res.failed||[]).forEach(f => failed.push(f));
+    done += slice.length;
+  }
+  let html = '<div class="ok" style="font-weight:bold">✅ '+updated.length+' updated'+
+    (failed.length? ' · <span class="err">'+failed.length+' failed</span>':'')+'</div>';
+  updated.forEach(u => { html += '<div class="ok">✅ '+esc(u.name)+' → '+esc(u.email)+
+    (u.overwrote?' (overwrote old email)':(u.already_had?' (already had one)':''))+'</div>'; });
+  failed.forEach(f => { html += '<div class="err">❌ '+esc(f.name)+': '+esc(f.error)+'</div>'; });
+  logEl.innerHTML = html;
+  setTimeout(preview, 900); // re-preview so applied rows drop off
+}
+
 async function apply(){
   const ids = selectedIds();
   if (!ids.length) return;
   if (!confirm('Set the email on '+ids.length+' QuickBooks customer'+(ids.length>1?'s':'')+'? This writes to QuickBooks.')) return;
-  const log = document.getElementById('log');
-  log.style.display='block';
-  log.innerHTML = '<div class="info">Applying to '+ids.length+' customer(s)…</div>';
   document.getElementById('apply-btn').disabled = true;
-  try {
-    const res = await post('/qb/backfill-emails', { apply:true, ids });
-    if (!res.ok) throw new Error(res.error || 'Apply failed');
-    let html = '<div class="ok" style="font-weight:bold">✅ '+res.updated+' updated'+
-      (res.failed_count? ' · <span class="err">'+res.failed_count+' failed</span>':'')+'</div>';
-    (res.updated_list||[]).forEach(u => {
-      html += '<div class="ok">✅ '+esc(u.name)+' → '+esc(u.email)+(u.already_had?' (already had one)':'')+'</div>';
-    });
-    (res.failed||[]).forEach(f => { html += '<div class="err">❌ '+esc(f.name)+': '+esc(f.error)+'</div>'; });
-    log.innerHTML = html;
-    // Re-preview so applied rows drop off the list.
-    setTimeout(preview, 800);
-  } catch(e){
-    log.innerHTML = '<div class="err">❌ '+e.message+'</div>';
-    document.getElementById('apply-btn').disabled = false;
-  }
+  await applyIds(ids, { logId:'log' });
+}
+
+// ── Already-has-an-email: visible, and force-overwritable per row ──────────────────────
+function renderAlready(){
+  const rows = plan.already || [];
+  const sec = document.getElementById('already-section');
+  if (!rows.length){ sec.style.display='none'; return; }
+  sec.style.display='block';
+  let html = '<table><thead><tr>'+
+    '<th style="width:28px"></th><th>Sub-customer</th><th>Current email</th><th>Will copy from</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    const canForce = !!r.owner_email && r.owner_email !== r.current_email;
+    html += '<tr>'+
+      '<td>'+(canForce ? '<input type="checkbox" class="apick" value="'+esc(r.id)+'" onchange="updateForceSel()">' : '')+'</td>'+
+      '<td>'+esc(r.name)+'</td>'+
+      '<td class="mono-email">'+esc(r.current_email)+'</td>'+
+      '<td>'+(r.owner_email
+              ? (canForce ? '<span class="mono-email">'+esc(r.owner_email)+'</span>'+
+                            (r.source_name ? ' <span class="info">← '+esc(r.source_name)+'</span>' : '')
+                          : '<span class="info">same</span>')
+              : '<span class="warn">parent has none</span>')+'</td>'+
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById('already').innerHTML = html;
+  updateForceSel();
+}
+function forceIds(){ return Array.from(document.querySelectorAll('.apick')).filter(c=>c.checked).map(c=>c.value); }
+function updateForceSel(){
+  const n = forceIds().length;
+  document.getElementById('force-count').textContent = n ? n+' selected to overwrite' : '';
+  document.getElementById('force-btn').disabled = n===0;
+}
+async function forceApply(){
+  const ids = forceIds();
+  if (!ids.length) return;
+  if (!confirm('OVERWRITE the existing email on '+ids.length+' QuickBooks customer'+(ids.length>1?'s':'')+' with the email from its parent in QuickBooks (shown in "Will copy from")? The current address on each will be replaced.')) return;
+  document.getElementById('force-btn').disabled = true;
+  await applyIds(ids, { force:true, logId:'force-log' });
 }
 </script>
 </body>

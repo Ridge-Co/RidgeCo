@@ -77,6 +77,34 @@ const { qbResolveEmailBackfill } = new Function(
   t('a sub-customer with its own email is left as-is', toSet.length === 0);
 }
 
+// ── A sub that already has an email is SURFACED in `already` (not dropped) with the owner's ─
+// This is the "why doesn't 153 W Lanvale show up" case: it had a stale email, so it was
+// silently skipped. Now it comes back so it can be seen and force-corrected.
+{
+  const customers = [
+    { id: '10', name: 'Goldszmidt Properties', email: 'owner@x.com', parent_id: '', is_sub: false },
+    { id: '50', name: '153 W Lanvale St', email: 'old@stale.com', parent_id: '10', is_sub: true },
+  ];
+  const { toSet, skipped, already } = qbResolveEmailBackfill(customers);
+  t('a sub with its own email is not queued to auto-set', toSet.length === 0);
+  t('and it is not in skipped', skipped.length === 0);
+  t('it is surfaced in `already`, not dropped silently', already.length === 1 && already[0].id === '50');
+  t('`already` carries the current email and the owner email a force would use',
+     already[0].current_email === 'old@stale.com' && already[0].owner_email === 'owner@x.com');
+}
+
+// ── An already-emailed sub whose owner ALSO has no email exposes a blank owner_email ───────
+// (the page uses this to disable the Force button — there's nothing to copy down).
+{
+  const customers = [
+    { id: '1', name: 'Owner No Email', email: '', parent_id: '', is_sub: false },
+    { id: '2', name: 'Prop with own email', email: 'p@x.com', parent_id: '1', is_sub: true },
+  ];
+  const { already } = qbResolveEmailBackfill(customers);
+  t('already row exists but owner_email is blank when no ancestor has one',
+     already.length === 1 && already[0].owner_email === '');
+}
+
 // ── A parent-reference cycle can never hang the planner ─────────────────────────────────
 {
   const customers = [

@@ -481,6 +481,17 @@
     </div>
     <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
 
+    <!-- STANDARD: every standalone admin/tool page gets a launcher button here so Brett has ONE place
+         to find them instead of remembering URLs. Same-origin pages inherit the Hub admin token
+         (mh_auth in localStorage), so they open logged-in. New tool page shipped? Add its button here. -->
+    <div class="section-title" style="margin-bottom:8px">🔗 TOOL PAGES</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Standalone admin pages, all in one place. Each opens in a new tab and uses your Hub admin login automatically — no need to hunt for a link.</div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <button class="btn small" onclick="window.open('qb-email-backfill.html','_blank')" style="background:var(--accent);color:#000">📧 Fill missing QuickBooks emails</button>
+      <button class="btn small" onclick="window.open('command-center.html','_blank')" style="background:var(--info);color:#000">📊 Command Center</button>
+      <button class="btn small" onclick="window.open('trash.html','_blank')" style="background:var(--accent2);color:#000">🗑 Trash Service billing</button>
+    </div>
+
     <div class="section-title" style="margin-bottom:8px">🔑 VENDOR ACCESS DEFAULTS BY TRADE</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Controls whether vendors see lockbox/access codes on work orders when set to "Auto". Trades marked NO will never receive access codes unless explicitly overridden on a specific WO. Trades not listed default to YES.</div>
     <div id="trade-access-list" style="margin-bottom:10px"><span style="color:var(--muted);font-size:11px">Loading…</span></div>

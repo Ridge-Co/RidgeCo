@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-08.5';
+const BUILD_VERSION = '2026-08-09.1';
 
 export default {
   async fetch(request, env) {
@@ -4710,15 +4710,15 @@ function qbResolveEmailBackfill(customers) {
   for (const c of list) byId[String(c.id)] = c;
 
   const norm = e => String(e || '').trim();
-  const toSet = [], skipped = [];
+  const toSet = [], skipped = [], already = [];
 
   for (const c of list) {
     const isSub = c.is_sub === true || !!(c.parent_id);
     if (!isSub) continue;                 // owners sit at the top; nothing to inherit
-    if (norm(c.email)) continue;          // already has one — never overwrite
 
-    // Climb to the first ancestor carrying an email. Guard against a parent cycle so a bad
-    // tree can never spin here.
+    // Climb to the first ancestor carrying an email — the value we'd copy down onto a blank
+    // sub, and also the value a FORCED overwrite would use on one that already has an email.
+    // Guard against a parent cycle so a bad tree can never spin here.
     let anc = byId[String(c.parent_id)];
     const seen = new Set([String(c.id)]);
     while (anc && !norm(anc.email)) {
@@ -4726,24 +4726,40 @@ function qbResolveEmailBackfill(customers) {
       seen.add(String(anc.id));
       anc = byId[String(anc.parent_id)];
     }
+    const ancEmail = anc && norm(anc.email) ? norm(anc.email) : '';
+    const ancId    = ancEmail ? String(anc.id) : '';
+    const ancName  = anc ? (anc.name || anc.path || ('#' + anc.id)) : '';
+    const fromGrandparent = !!ancId && String(ancId) !== String(c.parent_id);
+    const label    = c.name || c.path || ('#' + c.id);
 
-    if (anc && norm(anc.email)) {
+    if (norm(c.email)) {
+      // Already has an email. We NEVER auto-overwrite — but surface it (with the owner's
+      // email beside it) instead of dropping it silently, so a property with a stale/wrong
+      // email is VISIBLE and can be force-corrected on explicit request. This is the row
+      // that used to vanish — the "why doesn't my property show up" case.
+      already.push({
+        id: String(c.id), name: label, path: c.path || c.name || '',
+        current_email: norm(c.email), owner_email: ancEmail,
+        source_id: ancId, source_name: ancName,
+        inherited_from_grandparent: fromGrandparent,
+      });
+      continue;
+    }
+
+    if (ancEmail) {
       toSet.push({
-        id: String(c.id), name: c.name || c.path || ('#' + c.id),
-        path: c.path || c.name || '', current_email: norm(c.email),
-        email: norm(anc.email), source_id: String(anc.id),
-        source_name: anc.name || anc.path || ('#' + anc.id),
-        inherited_from_grandparent: String(anc.id) !== String(c.parent_id),
+        id: String(c.id), name: label, path: c.path || c.name || '',
+        current_email: '', email: ancEmail, source_id: ancId,
+        source_name: ancName, inherited_from_grandparent: fromGrandparent,
       });
     } else {
       skipped.push({
-        id: String(c.id), name: c.name || c.path || ('#' + c.id),
-        path: c.path || c.name || '',
+        id: String(c.id), name: label, path: c.path || c.name || '',
         reason: 'no parent or ancestor in QuickBooks has an email to copy down',
       });
     }
   }
-  return { toSet, skipped };
+  return { toSet, skipped, already };
 }
 
 // POST /qb/backfill-emails { apply?, ids? }
@@ -4756,54 +4772,68 @@ function qbResolveEmailBackfill(customers) {
 async function qbBackfillEmails(env, body) {
   body = body || {};
   const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  const force = body.force === true || String(body.force).toUpperCase() === 'TRUE';
   const onlyIds = Array.isArray(body.ids) ? body.ids.map(x => String(x).trim()).filter(Boolean) : null;
 
   try {
     const token = await qbAccessToken(env);
     const customers = await qbListEntities(env, 'customer', token, true); // force fresh — the tree matters
-    const { toSet, skipped } = qbResolveEmailBackfill(customers);
+    const { toSet, skipped, already } = qbResolveEmailBackfill(customers);
 
     if (!apply) {
       return json({
         ok: true, applied: false,
         total_customers: customers.length,
-        to_set_count: toSet.length, skipped_count: skipped.length,
-        to_set: toSet, skipped,
+        to_set_count: toSet.length, skipped_count: skipped.length, already_count: already.length,
+        to_set: toSet, skipped, already,
       });
     }
 
-    const targets = onlyIds ? toSet.filter(t => onlyIds.includes(String(t.id))) : toSet;
+    // Candidate map id -> {email to write, ...}. Blanks come from toSet. A FORCED overwrite
+    // (explicit, opt-in per row from the page) can also target rows that ALREADY have an
+    // email, using the owner/ancestor email — but only ones that actually have an ancestor
+    // email to copy. Without ids the default set is blanks only, never a blanket overwrite.
+    const cand = {};
+    for (const t of toSet) cand[String(t.id)] = { email: t.email, source_name: t.source_name, name: t.name, overwrite: false };
+    if (force) for (const a of already) if (a.owner_email) cand[String(a.id)] = { email: a.owner_email, source_name: a.source_name, name: a.name, overwrite: true };
+
+    const ids = onlyIds ? onlyIds.filter(id => cand[id]) : Object.keys(cand).filter(id => !cand[id].overwrite);
     const updated = [], failed = [];
 
-    for (const t of targets) {
+    // NOTE: this handler makes 2 QuickBooks subrequests per id (a SyncToken read + the
+    // sparse write). Cloudflare caps subrequests per invocation, so the page sends ids in
+    // small chunks — keep it that way; do not loop over hundreds of ids in one call.
+    for (const id of ids) {
+      const c = cand[id];
       try {
         // A sparse update needs the current SyncToken, so read the customer first.
-        const got = await qbApi(env, `customer/${encodeURIComponent(t.id)}?minorversion=73`, 'GET', null, token);
+        const got = await qbApi(env, `customer/${encodeURIComponent(id)}?minorversion=73`, 'GET', null, token);
         const cust = got && got.Customer;
-        if (!cust) { failed.push({ id: t.id, name: t.name, error: qbFault(got) || 'could not read customer from QuickBooks' }); continue; }
+        if (!cust) { failed.push({ id, name: c.name, error: qbFault(got) || 'could not read customer from QuickBooks' }); continue; }
 
-        // Guard the race: if it already picked up an email since the preview, leave it.
-        if (cust.PrimaryEmailAddr && cust.PrimaryEmailAddr.Address) {
-          updated.push({ id: t.id, name: t.name, email: cust.PrimaryEmailAddr.Address, already_had: true });
+        // Race guard: if a blank picked up an email since the preview, leave it — UNLESS this
+        // is an explicit forced overwrite, which is meant to replace whatever is there.
+        if (!c.overwrite && cust.PrimaryEmailAddr && cust.PrimaryEmailAddr.Address) {
+          updated.push({ id, name: c.name, email: cust.PrimaryEmailAddr.Address, already_had: true });
           continue;
         }
 
-        const patch = { Id: String(t.id), SyncToken: cust.SyncToken, sparse: true, PrimaryEmailAddr: { Address: t.email } };
+        const patch = { Id: String(id), SyncToken: cust.SyncToken, sparse: true, PrimaryEmailAddr: { Address: c.email } };
         const r = await qbApi(env, 'customer?minorversion=73', 'POST', patch, token);
         if (r && r.Customer) {
-          updated.push({ id: t.id, name: t.name, email: t.email, source_name: t.source_name });
+          updated.push({ id, name: c.name, email: c.email, source_name: c.source_name, overwrote: c.overwrite ? true : undefined });
         } else {
-          failed.push({ id: t.id, name: t.name, error: qbFault(r) || 'QuickBooks refused the update' });
+          failed.push({ id, name: c.name, error: qbFault(r) || 'QuickBooks refused the update' });
         }
       } catch (e) {
-        failed.push({ id: t.id, name: t.name, error: e.message });
+        failed.push({ id, name: c.name, error: e.message });
       }
     }
 
     _qbEntityCache.customer = null; // emails changed; don't serve a stale list
     return json({
-      ok: true, applied: true,
-      requested: targets.length, updated: updated.length, failed_count: failed.length,
+      ok: true, applied: true, forced: force,
+      requested: ids.length, updated: updated.length, failed_count: failed.length,
       updated_list: updated, failed, skipped,
     });
   } catch (e) {

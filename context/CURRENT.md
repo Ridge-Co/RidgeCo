@@ -1,4 +1,13 @@
-# WHERE THINGS STAND — Aug 8, 2026
+# WHERE THINGS STAND — Aug 9, 2026
+
+## One place for tool pages + QB-email backfill fixed (Aug 9)
+Two things shipped (Worker `2026-08-09.1`):
+
+**1. 🔗 TOOL PAGES launcher.** Brett's standing preference is now standard: every standalone admin page launches from **Hub → Dev Log → 🔗 TOOL PAGES**, never a remembered URL. Seeded with **📧 Fill missing QuickBooks emails**, **📊 Command Center**, **🗑 Trash Service billing**. Each opens in a new tab already logged in (same origin shares `mh_auth`). Convention = FEATURE_LOG rule 57; any new tool page adds its button here in the same commit.
+
+**2. QB email backfill had two real bugs (FEATURE_LOG rule 58), both fixed.** (a) The "Too many subrequests" wall Brett hit — apply does 2 QB calls per row in one Worker invocation and blew Cloudflare's subrequest cap, so repeated tries never stuck. The page now writes in **chunks of 8**. (b) A property that already has a **stale/wrong** email was silently invisible (this is why **153 W Lanvale** never showed) — the tool only ever filled blanks and dropped anything with an email. Now there's an **"Already has an email — not changed"** section; tick a row and **Force the parent's email** to overwrite it with the owner/property email (opt-in, preview-shows-the-source, confirm-gated). Default behavior still never overwrites.
+
+**How Brett fixes it now:** open 📧 Fill missing QuickBooks emails → **Preview changes**. The blanks (incl. the Goldszmidt units) apply cleanly in batches via **Apply selected**. For **153 W Lanvale**: look in the new **"Already has an email"** section — if it's there, it had a stale address; tick it → **Force the parent's email** (copies goldszmidtproperties@gmail.com down). If it's in **Skipped**, its owner has no email — fix the owner first. If it's in neither, QB isn't nesting it under Goldszmidt (re-parent it).
 
 ## Vendor photo/video access fixed (Aug 8) — one backfill tap left for Brett
 
