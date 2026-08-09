@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.6';
+const BUILD_VERSION = '2026-08-09.7';
 
 export default {
   async fetch(request, env) {
@@ -5044,6 +5044,8 @@ async function qbVendorReconcile(env, body) {
     }
 
     const vname = (vendorList.find(v => v.id === vid) || {}).name || ('V-' + vid);
+    const vrow = (vendors || []).find(v => String(v.ID || '') === vid);
+    const qboVendorId = vrow ? String(vrow.QBO_Vendor_ID || '').trim() : '';
     const myBills = activeBills.filter(b => String(b.Vendor_ID || '') === vid);
     const billIds = myBills.map(b => (b.QB_Bill_ID || '').trim()).filter(Boolean);
     const invIds  = myBills.map(b => (b.QB_Invoice_ID || '').trim()).filter(Boolean);
@@ -5097,6 +5099,45 @@ async function qbVendorReconcile(env, body) {
     });
     rows.sort((a, b) => (b.action ? 1 : 0) - (a.action ? 1 : 0) || (b.age_days || 0) - (a.age_days || 0));
 
+    // The LIVE QuickBooks side — the "transaction report by vendor" Brett can't pull on mobile.
+    // Every bill, bill payment, and direct check/expense QuickBooks has for this vendor, whether
+    // or not the Hub knows about it. A bill in QB that the Hub has no row for is flagged
+    // `in_hub:false` — those are the ones that reconcile the "no bill in the Hub" work orders.
+    const hubBillQbIds = new Set(myBills.map(b => (b.QB_Bill_ID || '').trim()).filter(Boolean));
+    let qb = { available: false, reason: 'This vendor is not linked to QuickBooks (no QBO_Vendor_ID).' };
+    if (qboVendorId) {
+      const tx = await qbVendorTransactions(env, token, qboVendorId);
+      const bills = (tx.bills || []).map(x => {
+        const bal = Number(x.Balance != null ? x.Balance : x.TotalAmt) || 0;
+        return {
+          id: String(x.Id), doc: x.DocNumber || '', date: x.TxnDate || '', due: x.DueDate || '',
+          total: +(Number(x.TotalAmt) || 0).toFixed(2), balance: +bal.toFixed(2),
+          paid: bal <= 0.005, in_hub: hubBillQbIds.has(String(x.Id)), age_days: ageOf(x.TxnDate),
+        };
+      });
+      const payments = (tx.payments || []).map(x => {
+        const applied = ((x.Line || []).flatMap(l => (l.LinkedTxn || []))
+          .filter(t => t && t.TxnType === 'Bill').map(t => String(t.TxnId)));
+        return { id: String(x.Id), date: x.TxnDate || '', total: +(Number(x.TotalAmt) || 0).toFixed(2), applied_to_bills: applied };
+      });
+      const purchases = (tx.purchases || []).map(x => ({
+        id: String(x.Id), date: x.TxnDate || '', total: +(Number(x.TotalAmt) || 0).toFixed(2),
+        type: x.PaymentType || '', doc: x.DocNumber || '',
+      }));
+      qb = {
+        available: true, vendor_qbo_id: qboVendorId,
+        sources: tx.sources,
+        bills, payments, purchases,
+        totals: {
+          open: +bills.filter(b => !b.paid).reduce((s, b) => s + b.balance, 0).toFixed(2),
+          billed: +bills.reduce((s, b) => s + b.total, 0).toFixed(2),
+          paid_via_billpayment: +payments.reduce((s, p) => s + p.total, 0).toFixed(2),
+          paid_via_check_expense: +purchases.reduce((s, p) => s + p.total, 0).toFixed(2),
+          bills_not_in_hub: bills.filter(b => !b.in_hub).length,
+        },
+      };
+    }
+
     return json({
       ok: true, mode: 'vendor', vendor: { id: vid, name: vname }, vendors: vendorList,
       summary: {
@@ -5105,11 +5146,35 @@ async function qbVendorReconcile(env, body) {
         collected_not_paid: +collectedNotPaid.toFixed(2),
         oldest_open_days: oldestOpen,
       },
-      rows,
+      rows, qb,
     });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
+}
+
+// Pull a vendor's LIVE transactions from QuickBooks: bills, bill payments, and direct
+// checks/expenses (Purchase). Each source is fetched independently and tolerantly — one query
+// failing (e.g. Purchase not filterable in this account) degrades that source to empty rather
+// than sinking the whole reconciliation. Read-only. `sources` reports which loaded.
+async function qbVendorTransactions(env, token, qboVendorId) {
+  const v = qbEscape(String(qboVendorId));
+  const run = async (sql, key) => {
+    try {
+      const r = await qbApi(env, `query?query=${encodeURIComponent(sql)}&minorversion=73`, 'GET', null, token);
+      if (r && r.Fault) return null;
+      return (r && r.QueryResponse && r.QueryResponse[key]) || [];
+    } catch (e) { return null; }
+  };
+  const [bills, payments, purchases] = await Promise.all([
+    run(`select Id, DocNumber, TxnDate, DueDate, TotalAmt, Balance from Bill where VendorRef = '${v}' maxresults 500`, 'Bill'),
+    run(`select * from BillPayment where VendorRef = '${v}' maxresults 500`, 'BillPayment'),
+    run(`select Id, TxnDate, TotalAmt, PaymentType, DocNumber from Purchase where EntityRef = '${v}' maxresults 500`, 'Purchase'),
+  ]);
+  return {
+    bills: bills || [], payments: payments || [], purchases: purchases || [],
+    sources: { bills: bills !== null, payments: payments !== null, purchases: purchases !== null },
+  };
 }
 
 async function qbCreateSubCustomer(env, body) {

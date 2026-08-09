@@ -73,8 +73,15 @@
 </div>
 
 <div class="section" id="rows-section" style="display:none">
-  <div class="section-title">Bills</div>
+  <div class="section-title">Bills (from the Hub, matched to QuickBooks)</div>
   <div id="rows"><div class="empty">Pick a vendor above.</div></div>
+</div>
+
+<div class="section" id="qb-section" style="display:none">
+  <div class="section-title">Straight from QuickBooks — this vendor</div>
+  <p class="sub" style="margin-bottom:10px">The live transaction report the mobile app won't give you: every bill, payment, and check/expense QuickBooks has for this vendor. A bill tagged <span class="pill nobill">not in Hub</span> exists in QuickBooks but has no Hub work-order bill — those are what reconcile the "no bill in the Hub" jobs (often already paid).</p>
+  <div class="cards" id="qb-cards"></div>
+  <div id="qb-body"></div>
 </div>
 
 <script>
@@ -119,7 +126,7 @@ async function init(){
 
 async function loadVendor(){
   const vid = document.getElementById('vendor').value;
-  if (!vid){ document.getElementById('summary-section').style.display='none'; document.getElementById('rows-section').style.display='none'; return; }
+  if (!vid){ ['summary-section','rows-section','qb-section'].forEach(id=>document.getElementById(id).style.display='none'); return; }
   const status = document.getElementById('conn-status');
   status.textContent = 'Reading QuickBooks…';
   try {
@@ -163,6 +170,62 @@ function render(res){
   });
   box.innerHTML = html;
   document.getElementById('rows-section').style.display='block';
+  renderQB(res.qb);
+}
+
+function renderQB(qb){
+  const sec = document.getElementById('qb-section');
+  if (!qb){ sec.style.display='none'; return; }
+  sec.style.display='block';
+  if (!qb.available){
+    document.getElementById('qb-cards').innerHTML='';
+    document.getElementById('qb-body').innerHTML = '<div class="empty">'+esc(qb.reason||'No QuickBooks data for this vendor.')+'</div>';
+    return;
+  }
+  const t = qb.totals||{};
+  document.getElementById('qb-cards').innerHTML =
+    card('Open in QuickBooks', money(t.open), (t.open>0?'warn':'ok')) +
+    card('Paid — bill payments', money(t.paid_via_billpayment), 'ok') +
+    card('Paid — checks/expenses', money(t.paid_via_check_expense), 'ok') +
+    card('QB bills not in Hub', (t.bills_not_in_hub||0), (t.bills_not_in_hub>0?'err':''));
+
+  let html = '';
+  const bills = qb.bills||[];
+  html += '<div class="section-title" style="margin:14px 0 8px">Bills in QuickBooks ('+bills.length+')</div>';
+  if (!bills.length) html += '<div class="empty">No bills in QuickBooks for this vendor.</div>';
+  bills.forEach(b => {
+    html += '<div class="jobcard'+(b.in_hub?'':' act')+'">'+
+      '<div class="jc-top"><div class="jc-title">'+(b.doc?'Bill #'+esc(b.doc):'Bill '+esc(b.id))+'</div>'+
+        (b.paid?'<span class="pill paid">Paid</span>':'<span class="pill wait">Open '+money(b.balance)+'</span>')+'</div>'+
+      '<div class="jc-meta">'+
+        '<div><span class="lbl">Total</span>'+money(b.total)+'</div>'+
+        '<div><span class="lbl">Date</span>'+esc(b.date||'—')+'</div>'+
+        '<div><span class="lbl">Age</span>'+ageTxt(b.age_days)+'</div>'+
+        '<div><span class="lbl">Tracked</span>'+(b.in_hub?'<span class="ok">in Hub</span>':'<span class="pill nobill">not in Hub</span>')+'</div>'+
+      '</div>'+
+    '</div>';
+  });
+
+  const pays = qb.payments||[];
+  html += '<div class="section-title" style="margin:14px 0 8px">Payments to this vendor ('+pays.length+')</div>';
+  if (!pays.length) html += '<div class="empty">No bill payments recorded in QuickBooks.</div>';
+  pays.forEach(p => {
+    html += '<div class="jobcard"><div class="jc-top"><div class="jc-title">Payment '+money(p.total)+'</div><span class="info">'+esc(p.date||'')+'</span></div>'+
+      '<div class="jc-desc">'+(p.applied_to_bills&&p.applied_to_bills.length? 'Applied to bill(s): '+p.applied_to_bills.map(esc).join(', ') : 'Not linked to a specific bill')+'</div></div>';
+  });
+
+  const purch = qb.purchases||[];
+  if (purch.length){
+    html += '<div class="section-title" style="margin:14px 0 8px">Checks / expenses ('+purch.length+')</div>';
+    purch.forEach(p => {
+      html += '<div class="jobcard"><div class="jc-top"><div class="jc-title">'+money(p.total)+(p.type?' · '+esc(p.type):'')+'</div><span class="info">'+esc(p.date||'')+'</span></div>'+
+        (p.doc?'<div class="jc-desc">Ref '+esc(p.doc)+'</div>':'')+'</div>';
+    });
+  }
+  if (qb.sources && qb.sources.purchases === false){
+    html += '<div class="jc-desc" style="margin-top:8px"><span class="warn">Note:</span> QuickBooks didn’t return the checks/expenses list for this vendor, so direct (non-bill) payments may not be shown.</div>';
+  }
+  document.getElementById('qb-body').innerHTML = html;
 }
 
 function card(lbl, val, cls){ return '<div class="card"><div class="lbl">'+esc(lbl)+'</div><div class="val '+(cls||'')+'">'+val+'</div></div>'; }
