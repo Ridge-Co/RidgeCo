@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Fix Unsent Invoice Emails</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:6px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1000px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.12em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;line-height:1.5;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .btn.success{background:var(--accent2);color:#000;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  input{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
+  .row label{color:var(--muted);font-size:11px;min-width:100px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border);}
+  td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  tr:hover td{background:var(--surface2);}
+  .ok{color:var(--accent2);}
+  .err{color:var(--danger);}
+  .info{color:var(--muted);}
+  .warn{color:var(--warn);}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;}
+  .pill.count{background:#1a3320;color:var(--accent2);}
+  .pill.skip{background:#2d2006;color:var(--warn);}
+  #log,#skipped-section,#already-section{margin-top:0;}
+  .mono-email{color:var(--accent2);}
+  .empty{padding:20px;text-align:center;color:var(--muted);}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — FIX UNSENT INVOICE EMAILS</h1>
+<p class="sub">
+  Invoices created before the fix went out with a <b>blank send-to email</b>, so QuickBooks made you
+  paste the address in before you could send them. This finds every invoice in QuickBooks with no
+  email and fills it in from the customer (or the owner above it). <b>Preview first — nothing is
+  written until you tap Apply.</b> It never touches an invoice that already has an email, and it
+  doesn't send anything — you still send from QuickBooks. Safe to re-run.
+</p>
+
+<div class="section">
+  <div class="section-title">Connection</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
+  <div class="row"><label>Admin token</label><input id="auth-token" type="password" placeholder="paste if not remembered" style="flex:1"></div>
+  <button class="btn" id="preview-btn" onclick="preview()">Preview changes</button>
+  <span id="conn-status" style="margin-left:10px;font-size:11px;color:var(--muted)"></span>
+</div>
+
+<div class="section">
+  <div class="section-title">Invoices missing a send-to email</div>
+  <div id="summary" style="margin-bottom:10px;color:var(--muted);font-size:11px"></div>
+  <div id="to-set"><div class="empty">Tap “Preview changes” to see what would be updated.</div></div>
+  <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+    <button class="btn success" id="apply-btn" onclick="apply()" disabled>Apply selected</button>
+    <button class="btn secondary" onclick="preview()">Refresh preview</button>
+    <span id="sel-count" style="color:var(--muted);font-size:11px"></span>
+  </div>
+  <div id="log"></div>
+</div>
+
+<div class="section" id="skipped-section" style="display:none">
+  <div class="section-title">Skipped — no email to use</div>
+  <p class="sub" style="margin-bottom:10px">These invoices' customers (and the owners above them) have no email <b>in QuickBooks</b>. Fix the customer/owner email first — the <b>📧 Fill missing QuickBooks emails</b> tool does that — then re-run this.</p>
+  <div id="skipped"></div>
+</div>
+
+<div class="section" id="already-section" style="display:none">
+  <div class="section-title">Already have an email — left alone</div>
+  <div id="already"></div>
+</div>
+
+<script>
+const CHUNK = 8; // invoices per request — 2 subrequests each; stays under Cloudflare's subrequest cap
+let plan = { to_set: [], skipped: [], already: [] };
+
+function worker(){ return document.getElementById('worker-url').value.trim(); }
+function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
+(function(){ const t = localStorage.getItem('mh_auth'); if(t){ document.getElementById('auth-token').value = t; } })();
+
+async function post(path, body){
+  const r = await fetch(worker()+path, {
+    method:'POST',
+    headers:{'X-Auth-Token':token(),'Content-Type':'application/json'},
+    body: JSON.stringify(body||{})
+  });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
+  if (r.status === 403) throw new Error('403 — the deployed Worker rejected the admin token for this endpoint.');
+  return data;
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function money(n){ return '$'+(Number(n)||0).toFixed(2); }
+
+async function preview(){
+  const status = document.getElementById('conn-status');
+  status.textContent = 'Loading invoices from QuickBooks…';
+  document.getElementById('apply-btn').disabled = true;
+  try {
+    const res = await post('/qb/backfill-invoice-emails', { apply:false });
+    if (!res.ok) throw new Error(res.error || 'Preview failed');
+    plan = res;
+    status.textContent = '✅ '+res.invoice_count+' invoices scanned';
+    renderToSet();
+    renderSkipped();
+    renderAlready();
+  } catch(e){
+    status.textContent = '❌ '+e.message;
+  }
+}
+
+function renderToSet(){
+  const rows = plan.to_set || [];
+  document.getElementById('summary').innerHTML =
+    '<span class="pill count">'+rows.length+' to fix</span> &nbsp; '+
+    '<span class="pill skip">'+((plan.skipped||[]).length)+' skipped</span> &nbsp; '+
+    '<span class="info">'+((plan.already||[]).length)+' already have one</span>';
+  const box = document.getElementById('to-set');
+  if (!rows.length){
+    box.innerHTML = '<div class="empty">No unsent invoices are missing an email. 🎉</div>';
+    document.getElementById('apply-btn').disabled = true;
+    updateSel();
+    return;
+  }
+  let html = '<table><thead><tr>'+
+    '<th style="width:28px"><input type="checkbox" id="all" checked onchange="toggleAll()"></th>'+
+    '<th>Invoice</th><th>Customer</th><th>Date</th><th>Balance</th><th>Email to set</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    html += '<tr>'+
+      '<td><input type="checkbox" class="pick" value="'+esc(r.id)+'" checked onchange="updateSel()"></td>'+
+      '<td>'+(r.doc? '#'+esc(r.doc) : '<span class="info">(no #)</span>')+'</td>'+
+      '<td>'+esc(r.customer)+'</td>'+
+      '<td class="info">'+esc(r.txn)+'</td>'+
+      '<td>'+money(r.balance)+'</td>'+
+      '<td><span class="mono-email">'+esc(r.email)+'</span> <span class="info">← '+esc(r.source_name)+'</span></td>'+
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  box.innerHTML = html;
+  document.getElementById('apply-btn').disabled = false;
+  updateSel();
+}
+
+function renderSkipped(){
+  const rows = plan.skipped || [];
+  const sec = document.getElementById('skipped-section');
+  if (!rows.length){ sec.style.display='none'; return; }
+  sec.style.display='block';
+  let html = '<table><thead><tr><th>Invoice</th><th>Customer</th><th>Why</th></tr></thead><tbody>';
+  rows.forEach(r => { html += '<tr><td>'+(r.doc?'#'+esc(r.doc):'—')+'</td><td>'+esc(r.customer)+'</td><td class="warn">'+esc(r.reason)+'</td></tr>'; });
+  html += '</tbody></table>';
+  document.getElementById('skipped').innerHTML = html;
+}
+
+function renderAlready(){
+  const rows = plan.already || [];
+  const sec = document.getElementById('already-section');
+  if (!rows.length){ sec.style.display='none'; return; }
+  sec.style.display='block';
+  let html = '<table><thead><tr><th>Invoice</th><th>Customer</th><th>Email on file</th></tr></thead><tbody>';
+  rows.forEach(r => { html += '<tr><td>'+(r.doc?'#'+esc(r.doc):'—')+'</td><td>'+esc(r.customer)+'</td><td class="mono-email">'+esc(r.current_email)+'</td></tr>'; });
+  html += '</tbody></table>';
+  document.getElementById('already').innerHTML = html;
+}
+
+function toggleAll(){
+  const on = document.getElementById('all').checked;
+  document.querySelectorAll('.pick').forEach(c => c.checked = on);
+  updateSel();
+}
+function selectedIds(){ return Array.from(document.querySelectorAll('.pick')).filter(c=>c.checked).map(c=>c.value); }
+function updateSel(){
+  const n = selectedIds().length;
+  document.getElementById('sel-count').textContent = n+' selected';
+  document.getElementById('apply-btn').disabled = n===0;
+}
+
+async function apply(){
+  const ids = selectedIds();
+  if (!ids.length) return;
+  if (!confirm('Set the send-to email on '+ids.length+' QuickBooks invoice'+(ids.length>1?'s':'')+'? This writes to QuickBooks but does NOT send anything.')) return;
+  document.getElementById('apply-btn').disabled = true;
+  const logEl = document.getElementById('log');
+  logEl.style.display='block';
+  const updated=[], failed=[]; let done=0;
+  for (let i=0;i<ids.length;i+=CHUNK){
+    const slice = ids.slice(i,i+CHUNK);
+    logEl.innerHTML = '<div class="info">Writing to QuickBooks… '+done+'/'+ids.length+' done</div>';
+    let res;
+    try { res = await post('/qb/backfill-invoice-emails', { apply:true, ids:slice }); }
+    catch(e){ slice.forEach(id=>failed.push({doc:id,error:e.message})); done+=slice.length; continue; }
+    if (!res || !res.ok){ slice.forEach(id=>failed.push({doc:id,error:(res&&res.error)||'Apply failed'})); done+=slice.length; continue; }
+    (res.updated_list||[]).forEach(u=>updated.push(u));
+    (res.failed||[]).forEach(f=>failed.push(f));
+    done += slice.length;
+  }
+  let html = '<div class="ok" style="font-weight:bold">✅ '+updated.length+' updated'+(failed.length?' · <span class="err">'+failed.length+' failed</span>':'')+'</div>';
+  updated.forEach(u => { html += '<div class="ok">✅ '+(u.doc?'#'+esc(u.doc):esc(u.id))+' → '+esc(u.email)+(u.already_had?' (already had one)':'')+'</div>'; });
+  failed.forEach(f => { html += '<div class="err">❌ '+(f.doc?'#'+esc(f.doc):esc(f.doc))+': '+esc(f.error)+'</div>'; });
+  logEl.innerHTML = html;
+  setTimeout(preview, 900);
+}
+</script>
+</body>
+</html>

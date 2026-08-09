@@ -125,5 +125,33 @@ const { qbResolveEmailBackfill } = new Function(
   t('a parent_id alone is enough to treat a row as a sub-customer', toSet.length === 1 && toSet[0].id === '2');
 }
 
+// ── qbNearestCustomerEmail: give an existing invoice a send-to by climbing the QB tree ─────
+const { qbNearestCustomerEmail } = new Function(
+  grab(wsrc, 'function qbNearestCustomerEmail(') + '\nreturn { qbNearestCustomerEmail };')();
+
+{
+  const customers = [
+    { id: '10', name: 'Goldszmidt Properties', email: 'owner@x.com', parent_id: '' },
+    { id: '20', name: '153 W Lanvale St', email: '', parent_id: '10' },       // property blank
+    { id: '30', name: '153 W Lanvale St Apt 1', email: '', parent_id: '20' },  // unit blank
+    { id: '40', name: '928 N Calvert St Apt B', email: 'unit@x.com', parent_id: '10' },
+  ];
+  // invoice billed to the unit → climbs unit→property→owner to owner@x.com
+  const a = qbNearestCustomerEmail(customers, '30');
+  t('invoice on a blank unit climbs to the owner email', a.email === 'owner@x.com' && a.source_id === '10');
+  // invoice billed to a customer that has its OWN email uses that, not the owner's
+  const b = qbNearestCustomerEmail(customers, '40');
+  t('a customer with its own email uses that one', b.email === 'unit@x.com' && b.source_id === '40');
+  // nobody in the chain has an email
+  const none = qbNearestCustomerEmail(
+    [{ id: '1', name: 'Owner', email: '', parent_id: '' }, { id: '2', name: 'Prop', email: '', parent_id: '1' }], '2');
+  t('no email anywhere up the chain returns blank', none.email === '');
+  // unknown customer id
+  t('an unknown customer id returns blank, not a throw', qbNearestCustomerEmail(customers, 'nope').email === '');
+  // cycle guard
+  const cyc = qbNearestCustomerEmail([{ id: 'a', email: '', parent_id: 'b' }, { id: 'b', email: '', parent_id: 'a' }], 'a');
+  t('a parent cycle resolves to blank, not an infinite loop', cyc.email === '');
+}
+
 console.log(`\nqb-email-backfill: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

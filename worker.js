@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.3';
+const BUILD_VERSION = '2026-08-09.4';
 
 export default {
   async fetch(request, env) {
@@ -243,6 +243,7 @@ export default {
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
         if (path === '/qb/backfill-emails')       return await qbBackfillEmails(env, body);
+        if (path === '/qb/backfill-invoice-emails') return await qbBackfillInvoiceEmails(env, body);
         if (path === '/qb/reparent-unit')         return await qbReparentUnit(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
@@ -4873,6 +4874,94 @@ async function qbBackfillEmails(env, body) {
       requested: ids.length, updated: updated.length, failed_count: failed.length,
       updated_list: updated, failed, skipped,
     });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
+
+// Pure: walk UP the QuickBooks customer tree from `customerId` to the nearest ancestor (or the
+// customer itself) that carries an email. Used to give an EXISTING invoice a send-to address:
+// the invoice's CustomerRef points at a property/unit sub-customer, and the billing email lives
+// on that customer or an owner above it. Cycle-guarded. Kept pure so the test harness runs it.
+function qbNearestCustomerEmail(customers, customerId) {
+  const byId = {}; for (const c of (customers || [])) byId[String(c.id)] = c;
+  const norm = e => String(e || '').trim();
+  let c = byId[String(customerId)];
+  const seen = new Set();
+  while (c && !seen.has(String(c.id))) {
+    seen.add(String(c.id));
+    if (norm(c.email)) return { email: norm(c.email), source_id: String(c.id), source_name: c.name || c.path || ('#' + c.id) };
+    c = byId[String(c.parent_id)];
+  }
+  return { email: '', source_id: '', source_name: '' };
+}
+
+// POST /qb/backfill-invoice-emails { apply?, ids? }
+// One-time fix for the BACKLOG of invoices created before rule 60 (which now stamps BillEmail on
+// new invoices). Finds invoices in QuickBooks with a BLANK BillEmail — i.e. the ones that could
+// never be emailed and had to have the address pasted in by hand — and fills each one's send-to
+// from its customer's (or the owner-above-it's) email. Preview-first; never overwrites an invoice
+// that already has an email; the page sends ids in chunks to stay under the subrequest cap.
+async function qbBackfillInvoiceEmails(env, body) {
+  body = body || {};
+  const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  const onlyIds = Array.isArray(body.ids) ? body.ids.map(x => String(x).trim()).filter(Boolean) : null;
+
+  try {
+    const token = await qbAccessToken(env);
+    const customers = await qbListEntities(env, 'customer', token, true);
+    // Pull recent invoices with email + status; classify in code (QBO WHERE on these is finicky).
+    const q = 'SELECT Id,DocNumber,TxnDate,Balance,TotalAmt,CustomerRef,BillEmail,EmailStatus FROM Invoice ORDERBY TxnDate DESC MAXRESULTS 1000';
+    const data = await qbApi(env, `query?query=${encodeURIComponent(q)}&minorversion=73`, 'GET', null, token);
+    const invoices = (data && data.QueryResponse && data.QueryResponse.Invoice) || [];
+
+    const toSet = [], skipped = [], already = [];
+    for (const inv of invoices) {
+      const cur = (inv.BillEmail && inv.BillEmail.Address) || '';
+      const custId = (inv.CustomerRef && inv.CustomerRef.value) || '';
+      const base = {
+        id: String(inv.Id), doc: inv.DocNumber || '', customer: (inv.CustomerRef && inv.CustomerRef.name) || '',
+        txn: inv.TxnDate || '', balance: +(Number(inv.Balance) || 0).toFixed(2),
+        email_status: inv.EmailStatus || '',
+      };
+      if (cur) { already.push(Object.assign({ current_email: cur }, base)); continue; }
+      const r = qbNearestCustomerEmail(customers, custId);
+      if (r.email) toSet.push(Object.assign({ email: r.email, source_name: r.source_name }, base));
+      else skipped.push(Object.assign({ reason: 'no email on this customer or any owner above it in QuickBooks — fix that first' }, base));
+    }
+
+    if (!apply) {
+      return json({
+        ok: true, applied: false, invoice_count: invoices.length,
+        to_set_count: toSet.length, skipped_count: skipped.length, already_count: already.length,
+        to_set: toSet, skipped, already,
+      });
+    }
+
+    const map = {}; for (const t of toSet) map[String(t.id)] = t;
+    // Hard server-side backstop on batch size. The page chunks in 8s and never hits this, but a
+    // non-chunked or malformed-ids call must not do 2×N subrequests over the whole backlog and
+    // blow Cloudflare's per-invocation cap. Anything beyond the cap is reported as `remaining`.
+    const MAX_PER_CALL = 25;
+    const wanted = onlyIds ? onlyIds.filter(id => map[id]) : Object.keys(map);
+    const ids = wanted.slice(0, MAX_PER_CALL);
+    const remaining = wanted.length - ids.length;
+    const updated = [], failed = [];
+    for (const id of ids) {
+      const t = map[id];
+      try {
+        const got = await qbApi(env, `invoice/${encodeURIComponent(id)}?minorversion=73`, 'GET', null, token);
+        const invc = got && got.Invoice;
+        if (!invc) { failed.push({ id, doc: t.doc, error: qbFault(got) || 'could not read invoice from QuickBooks' }); continue; }
+        // Never overwrite: if it picked up an email since the preview, leave it.
+        if (invc.BillEmail && invc.BillEmail.Address) { updated.push({ id, doc: t.doc, email: invc.BillEmail.Address, already_had: true }); continue; }
+        const patch = { Id: String(id), SyncToken: invc.SyncToken, sparse: true, BillEmail: { Address: t.email } };
+        const r = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
+        if (r && r.Invoice) updated.push({ id, doc: t.doc, email: t.email, customer: t.customer });
+        else failed.push({ id, doc: t.doc, error: qbFault(r) || 'QuickBooks refused the update' });
+      } catch (e) { failed.push({ id, doc: t.doc, error: e.message }); }
+    }
+    return json({ ok: true, applied: true, requested: ids.length, updated: updated.length, failed_count: failed.length, updated_list: updated, failed, remaining });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
