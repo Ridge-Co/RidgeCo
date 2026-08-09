@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Vendor Reconciliation</title>
+<style>
+  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:6px;--font:'Courier New',monospace;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1050px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.12em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;line-height:1.5;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  input,select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
+  .row label{color:var(--muted);font-size:11px;min-width:100px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border);}
+  td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  tr:hover td{background:var(--surface2);}
+  .ok{color:var(--accent2);}.err{color:var(--danger);}.info{color:var(--muted);}.warn{color:var(--warn);}
+  .cards{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;}
+  .card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;min-width:150px;}
+  .card .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;}
+  .card .val{font-size:1.2rem;margin-top:4px;}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;white-space:nowrap;}
+  .pill.act{background:#3a1414;color:#fca5a5;font-weight:bold;}
+  .pill.wait{background:#2d2006;color:var(--warn);}
+  .pill.paid{background:#1a3320;color:var(--accent2);}
+  .pill.nobill{background:#2a2a2a;color:var(--muted);}
+  .empty{padding:20px;text-align:center;color:var(--muted);}
+  .num{text-align:right;font-variant-numeric:tabular-nums;}
+</style>
+</head>
+<body>
+<h1>RIDGE CO — VENDOR RECONCILIATION</h1>
+<p class="sub">
+  Read-only. Pick a vendor to see every bill of theirs, joined to live QuickBooks: what's still
+  owed to them, whether the owner has paid us on the matching invoice, and how old each is.
+  <span class="pill act">COLLECTED — pay vendor</span> means you were paid but the vendor wasn't —
+  those are the ones to settle. Nothing here writes or sends anything.
+</p>
+
+<div class="section">
+  <div class="section-title">Connection</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
+  <div class="row"><label>Admin token</label><input id="auth-token" type="password" placeholder="paste if not remembered" style="flex:1"></div>
+  <div class="row">
+    <label>Vendor</label>
+    <select id="vendor" style="flex:1" disabled onchange="loadVendor()"><option value="">Loading vendors…</option></select>
+    <button class="btn secondary" onclick="init()">↻</button>
+  </div>
+  <span id="conn-status" style="font-size:11px;color:var(--muted)"></span>
+</div>
+
+<div class="section" id="summary-section" style="display:none">
+  <div class="section-title" id="vendor-title"></div>
+  <div class="cards" id="cards"></div>
+</div>
+
+<div class="section" id="rows-section" style="display:none">
+  <div class="section-title">Bills</div>
+  <div id="rows"><div class="empty">Pick a vendor above.</div></div>
+</div>
+
+<script>
+function worker(){ return document.getElementById('worker-url').value.trim(); }
+function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
+(function(){ const t = localStorage.getItem('mh_auth'); if(t){ document.getElementById('auth-token').value = t; } })();
+
+async function post(path, body){
+  const r = await fetch(worker()+path, { method:'POST', headers:{'X-Auth-Token':token(),'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
+  if (r.status === 403) throw new Error('403 — the deployed Worker rejected the admin token.');
+  return data;
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function money(n){ return n==null ? '<span class="info">—</span>' : '$'+(Number(n)||0).toFixed(2); }
+function ageTxt(d){ return d==null ? '—' : (d+'d'); }
+
+async function init(){
+  const status = document.getElementById('conn-status');
+  status.textContent = 'Loading vendors…';
+  try {
+    const res = await post('/qb/vendor-reconcile', {});
+    if (!res.ok) throw new Error(res.error||'Failed');
+    const sel = document.getElementById('vendor');
+    const withBills = res.vendors_with_bills || [];
+    let opts = '<option value="">— select a vendor —</option>';
+    if (withBills.length){
+      opts += '<optgroup label="Has bills">';
+      withBills.forEach(v => opts += '<option value="'+esc(v.id)+'">'+esc(v.name)+' ('+v.bill_count+')</option>');
+      opts += '</optgroup>';
+    }
+    opts += '<optgroup label="All vendors">';
+    (res.vendors||[]).forEach(v => opts += '<option value="'+esc(v.id)+'">'+esc(v.name)+'</option>');
+    opts += '</optgroup>';
+    sel.innerHTML = opts;
+    sel.disabled = false;
+    status.textContent = '✅ '+(res.vendors||[]).length+' vendors ('+withBills.length+' with bills)';
+  } catch(e){ status.textContent = '❌ '+e.message; }
+}
+
+async function loadVendor(){
+  const vid = document.getElementById('vendor').value;
+  if (!vid){ document.getElementById('summary-section').style.display='none'; document.getElementById('rows-section').style.display='none'; return; }
+  const status = document.getElementById('conn-status');
+  status.textContent = 'Reading QuickBooks…';
+  try {
+    const res = await post('/qb/vendor-reconcile', { vendor_id: vid });
+    if (!res.ok) throw new Error(res.error||'Failed');
+    render(res);
+    status.textContent = '✅ done';
+  } catch(e){ status.textContent = '❌ '+e.message; }
+}
+
+function render(res){
+  const s = res.summary || {};
+  document.getElementById('vendor-title').textContent = (res.vendor && res.vendor.name) || 'Vendor';
+  document.getElementById('cards').innerHTML =
+    card('Bills', s.bills) +
+    card('Still owed to vendor', money(s.owed_to_vendor), s.owed_to_vendor>0?'warn':'ok') +
+    card('Collected but unpaid', money(s.collected_not_paid), s.collected_not_paid>0?'err':'ok') +
+    card('Oldest open', (s.oldest_open_days||0)+' days', (s.oldest_open_days||0)>45?'err':'');
+  document.getElementById('summary-section').style.display='block';
+
+  const rows = res.rows || [];
+  const box = document.getElementById('rows');
+  if (!rows.length){ box.innerHTML = '<div class="empty">No bills recorded for this vendor.</div>'; document.getElementById('rows-section').style.display='block'; return; }
+  let html = '<table><thead><tr><th>WO</th><th>Customer</th><th>Status</th><th class="num">Vendor bill</th><th class="num">Owed vendor</th><th class="num">Owner invoice</th><th class="num">Owner owes</th><th class="num">Age</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    html += '<tr>'+
+      '<td>'+(r.wo_id?esc(r.wo_id):'—')+'</td>'+
+      '<td>'+esc(r.customer||'—')+(r.invoice_doc?' <span class="info">#'+esc(r.invoice_doc)+'</span>':'')+'</td>'+
+      '<td>'+statusPill(r.status,r.action)+'</td>'+
+      '<td class="num">'+money(r.bill_total)+'</td>'+
+      '<td class="num">'+(r.bill_balance==null?'<span class="warn">no QB bill</span>':money(r.bill_balance))+'</td>'+
+      '<td class="num">'+money(r.inv_total)+'</td>'+
+      '<td class="num">'+(r.inv_balance==null?'<span class="info">—</span>':money(r.inv_balance))+'</td>'+
+      '<td class="num">'+ageTxt(r.age_days)+'</td>'+
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  box.innerHTML = html;
+  document.getElementById('rows-section').style.display='block';
+}
+
+function card(lbl, val, cls){ return '<div class="card"><div class="lbl">'+esc(lbl)+'</div><div class="val '+(cls||'')+'">'+val+'</div></div>'; }
+function statusPill(s, action){
+  let cls='nobill';
+  if (action) cls='act';
+  else if (/waiting/i.test(s)) cls='wait';
+  else if (/paid/i.test(s)) cls='paid';
+  return '<span class="pill '+cls+'">'+esc(s)+'</span>';
+}
+
+init();
+</script>
+</body>
+</html>

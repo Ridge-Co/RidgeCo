@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.4';
+const BUILD_VERSION = '2026-08-09.5';
 
 export default {
   async fetch(request, env) {
@@ -244,6 +244,7 @@ export default {
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
         if (path === '/qb/backfill-emails')       return await qbBackfillEmails(env, body);
         if (path === '/qb/backfill-invoice-emails') return await qbBackfillInvoiceEmails(env, body);
+        if (path === '/qb/vendor-reconcile')      return await qbVendorReconcile(env, body);
         if (path === '/qb/reparent-unit')         return await qbReparentUnit(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
@@ -4962,6 +4963,135 @@ async function qbBackfillInvoiceEmails(env, body) {
       } catch (e) { failed.push({ id, doc: t.doc, error: e.message }); }
     }
     return json({ ok: true, applied: true, requested: ids.length, updated: updated.length, failed_count: failed.length, updated_list: updated, failed, remaining });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
+
+// Read several QuickBooks entities by Id in as few subrequests as possible: one `WHERE Id IN
+// (...)` query per chunk instead of one GET per id. Returns a map keyed by Id. Read-only.
+async function qbFetchByIds(env, token, entity, ids, fields) {
+  const out = {};
+  const list = [...new Set((ids || []).map(x => String(x).trim()).filter(Boolean))];
+  if (!list.length) return out;
+  const CH = 25;
+  for (let i = 0; i < list.length; i += CH) {
+    const inClause = list.slice(i, i + CH).map(x => `'${qbEscape(x)}'`).join(',');
+    const q = `SELECT ${fields} FROM ${entity} WHERE Id IN (${inClause}) MAXRESULTS 1000`;
+    const data = await qbApi(env, `query?query=${encodeURIComponent(q)}&minorversion=73`, 'GET', null, token);
+    const arr = (data && data.QueryResponse && data.QueryResponse[entity]) || [];
+    for (const r of arr) out[String(r.Id)] = r;
+  }
+  return out;
+}
+
+// PURE — classify one vendor bill's reconciliation state from the live QuickBooks balances.
+// hasBillId = the Sheet row carries a QB_Bill_ID; billFound = that bill actually came back from
+// QuickBooks (a linked-but-missing bill is a broken link, NOT an open payable — otherwise a
+// deleted/typo'd id with a paid invoice would falsely read "pay vendor"). billBal/invBal are the
+// QuickBooks Balances (null = unknown). action=true is the one that matters: the customer invoice
+// is PAID but the vendor bill is still owed — money Brett collected and still owes. Kept pure.
+function qbReconcileStatus(hasBillId, billFound, billBal, hasInv, invBal) {
+  if (!hasBillId) return { status: 'No vendor bill in QuickBooks', action: false };
+  if (!billFound) return { status: 'Linked bill not found in QuickBooks', action: false };
+  if (billBal !== null && billBal <= 0.005) return { status: 'Vendor paid', action: false };
+  if (hasInv && invBal !== null && invBal <= 0.005) return { status: 'COLLECTED — pay vendor', action: true };
+  if (hasInv && invBal !== null && invBal > 0.005) return { status: 'Waiting on owner', action: false };
+  return { status: 'Vendor unpaid (no/unknown invoice)', action: false };
+}
+
+// POST /qb/vendor-reconcile { vendor_id? | vendor_name? }
+// READ-ONLY. With no vendor: returns the vendor directory (+ which have bills) for the filter.
+// With a vendor: every one of that vendor's bills, joined to the live QuickBooks Bill (what's
+// still owed to the vendor) and Invoice (whether the owner has paid us), with ages and a status
+// per row. Answers: has this vendor been paid for everything we collected on, what's stuck on an
+// owner, what has no bill in QuickBooks at all, and how old each is. Never writes anything.
+async function qbVendorReconcile(env, body) {
+  body = body || {};
+  const vendorId = String(body.vendor_id || '').trim();
+  const vendorName = String(body.vendor_name || '').trim().toLowerCase();
+  try {
+    const [vendors, bills] = await fetchTabs(env, ['Vendors', 'Vendor_Bills']);
+    const activeBills = (bills || []).filter(b => b.Active !== 'FALSE');
+    const vendorList = (vendors || [])
+      .map(v => ({ id: String(v.ID || ''), name: qbVendorDisplayName(v) }))
+      .filter(v => v.id && v.name)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    // Resolve which vendor (explicit id wins; else name exact, else contains).
+    let vid = vendorId;
+    if (!vid && vendorName) {
+      const exact = vendorList.find(v => v.name.toLowerCase() === vendorName);
+      if (exact) vid = exact.id;
+      else {
+        // Only accept a contains-match when it is UNAMBIGUOUS — never silently pick one of
+        // several "Allen ..." vendors. If more than one matches, return the choices instead.
+        const hits = vendorList.filter(v => v.name.toLowerCase().includes(vendorName));
+        if (hits.length === 1) vid = hits[0].id;
+        else if (hits.length > 1) return json({ ok: true, mode: 'ambiguous', query: body.vendor_name, matches: hits });
+      }
+    }
+
+    if (!vid) {
+      const counts = {};
+      for (const b of activeBills) { const k = String(b.Vendor_ID || ''); if (k) counts[k] = (counts[k] || 0) + 1; }
+      const withBills = vendorList.filter(v => counts[v.id]).map(v => Object.assign({ bill_count: counts[v.id] }, v));
+      return json({ ok: true, mode: 'list', vendors: vendorList, vendors_with_bills: withBills });
+    }
+
+    const vname = (vendorList.find(v => v.id === vid) || {}).name || ('V-' + vid);
+    const myBills = activeBills.filter(b => String(b.Vendor_ID || '') === vid);
+    const billIds = myBills.map(b => (b.QB_Bill_ID || '').trim()).filter(Boolean);
+    const invIds  = myBills.map(b => (b.QB_Invoice_ID || '').trim()).filter(Boolean);
+
+    const token = await qbAccessToken(env);
+    const billById = await qbFetchByIds(env, token, 'Bill', billIds, 'Id, Balance, TotalAmt, TxnDate, DueDate');
+    const invById  = await qbFetchByIds(env, token, 'Invoice', invIds, 'Id, Balance, TotalAmt, TxnDate, DueDate, DocNumber, CustomerRef');
+
+    const now = Date.now();
+    const ageOf = d => { const t = Date.parse(d); return isNaN(t) ? null : Math.max(0, Math.floor((now - t) / 86400000)); };
+
+    let owedToVendor = 0, collectedNotPaid = 0, oldestOpen = 0;
+    const rows = myBills.map(b => {
+      const qbBillId = (b.QB_Bill_ID || '').trim();
+      const qbInvId  = (b.QB_Invoice_ID || '').trim();
+      const qbBill = qbBillId ? billById[qbBillId] : null;
+      const qbInv  = qbInvId ? invById[qbInvId] : null;
+      const billBal = qbBill ? (Number(qbBill.Balance) || 0) : null;
+      const billTot = qbBill ? (Number(qbBill.TotalAmt) || 0) : (Number(b.Total) || 0);
+      const invBal  = qbInv ? (Number(qbInv.Balance) || 0) : null;
+      const invTot  = qbInv ? (Number(qbInv.TotalAmt) || 0) : (Number(b.Customer_Total) || 0);
+      const invCust = (qbInv && qbInv.CustomerRef && qbInv.CustomerRef.name) || '';
+      const dateStr = (qbBill && qbBill.TxnDate) || (qbInv && qbInv.TxnDate) || b.Created_Date || '';
+      const age = ageOf(dateStr);
+      const { status, action } = qbReconcileStatus(!!qbBillId, !!qbBill, billBal, !!qbInvId, invBal);
+
+      if (billBal !== null && billBal > 0.005) owedToVendor += billBal;
+      if (action) collectedNotPaid += (billBal || 0);
+      // "Open" for age = a real unpaid QB bill, a no-QB-bill row, or a broken link worth chasing.
+      const stillOpen = (!!qbBillId && !qbBill) || (billBal !== null && billBal > 0.005) || !qbBillId;
+      if (stillOpen && age !== null && age > oldestOpen) oldestOpen = age;
+
+      return {
+        bill_row_id: String(b.ID || ''), wo_id: String(b.WO_ID || ''), customer: invCust,
+        qb_bill_id: qbBillId, qb_invoice_id: qbInvId, invoice_doc: (qbInv && qbInv.DocNumber) || '',
+        bill_total: +billTot.toFixed(2), bill_balance: billBal === null ? null : +billBal.toFixed(2),
+        inv_total: +invTot.toFixed(2), inv_balance: invBal === null ? null : +invBal.toFixed(2),
+        date: dateStr, age_days: age, status, action,
+      };
+    });
+    rows.sort((a, b) => (b.action ? 1 : 0) - (a.action ? 1 : 0) || (b.age_days || 0) - (a.age_days || 0));
+
+    return json({
+      ok: true, mode: 'vendor', vendor: { id: vid, name: vname }, vendors: vendorList,
+      summary: {
+        bills: rows.length,
+        owed_to_vendor: +owedToVendor.toFixed(2),
+        collected_not_paid: +collectedNotPaid.toFixed(2),
+        oldest_open_days: oldestOpen,
+      },
+      rows,
+    });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
