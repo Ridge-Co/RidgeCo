@@ -84,7 +84,7 @@ function render(rev,q){
   if(!row){ html='<div class="card"><b>No review yet</b><div class="sub">Run a review from the Command Center first.</div></div>'; document.getElementById('body').innerHTML=html; return; }
   html+='<div class="card"><h2>This week’s review</h2><div class="sub">'+h(row.Total_Jobs||'0')+' jobs · success '+pct(row.Success_Rate)+' · escalation '+pct(row.Escalation_Rate)+(row.Stuck_Patterns?' · ⚠ '+h(row.Stuck_Patterns):'')+'</div></div>';
   if(items.length){
-    html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Recommended top 3</button><button class="mini" onclick="pick(99)">Select all</button><button class="mini" onclick="pick(0)">Clear</button></div>';
+    html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
     items.forEach((it,i)=>{
       html+='<label class="pcard" id="pc'+i+'"><input type="checkbox" data-i="'+i+'" onchange="syncSel()">'
         +'<div class="pbody"><div class="prow"><span class="rank">#'+(it.rank||i+1)+'</span><span class="ptitle">'+h(it.title||'')+'</span></div>'

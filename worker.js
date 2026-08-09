@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-08.4';
+const BUILD_VERSION = '2026-08-08.5';
 
 export default {
   async fetch(request, env) {
@@ -2971,7 +2971,7 @@ async function llmReviewProposal(env, metrics, days) {
   if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
   const prompt = `You are "The Optimizer" — a continuous-improvement reviewer for Brett's property-maintenance automation (BrettOS). Given ${days} days of operational telemetry, produce a RANKED improvement proposal.
 
-Return ONLY strict minified JSON: {"proposals":[{"title","problem","action","impact","effort","tag"}]}. Ranked highest-impact first, MAX 5. Field rules:
+Return ONLY strict minified JSON: {"proposals":[{"title","problem","action","impact","effort","tag"}]}. Ranked highest-impact first, up to 10 (only include ones genuinely grounded in the metrics — quality over filling the list). Field rules:
 - title: short imperative, <= 8 words.
 - problem: the issue in one sentence, citing the metric NUMBER that motivates it. No generic advice.
 - action: the concrete first build step.
@@ -2982,14 +2982,14 @@ Ground every item in the metrics. If a job_type shows repeated failures or human
 
 TELEMETRY METRICS (${days}d):
 ${JSON.stringify(metrics, null, 2)}`;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1200, messages: [{ role: 'user', content: prompt }] }) });
+  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }) });
   const data = await resp.json();
   let txt = (data.content && data.content[0] && data.content[0].text || '').trim();
   if (!txt) throw new Error('empty LLM response');
   txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
   let items = [];
   try { const p = JSON.parse(txt); items = Array.isArray(p) ? p : (p.proposals || []); } catch (e) { items = []; }
-  items = (items || []).slice(0, 5).map((it, i) => ({
+  items = (items || []).slice(0, 10).map((it, i) => ({
     rank: i + 1, title: String(it.title || ('Item ' + (i + 1))), problem: String(it.problem || ''),
     action: String(it.action || it.first_step || ''), impact: String(it.impact || ''),
     effort: String(it.effort || ''), tag: String(it.tag || ''),
