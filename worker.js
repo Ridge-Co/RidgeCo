@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.2';
+const BUILD_VERSION = '2026-08-09.3';
 
 export default {
   async fetch(request, env) {
@@ -5972,7 +5972,7 @@ async function qbSendInvoice(env, body) {
                    note: billToNote,
                    owner_linked: !!((owner && owner.QBO_Customer_ID) || '').trim() },
         vendor_in_house: previewInHouse,
-        customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && owner.Billing_Email) || '',
+        customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && (owner.Billing_Email || owner.Email)) || '',
                     owner_id: (owner && owner.ID) || '', suggest: custSuggest, qb_list: qbCustomers },
         vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '',
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
@@ -6046,8 +6046,43 @@ async function qbSendInvoice(env, body) {
 
     if (!haveInv) {
       invoicePayload.CustomerRef = { value: customerId };
-      const r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+
+      // Put a send-to email ON THE INVOICE. QuickBooks does NOT copy the customer's email
+      // onto an API-created invoice, so every Hub invoice landed in QuickBooks with a blank
+      // "email" and had to be typed in by hand before sending — even when the customer record
+      // itself had an email (the "153 shows an email but I still paste it every time" bug).
+      // Prefer the Hub's billing email (canonical, already loaded). If that's blank, fall back
+      // to the OWNER's QuickBooks customer email — NOT the billed sub-customer's, whose
+      // PrimaryEmailAddr could be a stray tenant address that then gets auto-emailed the pay link.
+      let billEmail = (owner && (owner.Billing_Email || owner.Email) || '').trim();
+      if (!billEmail) {
+        const ownerQbId = (owner && (owner.QBO_Customer_ID || '')).trim();
+        if (ownerQbId) {
+          try {
+            const cg = await qbApi(env, `customer/${encodeURIComponent(ownerQbId)}?minorversion=73`, 'GET', null, token);
+            billEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address) || '';
+          } catch (e) { /* best-effort — the invoice still posts, just without a saved send-to */ }
+        }
+      }
+      // Only attach a well-formed address within QuickBooks' 100-char limit. A malformed or
+      // over-long email would make QuickBooks reject the whole POST — and even a valid one QB
+      // dislikes shouldn't block the invoice, so we also retry without it below.
+      const emailOk = billEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail);
+      if (billEmail && emailOk) invoicePayload.BillEmail = { Address: billEmail };
+      else if (billEmail && !emailOk) warnings.push(`The billing email on file ("${billEmail}") doesn't look valid, so it was left off the invoice — fix it on the Owner and the next invoice will carry it.`);
+      else warnings.push('No email on the customer or owner, so this invoice has no saved send-to address — add one in QuickBooks or on the Owner before emailing it.');
+
+      let r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
       invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+      if (!invoiceId && invoicePayload.BillEmail) {
+        // The email may be exactly what QuickBooks rejected. Never let a send-to address block
+        // the invoice itself — retry once without it, then warn so Brett can set it in QB.
+        const triedEmail = invoicePayload.BillEmail.Address;
+        delete invoicePayload.BillEmail;
+        r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+        invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+        if (invoiceId) warnings.push(`QuickBooks rejected the email "${triedEmail}", so the invoice was created without a saved send-to address — set it in QuickBooks before emailing it.`);
+      }
       if (!invoiceId) errors.push('Invoice: ' + (qbFault(r) || 'unknown error'));
       else {
         // QuickBooks assigns the invoice number itself — UNLESS "Custom transaction
