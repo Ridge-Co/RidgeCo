@@ -246,6 +246,7 @@ export default {
         if (path === '/qb/backfill-emails')       return await qbBackfillEmails(env, body);
         if (path === '/qb/backfill-invoice-emails') return await qbBackfillInvoiceEmails(env, body);
         if (path === '/qb/vendor-reconcile')      return await qbVendorReconcile(env, body);
+        if (path === '/qb/link-vendor-bills')     return await qbLinkVendorBills(env, body);
         if (path === '/qb/reparent-unit')         return await qbReparentUnit(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
@@ -5211,6 +5212,102 @@ async function qbVendorTransactions(env, token, qboVendorId) {
     bills: bills || [], payments: payments || [], purchases: purchases || [],
     sources: { bills: bills !== null, payments: payments !== null, purchases: purchases !== null },
   };
+}
+
+// PURE — match QuickBooks bills to the Hub's Vendor_Bills rows by work-order number. QB bill
+// DocNumbers look like "WO-1052"; Hub rows carry WO_ID "1052" — compare on digits only. Only
+// UNLINKED Hub rows (blank QB_Bill_ID) are candidates. A WO with >1 QB bill is ambiguous (never
+// auto-linked). Also reports QB bills with no Hub row and Hub rows with no QB bill. Amount
+// mismatches are flagged, not resolved — linking never changes a dollar figure. Kept pure.
+function qbMatchBillsToHub(hubBills, qbBills) {
+  const digits = s => String(s || '').replace(/\D/g, '');
+  const qbByWo = {};
+  for (const q of (qbBills || [])) { const k = digits(q.doc); if (!k) continue; (qbByWo[k] = qbByWo[k] || []).push(q); }
+  const alreadyLinked = new Set((hubBills || []).map(h => String(h.qb_bill_id || '').trim()).filter(Boolean));
+
+  const links = [], ambiguous = [], hubNoMatch = [];
+  const usedQb = new Set();
+  for (const h of (hubBills || [])) {
+    if (String(h.qb_bill_id || '').trim()) continue;            // already linked — leave it
+    const k = digits(h.wo_id);
+    const matches = (k ? (qbByWo[k] || []) : []).filter(q => !alreadyLinked.has(String(q.id)) && !usedQb.has(String(q.id)));
+    if (!matches.length) { hubNoMatch.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total }); continue; }
+    if (matches.length > 1) { ambiguous.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total, candidates: matches.map(q => ({ qb_bill_id: String(q.id), qb_doc: q.doc, qb_total: q.total, qb_paid: q.paid })) }); continue; }
+    const q = matches[0];
+    usedQb.add(String(q.id));
+    links.push({
+      row_id: h.row_id, wo_id: h.wo_id, property: h.property,
+      qb_bill_id: String(q.id), qb_doc: q.doc || '', qb_total: q.total, qb_paid: q.paid, qb_balance: q.balance,
+      hub_total: h.total, amount_mismatch: Math.abs((Number(q.total) || 0) - (Number(h.total) || 0)) > 0.005,
+    });
+  }
+  const qbNoHub = (qbBills || [])
+    .filter(q => !usedQb.has(String(q.id)) && !alreadyLinked.has(String(q.id)))
+    .map(q => ({ qb_bill_id: String(q.id), qb_doc: q.doc || '', qb_total: q.total, qb_paid: q.paid }));
+  return { links, ambiguous, hubNoMatch, qbNoHub };
+}
+
+// POST /qb/link-vendor-bills { vendor_id, apply?, ids? }
+// Hub-side reconcile (NOT a money-write, NOT a QB write): stamps the matching QuickBooks
+// QB_Bill_ID onto each unlinked Vendor_Bills row so the Hub reflects what QuickBooks already
+// holds — the paid ones then read "Vendor paid" and drop off the list, leaving only what's truly
+// open. Preview-first; ids restricts the apply; capped at 50 rows per call.
+async function qbLinkVendorBills(env, body) {
+  body = body || {};
+  const vid = String(body.vendor_id || '').trim();
+  if (!vid) return json({ ok: false, error: 'vendor_id required' }, 400);
+  const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  const onlyIds = Array.isArray(body.ids) ? body.ids.map(x => String(x).trim()).filter(Boolean) : null;
+  try {
+    const [vendors, bills, workorders, properties] = await fetchTabs(env, ['Vendors', 'Vendor_Bills', 'Work_Orders', 'Properties']);
+    const vrow = (vendors || []).find(v => String(v.ID || '') === vid);
+    const qboVendorId = vrow ? String(vrow.QBO_Vendor_ID || '').trim() : '';
+    if (!qboVendorId) return json({ ok: false, error: 'This vendor is not linked to QuickBooks (no QBO_Vendor_ID).' }, 400);
+
+    const woById = {}; for (const w of (workorders || [])) woById[String(w.ID)] = w;
+    const propById = {}; for (const p of (properties || [])) propById[String(p.ID)] = p;
+    const myBills = (bills || []).filter(b => b.Active !== 'FALSE' && String(b.Vendor_ID || '') === vid);
+    const hubBills = myBills.map(b => {
+      const wo = woById[String(b.WO_ID || '')];
+      const prop = wo ? propById[String(wo.Property_ID || '')] : null;
+      return {
+        row_id: String(b.ID || ''), wo_id: String(b.WO_ID || ''), qb_bill_id: String(b.QB_Bill_ID || '').trim(),
+        total: Number(b.Total) || 0, property: prop ? [prop.Address, prop.City].filter(Boolean).join(', ') : '',
+      };
+    });
+
+    const token = await qbAccessToken(env);
+    const tx = await qbVendorTransactions(env, token, qboVendorId);
+    const qbBills = (tx.bills || []).map(x => {
+      const bal = Number(x.Balance != null ? x.Balance : x.TotalAmt) || 0;
+      return { id: String(x.Id), doc: x.DocNumber || '', total: +(Number(x.TotalAmt) || 0).toFixed(2), balance: +bal.toFixed(2), paid: bal <= 0.005 };
+    });
+
+    const plan = qbMatchBillsToHub(hubBills, qbBills);
+
+    if (!apply) {
+      return json({ ok: true, applied: false, vendor: { id: vid, name: qbVendorDisplayName(vrow || {}) },
+        link_count: plan.links.length, ambiguous_count: plan.ambiguous.length,
+        hub_no_match_count: plan.hubNoMatch.length, qb_no_hub_count: plan.qbNoHub.length,
+        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: plan.qbNoHub });
+    }
+
+    const byRow = {}; for (const l of plan.links) byRow[l.row_id] = l;
+    const wanted = onlyIds ? onlyIds.filter(id => byRow[id]) : Object.keys(byRow);
+    const ids = wanted.slice(0, 50);
+    const remaining = wanted.length - ids.length;
+    const updated = [], failed = [];
+    for (const id of ids) {
+      const l = byRow[id];
+      try {
+        await updateRow(env, 'Vendor_Bills', id, { QB_Bill_ID: l.qb_bill_id });
+        updated.push({ row_id: id, wo_id: l.wo_id, qb_bill_id: l.qb_bill_id, qb_doc: l.qb_doc, qb_paid: l.qb_paid });
+      } catch (e) { failed.push({ row_id: id, wo_id: l.wo_id, error: e.message }); }
+    }
+    return json({ ok: true, applied: true, updated: updated.length, failed_count: failed.length, updated_list: updated, failed, remaining });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
 }
 
 async function qbCreateSubCustomer(env, body) {

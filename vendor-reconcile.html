@@ -84,6 +84,13 @@
   <div id="qb-body"></div>
 </div>
 
+<div class="section" id="reconcile-section" style="display:none">
+  <div class="section-title">Reconcile — link QuickBooks bills to the Hub</div>
+  <p class="sub" style="margin-bottom:10px">Most "no bill in the Hub" jobs actually DO have a bill in QuickBooks (entered directly), matched by work-order number. This links each Hub row to its QuickBooks bill so the paid ones read <b>Vendor paid</b> and drop off, leaving only what's truly open. <b>Hub-side only — no money moves, nothing sent.</b> Preview first; amount mismatches are flagged for you, never changed.</p>
+  <button class="btn" id="recon-btn" onclick="reconcilePreview()">Preview links</button>
+  <div id="recon-body" style="margin-top:10px"></div>
+</div>
+
 <script>
 function worker(){ return document.getElementById('worker-url').value.trim(); }
 function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
@@ -126,7 +133,7 @@ async function init(){
 
 async function loadVendor(){
   const vid = document.getElementById('vendor').value;
-  if (!vid){ ['summary-section','rows-section','qb-section'].forEach(id=>document.getElementById(id).style.display='none'); return; }
+  if (!vid){ ['summary-section','rows-section','qb-section','reconcile-section'].forEach(id=>document.getElementById(id).style.display='none'); return; }
   const status = document.getElementById('conn-status');
   status.textContent = 'Reading QuickBooks…';
   try {
@@ -171,6 +178,10 @@ function render(res){
   box.innerHTML = html;
   document.getElementById('rows-section').style.display='block';
   renderQB(res.qb);
+  // Offer the reconcile/link step whenever this vendor is linked to QuickBooks.
+  const rs = document.getElementById('reconcile-section');
+  if (res.qb && res.qb.available){ rs.style.display='block'; document.getElementById('recon-body').innerHTML=''; }
+  else rs.style.display='none';
 }
 
 function renderQB(qb){
@@ -226,6 +237,59 @@ function renderQB(qb){
     html += '<div class="jc-desc" style="margin-top:8px"><span class="warn">Note:</span> QuickBooks didn’t return the checks/expenses list for this vendor, so direct (non-bill) payments may not be shown.</div>';
   }
   document.getElementById('qb-body').innerHTML = html;
+}
+
+// ── Reconcile: link QB bills to Hub rows by WO number (Hub-side write only) ────────────────
+let reconPlan = null;
+async function reconcilePreview(){
+  const vid = document.getElementById('vendor').value;
+  if (!vid) return;
+  const body = document.getElementById('recon-body');
+  body.innerHTML = '<div class="info">Matching QuickBooks bills to Hub rows…</div>';
+  try {
+    const res = await post('/qb/link-vendor-bills', { vendor_id: vid });
+    if (!res.ok) throw new Error(res.error||'Failed');
+    reconPlan = res;
+    renderReconcile(res);
+  } catch(e){ body.innerHTML = '<div class="err">❌ '+esc(e.message)+'</div>'; }
+}
+function renderReconcile(res){
+  const links = res.links||[];
+  let html = '';
+  if (!links.length){ html += '<div class="empty">No new links to make — every Hub row is already linked or has no QuickBooks match.</div>'; }
+  else {
+    html += '<div style="margin-bottom:8px;color:var(--muted);font-size:11px">'+links.length+' Hub row(s) can be linked to a QuickBooks bill:</div>';
+    links.forEach(l => {
+      html += '<div class="jobcard">'+
+        '<div class="jc-top"><div class="jc-title"><label style="cursor:pointer"><input type="checkbox" class="lpick" value="'+esc(l.row_id)+'" checked> WO '+esc(l.wo_id)+(l.property?' · '+esc(l.property):'')+'</label></div>'+
+          (l.qb_paid?'<span class="pill paid">Paid</span>':'<span class="pill wait">Open '+money(l.qb_balance)+'</span>')+'</div>'+
+        '<div class="jc-desc">Link to QuickBooks '+(l.qb_doc?'#'+esc(l.qb_doc):'bill '+esc(l.qb_bill_id))+' · '+money(l.qb_total)+
+          (l.amount_mismatch?' <span class="warn">⚠ Hub has '+money(l.hub_total)+' — amounts differ, check which is right</span>':'')+'</div>'+
+      '</div>';
+    });
+    html += '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">'+
+      '<button class="btn success" id="link-btn" onclick="reconcileApply()">Link selected</button>'+
+      '<span id="link-count" class="info"></span></div>';
+  }
+  const notes = [];
+  if ((res.qb_no_hub||[]).length) notes.push((res.qb_no_hub.length)+' QuickBooks bill(s) have no Hub work order: '+res.qb_no_hub.map(q=>(q.qb_doc||('#'+q.qb_bill_id))+' '+money(q.qb_total)+(q.qb_paid?' paid':' open')).join(', '));
+  if ((res.ambiguous||[]).length) notes.push((res.ambiguous.length)+' Hub row(s) match more than one QuickBooks bill — link those by hand in QuickBooks.');
+  if ((res.hub_no_match||[]).length) notes.push((res.hub_no_match.length)+' Hub row(s) have no QuickBooks bill at all: '+res.hub_no_match.map(h=>'WO '+h.wo_id).join(', '));
+  if (notes.length) html += '<div class="jc-desc" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">'+notes.map(n=>'• '+esc(n)).join('<br>')+'</div>';
+  document.getElementById('recon-body').innerHTML = html;
+}
+async function reconcileApply(){
+  const ids = Array.from(document.querySelectorAll('.lpick')).filter(c=>c.checked).map(c=>c.value);
+  if (!ids.length) return;
+  if (!confirm('Link '+ids.length+' Hub row(s) to their QuickBooks bill? This only updates the Hub — no money moves.')) return;
+  document.getElementById('link-btn').disabled = true;
+  document.getElementById('recon-body').insertAdjacentHTML('afterbegin','<div class="info" id="link-log">Linking…</div>');
+  try {
+    const res = await post('/qb/link-vendor-bills', { vendor_id: document.getElementById('vendor').value, apply:true, ids });
+    if (!res.ok) throw new Error(res.error||'Failed');
+    document.getElementById('link-log').outerHTML = '<div class="ok">✅ Linked '+res.updated+(res.failed_count?' · '+res.failed_count+' failed':'')+'. Refreshing…</div>';
+    setTimeout(loadVendor, 900);
+  } catch(e){ document.getElementById('link-log').outerHTML = '<div class="err">❌ '+esc(e.message)+'</div>'; }
 }
 
 function card(lbl, val, cls){ return '<div class="card"><div class="lbl">'+esc(lbl)+'</div><div class="val '+(cls||'')+'">'+val+'</div></div>'; }
