@@ -1,12 +1,13 @@
 # WHERE THINGS STAND — Aug 9, 2026
 
-## ✅ Optimizer greenlit-workflow build — SHIPPED (Aug 9, Worker `2026-08-09.7`)
+## ✅ Optimizer greenlit-workflow build — SHIPPED (Aug 9, Worker `2026-08-09.8`)
 Built and verified in a prior Cowork session, but that session's git proxy lost push authorization
 for `Ridge-Co/RidgeCo` mid-way ("repository not in this session's authorized repository set"), so it
 was committed locally only (commit `720a09f`) and delivered as a `.patch`. Finished in a follow-up
-session: the patch 3-way-applied cleanly on top of current `main` (which had already advanced to
-`2026-08-09.6` — vendor-reconcile + BillEmail — so the version was bumped to **`2026-08-09.7`**, not
-the `.5` the stale-base patch named), pushed to `main`, Cloudflare + Pages auto-deployed, and the
+session: the patch 3-way-applied cleanly on top of current `main`. Base kept moving during the finish
+(a concurrent session shipped vendor-reconcile live-QB transactions + B-217 bill-pay design and had
+itself already taken `2026-08-09.7`), so this build was merged on top and bumped to **`2026-08-09.8`**
+— not the `.5` the stale-base patch named. Pushed to `main`, Cloudflare + Pages auto-deployed, and the
 auth-boundary smoke test passed.
 
 **What the build does (the fix for "you keep handing me half-built tools"):** the proposals →

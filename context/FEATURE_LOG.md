@@ -407,7 +407,7 @@ New standalone mobile page `trash.html` (Pages: `ridge-co.github.io/RidgeCo/tras
 
 **Nudge (partial):** the in-app "Needs attention" banner (missed/unbilled visits, current + prior week with a per-property deadline+grace so a day-late trip doesn't false-alarm) is LIVE on the page. The **phone push** is wired but dormant: `GET /trash/unbilled` accepts a narrow read-only `TRASH_NUDGE_TOKEN` (inert unless the Cloudflare env var is set, same pattern as `CONTACTS_SYNC_TOKEN`) so a scheduled task can poll it without the admin secret — set the env var + create the scheduled task to turn it on.
 
-## OPTIMIZER GREENLIT WORKFLOW — proposals become actionable builds (Aug 9, 2026, `2026-08-09.7`, commit `720a09f`, SHIPPED)
+## OPTIMIZER GREENLIT WORKFLOW — proposals become actionable builds (Aug 9, 2026, `2026-08-09.8`, commit `720a09f`, SHIPPED)
 
 **61. The greenlit queue is a workflow now, not a read-once bucket.** Approving a proposal used to store it and strand it — `proposals.html` showed only Title+Tag for greenlit items, with no way to re-read, copy, or act, and headless Claude can't read the authed queue (no worker secret). Now greenlit items render in **full** (Rank/Problem/→action/Impact/chips). The bridge across the secret wall: **📋 Copy build brief** (per-item) and **Copy all** render clean markdown into a modal (`navigator.clipboard` + manual-select fallback) that Brett pastes into a Claude session — the item comes to Claude instead of Claude reaching for the secret. `OPS_QUEUE_COLS` gained **`Problem`** so the WHY survives `opsApprove` (a brief without its problem statement is half a brief).
 
