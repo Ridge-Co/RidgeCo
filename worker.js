@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.10';
+const BUILD_VERSION = '2026-08-09.11';
 
 export default {
   async fetch(request, env) {
@@ -5584,10 +5584,23 @@ async function qbLinkVendorBills(env, body) {
     const plan = qbMatchBillsToHub(hubBills, qbBills);
 
     if (!apply) {
+      // Identify each QB-only bill: if a Work Order exists for that number, say what/where it is
+      // so Brett doesn't have to hunt (e.g. "WO-1053 = 123 Main St — gutter cleanup").
+      const woByNum = {}; for (const w of (workorders || [])) woByNum[String(w.ID || '').replace(/\D/g, '')] = w;
+      const qbNoHub = plan.qbNoHub.map(q => {
+        const wo = woByNum[String(q.qb_doc || '').replace(/\D/g, '')];
+        const prop = wo ? propById[String(wo.Property_ID || '')] : null;
+        return Object.assign({}, q, {
+          wo_id: wo ? String(wo.ID) : '',
+          property: prop ? [prop.Address, prop.City].filter(Boolean).join(', ') : '',
+          description: wo ? (wo.Description || '') : '',
+          has_work_order: !!wo,
+        });
+      });
       return json({ ok: true, applied: false, vendor: { id: vid, name: qbVendorDisplayName(vrow || {}) },
         link_count: plan.links.length, ambiguous_count: plan.ambiguous.length,
-        hub_no_match_count: plan.hubNoMatch.length, qb_no_hub_count: plan.qbNoHub.length,
-        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: plan.qbNoHub });
+        hub_no_match_count: plan.hubNoMatch.length, qb_no_hub_count: qbNoHub.length,
+        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: qbNoHub });
     }
 
     const byRow = {}; for (const l of plan.links) byRow[l.row_id] = l;

@@ -271,8 +271,19 @@ function renderReconcile(res){
       '<button class="btn success" id="link-btn" onclick="reconcileApply()">Link selected</button>'+
       '<span id="link-count" class="info"></span></div>';
   }
+  // QB-only bills — identify each so Brett knows what it is instead of hunting.
+  const qbOnly = res.qb_no_hub || [];
+  if (qbOnly.length){
+    html += '<div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px"><div class="jc-desc" style="margin-bottom:6px"><b>'+qbOnly.length+' QuickBooks bill(s) with no Hub work-order bill</b> — what they are:</div>';
+    qbOnly.forEach(q => {
+      const what = q.has_work_order
+        ? (esc(q.property||'—')+(q.description?' — '+esc((q.description||'').slice(0,90)):''))
+        : '<span class="warn">no matching work order in the Hub either — likely entered straight into QuickBooks</span>';
+      html += '<div class="jobcard"><div class="jc-top"><div class="jc-title">'+(q.qb_doc?esc(q.qb_doc):'#'+esc(q.qb_bill_id))+' · '+money(q.qb_total)+'</div>'+(q.qb_paid?'<span class="pill paid">Paid</span>':'<span class="pill wait">Open</span>')+'</div><div class="jc-desc">'+what+'</div></div>';
+    });
+    html += '</div>';
+  }
   const notes = [];
-  if ((res.qb_no_hub||[]).length) notes.push((res.qb_no_hub.length)+' QuickBooks bill(s) have no Hub work order: '+res.qb_no_hub.map(q=>(q.qb_doc||('#'+q.qb_bill_id))+' '+money(q.qb_total)+(q.qb_paid?' paid':' open')).join(', '));
   if ((res.ambiguous||[]).length) notes.push((res.ambiguous.length)+' Hub row(s) match more than one QuickBooks bill — link those by hand in QuickBooks.');
   if ((res.hub_no_match||[]).length) notes.push((res.hub_no_match.length)+' Hub row(s) have no QuickBooks bill at all: '+res.hub_no_match.map(h=>'WO '+h.wo_id).join(', '));
   if (notes.length) html += '<div class="jc-desc" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">'+notes.map(n=>'• '+esc(n)).join('<br>')+'</div>';
