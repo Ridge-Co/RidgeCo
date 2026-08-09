@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.8';
+const BUILD_VERSION = '2026-08-09.9';
 
 export default {
   async fetch(request, env) {
@@ -68,7 +68,17 @@ export default {
         const _nudgeOk = !!env.TRASH_NUDGE_TOKEN
           && _tok === env.TRASH_NUDGE_TOKEN
           && request.method === 'GET' && path === '/trash/unbilled';
-        if (!_syncOk && !_nudgeOk) {
+        // Narrow read-only token for the Optimizer Prepare agent (B-141 / greenlit→build
+        // bridge): accepted ONLY for GET /ops-queue — the greenlit build backlog
+        // (Title/Problem/Rank/Impact/action, no money, no PII, no writes). Lets the Tue/Fri
+        // headless Prepare agent read greenlit items and draft build-ready briefs WITHOUT
+        // carrying the admin secret (which can deploy). Read-only: the write path
+        // (POST /ops-queue-update) still requires the full admin secret. Fully inert unless
+        // env.OPS_QUEUE_TOKEN is set, so deploying this has zero effect until the secret exists.
+        const _opsQueueOk = !!env.OPS_QUEUE_TOKEN
+          && _tok === env.OPS_QUEUE_TOKEN
+          && request.method === 'GET' && path === '/ops-queue';
+        if (!_syncOk && !_nudgeOk && !_opsQueueOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);

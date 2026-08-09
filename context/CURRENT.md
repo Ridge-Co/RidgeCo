@@ -1,5 +1,13 @@
 # WHERE THINGS STAND — Aug 9, 2026
 
+## 🔒 Read-only `OPS_QUEUE_TOKEN` for the Prepare agent — SHIPPED, DORMANT (Aug 9, Worker `2026-08-09.9`)
+Closing the greenlit→build loop (Brett's Q1:C + Q3:B). New narrow token in the auth gate, accepted
+**only for `GET /ops-queue`** (read-only; the write path still needs the admin secret). Same
+inert-until-env-set pattern as `TRASH_NUDGE_TOKEN`. **To turn on:** set Cloudflare env
+`OPS_QUEUE_TOKEN` = a random string, then the Tue/Fri **Optimizer Prepare agent** gets that value in
+its scheduled-task prompt so it can read the greenlit queue and draft build-ready briefs headless —
+never deploying (Rung 0–1). Deploy is a no-op until the env var exists. FEATURE_LOG rule 66.
+
 ## ✅ Optimizer greenlit-workflow build — SHIPPED (Aug 9, Worker `2026-08-09.8`)
 Built and verified in a prior Cowork session, but that session's git proxy lost push authorization
 for `Ridge-Co/RidgeCo` mid-way ("repository not in this session's authorized repository set"), so it
