@@ -25,8 +25,10 @@ either, no worker secret). Now:
 - **command-center.html** Optimizer card — **per-job-type health table** + **zero-activity-day**
   flag ("⚠ no jobs logged today").
 - Verify gate done: `node --check` clean; adversarial review caught + fixed a CRITICAL (dead
-  status buttons — `onclick` double-quote collision, now `h(jsq(id))`). Live smoke test (auth
-  boundaries) is the one step still pending the push/deploy.
+  status buttons — `onclick` double-quote collision, now `h(jsq(id))`). Live smoke test PASSED on
+  `2026-08-09.8`: `/version`=.8; `POST /ops-queue-update` and `POST /admin/share-attachments` both
+  401 unauthed; `GET /ops-queue` + `/ops-telemetry` respond (401, gated + deployed); `/health` 200.
+  The authed 200 data-read is untested (admin secret lives only in Brett's browser — not faked).
 
 **The durable principle this build enforces (how we work now):** *every "store" ships with its
 "act" in the same build.* Storable data isn't done until it moves into a workflow — if the
