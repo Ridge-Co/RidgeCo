@@ -167,7 +167,7 @@ function optCard(opt){
     const ds=daysSince(rev.Timestamp);const when=ds==null?'':(ds<=0?'today':ds+'d ago');
     html+='<div style="margin-top:8px;border-left:3px solid var(--blue);padding-left:9px">'
       +'<div class="kick" style="color:var(--blue)">LATEST REVIEW'+(when?' · '+h(when):'')+'</div>'
-      +'<p class="plain" style="white-space:pre-wrap">'+h((rev.Proposal||'').slice(0,900))+'</p></div>';
+      +'<p class="plain" style="white-space:pre-wrap;max-height:60vh;overflow:auto">'+h((rev.Proposal||'').slice(0,8000))+'</p></div>';
   } else {
     html+='<p class="note">No review yet — tap below to run one now, or it runs automatically Monday.</p>';
   }
