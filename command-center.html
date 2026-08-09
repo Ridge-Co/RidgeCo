@@ -153,15 +153,41 @@ async function loadOptimizer(){
 function optCard(opt){
   const rev=opt&&opt.rev&&opt.rev.rows&&opt.rev.rows[0];
   const tel=opt&&opt.tel&&opt.tel.metrics;
+  const telRows=(opt&&opt.tel&&opt.tel.rows)||[];
   const pct=x=>{const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';};
+  const localDay=ts=>{const d=new Date(ts);return isNaN(d)?'':(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'));};
   let html='<div class="card"><h2>Optimizer <small style="font-weight:600;color:var(--muted)">· self-improvement loop</small></h2>';
   if(tel){
     html+='<div class="counts">'
       +'<div class="count"><b>'+h(tel.total||0)+'</b><small>jobs (7d)</small></div>'
       +'<div class="count"><b>'+pct(tel.success_rate)+'</b><small>success</small></div>'
       +'<div class="count"><b>'+pct(tel.escalation_rate)+'</b><small>escalation</small></div></div>';
+    // Zero-activity-day flag (B-219): nothing logged today usually means a broken pipe, not a quiet day.
+    const t=new Date();const todayStr=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+    const jobsToday=telRows.filter(r=>localDay(r.Timestamp)===todayStr).length;
+    if(jobsToday===0)
+      html+='<p class="note" style="color:var(--amber)">⚠ No jobs logged today — if that’s unexpected, telemetry may not be flowing.</p>';
     if(tel.stuck_patterns&&tel.stuck_patterns.length)
       html+='<p class="note" style="color:var(--red)">⚠ Stuck pattern: '+h(tel.stuck_patterns.join(' · '))+'</p>';
+    // Per-job-type health breakdown (B-217): where the wins/failures actually live, by job type.
+    const jobs=Object.entries(tel.byJob||{}).sort((a,b)=>b[1].count-a[1].count);
+    if(jobs.length){
+      html+='<div style="margin-top:10px"><div class="kick" style="color:var(--muted)">BY JOB TYPE (7d)</div>'
+        +'<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:4px">'
+        +'<tr style="color:var(--muted);text-align:right"><th style="text-align:left;font-weight:700;padding:2px 0">Type</th><th style="font-weight:700">n</th><th style="font-weight:700">success</th><th style="font-weight:700">latency</th><th style="font-weight:700">fixed</th></tr>';
+      jobs.forEach(([jt,m])=>{
+        const sr=(m.success_rate==null)?'n/a':Math.round(m.success_rate*100)+'%';
+        const lat=(m.avg_latency_ms==null)?'—':(m.avg_latency_ms+'ms');
+        const bad=(m.success_rate!=null&&m.success_rate<0.8)||(m.fail||0)>=2;
+        html+='<tr style="text-align:right;border-top:1px solid var(--line)">'
+          +'<td style="text-align:left;padding:3px 0'+(bad?';color:var(--red);font-weight:700':'')+'">'+h(jt)+'</td>'
+          +'<td>'+h(m.count||0)+'</td>'
+          +'<td'+(bad?' style="color:var(--red);font-weight:700"':'')+'>'+sr+'</td>'
+          +'<td>'+lat+'</td>'
+          +'<td>'+h(m.corrected||0)+'</td></tr>';
+      });
+      html+='</table></div>';
+    }
   }
   if(rev){
     const ds=daysSince(rev.Timestamp);const when=ds==null?'':(ds<=0?'today':ds+'d ago');

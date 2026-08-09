@@ -1,5 +1,36 @@
 # WHERE THINGS STAND — Aug 9, 2026
 
+## ✅ Optimizer greenlit-workflow build — SHIPPED (Aug 9, Worker `2026-08-09.7`)
+Built and verified in a prior Cowork session, but that session's git proxy lost push authorization
+for `Ridge-Co/RidgeCo` mid-way ("repository not in this session's authorized repository set"), so it
+was committed locally only (commit `720a09f`) and delivered as a `.patch`. Finished in a follow-up
+session: the patch 3-way-applied cleanly on top of current `main` (which had already advanced to
+`2026-08-09.6` — vendor-reconcile + BillEmail — so the version was bumped to **`2026-08-09.7`**, not
+the `.5` the stale-base patch named), pushed to `main`, Cloudflare + Pages auto-deployed, and the
+auth-boundary smoke test passed.
+
+**What the build does (the fix for "you keep handing me half-built tools"):** the proposals →
+greenlit → build flow was a read-once dead end — you could select a proposal, then it vanished
+into a "greenlit" bucket you couldn't open, copy, or act on (and headless Claude can't read it
+either, no worker secret). Now:
+- **proposals.html** renders greenlit items **in full** (problem/action/impact/chips), with a
+  per-item **📋 Copy build brief** + **Copy all** (markdown into a modal you paste into a Claude
+  session — this bridges the worker-secret wall: the item comes to Claude), plus **status buttons**
+  (Building / Done / Drop → `POST /ops-queue-update`) so the queue stays live, and a **thin-data
+  banner** when a review ran on <20 rows.
+- **worker.js** — `OPS_QUEUE_COLS` gains `Problem` (the WHY survives approval); `opsApprove`
+  stores it; new admin-gated `opsQueueUpdate` (SAFE class); `computeTelemetryMetrics.byJob`
+  enriched with per-type `success_rate`+`avg_latency_ms`; thin-data guard in `runWeeklyReview`.
+- **command-center.html** Optimizer card — **per-job-type health table** + **zero-activity-day**
+  flag ("⚠ no jobs logged today").
+- Verify gate done: `node --check` clean; adversarial review caught + fixed a CRITICAL (dead
+  status buttons — `onclick` double-quote collision, now `h(jsq(id))`). Live smoke test (auth
+  boundaries) is the one step still pending the push/deploy.
+
+**The durable principle this build enforces (how we work now):** *every "store" ships with its
+"act" in the same build.* Storable data isn't done until it moves into a workflow — if the
+workflow isn't built, it's named in the plan up front, never discovered later.
+
 ## One place for tool pages + QB-email backfill fixed (Aug 9)
 Two things shipped (Worker `2026-08-09.1`):
 

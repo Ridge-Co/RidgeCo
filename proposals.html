@@ -31,6 +31,11 @@
   .pprob{font-size:13px;color:#26313d;margin:6px 0 0}
   .pact{font-size:13px;color:var(--ink);margin:5px 0 0;font-weight:600}
   .pimp{font-size:12px;color:var(--muted);margin:4px 0 0}
+  .qcard{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:13px;margin:9px 0;box-shadow:var(--shadow)}
+  .banner{background:var(--amberbg);color:var(--amber);border:1px solid #f0d9ad;border-radius:11px;padding:10px 12px;font-size:12.5px;font-weight:700;margin:8px 0}
+  .modal{display:none;position:fixed;inset:0;background:rgba(14,22,33,.45);z-index:50;padding:14px}
+  .modal .box{max-width:560px;margin:20px auto;background:#fff;border-radius:14px;padding:14px;box-shadow:var(--shadow)}
+  .modal textarea{width:100%;height:44vh;font-size:12.5px;font-family:ui-monospace,Menlo,Consolas,monospace;border:1px solid var(--line);border-radius:9px;padding:10px;margin-top:6px;color:var(--ink)}
   .ctrls{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 2px}
   .mini{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 11px;font-size:12.5px;font-weight:700;color:var(--ink)}
   .bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);padding:12px;box-shadow:0 -2px 12px rgba(16,23,32,.08)}
@@ -55,6 +60,12 @@
 </div>
 <div class="bar" id="bar" style="display:none"><div class="wrap">
   <button class="go" id="go" onclick="approveSel()" disabled>Approve selected</button>
+</div></div>
+<div class="modal" id="modal" onclick="if(event.target.id==='modal')closeModal()"><div class="box">
+  <div class="prow" style="justify-content:space-between;align-items:center"><b id="mtitle">Build brief</b><button class="mini" onclick="closeModal()">Close</button></div>
+  <div id="mmsg" class="sub" style="margin:6px 0"></div>
+  <textarea id="mtext" readonly></textarea>
+  <button class="go" style="margin-top:10px" onclick="copyFromModal()">📋 Copy to clipboard</button>
 </div></div>
 <script>
 const _p=new URLSearchParams(location.search);
@@ -83,6 +94,8 @@ function render(rev,q){
   let html='';
   if(!row){ html='<div class="card"><b>No review yet</b><div class="sub">Run a review from the Command Center first.</div></div>'; document.getElementById('body').innerHTML=html; return; }
   html+='<div class="card"><h2>This week’s review</h2><div class="sub">'+h(row.Total_Jobs||'0')+' jobs · success '+pct(row.Success_Rate)+' · escalation '+pct(row.Escalation_Rate)+(row.Stuck_Patterns?' · ⚠ '+h(row.Stuck_Patterns):'')+'</div></div>';
+  const totJobs=parseInt(row.Total_Jobs||'0')||0;
+  if(totJobs<20) html+='<div class="banner">⚠ Directional only — thin data ('+totJobs+' telemetry rows; a confident review wants 20+). Treat these as hypotheses to sanity-check, not conclusions.</div>';
   if(items.length){
     html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
     items.forEach((it,i)=>{
@@ -99,12 +112,26 @@ function render(rev,q){
     // older review or parse fallback — show the full text
     html+='<div class="card"><h2>Proposal</h2><div class="sub" style="white-space:pre-wrap;color:var(--ink);font-size:13.5px">'+h(row.Proposal||'(none)')+'</div><div class="sub" style="margin-top:8px">This review isn’t in the selectable format yet — run a fresh review from the Command Center to get checkboxes.</div></div>';
   }
-  // already-queued
-  const queue=(q&&q.queue)||[];
+  // Greenlit build queue — full detail, copyable brief, status control. No longer a read-once dead end.
+  const queue=(q&&q.queue)||[]; window.__queue=queue;
   if(queue.length){
-    html+='<div class="card"><h2>Already queued for build ('+queue.length+')</h2>';
-    queue.forEach(x=>{html+='<div class="q"><span class="qs">'+h(x.Status||'greenlit')+'</span><div>'+h(x.Title||'')+(x.Tag?' <span class="chip eff">'+h(x.Tag)+'</span>':'')+'</div></div>';});
-    html+='<div class="sub" style="margin-top:8px">The Prepare agent works these next (Tue/Fri), then hands you a build-ready brief.</div></div>';
+    html+='<div class="card"><div class="prow" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Greenlit — build queue ('+queue.length+')</h2><button class="mini" onclick="copyAll()">📋 Copy all</button></div>'
+      +'<div class="sub" style="margin:4px 0 0">Full detail below. Tap <b>Copy build brief</b>, paste it into a Claude session, and it builds from that — no worker secret needed. Mark items <b>building</b> / <b>done</b> to keep the list live.</div></div>';
+    queue.forEach((x,qi)=>{
+      const st=(x.Status||'greenlit').toLowerCase();
+      html+='<div class="qcard" id="qc'+qi+'">'
+        +'<div class="prow"><span class="rank">#'+h(x.Rank||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
+        +'<div class="prow" style="margin-top:4px"><span class="qs">'+h(st)+'</span>'+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+'</div>'
+        +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
+        +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
+        +(x.Impact?'<div class="pimp">Impact: '+h(x.Impact)+'</div>':'')
+        +'<div class="ctrls" style="margin-top:9px">'
+        +'<button class="mini" onclick="copyOne('+qi+')">📋 Copy build brief</button>'
+        +(st!=='building'?'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'building\')">▶ Building</button>':'')
+        +'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'done\')">✓ Done</button>'
+        +'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'dropped\')">✕ Drop</button>'
+        +'</div></div>';
+    });
   }
   document.getElementById('body').innerHTML=html;
   syncSel();
@@ -124,6 +151,36 @@ async function approveSel(){
   }catch(e){ g.disabled=false; g.textContent='Failed — '+(e&&e.message||e); }
 }
 function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
+
+// ── Greenlit → build bridge ──────────────────────────────────────────────
+// Headless Claude can't read the authed queue (no worker secret). So the item comes to
+// Claude instead: this renders a clean build brief you copy and paste into a session.
+function jsq(s){return JSON.stringify(String(s==null?'':s));}
+function brief(x){
+  return '## '+(x.Title||'(untitled)')+'\n'
+    +'- Rank: #'+(x.Rank||'')+(x.Tag?'  ·  '+x.Tag:'')+(x.Effort?'  ·  '+x.Effort+' effort':'')+'\n'
+    +(x.Problem?'- Problem: '+x.Problem+'\n':'')
+    +(x.First_Step?'- First step: '+x.First_Step+'\n':'')
+    +(x.Impact?'- Impact: '+x.Impact+'\n':'')
+    +(x.Review_TS?'- From review: '+String(x.Review_TS).slice(0,10)+'\n':'')
+    +'- Queue ID: '+(x.ID||'')+'\n';
+}
+function copyOne(qi){const x=(window.__queue||[])[qi];if(!x)return;openModal('Build brief — '+(x.Title||''),brief(x),'Paste this into a Claude session to build it.');}
+function copyAll(){const qs=window.__queue||[];if(!qs.length)return;const text='# BrettOS — greenlit build queue ('+qs.length+' items)\n\n'+qs.map(brief).join('\n');openModal('All greenlit ('+qs.length+')',text,'Paste into a Claude session — this is the full build backlog.');}
+function openModal(title,text,msg){document.getElementById('mtitle').textContent=title;document.getElementById('mtext').value=text;document.getElementById('mmsg').textContent=msg||'';document.getElementById('modal').style.display='block';tryCopy(text);}
+function closeModal(){document.getElementById('modal').style.display='none';}
+function tryCopy(text){try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){var m=document.getElementById('mmsg');if(m)m.textContent='✓ Copied to clipboard. (Or select the text below to copy manually.)';},function(){});}}catch(e){}}
+function copyFromModal(){const t=document.getElementById('mtext');t.focus();t.select();try{document.execCommand('copy')}catch(e){}tryCopy(t.value);document.getElementById('mmsg').textContent='✓ Copied (or long-press the text → Copy).';}
+// Lifecycle: greenlit → building → done | dropped. Keeps the queue live (done/dropped drop off).
+async function setStatus(id,status){
+  if(status==='dropped'&&!confirm('Drop this item from the build queue?'))return;
+  try{
+    const r=await fetch(WORKER+'/ops-queue-update',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({id:id,status:status})});
+    const d=await r.json().catch(function(){return null;});
+    if(!r.ok||!d||(d.success!==true&&d.ok!==true)) throw new Error((d&&d.error)||('HTTP '+r.status));
+    load();
+  }catch(e){ alert('Update failed — '+(e&&e.message||e)); }
+}
 load();
 </script>
 </body>

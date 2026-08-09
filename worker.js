@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.6';
+const BUILD_VERSION = '2026-08-09.7';
 
 export default {
   async fetch(request, env) {
@@ -234,6 +234,7 @@ export default {
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
         if (path === '/ops-approve')              return await opsApprove(env, body);
+        if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
@@ -2944,20 +2945,28 @@ function computeTelemetryMetrics(rows) {
   for (const r of rows) {
     bySource[r.Source || '(none)'] = (bySource[r.Source || '(none)'] || 0) + 1;
     const jt = r.Job_Type || '(none)';
-    byJob[jt] = byJob[jt] || { count: 0, fail: 0, corrected: 0 };
+    // Per-job-type health (B-217): count/fail/corrected/escalated + accumulators for success &
+    // latency, so the Command Center can show a breakdown BY job type, not just the global roll-up.
+    byJob[jt] = byJob[jt] || { count: 0, fail: 0, corrected: 0, escalated: 0, _sk: 0, _st: 0, _ls: 0, _ln: 0 };
     byJob[jt].count++;
-    if (isTrue(r.Escalated)) escalated++;
+    if (isTrue(r.Escalated)) { escalated++; byJob[jt].escalated++; }
     if (isTrue(r.Human_Corrected)) { humanCorrected++; byJob[jt].corrected++; }
     if (isFalse(r.Success)) byJob[jt].fail++;
-    if (r.Success !== undefined && r.Success !== '') { successKnown++; if (isTrue(r.Success)) successTrue++; }
+    if (r.Success !== undefined && r.Success !== '') { successKnown++; byJob[jt]._sk++; if (isTrue(r.Success)) { successTrue++; byJob[jt]._st++; } }
     const c = parseFloat(r.Est_Cost);   if (Number.isFinite(c)) cost += c;
-    const l = parseFloat(r.Latency_ms); if (Number.isFinite(l)) { latSum += l; latN++; }
+    const l = parseFloat(r.Latency_ms); if (Number.isFinite(l)) { latSum += l; latN++; byJob[jt]._ls += l; byJob[jt]._ln++; }
   }
   // Stuck-pattern flags (H2): a job type looping on the same failure or repeatedly corrected.
   const stuck = [];
   for (const [jt, m] of Object.entries(byJob)) {
     if (m.fail >= 2)      stuck.push(`${jt}: ${m.fail} failures`);
     if (m.corrected >= 2) stuck.push(`${jt}: ${m.corrected} human-corrections`);
+  }
+  // Derive per-job success rate + avg latency, then strip the private accumulators.
+  for (const m of Object.values(byJob)) {
+    m.success_rate  = m._sk ? +(m._st / m._sk).toFixed(3) : null;
+    m.avg_latency_ms = m._ln ? Math.round(m._ls / m._ln) : null;
+    delete m._sk; delete m._st; delete m._ls; delete m._ln;
   }
   return {
     total: rows.length, bySource, byJob,
@@ -3021,11 +3030,19 @@ async function runWeeklyReview(env, opts) {
   const rows = await readTelemetryRows(env, days);
   const metrics = computeTelemetryMetrics(rows);
   let proposal, proposalItems = [];
+  // Thin-data honesty guard (B-220): a confident ranked review wants a real history behind it.
+  // Below THIN_DATA_MIN rows the proposals are hypotheses, not conclusions — say so loudly
+  // rather than dressing up a review built on a handful of (possibly seed) rows.
+  const THIN_DATA_MIN = 20;
+  const thinData = metrics.total < THIN_DATA_MIN;
   if (metrics.total < 5) {
     proposal = `Not enough telemetry yet (${metrics.total} row(s) in ${days}d). The spine is collecting — a data-backed ranked proposal needs a bit more history. This will get sharper every week as jobs accrue.`;
   } else {
     try { const pr = await llmReviewProposal(env, metrics, days); proposal = pr.text; proposalItems = pr.items || []; }
     catch (e) { proposal = `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
+    if (thinData) {
+      proposal = `⚠ DIRECTIONAL ONLY — thin data (${metrics.total} telemetry rows in ${days}d; a confident review wants ${THIN_DATA_MIN}+). Treat these as hypotheses to sanity-check, not conclusions.\n\n` + proposal;
+    }
   }
   // Deliver first (gated), so the history row records the REAL outcome (reviewer NIT-1).
   let delivery = null;
@@ -3046,7 +3063,7 @@ async function runWeeklyReview(env, opts) {
   } catch (_) { /* history write is best-effort; the review still returns */ }
   // Self-instrument (PAT-031): the reviewer is itself a measured job.
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Notes: `${metrics.total} rows/${days}d` }); } catch (_) {}
-  return { ok: true, window_days: days, metrics, proposal, items: proposalItems, logged, delivery };
+  return { ok: true, window_days: days, metrics, proposal, items: proposalItems, thin_data: thinData, logged, delivery };
 }
 
 // ── OPTIMIZER BUILD QUEUE (approve proposals → queue for the Prepare agent) ────
@@ -3054,7 +3071,10 @@ async function runWeeklyReview(env, opts) {
 // The Rung-1 Prepare agent reads this queue first. Nothing auto-builds — this is the
 // human gate that turns a proposal into a queued build. Admin-gated; internal tab only.
 const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By'];
+// Problem is stored (B-218) so a greenlit item keeps its WHY — a build brief without the
+// problem statement is half a brief. Every field the proposal carried survives the approve step.
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By'];
+const OPS_QUEUE_STATUSES = ['greenlit', 'building', 'done', 'dropped'];
 
 async function opsApprove(env, body) {
   const items = Array.isArray(body && body.items) ? body.items : [];
@@ -3066,6 +3086,7 @@ async function opsApprove(env, body) {
   for (const it of items) {
     await addRow(env, OPS_QUEUE_TAB, {
       Timestamp: now, Title: String(it.title || '').slice(0, 200), Rank: String(it.rank || ''),
+      Problem: String(it.problem || '').slice(0, 600),
       Impact: String(it.impact || '').slice(0, 300), Effort: String(it.effort || ''), Tag: String(it.tag || ''),
       First_Step: String(it.action || it.first_step || '').slice(0, 500),
       Review_TS: String((body && body.review_ts) || ''), Status: 'greenlit', Approved_By: String((body && body.by) || 'command-center'),
@@ -3084,6 +3105,21 @@ async function opsQueueRead(env, url) {
   } catch (e) { if (!isMissingTabError(e)) throw e; }
   const active = rows.filter(r => r.Status && r.Status !== 'done' && r.Status !== 'dropped');
   return json({ ok: true, count: active.length, queue: active.reverse().slice(0, 50) });
+}
+
+// POST /ops-queue-update {id, status} — advance a greenlit item along its lifecycle
+// (greenlit → building → done | dropped). Admin-gated. SAFE class: touches only the internal
+// Ops_Build_Queue Status column — no money, PII, or auth. This is what turns the queue from a
+// read-once pile into a real workflow: finished/dropped items leave the active list automatically
+// (opsQueueRead filters them), so what remains is always the live build backlog.
+async function opsQueueUpdate(env, body) {
+  const id = body && body.id;
+  const status = String((body && body.status) || '').toLowerCase();
+  if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
+  if (!OPS_QUEUE_STATUSES.includes(status)) return json({ error: 'status must be one of ' + OPS_QUEUE_STATUSES.join('|') }, 400);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  return await updateRow(env, OPS_QUEUE_TAB, id, { Status: status });
 }
 
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
