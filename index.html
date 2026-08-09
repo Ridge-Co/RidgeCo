@@ -1047,7 +1047,7 @@ function doLogin() {
     localStorage.setItem(SECRET_KEY, val);
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
-    loadAll();
+    Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
   }).catch(function() {
     AUTH_TOKEN = '';
     document.getElementById('login-error').style.display = 'block';
@@ -1061,7 +1061,7 @@ if (stored) {
   api('GET','/config').then(function() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
-    loadAll();
+    Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
   }).catch(function() { localStorage.removeItem(SECRET_KEY); AUTH_TOKEN = ''; });
 }
 
@@ -1288,6 +1288,16 @@ function renderWOPage() {
 }
 
 // ── WO Detail ────────────────────────────────────────────────
+// Deep link: another Hub page (e.g. the Vendor Reconciliation tool) can link to
+// index.html?wo=<id> to open that work order directly once the app has loaded. Guarded so a
+// missing/unknown id or an early call can never break normal startup.
+function maybeOpenWOFromURL() {
+  try {
+    var wid = new URLSearchParams(location.search).get('wo');
+    if (wid && typeof openWODetail === 'function') openWODetail(wid);
+  } catch (e) {}
+}
+
 function openWODetail(woId) {
   console.log('[openWODetail] called woId=', woId, 'workorders count=', state.workorders && state.workorders.length);
   var wo = state.workorders.find(function(w){return w.ID===woId;});

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.5';
+const BUILD_VERSION = '2026-08-09.6';
 
 export default {
   async fetch(request, env) {
@@ -5011,8 +5011,12 @@ async function qbVendorReconcile(env, body) {
   const vendorId = String(body.vendor_id || '').trim();
   const vendorName = String(body.vendor_name || '').trim().toLowerCase();
   try {
-    const [vendors, bills] = await fetchTabs(env, ['Vendors', 'Vendor_Bills']);
+    const [vendors, bills, workorders, properties] = await fetchTabs(env, ['Vendors', 'Vendor_Bills', 'Work_Orders', 'Properties']);
+    let units = []; try { units = await fetchTab(env, 'Units'); } catch (e) { units = []; }
     const activeBills = (bills || []).filter(b => b.Active !== 'FALSE');
+    const woById = {}; for (const w of (workorders || [])) woById[String(w.ID)] = w;
+    const propById = {}; for (const p of (properties || [])) propById[String(p.ID)] = p;
+    const unitById = {}; for (const u of (units || [])) unitById[String(u.ID)] = u;
     const vendorList = (vendors || [])
       .map(v => ({ id: String(v.ID || ''), name: qbVendorDisplayName(v) }))
       .filter(v => v.id && v.name)
@@ -5066,6 +5070,16 @@ async function qbVendorReconcile(env, body) {
       const age = ageOf(dateStr);
       const { status, action } = qbReconcileStatus(!!qbBillId, !!qbBill, billBal, !!qbInvId, invBal);
 
+      // Job context from the work order behind the bill, so the row says WHAT and WHERE, not
+      // just a WO number: the property address, the unit, the trade, and the job description.
+      const wo = woById[String(b.WO_ID || '')];
+      const prop = wo ? propById[String(wo.Property_ID || '')] : null;
+      const unit = (wo && wo.Unit_ID) ? unitById[String(wo.Unit_ID)] : null;
+      const property = prop ? [prop.Address, prop.City].filter(Boolean).join(', ') : (invCust || '');
+      const unitLabel = unit ? (unit.Unit_Number || unit.Label || unit.Name || unit.Unit || '') : '';
+      const description = wo ? (wo.Description || '') : '';
+      const trade = wo ? (wo.Trade || '') : '';
+
       if (billBal !== null && billBal > 0.005) owedToVendor += billBal;
       if (action) collectedNotPaid += (billBal || 0);
       // "Open" for age = a real unpaid QB bill, a no-QB-bill row, or a broken link worth chasing.
@@ -5074,6 +5088,7 @@ async function qbVendorReconcile(env, body) {
 
       return {
         bill_row_id: String(b.ID || ''), wo_id: String(b.WO_ID || ''), customer: invCust,
+        property, unit: unitLabel, description, trade,
         qb_bill_id: qbBillId, qb_invoice_id: qbInvId, invoice_doc: (qbInv && qbInv.DocNumber) || '',
         bill_total: +billTot.toFixed(2), bill_balance: billBal === null ? null : +billBal.toFixed(2),
         inv_total: +invTot.toFixed(2), inv_balance: invBal === null ? null : +invBal.toFixed(2),
