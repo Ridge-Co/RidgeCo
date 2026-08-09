@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.1';
+const BUILD_VERSION = '2026-08-09.2';
 
 export default {
   async fetch(request, env) {
@@ -4773,6 +4773,7 @@ async function qbBackfillEmails(env, body) {
   body = body || {};
   const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
   const force = body.force === true || String(body.force).toUpperCase() === 'TRUE';
+  const explicitEmail = typeof body.email === 'string' ? body.email.trim() : '';
   const onlyIds = Array.isArray(body.ids) ? body.ids.map(x => String(x).trim()).filter(Boolean) : null;
 
   try {
@@ -4781,12 +4782,48 @@ async function qbBackfillEmails(env, body) {
     const { toSet, skipped, already } = qbResolveEmailBackfill(customers);
 
     if (!apply) {
+      // all_customers is the GROUND TRUTH: the email read straight from QuickBooks for every
+      // customer (owners + properties + units). The Hub/Sheets may show an owner email that
+      // was never pushed to QuickBooks — this is how the page proves what QB actually holds.
+      const all_customers = customers.map(c => ({
+        id: String(c.id), name: c.name || '', path: c.path || c.name || '',
+        email: c.email || '', is_sub: c.is_sub === true || !!c.parent_id,
+        parent_id: String(c.parent_id || ''), level: c.level || 0,
+      }));
       return json({
         ok: true, applied: false,
         total_customers: customers.length,
         to_set_count: toSet.length, skipped_count: skipped.length, already_count: already.length,
-        to_set: toSet, skipped, already,
+        to_set: toSet, skipped, already, all_customers,
       });
+    }
+
+    // EXPLICIT-SET MODE: write a specific address the user typed onto exactly the given ids.
+    // This is the escape hatch for rows the automatic copy can't reach — e.g. a property whose
+    // owner has NO email in QuickBooks to inherit (the address lives only in the Hub/Sheets),
+    // so the user supplies it. Overwrites by design; the page confirms first. Chunked by the
+    // page to stay under the subrequest cap, same as the inheritance path.
+    if (explicitEmail) {
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(explicitEmail)) return json({ ok: false, error: 'That does not look like an email address.' }, 400);
+      const setIds = onlyIds || [];
+      if (!setIds.length) return json({ ok: false, error: 'No customers selected to set.' }, 400);
+      const byId = {}; for (const c of customers) byId[String(c.id)] = c;
+      const updated = [], failed = [];
+      for (const id of setIds) {
+        const c = byId[String(id)];
+        const nm = c ? (c.path || c.name || ('#' + id)) : ('#' + id);
+        try {
+          const got = await qbApi(env, `customer/${encodeURIComponent(id)}?minorversion=73`, 'GET', null, token);
+          const cust = got && got.Customer;
+          if (!cust) { failed.push({ id, name: nm, error: qbFault(got) || 'could not read customer from QuickBooks' }); continue; }
+          const patch = { Id: String(id), SyncToken: cust.SyncToken, sparse: true, PrimaryEmailAddr: { Address: explicitEmail } };
+          const r = await qbApi(env, 'customer?minorversion=73', 'POST', patch, token);
+          if (r && r.Customer) updated.push({ id, name: nm, email: explicitEmail });
+          else failed.push({ id, name: nm, error: qbFault(r) || 'QuickBooks refused the update' });
+        } catch (e) { failed.push({ id, name: nm, error: e.message }); }
+      }
+      _qbEntityCache.customer = null;
+      return json({ ok: true, applied: true, explicit: true, requested: setIds.length, updated: updated.length, failed_count: failed.length, updated_list: updated, failed });
     }
 
     // Candidate map id -> {email to write, ...}. Blanks come from toSet. A FORCED overwrite

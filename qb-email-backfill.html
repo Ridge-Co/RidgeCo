@@ -79,13 +79,26 @@
 
 <div class="section" id="skipped-section" style="display:none">
   <div class="section-title">Skipped — no parent email to copy</div>
-  <p class="sub" style="margin-bottom:10px">These have no email anywhere above them in QuickBooks. Give the property or owner an email first, then re-run.</p>
+  <p class="sub" style="margin-bottom:10px">These have no email anywhere above them <b>in QuickBooks</b>. That usually means the OWNER has no email on file in QuickBooks (even if the Hub shows one). Fix them in the ground-truth panel below: filter to the row, type the email, and Set — or set the email on the owner and re-run to cascade.</p>
   <div id="skipped"></div>
+</div>
+
+<div class="section" id="all-section" style="display:none">
+  <div class="section-title">Every QuickBooks customer — the real email on file</div>
+  <p class="sub" style="margin-bottom:10px">This reads the email <b>straight from QuickBooks</b>. <span class="warn">(blank in QuickBooks)</span> means there is genuinely nothing there — no matter what the Hub or Sheets show elsewhere. This is the ground truth. To fix a row the automatic copy can't reach (e.g. its owner is blank here): filter to it, tick it, type the email, and Set. Setting the email on the <b>owner</b> row and then re-previewing lets the blanks under it inherit automatically.</p>
+  <div class="row"><input id="all-filter" placeholder="Filter by name or email… (e.g. Lanvale, Goldszmidt)" oninput="applyAllFilter()" style="flex:1"></div>
+  <div id="all-list" style="margin-top:8px"><div class="empty">Preview first to load QuickBooks.</div></div>
+  <div class="row" style="margin-top:12px"><label>Email to set</label><input id="ground-email" placeholder="e.g. goldszmidtproperties@gmail.com" style="flex:1"></div>
+  <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+    <button class="btn" id="ground-btn" onclick="groundApply()" disabled style="background:var(--accent);color:#000">Set email on checked (writes to QuickBooks)</button>
+    <span id="ground-count" style="color:var(--muted);font-size:11px"></span>
+  </div>
+  <div id="ground-log"></div>
 </div>
 
 <script>
 const CHUNK = 8; // QuickBooks writes per request — 2 subrequests each; keeps each Worker call well under Cloudflare's subrequest cap
-let plan = { to_set: [], skipped: [], already: [] };
+let plan = { to_set: [], skipped: [], already: [], all_customers: [] };
 
 function worker(){ return document.getElementById('worker-url').value.trim(); }
 function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
@@ -120,6 +133,7 @@ async function preview(){
     renderToSet();
     renderAlready();
     renderSkipped();
+    renderAllCustomers();
   } catch(e){
     status.textContent = '❌ '+e.message;
   }
@@ -191,6 +205,7 @@ async function applyIds(ids, opts){
     logEl.innerHTML = '<div class="info">Writing to QuickBooks… '+done+'/'+ids.length+' done</div>';
     const body = { apply:true, ids: slice };
     if (opts.force) body.force = true;
+    if (opts.email) body.email = opts.email;
     let res;
     try { res = await post('/qb/backfill-emails', body); }
     catch(e){ slice.forEach(id => failed.push({ name:id, error:e.message })); done += slice.length; continue; }
@@ -253,6 +268,48 @@ async function forceApply(){
   if (!confirm('OVERWRITE the existing email on '+ids.length+' QuickBooks customer'+(ids.length>1?'s':'')+' with the email from its parent in QuickBooks (shown in "Will copy from")? The current address on each will be replaced.')) return;
   document.getElementById('force-btn').disabled = true;
   await applyIds(ids, { force:true, logId:'force-log' });
+}
+
+// ── Ground truth: every customer's ACTUAL QuickBooks email + type-and-set for any row ─────
+function renderAllCustomers(){
+  const rows = plan.all_customers || [];
+  const sec = document.getElementById('all-section');
+  if (!rows.length){ sec.style.display='none'; return; }
+  sec.style.display='block';
+  applyAllFilter();
+}
+function applyAllFilter(){
+  const q = (document.getElementById('all-filter').value||'').toLowerCase().trim();
+  const all = plan.all_customers || [];
+  const rows = q ? all.filter(r => ((r.path||r.name||'')+' '+(r.email||'')).toLowerCase().includes(q)) : all;
+  if (!rows.length){ document.getElementById('all-list').innerHTML = '<div class="empty">No customers match “'+esc(q)+'”.</div>'; updateGroundSel(); return; }
+  let html = '<table><thead><tr><th style="width:28px"></th><th>Customer</th><th>Email in QuickBooks</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    const has = !!(r.email && String(r.email).trim());
+    html += '<tr>'+
+      '<td><input type="checkbox" class="gpick" value="'+esc(r.id)+'" onchange="updateGroundSel()"></td>'+
+      '<td>'+esc(r.path||r.name)+(r.is_sub?'':' <span class="pill skip">owner</span>')+'</td>'+
+      '<td>'+(has ? '<span class="mono-email">'+esc(r.email)+'</span>' : '<span class="warn">(blank in QuickBooks)</span>')+'</td>'+
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById('all-list').innerHTML = html;
+  updateGroundSel();
+}
+function groundIds(){ return Array.from(document.querySelectorAll('.gpick')).filter(c=>c.checked).map(c=>c.value); }
+function updateGroundSel(){
+  const n = groundIds().length;
+  document.getElementById('ground-count').textContent = n ? n+' selected' : '';
+  document.getElementById('ground-btn').disabled = n===0;
+}
+async function groundApply(){
+  const ids = groundIds();
+  const email = (document.getElementById('ground-email').value||'').trim();
+  if (!ids.length) return;
+  if (!email){ alert('Type the email to set first.'); return; }
+  if (!confirm('Set “'+email+'” on '+ids.length+' QuickBooks customer'+(ids.length>1?'s':'')+'? This writes to QuickBooks and replaces any existing address on those rows.')) return;
+  document.getElementById('ground-btn').disabled = true;
+  await applyIds(ids, { email:email, logId:'ground-log' });
 }
 </script>
 </body>
