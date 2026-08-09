@@ -188,6 +188,33 @@ async function runReview(){
 }
 // AR aging — best-effort read from QuickBooks; null on any failure (card falls back to Sheet).
 async function loadAR(){ try{ return await getJSON('/ar/aging'); }catch(e){ return null; } }
+// AR reminders (Phase 2) — preview-first, per-customer, gated on Brett's tap. Sends via
+// QuickBooks (re-emails the invoice + pay link); paid invoices are re-checked and skipped.
+async function remindAR(i){
+  const c=(window.__arCust||[])[i]; if(!c||!c.ids||!c.ids.length) return;
+  let pv;
+  try{
+    const r=await fetch(WORKER+'/ar/remind',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({invoice_ids:c.ids,preview:true})});
+    pv=await r.json(); if(!r.ok||!pv||pv.ok!==true) throw new Error((pv&&pv.error)||('HTTP '+r.status));
+  }catch(e){ openSheet('Couldn’t prepare','Preview failed — '+(e&&e.message||e),false,null,false); return; }
+  const willSend=(pv.items||[]).filter(x=>x.willSend), skipped=(pv.items||[]).filter(x=>!x.willSend);
+  if(!willSend.length){ openSheet('Nothing to send',c.name+': '+(skipped.map(s=>s.reason).join(', ')||'no eligible invoices')+'.',false,null,false); return; }
+  const emails=[...new Set(willSend.map(x=>x.email))].join(', ');
+  const total=willSend.reduce((s,x)=>s+(x.balance||0),0);
+  let bodyTxt='Email '+c.name+' a QuickBooks reminder for '+willSend.length+' invoice'+(willSend.length>1?'s':'')+' ($'+Math.round(total).toLocaleString()+') → '+emails+'.';
+  if(skipped.length) bodyTxt+=' Skipping '+skipped.length+' ('+skipped.map(s=>(s.doc||s.id)+': '+s.reason).join('; ')+').';
+  bodyTxt+=' This re-sends QuickBooks’ standard invoice email with a pay link. Send now?';
+  const sendIds=willSend.map(x=>x.id);
+  openSheet('Send reminder to '+c.name+'?',bodyTxt,false,function(){
+    (async function(){
+      try{
+        const r=await fetch(WORKER+'/ar/remind',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({invoice_ids:sendIds})});
+        const d=await r.json(); if(!r.ok||!d||d.ok!==true) throw new Error((d&&d.error)||('HTTP '+r.status));
+        openSheet('Reminder sent','Sent '+d.sent+' of '+sendIds.length+' to '+c.name+'.'+(d.skipped?' Skipped '+d.skipped+'.':''),false,null,false); load();
+      }catch(e){ openSheet('Send failed',String(e&&e.message||e),false,null,false); }
+    })();
+  },false);
+}
 function arCard(ar){
   const b=ar.buckets||{}; const bk=k=>(b[k]||{count:0,total:0});
   const money=n=>'$'+Math.round(n||0).toLocaleString();
@@ -198,14 +225,22 @@ function arCard(ar){
     +'<div class="count"><b>'+money(bk("d30").total)+'</b><small>1-30d</small></div>'
     +'<div class="count" style="border-color:#f0d9a8;background:var(--amberbg)"><b style="color:var(--amber)">'+money(bk("d60").total+bk("d90").total)+'</b><small>31-90d</small></div>'
     +'<div class="count" style="border-color:#ecc3c3;background:var(--redbg)"><b style="color:var(--red)">'+money(bk("d90plus").total)+'</b><small>90d+</small></div></div>';
+  window.__arCust=[];
   const cust=(ar.by_customer||[]).filter(c=>c.oldest_days>0).slice(0,6);
   if(cust.length){
     html+='<p class="note" style="margin-top:10px">Oldest first — chase these:</p>';
-    cust.forEach(c=>{const dc=c.oldest_days>90?'r':(c.oldest_days>30?'a':'y');
+    cust.forEach(c=>{
+      const dc=c.oldest_days>90?'r':(c.oldest_days>30?'a':'y');
+      let btn='';
+      if(TOKEN&&c.overdue_ids&&c.overdue_ids.length){
+        const i=window.__arCust.length; window.__arCust.push({name:c.customer,ids:c.overdue_ids});
+        btn='<br><button onclick="remindAR('+i+')" style="margin-top:7px;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;background:var(--blue);color:#fff;cursor:pointer">✉ Send reminder — '+money(c.overdue_total)+' (30d+)</button>';
+      }
       html+='<div class="row2"><span class="pdot '+dc+'"></span><div class="t">'+h(c.customer)
-        +'<small>'+money(c.total)+' · '+c.count+' invoice'+(c.count===1?'':'s')+' · oldest '+c.oldest_days+'d past due</small></div><span class="vtag">RIDGE CO</span></div>';});
+        +'<small>'+money(c.total)+' · '+c.count+' invoice'+(c.count===1?'':'s')+' · oldest '+c.oldest_days+'d past due</small>'+btn+'</div><span class="vtag">RIDGE CO</span></div>';
+    });
   } else { html+='<p class="note">Nothing past due — everything owed is still current. 🎉</p>'; }
-  html+='<p class="note">One-tap reminders (re-send via QuickBooks) are Phase 2 — ask to turn them on.</p></div>';
+  html+='<p class="note">Reminders re-send QuickBooks’ standard invoice email (pay link included) to the address on file — you preview every send, and paid invoices are auto-skipped.</p></div>';
   return html;
 }
 

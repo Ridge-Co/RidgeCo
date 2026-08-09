@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-08.2';
+const BUILD_VERSION = '2026-08-08.3';
 
 export default {
   async fetch(request, env) {
@@ -231,6 +231,7 @@ export default {
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
+        if (path === '/ar/remind')                return await arRemind(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
@@ -3087,15 +3088,72 @@ async function arAging(env, url) {
     const bkt = age <= 0 ? 'current' : age <= 30 ? 'd30' : age <= 60 ? 'd60' : age <= 90 ? 'd90' : 'd90plus';
     buckets[bkt].count++; buckets[bkt].total += bal;
     const cust = (inv.CustomerRef && (inv.CustomerRef.name || inv.CustomerRef.value)) || 'Unknown';
-    (byCust[cust] = byCust[cust] || { customer: cust, total: 0, count: 0, oldest_days: 0 });
+    const custId = (inv.CustomerRef && inv.CustomerRef.value) || '';
+    (byCust[cust] = byCust[cust] || { customer: cust, customer_id: custId, total: 0, count: 0, oldest_days: 0, overdue_total: 0, overdue_ids: [] });
     byCust[cust].total += bal; byCust[cust].count++; if (age > byCust[cust].oldest_days) byCust[cust].oldest_days = age;
+    if (age > 30) { byCust[cust].overdue_total += bal; byCust[cust].overdue_ids.push(inv.Id); }
     list.push({ id: inv.Id, doc: inv.DocNumber || '', customer: cust, balance: +bal.toFixed(2), due, age_days: age, bucket: bkt });
   }
   Object.values(buckets).forEach(b => b.total = +b.total.toFixed(2));
-  const customers = Object.values(byCust).map(c => ({ ...c, total: +c.total.toFixed(2) }))
+  const customers = Object.values(byCust).map(c => ({ ...c, total: +c.total.toFixed(2), overdue_total: +c.overdue_total.toFixed(2) }))
     .sort((a, b) => b.oldest_days - a.oldest_days || b.total - a.total);
   list.sort((a, b) => b.age_days - a.age_days || b.balance - a.balance);
   return json({ ok: true, as_of: new Date(now).toISOString().slice(0, 10), total_open: +totalOpen.toFixed(2), open_count: list.length, buckets, by_customer: customers, invoices: list.slice(0, 100) });
+}
+
+// POST /ar/remind {invoice_ids:[...], preview?} — re-send the QuickBooks invoice email (with
+// pay link) to the billing address on file, for aging invoices. MONEY/CUSTOMER-FACING, so:
+//   • preview:true returns exactly who WOULD be emailed (re-checked balances + email) and sends
+//     NOTHING — the Command Center previews before every send.
+//   • On real send, EACH invoice's balance is re-fetched from QuickBooks first; a paid invoice
+//     is SKIPPED (never dun a customer who already paid — the aging view can be stale).
+//   • Invoices with no email on file are skipped and reported, not silently dropped.
+//   • Every actual send is logged to AR_Reminders. Admin-gated by the top auth gate.
+const AR_REMINDER_TAB  = 'AR_Reminders';
+const AR_REMINDER_COLS = ['ID','Timestamp','Invoice_ID','Doc','Customer','Amount','Email','Result','By'];
+
+async function arRemind(env, body) {
+  body = body || {};
+  const ids = Array.isArray(body.invoice_ids) ? body.invoice_ids.map(String).filter(Boolean) : [];
+  if (!ids.length) return json({ error: 'invoice_ids required' }, 400);
+  if (ids.length > 50) return json({ error: 'too many at once (max 50)' }, 400);
+  const preview = body.preview === true || body.preview === '1';
+  const token = await qbAccessToken(env);
+  const items = [];
+  for (const id of ids) {
+    let inv = null;
+    try {
+      const r = await qbApi(env, `invoice/${encodeURIComponent(id)}?minorversion=73`, 'GET', null, token);
+      if (r && r.Fault) throw new Error('fault');
+      inv = r && r.Invoice;
+    } catch (e) { items.push({ id, willSend: false, reason: 'lookup failed' }); continue; }
+    if (!inv) { items.push({ id, willSend: false, reason: 'not found' }); continue; }
+    const bal = Number(inv.Balance) || 0;
+    const cust = (inv.CustomerRef && inv.CustomerRef.name) || '';
+    const doc = inv.DocNumber || '';
+    const email = (inv.BillEmail && inv.BillEmail.Address) || '';
+    if (bal <= 0.005) { items.push({ id, doc, customer: cust, balance: 0, email, willSend: false, reason: 'already paid' }); continue; }
+    if (!email) { items.push({ id, doc, customer: cust, balance: +bal.toFixed(2), email: '', willSend: false, reason: 'no email on file' }); continue; }
+    if (preview) { items.push({ id, doc, customer: cust, balance: +bal.toFixed(2), email, willSend: true }); continue; }
+    // SEND — QuickBooks re-emails its standard invoice (with pay link) to BillEmail on file.
+    // Documented SendInvoice shape: bodyless POST, Content-Type application/octet-stream.
+    // Require a POSITIVE confirmation (2xx + Invoice + EmailStatus) — never report "sent" on a
+    // response that merely lacks a Fault, or the audit log would claim a send that never went.
+    try {
+      const rr = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(id)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
+      const sres = await rr.json().catch(() => null);
+      if (!rr.ok || !sres || sres.Fault || !sres.Invoice) throw new Error('send not confirmed (HTTP ' + rr.status + '): ' + JSON.stringify((sres && sres.Fault) || sres || '').slice(0, 150));
+      const es = sres.Invoice.EmailStatus;
+      if (es && es !== 'EmailSent') throw new Error('QuickBooks did not send (EmailStatus=' + es + ')');
+      items.push({ id, doc, customer: cust, balance: +bal.toFixed(2), email, willSend: true, sent: true });
+      try {
+        await ensureTab(env, AR_REMINDER_TAB, AR_REMINDER_COLS);
+        await ensureColumns(env, AR_REMINDER_TAB, AR_REMINDER_COLS);
+        await addRow(env, AR_REMINDER_TAB, { Timestamp: new Date().toISOString(), Invoice_ID: id, Doc: doc, Customer: cust, Amount: bal.toFixed(2), Email: email, Result: 'sent', By: String(body.by || 'command-center') });
+      } catch (_) { /* audit log best-effort; the send already happened */ }
+    } catch (e) { items.push({ id, doc, customer: cust, balance: +bal.toFixed(2), email, willSend: true, sent: false, reason: String((e && e.message) || e).slice(0, 150) }); }
+  }
+  return json({ ok: true, preview, count: items.length, to_send: items.filter(i => i.willSend).length, sent: items.filter(i => i.sent).length, skipped: items.filter(i => !i.willSend).length, items });
 }
 
 function bytesToB64(buf) {
