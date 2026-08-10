@@ -331,7 +331,7 @@ _🔴 Wave 0 = Communication (leads everything, Brett's directive). Detail table
 | B-030 | 🟠 | Estimating template system — reusable proposal generator | Intake form (Sheet or structured input) → auto-generated HTML proposal. Base design on 4518 Fairfax Rd v1.1 as reference. ~2hr build session. |
 | B-031 | 🟠 | Estimating skill/agent — scope intake, photo review, line item generation | Replace Gemini workflow. Ask questions, stick to provided scope, no invented items, build memory of Brett's pricing patterns. |
 | B-032 | 🟡 | Proposal PDF export — one-click PDF with hyperlinks from HTML proposal | Chromium headless print-to-PDF. Links to Drive photos must survive. |
-| B-076 | 🟠 | Estimate-acceptance workflow — accept-all-in-section or cherry-pick w/ running total | Ties B-030/B-032. From CAP-018. |
+| B-076 | 🔵 IN PROGRESS | Estimate/proposal-acceptance workflow → QB | **Core shipped Aug 10 (`2026-08-10.1`, FEATURE_LOG rule 72):** customer e-signs HTML proposal → `POST /proposal/sign` stores it → Hub `signed-proposals.html` → Brett previews → `POST /proposal/book` creates QB customer invoice (first payment) + vendor bill (base). Preview-first, idempotent, server-authoritative amounts (PROPOSAL_REGISTRY). First live registry entry = roofing 3101 Gibbons (Tristan/Eddie). **Remaining:** first supervised live-QB booking; set `PROPOSAL_SIGN_TOKEN` env; milestone vendor bills; move registry to a Sheet tab; add version-poll auto-refresh to the page. Ties B-030/B-032/B-126. |
 
 ---
 
