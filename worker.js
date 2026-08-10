@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.14';
+const BUILD_VERSION = '2026-08-10.1';
 
 export default {
   async fetch(request, env) {
@@ -82,7 +82,16 @@ export default {
         const _opsQueueOk = !!env.OPS_QUEUE_TOKEN
           && _tok === env.OPS_QUEUE_TOKEN
           && request.method === 'GET' && path === '/ops-queue';
-        if (!_syncOk && !_nudgeOk && !_opsQueueOk) {
+        // Narrow WRITE token for the customer-facing proposal e-sign (B-076). Accepted ONLY for
+        // POST /proposal/sign, which appends a signed-acceptance row to Proposal_Signatures. No
+        // money, no QuickBooks, no PII beyond the signer's own name + signature image. The QB
+        // customer invoice + vendor bill are created LATER by Brett from the Hub (full admin
+        // secret + preview-first), never by this token. Fully inert unless env.PROPOSAL_SIGN_TOKEN
+        // is set, so deploying it has zero effect until the secret exists.
+        const _signOk = !!env.PROPOSAL_SIGN_TOKEN
+          && _tok === env.PROPOSAL_SIGN_TOKEN
+          && request.method === 'POST' && path === '/proposal/sign';
+        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -160,6 +169,7 @@ export default {
         if (path === '/trash/qb-customers')     return await trashQbCustomers(env);
         if (path === '/trash/qb-items')         return await trashQbItems(env);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
+        if (path === '/proposal/signatures')    return await proposalList(env, url);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -289,6 +299,8 @@ export default {
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
         if (path === '/trash/log-visit')          return await trashLogVisit(env, body);
         if (path === '/trash/invoice')            return await trashInvoice(env, body);
+        if (path === '/proposal/sign')            return await proposalSign(env, body);
+        if (path === '/proposal/book')            return await proposalBook(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -7341,6 +7353,193 @@ async function trashInvoice(env, body) {
 }
 
 // ── UTILITY ──────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROPOSAL E-SIGN → QUICKBOOKS (B-076)
+// A customer signs the HTML roofing proposal; the signature is stored here via
+// POST /proposal/sign (PROPOSAL_SIGN_TOKEN-gated, no money). Brett then reviews in the Hub
+// (signed-proposals.html) and one-taps POST /proposal/book (admin secret, preview-first) to
+// create the customer invoice (first payment, marked-up) + the vendor bill (base cost).
+// MONEY IS SERVER-AUTHORITATIVE: the client only sends which proposal + which option + who
+// signed. Every dollar, the owner/customer, the vendor, and the trade come from
+// PROPOSAL_REGISTRY / the Sheets here — never trusted from the client.
+// ─────────────────────────────────────────────────────────────────────────────
+const PROPOSAL_SIG_HEADERS = ['ID','Proposal_ID','Option','Owner_Total','First_Payment','Vendor_Cost','Signer_Name','Signed_Date','Signature_PNG','Signed_TS','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Created_Date','Active'];
+
+// One entry per live proposal. Adding a proposal = add an entry (or later, a Proposals tab).
+const PROPOSAL_REGISTRY = {
+  'RC-ROOF-3101GIB-01': {
+    wo: 'WO-1077', property: '3101 Gibbons Ave', vendorId: '5', trade: 'Roofing',
+    options: {
+      A: { label: 'Targeted Repair (no warranty)',      ownerTotal: 4200,  firstPayment: 2100,  vendorCost: 3200,  firstLabel: '50% deposit' },
+      B: { label: 'Full Roof Replacement (warrantied)',  ownerTotal: 25990, firstPayment: 19035, vendorCost: 19800, firstLabel: 'materials & mobilization' },
+    },
+  },
+};
+
+async function ensureProposalTab(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  if (!titles.includes('Proposal_Signatures')) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: 'Proposal_Signatures' } } }] });
+  }
+  await ensureColumns(env, 'Proposal_Signatures', PROPOSAL_SIG_HEADERS);
+}
+
+// POST /proposal/sign { proposal_id, option, signer_name, signed_date, signature_png, signed_ts }
+// Store a signed acceptance. Amounts come from PROPOSAL_REGISTRY, NOT the client. Creates
+// nothing in QuickBooks.
+async function proposalSign(env, body) {
+  if (!body || !body.proposal_id || !body.option) return json({ error: 'proposal_id and option required' }, 400);
+  const reg = PROPOSAL_REGISTRY[body.proposal_id];
+  if (!reg) return json({ error: 'unknown proposal_id' }, 404);
+  const optKey = String(body.option).toUpperCase();
+  const opt = reg.options[optKey];
+  if (!opt) return json({ error: 'unknown option' }, 400);
+  const signer = String(body.signer_name || '').trim().slice(0, 120);
+  if (signer.length < 2) return json({ error: 'signer_name required' }, 400);
+  await ensureProposalTab(env);
+  const rows = await fetchTab(env, 'Proposal_Signatures');
+  const dup = rows.find(r => r.Active !== 'FALSE' && r.Proposal_ID === body.proposal_id && r.Option === optKey && r.Signer_Name === signer);
+  if (dup) return json({ success: true, id: dup.ID, duplicate: true });
+  const png = String(body.signature_png || '');
+  await addRow(env, 'Proposal_Signatures', {
+    Proposal_ID: body.proposal_id, Option: optKey,
+    Owner_Total: opt.ownerTotal, First_Payment: opt.firstPayment, Vendor_Cost: opt.vendorCost,
+    Signer_Name: signer, Signed_Date: String(body.signed_date || '').slice(0, 40),
+    Signature_PNG: png.length <= 45000 ? png : '',   // Sheets cell cap ~50k chars; skip if oversized
+    Signed_TS: String(body.signed_ts || new Date().toISOString()).slice(0, 60),
+    Status: 'Signed', Created_Date: new Date().toISOString(), Active: 'TRUE',
+  });
+  return json({ success: true });
+}
+
+// GET /proposal/signatures (admin) — list signed proposals for the Hub review page.
+async function proposalList(env, url) {
+  await ensureProposalTab(env);
+  const rows = await fetchTab(env, 'Proposal_Signatures');
+  const out = rows.filter(r => r.Active !== 'FALSE').map(r => {
+    const reg = PROPOSAL_REGISTRY[r.Proposal_ID] || {};
+    const opt = (reg.options && reg.options[r.Option]) || {};
+    return {
+      id: r.ID, proposal_id: r.Proposal_ID, option: r.Option, option_label: opt.label || '',
+      property: reg.property || '', owner_total: +r.Owner_Total || 0, first_payment: +r.First_Payment || 0,
+      vendor_cost: +r.Vendor_Cost || 0, signer: r.Signer_Name, signed_date: r.Signed_Date, signed_ts: r.Signed_TS,
+      status: r.Status || 'Signed', qb_invoice_id: r.QB_Invoice_ID || '', qb_invoice_number: r.QB_Invoice_Number || '',
+      qb_bill_id: r.QB_Bill_ID || '', qb_bill_number: r.QB_Bill_Number || '',
+    };
+  });
+  out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
+  return json(out);
+}
+
+// POST /proposal/book (admin) { id, preview_only }
+// Preview or commit the QuickBooks side: a customer invoice for the owner (first payment,
+// marked-up) + a vendor bill for the contractor (full base cost). Idempotent on the stored row.
+async function proposalBook(env, body) {
+  if (!body || !body.id) return json({ error: 'id required' }, 400);
+  await ensureProposalTab(env);
+  const rows = await fetchTab(env, 'Proposal_Signatures');
+  const row = rows.find(r => r.ID === String(body.id) && r.Active !== 'FALSE');
+  if (!row) return json({ error: 'signature not found' }, 404);
+  const reg = PROPOSAL_REGISTRY[row.Proposal_ID];
+  if (!reg) return json({ error: 'unknown proposal in registry' }, 404);
+  const opt = reg.options[row.Option] || {};
+  const firstPayment = +row.First_Payment || opt.firstPayment || 0;
+  const vendorCost   = +row.Vendor_Cost   || opt.vendorCost   || 0;
+  const ownerTotal   = +row.Owner_Total   || opt.ownerTotal   || 0;
+  const tradeName = reg.trade || 'Roofing';
+  const trade = QB_TRADE_MAP[tradeName] || QB_TRADE_MAP.General;
+
+  const [wos, props, owners, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Owners','Vendors']);
+  const wo    = findWO(wos, reg.wo) || {};
+  const prop  = props.find(p => (p.Address || '').trim() === reg.property) || props.find(p => p.ID === (wo.Property_ID || '')) || {};
+  const owner = owners.find(o => o.ID === (prop.Owner_ID || '')) || null;
+  const vendor = vendors.find(v => v.ID === String(reg.vendorId)) || {};
+  const billTo = qbResolveBillTo(owner, prop, null);
+  const custDisplay = billTo.display || (owner && qbOwnerDisplayName(owner)) || 'Customer';
+  const vendDisplay = (vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + reg.vendorId)).trim();
+  const vendorInHouse = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+
+  const warnings = [];
+  if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
+  if (!vendor.ID) warnings.push('Vendor ' + reg.vendorId + ' not found — no vendor bill will be created.');
+  if (vendorInHouse) warnings.push('Vendor is marked in-house — no vendor bill will be created.');
+  if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, null); if (n) warnings.push(n); }
+  warnings.push('Invoice is the FIRST payment only ($' + firstPayment + ' of $' + ownerTotal + '); the vendor bill is the FULL base cost ($' + vendorCost + ').');
+
+  const invoiceDesc = tradeName + ' — ' + (opt.label || 'roof work') + ' — ' + (opt.firstLabel || 'first payment') + ' (' + reg.property + ')';
+  const preview = {
+    signature_id: row.ID, proposal_id: row.Proposal_ID, option: row.Option, property: reg.property, signer: row.Signer_Name,
+    invoice: { customer: custDisplay, level: billTo.level, amount: firstPayment, item: tradeName, desc: invoiceDesc, of_total: ownerTotal },
+    bill: (vendor.ID && !vendorInHouse) ? { vendor: vendDisplay, amount: vendorCost, trade: tradeName } : null,
+    already: { invoice: row.QB_Invoice_ID || '', bill: row.QB_Bill_ID || '' }, warnings,
+  };
+  if (body.preview_only) return json({ ok: true, preview });
+
+  // ---- COMMIT ----
+  // Refuse to bill a fallback "Customer": if the owner didn't resolve and there is no
+  // property/unit-level QB customer either, stop rather than post real money to a junk ledger.
+  if (!owner && !(billTo.qb_id || '')) return json({ ok: false, error: 'Owner not resolved for ' + reg.property + ' — refusing to create a QuickBooks invoice on a fallback customer. Fix the property/owner link first.', warnings });
+  const token = await qbAccessToken(env);
+  const txnDate = new Date().toISOString().slice(0, 10);
+  let invoiceId = row.QB_Invoice_ID || '', invoiceNumber = row.QB_Invoice_Number || '';
+  let billId = row.QB_Bill_ID || '', billNumber = row.QB_Bill_Number || '';
+
+  // 1) Customer invoice (first payment) — idempotent.
+  if (!invoiceId && firstPayment > 0) {
+    let customerId = (billTo.level !== 'owner' && billTo.qb_id) ? billTo.qb_id : '';
+    if (!customerId) {
+      try { customerId = await qbFindOrCreateCustomer(env, owner || {}, custDisplay, token); }
+      catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
+    }
+    const invoicePayload = {
+      Line: [{ DetailType: 'SalesItemLineDetail', Amount: +firstPayment.toFixed(2), Description: invoiceDesc.slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: +firstPayment.toFixed(2) } }],
+      CustomerRef: { value: customerId }, TxnDate: txnDate,
+      CustomerMemo: { value: ('Roofing proposal ' + row.Proposal_ID + ' — accepted ' + (row.Signed_Date || '') + ' by ' + row.Signer_Name).slice(0, 1000) },
+    };
+    const billEmail = (owner && (owner.Billing_Email || owner.Email) || '').trim();
+    if (billEmail && billEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail)) invoicePayload.BillEmail = { Address: billEmail };
+    let r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+    invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    if (!invoiceId && invoicePayload.BillEmail) { delete invoicePayload.BillEmail; r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token); invoiceId = (r && r.Invoice && r.Invoice.Id) || ''; }
+    if (!invoiceId) return json({ ok: false, error: 'QB invoice failed: ' + JSON.stringify(r).slice(0, 400), warnings });
+    invoiceNumber = (r.Invoice && r.Invoice.DocNumber) || '';
+    // Persist the invoice id NOW, before touching the bill, so a later failure (bill error or a
+    // dropped connection) can never cause a duplicate invoice on retry.
+    try { await updateRow(env, 'Proposal_Signatures', row.ID, { Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber }); } catch (e) {}
+  }
+
+  // 2) Vendor bill (full base cost) — idempotent; skipped if vendor missing/in-house.
+  // Wrapped so a bill failure can never roll back or hide the already-created (and persisted) invoice.
+  if (!billId && vendor.ID && !vendorInHouse && vendorCost > 0) {
+    try {
+      const vendorQbId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token);
+      if (vendorQbId) {
+        const billPayload = {
+          Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +vendorCost.toFixed(2),
+            Description: (vendDisplay + ' — ' + tradeName + ' — ' + (opt.label || '') + ' — ' + reg.wo).slice(0, 4000),
+            AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+          VendorRef: { value: vendorQbId }, TxnDate: txnDate,
+          PrivateNote: ('Roofing proposal ' + row.Proposal_ID + ' (' + row.Option + ') — ' + vendDisplay).slice(0, 1000),
+        };
+        const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+        billId = (rb && rb.Bill && rb.Bill.Id) || '';
+        billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
+        if (!billId) warnings.push('QB bill failed: ' + JSON.stringify(rb).slice(0, 300));
+      } else { warnings.push('Vendor QB id could not be resolved — no bill created.'); }
+    } catch (e) { warnings.push('Vendor bill error: ' + e.message); }
+  }
+
+  // 3) Persist QB ids + tie to the work order.
+  await updateRow(env, 'Proposal_Signatures', row.ID, {
+    Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber, QB_Bill_ID: billId, QB_Bill_Number: billNumber,
+  });
+  try { if (reg.wo) await updateWOFields(env, reg.wo, { Status: 'Invoiced' }); } catch (e) {}
+
+  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
+}
 
 function json(data, status=200) {
   return new Response(JSON.stringify(data), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });

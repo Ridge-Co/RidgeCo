@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Signed Proposals</title>
+<style>
+  :root{--bg:#e9ebef;--card:#fff;--ink:#0e1621;--muted:#5b6672;--line:#d8dce2;
+    --green:#1a8f4c;--greenbg:#e6f4ec;--amber:#b26a00;--amberbg:#fbf0dd;
+    --red:#c0242b;--redbg:#f9e4e4;--blue:#1f5fbf;--bluebg:#e7effb;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;font-size:15px;line-height:1.45;padding-bottom:60px}
+  .wrap{max-width:640px;margin:0 auto;padding:0 12px}
+  header{position:sticky;top:0;z-index:10;background:var(--bg);padding:12px 0 8px;border-bottom:1px solid var(--line)}
+  .title{font-size:16px;font-weight:800;display:flex;align-items:center;gap:8px}
+  .title small{font-weight:600;color:var(--muted);font-size:12px;margin-left:auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px;margin:10px 0;box-shadow:0 1px 2px rgba(16,23,32,.06)}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .name{font-size:15px;font-weight:800}
+  .sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .chip{font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:20px;white-space:nowrap}
+  .chip.signed{background:var(--amberbg);color:var(--amber)}
+  .chip.booked{background:var(--greenbg);color:var(--green)}
+  .amt{margin-left:auto;text-align:right}
+  .amt .big{font-size:17px;font-weight:800}
+  .amt .lbl{font-size:10.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+  .btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 13px;font-size:13px;font-weight:700;color:var(--ink);cursor:pointer}
+  .btn.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .booked{font-size:12.5px;color:var(--green);font-weight:700;margin-top:8px}
+  .muted{color:var(--muted)}
+  .warn{background:var(--amberbg);color:#5c3d00;border:1px solid #ecd6a6;border-radius:8px;padding:8px 10px;font-size:12px;margin:8px 0}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid #ccd;border-top-color:var(--blue);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
+  @keyframes s{to{transform:rotate(360deg)}}
+  #login{max-width:340px;margin:60px auto;text-align:center}
+  #login input{width:100%;padding:12px;border:1px solid var(--line);border-radius:9px;font-size:16px;margin:10px 0}
+  .modal{display:none;position:fixed;inset:0;background:rgba(14,22,33,.5);z-index:50;padding:14px}
+  .modal.open{display:block}
+  .box{max-width:520px;margin:24px auto;background:#fff;border-radius:14px;padding:16px}
+  .line{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dotted var(--line);font-size:13.5px}
+  .total{display:flex;justify-content:space-between;font-weight:800;font-size:16px;margin-top:8px;padding-top:8px;border-top:2px solid var(--ink)}
+  .hide{display:none}
+  .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#0e1621;color:#fff;padding:11px 16px;border-radius:10px;font-size:13px;z-index:80;opacity:0;transition:opacity .2s}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="title" style="justify-content:center;margin-bottom:6px">🧾 Signed Proposals</div>
+  <p class="muted" style="font-size:13px">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" onkeydown="if(event.key==='Enter')doLogin()">
+  <button class="btn primary" style="width:100%" onclick="doLogin()">Enter</button>
+  <p id="login-error" class="hide" style="color:var(--red);font-size:13px">Wrong code — try again.</p>
+</div>
+
+<div id="app" class="hide">
+  <header><div class="wrap"><div class="title">🧾 Signed Proposals <small id="count"></small></div></div></header>
+  <div class="wrap" id="list"><p class="muted" style="padding:20px 0"><span class="spin"></span> Loading…</p></div>
+</div>
+
+<div class="modal" id="modal"><div class="box">
+  <div class="title" id="m-title" style="margin-bottom:6px">Preview</div>
+  <div id="m-body"><p class="muted"><span class="spin"></span> Building preview…</p></div>
+  <div style="display:flex;gap:8px;margin-top:14px">
+    <button class="btn" style="flex:1" onclick="closeModal()">Cancel</button>
+    <button class="btn primary hide" style="flex:1" id="m-confirm" onclick="confirmBook(this)">Confirm</button>
+  </div>
+</div></div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var WORKER='https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY='mh_auth';
+var AUTH_TOKEN='';
+var cur=null;
+
+function api(method,path,body){
+  var opts={method:method,headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN}};
+  if(body)opts.body=JSON.stringify(body);
+  return fetch(WORKER+path,opts).then(function(res){return res.json().then(function(d){if(d.error==='Unauthorized')throw new Error('Unauthorized');return d;});});
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function money(n){return '$'+(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});}
+function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(function(){t.classList.remove('show');},2600);}
+
+function doLogin(){
+  var v=document.getElementById('login-input').value.trim();AUTH_TOKEN=v;
+  api('GET','/proposal/signatures').then(function(){localStorage.setItem(SECRET_KEY,v);enterApp();})
+    .catch(function(){AUTH_TOKEN='';document.getElementById('login-error').classList.remove('hide');});
+}
+function enterApp(){document.getElementById('login').classList.add('hide');document.getElementById('app').classList.remove('hide');load();}
+
+function load(){
+  api('GET','/proposal/signatures').then(function(rows){
+    if(!Array.isArray(rows)){document.getElementById('list').innerHTML='<div class="warn">'+esc((rows&&rows.error)||'Could not load')+'</div>';return;}
+    document.getElementById('count').textContent=rows.length+' total';
+    if(!rows.length){document.getElementById('list').innerHTML='<p class="muted" style="padding:20px 0">No signed proposals yet. When a customer signs a proposal, it appears here.</p>';return;}
+    var html='';
+    rows.forEach(function(r){
+      var booked=(r.status==='Booked')||r.qb_invoice_id;
+      html+='<div class="card"><div class="row">'
+        +'<div><div class="name">'+esc(r.signer||'—')+'</div>'
+        +'<div class="sub">'+esc(r.property||r.proposal_id)+' · '+esc(r.option_label||('Option '+r.option))+'</div>'
+        +'<div class="sub">Signed '+esc(r.signed_date||'')+'</div></div>'
+        +'<span class="chip '+(booked?'booked':'signed')+'">'+(booked?'✓ Booked':'Signed — needs billing')+'</span>'
+        +'</div>'
+        +'<div class="row" style="margin-top:10px">'
+        +'<div class="amt"><div class="lbl">Invoice owner (1st pmt)</div><div class="big">'+money(r.first_payment)+'</div></div>'
+        +'<div class="amt"><div class="lbl">Bill vendor (base)</div><div class="big">'+money(r.vendor_cost)+'</div></div>'
+        +'</div>';
+      if(booked){
+        html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created.</div>';
+      } else {
+        html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\')">Preview &amp; create invoice + bill</button></div>';
+      }
+      html+='</div>';
+    });
+    document.getElementById('list').innerHTML=html;
+  }).catch(function(e){document.getElementById('list').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
+}
+
+function preview(id){
+  cur={id:id};
+  document.getElementById('m-title').textContent='Preview — create in QuickBooks';
+  document.getElementById('m-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
+  document.getElementById('m-confirm').classList.add('hide');
+  document.getElementById('modal').classList.add('open');
+  api('POST','/proposal/book',{id:id,preview_only:true}).then(function(r){
+    if(!r||!r.ok||!r.preview){document.getElementById('m-body').innerHTML='<div class="warn">'+esc((r&&r.error)||'Could not build preview')+'</div>';return;}
+    var p=r.preview,h='';
+    h+='<div class="sub" style="margin-bottom:8px">'+esc(p.property)+' · '+esc(p.signer)+' · Option '+esc(p.option)+'</div>';
+    h+='<div class="line"><span>Invoice → '+esc(p.invoice.customer)+' <span class="muted">('+esc(p.invoice.level)+')</span><br><span class="muted" style="font-size:12px">'+esc(p.invoice.desc)+'</span></span><span>'+money(p.invoice.amount)+'</span></div>';
+    if(p.bill){h+='<div class="line"><span>Vendor bill → '+esc(p.bill.vendor)+' <span class="muted">('+esc(p.bill.trade)+')</span></span><span>'+money(p.bill.amount)+'</span></div>';}
+    else {h+='<div class="line muted"><span>No vendor bill</span><span>—</span></div>';}
+    if(p.already&&(p.already.invoice||p.already.bill)){h+='<div class="warn">Already partly booked (invoice '+esc(p.already.invoice||'—')+', bill '+esc(p.already.bill||'—')+'). Confirm will only create what is missing.</div>';}
+    if(p.warnings&&p.warnings.length){h+='<div class="warn">⚠ '+p.warnings.map(esc).join('<br>⚠ ')+'</div>';}
+    document.getElementById('m-body').innerHTML=h;
+    var b=document.getElementById('m-confirm');b.classList.remove('hide');b.textContent='Confirm — create in QuickBooks';b.disabled=false;
+  }).catch(function(e){document.getElementById('m-body').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
+}
+
+function confirmBook(btn){
+  if(!cur)return;
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Creating…';
+  api('POST','/proposal/book',{id:cur.id}).then(function(r){
+    if(r&&r.ok){
+      var msg='Created'+(r.invoice_number?(' invoice #'+r.invoice_number):' invoice')+(r.bill_number?(' + bill #'+r.bill_number):(r.bill_id?' + bill':''));
+      document.getElementById('m-body').innerHTML='<p style="font-weight:700;color:var(--green)">✓ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');
+      btn.classList.add('hide');toast('Booked in QuickBooks');load();
+    } else {
+      btn.disabled=false;btn.textContent='Confirm — create in QuickBooks';
+      document.getElementById('m-body').innerHTML+='<div class="warn">⚠ '+esc((r&&r.error)||'Failed')+'</div>';
+    }
+  }).catch(function(e){btn.disabled=false;btn.textContent='Confirm — create in QuickBooks';toast('Error: '+e.message);});
+}
+function closeModal(){document.getElementById('modal').classList.remove('open');cur=null;}
+
+(function(){var s=localStorage.getItem(SECRET_KEY);if(s){AUTH_TOKEN=s;api('GET','/proposal/signatures').then(enterApp).catch(function(){AUTH_TOKEN='';});}})();
+</script>
+</body>
+</html>
