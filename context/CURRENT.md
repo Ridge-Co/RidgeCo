@@ -1,5 +1,14 @@
 # WHERE THINGS STAND — Aug 10, 2026
 
+## ✅ Proposals de-dup + Stuck-WO detector (Aug 10, Worker `2026-08-09.14`)
+Two builds. (1) **De-dup:** proposals.html now flags a proposal that's already in the build queue or
+already shipped ("✅ already built" / "⏳ in build queue", dimmed + non-selectable) instead of
+re-offering it — fixes the "why is a built item back as a checkbox" confusion. `opsQueueRead?all=1`
+backs it. (2) **Greenlit #2 shipped — stuck-WO detector:** read-only `GET /stale-wos?days=N` +
+a red "⏰ Stuck open work" Command Center card for open jobs sitting past N days. Both SAFE/read-only.
+FEATURE_LOG rules 70–71. Also fixed the stale-cache button bug (rule 69, `.13`) — proposals +
+Command Center now auto-refresh on new deploys.
+
 ## ✅ FIRST GREENLIT-QUEUE BUILD SHIPPED — Optimizer review now runs Mon + Wed (Aug 10, Worker `2026-08-09.12`)
 The greenlit→build loop produced its first shipped item. Read the live queue via the new `OPS_QUEUE_TOKEN`
 (read-only), took the top *buildable* item — **ID-1 "Increase Weekly Review Run Frequency"** — and shipped it.

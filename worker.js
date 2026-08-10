@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.13';
+const BUILD_VERSION = '2026-08-09.14';
 
 export default {
   async fetch(request, env) {
@@ -135,6 +135,7 @@ export default {
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
         if (path === '/estimates')              return await listEstimates(env, url);
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
+        if (path === '/stale-wos')              return await staleWos(env, url);
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
         if (path === '/qb/test')                return await qbTest(env);
         if (path === '/qb/accounts')            return await qbListAccounts(env);
@@ -2810,6 +2811,29 @@ async function buildDigest(env) {
   };
 }
 
+// GET /stale-wos?days=N — READ-ONLY. Open WOs stuck in an active status past N days (by Created_Date),
+// so a job that has quietly stalled surfaces before an SLA slips (greenlit #2 "wo_status polling on
+// open WOs"). Admin-gated. SAFE class: read-only; returns only the same WO summary the daily digest
+// already shows (no money, no PII beyond WO label). 'On Hold' is excluded — it's a deliberate pause.
+const STALE_ACTIVE_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress'];
+async function staleWos(env, url) {
+  const days = Math.max(1, parseInt((url && url.searchParams && url.searchParams.get('days')) || '4') || 4);
+  let wos = [];
+  try { wos = await fetchTab(env, 'Work_Orders'); } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const now = Date.now();
+  const ageOf = d => { const t = Date.parse(d); return isNaN(t) ? null : Math.max(0, Math.floor((now - t) / 86400000)); };
+  const stale = wos
+    .filter(w => STALE_ACTIVE_STATUSES.includes(w.Status))
+    .map(w => ({
+      id: w.ID, status: w.Status, priority: String(w.Priority || ''),
+      age_days: ageOf(w.Created_Date),
+      label: `WO-${w.ID || '?'} · ${w.Property_Address || ('prop ' + (w.Property_ID || '?'))}${w.Unit_Label ? (' ' + w.Unit_Label) : ''} · ${w.Status}${w.Description ? (' · ' + String(w.Description).slice(0, 55)) : ''}`,
+    }))
+    .filter(x => x.age_days != null && x.age_days >= days)
+    .sort((a, b) => b.age_days - a.age_days);
+  return json({ ok: true, threshold_days: days, count: stale.length, stale: stale.slice(0, 100) });
+}
+
 function formatDigestText(d) {
   const L = [];
   L.push(`RIDGE CO — DAILY DIGEST · ${d.stamp}`); L.push('');
@@ -3140,6 +3164,12 @@ async function opsQueueRead(env, url) {
     const v = d.values || [];
     if (v.length > 1) { const hs = v[0]; rows = v.slice(1).map(r => { const o = {}; hs.forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }); }
   } catch (e) { if (!isMissingTabError(e)) throw e; }
+  // ?all=1 → every row incl. done/dropped (capped 200), so proposals.html can flag a proposal
+  // that's already been queued or built instead of re-offering it as fresh. Same read-only data
+  // (titles/problems, no money/PII), so the narrow OPS_QUEUE_TOKEN may read it too.
+  if (url && url.searchParams && url.searchParams.get('all') === '1') {
+    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 200) });
+  }
   const active = rows.filter(r => r.Status && r.Status !== 'done' && r.Status !== 'dropped');
   return json({ ok: true, count: active.length, queue: active.reverse().slice(0, 50) });
 }

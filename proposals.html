@@ -82,7 +82,7 @@ async function load(){
   if(!TOKEN){ document.getElementById('body').innerHTML='<div class="tokbar"><b>Connect</b><div class="sub">Paste your Hub access code (mh_auth) to load proposals.</div><input id="tok" type="password" placeholder="access code"><button onclick="saveTok()">Connect</button></div>'; return; }
   let rev=null,q=null;
   try{ rev=await getJSON('/ops-review-log?limit=1'); }catch(e){ document.getElementById('body').innerHTML='<div class="card"><b>Couldn’t load</b><div class="sub">'+h(e.message)+'</div></div>'; return; }
-  try{ q=await getJSON('/ops-queue'); }catch(e){ q=null; }
+  try{ q=await getJSON('/ops-queue?all=1'); }catch(e){ q=null; }
   render(rev,q);
 }
 function render(rev,q){
@@ -96,24 +96,45 @@ function render(rev,q){
   html+='<div class="card"><h2>This week’s review</h2><div class="sub">'+h(row.Total_Jobs||'0')+' jobs · success '+pct(row.Success_Rate)+' · escalation '+pct(row.Escalation_Rate)+(row.Stuck_Patterns?' · ⚠ '+h(row.Stuck_Patterns):'')+'</div></div>';
   const totJobs=parseInt(row.Total_Jobs||'0')||0;
   if(totJobs<20) html+='<div class="banner">⚠ Directional only — thin data ('+totJobs+' telemetry rows; a confident review wants 20+). Treat these as hypotheses to sanity-check, not conclusions.</div>';
+  // Build queue (ALL statuses via ?all=1) → dedup map so a proposal already queued/built isn't re-offered.
+  const allQ=(q&&q.queue)||[];
+  const isInactive=s=>{s=(s||'').toLowerCase();return s==='done'||s==='dropped';};
+  const activeQ=allQ.filter(x=>!isInactive(x.Status));
+  window.__queue=activeQ;
+  const normT=t=>(t==null?'':(''+t)).toLowerCase().replace(/\s+/g,' ').trim();
+  const qStatusByTitle={}; allQ.forEach(x=>{const k=normT(x.Title); if(k&&!qStatusByTitle[k]) qStatusByTitle[k]=(x.Status||'greenlit').toLowerCase();});
+  let dupCount=0;
   if(items.length){
     html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
     items.forEach((it,i)=>{
+      const dup=qStatusByTitle[normT(it.title)];
+      if(dup==='done'||dup==='greenlit'||dup==='building'){
+        dupCount++;
+        const lbl=(dup==='done')?'<span class="chip big">✅ already built</span>':'<span class="chip quick">⏳ in build queue</span>';
+        html+='<div class="pcard" style="opacity:.62" id="pc'+i+'">'
+          +'<div class="pbody"><div class="prow"><span class="rank">#'+(it.rank||i+1)+'</span><span class="ptitle">'+h(it.title||'')+'</span></div>'
+          +'<div class="prow" style="margin-top:4px">'+lbl+chip(it.tag)+'</div>'
+          +'<div class="pimp">Not offered for approval — already '+((dup==='done')?'built and shipped':'in the build queue')+'.</div>'
+          +'</div></div>';
+        return;
+      }
+      const droppedNote=(dup==='dropped')?' <span class="chip eff">✕ previously dropped</span>':'';
       html+='<label class="pcard" id="pc'+i+'"><input type="checkbox" data-i="'+i+'" onchange="syncSel()">'
         +'<div class="pbody"><div class="prow"><span class="rank">#'+(it.rank||i+1)+'</span><span class="ptitle">'+h(it.title||'')+'</span></div>'
-        +'<div class="prow" style="margin-top:4px">'+chip(it.tag)+(it.effort?'<span class="chip eff">'+h(it.effort)+' effort</span>':'')+'</div>'
+        +'<div class="prow" style="margin-top:4px">'+chip(it.tag)+(it.effort?'<span class="chip eff">'+h(it.effort)+' effort</span>':'')+droppedNote+'</div>'
         +(it.problem?'<div class="pprob">'+h(it.problem)+'</div>':'')
         +(it.action?'<div class="pact">→ '+h(it.action)+'</div>':'')
         +(it.impact?'<div class="pimp">Impact: '+h(it.impact)+'</div>':'')
         +'</div></label>';
     });
+    if(dupCount) html+='<div class="sub" style="margin:2px 2px 6px">'+dupCount+' proposal'+(dupCount>1?'s':'')+' already queued or built — dimmed, not selectable.</div>';
     document.getElementById('bar').style.display='block';
   } else {
     // older review or parse fallback — show the full text
     html+='<div class="card"><h2>Proposal</h2><div class="sub" style="white-space:pre-wrap;color:var(--ink);font-size:13.5px">'+h(row.Proposal||'(none)')+'</div><div class="sub" style="margin-top:8px">This review isn’t in the selectable format yet — run a fresh review from the Command Center to get checkboxes.</div></div>';
   }
-  // Greenlit build queue — full detail, copyable brief, status control. No longer a read-once dead end.
-  const queue=(q&&q.queue)||[]; window.__queue=queue;
+  // Greenlit build queue — full detail, copyable brief, status control. Active items only (done/dropped filtered).
+  const queue=activeQ;
   if(queue.length){
     html+='<div class="card"><div class="prow" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Greenlit — build queue ('+queue.length+')</h2><button class="mini" onclick="copyAll()">📋 Copy all</button></div>'
       +'<div class="sub" style="margin:4px 0 0">Full detail below. Tap <b>Copy build brief</b>, paste it into a Claude session, and it builds from that — no worker secret needed. Mark items <b>building</b> / <b>done</b> to keep the list live.</div></div>';

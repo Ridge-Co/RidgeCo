@@ -133,14 +133,32 @@ async function load(){
   if(!TOKEN){return sampleMode('no token yet')}
   const optP=loadOptimizer();   // best-effort, runs concurrently; never throws, never gates first paint
   const arP=loadAR();           // best-effort AR aging (QuickBooks)
+  const staleP=loadStale();     // best-effort stuck-WO alert (greenlit #2)
   try{
     const [wos,inv,bills,vendors,props,units]=await Promise.all(
       ['/workorders','/invoices','/vendor-bills?status=submitted','/vendors','/properties','/units'].map(getJSON));
-    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP,ar:await arP});
+    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP,ar:await arP,stale:await staleP});
   }catch(e){ sampleMode('DIAGNOSTIC → '+e.message, await optP, null); }
 }
 // Optimizer / Ops feed — the autonomous loop's output (weekly review + live telemetry),
 // pulled READ-ONLY. Best-effort: any failure just omits the card, never trips sample mode.
+// Stuck-WO alert (greenlit #2 "wo_status polling"): open WOs sitting in an active status past the
+// threshold. READ-ONLY. Best-effort — any failure just omits the card, never trips sample mode.
+async function loadStale(){ try{ return await getJSON('/stale-wos?days=4'); }catch(e){ return null; } }
+function staleCard(s){
+  if(!s||!s.ok||!s.count) return '';
+  var list=(s.stale||[]).slice(0,8);
+  var html='<div class="card" style="border-color:#ecc3c3;background:var(--redbg)">'
+    +'<h2>⏰ Stuck open work <small style="font-weight:600;color:var(--muted)">· '+s.count+' sitting '+s.threshold_days+'d+</small></h2>'
+    +'<p class="note">Open jobs that have gone quiet — chase or close before they slip.</p>';
+  list.forEach(function(w){
+    html+='<div class="row2"><span class="pdot r"></span><div class="t">'
+      +'<span class="rtag cost">'+h(w.age_days)+'d</span>'+(String(w.priority).toLowerCase()==='urgent'?'<span class="rtag due">URGENT</span>':'')
+      +'<br>'+h(w.label||('WO-'+w.id))+'</div><span class="vtag">RIDGE CO</span></div>';
+  });
+  if(s.count>list.length) html+='<p class="note">+ '+(s.count-list.length)+' more</p>';
+  return html+'</div>';
+}
 async function loadOptimizer(){
   try{
     const [rev,tel]=await Promise.all([
@@ -330,6 +348,7 @@ function render(d){
       +'<div class="count" style="border-color:#ecc3c3;background:var(--redbg)"><b style="color:var(--red)">'+overdue.length+'</b><small>aging 7d+</small></div></div>'
       +'<p class="note">Ranked by who’s waiting on you, then priority, then how long it’s been sitting.</p></div>';
 
+  html+=staleCard(d.stale);
   html+=optCard(d.opt);
 
   // vendor bills to review
