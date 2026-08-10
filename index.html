@@ -333,6 +333,7 @@
       <button class="btn secondary" onclick="loadInvoiceReview()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
     </div>
     <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Review each vendor bill, set markup, and approve to create a customer invoice.</p>
+    <div id="ir-filters"></div>
     <div id="ir-list"><div class="loading"><span class="spinner"></span>Loading bills…</div></div>
   </div>
 
@@ -564,7 +565,7 @@
 <!-- WO DETAIL MODAL -->
 <div class="modal-overlay" id="modal-wo-detail">
   <div class="modal" style="max-width:640px">
-    <div class="modal-header"><div class="modal-title" id="detail-wo-id">WO-XXXX</div><button class="modal-close" onclick="closeModal('modal-wo-detail')">✕</button></div>
+    <div class="modal-header"><div class="modal-title" id="detail-wo-id">WO-XXXX</div><div style="display:flex;gap:8px;align-items:center"><button class="btn small secondary" id="detail-edit-btn" style="font-size:12px;padding:6px 12px">✏️ Edit</button><button class="modal-close" onclick="closeModal('modal-wo-detail')">✕</button></div></div>
     <div id="detail-body"></div>
     <div class="modal-actions" id="detail-actions"></div>
   </div>
@@ -718,6 +719,7 @@
         <select id="ewo-vendor" size="4" style="height:auto;min-height:80px;font-size:13px;cursor:pointer;width:100%"><option value="">— Unassigned —</option></select>
       </div>
       <div class="form-group"><label>Trade</label><select id="ewo-trade"></select></div>
+      <div class="form-group"><label>Source <span style="font-weight:normal;color:var(--muted)">(where it came from)</span></label><select id="ewo-type"><option value="">— not set —</option><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
       <div class="form-group"><label>Priority</label><select id="ewo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Status</label>
         <select id="ewo-status">
@@ -1348,6 +1350,9 @@ function openWODetail(woId) {
   if (!tenant && wo.Unit_ID) tenant = state.tenants.find(function(t){return t.Unit_ID===wo.Unit_ID && t.Active!=='FALSE';});
   if (!tenant && wo.Property_ID && !wo.Unit_ID) tenant = state.tenants.find(function(t){return String(t.Property_ID)===String(wo.Property_ID) && !t.Unit_ID && t.Active!=='FALSE';});
   document.getElementById('detail-wo-id').textContent = woId;
+  // Header Edit button — reach Edit without scrolling to the bottom of the WO.
+  var _editBtn = document.getElementById('detail-edit-btn');
+  if (_editBtn) _editBtn.onclick = function(){ openEditWOModal(woId); };
   var sc = 'badge-'+(wo.Status||'new').toLowerCase().replace(/\s+/g,'');
   var propHtml = '';
   if (prop) {
@@ -2338,6 +2343,7 @@ function openEditWOModal(woId) {
   var ewoTrade = document.getElementById('ewo-trade');
   ewoTrade.innerHTML = tradeOptions(wo.Trade || 'General', false);
   ewoTrade.value = wo.Trade || 'General';
+  document.getElementById('ewo-type').value = wo.Type || '';
   document.getElementById('ewo-priority').value = wo.Priority||'normal';
   document.getElementById('ewo-status').value = wo.Status||'New';
   document.getElementById('ewo-scheduled').value = wo.Scheduled_Date||'';
@@ -2398,6 +2404,7 @@ function submitEditWO() {
     Tenant_ID: document.getElementById('ewo-tenant').value,
     Vendor_ID: document.getElementById('ewo-vendor').value,
     Trade: document.getElementById('ewo-trade').value,
+    Type: document.getElementById('ewo-type').value,
     Priority: document.getElementById('ewo-priority').value,
     Status: document.getElementById('ewo-status').value,
     Scheduled_Date: document.getElementById('ewo-scheduled').value,
@@ -6088,12 +6095,18 @@ function loadInvoiceReview() {
   if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) {
     if (Array.isArray(r)) state.vendors = r;
   }).catch(function() {}));
+  // Owners power the Owner filter's labels (resolved property → owner). Top up if empty.
+  if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) {
+    if (Array.isArray(r)) state.owners = r;
+  }).catch(function() {}));
 
   Promise.all(prep).then(function() {
     return api('GET', '/vendor-bills?status=submitted');
   }).then(function(bills) {
     _irBills = Array.isArray(bills) ? bills : [];
+    var fhost = document.getElementById('ir-filters');
     if (!_irBills.length) {
+      if (fhost) fhost.innerHTML = '';
       el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ No vendor bills pending review.</div>';
       return;
     }
@@ -6108,9 +6121,125 @@ function loadInvoiceReview() {
       _invPreferBill['ir' + i] = String(b.ID || '');
       loadInvoiceBuilder('ir' + i, b.WO_ID);
     });
+    // Build the filter bar from the bills actually in the queue, then apply (all visible).
+    irBuildFilters();
+    irApplyFilters();
   }).catch(function(e) {
     el.innerHTML = '<div style="color:var(--danger);font-size:12px">Error loading bills: ' + esc(e.message||'?') + '</div>';
   });
+}
+
+// ── Review Bills filtering ───────────────────────────────────────────────────
+// Full-granularity filter/search over the pending vendor-bill queue: free-text
+// search + Vendor / Property / Owner / Type / Trade dropdowns. Filtering HIDES
+// non-matching cards (display:none) rather than re-rendering, so every card keeps
+// its original index — irClearFromQueue(i) reads _irBills[i], and each card's
+// billing panel is mounted as 'ir'+i. Re-indexing would break both.
+function irBillContext(b) {
+  var woId = b.WO_ID || '';
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : null;
+  var ownerId = prop ? String(prop.Owner_ID || '') : '';
+  var owner = ownerId ? safeArray(state.owners).find(function(o) { return String(o.ID) === ownerId; }) : null;
+  var ownerName = owner
+    ? (((owner.First_Name || '') + (owner.Last_Name ? ' ' + owner.Last_Name : '') + (owner.Company ? ' / ' + owner.Company : '')).trim() || owner.Name || ('Owner ' + owner.ID))
+    : '';
+  return {
+    wo: wo, prop: prop,
+    vendor: b.Vendor_Name || '',
+    propId: prop ? String(prop.ID) : '',
+    propAddr: prop ? (prop.Address || '') : '',
+    ownerId: ownerId,
+    ownerName: ownerName,
+    type: wo ? (wo.Type || '') : '',
+    trade: wo ? (wo.Trade || '') : '',
+    woId: woId
+  };
+}
+
+function irTypeLabel(v) {
+  var m = { manual: 'Manual', tenant: 'Tenant Request', owner: 'Owner Request', recurring: 'Recurring/Preventive' };
+  return m[String(v).toLowerCase()] || v;
+}
+
+function irBuildFilters() {
+  var host = document.getElementById('ir-filters');
+  if (!host) return;
+  if (!safeArray(_irBills).length) { host.innerHTML = ''; return; }
+  var ctxs = _irBills.map(irBillContext);
+  function distinct(getVal) {
+    var seen = {}, out = [];
+    ctxs.forEach(function(c) { var v = getVal(c); if (v && !seen[v]) { seen[v] = 1; out.push(v); } });
+    return out;
+  }
+  var vendors = distinct(function(c) { return c.vendor; }).sort();
+  var trades = distinct(function(c) { return c.trade; }).sort();
+  var types = distinct(function(c) { return c.type; });
+  var props = [], pseen = {};
+  ctxs.forEach(function(c) { if (c.propId && !pseen[c.propId]) { pseen[c.propId] = 1; props.push({ id: c.propId, label: c.propAddr || ('Property ' + c.propId) }); } });
+  props.sort(function(a, b) { return a.label.localeCompare(b.label); });
+  var owners = [], oseen = {};
+  ctxs.forEach(function(c) { if (c.ownerId && !oseen[c.ownerId]) { oseen[c.ownerId] = 1; owners.push({ id: c.ownerId, label: c.ownerName || ('Owner ' + c.ownerId) }); } });
+  owners.sort(function(a, b) { return a.label.localeCompare(b.label); });
+
+  var ss = 'flex:1;min-width:130px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 8px;border-radius:6px;cursor:pointer';
+  function opts(list, allLabel) { return '<option value="">' + allLabel + '</option>' + list.map(function(v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join(''); }
+  function optsPair(list, allLabel) { return '<option value="">' + allLabel + '</option>' + list.map(function(o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join(''); }
+  function optsType(list) { return '<option value="">All types</option>' + list.map(function(v) { return '<option value="' + esc(v) + '">' + esc(irTypeLabel(v)) + '</option>'; }).join(''); }
+
+  host.innerHTML =
+    '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">' +
+      '<input id="ir-q" type="text" placeholder="Search vendor, WO#, address, owner, description…" oninput="irApplyFilters()" autocomplete="off" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px;box-sizing:border-box">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' +
+        '<select id="ir-f-vendor" onchange="irApplyFilters()" style="' + ss + '">' + opts(vendors, 'All vendors') + '</select>' +
+        '<select id="ir-f-prop" onchange="irApplyFilters()" style="' + ss + '">' + optsPair(props, 'All properties') + '</select>' +
+        '<select id="ir-f-owner" onchange="irApplyFilters()" style="' + ss + '">' + optsPair(owners, 'All owners') + '</select>' +
+        '<select id="ir-f-type" onchange="irApplyFilters()" style="' + ss + '">' + optsType(types) + '</select>' +
+        '<select id="ir-f-trade" onchange="irApplyFilters()" style="' + ss + '">' + opts(trades, 'All trades') + '</select>' +
+        '<button onclick="irClearFilters()" class="btn small secondary" style="font-size:11px;padding:7px 12px;white-space:nowrap">Clear</button>' +
+      '</div>' +
+      '<div id="ir-count" style="color:var(--muted);font-size:11px;margin-top:8px"></div>' +
+    '</div>' +
+    '<div id="ir-nomatch" style="display:none;color:var(--muted);font-size:13px;padding:20px 0;text-align:center">No bills match these filters. <a onclick="irClearFilters()" style="color:var(--accent);cursor:pointer;text-decoration:underline">Clear filters</a></div>';
+}
+
+function irApplyFilters() {
+  if (!safeArray(_irBills).length) return;
+  var q = ((document.getElementById('ir-q') || {}).value || '').toLowerCase().trim();
+  var fv = (document.getElementById('ir-f-vendor') || {}).value || '';
+  var fp = (document.getElementById('ir-f-prop') || {}).value || '';
+  var fo = (document.getElementById('ir-f-owner') || {}).value || '';
+  var ft = (document.getElementById('ir-f-type') || {}).value || '';
+  var ftr = (document.getElementById('ir-f-trade') || {}).value || '';
+  var shown = 0;
+  _irBills.forEach(function(b, i) {
+    var c = irBillContext(b);
+    var ok = true;
+    if (fv && c.vendor !== fv) ok = false;
+    if (ok && fp && c.propId !== fp) ok = false;
+    if (ok && fo && c.ownerId !== fo) ok = false;
+    if (ok && ft && c.type !== ft) ok = false;
+    if (ok && ftr && c.trade !== ftr) ok = false;
+    if (ok && q) {
+      var hay = [c.vendor, c.woId, c.propAddr, c.ownerName, irTypeLabel(c.type), c.trade,
+                 (c.wo && c.wo.Description) || '', (c.wo && c.wo.Owner_WO_Ref) || '', b.Notes || ''].join(' ').toLowerCase();
+      if (hay.indexOf(q) === -1) ok = false;
+    }
+    var card = document.getElementById('ir-card-' + i);
+    if (card) card.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  var countEl = document.getElementById('ir-count');
+  if (countEl) countEl.textContent = 'Showing ' + shown + ' of ' + _irBills.length + ' bill' + (_irBills.length === 1 ? '' : 's');
+  var nm = document.getElementById('ir-nomatch');
+  if (nm) nm.style.display = shown ? 'none' : 'block';
+}
+
+function irClearFilters() {
+  ['ir-q', 'ir-f-vendor', 'ir-f-prop', 'ir-f-owner', 'ir-f-type', 'ir-f-trade'].forEach(function(id) {
+    var e = document.getElementById(id); if (e) e.value = '';
+  });
+  irApplyFilters();
 }
 
 function renderIRCard(b, i) {
