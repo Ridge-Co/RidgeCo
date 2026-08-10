@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-09.11';
+const BUILD_VERSION = '2026-08-09.12';
 
 export default {
   async fetch(request, env) {
@@ -300,10 +300,11 @@ export default {
   // with delivery off just builds the digest and returns — no messages, negligible cost.
   async scheduled(event, env, ctx) {
     const cron = event && event.cron;
-    // Weekly Optimizer Reviewer (B-129) — Mondays 12:00 UTC (8am ET). Reads the last 7 days
+    // Optimizer Reviewer (B-129) — Mon + Wed 12:00 UTC (8am ET). Reads the last 7 days
     // of Ops_Telemetry, computes metrics, asks Claude for a ranked proposal, logs it to
     // Ops_Review_Log, and delivers IF digest delivery is enabled. Isolated from the digest.
-    if (cron === '0 12 * * 1') {
+    // Mid-week (Wed) run added per greenlit ID-1 to halve max issue-detection lag (7d → ~3.5d).
+    if (cron === '0 12 * * 1' || cron === '0 12 * * 3') {
       try { await runWeeklyReview(env, { deliver: true, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
       return;
     }

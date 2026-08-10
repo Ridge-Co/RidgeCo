@@ -1,5 +1,15 @@
 # WHERE THINGS STAND — Aug 10, 2026
 
+## ✅ FIRST GREENLIT-QUEUE BUILD SHIPPED — Optimizer review now runs Mon + Wed (Aug 10, Worker `2026-08-09.12`)
+The greenlit→build loop produced its first shipped item. Read the live queue via the new `OPS_QUEUE_TOKEN`
+(read-only), took the top *buildable* item — **ID-1 "Increase Weekly Review Run Frequency"** — and shipped it.
+The Optimizer's weekly telemetry review fired only Mondays; it now also runs Wednesday (`0 12 * * 3`), halving
+max issue-detection lag (7d → ~3.5d). Two-line change (wrangler cron + `scheduled()` branch), SAFE-class,
+no money/PII/auth. FEATURE_LOG rule 68. **Note:** the queue item is still marked `greenlit` — mark ID-1 **Done**
+on proposals.html (status write needs the admin secret, which this session doesn't hold). Literal top queue item
+(ID-6 "Expand job volume") was skipped as a build: it's a strategic audit ("wire 3 of your manual tasks"), not a
+code spec — needs Brett's input, not a push.
+
 ## ✅ Hub UX: Review Bills filtering + reachable WO Edit + editable WO Source — SHIPPED (Aug 10, index.html only)
 Three frontend fixes Brett asked for, pushed to `main` (GitHub Pages auto-deploys; **no worker.js change**). See FEATURE_LOG rule 67.
 - **Review Bills now filters/searches** by Vendor, Property, Owner, **Type** (Manual/Tenant/Owner/Recurring), Trade + a free-text box, with a live "Showing X of Y" count and Clear. Filters by hiding cards (preserves `_irBills[i]` indexing that `irClearFromQueue` + the `'ir'+i` billing panels depend on) — do not refactor into a re-render.
