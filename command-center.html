@@ -147,16 +147,24 @@ async function load(){
 async function loadStale(){ try{ return await getJSON('/stale-wos?days=4'); }catch(e){ return null; } }
 function staleCard(s){
   if(!s||!s.ok||!s.count) return '';
-  var list=(s.stale||[]).slice(0,8);
+  var all=s.stale||[]; var SHOWN=8;
+  // Each row is a link into the Hub that pops that WO's detail (index.html?wo=<id> → maybeOpenWOFromURL).
+  var row=function(w){
+    var tags='<span class="rtag cost">'+h(w.age_days)+'d</span>'+(String(w.priority).toLowerCase()==='urgent'?'<span class="rtag due">URGENT</span>':'');
+    return '<a href="index.html?wo='+encodeURIComponent(w.id||'')+'" target="_blank" rel="noopener" style="text-decoration:none;color:inherit;display:block">'
+      +'<div class="row2"><span class="pdot r"></span><div class="t">'+tags
+      +'<br>'+h(w.label||('WO-'+w.id))+' <span style="color:var(--blue);font-weight:800">open →</span></div><span class="vtag">RIDGE CO</span></div></a>';
+  };
   var html='<div class="card" style="border-color:#ecc3c3;background:var(--redbg)">'
     +'<h2>⏰ Stuck open work <small style="font-weight:600;color:var(--muted)">· '+s.count+' sitting '+s.threshold_days+'d+</small></h2>'
-    +'<p class="note">Open jobs that have gone quiet — chase or close before they slip.</p>';
-  list.forEach(function(w){
-    html+='<div class="row2"><span class="pdot r"></span><div class="t">'
-      +'<span class="rtag cost">'+h(w.age_days)+'d</span>'+(String(w.priority).toLowerCase()==='urgent'?'<span class="rtag due">URGENT</span>':'')
-      +'<br>'+h(w.label||('WO-'+w.id))+'</div><span class="vtag">RIDGE CO</span></div>';
-  });
-  if(s.count>list.length) html+='<p class="note">+ '+(s.count-list.length)+' more</p>';
+    +'<p class="note">Open jobs that have gone quiet — tap one to open it, chase or close before it slips.</p>';
+  html+=all.slice(0,SHOWN).map(row).join('');
+  if(all.length>SHOWN){
+    html+='<div id="stale-more" style="display:none">'+all.slice(SHOWN).map(row).join('')+'</div>'
+      +'<button id="stale-more-btn" onclick="var m=document.getElementById(\'stale-more\');if(m)m.style.display=\'block\';this.style.display=\'none\';" '
+      +'style="width:100%;margin-top:8px;padding:11px;border:1px solid var(--line);border-radius:10px;background:#fff;font-weight:800;color:var(--blue);font-size:13px">+ '+(all.length-SHOWN)+' more — tap to show all</button>';
+  }
+  if(s.count>all.length) html+='<p class="note">Showing the oldest '+all.length+' of '+s.count+'.</p>';
   return html+'</div>';
 }
 async function loadOptimizer(){
