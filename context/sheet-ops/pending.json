@@ -1,0 +1,144 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Back-enter Eddie Smith's 3 MISSING pre-Hub jobs so Brett can run them through regular Hub bill entry (Review Bills), add photos, price, and post to QuickBooks. Creates 3 Work Orders (WO-1120..1122, next after current max WO-1119) assigned to Eddie (Vendor 5) in Complete status, plus 3 matching flat Vendor_Bills (IDs 30..32, next after max 29) in 'submitted' status so they appear in Review Bills. Vendor cost only (Flat_Rate=Total); Customer_Total left blank for Brett to price. Notify flags all FALSE (no SMS/tenant/owner notifications for back-entered jobs). Amounts confirmed with Brett: 928 N Calvert water-heater/gas-sniffer $85, 1214 N Calvert garbage disposal $185, 3014 N Calvert Apt B window $485.",
+  "ops": [
+    {
+      "type": "append_row",
+      "tab": "Work_Orders",
+      "row": {
+        "Vendor_Needs_Access": "auto",
+        "ID": "WO-1120",
+        "Property_ID": "11",
+        "Vendor_ID": "5",
+        "Type": "manual",
+        "Trade": "Plumbing",
+        "Description": "Water heater(s) — tenant reported gas smell. Evaluated / checked with gas sniffer. Back-entered pre-Hub job (~winter 2025-2026) for Eddie reconciliation.",
+        "Priority": "normal",
+        "Status": "Complete",
+        "Created_By": "admin",
+        "Created_Date": "2026-08-10",
+        "Notes": "Back-entered Aug 10 2026 for Eddie Smith reconciliation. Pre-Hub job; exact date approximate (winter 2025-26). Vendor cost $85.",
+        "Property_Address": "928 N Calvert St",
+        "Vendor_Name": "Eddie Smith",
+        "Tenant_Visible": "FALSE",
+        "Tenant_Notify_Created": "FALSE",
+        "Tenant_Notify_Updates": "FALSE",
+        "Vendor_SMS_Sent": "FALSE",
+        "Tenant_SMS_Sent": "FALSE",
+        "Owner_Notified": "FALSE"
+      }
+    },
+    {
+      "type": "append_row",
+      "tab": "Work_Orders",
+      "row": {
+        "Vendor_Needs_Access": "auto",
+        "ID": "WO-1121",
+        "Property_ID": "4",
+        "Vendor_ID": "5",
+        "Type": "manual",
+        "Trade": "Plumbing",
+        "Description": "Repair jammed garbage disposal. Back-entered pre-Hub job for Eddie reconciliation.",
+        "Priority": "normal",
+        "Status": "Complete",
+        "Created_By": "admin",
+        "Created_Date": "2026-08-10",
+        "Notes": "Back-entered Aug 10 2026 for Eddie Smith reconciliation. Pre-Hub job; exact date approximate. Vendor cost $185.",
+        "Property_Address": "1214 N Calvert St",
+        "Vendor_Name": "Eddie Smith",
+        "Tenant_Visible": "FALSE",
+        "Tenant_Notify_Created": "FALSE",
+        "Tenant_Notify_Updates": "FALSE",
+        "Vendor_SMS_Sent": "FALSE",
+        "Tenant_SMS_Sent": "FALSE",
+        "Owner_Notified": "FALSE"
+      }
+    },
+    {
+      "type": "append_row",
+      "tab": "Work_Orders",
+      "row": {
+        "Vendor_Needs_Access": "auto",
+        "ID": "WO-1122",
+        "Property_ID": "8",
+        "Vendor_ID": "5",
+        "Type": "manual",
+        "Trade": "General",
+        "Description": "Window issue in Apt B — replaced window. Back-entered pre-Hub job for Eddie reconciliation.",
+        "Priority": "normal",
+        "Status": "Complete",
+        "Created_By": "admin",
+        "Created_Date": "2026-08-10",
+        "Notes": "Back-entered Aug 10 2026 for Eddie Smith reconciliation. Pre-Hub job; Apt B; exact date approximate. Vendor cost $485.",
+        "Property_Address": "3014 N Calvert St",
+        "Vendor_Name": "Eddie Smith",
+        "Tenant_Visible": "FALSE",
+        "Tenant_Notify_Created": "FALSE",
+        "Tenant_Notify_Updates": "FALSE",
+        "Vendor_SMS_Sent": "FALSE",
+        "Tenant_SMS_Sent": "FALSE",
+        "Owner_Notified": "FALSE"
+      }
+    },
+    {
+      "type": "append_row",
+      "tab": "Vendor_Bills",
+      "row": {
+        "ID": "30",
+        "WO_ID": "WO-1120",
+        "Vendor_ID": "5",
+        "Vendor_Name": "Eddie Smith",
+        "Bill_Type": "flat",
+        "Hours": "0",
+        "Rate": "0",
+        "Labor_Total": "0.00",
+        "Flat_Rate": "85.00",
+        "Total": "85.00",
+        "Status": "submitted",
+        "Created_Date": "2026-08-10",
+        "Notes": "928 N Calvert — water heater / gas-smell check (gas sniffer). Pre-Hub, back-entered for reconciliation. Add photos + price before posting to QB.",
+        "Active": "TRUE"
+      }
+    },
+    {
+      "type": "append_row",
+      "tab": "Vendor_Bills",
+      "row": {
+        "ID": "31",
+        "WO_ID": "WO-1121",
+        "Vendor_ID": "5",
+        "Vendor_Name": "Eddie Smith",
+        "Bill_Type": "flat",
+        "Hours": "0",
+        "Rate": "0",
+        "Labor_Total": "0.00",
+        "Flat_Rate": "185.00",
+        "Total": "185.00",
+        "Status": "submitted",
+        "Created_Date": "2026-08-10",
+        "Notes": "1214 N Calvert — repair jammed garbage disposal. Pre-Hub, back-entered for reconciliation. Add photos + price before posting to QB.",
+        "Active": "TRUE"
+      }
+    },
+    {
+      "type": "append_row",
+      "tab": "Vendor_Bills",
+      "row": {
+        "ID": "32",
+        "WO_ID": "WO-1122",
+        "Vendor_ID": "5",
+        "Vendor_Name": "Eddie Smith",
+        "Bill_Type": "flat",
+        "Hours": "0",
+        "Rate": "0",
+        "Labor_Total": "0.00",
+        "Flat_Rate": "485.00",
+        "Total": "485.00",
+        "Status": "submitted",
+        "Created_Date": "2026-08-10",
+        "Notes": "3014 N Calvert Apt B — window replacement. Pre-Hub, back-entered for reconciliation. Add photos + price before posting to QB.",
+        "Active": "TRUE"
+      }
+    }
+  ]
+}
