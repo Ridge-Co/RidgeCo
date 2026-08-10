@@ -467,34 +467,48 @@
   </div>
 
   <div class="page" id="page-devlog">
-    <div class="section-title" style="margin-bottom:10px">DATA TOOLS</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+    <!-- TOOLS — grouped so this page stays navigable as tools grow (FEATURE_LOG rule 57, extended
+         Aug 10: one TOOLS area, sub-grouped by purpose). Launcher buttons window.open a standalone
+         page which inherits the Hub admin token (mh_auth, same origin) so it opens already logged in;
+         the in-Hub fix buttons call their handler directly and print to #admin-tool-result below.
+         New tool page shipped? Add its button to the right sub-group in the SAME commit. -->
+    <div class="section-title" style="margin-bottom:6px">🧰 TOOLS</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:14px">Everything in one place, grouped by what it's for. Launcher buttons open a standalone page already logged in; the rest run a fix right here and print the result at the bottom.</div>
+
+    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">✅ ON-DEMAND WORK &amp; DASHBOARDS</div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <button class="btn small" onclick="window.open('action-center.html','_blank')" style="background:var(--accent);color:#000">✅ Action Center — who to pay / to process</button>
+      <button class="btn small" onclick="window.open('command-center.html','_blank')" style="background:var(--info);color:#000">📊 Command Center</button>
+      <button class="btn small" onclick="window.open('proposals.html','_blank')" style="background:var(--info);color:#000">💡 Proposals / greenlit queue</button>
+    </div>
+
+    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">💵 MONEY &amp; QUICKBOOKS</div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      <button class="btn small" onclick="window.open('vendor-reconcile.html','_blank')" style="background:var(--info);color:#000">💵 Vendor reconciliation</button>
+      <button class="btn small" onclick="window.open('qb-email-backfill.html','_blank')" style="background:var(--accent);color:#000">📧 Fill missing QuickBooks emails</button>
+      <button class="btn small" onclick="window.open('qb-invoice-email-backfill.html','_blank')" style="background:var(--accent);color:#000">🧾 Fix unsent invoice emails</button>
+      <button class="btn small" onclick="findRepairableInvoices()" style="background:var(--accent2);color:#000">🔧 Fix invoices already in QuickBooks</button>
+      <button class="btn small" onclick="window.open('signed-proposals.html','_blank')" style="background:var(--info);color:#000">🖊 Signed proposals → QB</button>
+      <button class="btn small" onclick="window.open('trash.html','_blank')" style="background:var(--accent2);color:#000">🗑 Trash Service billing</button>
+    </div>
+
+    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🧹 DATA HYGIENE</div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
       <button class="btn small" onclick="runAdminTool('fix-pins')" style="background:var(--accent2);color:#000">🔑 Fix PINs + Phones</button>
-      <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#000">🏠 Check units naming moved-out tenants</button>
-      <button class="btn small" onclick="findRepairableInvoices()" style="background:var(--accent2);color:#000">🧾 Fix invoices already in QuickBooks</button>
+      <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#000">🏠 Check units / moved-out tenants</button>
       <button class="btn small" onclick="migrateTrades(false)" style="background:var(--accent)">🔧 Update old trade names</button>
       <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#000">🏢 Find duplicate properties</button>
       <button class="btn small" onclick="checkDuplicateOwners()" style="background:var(--info);color:#000">👤 Find duplicate owners</button>
       <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
       <button class="btn small" onclick="shareAttachments(false)" style="background:var(--accent2);color:#000">🖼 Fix photo/video sharing</button>
+    </div>
+
+    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🔎 DIAGNOSTICS</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn small" onclick="runOpsReview()" style="background:var(--accent)">🔎 Run Ops Review (test)</button>
       <button class="btn small" onclick="logTestTelemetry()" style="background:var(--info);color:#000">📊 Log test telemetry row</button>
     </div>
     <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
-
-    <!-- STANDARD: every standalone admin/tool page gets a launcher button here so Brett has ONE place
-         to find them instead of remembering URLs. Same-origin pages inherit the Hub admin token
-         (mh_auth in localStorage), so they open logged-in. New tool page shipped? Add its button here. -->
-    <div class="section-title" style="margin-bottom:8px">🔗 TOOL PAGES</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Standalone admin pages, all in one place. Each opens in a new tab and uses your Hub admin login automatically — no need to hunt for a link.</div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="window.open('qb-email-backfill.html','_blank')" style="background:var(--accent);color:#000">📧 Fill missing QuickBooks emails</button>
-      <button class="btn small" onclick="window.open('qb-invoice-email-backfill.html','_blank')" style="background:var(--accent);color:#000">🧾 Fix unsent invoice emails</button>
-      <button class="btn small" onclick="window.open('vendor-reconcile.html','_blank')" style="background:var(--info);color:#000">💵 Vendor reconciliation</button>
-      <button class="btn small" onclick="window.open('command-center.html','_blank')" style="background:var(--info);color:#000">📊 Command Center</button>
-      <button class="btn small" onclick="window.open('trash.html','_blank')" style="background:var(--accent2);color:#000">🗑 Trash Service billing</button>
-      <button class="btn small" onclick="window.open('signed-proposals.html','_blank')" style="background:var(--info);color:#000">🖊 Signed proposals → QB</button>
-    </div>
 
     <div class="section-title" style="margin-bottom:8px">🔑 VENDOR ACCESS DEFAULTS BY TRADE</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Controls whether vendors see lockbox/access codes on work orders when set to "Auto". Trades marked NO will never receive access codes unless explicitly overridden on a specific WO. Trades not listed default to YES.</div>
@@ -510,15 +524,17 @@
     </div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <button class="btn danger small" onclick="clearErrorLog()">Clear Errors</button>
-      <button class="btn secondary small" onclick="clearWishlist()">Clear Wishlist</button>
+      <button class="btn secondary small" onclick="clearWishlistDone()">🧹 Clear Done / N-A</button>
     </div>
     <div class="section-title">ERROR LOG</div>
     <div id="error-log-list" style="margin-bottom:24px"><div class="loading">No errors logged</div></div>
-    <div class="section-title">WISHLIST / IMPROVEMENTS</div>
+    <div class="section-title">WISHLIST / DEV LOG</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Every idea/improvement, with a live status. As things get built or stop mattering, mark them ✓ Done or ✗ N-A so this list always reflects reality. Filter by status below; "Clear Done / N-A" archives the finished ones without touching what's still open.</div>
     <div style="display:flex;gap:8px;margin-bottom:12px">
       <textarea id="wishlist-input" placeholder="Type an idea or improvement..." style="flex:1;min-height:60px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px 12px;border-radius:var(--radius)"></textarea>
       <button class="btn" onclick="addWishlistItem()">Add</button>
     </div>
+    <div id="wishlist-filters" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
     <div id="wishlist-list" style="margin-bottom:24px"><div class="loading">No items yet</div></div>
     <div class="section-title">TROUBLESHOOTING CACHE</div>
     <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review.</p>
@@ -1326,12 +1342,22 @@ function renderWOPage() {
 }
 
 // ── WO Detail ────────────────────────────────────────────────
-// Deep link: another Hub page (e.g. the Vendor Reconciliation tool) can link to
-// index.html?wo=<id> to open that work order directly once the app has loaded. Guarded so a
-// missing/unknown id or an early call can never break normal startup.
+// Deep link: another Hub page (e.g. the Action Center or Vendor Reconciliation tool) can link to
+//   index.html?page=<id>  → open a specific screen (payables, qb-send, invoice-review, invoices…)
+//   index.html?wo=<id>    → open that work order directly
+// once the app has loaded. Guarded so a missing/unknown id or an early call can never break startup.
 function maybeOpenWOFromURL() {
   try {
-    var wid = new URLSearchParams(location.search).get('wo');
+    var qs = new URLSearchParams(location.search);
+    var pg = qs.get('page');
+    if (pg && document.getElementById('page-' + pg)) {
+      // find the nav button that opens this page so the tab highlights, then open it
+      var btn = Array.prototype.find.call(document.querySelectorAll('.nav-btn'), function(b){
+        return (b.getAttribute('onclick') || '').indexOf("showPage('" + pg + "'") !== -1;
+      });
+      showPage(pg, btn || null);
+    }
+    var wid = qs.get('wo');
     if (wid && typeof openWODetail === 'function') openWODetail(wid);
   } catch (e) {}
 }
@@ -2678,8 +2704,19 @@ function renderErrorLog(){
 }
 function clearErrorLog(){if(!confirm('Clear all error logs?'))return;localStorage.removeItem('mh_errors');renderErrorLog();toast('Error log cleared','info');}
 
-// ── Wishlist ─────────────────────────────────────────────────
+// ── Wishlist / Dev Log ───────────────────────────────────────
+// Every item carries a Status so the list reflects reality: Active (new/open),
+// In progress, Done (built/handled), Not applicable (no longer relevant). Status
+// persists via /wishlist/status; Active==='FALSE' still means fully removed/archived.
 var wishlistItems=[];
+var wishlistFilter='open';   // 'open' = Active + In progress (default); a status key; or 'all'
+var WL_STATUSES=[
+  {key:'Active',        label:'Active',      border:'var(--info)',    badge:'var(--info)'},
+  {key:'In progress',   label:'In progress', border:'var(--warn)',    badge:'var(--warn)'},
+  {key:'Done',          label:'✓ Done',      border:'var(--accent2)', badge:'var(--accent2)'},
+  {key:'Not applicable',label:'✗ N-A',       border:'var(--muted)',   badge:'var(--muted)'}
+];
+function wlStatusOf(item){ var s=(item.Status||'').trim(); return s||'Active'; }
 function loadWishlist(){
   api('GET','/wishlist').then(function(items){
     wishlistItems=Array.isArray(items)?items.filter(function(i){return i.Active!=='FALSE';}):[]; renderWishlist();
@@ -2687,21 +2724,57 @@ function loadWishlist(){
 }
 function addWishlistItem(){
   var input=document.getElementById('wishlist-input'); var val=input.value.trim(); if(!val)return;
-  api('POST','/wishlist/add',{text:val}).then(function(){input.value='';loadWishlist();toast('Added to wishlist','success');}).catch(function(e){toast('Error: '+e.message,'error');});
+  api('POST','/wishlist/add',{text:val}).then(function(){input.value='';loadWishlist();toast('Added','success');}).catch(function(e){toast('Error: '+e.message,'error');});
+}
+function setWishlistStatus(id,status){
+  api('POST','/wishlist/status',{id:id,status:status}).then(function(res){
+    if(res&&res.success){ var it=wishlistItems.filter(function(i){return String(i.ID)===String(id);})[0]; if(it)it.Status=status; renderWishlist(); toast('Marked "'+status+'"','success'); }
+    else toast('Error: '+((res&&res.error)||'could not save'),'error');
+  }).catch(function(e){toast('Error: '+e.message,'error');});
 }
 function renderWishlist(){
-  var el=document.getElementById('wishlist-list'); if(!el)return;
-  if(!wishlistItems.length){el.innerHTML='<div class="loading">No items yet</div>';return;}
-  el.innerHTML=[...wishlistItems].reverse().map(function(item){return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--info);border-radius:var(--radius);padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center"><div><div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+(item.Created||'')+'</div><div style="font-size:13px">'+(item.Text||'')+'</div></div><button class="btn small danger" onclick="deleteWishlistItem(\''+item.ID+'\')">✕</button></div>';}).join('');
+  var el=document.getElementById('wishlist-list'); var fEl=document.getElementById('wishlist-filters'); if(!el)return;
+  var counts={all:wishlistItems.length,open:0}; WL_STATUSES.forEach(function(s){counts[s.key]=0;});
+  wishlistItems.forEach(function(i){var s=wlStatusOf(i); counts[s]=(counts[s]||0)+1; if(s==='Active'||s==='In progress')counts.open++;});
+  if(fEl){
+    var chips=[{key:'open',label:'Open'},{key:'all',label:'All'}].concat(WL_STATUSES.map(function(s){return {key:s.key,label:s.label};}));
+    fEl.innerHTML=chips.map(function(c){
+      var on=wishlistFilter===c.key;
+      return '<button class="btn small'+(on?'':' secondary')+'" onclick="wishlistFilter=\''+c.key+'\';renderWishlist()" style="font-size:11px'+(on?'':';opacity:.7')+'">'+c.label+' ('+(counts[c.key]||0)+')</button>';
+    }).join('');
+  }
+  var list=wishlistItems.filter(function(i){var s=wlStatusOf(i);
+    if(wishlistFilter==='all')return true;
+    if(wishlistFilter==='open')return s==='Active'||s==='In progress';
+    return s===wishlistFilter;});
+  if(!list.length){el.innerHTML='<div class="loading">Nothing in this view.</div>';return;}
+  el.innerHTML=[...list].reverse().map(function(item){
+    var s=wlStatusOf(item); var meta=WL_STATUSES.filter(function(x){return x.key===s;})[0]||WL_STATUSES[0];
+    var done=(s==='Done'||s==='Not applicable');
+    var txt='<div style="font-size:13px'+(done?';opacity:.6'+(s==='Not applicable'?';text-decoration:line-through':''):'')+'">'+(item.Text||'')+'</div>';
+    var badge='<span style="font-size:10px;font-weight:700;color:'+meta.badge+';white-space:nowrap;margin-left:8px">'+meta.label+'</span>';
+    var btns='';
+    if(s!=='In progress'&&s!=='Done')btns+='<button class="btn small secondary" style="font-size:11px" onclick="setWishlistStatus(\''+item.ID+'\',\'In progress\')">▶ Start</button>';
+    if(s!=='Done')btns+='<button class="btn small secondary" style="font-size:11px;color:var(--accent2);border-color:var(--accent2)" onclick="setWishlistStatus(\''+item.ID+'\',\'Done\')">✓ Done</button>';
+    if(s!=='Not applicable')btns+='<button class="btn small secondary" style="font-size:11px;color:var(--muted)" onclick="setWishlistStatus(\''+item.ID+'\',\'Not applicable\')">✗ N-A</button>';
+    if(s!=='Active')btns+='<button class="btn small secondary" style="font-size:11px" onclick="setWishlistStatus(\''+item.ID+'\',\'Active\')">↩ Active</button>';
+    btns+='<button class="btn small danger" style="font-size:11px" onclick="deleteWishlistItem(\''+item.ID+'\')">🗑</button>';
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid '+meta.border+';border-radius:var(--radius);padding:12px;margin-bottom:8px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px"><div style="flex:1">'+
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+(item.Created||'')+'</div>'+txt+'</div>'+badge+'</div>'+
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">'+btns+'</div></div>';
+  }).join('');
 }
 function deleteWishlistItem(id){
-  if(!confirm('Remove this item?'))return;
-  api('POST','/wishlist/delete',{id:id}).then(function(){loadWishlist();}).catch(function(e){toast('Error: '+e.message,'error');});
+  if(!confirm('Remove this item completely? (To keep it as history, use ✓ Done or ✗ N-A instead.)'))return;
+  api('POST','/wishlist/delete',{id:id}).then(function(){wishlistItems=wishlistItems.filter(function(i){return String(i.ID)!==String(id);});renderWishlist();}).catch(function(e){toast('Error: '+e.message,'error');});
 }
-function clearWishlist(){
-  if(!confirm('Clear ALL wishlist items?'))return;
-  Promise.all(wishlistItems.map(function(i){return api('POST','/wishlist/delete',{id:i.ID});}))
-    .then(function(){loadWishlist();toast('Wishlist cleared','info');}).catch(function(e){toast('Error: '+e.message,'error');});
+function clearWishlistDone(){
+  var gone=wishlistItems.filter(function(i){var s=wlStatusOf(i);return s==='Done'||s==='Not applicable';});
+  if(!gone.length){toast('Nothing Done or N-A to clear','info');return;}
+  if(!confirm('Archive '+gone.length+' Done / N-A item'+(gone.length>1?'s':'')+'? Active + In-progress items are untouched.'))return;
+  Promise.all(gone.map(function(i){return api('POST','/wishlist/delete',{id:i.ID});}))
+    .then(function(){loadWishlist();toast('Cleared '+gone.length+' finished item'+(gone.length>1?'s':''),'info');}).catch(function(e){toast('Error: '+e.message,'error');});
 }
 
 // ── Cache ────────────────────────────────────────────────────

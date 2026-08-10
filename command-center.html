@@ -350,6 +350,14 @@ function render(d){
   html+='<div class="card hero"><div class="kick">'+h(hero.k)+'</div><h2 style="margin-top:5px">'+h(hero.t)+'</h2><p class="plain">'+h(hero.b)+'</p>'
       +'<div class="btns"><button class="btn off" disabled>Open (soon)</button><button class="btn off" disabled>Mark done (soon)</button></div></div>';
 
+  // On-demand action list — who to pay / invoices to process / overdue / receipts. Lives on its
+  // own page (action-center.html) so it's reachable from here AND the Hub Dev Log; each item there
+  // deep-links into the right gated tool. Read-only nav — no money moves from this link.
+  html+='<a class="card" href="action-center.html" style="display:block;text-decoration:none;color:inherit;border-left:4px solid var(--blue)">'
+      +'<h2>✅ Action Center <small style="font-weight:600;color:var(--muted)">· on-demand work</small></h2>'
+      +'<p class="plain">Who to pay, invoices to process, overdue invoices, receipts to file — each opens the right tool ready to act.</p>'
+      +'<p class="note" style="color:var(--blue);font-weight:800">Open the Action Center →</p></a>';
+
   html+='<div class="card"><h2>Where things stand</h2><div class="counts">'
       +'<div class="count"><b>'+(needsBrett.length+bills.length)+'</b><small>need your OK</small></div>'
       +'<div class="count"><b>'+(waiting.length+outInv.length)+'</b><small>waiting on others</small></div>'

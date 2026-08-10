@@ -9,6 +9,14 @@ a red "⏰ Stuck open work" Command Center card for open jobs sitting past N day
 FEATURE_LOG rules 70–71. Also fixed the stale-cache button bug (rule 69, `.13`) — proposals +
 Command Center now auto-refresh on new deploys.
 
+## ✅ Action Center + Dev Log reconcile mechanism + tools cleanup — SHIPPED (Aug 10; worker.js /wishlist/status only, rest frontend)
+Three things Brett asked for in one session (FEATURE_LOG rules 73–75):
+1. **Action Center** (`action-center.html`, NEW) — on-demand tracked work: **who to pay** (`/qb/payables` PAY-THE-VENDOR), **invoices to process** (`/qb/ready` + submitted vendor bills), **overdue invoices** (`/ar/aging`, opens each in QuickBooks), **receipts to file** (`/receipt-queue`). Each item = a plain prompt ("owner paid ✓ · $460 due vendor") + a button that opens the right gated tool ready to act. **No money-write, no new Worker endpoint** — actions deep-link into existing flows (respects BUILD_ORDER/AUTONOMY). Reachable from **both** the Command Center (a card) and the Hub → Dev Log → 🧰 TOOLS. Needed a small `?page=<id>` deep-link handler in index.html so it lands on the exact Hub screen.
+2. **Dev Log reconcile mechanism** — the Hub Wishlist now carries a per-item **Status** (Active / In progress / ✓ Done / ✗ N-A) with buttons + a filter + "Clear Done / N-A" archive (backed by `POST /wishlist/status`). Plus a documented **Reconciliation mechanism** block at the top of BACKLOG.md (repeatable session-close pass + a first Aug-10 pass verifying what FEATURE_LOG confirms shipped).
+3. **Tools cleanup** — the flat Dev Log DATA TOOLS + TOOL PAGES are now one 🧰 TOOLS area, sub-grouped: On-demand & dashboards / Money & QuickBooks / Data hygiene / Diagnostics.
+
+**Verify (Brett, on the live Hub after this deploys):** (a) Dev Log → 🧰 TOOLS → **Action Center** opens; check "Pay these vendors" matches what you actually owe, tap **Pay →** lands on Who-to-Pay; tap an **overdue** invoice → opens in QuickBooks. (b) Command Center now shows an **Action Center** card near the top. (c) Dev Log → Wishlist: mark one item **✓ Done**, refresh, confirm the status sticks and the filter counts move. **Not yet eyeballed live by Brett.** Adversarial money-review passed (one fail-silent bug caught + fixed pre-push). NOTE: `listVendorBills`/`listReceiptQueue` swallow errors to `[]`, so those two Action-Center cards can't fully "fail loud" if Sheets is down — small follow-up in those handlers.
+
 ## ✅ FIRST GREENLIT-QUEUE BUILD SHIPPED — Optimizer review now runs Mon + Wed (Aug 10, Worker `2026-08-09.12`)
 The greenlit→build loop produced its first shipped item. Read the live queue via the new `OPS_QUEUE_TOKEN`
 (read-only), took the top *buildable* item — **ID-1 "Increase Weekly Review Run Frequency"** — and shipped it.
