@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BrettOS — Action Center</title>
+<style>
+  :root{
+    --bg:#e9ebef;--card:#fff;--ink:#0e1621;--muted:#5b6672;--line:#d8dce2;
+    --green:#1a8f4c;--greenbg:#e6f4ec;--amber:#b26a00;--amberbg:#fbf0dd;
+    --red:#c0242b;--redbg:#f9e4e4;--blue:#1f5fbf;--bluebg:#e7effb;
+    --shadow:0 1px 2px rgba(16,23,32,.08),0 1px 8px rgba(16,23,32,.04);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+    font-size:16px;line-height:1.4;padding-bottom:40px}
+  .wrap{max-width:520px;margin:0 auto;padding:0 12px}
+  header{position:sticky;top:0;z-index:20;background:var(--bg);padding:12px 0 8px}
+  .title{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .title small{font-weight:600;color:var(--muted);font-size:12px}
+  .mode{font-size:11px;font-weight:800;padding:3px 9px;border-radius:20px;margin-left:auto}
+  .mode.live{background:var(--greenbg);color:var(--green)}
+  .mode.sample{background:var(--amberbg);color:var(--amber)}
+  .health{margin-top:8px;border-radius:14px;padding:13px 14px;box-shadow:var(--shadow);
+    display:flex;align-items:center;gap:12px;border:1px solid var(--line);background:var(--bluebg);border-color:#c3d6f2}
+  .dot{width:13px;height:13px;border-radius:50%;flex:none;background:var(--blue)}
+  .health h1{margin:0;font-size:16px;font-weight:800}
+  .health p{margin:2px 0 0;font-size:12.5px;color:var(--muted)}
+  .jump{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .jump a{flex:1;min-width:110px;text-align:center;text-decoration:none;font-size:12px;font-weight:800;
+    padding:8px 6px;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--ink)}
+  .jump a .n{display:block;font-size:17px;font-weight:800;margin-bottom:1px}
+  .jump a.red .n{color:var(--red)} .jump a.amber .n{color:var(--amber)} .jump a.green .n{color:var(--green)} .jump a.blue .n{color:var(--blue)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0;box-shadow:var(--shadow)}
+  .card h2{margin:0 0 2px;font-size:16px;font-weight:800;display:flex;align-items:center;gap:7px}
+  .card h2 .cnt{margin-left:auto;font-size:12px;font-weight:800;color:#fff;background:var(--muted);border-radius:20px;padding:2px 9px}
+  .card.pay h2 .cnt{background:var(--red)} .card.inv h2 .cnt{background:var(--amber)}
+  .card.ar h2 .cnt{background:var(--blue)} .card.rc h2 .cnt{background:var(--green)}
+  .sub{font-size:12px;color:var(--muted);margin:4px 0 6px}
+  .row2{display:flex;align-items:flex-start;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .row2:last-child{border-bottom:none}
+  .pdot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:5px}
+  .pdot.r{background:var(--red)} .pdot.a{background:var(--amber)} .pdot.b{background:var(--blue)} .pdot.g{background:var(--green)}
+  .row2 .t{flex:1;font-size:14px;font-weight:600;min-width:0}
+  .row2 .t small{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:1px}
+  .rtag{display:inline-block;font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;margin:0 5px 3px 0;white-space:nowrap}
+  .rtag.due{background:var(--redbg);color:var(--red)} .rtag.cash{background:var(--greenbg);color:var(--green)}
+  .rtag.cost{background:var(--amberbg);color:var(--amber)} .rtag.wait{background:var(--bluebg);color:var(--blue)}
+  .act{flex:none;text-decoration:none;font-size:12px;font-weight:800;white-space:nowrap;
+    padding:7px 11px;border-radius:9px;background:var(--ink);color:#fff;align-self:center}
+  .act.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  .allclear{font-size:13px;color:var(--green);font-weight:700;padding:6px 0}
+  .err{font-size:12.5px;color:var(--amber);font-weight:600;padding:6px 0}
+  .toolbtn{display:block;width:100%;text-align:center;text-decoration:none;margin-top:10px;
+    border-radius:11px;padding:11px;font-size:13.5px;font-weight:800;background:var(--bluebg);color:var(--blue)}
+  .more{font-size:12px;color:var(--muted);margin:8px 2px 0}
+  .foot{font-size:11.5px;color:var(--muted);text-align:center;margin:16px 4px 2px;line-height:1.5}
+  .tokbar{display:none;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+  .tokbar input{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-size:14px;margin:6px 0}
+  .tokbar button{width:100%;border:none;border-radius:9px;padding:11px;font-weight:700;background:var(--blue);color:#fff}
+  .spin{color:var(--muted);font-size:13px;padding:14px 2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="title">✅ BrettOS Action Center <span class="mode sample" id="mode">…</span></div>
+    <div class="health"><span class="dot"></span><div><h1 id="hTitle">Loading…</h1><p id="hSub">reading your live Hub + QuickBooks</p></div></div>
+    <div class="jump" id="jump"></div>
+  </header>
+
+  <div class="tokbar" id="tokbar">
+    <b>Enter your Hub access token to see live actions</b>
+    <div class="sub" style="margin:2px 0 0">Same token your Hub uses. Stored only on this device.</div>
+    <input type="password" id="tok" placeholder="access token" autocomplete="off">
+    <button onclick="saveTok()">Connect to live data</button>
+  </div>
+
+  <div id="body"><div class="spin">Loading your action list…</div></div>
+
+  <p class="foot" id="foot">On-demand tracked work — money to move and paperwork to clear.<br>Each item opens the right tool ready to act; nothing here changes money on its own.</p>
+</div>
+
+<script>
+const _params=new URLSearchParams(location.search);
+const STAGING=_params.has('staging')||_params.get('env')==='staging';
+const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
+const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';   // staging uses its own token, separate from prod
+const HUB='index.html', CC='command-center.html';
+let TOKEN='';
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
+if(STAGING){try{document.title='BrettOS — Action Center (STAGING)';
+  var _b=document.createElement('div');_b.textContent='🧪 STAGING SANDBOX — test data only, not your live Hub';
+  _b.style.cssText='background:#7a3fb0;color:#fff;font-weight:800;font-size:12px;text-align:center;padding:7px;letter-spacing:.4px';
+  document.body.insertBefore(_b,document.body.firstChild);}catch(e){}}
+
+function h(s){return (s==null?'':(''+s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function money(n){var v=Number(n); if(!isFinite(v))return '—'; return '$'+v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
+function arr(x){return Array.isArray(x)?x:(x&&Array.isArray(x.rows)?x.rows:[]);}
+function errOf(x){return (x&&x.__err)?x.__err:((x&&x.ok===false&&x.error)?x.error:'');}
+
+async function getJSON(path){
+  let r;
+  try{ r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}}); }
+  catch(e){ throw new Error('could not connect (network/CORS)'); }
+  let d=null,t='';
+  try{ t=await r.text(); d=JSON.parse(t); }catch(e){}
+  if(!r.ok) throw new Error((d&&d.error)?d.error:('HTTP '+r.status));
+  if(d&&d.error) throw new Error(d.error);
+  return d;
+}
+
+function noToken(){
+  document.getElementById('mode').className='mode sample';
+  document.getElementById('mode').textContent='NO TOKEN';
+  document.getElementById('hTitle').textContent='Connect to see your actions';
+  document.getElementById('hSub').textContent='Enter your Hub token below — same one the Hub uses.';
+  document.getElementById('tokbar').style.display='block';
+  document.getElementById('body').innerHTML='';
+  document.getElementById('jump').innerHTML='';
+}
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}
+  document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';document.getElementById('tokbar').style.display='none';load();}
+
+async function load(){
+  if(!TOKEN){ return noToken(); }
+  document.getElementById('tokbar').style.display='none';
+  // Every feed is best-effort: a failure surfaces as an amber note in its own card, never a blank page.
+  const [pay, ready, bills, ar, receipts] = await Promise.all([
+    getJSON('/qb/payables?days=365').catch(e=>({__err:e.message})),
+    getJSON('/qb/ready').catch(e=>({__err:e.message})),
+    getJSON('/vendor-bills?status=submitted').catch(e=>({__err:e.message})),
+    getJSON('/ar/aging').catch(e=>({__err:e.message})),
+    getJSON('/receipt-queue').catch(e=>({__err:e.message}))
+  ]);
+  render({pay,ready,bills,ar,receipts});
+}
+
+function render(d){
+  // ---- derive the actionable sets ----
+  const payErr=errOf(d.pay);
+  const payRows=arr(d.pay).filter(r=>r&&r.state==='PAY THE VENDOR');
+
+  const readyErr=errOf(d.ready);
+  const readyRows=arr(d.ready);
+  const billsErr=errOf(d.bills);
+  const billRows=arr(d.bills);
+  const invCount=readyRows.length+billRows.length;
+
+  const arErr=errOf(d.ar);
+  const arInv=(d.ar&&Array.isArray(d.ar.invoices))?d.ar.invoices:[];
+  const overdue=arInv.filter(i=>Number(i.age_days)>0);   // past its due date
+
+  const rcErr=errOf(d.receipts);
+  const rcRows=arr(d.receipts);
+
+  const live = !payErr||!readyErr||!arErr;   // at least one feed answered
+  document.getElementById('mode').className='mode '+(live?'live':'sample');
+  document.getElementById('mode').textContent=live?'LIVE':'OFFLINE';
+
+  const totalActions=payRows.length+invCount+overdue.length+rcRows.length;
+  document.getElementById('hTitle').textContent=totalActions?(totalActions+' thing'+(totalActions>1?'s':'')+' to act on'):'You’re all caught up';
+  document.getElementById('hSub').textContent=totalActions?'Tap any item to open the right tool, ready to go.':'No vendors to pay, invoices to process, overdue bills, or receipts waiting.';
+
+  // ---- jump strip ----
+  document.getElementById('jump').innerHTML=
+     jumpBtn('#pay','red',payRows.length,'to pay')
+    +jumpBtn('#inv','amber',invCount,'to process')
+    +jumpBtn('#ar','blue',overdue.length,'overdue')
+    +jumpBtn('#rc','green',rcRows.length,'receipts');
+
+  let html='';
+
+  // ===== 1. PAY THESE VENDORS (money out — owner already paid you) =====
+  html+='<div class="card pay" id="pay"><h2>💸 Pay these vendors <span class="cnt">'+payRows.length+'</span></h2>'
+      +'<div class="sub">The owner has paid you in full but the vendor hasn’t been paid yet — cash you’re holding that belongs to them.</div>';
+  if(payErr){ html+='<div class="err">⚠ Couldn’t read payables from QuickBooks — '+h(payErr)+'</div>'; }
+  else if(!payRows.length){ html+='<div class="allclear">✓ Nobody’s waiting on a payment.</div>'; }
+  else{
+    payRows.slice(0,12).forEach(function(r){
+      const amt=(r.vendor_balance!=null?r.vendor_balance:r.vendor_cost);
+      const wo=r.wo_id?('WO-'+h(r.wo_id).replace(/^WO-/,'')):'';
+      html+='<div class="row2"><span class="pdot r"></span><div class="t">'
+        +'<span class="rtag cash">owner paid ✓</span><span class="rtag cost">'+money(amt)+' due vendor</span><br>'
+        +h(r.vendor_name||'Vendor')+(wo?' — '+wo:'')
+        +'<small>'+(r.invoice_number?('invoice #'+h(r.invoice_number)+' collected · '):'')+'pay the vendor to settle</small></div>'
+        +'<a class="act" href="'+HUB+'?page=payables" target="_blank">Pay →</a></div>';
+    });
+    if(payRows.length>12)html+='<div class="more">+ '+(payRows.length-12)+' more — see the full list in the tool.</div>';
+    html+='<a class="toolbtn" href="'+HUB+'?page=payables" target="_blank">Open “Who to pay” →</a>';
+  }
+  html+='</div>';
+
+  // ===== 2. INVOICES TO PROCESS (money in — blocked on you) =====
+  html+='<div class="card inv" id="inv"><h2>🧾 Invoices to process <span class="cnt">'+invCount+'</span></h2>'
+      +'<div class="sub">Work that’s ready to bill the customer, plus vendor bills waiting on your review — money that only moves once you act.</div>';
+  if(readyErr||billsErr){ html+='<div class="err">⚠ Couldn’t read the billing queues — '+h(readyErr||billsErr)+'</div>'; }
+  else if(!invCount){ html+='<div class="allclear">✓ Nothing waiting to invoice or review.</div>'; }
+  else{
+    billRows.slice(0,8).forEach(function(b){
+      const amt=b.Total||b.Customer_Total||b.Amount||'';
+      html+='<div class="row2"><span class="pdot a"></span><div class="t">'
+        +'<span class="rtag due">⏳ your review</span>'+(amt?'<span class="rtag cost">'+money(amt)+'</span>':'')+'<br>'
+        +h(b.Vendor_Name||'Vendor')+(b.WO_ID?' — WO-'+h((''+b.WO_ID).replace(/^WO-/,'')):'')
+        +'<small>vendor bill submitted — approve it to invoice the customer</small></div>'
+        +'<a class="act" href="'+HUB+'?page=invoice-review" target="_blank">Review →</a></div>';
+    });
+    readyRows.slice(0,8).forEach(function(r){
+      const flag=r.needs_individual_send?'<span class="rtag due">send one-by-one</span>':(r.vendor_cost_zero?'<span class="rtag due">no vendor cost</span>':'');
+      html+='<div class="row2"><span class="pdot a"></span><div class="t">'
+        +'<span class="rtag cash">ready to send</span>'+(r.customer_total?'<span class="rtag cost">'+money(r.customer_total)+'</span>':'')+flag+'<br>'
+        +(r.wo_id?'WO-'+h((''+r.wo_id).replace(/^WO-/,'')):'Invoice')+(r.vendor_name?' — '+h(r.vendor_name):'')
+        +'<small>'+h(r.trade||r.description||'approved — send to QuickBooks')+'</small></div>'
+        +'<a class="act" href="'+HUB+'?page=qb-send" target="_blank">Send →</a></div>';
+    });
+    const shown=Math.min(billRows.length,8)+Math.min(readyRows.length,8);
+    if(invCount>shown)html+='<div class="more">+ '+(invCount-shown)+' more across the two queues.</div>';
+    html+='<a class="toolbtn" href="'+HUB+'?page=invoice-review" target="_blank">Open Review Bills →</a>';
+  }
+  html+='</div>';
+
+  // ===== 3. OVERDUE INVOICES (customers owe you) =====
+  html+='<div class="card ar" id="ar"><h2>⏳ Overdue invoices <span class="cnt">'+overdue.length+'</span></h2>'
+      +'<div class="sub">Customers past their due date. Each opens straight in QuickBooks to send a reminder or record a payment.</div>';
+  if(arErr){ html+='<div class="err">⚠ Couldn’t read A/R aging from QuickBooks — '+h(arErr)+'</div>'; }
+  else if(!overdue.length){ html+='<div class="allclear">✓ Nothing past due.</div>'; }
+  else{
+    overdue.slice(0,12).forEach(function(i){
+      const age=Number(i.age_days)||0;
+      const sev=age>=30?'r':'b';
+      html+='<div class="row2"><span class="pdot '+sev+'"></span><div class="t">'
+        +'<span class="rtag due">'+age+'d overdue</span><span class="rtag cost">'+money(i.balance)+'</span><br>'
+        +h(i.customer||'Customer')+(i.doc?' — #'+h(i.doc):'')
+        +'<small>this invoice is overdue — send a reminder or record the payment</small></div>'
+        +'<a class="act" href="https://app.qbo.intuit.com/app/invoice?txnId='+encodeURIComponent(i.id)+'" target="_blank">Open in QB →</a></div>';
+    });
+    if(overdue.length>12)html+='<div class="more">+ '+(overdue.length-12)+' more overdue.</div>';
+    html+='<a class="toolbtn" href="'+CC+'" target="_blank">Send reminders in bulk (Command Center) →</a>';
+  }
+  html+='</div>';
+
+  // ===== 4. RECEIPTS TO FILE =====
+  html+='<div class="card rc" id="rc"><h2>📥 Receipts to file <span class="cnt">'+rcRows.length+'</span></h2>'
+      +'<div class="sub">Receipts sitting in the intake queue waiting to be classified and filed.</div>';
+  if(rcErr){ html+='<div class="err">⚠ Couldn’t read the receipt queue — '+h(rcErr)+'</div>'; }
+  else if(!rcRows.length){ html+='<div class="allclear">✓ No receipts waiting.</div>'; }
+  else{
+    rcRows.slice(0,8).forEach(function(r){
+      html+='<div class="row2"><span class="pdot g"></span><div class="t">'
+        +'<span class="rtag wait">to file</span>'+(r.Total?'<span class="rtag cost">'+money(r.Total)+'</span>':'')+'<br>'
+        +h(r.Vendor||r.Merchant||'Receipt')+(r.Receipt_Date?' — '+h(r.Receipt_Date):'')
+        +'<small>'+h(r.Category||'needs a category + property/WO')+'</small></div></div>';
+    });
+    if(rcRows.length>8)html+='<div class="more">+ '+(rcRows.length-8)+' more in the queue.</div>';
+    html+='<div class="more">The in-Hub review screen is on the backlog (B-084); for now new receipts land in the Receipts intake.</div>';
+  }
+  html+='</div>';
+
+  document.getElementById('body').innerHTML=html;
+}
+function jumpBtn(href,cls,n,label){
+  return '<a class="'+(n?cls:'')+'" href="'+href+'"><span class="n">'+n+'</span>'+label+'</a>';
+}
+
+load();
+
+// Auto-refresh onto a new Worker version (same pattern as the Command Center) so a stale tab
+// doesn't keep showing links/fields that changed. Idle → reload; never interrupts a token entry.
+(function(){
+  var VER_URL=WORKER+'/version', booted=null;
+  function check(){
+    fetch(VER_URL,{cache:'no-store'}).then(function(r){return r.json();}).then(function(v){
+      if(!v||!v.version)return;
+      if(booted===null){booted=v.version;return;}
+      if(v.version!==booted){ var el=document.activeElement;
+        if(el&&(el.tagName==='INPUT'))return; location.reload(true); }
+    }).catch(function(){});
+  }
+  check(); setInterval(check,60000);
+})();
+</script>
+</body>
+</html>

@@ -10,6 +10,25 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 ## Quick Index
 _Compact map of every open backlog item. Read THIS map on load (two-tier loading); open a full entry below only when a task needs it — grep the ID._
 
+<!-- RECONCILE:START -->
+### 🔄 Reconciliation mechanism (keep the Dev Log honest)
+_Added Aug 10, 2026. Problem it solves: items get built or become moot but stay marked "open," so the list stops reflecting reality._
+
+**Two synced surfaces, one status vocabulary — `Active · In progress · Done · Not applicable`:**
+1. **In the Hub** (`Dev Log → Wishlist / Dev Log`): every idea carries a live **Status** with one-tap buttons (▶ Start · ✓ Done · ✗ N-A · ↩ Active), a status filter with counts, and **Clear Done / N-A** to archive finished items without touching open ones. Backed by `POST /wishlist/status` (worker.js, ensures the `Status` column per rule 37). This is where Brett marks items as they land or lapse.
+2. **In this backlog** (repo): the durable record; the session-close ritual (brett-flow) reconciles it.
+
+**The repeatable pass — run at every session close, or when asked to "reconcile the dev log":**
+- For each **IN PROGRESS** + open Quick-Index item, check it against **FEATURE_LOG** + **CURRENT.md**: shipped & verified → move to **COMPLETED** with the date; superseded/moot → mark **N/A + one-line reason**; partially done → keep open with a crisp `REMAINING:` note.
+- Cross-check the Hub Wishlist (Brett's live list) against these IDs so nothing is tracked twice — a wishlist idea already covered by a B-item gets ✓ Done in the Hub with "→ B-xxx".
+- Never mark Done what FEATURE_LOG can't confirm (truth-mode): "reported done" ≠ "verified done".
+
+**First reconciliation pass — Aug 10, 2026 (verified against FEATURE_LOG v1.13 + CURRENT):**
+- ✅ Confirmed shipped (already ✅ in the detail tables; the Quick Index bullets below were stale): B-001/B-002 (QB invoice+bill send), B-003 (WO creation), B-004 (vendor assign/reassign), B-005 (payment tracking), B-051 (daily digest), B-140 (staging lane), B-142 (ridgeco-validate), B-151 (Command Center Phase-0), B-153 (priority-engine mockup).
+- 🟡 Shipped-but-remaining (stay open, remaining noted inline): B-205 Trash (live send + push nudge left), B-217 bill-pay (read-only report shipped; the two writes are next), B-015 (send flow built, never run end-to-end against live QB).
+- ▶ New this session (Aug 10): Dev Log **tools regrouped**; **Wishlist status mechanism**; **Action Center** (who-to-pay / invoices / overdue / receipts, deep-links into gated tools) — see FEATURE_LOG.
+<!-- RECONCILE:END -->
+
 **IN PROGRESS**
 - B-217 · 🟠 **Gated bill-pay + reconcile-clear off the Vendor Reconciliation page** (Aug 9; Brett chose "report first" — read-only live QB pull shipped `2026-08-09.7`, rule 63; these two writes are NEXT). **(A) Pay vendor bills** = a QuickBooks BillPayment money-write (`POST /qb/pay-bills`), preview-first (which bills/vendor/amounts/from-account), one confirm. **Second-factor security (Brett's spec):** a passphrase entered as the FINAL step, verified **server-side in the Worker** against a **Cloudflare secret `PAY_AUTH_CODE`** (NEVER in repo/HTML/JS), on top of the existing admin-token gate; **case-insensitive; ONE entry per batch** (1..N bills, all must be in the batch); **no session memory** — re-enter every new batch; rate-limit + log attempts. UI shows only a "phone ending ***4" hint. The literal code + full spec are in the PRIVATE repo `brett332/data` → `business-context/payment-auth-interim.md` (keep out of this public repo). Interim — replace with Twilio 2FA + PIN (B-136) later. **(B) Reconcile-clear** = Hub-side buttons to mark a "no bill in Hub" job resolved (drops off the list once QB shows it paid) and to flag a bill that still needs collecting from the owner. B = lower risk (Hub writes, not QB money).
 - B-205 · ✅ **Trash Service — one-tap recurring flat-rate billing** (shipped Aug 7, `2026-08-07.6`). `trash.html` + 9 `/trash/*` Worker endpoints + `Trash_Properties`/`Trash_Visits` tabs. Tap a property → before/after photos → optional $20-increment extra → Save (logs the visit); one weekly QB invoice/property, preview-first, photos attached; in-app "Needs attention" nudge live. **REMAINING:** (1) Brett's first real invoice send off a preview (never run against live QB); (2) phone-push nudge — set Cloudflare env `TRASH_NUDGE_TOKEN` + create the scheduled task (endpoint gate already deployed, inert). See FEATURE_LOG rules 50–53. (Commit labeled "B-203" in error — B-203 is the tenant-transfer item below.)

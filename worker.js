@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-10.1';
+const BUILD_VERSION = '2026-08-10.2';
 
 export default {
   async fetch(request, env) {
@@ -265,6 +265,7 @@ export default {
         if (path === '/cache/refresh')            return await refreshCacheEntry(env, body);
         if (path === '/wishlist/add')             return await addWishlistItem(env, body);
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
+        if (path === '/wishlist/status')          return await setWishlistStatus(env, body);
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
@@ -2730,10 +2731,27 @@ async function shouldNotifyOwner(env, wo, statusEvent) {
 }
 
 async function addWishlistItem(env, body) {
-  const data=await sheetsRequest(env,'GET',`/values/Wishlist`); const rows=data.values||[['ID','Text','Created','Active']], headers=rows[0];
+  // Ensure the Status column exists so new items are born 'Active' and the Dev Log status
+  // buttons have somewhere to write (rule 37: never write a column that isn't there).
+  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* non-fatal — add still works */ }
+  const data=await sheetsRequest(env,'GET',`/values/Wishlist`); const rows=data.values||[['ID','Text','Created','Active','Status']], headers=rows[0];
   const now=new Date().toISOString().replace('T',' ').split('.')[0];
-  const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),Text:body.text||'',Created:now,Active:'TRUE'}[h]??''));
+  const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),Text:body.text||'',Created:now,Active:'TRUE',Status:'Active'}[h]??''));
   await sheetsRequest(env,'POST',`/values/Wishlist:append?valueInputOption=RAW`,{values:[newRow]}); return json({success:true});
+}
+
+// POST /wishlist/status { id, status } — set an item's lifecycle status so the Dev Log
+// wishlist reflects reality: Active / In progress / Done / Not applicable. Ensures the Status
+// column first (rule 37) — otherwise updateRow silently no-ops on a missing column and returns
+// a false success. Internal improvement list — no money/PII/auth surface.
+async function setWishlistStatus(env, body) {
+  const id = body && body.id;
+  const status = String((body && body.status) || '').trim();
+  const ALLOWED = ['Active','In progress','Done','Not applicable'];
+  if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
+  if (!ALLOWED.includes(status)) return json({ error: 'invalid status' }, 400);
+  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* if it already exists, updateRow proceeds */ }
+  return await updateRow(env, 'Wishlist', id, { Status: status });
 }
 
 // ── SMS ──────────────────────────────────────────────────────
