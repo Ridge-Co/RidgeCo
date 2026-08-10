@@ -1,3 +1,12 @@
+# WHERE THINGS STAND — Aug 10, 2026
+
+## ✅ Hub UX: Review Bills filtering + reachable WO Edit + editable WO Source — SHIPPED (Aug 10, index.html only)
+Three frontend fixes Brett asked for, pushed to `main` (GitHub Pages auto-deploys; **no worker.js change**). See FEATURE_LOG rule 67.
+- **Review Bills now filters/searches** by Vendor, Property, Owner, **Type** (Manual/Tenant/Owner/Recurring), Trade + a free-text box, with a live "Showing X of Y" count and Clear. Filters by hiding cards (preserves `_irBills[i]` indexing that `irClearFromQueue` + the `'ir'+i` billing panels depend on) — do not refactor into a re-render.
+- **WO detail modal** has an **✏️ Edit** button in the header (no more scrolling to the bottom); bottom Edit kept.
+- **Edit WO** has a new **Source** dropdown saving to `Work_Orders.Type` via `/wo/admin-update`.
+Not yet eyeballed on the live Hub by Brett — first check: open Review Bills, try each filter; open a WO → header Edit → change Source → save → confirm it sticks + shows in the audit trail.
+
 # WHERE THINGS STAND — Aug 9, 2026
 
 ## 🔒 Read-only `OPS_QUEUE_TOKEN` for the Prepare agent — SHIPPED, DORMANT (Aug 9, Worker `2026-08-09.9`)
