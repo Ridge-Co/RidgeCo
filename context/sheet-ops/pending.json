@@ -1,0 +1,20 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Add 619 Cator Ave to Properties as Brett-owned (Owner_ID 10 = Brett Lambert). Site of Eddie Smith's roof job; being added so its pre-Hub roof payables can be reconciled against a real property record. Owner is Brett himself (his own property). Type/Unit_Count set to house/1 as a safe default; Brett can adjust in the Hub. QBO_Customer_ID left blank.",
+  "ops": [
+    {
+      "type": "append_row",
+      "tab": "Properties",
+      "row": {
+        "ID": "75",
+        "Address": "619 Cator Ave",
+        "City": "Baltimore",
+        "Market": "Baltimore",
+        "Type": "house",
+        "Unit_Count": "1",
+        "Owner_ID": "10",
+        "Active": "TRUE"
+      }
+    }
+  ]
+}
