@@ -1,0 +1,8 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Aug 11 2026 — two corrections. (1) RESTORE tenant #55 Angelic Herbert (2628 W Cold Spring Ln, Property 38): the RidgeCo Contacts-sync Apps Script FALSELY moved her to Former on its 2026-08-11 06:44 daily run (Active=FALSE, Move_Out_Date=2026-08-10). No owner move-out notice exists in email and the owner's June 8 roster lists 2628 W Cold Spring Ln as currently tenanted, so the move was wrong. Setting Active=TRUE and clearing Move_Out_Date to restore her as a current tenant. NOTE: her Google Contact was also relabeled 'Former Tenant' by the sync (fix in Google Contacts) and the sync runs again daily 6:44am — the move-out rule lives in the Apps Script (not in this repo) and must be fixed there or it may re-flip her. (2) Fix inspector name on Notes #1: Daniel Barry (not Barry Daniel).",
+  "ops": [
+    { "type": "update_cell_by_id", "tab": "Tenants", "id": "55", "fields": { "Active": "TRUE", "Move_Out_Date": "" } },
+    { "type": "update_cell_by_id", "tab": "Notes", "id": "1", "fields": { "Contact_Name": "Daniel Barry — DHCD Inspector" } }
+  ]
+}
