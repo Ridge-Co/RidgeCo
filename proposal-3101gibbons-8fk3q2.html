@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Roofing Proposal · 3101 Gibbons Ave</title>
+<style>
+  :root{
+    --ink:#12202e; --muted:#5b6672; --line:#d8dce2; --hair:#e7eaee;
+    --bg:#eef0f3; --paper:#ffffff; --band:#12202e; --bandink:#ffffff;
+    --accent:#1f5fbf; --accentbg:#e8f0fb;
+    --green:#1a7f46; --greenbg:#e7f4ec; --greenline:#bfe2cc;
+    --amber:#9a6400; --amberbg:#fbf1dc; --amberline:#ecd6a6;
+    --red:#b3242b; --redbg:#f9e7e7; --redline:#eec3c4;
+    --shadow:0 1px 2px rgba(16,23,32,.09),0 6px 22px rgba(16,23,32,.06);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,system-ui,sans-serif;
+    font-size:15px;line-height:1.5;padding:18px 0 120px}
+  .sheet{max-width:820px;margin:0 auto;background:var(--paper);
+    box-shadow:var(--shadow);border-radius:8px;overflow:hidden}
+  .pad{padding:26px 30px}
+  @media(max-width:600px){.pad{padding:18px 16px}}
+
+  .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;
+    border-bottom:3px solid var(--band);padding-bottom:16px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{width:46px;height:46px;flex:none}
+  .bname{font-size:23px;font-weight:800;letter-spacing:.5px;line-height:1}
+  .bsub{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.7px;text-transform:uppercase;margin-top:5px}
+  .binfo{font-size:11.5px;color:var(--muted);text-align:right;line-height:1.6}
+  .binfo .ph{font-weight:700;color:var(--ink)}
+  .ttl{margin:20px 0 2px;font-size:20px;font-weight:800;letter-spacing:.3px}
+  .meta{display:flex;flex-wrap:wrap;gap:6px 26px;font-size:13px;margin-top:10px}
+  .meta div{min-width:180px}
+  .meta span{color:var(--muted)}
+
+  h2.band{background:var(--band);color:var(--bandink);font-size:12.5px;font-weight:800;
+    letter-spacing:1.2px;text-transform:uppercase;padding:8px 12px;border-radius:5px;margin:26px 0 12px}
+  h3{font-size:15.5px;margin:18px 0 6px;font-weight:800}
+  p{margin:9px 0}
+  .lead{font-size:14.5px}
+
+  .call{border-radius:8px;padding:12px 14px;margin:14px 0;font-size:13px;line-height:1.55;border:1px solid}
+  .call .ct{font-weight:800;display:block;margin-bottom:3px;font-size:12.5px;letter-spacing:.4px;text-transform:uppercase}
+  .call.amber{background:var(--amberbg);border-color:var(--amberline);color:#5c3d00}
+  .call.blue{background:var(--accentbg);border-color:#bcd4f4;color:#123a76}
+  .call.red{background:var(--redbg);border-color:var(--redline);color:#7c1a1f}
+  .call.green{background:var(--greenbg);border-color:var(--greenline);color:#0f5b30}
+
+  .opt{border:1.5px solid var(--line);border-radius:11px;padding:0;margin:14px 0;overflow:hidden}
+  .opt.repair{border-color:var(--amberline)}
+  .opt.replace{border-color:var(--greenline)}
+  .opthd{display:flex;align-items:flex-start;gap:12px;padding:15px 16px;border-bottom:1px solid var(--hair)}
+  .opt.repair .opthd{background:var(--amberbg)}
+  .opt.replace .opthd{background:var(--greenbg)}
+  .opttag{font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;
+    padding:2px 8px;border-radius:20px;display:inline-block;margin-bottom:4px}
+  .opt.repair .opttag{background:#9a6400;color:#fff}
+  .opt.replace .opttag{background:#1a7f46;color:#fff}
+  .optname{font-size:17px;font-weight:800;line-height:1.15}
+  .optprice{margin-left:auto;text-align:right;flex:none}
+  .optprice .num{font-size:24px;font-weight:800;line-height:1}
+  .optprice .lbl{font-size:10.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+  .optbody{padding:14px 16px}
+
+  .scope{margin:8px 0}
+  .scope .li{display:flex;gap:10px;padding:7px 0;border-bottom:1px dotted var(--hair);font-size:13px;line-height:1.5}
+  .scope .li:last-child{border-bottom:none}
+  .scope .k{flex:none;width:19px;height:19px;border-radius:50%;background:var(--accentbg);color:var(--accent);
+    font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .opt.replace .scope .k{background:var(--greenbg);color:var(--green)}
+  .scope .t b{font-weight:700}
+
+  table.sum{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px}
+  table.sum td{padding:7px 4px;border-bottom:1px solid var(--hair)}
+  table.sum td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  table.sum tr.total td{border-top:2px solid var(--ink);border-bottom:none;font-weight:800;font-size:15px;padding-top:10px}
+  table.sum tr.total td .sm{font-size:11px;color:var(--muted);font-weight:600}
+
+  .pay{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+  .pay .m{flex:1;min-width:150px;background:#f5f7f9;border:1px solid var(--hair);border-radius:8px;padding:9px 11px}
+  .pay .m .s1{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+  .pay .m .s2{font-size:17px;font-weight:800;margin-top:2px}
+  .pay .m .s3{font-size:11.5px;color:var(--muted);margin-top:1px}
+
+  table.cmp{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0}
+  table.cmp th,table.cmp td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  table.cmp th{background:#f2f4f6;font-weight:800}
+  table.cmp td.a{background:#fffaf0}
+  table.cmp td.b{background:#f2faf5}
+
+  .terms{font-size:12.5px;line-height:1.6}
+  .terms h4{margin:13px 0 3px;font-size:13px;font-weight:800}
+  .terms p{margin:4px 0}
+
+  .sign{border:2px solid var(--accent);border-radius:12px;margin:8px 0;overflow:hidden}
+  .signhd{background:var(--accent);color:#fff;padding:11px 16px;font-size:14px;font-weight:800;letter-spacing:.3px}
+  .signbody{padding:16px}
+  .pick{display:flex;flex-direction:column;gap:9px;margin:4px 0 14px}
+  .pickrow{display:flex;align-items:center;gap:11px;border:1.5px solid var(--line);border-radius:9px;padding:11px 13px;cursor:pointer}
+  .pickrow input{width:20px;height:20px;accent-color:var(--accent);flex:none}
+  .pickrow.sel{border-color:var(--accent);background:var(--accentbg)}
+  .pickrow .pn{font-weight:700;font-size:13.5px}
+  .pickrow .pp{margin-left:auto;font-weight:800;font-size:14px;white-space:nowrap}
+  .fld{margin:11px 0}
+  .fld label{display:block;font-size:11.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+  .fld input[type=text]{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;font-size:15px;font-family:inherit;color:var(--ink)}
+  .row2{display:flex;gap:11px;flex-wrap:wrap}
+  .row2 .fld{flex:1;min-width:150px}
+  .sigwrap{border:1px solid var(--line);border-radius:8px;background:#fcfdfe;position:relative}
+  .sigwrap canvas{display:block;width:100%;height:150px;border-radius:8px;touch-action:none}
+  .sighint{position:absolute;left:14px;bottom:10px;font-size:12px;color:#b7bfc8;pointer-events:none}
+  .sigbase{position:absolute;left:14px;right:14px;bottom:34px;border-bottom:1.5px solid #d3d9df;pointer-events:none}
+  .clear{position:absolute;top:8px;right:10px;font-size:11.5px;color:var(--accent);background:#fff;border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-weight:700;cursor:pointer}
+  .ack{display:flex;gap:10px;align-items:flex-start;font-size:12px;color:#3a4653;margin:12px 0;line-height:1.5}
+  .ack input{width:19px;height:19px;flex:none;margin-top:1px;accent-color:var(--accent)}
+  .cta{width:100%;padding:15px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:16px;font-weight:800;cursor:pointer;margin-top:4px;letter-spacing:.3px}
+  .cta:disabled{background:#a9b6c4;cursor:not-allowed}
+  .err{color:var(--red);font-size:12.5px;font-weight:700;margin:8px 0;display:none}
+  .done{display:none;text-align:center;padding:22px 8px}
+  .done .big{font-size:20px;font-weight:800;color:var(--green);margin-bottom:6px}
+  .done .sm{font-size:13px;color:var(--muted);max-width:520px;margin:0 auto 14px}
+  .done .btns{display:flex;gap:9px;justify-content:center;flex-wrap:wrap}
+  .done .btns button{padding:11px 16px;border:1px solid var(--accent);background:#fff;color:var(--accent);border-radius:9px;font-weight:800;font-size:13px;cursor:pointer}
+  .stamp{margin-top:14px;font-size:12px;color:var(--ink);background:#f2f4f6;border:1px dashed var(--line);border-radius:8px;padding:12px;text-align:left;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}
+
+  .contractor{display:flex;gap:26px;flex-wrap:wrap;margin-top:8px}
+  .contractor .c{flex:1;min-width:210px}
+  .sigline{border-bottom:1.5px solid var(--ink);height:30px;margin-top:20px}
+  .sigcap{font-size:11px;color:var(--muted);margin-top:4px}
+
+  .foot{margin-top:26px;padding-top:12px;border-top:1px solid var(--line);font-size:10.5px;color:var(--muted);line-height:1.5;text-align:center}
+
+  @media print{
+    body{background:#fff;padding:0;font-size:11.5px}
+    .sheet{box-shadow:none;max-width:none;border-radius:0}
+    .pad{padding:0 4px}
+    .clear,.cta,.done .btns,.err{display:none !important}
+    .noprint{display:none !important}
+    h2.band{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .opt,.call,.sign,.pay .m,table.cmp td.a,table.cmp td.b{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .opt{break-inside:avoid}
+    .sign{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+
+<div class="sheet">
+<div class="pad">
+
+  <!-- LETTERHEAD -->
+  <div class="head">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect width="48" height="48" rx="9" fill="#12202e"/>
+        <path d="M9 25 L24 13 L39 25" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M13 24 V36 H35 V24" stroke="#7ea6e0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M22 36 V29 H27 V36" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div>
+        <div class="bname">RIDGE CO</div>
+        <div class="bsub">Property Maintenance &amp; Roofing</div>
+      </div>
+    </div>
+    <div class="binfo">
+      Saint Thomas Ventures LLC <span style="opacity:.7">DBA Ridge&nbsp;Co</span><br>
+      Baltimore, Maryland<br>
+      <span class="ph">brett@bmoremanagement.com</span><br>
+      Ph: <span>443-961-7927</span>
+    </div>
+  </div>
+
+  <div class="ttl">Roofing Proposal &amp; Home Improvement Agreement</div>
+  <div class="meta">
+    <div><span>Date:</span> <strong>August 10, 2026</strong></div>
+    <div><span>Proposal #:</span> <strong>RC-ROOF-3101GIB-01</strong></div>
+    <div><span>Prepared for:</span> <strong>Tristan Toliver</strong></div>
+    <div><span>Property address:</span> <strong>3101 Gibbons Ave, Baltimore, MD 21214</strong></div>
+    <div><span>Est. start:</span> <strong>ASAP after acceptance &amp; deposit, weather permitting</strong></div>
+    <div><span>Est. substantial completion:</span> <strong>10 business days after start (weather dependent)</strong></div>
+  </div>
+
+  <!-- INTRO -->
+  <h2 class="band">Overview — Two Ways Forward</h2>
+  <p class="lead">Thank you for the opportunity to look at the roof at <strong>3101 Gibbons Ave</strong>. Based on our inspection of the failing area above the second-floor bathroom, this proposal lays out <strong>two separate options</strong> so you can choose the one that best fits your budget and timeline. They are independent — you select <strong>one</strong>.</p>
+  <p><strong>Option A — Targeted Repair</strong> is the lower-cost path: we address the active problem area now. Because of the overall age and condition of the existing roof, this repair <strong>carries no guarantee or warranty</strong>, and we honestly recommend the full replacement instead.</p>
+  <p><strong>Option B — Full Roof Replacement</strong> removes and replaces the entire roof system with new shingles and a fully warrantied installation. It costs more up front but resolves the underlying condition and is protected by a workmanship warranty plus the shingle manufacturer's warranty.</p>
+
+  <div class="call amber">
+    <span class="ct">⚠ Ballpark, best-efforts inspection disclaimer</span>
+    This proposal is based on a visual inspection from accessible vantage points. Roof decking, framing, and areas beneath the existing shingles cannot be fully evaluated until work is underway. Hidden rot, prior improper repairs, or additional damaged decking are common on older roofs and may not be visible now. We make every effort to honor these numbers; should genuinely unforeseen conditions be uncovered, any additional work will be presented to you in writing as a change order for approval <em>before</em> we proceed (see Terms).
+  </div>
+
+  <!-- OPTION A -->
+  <h2 class="band">Option A — Targeted Roof Repair <span style="opacity:.6;font-weight:700">(No Guarantee / No Warranty)</span></h2>
+  <div class="opt repair">
+    <div class="opthd">
+      <div>
+        <span class="opttag">Lower cost · No warranty</span>
+        <div class="optname">Repair Above 2nd-Floor Bathroom</div>
+      </div>
+      <div class="optprice">
+        <div class="num">$4,200</div>
+        <div class="lbl">Total</div>
+      </div>
+    </div>
+    <div class="optbody">
+      <div class="scope">
+        <div class="li"><div class="k">1</div><div class="t"><b>Repair the roof at the failure area above the second-floor bathroom.</b> Remove failed and deteriorated shingles/roofing material in the affected section, correct the source of the leak, and re-seal and re-flash the area to shed water.</div></div>
+        <div class="li"><div class="k">2</div><div class="t"><b>Replace up to one (1) sheet of roof decking (plywood)</b> if the sheathing beneath the failed area is found to be rotted or compromised. Additional sheets, if needed, are billed per the decking rate below.</div></div>
+        <div class="li"><div class="k">3</div><div class="t"><b>Re-integrate shingles, flashing, and sealant</b> at the repaired section and clean up all related debris from the work area.</div></div>
+      </div>
+
+      <div class="call red">
+        <span class="ct">✕ No guarantee &amp; no warranty on this option</span>
+        Because of the age and overall deteriorated condition of the existing roof, <strong>we cannot guarantee or warranty this repair.</strong> Water can and often does find a new path on a roof that is at the end of its service life, and adjacent areas may fail independently of the section we repair. This option is offered as a good-faith, best-effort measure to buy time. <strong>Our professional recommendation is the full roof replacement (Option B).</strong>
+      </div>
+
+      <table class="sum">
+        <tr><td>Targeted repair — labor, materials &amp; sealing</td><td class="r">included</td></tr>
+        <tr><td>Up to one (1) sheet of replacement decking</td><td class="r">included</td></tr>
+        <tr><td>Additional decking beyond the allowance, if required</td><td class="r">$125 / sheet</td></tr>
+        <tr class="total"><td>Option A total <span class="sm">— fixed price</span></td><td class="r">$4,200.00</td></tr>
+      </table>
+
+      <div class="pay">
+        <div class="m"><div class="s1">To start</div><div class="s2">$2,100</div><div class="s3">50% at scheduling</div></div>
+        <div class="m"><div class="s1">On completion</div><div class="s2">$2,100</div><div class="s3">balance when finished</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OPTION B -->
+  <h2 class="band">Option B — Full Roof Replacement <span style="opacity:.6;font-weight:700">(Warrantied)</span></h2>
+  <div class="opt replace">
+    <div class="opthd">
+      <div>
+        <span class="opttag">Recommended · Warrantied</span>
+        <div class="optname">Complete Tear-Off &amp; New Shingle Roof System</div>
+      </div>
+      <div class="optprice">
+        <div class="num">$25,990</div>
+        <div class="lbl">Total</div>
+      </div>
+    </div>
+    <div class="optbody">
+      <p style="font-size:13px;margin-top:2px">A full replacement of the roof covering with a new architectural asphalt-<strong>shingle</strong> system, installed to manufacturer specification so the material warranty is preserved. Scope of work:</p>
+      <div class="scope">
+        <div class="li"><div class="k">1</div><div class="t"><b>Tear-off &amp; disposal.</b> Complete removal of the existing roof covering down to the decking; all debris hauled away and disposed of, including dumpster/haul fees.</div></div>
+        <div class="li"><div class="k">2</div><div class="t"><b>Deck inspection + up to four (4) sheets of plywood included.</b> The exposed roof deck is inspected for soft or rotted areas; up to four 4&#39;×8&#39; sheets of replacement decking are included at no added cost. Additional sheets, if needed, are billed at the decking rate below and documented with a photo.</div></div>
+        <div class="li"><div class="k">3</div><div class="t"><b>Underlayment.</b> New synthetic underlayment mechanically fastened across the full roof deck as a secondary moisture barrier.</div></div>
+        <div class="li"><div class="k">4</div><div class="t"><b>Ice &amp; water leak barrier.</b> Self-adhering ice-and-water shield installed at eaves, valleys, and vulnerable penetrations to protect against ice-dam and wind-driven-rain leaks.</div></div>
+        <div class="li"><div class="k">5</div><div class="t"><b>Drip edge &amp; starter.</b> New metal drip edge along all eaves and rakes, and a sealed starter-strip course along the eaves for wind resistance.</div></div>
+        <div class="li"><div class="k">6</div><div class="t"><b>Architectural shingles.</b> New architectural (dimensional) asphalt shingles installed in the manufacturer's specified nailing pattern; color to be selected by the owner from available options.</div></div>
+        <div class="li"><div class="k">7</div><div class="t"><b>Flashing.</b> New/re-worked flashing at all roof penetrations, walls, and transitions (vent pipes, and any chimney or sidewall as applicable) to seal against leaks.</div></div>
+        <div class="li"><div class="k">8</div><div class="t"><b>Ridge ventilation &amp; ridge cap.</b> Ridge/cap shingles installed at peaks and hips; balanced ridge ventilation maintained as required to keep the shingle manufacturer's warranty valid.</div></div>
+        <div class="li"><div class="k">9</div><div class="t"><b>Cleanup &amp; magnetic nail sweep.</b> Full site cleanup with a magnetic sweep of the grounds for nails and debris; the property is left clean.</div></div>
+        <div class="li"><div class="k">10</div><div class="t"><b>Permit &amp; final check.</b> Any required roofing permit pulled, and a final walk-through/inspection of the completed roof.</div></div>
+      </div>
+
+      <div class="call green">
+        <span class="ct">✓ Warranty on this option</span>
+        <strong>1-year Ridge Co workmanship warranty</strong> on the installation, <strong>plus full pass-through of the shingle manufacturer's limited warranty</strong> on the roofing materials (typically 25 years to limited-lifetime, per the manufacturer's terms). The workmanship warranty covers defects in installation; the manufacturer's warranty covers the materials on its own terms.
+      </div>
+
+      <table class="sum">
+        <tr><td>Full tear-off, new shingle roof system, flashing, ventilation &amp; permit</td><td class="r">included</td></tr>
+        <tr><td>Up to four (4) sheets of replacement decking</td><td class="r">included</td></tr>
+        <tr><td>Debris removal, dumpster &amp; magnetic-sweep cleanup</td><td class="r">included</td></tr>
+        <tr><td>Additional decking beyond the 4-sheet allowance, if required</td><td class="r">$125 / sheet</td></tr>
+        <tr class="total"><td>Option B total <span class="sm">— fixed price, all trades concurrent</span></td><td class="r">$25,990.00</td></tr>
+      </table>
+
+      <p style="font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Payment schedule</p>
+      <div class="pay">
+        <div class="m"><div class="s1">Materials &amp; mobilization</div><div class="s2">$19,035</div><div class="s3">at scheduling — covers shingles, decking, dumpster &amp; crew mobilization</div></div>
+        <div class="m"><div class="s1">Halfway</div><div class="s2">$4,990</div><div class="s3">at roof dried-in / midpoint</div></div>
+        <div class="m"><div class="s1">Final</div><div class="s2">$1,965</div><div class="s3">on completion &amp; final walk-through</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPARE -->
+  <h2 class="band">Side-by-Side</h2>
+  <table class="cmp">
+    <tr><th style="width:24%">&nbsp;</th><th style="width:38%">Option A — Repair</th><th style="width:38%">Option B — Replacement</th></tr>
+    <tr><td><strong>What you get</strong></td><td class="a">Fix the active failure above the 2nd-floor bathroom</td><td class="b">Entire roof removed &amp; replaced with a new shingle system</td></tr>
+    <tr><td><strong>Decking included</strong></td><td class="a">Up to 1 sheet</td><td class="b">Up to 4 sheets</td></tr>
+    <tr><td><strong>Warranty</strong></td><td class="a"><strong>None</strong> — no guarantee (roof at end of life)</td><td class="b">1-yr workmanship + manufacturer's shingle warranty</td></tr>
+    <tr><td><strong>Best for</strong></td><td class="a">Stopping the immediate leak on a tight budget</td><td class="b">A lasting fix &amp; long-term protection</td></tr>
+    <tr><td><strong>Price</strong></td><td class="a"><strong>$4,200</strong></td><td class="b"><strong>$25,990</strong></td></tr>
+  </table>
+
+  <!-- TERMS -->
+  <h2 class="band">Terms &amp; Conditions</h2>
+  <div class="terms">
+    <h4>1. Proposal validity</h4>
+    <p>This proposal is valid for <strong>30 days</strong> from the date above. Pricing assumes the two options are quoted together; selecting Option A does not obligate you to Option B or vice-versa.</p>
+
+    <h4>2. Scope &amp; hidden conditions / change orders</h4>
+    <p>Prices cover the scope described above. If concealed conditions are discovered once work is underway (e.g., additional rotted decking beyond the included allowance, prior improper repairs, or structural framing damage), we will stop, document the condition, and present a written <strong>change order</strong> with pricing for your approval before continuing. You are never billed for extra work you have not approved in writing.</p>
+
+    <h4>3. Additional decking</h4>
+    <p>Replacement roof decking beyond the sheets included in your selected option is billed at <strong>$125 per 4&#39;×8&#39; sheet</strong>, installed, and only as actually needed and documented.</p>
+
+    <h4>4. Estimate Integrity Clause</h4>
+    <p>Pricing assumes a single, unified, mobilized project performed on a continuous timeline. If line items are selectively removed or descoped after acceptance, the remaining approved work is subject to a <strong>15% price adjustment plus a $150 travel/mobilization fee</strong> to cover independent trip and setup overhead.</p>
+
+    <h4>5. Materials &amp; color selection</h4>
+    <p>Shingle color and available product line are selected by the owner from current stock options prior to material ordering. Substitutions of equivalent-or-better materials may be made if a specified product is unavailable.</p>
+
+    <h4>6. Access, staging &amp; weather</h4>
+    <p>Owner provides reasonable access to the property, driveway/curb space for a dumpster and materials, and access to electrical power. Roofing is weather-dependent; <strong>either job requires approximately four (4) consecutive dry days to perform.</strong> Start and completion dates are good-faith estimates and may shift for rain, high wind, or unsafe conditions. Weather delays are not a breach of this agreement.</p>
+
+    <h4>7. Payment terms</h4>
+    <p>Payments are due at the milestones shown for your selected option. <strong>Payment is by electronic methods only; physical checks are not accepted.</strong> Past-due balances may pause work until the account is current. Any first payment collected before work begins is applied to your contract price.</p>
+
+    <h4>8. Warranty</h4>
+    <p><strong>Option A (Repair)</strong> is expressly sold <strong>AS-IS with no guarantee or warranty</strong> of any kind, given the end-of-life condition of the existing roof. <strong>Option B (Replacement)</strong> carries a <strong>1-year Ridge Co workmanship warranty</strong> on the installation plus pass-through of the shingle <strong>manufacturer's limited warranty</strong> on materials. Workmanship warranty covers defects in installation, not damage from storms, impacts, other trades, foot traffic, or lack of maintenance.</p>
+  </div>
+
+  <!-- ACCEPTANCE / E-SIGN -->
+  <h2 class="band noprint">Choose Your Option &amp; Sign</h2>
+  <div class="sign" id="signCard">
+    <div class="signhd">✔ Acceptance &amp; Electronic Signature</div>
+    <div class="signbody">
+      <p style="margin-top:0;font-size:13px">Select the option you'd like to move forward with, then sign below. Signing indicates you accept this proposal and its Terms &amp; Conditions for the option you selected.</p>
+
+      <div class="pick" id="pick">
+        <label class="pickrow" data-opt="A">
+          <input type="radio" name="opt" value="A">
+          <span class="pn">Option A — Targeted Repair <span style="color:var(--muted);font-weight:600">(no warranty)</span></span>
+          <span class="pp">$4,200</span>
+        </label>
+        <label class="pickrow" data-opt="B">
+          <input type="radio" name="opt" value="B">
+          <span class="pn">Option B — Full Replacement <span style="color:var(--muted);font-weight:600">(warrantied)</span></span>
+          <span class="pp">$25,990</span>
+        </label>
+      </div>
+
+      <div class="row2">
+        <div class="fld"><label>Full name (printed)</label><input type="text" id="cname" placeholder="Your full name" autocomplete="name"></div>
+        <div class="fld"><label>Date</label><input type="text" id="cdate" placeholder="MM/DD/YYYY"></div>
+      </div>
+
+      <div class="fld">
+        <label>Signature — draw below</label>
+        <div class="sigwrap">
+          <canvas id="sig"></canvas>
+          <div class="sigbase"></div>
+          <div class="sighint" id="sighint">Sign here with your finger or mouse</div>
+          <button type="button" class="clear" id="clearSig">Clear</button>
+        </div>
+      </div>
+
+      <label class="ack"><input type="checkbox" id="ackChk"><span>I have read and agree to this proposal and its Terms &amp; Conditions for the option I selected above. I understand Option A (Repair) is sold as-is with no warranty, and that any deposit/first payment is applied to my contract price.</span></label>
+
+      <div class="err" id="err"></div>
+      <button class="cta" id="accept" disabled>Accept &amp; Sign</button>
+
+      <div class="done" id="done">
+        <div class="big">✓ Signed — thank you!</div>
+        <div class="sm">Your acceptance has been recorded. Please send the signed copy back to Ridge Co using the buttons below. An invoice for your first payment will follow by email.</div>
+        <div class="btns">
+          <button id="btnPrint">🖨 Save / Print signed PDF</button>
+          <button id="btnEmail">✉ Email signed copy to Ridge Co</button>
+        </div>
+        <div class="stamp" id="stamp"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SIGNATURES -->
+  <div class="contractor">
+    <div class="c">
+      <div class="sigline"></div>
+      <div class="sigcap">Client approval signature &amp; date</div>
+    </div>
+    <div class="c">
+      <div class="sigline"></div>
+      <div class="sigcap">Ridge Co (Saint Thomas Ventures LLC) — authorized signature &amp; date</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    Ridge Co · Saint Thomas Ventures LLC · Baltimore, Maryland · brett@bmoremanagement.com<br>
+    This document is a proposal and, upon signature, a home improvement agreement under Maryland law. Proposal&nbsp;#RC-ROOF-3101GIB-01.
+  </div>
+
+</div>
+</div>
+
+<script>
+(function(){
+  var pick = document.getElementById('pick');
+  var rows = pick.querySelectorAll('.pickrow');
+  rows.forEach(function(r){
+    r.addEventListener('click', function(){
+      rows.forEach(function(x){x.classList.remove('sel');});
+      r.classList.add('sel');
+      r.querySelector('input').checked = true;
+      validate();
+    });
+  });
+
+  var d = new Date();
+  var mm = String(d.getMonth()+1).padStart(2,'0');
+  var dd = String(d.getDate()).padStart(2,'0');
+  document.getElementById('cdate').value = mm+'/'+dd+'/'+d.getFullYear();
+
+  var canvas = document.getElementById('sig');
+  var hint = document.getElementById('sighint');
+  var ctx = canvas.getContext('2d');
+  var drawing=false, dirty=false, last=null;
+  function resize(){
+    var ratio = window.devicePixelRatio||1;
+    var w = canvas.offsetWidth, h = canvas.offsetHeight;
+    canvas.width = w*ratio; canvas.height = h*ratio;
+    ctx.scale(ratio,ratio);
+    ctx.lineWidth=2.2; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.strokeStyle='#12202e';
+  }
+  setTimeout(resize,30);
+  window.addEventListener('resize', function(){ if(!dirty) resize(); });
+  function pos(e){
+    var rect = canvas.getBoundingClientRect();
+    var t = e.touches ? e.touches[0] : e;
+    return {x:t.clientX-rect.left, y:t.clientY-rect.top};
+  }
+  function start(e){ drawing=true; last=pos(e); if(!dirty){dirty=true; hint.style.display='none';} e.preventDefault(); }
+  function move(e){ if(!drawing) return; var p=pos(e); ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; validate(); e.preventDefault(); }
+  function end(){ drawing=false; }
+  canvas.addEventListener('mousedown',start); canvas.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
+  canvas.addEventListener('touchstart',start,{passive:false}); canvas.addEventListener('touchmove',move,{passive:false}); canvas.addEventListener('touchend',end);
+  document.getElementById('clearSig').addEventListener('click', function(){
+    ctx.clearRect(0,0,canvas.width,canvas.height); dirty=false; hint.style.display='block'; validate();
+  });
+
+  var cname=document.getElementById('cname'), ack=document.getElementById('ackChk'), accept=document.getElementById('accept'), err=document.getElementById('err');
+  function selectedOpt(){ var c=pick.querySelector('input:checked'); return c?c.value:null; }
+  function validate(){
+    var ok = selectedOpt() && cname.value.trim().length>1 && dirty && ack.checked;
+    accept.disabled = !ok;
+    if(ok) err.style.display='none';
+    return ok;
+  }
+  cname.addEventListener('input',validate); ack.addEventListener('change',validate);
+
+  accept.addEventListener('click', function(){
+    if(!validate()){ err.textContent='Please pick an option, type your name, sign, and check the box.'; err.style.display='block'; return; }
+    var opt = selectedOpt();
+    var label = opt==='A' ? 'Option A — Targeted Repair (no warranty) — $4,200' : 'Option B — Full Roof Replacement (warrantied) — $25,990';
+    var when = new Date().toString();
+    document.getElementById('pick').style.pointerEvents='none';
+    cname.readOnly=true; ack.disabled=true; canvas.style.pointerEvents='none';
+    accept.style.display='none';
+    var stamp = 'SIGNED PROPOSAL — RC-ROOF-3101GIB-01\n'
+      + 'Property : 3101 Gibbons Ave, Baltimore, MD 21214\n'
+      + 'Selected : '+label+'\n'
+      + 'Signed by: '+cname.value.trim()+'\n'
+      + 'Date     : '+document.getElementById('cdate').value+'\n'
+      + 'Timestamp: '+when;
+    document.getElementById('stamp').textContent = stamp;
+    document.getElementById('done').style.display='block';
+    document.getElementById('done').scrollIntoView({behavior:'smooth',block:'center'});
+    window.__signed = {opt:opt,label:label,name:cname.value.trim(),date:document.getElementById('cdate').value,ts:when,sig:canvas.toDataURL('image/png')};
+    try {
+      var SIGN_ENDPOINT='https://maintenance-hub.brett-2f8.workers.dev/proposal/sign';
+      var SIGN_TOKEN='psign_yh0nYZycTW05PD8fW4TcDVb';
+      if (SIGN_TOKEN) {
+        fetch(SIGN_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':SIGN_TOKEN},
+          body:JSON.stringify({proposal_id:'RC-ROOF-3101GIB-01',option:opt,signer_name:cname.value.trim(),signed_date:document.getElementById('cdate').value,signature_png:window.__signed.sig,signed_ts:when})}).catch(function(){});
+      }
+    } catch(e){}
+  });
+
+  document.getElementById('btnPrint').addEventListener('click', function(){ window.print(); });
+  document.getElementById('btnEmail').addEventListener('click', function(){
+    var s = window.__signed||{};
+    var subj = encodeURIComponent('Signed roofing proposal — 3101 Gibbons Ave ('+(s.opt==='A'?'Repair':'Replacement')+')');
+    var body = encodeURIComponent('Hi Brett,\n\nI\'ve accepted the roofing proposal for 3101 Gibbons Ave.\n\n'
+      + 'Selected: '+(s.label||'')+'\nName: '+(s.name||'')+'\nDate: '+(s.date||'')+'\n\n'
+      + 'I used the "Save / Print signed PDF" button and attached the signed copy.\n\nThank you.');
+    window.location.href = 'mailto:brett@bmoremanagement.com?subject='+subj+'&body='+body;
+  });
+})();
+</script>
+</body>
+</html>

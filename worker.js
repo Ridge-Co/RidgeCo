@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-10.3';
+const BUILD_VERSION = '2026-08-10.4';
 
 export default {
   async fetch(request, env) {
@@ -7379,21 +7379,21 @@ async function trashInvoice(env, body) {
 // (signed-proposals.html) and one-taps POST /proposal/book (admin secret, preview-first) to
 // create the customer invoice (first payment, marked-up) + the vendor bill (base cost).
 // MONEY IS SERVER-AUTHORITATIVE: the client only sends which proposal + which option + who
-// signed. Every dollar, the owner/customer, the vendor, and the trade come from
-// PROPOSAL_REGISTRY / the Sheets here — never trusted from the client.
+// signed. Every dollar, the owner/customer, the vendor, and the trade come from the PRIVATE
+// PROPOSAL_CONFIG env var / the Sheets here — never trusted from the client, never in this repo.
 // ─────────────────────────────────────────────────────────────────────────────
 const PROPOSAL_SIG_HEADERS = ['ID','Proposal_ID','Option','Owner_Total','First_Payment','Vendor_Cost','Signer_Name','Signed_Date','Signature_PNG','Signed_TS','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Created_Date','Active'];
 
-// One entry per live proposal. Adding a proposal = add an entry (or later, a Proposals tab).
-const PROPOSAL_REGISTRY = {
-  'RC-ROOF-3101GIB-01': {
-    wo: 'WO-1077', property: '3101 Gibbons Ave', vendorId: '5', trade: 'Roofing',
-    options: {
-      A: { label: 'Targeted Repair (no warranty)',      ownerTotal: 4200,  firstPayment: 2100,  vendorCost: 3200,  firstLabel: '50% deposit' },
-      B: { label: 'Full Roof Replacement (warrantied)',  ownerTotal: 25990, firstPayment: 19035, vendorCost: 19800, firstLabel: 'materials & mobilization' },
-    },
-  },
-};
+// Per-proposal config (routing + amounts) is CONFIDENTIAL — it contains the vendor's cost and
+// therefore the markup, which must NEVER live in this public repo. It is stored in the private
+// Cloudflare secret env var PROPOSAL_CONFIG (JSON), read at runtime. Shape:
+//   { "RC-ROOF-3101GIB-01": { wo, property, vendorId, trade,
+//       options: { A:{label,ownerTotal,firstPayment,vendorCost,firstLabel}, B:{...} } } }
+// If PROPOSAL_CONFIG is unset the feature is dormant (proposals resolve to "unknown").
+function proposalRegistry(env) {
+  try { return env && env.PROPOSAL_CONFIG ? JSON.parse(env.PROPOSAL_CONFIG) : {}; }
+  catch (e) { return {}; }
+}
 
 async function ensureProposalTab(env) {
   const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
@@ -7409,7 +7409,7 @@ async function ensureProposalTab(env) {
 // nothing in QuickBooks.
 async function proposalSign(env, body) {
   if (!body || !body.proposal_id || !body.option) return json({ error: 'proposal_id and option required' }, 400);
-  const reg = PROPOSAL_REGISTRY[body.proposal_id];
+  const reg = proposalRegistry(env)[body.proposal_id];
   if (!reg) return json({ error: 'unknown proposal_id' }, 404);
   const optKey = String(body.option).toUpperCase();
   const opt = reg.options[optKey];
@@ -7436,8 +7436,9 @@ async function proposalSign(env, body) {
 async function proposalList(env, url) {
   await ensureProposalTab(env);
   const rows = await fetchTab(env, 'Proposal_Signatures');
+  const registry = proposalRegistry(env);
   const out = rows.filter(r => r.Active !== 'FALSE').map(r => {
-    const reg = PROPOSAL_REGISTRY[r.Proposal_ID] || {};
+    const reg = registry[r.Proposal_ID] || {};
     const opt = (reg.options && reg.options[r.Option]) || {};
     return {
       id: r.ID, proposal_id: r.Proposal_ID, option: r.Option, option_label: opt.label || '',
@@ -7460,7 +7461,7 @@ async function proposalBook(env, body) {
   const rows = await fetchTab(env, 'Proposal_Signatures');
   const row = rows.find(r => r.ID === String(body.id) && r.Active !== 'FALSE');
   if (!row) return json({ error: 'signature not found' }, 404);
-  const reg = PROPOSAL_REGISTRY[row.Proposal_ID];
+  const reg = proposalRegistry(env)[row.Proposal_ID];
   if (!reg) return json({ error: 'unknown proposal in registry' }, 404);
   const opt = reg.options[row.Option] || {};
   const firstPayment = +row.First_Payment || opt.firstPayment || 0;
