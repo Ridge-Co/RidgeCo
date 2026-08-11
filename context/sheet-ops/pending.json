@@ -1,0 +1,32 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Aug 11 2026 — (1) Add Bedroom-3 door key for 151 W Lanvale St Apt 1 (Property 5 / Unit 8, owner Goldszmidt ID 3). New interior bedroom-door lock, key #A4. No prior bedroom-door key existed (verified against live Keys tab; max ID was 67 -> new ID 68), so this is an append, not an overwrite. Room stored in Lockbox_Location='Bedroom 3' so it surfaces to the vendor on the work order and shows on the Keys card, without creating a QuickBooks unit/billing layer. (2) Add optional 'Room' column to Work_Orders so a WO can be tagged to a specific room/area (e.g. Bedroom 2) for vendor routing — internal/vendor only, never on owner-facing views. ensureColumns-safe: add_column_header is idempotent.",
+  "ops": [
+    {
+      "type": "append_row",
+      "tab": "Keys",
+      "row": {
+        "ID": "68",
+        "Property_ID": "5",
+        "Property_Address": "151 W Lanvale St",
+        "Unit_ID": "8",
+        "Unit_Label": "Apt 1",
+        "Owner_ID": "3",
+        "Key_Type": "Bedroom Door",
+        "Key_Code": "A4",
+        "Lockbox_Code": "",
+        "Lockbox_Location": "Bedroom 3",
+        "Notes": "Interior bedroom-door lock - Apt 1, Bedroom 3",
+        "Status": "Active",
+        "Last_Changed": "2026-08-11",
+        "Active": "TRUE",
+        "Possession_Status": "Have It"
+      }
+    },
+    {
+      "type": "add_column_header",
+      "tab": "Work_Orders",
+      "header": "Room"
+    }
+  ]
+}
