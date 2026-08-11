@@ -154,6 +154,24 @@ Some stores send a **live en-route notice** on delivery day — an SMS and/or an
 
 **How it's captured:** the store's en-route SMS lands on the dedicated deliveries number (`/sms-inbound` parse) and/or the en-route email lands at the watched inbox — parse the "N stops away" / ETA / tracking-link signal → fire the touchpoint. **Not every store sends this**, so it's a *best-effort enrichment*: when the signal exists we act on it; when it doesn't, the window notice + arrival call still cover the tenant. New `Status` value **`Approaching`** sits between `En-Route` and `Arrived`.
 
+### 8.6 Delivery-exception handling — the "it won't install" protocol (as-needed, NOT broadcast)
+
+The recurring failure: the appliance arrives but **can't be installed** — a site issue (plumbing, a doorway, an old shutoff) blocks it, and the delivery crew won't fix anything; their only offer is to **take it back**. Returning it means a reorder and another week without a working appliance, when often we could have just sent our own vendor.
+
+**This guidance is delivered ONLY when a tenant contacts us reporting a delivery problem** — it must **not** appear in the routine window/en-route/arrival notifications (Brett's explicit call). It's a canned protocol the AI agent / Brett gives on that inbound contact, stored in Config so it stays consistent.
+
+**Triage the moment a tenant reports a problem (agent asks, or Brett decides):**
+
+1. **Can the appliance physically get *into* the unit/building at all?**
+   - **No** → **return & reorder.** It cannot be left on the curb, in a hallway, or **anywhere blocking fire egress** — hard safety line. Alert Brett/assignee, reopen the order.
+2. **If it fits through the building — is it the *right size* for the space?**
+   - **Wrong size by a large margin** (won't fit / can't be adapted — e.g. **~4"+ off**) → **return & reorder.** (Ideally already caught by the §6 dimension check *before* it ever ships.)
+   - **Right size, or a *minor* obstruction we can fix** (just needs a door removed, a shutoff swapped, a minor plumbing fix) → **keep-and-fix (default):**
+     - Instruct the tenant to ask the delivery company to **leave the appliance on-site**, then contact us.
+     - We **dispatch one of our own vendors** to resolve the underlying issue and complete the install — this spawns a **child WO** under the delivery's parent goal (per §5 / B-223), routed to the right trade (e.g. plumbing).
+
+**Net:** the default is *keep it and we finish the job*; return-and-reorder is the exception, reserved for **(a) wrong size by a large margin** and **(b) can't get it inside at all** — with the fire-egress / no-curb-dumping rule as a non-negotiable. Ties the dimension check (§6, catches most size cases up front), related/sub-WOs (§5, the fix becomes a child WO), and the notification fan-out (§8, tenant + Brett + backup alerted on any exception).
+
 ---
 
 ## 9. Decisions
@@ -193,6 +211,7 @@ Some stores send a **live en-route notice** on delivery day — an SMS and/or an
 - **Fallback cascade** tenant → assignee → backup, configurable per delivery.
 - **Confirmation-of-receipt + damage-claim loop** after the window.
 - **En-route "stops away" touchpoint** (§8.5) — capture the store's live en-route signal when present → immediate tenant SMS + optional auto-call. A touchpoint most systems never grab.
+- **Delivery-exception protocol** (§8.6) — as-needed "leave it on-site, we'll finish it" default that turns a would-be return into a same-appliance install via our own vendor; return-and-reorder only for large-margin wrong-size or can't-get-it-inside, with a hard no-egress-blocking rule.
 - **Reschedule handling** from inbound SMS/email parse (stores reschedule constantly) → re-notify all + update calendar.
 - **Store-account learning** (typical windows, which numbers they call from) to improve matching over time.
 
