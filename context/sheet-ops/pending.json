@@ -1,0 +1,46 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "931 Saint Paul St (Property 70, Owner 12 Jamuna Yalamanchili) — three things Brett asked for Aug 11 2026 while driving. (1) Create a general cross-reference Notes tab (new isolated tab; notes link to any of property/unit/WO/owner/vendor/tenant so info can be cross-referenced whether or not it ties to a work order) — the data-layer foundation of the long-planned notes system; the Hub UI wiring is staged as a separate reviewable build (NOTES_SYSTEM_BUILD_BRIEF). (2) Seed it with the Baltimore City DHCD rodent/common-areas citation record: inspector Barry Daniel, mobile 410-852-1204, daniel.barry@baltimorecity.gov; correct by Aug 31 2026 (further extension possible on request but resolve is the goal); action = email the inspector our Hawx pest-control service record (8/4/26 visit) to add to the file; call inspector to schedule reinspection when ready; owner (Jamuna) already informed by text today 8/11/26. Linked to Property 70, Unit 2F (new unit 45) & common areas, and WO-1100 (the In-Progress pest-control walkthrough). Also appended the same summary to WO-1100 Notes and filled its blank Property_Address. (3) Added 6 units to Property 70 (1F,1R,2F,2R,BF,BR = new Unit IDs 43-48) linked to the property (owner links transitively via Property.Owner_ID=12). NOTE: Property 70 Unit_Count=8 but Brett named only 6 — 3F/3R not added pending his confirmation.",
+  "ops": [
+    { "type": "create_tab", "tab": "Notes" },
+    { "type": "write_headers", "tab": "Notes", "headers": ["ID","Date","Category","Subject","Body","Property_ID","Property_Address","Unit_ID","Unit_Label","WO_ID","Owner_ID","Vendor_ID","Tenant_ID","Contact_Name","Contact_Phone","Contact_Email","Follow_Up_Date","Status","Author_Role","Shared_With","Source","Created_Date","Active"] },
+
+    { "type": "append_row", "tab": "Units", "row": { "ID": "43", "Property_ID": "70", "Unit_Label": "1F", "Active": "TRUE", "Property_Address": "931 Saint Paul St", "Display_Label": "931 St Paul – 1F", "Notes": "Added Aug 11 2026 (building unit setup)." } },
+    { "type": "append_row", "tab": "Units", "row": { "ID": "44", "Property_ID": "70", "Unit_Label": "1R", "Active": "TRUE", "Property_Address": "931 Saint Paul St", "Display_Label": "931 St Paul – 1R", "Notes": "Added Aug 11 2026 (building unit setup)." } },
+    { "type": "append_row", "tab": "Units", "row": { "ID": "45", "Property_ID": "70", "Unit_Label": "2F", "Active": "TRUE", "Property_Address": "931 Saint Paul St", "Display_Label": "931 St Paul – 2F", "Notes": "Added Aug 11 2026. Subject of the DHCD rodent citation (2F & common areas) — see Notes tab #1." } },
+    { "type": "append_row", "tab": "Units", "row": { "ID": "46", "Property_ID": "70", "Unit_Label": "2R", "Active": "TRUE", "Property_Address": "931 Saint Paul St", "Display_Label": "931 St Paul – 2R", "Notes": "Added Aug 11 2026 (building unit setup)." } },
+    { "type": "append_row", "tab": "Units", "row": { "ID": "47", "Property_ID": "70", "Unit_Label": "BF", "Active": "TRUE", "Property_Address": "931 Saint Paul St", "Display_Label": "931 St Paul – BF (Basement Front)", "Notes": "Added Aug 11 2026 (building unit setup). Basement Front — confirm label." } },
+    { "type": "append_row", "tab": "Units", "row": { "ID": "48", "Property_ID": "70", "Unit_Label": "BR", "Active": "TRUE", "Property_Address": "931 Saint Paul St", "Display_Label": "931 St Paul – BR (Basement Rear)", "Notes": "Added Aug 11 2026 (building unit setup). Basement Rear — confirm label." } },
+
+    { "type": "append_row", "tab": "Notes", "row": {
+      "ID": "1",
+      "Date": "2026-08-11",
+      "Category": "Code Violation — Inspection",
+      "Subject": "Baltimore Housing rodent/common-areas citation — 931 St Paul (Unit 2F & common areas)",
+      "Body": "Baltimore City DHCD code violation (rodent control) at 931 Saint Paul St — Unit 2F & common areas. Correction deadline: Aug 31, 2026. A further extension can be requested at that time if needed, but the goal is to resolve, not extend. ACTION: email the inspector our pest-control service record (Hawx Pest Control, 8/4/26 visit) related to the citation so it is added to the record. Contact the inspector at his mobile to schedule the reinspection when we are ready. Owner (Jamuna Yalamanchili, Owner 12) was informed of this by text today, Aug 11, 2026.",
+      "Property_ID": "70",
+      "Property_Address": "931 Saint Paul St",
+      "Unit_ID": "45",
+      "Unit_Label": "2F",
+      "WO_ID": "WO-1100",
+      "Owner_ID": "12",
+      "Vendor_ID": "",
+      "Tenant_ID": "",
+      "Contact_Name": "Barry Daniel — DHCD Inspector",
+      "Contact_Phone": "410-852-1204",
+      "Contact_Email": "daniel.barry@baltimorecity.gov",
+      "Follow_Up_Date": "2026-08-31",
+      "Status": "Open",
+      "Author_Role": "admin",
+      "Shared_With": "owner",
+      "Source": "Inspector phone + email; relayed by Brett Aug 11 2026",
+      "Created_Date": "2026-08-11",
+      "Active": "TRUE"
+    } },
+
+    { "type": "update_cell_by_id", "tab": "Work_Orders", "id": "WO-1100", "fields": {
+      "Property_Address": "931 Saint Paul St",
+      "Notes": "CODE VIOLATION / INSPECTION (cross-ref: Notes tab #1). Baltimore City DHCD rodent citation — Unit 2F & common areas. Correct by Aug 31, 2026 (extension possible on request, but resolving is the goal). Inspector: Barry Daniel, mobile 410-852-1204, daniel.barry@baltimorecity.gov. NEXT: email inspector our Hawx pest-control service record (8/4/26 visit) to add to the file; call him to schedule reinspection when ready. Owner (Jamuna) informed by text today 8/11/26."
+    } }
+  ]
+}
