@@ -1,5 +1,8 @@
 # WHERE THINGS STAND — Aug 10, 2026
 
+## 🔒 HARD RULE — NEVER LEAK COST / MARKUP (LOCKED Aug 10, 2026 — after a live breach)
+**Brett's cost, ANY vendor/contractor cost, markup, margin, or the math that derives a price is STRICTLY CONFIDENTIAL.** It must **NEVER** appear on any customer-facing or externally-shared/hostable artifact — not in visible text, not in a footnote, not in an HTML comment, not in JavaScript, not in a filename or metadata, and **NEVER committed to the public `Ridge-Co/RidgeCo` repo (code OR context files).** Customer/vendor-facing documents show **only the final price for that audience** — never "show your work," never the breakdown. Confidential pricing lives ONLY in private stores (Cloudflare secret env, the private Google Sheet, or the private `brett332/data` repo). **Before delivering, hosting, pushing, or sending ANYTHING a customer / vendor / the public could see, grep it for cost / markup / margin / vendor-cost / base and confirm none is present.** Applies to proposals, estimates, invoices, emails, listings, PDFs, HTML, and all code/comments. **A violation is a CRITICAL failure — Brett's #1 non-negotiable.** (Incident: a proposal's on-screen banner + HTML comment carried the base cost + markup, and the same numbers were pushed into the public `worker.js`; the customer screenshotted the markup. Remediation: markup moved to the private env `PROPOSAL_CONFIG`; all documents scrubbed; this rule locked. See FEATURE_LOG rule 73.)
+
 ## ✅ Proposals de-dup + Stuck-WO detector (Aug 10, Worker `2026-08-09.14`)
 Two builds. (1) **De-dup:** proposals.html now flags a proposal that's already in the build queue or
 already shipped ("✅ already built" / "⏳ in build queue", dimmed + non-selectable) instead of
