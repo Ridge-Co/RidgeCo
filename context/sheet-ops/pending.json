@@ -1,6 +1,6 @@
 {
   "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
-  "description": "Aug 11 2026 (retry) — add optional 'Room' column to Work_Orders. The prior combined op appended the Bedroom-3 key (ID 68, verified present in Keys) but did not clear pending.json, so the column add did not complete. This op is column-only: the key append is intentionally omitted to avoid a duplicate key row. add_column_header is idempotent (no-op if 'Room' already exists).",
+  "description": "Aug 11 2026 (retry 2) — add optional 'Room' column to Work_Orders, now that run_ops.add_column_header auto-widens the grid first. Work_Orders was at its 39-col grid edge, so the earlier values.update to col 40 failed with 'exceeds grid limits' (op1 key-append had already succeeded — key ID 68 verified present, single row, not re-added here). Column-only + idempotent.",
   "ops": [
     { "type": "add_column_header", "tab": "Work_Orders", "header": "Room" }
   ]

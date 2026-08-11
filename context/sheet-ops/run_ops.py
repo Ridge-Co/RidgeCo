@@ -58,7 +58,23 @@ for op in ops:
             header = op['header']
             headers = get_headers(tab)
             if header not in headers:
-                col = col_letter(len(headers))
+                target_idx = len(headers)  # 0-based index of the new column
+                # values.update does NOT auto-widen the grid: writing a header past
+                # the tab's current columnCount fails with "exceeds grid limits".
+                # This is why a tab already at its grid edge (e.g. Work_Orders at 39
+                # cols) silently failed the column add while roomier tabs succeeded.
+                # Expand the grid first when the new column would land out of bounds.
+                meta = ss.get(spreadsheetId=sheet_id).execute()
+                sh = next((s for s in meta.get('sheets', []) if s['properties']['title'] == tab), None)
+                if sh is not None:
+                    col_count = sh['properties'].get('gridProperties', {}).get('columnCount', 0)
+                    if target_idx >= col_count:
+                        ss.batchUpdate(spreadsheetId=sheet_id, body={'requests': [{
+                            'appendDimension': {'sheetId': sh['properties']['sheetId'],
+                                                'dimension': 'COLUMNS',
+                                                'length': target_idx - col_count + 1}
+                        }]}).execute()
+                col = col_letter(target_idx)
                 ss.values().update(
                     spreadsheetId=sheet_id,
                     range=f'{tab}!{col}1',
