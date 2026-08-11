@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-11.1';
+const BUILD_VERSION = '2026-08-11.2';
 
 export default {
   async fetch(request, env) {
@@ -168,6 +168,7 @@ export default {
         if (path === '/trash/unbilled')         return await trashUnbilled(env, url);
         if (path === '/trash/qb-customers')     return await trashQbCustomers(env);
         if (path === '/trash/qb-items')         return await trashQbItems(env);
+        if (path === '/deliveries')             return await deliveriesList(env, url);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
         if (path === '/proposal/signatures')    return await proposalList(env, url);
       }
@@ -300,6 +301,8 @@ export default {
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
         if (path === '/trash/log-visit')          return await trashLogVisit(env, body);
         if (path === '/trash/invoice')            return await trashInvoice(env, body);
+        if (path === '/delivery/add')             return await deliveryAdd(env, body);
+        if (path === '/delivery/update')          return await updateRow(env, 'Deliveries', body.id, body.fields);
         if (path === '/proposal/sign')            return await proposalSign(env, body);
         if (path === '/proposal/book')            return await proposalBook(env, body);
       }
@@ -7008,6 +7011,83 @@ async function qbSendInvoice(env, body) {
 const TRASH_PROP_HEADERS  = ['ID','Label','QBO_Customer_ID','Customer_Name','QBO_Item_ID','Item_Name','Flat_Rate','Visits_Per_Week','Nudge_Day','Grace_Days','Active','Created_Date'];
 const TRASH_VISIT_HEADERS = ['ID','Property_ID','Label','Visit_Date','Week_Key','Photo_Folder_ID','Photo_Folder_URL','Photo_File_IDs','Base_Rate','Extra_Amount','Extra_Reason','QB_Invoice_ID','QB_Invoice_Number','Invoice_Status','Created_Date','Active'];
 const TRASH_DOW = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sat:5, Sun:6 };
+
+// ── Appliance & Materials Delivery System — Phase 0 (B-218) ──────────────────
+// A Delivery record is the spine: what was ordered, where it's going, who meets it,
+// and which WO(s) it belongs to. SAFE class — no Twilio, no money, no customer send.
+// Tab self-provisions (mirrors the Trash pattern) so first use just works.
+const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Model','New_Dims','Property_ID','Unit_ID','Tenant_ID','Delivery_Address','Expected_Date','Expected_Window','Onsite_Contact','Onsite_Contact_Phone','Backup_Contact','Backup_Phone','Delivery_Notes','Linked_WO_IDs','Status','Source','Message_ID','Created_Date','Active'];
+
+async function ensureDeliveryTab(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  if (!titles.includes('Deliveries')) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: 'Deliveries' } } }] });
+  }
+  await ensureColumns(env, 'Deliveries', DELIVERY_HEADERS);
+}
+
+// GET /deliveries — every active delivery, enriched with property/unit/tenant labels,
+// plus today's date (ET) so the page can bucket Today / Upcoming / Needs-a-date / Done.
+async function deliveriesList(env, url) {
+  await ensureDeliveryTab(env);
+  let dels = [], props = [], units = [], tenants = [];
+  try { dels    = await fetchTab(env, 'Deliveries'); } catch (e) {}
+  try { props   = await fetchTab(env, 'Properties'); } catch (e) {}
+  try { units   = await fetchTab(env, 'Units'); } catch (e) {}
+  try { tenants = await fetchTab(env, 'Tenants'); } catch (e) {}
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const out = dels.filter(d => d.Active !== 'FALSE').map(d => {
+    const p = props.find(x => String(x.ID) === String(d.Property_ID));
+    const u = units.find(x => String(x.ID) === String(d.Unit_ID));
+    const t = tenants.find(x => String(x.ID) === String(d.Tenant_ID));
+    return {
+      id: d.ID, order_number: d.Order_Number || '', store: d.Store || '',
+      item_type: d.Item_Type || '', make_model: d.New_Make_Model || '', dims: d.New_Dims || '',
+      property_id: d.Property_ID || '', unit_id: d.Unit_ID || '', tenant_id: d.Tenant_ID || '',
+      property_address: p ? (p.Address || '') : '', unit_label: u ? (u.Unit_Label || '') : '',
+      tenant_name: t ? ((t.First_Name || '') + ' ' + (t.Last_Name || '')).trim() : '',
+      tenant_phone: t ? (t.Phone || '') : '',
+      delivery_address: d.Delivery_Address || '', expected_date: d.Expected_Date || '', expected_window: d.Expected_Window || '',
+      onsite_contact: d.Onsite_Contact || 'tenant', onsite_contact_phone: d.Onsite_Contact_Phone || '',
+      backup_contact: d.Backup_Contact || '', backup_phone: d.Backup_Phone || '',
+      notes: d.Delivery_Notes || '', linked_wo_ids: d.Linked_WO_IDs || '',
+      status: d.Status || 'Ordered', source: d.Source || '',
+    };
+  });
+  out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
+  return json({ today, count: out.length, deliveries: out });
+}
+
+// POST /delivery/add — create a delivery. If no WO is linked and we know the property,
+// auto-create the install WO (Brett's "a delivery always has a work order") and link it.
+async function deliveryAdd(env, body) {
+  await ensureDeliveryTab(env);
+  let woIds = String(body.linked_wo_ids || '').trim();
+  let createdWO = '';
+  if (!woIds && (body.property_id || body.unit_id)) {
+    const desc = ('Appliance delivery/install: ' + [body.item_type, body.new_make_model].filter(Boolean).join(' ')
+      + (body.order_number ? ` (order ${body.order_number})` : '')).trim();
+    const woResp = await createWorkOrder(env, {
+      property_id: body.property_id || '', unit_id: body.unit_id || '', tenant_id: body.tenant_id || '',
+      trade: body.trade || 'Appliance', type: 'delivery', description: desc || 'Appliance delivery',
+      priority: body.priority || 'normal', notes: body.delivery_notes || '', created_by: body.created_by || 'admin',
+    });
+    try { const wj = await woResp.json(); if (wj && wj.id) { createdWO = wj.id; woIds = wj.id; } } catch (_) {}
+  }
+  const add = await addRow(env, 'Deliveries', {
+    Order_Number: body.order_number || '', Store: body.store || '', Item_Type: body.item_type || '',
+    New_Make_Model: body.new_make_model || '', New_Dims: body.new_dims || '',
+    Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Tenant_ID: body.tenant_id || '',
+    Delivery_Address: body.delivery_address || '', Expected_Date: body.expected_date || '', Expected_Window: body.expected_window || '',
+    Onsite_Contact: body.onsite_contact || 'tenant', Onsite_Contact_Phone: body.onsite_contact_phone || '',
+    Backup_Contact: body.backup_contact || '', Backup_Phone: body.backup_phone || '',
+    Delivery_Notes: body.delivery_notes || '', Linked_WO_IDs: woIds,
+    Status: body.status || 'Ordered', Source: body.source || 'manual', Message_ID: body.message_id || '',
+    Created_Date: new Date().toISOString(), Active: 'TRUE',
+  });
+  try { const aj = await add.json(); return json({ success: true, id: aj.id, wo_id: createdWO }); } catch (_) { return add; }
+}
 
 // Monday-anchored week key (YYYY-MM-DD of that week's Monday). Date-only + UTC
 // noon so a Baltimore evening never rolls into the next day's bucket.

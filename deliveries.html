@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Deliveries — Ridge Co</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --surface:#fff; --border:#dfe3e8; --text:#1c2430; --muted:#6b7684;
+    --accent:#1f6feb; --accent2:#1a7f4b; --danger:#c0392b; --warn:#b8860b; --chip:#eef2f7;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px}
+  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;z-index:10}
+  header h1{font-size:18px;margin:0}
+  header .ver{font-size:11px;color:var(--muted)}
+  main{padding:14px 14px 60px;max-width:640px;margin:0 auto}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  .sec-title{font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--muted);margin:18px 2px 8px;text-transform:uppercase}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .muted{color:var(--muted);font-size:13px}
+  .btn{padding:11px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:15px;font-weight:600;cursor:pointer}
+  .btn.small{padding:7px 12px;font-size:13px}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.go{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+  .btn.ghost{background:transparent}
+  .btn:active{opacity:.85}
+  .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--chip);color:var(--muted)}
+  .pill.ok{background:#e7f6ec;color:var(--accent2)} .pill.due{background:#fdf3e0;color:var(--warn)} .pill.new{background:#eaf1fd;color:var(--accent)}
+  input,select,textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text)}
+  textarea{min-height:64px;resize:vertical}
+  label.fld{display:block;margin:10px 0 4px;font-size:13px;color:var(--muted);font-weight:600}
+  .grid2{display:flex;gap:8px}.grid2>div{flex:1}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center;z-index:50}
+  .modal.open{display:flex}
+  .sheet{background:var(--surface);width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:16px;max-height:92vh;overflow:auto}
+  .sheet h2{margin:2px 0 12px;font-size:18px}
+  .dcard{border-top:1px solid var(--border);padding:12px 0}
+  .dcard:first-child{border-top:none}
+  .dtitle{font-weight:700}
+  .dline{font-size:13px;color:var(--muted);margin-top:2px}
+  .actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .hide{display:none}
+  .banner{background:#eaf1fd;border:1px solid #cadcff;color:#274b8f;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>Deliveries</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized — try again.</p>
+  <button class="btn primary" style="width:100%;margin-top:12px" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <header>
+    <h1>🚚 Deliveries</h1>
+    <span class="ver" id="ver"></span>
+  </header>
+  <main>
+    <button class="btn primary" style="width:100%;margin-bottom:12px" onclick="openAdd()">+ New delivery</button>
+    <div id="lists"><p class="muted">Loading…</p></div>
+  </main>
+</div>
+
+<!-- Add / Edit delivery sheet -->
+<div class="modal" id="d-modal">
+  <div class="sheet">
+    <h2 id="dm-title">New delivery</h2>
+    <input type="hidden" id="df-id">
+    <div id="df-woline" class="muted" style="margin-bottom:8px"></div>
+
+    <div class="grid2">
+      <div><label class="fld">Store</label><input id="df-store" placeholder="Home Depot"></div>
+      <div><label class="fld">Order / confirmation #</label><input id="df-order" placeholder="e.g. H1234-56789"></div>
+    </div>
+    <div class="grid2">
+      <div><label class="fld">Item type</label>
+        <select id="df-item"><option value="">—</option><option>Refrigerator</option><option>Range</option><option>Washer</option><option>Dryer</option><option>Dishwasher</option><option>Water heater</option><option>Microwave</option><option>Materials</option><option>Other</option></select>
+      </div>
+      <div><label class="fld">Make / model</label><input id="df-model" placeholder="GE GTS18FBMWW"></div>
+    </div>
+    <label class="fld">Dimensions (W×H×D) <span class="muted">optional — for the size check later</span></label>
+    <input id="df-dims" placeholder='e.g. 30" × 66" × 33"'>
+
+    <label class="fld">Property</label>
+    <select id="df-property" onchange="onPropertyChange()"><option value="">— pick property —</option></select>
+    <div class="grid2">
+      <div><label class="fld">Unit</label><select id="df-unit" onchange="onUnitChange()"><option value="">— (whole property) —</option></select></div>
+      <div><label class="fld">Tenant</label><select id="df-tenant"><option value="">— none —</option></select></div>
+    </div>
+    <label class="fld">Delivery address <span class="muted">as the store has it</span></label>
+    <input id="df-address" placeholder="123 Main St, Baltimore MD 21216">
+
+    <div class="grid2">
+      <div><label class="fld">Expected date</label><input id="df-date" type="date"></div>
+      <div><label class="fld">Window</label><input id="df-window" placeholder="11a–3p"></div>
+    </div>
+
+    <label class="fld">Who meets the delivery</label>
+    <select id="df-onsite"><option value="tenant">Tenant (default)</option><option value="me">Me / Ridge Co</option><option value="vendor">A vendor</option><option value="backup">Backup contact</option></select>
+    <div class="grid2">
+      <div><label class="fld">Backup contact</label><input id="df-backup" placeholder="name"></div>
+      <div><label class="fld">Backup phone</label><input id="df-backupphone" type="tel" placeholder="410-555-1212"></div>
+    </div>
+
+    <label class="fld">Delivery notes <span class="muted">floor, stairs, gate/access code, "call before"</span></label>
+    <textarea id="df-notes" placeholder="2nd floor walk-up. Gate code 4417. Call tenant before arrival."></textarea>
+
+    <div id="df-editonly" class="hide">
+      <label class="fld">Status</label>
+      <select id="df-status"><option>Ordered</option><option>Scheduled</option><option>Window-Set</option><option>En-Route</option><option>Approaching</option><option>Arrived</option><option>Delivered</option><option>Exception</option><option>Rescheduled</option><option>Cancelled</option></select>
+      <label class="fld">Linked work order(s)</label>
+      <input id="df-woids" placeholder="WO-1042">
+    </div>
+
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeD()">Cancel</button>
+      <button class="btn primary" style="flex:2" id="df-save" onclick="saveD(this)">Save</button>
+    </div>
+    <p class="muted" id="df-hint" style="margin-top:8px">A new delivery with a property but no linked WO auto-creates the install work order.</p>
+    <button id="df-remove" class="btn hide" style="width:100%;margin-top:10px;color:var(--danger);border-color:var(--danger)" onclick="removeD()">Remove this delivery</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';
+var AUTH_TOKEN = '';
+var DELS = [], TODAY = '';
+var PROPS = [], UNITS = [], TENANTS = [];
+var PREFILL = null; // from ?wo_id=&property_id=... when opened from a WO
+
+function qs(k){ try{ return new URLSearchParams(window.location.search).get(k)||''; }catch(e){ return ''; } }
+function api(method, path, body){
+  var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.json().then(function(data){
+      if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
+      return data;
+    });
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';},2400); }
+
+// ── Login ────────────────────────────────────────────────────
+function doLogin(){
+  var v=document.getElementById('login-input').value.trim(); AUTH_TOKEN=v;
+  api('GET','/deliveries').then(function(){ localStorage.setItem(SECRET_KEY,v); enterApp(); })
+    .catch(function(){ AUTH_TOKEN=''; document.getElementById('login-error').classList.remove('hide'); });
+}
+document.getElementById('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored=localStorage.getItem(SECRET_KEY);
+  if(stored){ AUTH_TOKEN=stored; api('GET','/deliveries').then(enterApp).catch(function(){ AUTH_TOKEN=''; }); }
+})();
+function enterApp(){
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').classList.remove('hide');
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  loadEntities().then(function(){
+    if (qs('wo_id') || qs('property_id')) { PREFILL = { wo_id:qs('wo_id'), property_id:qs('property_id'), unit_id:qs('unit_id'), tenant_id:qs('tenant_id') }; openAdd(); }
+  });
+  load();
+}
+
+// ── Load ─────────────────────────────────────────────────────
+function loadEntities(){
+  return Promise.all([
+    api('GET','/properties').then(function(l){ PROPS=Array.isArray(l)?l:[]; }).catch(function(){ PROPS=[]; }),
+    api('GET','/units').then(function(l){ UNITS=Array.isArray(l)?l:[]; }).catch(function(){ UNITS=[]; }),
+    api('GET','/tenants').then(function(l){ TENANTS=Array.isArray(l)?l:[]; }).catch(function(){ TENANTS=[]; })
+  ]);
+}
+function load(){
+  return api('GET','/deliveries').then(function(d){
+    DELS=(d&&d.deliveries)||[]; TODAY=(d&&d.today)||'';
+    render();
+  }).catch(function(e){ document.getElementById('lists').innerHTML='<p class="muted">Could not load ('+esc(e.message)+').</p>'; });
+}
+function statusPill(s){
+  var done=['Delivered','Cancelled'], warn=['Exception','Rescheduled'], live=['En-Route','Approaching','Arrived'];
+  var cls='new'; if(done.indexOf(s)>=0)cls='ok'; else if(warn.indexOf(s)>=0)cls='due'; else if(live.indexOf(s)>=0)cls='due';
+  return '<span class="pill '+cls+'">'+esc(s||'Ordered')+'</span>';
+}
+function whereText(d){
+  var addr = d.delivery_address || [d.property_address, d.unit_label?('Unit '+d.unit_label):''].filter(Boolean).join(' ');
+  return addr || '(no address)';
+}
+function relayTarget(d){
+  if (d.onsite_contact==='tenant' && d.tenant_phone) return { phone:d.tenant_phone, name:(d.tenant_name||'tenant') };
+  if (d.onsite_contact_phone) return { phone:d.onsite_contact_phone, name:'on-site contact' };
+  if (d.tenant_phone) return { phone:d.tenant_phone, name:(d.tenant_name||'tenant') };
+  return null;
+}
+function relayText(d){
+  var item = [d.item_type, d.make_model].filter(Boolean).join(' ') || 'your appliance';
+  var when = d.expected_date ? ('on '+d.expected_date+(d.expected_window?(' ('+d.expected_window+')'):'')) : 'soon';
+  var store = d.store ? (d.store+' ') : '';
+  var name = (d.tenant_name||'').split(' ')[0];
+  return (name?('Hi '+name+', '):'')+store+'is delivering '+item+' '+when+' to '+whereText(d)+'. Please plan to be available, and text us at this number if anything comes up. — Ridge Co';
+}
+function relay(id){
+  var d=DELS.find(function(x){return x.id===id;}); if(!d) return;
+  var tgt=relayTarget(d);
+  if(!tgt||!tgt.phone){ toast('No phone on file for the contact'); return; }
+  var url='sms:'+tgt.phone.replace(/[^0-9+]/g,'')+'?&body='+encodeURIComponent(relayText(d));
+  window.location.href=url;
+}
+function bucket(d){
+  var done=['Delivered','Cancelled'];
+  if(done.indexOf(d.status)>=0) return 'done';
+  if(!d.expected_date) return 'nodate';
+  if(d.expected_date===TODAY) return 'today';
+  if(d.expected_date>TODAY) return 'upcoming';
+  return 'past';
+}
+function render(){
+  var el=document.getElementById('lists');
+  if(!DELS.length){ el.innerHTML='<div class="card"><p class="muted">No deliveries yet. Tap <b>+ New delivery</b> to add one.</p></div>'; return; }
+  var groups={ today:[], upcoming:[], past:[], nodate:[], done:[] };
+  DELS.forEach(function(d){ groups[bucket(d)].push(d); });
+  var html='';
+  html+=section('📦 Today', groups.today, true);
+  html+=section('🗓 Upcoming', groups.upcoming, true);
+  html+=section('⚠ Past date — not yet delivered', groups.past, true);
+  html+=section('📝 Needs a date', groups.nodate, true);
+  html+=section('✓ Delivered / closed', groups.done, false);
+  el.innerHTML=html||'<div class="card"><p class="muted">Nothing to show.</p></div>';
+}
+function section(title, arr, showRelay){
+  if(!arr.length) return '';
+  return '<div class="sec-title">'+title+' ('+arr.length+')</div><div class="card">'+arr.map(function(d){ return dcard(d, showRelay); }).join('')+'</div>';
+}
+function dcard(d, showRelay){
+  var item=[d.item_type,d.make_model].filter(Boolean).join(' ')||'(item?)';
+  var win=d.expected_window?(' · '+esc(d.expected_window)):'';
+  var contact = d.onsite_contact==='tenant' ? (d.tenant_name?('Tenant: '+esc(d.tenant_name)):'Tenant') : ('Meets: '+esc(d.onsite_contact));
+  var wo = d.linked_wo_ids?(' · '+esc(d.linked_wo_ids)):'';
+  var order = d.order_number?(esc(d.store||'')+' #'+esc(d.order_number)):esc(d.store||'');
+  var tgt=relayTarget(d);
+  var relayBtn = (showRelay && tgt) ? '<button class="btn small go" onclick="relay(\''+d.id+'\')">✉ Relay to tenant</button>' : '';
+  return '<div class="dcard">'
+    + '<div class="row"><span class="dtitle">'+esc(item)+'</span>'+statusPill(d.status)+'</div>'
+    + '<div class="dline">'+esc(whereText(d))+(d.expected_date?(' · '+esc(d.expected_date)+win):'')+'</div>'
+    + '<div class="dline">'+contact+wo+(order?(' · '+order):'')+'</div>'
+    + (d.notes?('<div class="dline">📝 '+esc(d.notes)+'</div>'):'')
+    + '<div class="actions">'+relayBtn+'<button class="btn small" onclick="openEdit(\''+d.id+'\')">Edit</button></div>'
+    + '</div>';
+}
+
+// ── Add / Edit ───────────────────────────────────────────────
+function fillProps(){
+  var s=document.getElementById('df-property');
+  s.innerHTML='<option value="">— pick property —</option>'+PROPS.filter(function(p){return p.Active!=='FALSE';}).map(function(p){
+    return '<option value="'+esc(p.ID)+'">'+esc(p.Address||('property '+p.ID))+'</option>';
+  }).join('');
+}
+function onPropertyChange(){
+  var pid=document.getElementById('df-property').value;
+  var us=document.getElementById('df-unit');
+  us.innerHTML='<option value="">— (whole property) —</option>'+UNITS.filter(function(u){return u.Active!=='FALSE'&&String(u.Property_ID)===String(pid);}).map(function(u){
+    return '<option value="'+esc(u.ID)+'">'+esc(u.Unit_Label||('unit '+u.ID))+'</option>';
+  }).join('');
+  // auto-fill delivery address from property
+  var p=PROPS.find(function(x){return String(x.ID)===String(pid);});
+  var addr=document.getElementById('df-address'); if(p && !addr.value) addr.value=p.Address||'';
+  fillTenants();
+}
+function onUnitChange(){ fillTenants(); }
+function fillTenants(){
+  var pid=document.getElementById('df-property').value, uid=document.getElementById('df-unit').value;
+  var ts=document.getElementById('df-tenant');
+  var list=TENANTS.filter(function(t){
+    if(t.Active==='FALSE') return false;
+    if(uid) return String(t.Unit_ID)===String(uid);
+    if(pid) return String(t.Property_ID)===String(pid);
+    return false;
+  });
+  ts.innerHTML='<option value="">— none —</option>'+list.map(function(t){
+    return '<option value="'+esc(t.ID)+'">'+esc(((t.First_Name||'')+' '+(t.Last_Name||'')).trim()||('tenant '+t.ID))+'</option>';
+  }).join('');
+  if(list.length===1) ts.value=list[0].ID;
+}
+function resetForm(){
+  ['df-store','df-order','df-model','df-dims','df-address','df-date','df-window','df-backup','df-backupphone','df-notes','df-woids'].forEach(function(id){ document.getElementById(id).value=''; });
+  document.getElementById('df-item').value='';
+  document.getElementById('df-onsite').value='tenant';
+  fillProps();
+  document.getElementById('df-property').value='';
+  document.getElementById('df-unit').innerHTML='<option value="">— (whole property) —</option>';
+  document.getElementById('df-tenant').innerHTML='<option value="">— none —</option>';
+}
+function openAdd(){
+  document.getElementById('df-id').value='';
+  document.getElementById('dm-title').textContent='New delivery';
+  document.getElementById('df-editonly').classList.add('hide');
+  document.getElementById('df-remove').classList.add('hide');
+  document.getElementById('df-hint').classList.remove('hide');
+  resetForm();
+  if(PREFILL){
+    if(PREFILL.property_id){ document.getElementById('df-property').value=PREFILL.property_id; onPropertyChange(); }
+    if(PREFILL.unit_id){ document.getElementById('df-unit').value=PREFILL.unit_id; onUnitChange(); }
+    if(PREFILL.tenant_id){ document.getElementById('df-tenant').value=PREFILL.tenant_id; }
+    document.getElementById('df-woline').textContent = PREFILL.wo_id ? ('Linked to '+PREFILL.wo_id) : '';
+    PREFILL._wo = PREFILL.wo_id;
+  } else { document.getElementById('df-woline').textContent=''; }
+  document.getElementById('d-modal').classList.add('open');
+}
+function openEdit(id){
+  var d=DELS.find(function(x){return x.id===id;}); if(!d) return;
+  document.getElementById('df-id').value=id;
+  document.getElementById('dm-title').textContent='Edit delivery';
+  document.getElementById('df-editonly').classList.remove('hide');
+  document.getElementById('df-remove').classList.remove('hide');
+  document.getElementById('df-hint').classList.add('hide');
+  document.getElementById('df-woline').textContent='';
+  fillProps();
+  document.getElementById('df-store').value=d.store||'';
+  document.getElementById('df-order').value=d.order_number||'';
+  document.getElementById('df-item').value=d.item_type||'';
+  document.getElementById('df-model').value=d.make_model||'';
+  document.getElementById('df-dims').value=d.dims||'';
+  document.getElementById('df-property').value=d.property_id||''; onPropertyChange();
+  document.getElementById('df-unit').value=d.unit_id||''; onUnitChange();
+  document.getElementById('df-tenant').value=d.tenant_id||'';
+  document.getElementById('df-address').value=d.delivery_address||'';
+  document.getElementById('df-date').value=d.expected_date||'';
+  document.getElementById('df-window').value=d.expected_window||'';
+  document.getElementById('df-onsite').value=d.onsite_contact||'tenant';
+  document.getElementById('df-backup').value=d.backup_contact||'';
+  document.getElementById('df-backupphone').value=d.backup_phone||'';
+  document.getElementById('df-notes').value=d.notes||'';
+  document.getElementById('df-status').value=d.status||'Ordered';
+  document.getElementById('df-woids').value=d.linked_wo_ids||'';
+  document.getElementById('d-modal').classList.add('open');
+}
+function closeD(){ document.getElementById('d-modal').classList.remove('open'); }
+function formBody(){
+  return {
+    store:document.getElementById('df-store').value.trim(),
+    order_number:document.getElementById('df-order').value.trim(),
+    item_type:document.getElementById('df-item').value,
+    new_make_model:document.getElementById('df-model').value.trim(),
+    new_dims:document.getElementById('df-dims').value.trim(),
+    property_id:document.getElementById('df-property').value,
+    unit_id:document.getElementById('df-unit').value,
+    tenant_id:document.getElementById('df-tenant').value,
+    delivery_address:document.getElementById('df-address').value.trim(),
+    expected_date:document.getElementById('df-date').value,
+    expected_window:document.getElementById('df-window').value.trim(),
+    onsite_contact:document.getElementById('df-onsite').value,
+    backup_contact:document.getElementById('df-backup').value.trim(),
+    backup_phone:document.getElementById('df-backupphone').value.trim(),
+    delivery_notes:document.getElementById('df-notes').value.trim()
+  };
+}
+function saveD(btn){
+  var id=document.getElementById('df-id').value;
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
+  if(id){
+    var f=formBody();
+    var fields={ Store:f.store, Order_Number:f.order_number, Item_Type:f.item_type, New_Make_Model:f.new_make_model, New_Dims:f.new_dims,
+      Property_ID:f.property_id, Unit_ID:f.unit_id, Tenant_ID:f.tenant_id, Delivery_Address:f.delivery_address,
+      Expected_Date:f.expected_date, Expected_Window:f.expected_window, Onsite_Contact:f.onsite_contact,
+      Backup_Contact:f.backup_contact, Backup_Phone:f.backup_phone, Delivery_Notes:f.delivery_notes,
+      Status:document.getElementById('df-status').value, Linked_WO_IDs:document.getElementById('df-woids').value.trim() };
+    api('POST','/delivery/update',{ id:id, fields:fields }).then(function(r){
+      btn.disabled=false; btn.textContent='Save';
+      if(r&&r.success){ toast('Saved'); closeD(); load(); } else toast((r&&r.error)||'Could not save');
+    }).catch(function(e){ btn.disabled=false; btn.textContent='Save'; toast('Error: '+e.message); });
+  } else {
+    var body=formBody();
+    if(PREFILL && PREFILL._wo) body.linked_wo_ids=PREFILL._wo;
+    body.source='manual';
+    api('POST','/delivery/add',body).then(function(r){
+      btn.disabled=false; btn.textContent='Save';
+      if(r&&r.success){ toast('Delivery added'+(r.wo_id?(' · '+r.wo_id+' created'):'')); PREFILL=null; closeD(); load(); }
+      else toast((r&&r.error)||'Could not add');
+    }).catch(function(e){ btn.disabled=false; btn.textContent='Save'; toast('Error: '+e.message); });
+  }
+}
+function removeD(){
+  var id=document.getElementById('df-id').value; if(!id) return;
+  if(!confirm('Remove this delivery? The linked work order stays intact.')) return;
+  api('POST','/delivery/update',{ id:id, fields:{ Active:'FALSE' } }).then(function(r){
+    if(r&&r.success){ toast('Removed'); closeD(); load(); } else toast((r&&r.error)||'Could not remove');
+  }).catch(function(e){ toast('Error: '+e.message); });
+}
+</script>
+</body>
+</html>
