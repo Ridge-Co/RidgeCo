@@ -556,6 +556,7 @@
         </select>
       </div>
       <div class="form-group" id="wo-unit-group" style="display:none"><label>Unit</label><select id="wo-unit"><option value="">Whole property</option></select></div>
+      <div class="form-group"><label>Room / Area <span style="color:var(--muted);font-weight:normal">(optional — vendor-facing)</span></label><input type="text" id="wo-room" placeholder="e.g. Bedroom 2" list="wo-room-list"><datalist id="wo-room-list"></datalist></div>
       <div class="form-group"><label>Trade</label><select id="wo-trade"></select></div>
       <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
@@ -729,6 +730,7 @@
         </select>
       </div>
       <div class="form-group" id="ewo-unit-group"><label>Unit</label><select id="ewo-unit" onchange="ewoUnitChanged()"><option value="">Whole property</option></select></div>
+      <div class="form-group"><label>Room / Area <span style="font-weight:normal;color:var(--muted)">(optional — vendor-facing)</span></label><input type="text" id="ewo-room" placeholder="e.g. Bedroom 2"></div>
       <div class="form-group"><label>Tenant (auto from unit)</label><select id="ewo-tenant"><option value="">None</option></select></div>
       <div class="form-group full">
         <label>Vendor</label>
@@ -1068,6 +1070,17 @@ function woPropertySelected() {
     document.getElementById('wo-unit-group').style.display = 'flex';
   } else {
     document.getElementById('wo-unit-group').style.display = 'none';
+  }
+  // Suggest rooms/areas already on file for this property (from key locations)
+  var rl = document.getElementById('wo-room-list');
+  if (rl) {
+    var rooms = {};
+    safeArray(state.keys).forEach(function(k){
+      if (String(k.Property_ID) !== String(propId)) return;
+      var loc = (k.Lockbox_Location||'').trim();
+      if (loc) rooms[loc] = true;
+    });
+    rl.innerHTML = Object.keys(rooms).map(function(r){ return '<option value="'+esc(r)+'">'; }).join('');
   }
 }
 
@@ -1410,6 +1423,7 @@ function openWODetail(woId) {
     '<table class="data-table" style="margin-bottom:16px">' +
     '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span></td></tr>' +
     '<tr><td style="color:var(--muted)">Trade</td><td>'+(wo.Trade||'—')+'</td></tr>' +
+    (wo.Room ? '<tr><td style="color:var(--muted)">Room / Area</td><td>'+esc(wo.Room)+'</td></tr>' : '') +
     '<tr><td style="color:var(--muted)">Priority</td><td>'+(wo.Priority||'normal')+'</td></tr>' +
     '<tr><td style="color:var(--muted)">Vendor</td><td>' +
     (vendor ? '<a onclick="showPage(\'vendors\',document.querySelector(\'[onclick*=vendors]\'))" style="color:var(--accent2);cursor:pointer;text-decoration:underline dotted">' + vendor.Name + '</a>' +
@@ -1818,6 +1832,7 @@ function openNewWOModal() {
   // Clear textareas and reset selects
   var desc = document.getElementById('wo-desc'); if(desc) desc.value='';
   var notes = document.getElementById('wo-notes'); if(notes) notes.value='';
+  var room = document.getElementById('wo-room'); if(room) room.value='';
   var trade = document.getElementById('wo-trade'); if(trade) trade.value='';
   var priority = document.getElementById('wo-priority'); if(priority) priority.value='normal';
   var type = document.getElementById('wo-type'); if(type) type.value='manual';
@@ -1871,6 +1886,7 @@ function submitNewWO() {
     type:document.getElementById('wo-type').value,
     description:document.getElementById('wo-desc').value,
     notes:document.getElementById('wo-notes').value,
+    room:(document.getElementById('wo-room')||{value:''}).value.trim(),
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
@@ -2383,6 +2399,7 @@ function openEditWOModal(woId) {
     if (tn && tn.value) { tn.style.height='auto'; tn.style.height=Math.max(80,tn.scrollHeight)+'px'; }
   }, 30);
   document.getElementById('ewo-notes').value = wo.Notes||'';
+  var ewoRoom = document.getElementById('ewo-room'); if (ewoRoom) ewoRoom.value = wo.Room||'';
   document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
   document.getElementById('ewo-contact-name').value = wo.WO_Contact_Name||'';
   document.getElementById('ewo-contact-phone').value = wo.WO_Contact_Phone||'';
@@ -2437,6 +2454,7 @@ function submitEditWO() {
     Scheduled_Date: document.getElementById('ewo-scheduled').value,
     Description: document.getElementById('ewo-description').value,
     Notes: document.getElementById('ewo-notes').value,
+    Room: (document.getElementById('ewo-room')||{value:''}).value.trim(),
     Owner_WO_Ref: document.getElementById('ewo-owner-ref').value.trim(),
     WO_Contact_Name: document.getElementById('ewo-contact-name').value.trim(),
     WO_Contact_Phone: document.getElementById('ewo-contact-phone').value.trim(),

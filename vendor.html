@@ -430,7 +430,7 @@ function renderWOs(wos) {
       'on hold': 'badge-onhold',
     }[(wo.Status || '').toLowerCase()] || 'badge-status';
 
-    var addrLine = wo.property_address + (wo.unit_label ? ' — Unit ' + wo.unit_label : '');
+    var addrLine = wo.property_address + (wo.unit_label ? ' — Unit ' + wo.unit_label : '') + (wo.Room ? ' · ' + wo.Room : '');
     var descShort = (wo.Description || '').substring(0, 80) + (wo.Description && wo.Description.length > 80 ? '…' : '');
 
     var lbHtml = '';
@@ -482,6 +482,7 @@ function renderWOs(wos) {
       '</div>' +
       '<div class="wo-detail" id="detail-' + idx + '">' +
         '<div class="detail-row"><span class="detail-label">Address</span><span class="detail-val">' + esc(wo.property_address) + (wo.unit_label ? ' Unit ' + esc(wo.unit_label) : '') + '</span></div>' +
+        (wo.Room ? '<div class="detail-row"><span class="detail-label">Room / Area</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Room) + '</span></div>' : '') +
         (wo.Owner_WO_Ref ? '<div class="detail-row"><span class="detail-label">Owner Ref #</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Owner_WO_Ref) + '</span></div>' : '') +
         '<div class="detail-row"><span class="detail-label">Issue</span><span class="detail-val">' + esc(wo.Description || '—') + '</span></div>' +
         '<div class="detail-row"><span class="detail-label">Tenant</span><span class="detail-val">' + tenantHtml + '</span></div>' +
