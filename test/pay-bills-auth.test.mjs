@@ -18,6 +18,7 @@ function grab(name){
 }
 const payAuthOk = new Function(grab('payAuthOk') + '\nreturn payAuthOk;')();
 const payRecentBadCount = new Function(grab('payRecentBadCount') + '\nreturn payRecentBadCount;')();
+const payAlreadyPaid = new Function(grab('payAlreadyPaid') + '\nreturn payAlreadyPaid;')();
 
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 
@@ -45,5 +46,18 @@ const rows = [
 ok(payRecentBadCount(rows, now, W) === 2, 'counts only recent bad_code rows (2)');
 ok(payRecentBadCount([], now, W) === 0, 'empty log ⇒ 0');
 ok(payRecentBadCount(null, now, W) === 0, 'null log ⇒ 0 (no crash)');
+
+// payAlreadyPaid — idempotency guard: only a FULLY-completed batch ('paid') blocks a retry.
+const idemLog = [
+  { Result: 'bad_code', Idem: 'K1' },
+  { Result: 'paid',     Idem: 'K2' },
+  { Result: 'partial',  Idem: 'K3' },
+];
+ok(payAlreadyPaid(idemLog, 'K2') === true,  'a fully-paid batch key ⇒ duplicate (blocked)');
+ok(payAlreadyPaid(idemLog, 'K3') === false, 'a partial batch key ⇒ retryable (not blocked)');
+ok(payAlreadyPaid(idemLog, 'K1') === false, 'a bad_code-only key ⇒ not a duplicate');
+ok(payAlreadyPaid(idemLog, 'K9') === false, 'an unseen key ⇒ not a duplicate');
+ok(payAlreadyPaid(idemLog, '') === false,   'blank key never counts as duplicate');
+ok(payAlreadyPaid(null, 'K2') === false,    'null log ⇒ not a duplicate (no crash)');
 
 console.log('pay-bills-auth: ' + n + ' assertions passed');

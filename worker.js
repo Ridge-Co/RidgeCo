@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-12.1';
+const BUILD_VERSION = '2026-08-12.2';
 
 export default {
   async fetch(request, env) {
@@ -6269,7 +6269,7 @@ async function qbRecordPaidBill(env, body) {
 // secret PAY_AUTH_CODE. The literal is never in the repo/HTML/JS — only in the Worker secret and
 // Brett's head (spec: brett332/data payment-auth-interim.md). Dormant until the secret is set.
 const PAY_AUTH_LOG_TAB  = 'Pay_Auth_Log';
-const PAY_AUTH_LOG_COLS = ['ID','Timestamp','Result','Detail','Amount','By'];
+const PAY_AUTH_LOG_COLS = ['ID','Timestamp','Result','Detail','Amount','By','Idem'];
 const PAY_LOCK_WINDOW_MS = 15 * 60 * 1000;   // look back 15 minutes…
 const PAY_LOCK_MAX_BAD   = 5;                 // …and lock out after 5 wrong codes in that window.
 
@@ -6293,11 +6293,24 @@ function payRecentBadCount(logRows, now, windowMs) {
   return n;
 }
 
-async function payAuthLog(env, result, detail, amount, by) {
+// PURE — has this idempotency key ALREADY fully paid? Guards a double-submit (same authorized batch
+// fired twice) from paying vendors twice. Only a FULLY-completed batch ('paid') blocks a retry — a
+// 'partial' (some vendors failed) must stay retryable so the unpaid ones can still go through (the
+// already-paid bills get skipped on the live balance re-fetch), and a prior 'bad_code' never blocks.
+function payAlreadyPaid(logRows, idem) {
+  const key = String(idem || '').trim();
+  if (!key) return false;
+  for (const r of (logRows || [])) {
+    if (String(r.Result || '') === 'paid' && String(r.Idem || '').trim() === key) return true;
+  }
+  return false;
+}
+
+async function payAuthLog(env, result, detail, amount, by, idem) {
   try {
     await ensureTab(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
     await ensureColumns(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
-    await addRow(env, PAY_AUTH_LOG_TAB, { Timestamp: new Date().toISOString(), Result: result, Detail: String(detail || '').slice(0, 300), Amount: amount != null ? String(amount) : '', By: String(by || 'hub') });
+    await addRow(env, PAY_AUTH_LOG_TAB, { Timestamp: new Date().toISOString(), Result: result, Detail: String(detail || '').slice(0, 300), Amount: amount != null ? String(amount) : '', By: String(by || 'hub'), Idem: String(idem || '').slice(0, 80) });
   } catch (_) { /* audit is best-effort; never let logging block or fake a payment result */ }
 }
 
@@ -6310,6 +6323,7 @@ async function qbPayBills(env, body) {
   const payAcct = String(body.pay_account_id || '').trim();
   const preview = body.preview === true || body.preview === '1';
   const by = String(body.by || 'who-to-pay').slice(0, 40);
+  const idem = String(body.idempotency_key || '').trim().slice(0, 80);
   if (!billIds.length) return json({ ok: false, error: 'Select at least one bill to pay.' }, 400);
   if (billIds.length > 50) return json({ ok: false, error: 'Too many bills at once (max 50).' }, 400);
 
@@ -6352,19 +6366,34 @@ async function qbPayBills(env, body) {
       count: bills.length, to_pay: payable.length, total, bills });
   }
 
-  // ── Real payment path ── second factor + lock-out ──
+  // ── Real payment path ── second factor + lock-out + idempotency ──
   if (!payAcct) return json({ ok: false, error: 'Pick the account the money pays FROM before paying.' }, 400);
   if (!payable.length) return json({ ok: false, error: 'None of the selected bills are payable (already paid or missing).', bills }, 400);
 
+  // Read the audit log ONCE, up front — it drives BOTH the lock-out and the duplicate guard.
+  // FAIL CLOSED: if we cannot read the attempt history, we cannot enforce the lock-out or catch a
+  // duplicate, so a money-write must NOT proceed. ensureTab first so a first-ever call (tab missing)
+  // still works — only a genuine Sheets failure after that refuses.
+  let logRows;
+  try {
+    await ensureTab(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
+    logRows = await fetchTab(env, PAY_AUTH_LOG_TAB);
+  } catch (e) {
+    return json({ ok: false, error: 'Could not verify the payment lock right now — nothing was paid. Try again in a moment.' }, 503);
+  }
+
+  // Idempotency: this exact authorized batch already paid ⇒ do not pay twice (double-tap / retry).
+  if (payAlreadyPaid(logRows, idem))
+    return json({ ok: false, duplicate: true, error: 'That payment was already made — nothing was charged again.' }, 409);
+
   // Lock-out: too many wrong codes recently ⇒ refuse even a correct one.
-  let logRows = []; try { logRows = await fetchTab(env, PAY_AUTH_LOG_TAB); } catch (_) { logRows = []; }
   const badCount = payRecentBadCount(logRows, Date.now(), PAY_LOCK_WINDOW_MS);
   if (badCount >= PAY_LOCK_MAX_BAD) {
-    await payAuthLog(env, 'locked', `locked after ${badCount} bad attempts`, total, by);
+    await payAuthLog(env, 'locked', `locked after ${badCount} bad attempts`, total, by, idem);
     return json({ ok: false, locked: true, error: 'Too many wrong codes. Locked for a few minutes — try again shortly.' }, 429);
   }
   if (!payAuthOk(body.passphrase, env.PAY_AUTH_CODE)) {
-    await payAuthLog(env, 'bad_code', `${payable.length} bill(s)`, total, by);
+    await payAuthLog(env, 'bad_code', `${payable.length} bill(s)`, total, by, idem);
     return json({ ok: false, bad_code: true, error: 'That code did not match. The payment was not made.' }, 401);
   }
 
@@ -6391,7 +6420,7 @@ async function qbPayBills(env, body) {
   }
   const paidAmt = +results.filter(r => r.paid).reduce((s, r) => s + r.amount, 0).toFixed(2);
   const allPaid = results.every(r => r.paid);
-  await payAuthLog(env, allPaid ? 'paid' : 'partial', results.map(r => (r.vendor || r.vendor_id) + (r.paid ? ' ✓' : ' ✗')).join('; '), paidAmt, by);
+  await payAuthLog(env, allPaid ? 'paid' : 'partial', results.map(r => (r.vendor || r.vendor_id) + (r.paid ? ' ✓' : ' ✗')).join('; '), paidAmt, by, idem);
   return json({ ok: true, paid: allPaid, paid_total: paidAmt, vendors_paid: results.filter(r => r.paid).length, results });
 }
 
