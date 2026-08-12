@@ -2222,7 +2222,7 @@ function renderVendorsPage() {
   if (!vendors.length) { el.innerHTML='<div class="loading">No vendors yet</div>'; return; }
   el.innerHTML = '<table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
-    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
@@ -2235,6 +2235,7 @@ function renderVendorsPage() {
         '<td>'+(v.Markets||'—')+'</td>' +
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
         '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
@@ -7282,6 +7283,18 @@ function qbCreateSub(kind, id) {
     toast(r && r.linked_existing ? 'Already existed — linked it' : 'Created in QuickBooks', 'success');
     loadQBMapping(true);        // the tree changed, so re-read it
   }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+// Toggle in-house straight from the Vendors page (where Brett looks for it) — updates the loaded
+// vendor list + re-renders that table. Same endpoint as the QB-Mapping toggle, different re-render.
+function toggleVendorInHouse(id, on) {
+  api('POST', '/qb/vendor-in-house', { id: id, in_house: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
+    toast(on ? 'Marked in-house — no QuickBooks bill; kept off vendor reconciliation' : 'Back to a normal vendor', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.In_House = on ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
 }
 
 function qbToggleInHouse(kind, id, on) {
