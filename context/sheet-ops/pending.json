@@ -1,0 +1,12 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Aug 12 2026 — tenant reconciliation from the Google Voice roster. (1) One clean linkage: unit 4 (1214 N Calvert Apt 1, currently empty) linked to tenant 88 Jasmine Jenkins, whose own record already points to unit 4. (2) Add James (20 E Eager St Apt 1, 225-721-7547) as a NEW tenant — he's not in the Hub. NOT linking him to a unit: 20 E Eager Apt 1 (unit 35) is already tenant 27, so this looks like a turnover to confirm with Brett before reassigning. The 8 'conflict' cases (old tenant records with stale Unit_IDs) were intentionally left untouched — the units are already correctly assigned to current tenants; those are just lingering old-tenant records (optional move-out cleanup).",
+  "ops": [
+    { "type": "update_cell_by_id", "tab": "Units", "id": "4", "fields": { "Tenant_ID": "88" } },
+    { "type": "append_row", "tab": "Tenants", "row": {
+      "ID": "98", "First_Name": "James", "Phone": "2257217547",
+      "Property_ID": "13", "Property_Address": "20 E Eager St",
+      "Active": "TRUE"
+    } }
+  ]
+}
