@@ -1,0 +1,21 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Add 3 vendors confirmed by Brett from the SMS mining (Aug 12 2026). Sergio = Andreas Cleaning Service (cleaning). Celia (Blessings) = vendor. Emmanuel Tires = vendor but MECHANIC/auto work only. PINs left blank (generate in Hub if portal access is wanted). John Rolling / Angela Johnson / Mary were explicitly NOT added (no longer vendors — data-only).",
+  "ops": [
+    { "type": "append_row", "tab": "Vendors", "row": {
+      "ID": "11", "First_Name": "Sergio", "Name": "Sergio González", "Company": "Andreas Cleaning Service",
+      "Phone": "4432306887", "Trade": "Cleaning", "Markets": "Baltimore", "Language": "Spanish",
+      "Active": "TRUE", "Rate_Notes": "Added from SMS mining Aug 2026 (active cleaning sub)."
+    } },
+    { "type": "append_row", "tab": "Vendors", "row": {
+      "ID": "12", "First_Name": "Celia", "Name": "Celia", "Company": "Blessings",
+      "Phone": "4437629903", "Trade": "General", "Markets": "Baltimore",
+      "Active": "TRUE", "Rate_Notes": "Added from SMS mining Aug 2026. Confirm trade (has invoiced jobs, e.g. 2117 Bolton St)."
+    } },
+    { "type": "append_row", "tab": "Vendors", "row": {
+      "ID": "13", "First_Name": "Emmanuel", "Name": "Emmanuel Tires", "Company": "Emmanuel Tires",
+      "Phone": "4103146562", "Trade": "Mechanic", "Markets": "Baltimore",
+      "Active": "TRUE", "Rate_Notes": "MECHANIC / auto work only (per Brett). Fleet vehicle repairs."
+    } }
+  ]
+}
