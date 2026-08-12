@@ -2231,6 +2231,7 @@ function renderVendorsPage() {
         '<td><input type="checkbox" class="pin-check" data-id="'+v.ID+'" data-type="vendor" data-name="'+nm+'" data-phone="'+(v.Phone||'')+'" onchange="updatePinActionBar(\'vendors-action-bar\')"></td>' +
         '<td>'+nm+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
         '<td>'+(v.Trades ? v.Trades.split(',').map(function(t){return '<span style="display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:10px;margin:1px">'+t.trim()+'</span>';}).join(' ') : (v.Trade||'—'))+'</td>' +
+        '<td style="color:var(--muted)">'+(v.Hourly_Rate?'$'+esc(String(v.Hourly_Rate))+'/hr':'—')+'</td>' +
         '<td><a href="tel:'+v.Phone+'" style="color:var(--accent);text-decoration:none">'+(v.Phone||'—')+'</a></td>' +
         '<td>'+(v.Markets||'—')+'</td>' +
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
