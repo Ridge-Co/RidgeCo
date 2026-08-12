@@ -5,16 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Ridge Co — Key Registry</title>
 <style>
-  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:8px;--font:'Courier New',monospace;}
+  :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--warn:#fbbf24;--info:#1d4ed8;--radius:8px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:16px;max-width:700px;margin:0 auto;}
   h1{color:var(--accent);font-size:1rem;letter-spacing:0.15em;margin-bottom:2px;}
   .sub{color:var(--muted);font-size:11px;margin-bottom:16px;}
-  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn{background:var(--accent);color:#1b1f24;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
   .btn:hover{opacity:0.85;}
   .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
-  .btn.success{background:var(--accent2);color:#000;}
-  .btn.danger{background:var(--danger);color:#000;}
+  .btn.success{background:var(--accent2);color:#1b1f24;}
+  .btn.danger{background:var(--danger);color:#1b1f24;}
   .btn.small{padding:5px 9px;font-size:11px;}
   input,select,textarea{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
@@ -25,7 +25,7 @@
   .search-row input{flex:1;}
   .filters{display:flex;gap:6px;flex-wrap:wrap;}
   .filter-btn{padding:4px 10px;border-radius:20px;font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--muted);font-family:var(--font);}
-  .filter-btn.active{background:var(--accent);color:#000;border-color:var(--accent);}
+  .filter-btn.active{background:var(--accent);color:#1b1f24;border-color:var(--accent);}
 
   /* Results */
   .results-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
@@ -40,11 +40,11 @@
   .key-addr{font-size:13px;font-weight:bold;}
   .key-unit{color:var(--muted);font-size:11px;margin-top:2px;}
   .key-type-badge{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:bold;white-space:nowrap;}
-  .badge-fd{background:#1e3a5f;color:var(--info);}
-  .badge-unit{background:#1a2d1a;color:var(--accent2);}
-  .badge-lockbox{background:#2d2006;color:var(--warn);}
-  .badge-gate{background:#2d1a2d;color:#c084fc;}
-  .badge-garage{background:#2d1a2d;color:#c084fc;}
+  .badge-fd{background:#e8f0fb;color:var(--info);}
+  .badge-unit{background:#eaf6ee;color:var(--accent2);}
+  .badge-lockbox{background:#fdf2e2;color:var(--warn);}
+  .badge-gate{background:#efe7fb;color:#6d28d9;}
+  .badge-garage{background:#efe7fb;color:#6d28d9;}
   .badge-other{background:var(--surface2);color:var(--muted);}
   .key-codes{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0;}
   .code-item{background:var(--surface2);border-radius:4px;padding:6px 10px;}

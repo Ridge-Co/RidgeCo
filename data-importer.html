@@ -5,18 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Data Importer</title>
 <style>
-  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:6px;--font:'Courier New',monospace;}
+  :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--warn:#fbbf24;--info:#1d4ed8;--radius:6px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1100px;margin:0 auto;}
   h1{color:var(--accent);font-size:1.2rem;letter-spacing:0.15em;margin-bottom:4px;}
   p.sub{color:var(--muted);font-size:11px;margin-bottom:20px;}
   .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;}
   .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
-  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn{background:var(--accent);color:#1b1f24;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
   .btn:hover{opacity:0.85;}
   .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
-  .btn.success{background:var(--accent2);color:#000;}
-  .btn.danger{background:var(--danger);color:#000;}
+  .btn.success{background:var(--accent2);color:#1b1f24;}
+  .btn.danger{background:var(--danger);color:#1b1f24;}
   .btn.small{padding:4px 9px;font-size:11px;}
   input,select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
   input:focus,select:focus{outline:none;border-color:var(--accent);}
@@ -28,10 +28,10 @@
   td{padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
   tr:hover td{background:var(--surface2);}
   .badge{padding:2px 6px;border-radius:20px;font-size:10px;font-weight:bold;text-transform:uppercase;}
-  .badge-active{background:#1a3320;color:var(--accent2);}
-  .badge-vacant{background:#2d1f06;color:var(--warn);}
-  .badge-baltimore{background:#1e3a5f;color:var(--info);}
-  .badge-waynesboro{background:#2d1a2d;color:#c084fc;}
+  .badge-active{background:#eaf6ee;color:var(--accent2);}
+  .badge-vacant{background:#fdf2e2;color:var(--warn);}
+  .badge-baltimore{background:#e8f0fb;color:var(--info);}
+  .badge-waynesboro{background:#efe7fb;color:#6d28d9;}
   #log{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;max-height:160px;overflow-y:auto;font-size:11px;margin-top:10px;}
   .log-ok{color:var(--accent2);}
   .log-err{color:var(--danger);}
@@ -234,7 +234,7 @@ const BMORE_UNITS = [
 
 const AMANDA_PROPERTIES = [
   "567 Welbrook rd","1216 Kevin rd","5433 Jonquil Ave","420 Denison St.",
-  "5425 Belle Vista Ave","1427 N Dukeland","3737 Clarks Lane Unit #104",
+  "5425 Belle Vista Ave","1427 N Dukeland","3737 Clarks Lane Unit #e8f0fb",
   "4210 Ivanhoe","619 Denison St.","2842 Oakford Avenue","56 S Culver St.",
   "906 N Franklintown Rd","1575 Ingleside Ave.","1577 Ingleside Ave.",
   "1581 Ingleside Ave","1589 Ingleside Ave.","1599 Ingleside Ave.",

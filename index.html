@@ -6,9 +6,9 @@
 <title>Ridge Co — Maintenance Hub</title>
 <style>
   :root {
-    --bg: #040810; --surface: #0d1c38; --surface2: #172d4e; --border: #2e4578;
-    --text: #edf2ff; --muted: #8aaed4; --accent: #4d7de8; --accent2: #4ade80;
-    --danger: #f87171; --warn: #f59e0b; --info: #7ab4f0; --radius: 6px;
+    --bg: #eceef1; --surface: #ffffff; --surface2: #f3f5f8; --border: #dce0e6;
+    --text: #1b1f24; --muted: #66707c; --accent: #1d4ed8; --accent2: #166534;
+    --danger: #b42318; --warn: #b45309; --info: #1d4ed8; --radius: 6px;
     /* Retired 'Courier New' monospace (HUB_UX v1.1) for a proportional system
        stack — narrower glyphs that fit a phone and wrap cleanly. --font-mono is
        kept for anything that genuinely needs fixed-width (codes, raw logs). */
@@ -30,8 +30,8 @@
   .btn { background: var(--accent); color: #fff; border: none; padding: 10px 16px; border-radius: var(--radius); font-family: var(--font); font-size: 13px; font-weight: bold; cursor: pointer; letter-spacing: 0.05em; transition: opacity 0.15s; }
   .btn:hover { opacity: 0.85; }
   .btn.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
-  .btn.danger { background: var(--danger); color: #000; }
-  .btn.success { background: var(--accent2); color: #000; }
+  .btn.danger { background: var(--danger); color: #1b1f24; }
+  .btn.success { background: var(--accent2); color: #1b1f24; }
   .btn.small { padding: 6px 10px; font-size: 12px; }
   #login-error { color: var(--danger); font-size: 0.8rem; text-align: center; display: none; }
   #app { display: none; }
@@ -60,17 +60,17 @@
   .wo-desc { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .wo-right { display: flex; align-items: center; gap: 10px; }
   .badge { padding: 3px 8px; border-radius: 20px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: bold; }
-  .badge-new { background: #1c3d6e; color: var(--info); }
-  .badge-assigned { background: #2d2006; color: var(--warn); }
-  .badge-accepted { background: #1a3320; color: var(--accent2); }
-  .badge-scheduled { background: #1a3320; color: var(--accent2); }
-  .badge-inprogress,.badge-in,.badge-in-progress { background: #1a3320; color: var(--accent2); }
-  .badge-complete { background: #1f2d1f; color: #6ee7b7; }
-  .badge-pendinginvoice,.badge-pending-invoice { background: #2d1f06; color: var(--warn); }
-  .badge-invoiced { background: #2d1f06; color: var(--accent); }
-  .badge-paid { background: #1f2d1f; color: #6ee7b7; }
-  .badge-declined { background: #2d1a1a; color: var(--danger); }
-  .badge-cancelled { background: #1e1e1e; color: var(--muted); border: 1px solid var(--border); }
+  .badge-new { background: #e8f0fb; color: var(--info); }
+  .badge-assigned { background: #fdf2e2; color: var(--warn); }
+  .badge-accepted { background: #eaf6ee; color: var(--accent2); }
+  .badge-scheduled { background: #eaf6ee; color: var(--accent2); }
+  .badge-inprogress,.badge-in,.badge-in-progress { background: #eaf6ee; color: var(--accent2); }
+  .badge-complete { background: #eaf6ee; color: #6ee7b7; }
+  .badge-pendinginvoice,.badge-pending-invoice { background: #fdf2e2; color: var(--warn); }
+  .badge-invoiced { background: #fdf2e2; color: var(--accent); }
+  .badge-paid { background: #eaf6ee; color: #6ee7b7; }
+  .badge-declined { background: #fdecea; color: var(--danger); }
+  .badge-cancelled { background: #f3f5f8; color: var(--muted); border: 1px solid var(--border); }
   .priority-urgent { border-left: 3px solid var(--danger); }
   .priority-normal { border-left: 3px solid var(--border); }
   .priority-low { border-left: 3px solid var(--muted); }
@@ -130,7 +130,7 @@
   .sched-custom{display:none;margin-top:8px;}
   .sched-notify-row{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--muted);}
   .sched-notify-row input{width:auto;padding:0;}
-  .sched-urgent-banner{background:#002d0f;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--accent2);margin-bottom:10px;display:none;}
+  .sched-urgent-banner{background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--accent2);margin-bottom:10px;display:none;}
   .portal-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:border-color .15s;cursor:pointer;height:100%;}
   .portal-card:hover{border-color:var(--accent);}
   .portal-icon{font-size:1.6rem;margin-bottom:8px;}
@@ -143,7 +143,7 @@
   .copy-hint{color:var(--muted);font-size:10px;}
 
   /* Native select dark theme — make selection visible */
-  select[size] option:checked, select[size] option:hover { background: var(--accent) !important; color: #000 !important; }
+  select[size] option:checked, select[size] option:hover { background: var(--accent) !important; color: #1b1f24 !important; }
   select[size] option { padding: 6px 10px; }
   @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } .stats-row { grid-template-columns: repeat(2, 1fr); } .wo-right { flex-direction: column; gap: 4px; } }
 </style>
@@ -162,7 +162,7 @@
 
 <div id="app">
   <header>
-    <div class="logo"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" style="display:inline;vertical-align:middle;margin-right:7px;position:relative;top:-1px"><rect x="1" y="1" width="20" height="20" rx="3.5" fill="#142040" stroke="#4575d4" stroke-width="1.5"/><polygon points="11,4 19,17 3,17" fill="none" stroke="#4575d4" stroke-width="1.4" stroke-linejoin="round"/><polygon points="11,9 15.5,17 6.5,17" fill="#4575d4" fill-opacity="0.4"/></svg>RIDGE CO <span>/ HUB</span></div>
+    <div class="logo"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" style="display:inline;vertical-align:middle;margin-right:7px;position:relative;top:-1px"><rect x="1" y="1" width="20" height="20" rx="3.5" fill="#f3f5f8" stroke="#1d4ed8" stroke-width="1.5"/><polygon points="11,4 19,17 3,17" fill="none" stroke="#1d4ed8" stroke-width="1.4" stroke-linejoin="round"/><polygon points="11,9 15.5,17 6.5,17" fill="#1d4ed8" fill-opacity="0.4"/></svg>RIDGE CO <span>/ HUB</span></div>
     <nav>
       <button class="nav-btn active" onclick="showPage('dashboard',this)">DASHBOARD</button>
       <button class="nav-btn" onclick="showPage('workorders',this)">WORK ORDERS</button>
@@ -455,7 +455,7 @@
       is the top of the list rather than something you find out about when they call.
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      <button class="btn small" onclick="loadPayables(false)" style="background:var(--info);color:#000">↻ Check QuickBooks</button>
+      <button class="btn small" onclick="loadPayables(false)" style="background:var(--info);color:#1b1f24">↻ Check QuickBooks</button>
       <button class="btn small" onclick="loadPayables(true)" style="background:var(--surface2);color:var(--text)">↻ Check and save to the sheet</button>
     </div>
     <div id="payables-body"><div style="color:var(--muted);font-size:12px">Hit "Check QuickBooks" to pull the current balances.</div></div>
@@ -469,9 +469,9 @@
       which is how you end up with the same customer twice under slightly different names.
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      <button class="btn small" onclick="loadQBMapping(true)" style="background:var(--info);color:#000">↻ Reload from QuickBooks</button>
-      <button class="btn small" onclick="qbApplyAllSuggestions()" style="background:var(--accent2);color:#000">✓ Accept all confident matches</button>
-      <button class="btn small" onclick="auditUnits()" style="background:var(--warn);color:#000">🔍 Check every unit</button>
+      <button class="btn small" onclick="loadQBMapping(true)" style="background:var(--info);color:#1b1f24">↻ Reload from QuickBooks</button>
+      <button class="btn small" onclick="qbApplyAllSuggestions()" style="background:var(--accent2);color:#1b1f24">✓ Accept all confident matches</button>
+      <button class="btn small" onclick="auditUnits()" style="background:var(--warn);color:#1b1f24">🔍 Check every unit</button>
     </div>
     <div id="qb-map-body"><div style="color:var(--muted);font-size:12px">Loading…</div></div>
   </div>
@@ -487,37 +487,37 @@
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">✅ ON-DEMAND WORK &amp; DASHBOARDS</div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="window.open('action-center.html','_blank')" style="background:var(--accent);color:#000">✅ Action Center — who to pay / to process</button>
-      <button class="btn small" onclick="window.open('command-center.html','_blank')" style="background:var(--info);color:#000">📊 Command Center</button>
-      <button class="btn small" onclick="window.open('proposals.html','_blank')" style="background:var(--info);color:#000">💡 Proposals / greenlit queue</button>
-      <button class="btn small" onclick="window.open('deliveries.html','_blank')" style="background:var(--accent2);color:#000">🚚 Deliveries</button>
+      <button class="btn small" onclick="window.open('action-center.html','_blank')" style="background:var(--accent);color:#1b1f24">✅ Action Center — who to pay / to process</button>
+      <button class="btn small" onclick="window.open('command-center.html','_blank')" style="background:var(--info);color:#1b1f24">📊 Command Center</button>
+      <button class="btn small" onclick="window.open('proposals.html','_blank')" style="background:var(--info);color:#1b1f24">💡 Proposals / greenlit queue</button>
+      <button class="btn small" onclick="window.open('deliveries.html','_blank')" style="background:var(--accent2);color:#1b1f24">🚚 Deliveries</button>
     </div>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">💵 MONEY &amp; QUICKBOOKS</div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="window.open('vendor-reconcile.html','_blank')" style="background:var(--info);color:#000">💵 Vendor reconciliation</button>
-      <button class="btn small" onclick="window.open('qb-email-backfill.html','_blank')" style="background:var(--accent);color:#000">📧 Fill missing QuickBooks emails</button>
-      <button class="btn small" onclick="window.open('qb-invoice-email-backfill.html','_blank')" style="background:var(--accent);color:#000">🧾 Fix unsent invoice emails</button>
-      <button class="btn small" onclick="findRepairableInvoices()" style="background:var(--accent2);color:#000">🔧 Fix invoices already in QuickBooks</button>
-      <button class="btn small" onclick="window.open('signed-proposals.html','_blank')" style="background:var(--info);color:#000">🖊 Signed proposals → QB</button>
-      <button class="btn small" onclick="window.open('trash.html','_blank')" style="background:var(--accent2);color:#000">🗑 Trash Service billing</button>
+      <button class="btn small" onclick="window.open('vendor-reconcile.html','_blank')" style="background:var(--info);color:#1b1f24">💵 Vendor reconciliation</button>
+      <button class="btn small" onclick="window.open('qb-email-backfill.html','_blank')" style="background:var(--accent);color:#1b1f24">📧 Fill missing QuickBooks emails</button>
+      <button class="btn small" onclick="window.open('qb-invoice-email-backfill.html','_blank')" style="background:var(--accent);color:#1b1f24">🧾 Fix unsent invoice emails</button>
+      <button class="btn small" onclick="findRepairableInvoices()" style="background:var(--accent2);color:#1b1f24">🔧 Fix invoices already in QuickBooks</button>
+      <button class="btn small" onclick="window.open('signed-proposals.html','_blank')" style="background:var(--info);color:#1b1f24">🖊 Signed proposals → QB</button>
+      <button class="btn small" onclick="window.open('trash.html','_blank')" style="background:var(--accent2);color:#1b1f24">🗑 Trash Service billing</button>
     </div>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🧹 DATA HYGIENE</div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="runAdminTool('fix-pins')" style="background:var(--accent2);color:#000">🔑 Fix PINs + Phones</button>
-      <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#000">🏠 Check units / moved-out tenants</button>
+      <button class="btn small" onclick="runAdminTool('fix-pins')" style="background:var(--accent2);color:#1b1f24">🔑 Fix PINs + Phones</button>
+      <button class="btn small" onclick="checkStaleTenants(false)" style="background:var(--warn);color:#1b1f24">🏠 Check units / moved-out tenants</button>
       <button class="btn small" onclick="migrateTrades(false)" style="background:var(--accent)">🔧 Update old trade names</button>
-      <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#000">🏢 Find duplicate properties</button>
-      <button class="btn small" onclick="checkDuplicateOwners()" style="background:var(--info);color:#000">👤 Find duplicate owners</button>
-      <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#000">🗂 Reformat All Sheets</button>
-      <button class="btn small" onclick="shareAttachments(false)" style="background:var(--accent2);color:#000">🖼 Fix photo/video sharing</button>
+      <button class="btn small" onclick="checkDuplicateProperties()" style="background:var(--info);color:#1b1f24">🏢 Find duplicate properties</button>
+      <button class="btn small" onclick="checkDuplicateOwners()" style="background:var(--info);color:#1b1f24">👤 Find duplicate owners</button>
+      <button class="btn small" onclick="runAdminTool('reformat-sheets')" style="background:var(--info);color:#1b1f24">🗂 Reformat All Sheets</button>
+      <button class="btn small" onclick="shareAttachments(false)" style="background:var(--accent2);color:#1b1f24">🖼 Fix photo/video sharing</button>
     </div>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🔎 DIAGNOSTICS</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn small" onclick="runOpsReview()" style="background:var(--accent)">🔎 Run Ops Review (test)</button>
-      <button class="btn small" onclick="logTestTelemetry()" style="background:var(--info);color:#000">📊 Log test telemetry row</button>
+      <button class="btn small" onclick="logTestTelemetry()" style="background:var(--info);color:#1b1f24">📊 Log test telemetry row</button>
     </div>
     <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
 
@@ -637,7 +637,7 @@
     <div id="share-body" style="padding:4px 2px">
       <div id="share-loading" style="color:var(--muted);font-size:13px;padding:10px 0">Generating link…</div>
       <div id="share-content" style="display:none">
-        <div id="share-warn" style="display:none;background:#3a2a00;border:1px solid var(--warn);border-radius:6px;padding:10px;font-size:12px;margin-bottom:12px"></div>
+        <div id="share-warn" style="display:none;background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px;font-size:12px;margin-bottom:12px"></div>
         <div style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">Vendor</div>
         <div id="share-vendor" style="font-size:14px;margin-bottom:12px"></div>
 
@@ -1228,11 +1228,11 @@ function woCard(w) {
   var daysOpen = w.Created_Date ? Math.floor((Date.now()-new Date(w.Created_Date))/(86400000)) : 0;
   var agingBadge = '';
   if (OPEN_WO.includes(w.Status)) {
-    if (daysOpen >= 14) agingBadge = '<span class="badge" style="background:#3b0000;border:1px solid var(--danger);color:var(--danger);margin-left:4px">'+daysOpen+'d OVERDUE</span>';
-    else if (daysOpen >= 7) agingBadge = '<span class="badge" style="background:#2d2000;border:1px solid var(--warn);color:var(--warn);margin-left:4px">'+daysOpen+'d AGING</span>';
+    if (daysOpen >= 14) agingBadge = '<span class="badge" style="background:#fdecea;border:1px solid var(--danger);color:var(--danger);margin-left:4px">'+daysOpen+'d OVERDUE</span>';
+    else if (daysOpen >= 7) agingBadge = '<span class="badge" style="background:#fdf2e2;border:1px solid var(--warn);color:var(--warn);margin-left:4px">'+daysOpen+'d AGING</span>';
   }
   return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
-    '<div class="wo-id">'+w.ID+(w.Priority==='urgent'?' <span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#451a03;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#450a0a;color:#f87171;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
+    '<div class="wo-id">'+w.ID+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+'</div></div>' +
     (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
@@ -1412,7 +1412,7 @@ function openWODetail(woId) {
       (prop.Lock_Code?'<div><div class="pf-label">Door Code</div><div class="pf-val sensitive">'+prop.Lock_Code+'</div></div>':'') +
       (prop.Water_Shutoff?'<div><div class="pf-label">Water Shutoff</div><div class="pf-val">'+prop.Water_Shutoff+'</div></div>':'') +
       (prop.HVAC_Filter_Size?'<div><div class="pf-label">HVAC Filter</div><div class="pf-val">'+prop.HVAC_Filter_Size+'</div></div>':'') +
-      (prop.Access_Notes?'<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;margin-top:6px">' +
+      (prop.Access_Notes?'<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;margin-top:6px">' +
       '<div style="color:var(--accent2);font-size:10px;letter-spacing:.08em;font-weight:bold;margin-bottom:3px">ACCESS NOTES</div>' +
       '<div style="color:var(--text);font-size:12px">'+prop.Access_Notes+'</div></div>':'') +
       '</div></div>';
@@ -1503,7 +1503,7 @@ function openWODetail(woId) {
       var items = [];
       try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
       var statusLabel = (bill.Status||'submitted').toUpperCase();
-      var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#f59e0b)';
+      var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#b45309)';
       var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
       var typeLabel = bill.Bill_Type === 'hourly' ? '⏱ By the hour' : '📋 Flat rate';
       return '<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
@@ -1958,7 +1958,7 @@ function renderPropertiesPage() {
               '<span style="font-weight:bold;color:var(--accent);font-size:clamp(12px,1.2vw,15px)">'+esc(p.Address)+'</span>' +
               (p.City ? '<span style="color:var(--muted);font-size:clamp(11px,1vw,13px)">'+esc(p.City)+'</span>' : '') +
               (p.Type ? '<span style="font-size:clamp(9px,0.8vw,11px);background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(p.Type)+'</span>' : '') +
-              (urgentCount ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:clamp(9px,0.8vw,11px);padding:2px 7px;border-radius:3px">'+urgentCount+' URGENT</span>' : '') +
+              (urgentCount ? '<span style="background:#fdecea;color:#b42318;font-size:clamp(9px,0.8vw,11px);padding:2px 7px;border-radius:3px">'+urgentCount+' URGENT</span>' : '') +
             '</div>' +
             '<div style="display:flex;gap:10px;margin-top:5px;font-size:clamp(10px,0.9vw,12px);color:var(--muted);flex-wrap:wrap">' +
               (owner ? '<span>👤 '+esc(owner.Name||owner.First_Name||'')+'</span>' : '') +
@@ -2017,8 +2017,8 @@ function renderUnitCards(prop, units, openWOs) {
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px">' +
         '<span style="font-weight:bold;font-size:clamp(12px,1.2vw,14px)">Unit '+esc(u.Unit_Label||u.ID)+'</span>' +
         '<span style="font-size:clamp(9px,0.8vw,11px);padding:2px 8px;border-radius:4px;font-weight:bold;white-space:nowrap;'+(isVacant
-          ? 'background:#14532d;color:#4ade80'
-          : 'background:#1e3a5f;color:#90caf9')+'">'+(isVacant?'VACANT':'OCCUPIED')+'</span>' +
+          ? 'background:#eaf6ee;color:#166534'
+          : 'background:#e8f0fb;color:#90caf9')+'">'+(isVacant?'VACANT':'OCCUPIED')+'</span>' +
       '</div>' +
       // Tenant info or vacant note
       (tenants.length
@@ -2034,7 +2034,7 @@ function renderUnitCards(prop, units, openWOs) {
       (uWOs.length || urgentWOs.length
         ? '<div style="display:flex;align-items:center;gap:6px;margin-top:2px">' +
           (uWOs.length ? '<span style="font-size:clamp(10px,0.9vw,11px);color:var(--warn)">'+uWOs.length+' open WO'+(uWOs.length!==1?'s':'')+'</span>' : '') +
-          (urgentWOs.length ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:clamp(9px,0.8vw,10px);padding:1px 5px;border-radius:3px">'+urgentWOs.length+' URGENT</span>' : '') +
+          (urgentWOs.length ? '<span style="background:#fdecea;color:#b42318;font-size:clamp(9px,0.8vw,10px);padding:1px 5px;border-radius:3px">'+urgentWOs.length+' URGENT</span>' : '') +
           '</div>'
         : '') +
     '</div>';
@@ -2047,7 +2047,7 @@ function singleFamilyCard(prop, tenants, wos) {
     '<div style="flex:1;min-width:0">' +
       '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
         '<span style="font-weight:bold;font-size:12px">Single Family</span>' +
-        (isVacant ? '<span style="background:#14532d;color:#4ade80;font-size:9px;padding:1px 7px;border-radius:3px">VACANT</span>' : '<span style="background:#1e3a5f;color:#90caf9;font-size:9px;padding:1px 7px;border-radius:3px">OCCUPIED</span>') +
+        (isVacant ? '<span style="background:#eaf6ee;color:#166534;font-size:9px;padding:1px 7px;border-radius:3px">VACANT</span>' : '<span style="background:#e8f0fb;color:#90caf9;font-size:9px;padding:1px 7px;border-radius:3px">OCCUPIED</span>') +
       '</div>' +
       (tenants.map(function(t){ return '<div style="font-size:12px">'+esc((t.First_Name+' '+(t.Last_Name||'')).trim())+'</div>'; }).join('')) +
       (wos.length ? '<div style="font-size:11px;color:var(--warn);margin-top:4px">'+wos.length+' open WO'+(wos.length!==1?'s':'')+'</div>' : '') +
@@ -2079,8 +2079,8 @@ function openUnitDetail(propId, unitId) {
     '<div style="display:flex;align-items:center;gap:8px">' +
       '<span style="font-size:16px;font-weight:bold">'+unitLabel+'</span>' +
       (isVacant
-        ? '<span style="background:#14532d;color:#4ade80;font-size:10px;padding:2px 8px;border-radius:4px">VACANT</span>'
-        : '<span style="background:#1e3a5f;color:#90caf9;font-size:10px;padding:2px 8px;border-radius:4px">OCCUPIED</span>') +
+        ? '<span style="background:#eaf6ee;color:#166534;font-size:10px;padding:2px 8px;border-radius:4px">VACANT</span>'
+        : '<span style="background:#e8f0fb;color:#90caf9;font-size:10px;padding:2px 8px;border-radius:4px">OCCUPIED</span>') +
     '</div>' +
   '</div>';
 
@@ -2089,7 +2089,7 @@ function openUnitDetail(propId, unitId) {
     '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">👤 TENANTS</div>';
   if (isVacant) {
     html += '<div style="color:var(--muted);font-size:12px;font-style:italic;margin-bottom:6px">No current tenants</div>' +
-      '<button class="btn small" style="background:var(--accent2);color:#000" onclick="closeModal(\'modal-unit-detail\');openMoveInModal()">+ Move In Tenant</button>';
+      '<button class="btn small" style="background:var(--accent2);color:#1b1f24" onclick="closeModal(\'modal-unit-detail\');openMoveInModal()">+ Move In Tenant</button>';
   } else {
     html += tenants.map(function(t) {
       var nm = (t.First_Name+' '+(t.Last_Name||'')).trim();
@@ -2123,7 +2123,7 @@ function openUnitDetail(propId, unitId) {
     html += '<div style="color:var(--muted);font-size:12px;font-style:italic">No open work orders</div>';
   } else {
     html += wos.map(function(wo) {
-      var priBadge = wo.Priority==='urgent' ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
+      var priBadge = wo.Priority==='urgent' ? '<span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
       return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:6px;cursor:pointer" onclick="closeModal(\'modal-unit-detail\');openWODetail(\''+wo.ID+'\')">' +
         '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
           '<div>' +
@@ -2171,8 +2171,8 @@ function openUnitDetail(propId, unitId) {
     '</div>';
 
   function renderKeyItem(k) {
-    var POSS = { 'Have It':'#14532d:#4ade80:✓', 'Need Copy':'#451a03:#fdba74:⚠', "Don't Have It":'#450a0a:#f87171:✗', 'Not Applicable':'#1e293b:#94a3b8:—' };
-    var pBits = (POSS[k.Possession_Status||''] || '#1e293b:#64748b:?').split(':');
+    var POSS = { 'Have It':'#eaf6ee:#166534:✓', 'Need Copy':'#fdf2e2:#fdba74:⚠', "Don't Have It":'#fdecea:#b42318:✗', 'Not Applicable':'#e8f0fb:#1d4ed8:—' };
+    var pBits = (POSS[k.Possession_Status||''] || '#e8f0fb:#66707c:?').split(':');
     var code = k.Key_Code || k.Lockbox_Code || '';
     var TYPE_LABELS = {'Building-FrontDoorKey':'Front Door Key','Building-FrontDoorCode':'Front Door Code','Building-Lockbox':'Building Lockbox','Building-Padlock':'Building Padlock','Building-GateCode':'Gate Code','Building-CustomKey':'Custom Key','Building-CustomLockbox':'Custom Lockbox','Building-CustomCode':'Custom Code','Unit-Key':'Unit Key','Unit-DoorCode':'Door Code','Unit-Lockbox':'Unit Lockbox','Unit-MailboxKey':'Mailbox Key','Unit-Padlock':'Padlock','Key':'Key','Lockbox':'Lockbox','Electronic':'Electronic Lock','Unit Key':'Unit Key','Front Door':'Front Door'};
     return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
@@ -3026,7 +3026,7 @@ function renderOwnersPage() {
       '<td style="color:'+(o.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(o.PIN||'—')+'</td>' +
       '<td style="display:flex;gap:4px">' +
       '<button class="btn small secondary" onclick="toast(\'Edit owners via Sheet for now\',\'info\')">Edit</button>' +
-      '<button class="btn small" style="background:var(--accent2);color:#000" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
+      '<button class="btn small" style="background:var(--accent2);color:#1b1f24" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
       '</td></tr>';
   }).join('');
@@ -3197,7 +3197,7 @@ async function submitMoveIn() {
 
   // Validation — scroll msgEl into view so errors are always visible
   function showMiError(msg) {
-    if (msgEl) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:8px;background:#2d0a0a;border-radius:4px">⚠ '+msg+'</div>'; msgEl.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+    if (msgEl) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:8px;background:#fdecea;border-radius:4px">⚠ '+msg+'</div>'; msgEl.scrollIntoView({behavior:'smooth',block:'nearest'}); }
   }
   if (!propId) { showMiError('Select a property.'); return; }
   if (!first)  { showMiError('First name is required.'); return; }
@@ -3239,10 +3239,10 @@ async function submitMoveIn() {
 
   // Show an inline confirm step — user must click "Confirm Move In" to proceed
   if (!btn.dataset.confirmed) {
-    msgEl.innerHTML = '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:10px;font-size:12px">' +
+    msgEl.innerHTML = '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:10px;font-size:12px">' +
       '<div style="font-weight:bold;color:var(--accent2);margin-bottom:6px">Ready to move in ' + esc(newName) + '?</div>' +
       (summaryLines.length ? '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+summaryLines.join('<br>')+'</div>' : '') +
-      '<button class="btn small" style="background:var(--accent2);color:#000" id="mi-confirm-btn">✓ Confirm Move In</button>' +
+      '<button class="btn small" style="background:var(--accent2);color:#1b1f24" id="mi-confirm-btn">✓ Confirm Move In</button>' +
       ' <button class="btn small secondary" onclick="document.getElementById(\'mi-msg\').innerHTML=\'\';document.getElementById(\'mi-submit-btn\').removeAttribute(\'data-confirmed\')">Back</button>' +
     '</div>';
     msgEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -3322,7 +3322,7 @@ async function submitMoveIn() {
     var errEl = document.getElementById('mi-msg');
     var errMsg = esc(e.message || 'Unknown error — check console (F12)');
     if (errEl) {
-      errEl.innerHTML = '<div style="color:#fca5a5;font-size:12px;padding:8px;background:#450a0a;border:1px solid #f87171;border-radius:6px;margin-top:8px">⚠ ' + errMsg + '</div>';
+      errEl.innerHTML = '<div style="color:#b42318;font-size:12px;padding:8px;background:#fdecea;border:1px solid #b42318;border-radius:6px;margin-top:8px">⚠ ' + errMsg + '</div>';
       errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } else {
       toast('Move-in error: ' + e.message, 'error');
@@ -3474,10 +3474,10 @@ function keySearch() {
     'Electronic':'Electronic Lock','Lock Box':'Lockbox'
   };
   var POSS = {
-    'Have It':      '#14532d:#4ade80',
-    'Need Copy':    '#451a03:#fdba74',
-    "Don't Have It":'#450a0a:#f87171',
-    'Not Applicable':'#1e293b:#94a3b8'
+    'Have It':      '#eaf6ee:#166534',
+    'Need Copy':    '#fdf2e2:#fdba74',
+    "Don't Have It":'#fdecea:#b42318',
+    'Not Applicable':'#e8f0fb:#1d4ed8'
   };
 
   // Exact code match first, then active before inactive
@@ -3505,7 +3505,7 @@ function keySearch() {
     var label    = TYPE_LABELS[k.Key_Type] || k.Key_Type || '—';
     var locNote  = [k.Location, k.Lockbox_Location, k.Notes].filter(Boolean).join(' · ').substring(0, 80);
     var isActive = k.Active !== 'FALSE';
-    var pBits    = (POSS[k.Possession_Status] || '#1e293b:#64748b').split(':');
+    var pBits    = (POSS[k.Possession_Status] || '#e8f0fb:#66707c').split(':');
 
     html += '<tr style="border-bottom:1px solid var(--border);'+(isActive?'':'opacity:.5')+'">' +
       '<td style="padding:8px 10px;font-weight:bold;color:'+(isActive?'var(--accent)':'var(--muted)')+';font-size:13px;letter-spacing:.05em">' + esc(code) + '</td>' +
@@ -3540,11 +3540,11 @@ function renderKeysView() {
     if (!props.length) { el.innerHTML = '<div class="loading">No properties</div>'; return; }
 
     var POSS_BADGE = {
-      'Have It':        { bg: '#14532d', color: '#4ade80', label: '✓ Have It' },
-      'Need Copy':      { bg: '#451a03', color: '#fdba74', label: '⚠ Need Copy' },
-      "Don't Have It":  { bg: '#450a0a', color: '#f87171', label: '✗ Missing' },
-      'Not Applicable': { bg: '#1e293b', color: '#94a3b8', label: '— N/A' },
-      'Unknown':        { bg: '#1e293b', color: '#64748b', label: '? Unknown' },
+      'Have It':        { bg: '#eaf6ee', color: '#166534', label: '✓ Have It' },
+      'Need Copy':      { bg: '#fdf2e2', color: '#fdba74', label: '⚠ Need Copy' },
+      "Don't Have It":  { bg: '#fdecea', color: '#b42318', label: '✗ Missing' },
+      'Not Applicable': { bg: '#e8f0fb', color: '#1d4ed8', label: '— N/A' },
+      'Unknown':        { bg: '#e8f0fb', color: '#66707c', label: '? Unknown' },
     };
     var DEFAULT_BADGE = POSS_BADGE['Unknown'];
 
@@ -3615,7 +3615,7 @@ function renderKeysView() {
       }
 
       if (p.Access_Notes) {
-        html += '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:5px;padding:8px 10px;font-size:11px;margin-top:8px">'+
+        html += '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:5px;padding:8px 10px;font-size:11px;margin-top:8px">'+
           '<span style="color:var(--accent2);font-size:10px;text-transform:uppercase;letter-spacing:.06em">Access Notes</span><br>'+
           '<span style="color:var(--text)">'+esc(p.Access_Notes)+'</span></div>';
       }
@@ -3707,12 +3707,12 @@ function renderMaterials() {
     byTrade[trade].push(m);
   });
 
-  var STORES = {'Home Depot':'#F96302','Lowes':'#004990','Amazon':'#FF9900','Supplies':'#4ade80','Other':'#888'};
+  var STORES = {'Home Depot':'#F96302','Lowes':'#004990','Amazon':'#FF9900','Supplies':'#166534','Other':'#66707c'};
   var STATUS_STYLE = {
-    'needed':    'background:#1a3e72;color:var(--info)',
-    'purchased': 'background:#1f2d1f;color:var(--accent2)',
-    'on-hand':   'background:#2d2000;color:var(--warn)',
-    'return':    'background:#3b0000;color:var(--danger)',
+    'needed':    'background:#e8f0fb;color:var(--info)',
+    'purchased': 'background:#eaf6ee;color:var(--accent2)',
+    'on-hand':   'background:#fdf2e2;color:var(--warn)',
+    'return':    'background:#fdecea;color:var(--danger)',
   };
 
   var html = '';
@@ -3723,7 +3723,7 @@ function renderMaterials() {
     tradeItems.forEach(function(m) {
       var isOnHold = m.wo_status === 'On Hold';
       var isCancelled = ['Cancelled','Declined'].includes(m.wo_status);
-      var storeColor = STORES[m.Store] || '#888';
+      var storeColor = STORES[m.Store] || '#66707c';
       var statusStyle = STATUS_STYLE[m.Status||'needed'] || STATUS_STYLE['needed'];
       html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;'+(isOnHold?'opacity:.5':'')+(isCancelled?'opacity:.3;text-decoration:line-through':'') + '">';
       html += '<input type="checkbox" '+(m.Status==='purchased'?'checked':'')+' onchange="toggleMaterialStatus(\''+m.ID+'\',this.checked)" style="width:auto;flex-shrink:0" title="Mark purchased">';
@@ -3852,7 +3852,7 @@ function returnRow(r, done) {
       '<div style="font-size:13px;font-weight:bold">' + esc(r.Item||'—') + (r.Amount?' <span style="color:var(--accent2);font-size:12px">$'+esc(r.Amount)+'</span>':'') + '</div>' +
       '<div style="font-size:11px;color:var(--muted)">' + esc(r.Store||'—') + (r.WO_ID?' · '+esc(r.WO_ID):'') + (r.Notes?' · '+esc(r.Notes):'') + '</div>' +
     '</div>' +
-    (done ? '' : '<button class="btn small" style="background:var(--accent2);color:#000" onclick="markReturned(\''+r.ID+'\')">✓ Returned</button>') +
+    (done ? '' : '<button class="btn small" style="background:var(--accent2);color:#1b1f24" onclick="markReturned(\''+r.ID+'\')">✓ Returned</button>') +
     '<button onclick="api(\'POST\',\'/return/update\',{id:\''+r.ID+'\',fields:{Active:\'FALSE\'}})" style="background:none;border:none;color:var(--muted);cursor:pointer">×</button>' +
   '</div>';
 }
@@ -4032,7 +4032,7 @@ function injectMasterKeyInfo(wo) {
   var detail = document.getElementById('detail-body');
   if (!detail) return;
   var mk_banner = document.createElement('div');
-  mk_banner.style.cssText = 'background:#1a2540;border:1px solid var(--info);border-radius:6px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px;font-size:12px';
+  mk_banner.style.cssText = 'background:#e8f0fb;border:1px solid var(--info);border-radius:6px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px;font-size:12px';
   mk_banner.innerHTML = '<span style="font-size:1.2rem">🔑</span><div><div style="color:var(--info);font-weight:bold;font-size:11px;letter-spacing:.06em">MASTER KEY REQUIRED</div><div style="color:var(--text)">' + esc(wo.master_key) + (wo.master_key_notes?'<span style="color:var(--muted)"> · '+esc(wo.master_key_notes)+'</span>':'') + '</div></div>';
   detail.insertBefore(mk_banner, detail.firstChild);
 }
@@ -4290,7 +4290,7 @@ function hubBillRenderReceipts(k) {
       '<input type="number" step="0.01" min="0" id="hb-r-amt-' + k + '-' + i + '" value="' + esc(String(r.amount || '')) + '" oninput="hubBillCalc(\'' + k + '\')" placeholder="0.00" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px">' +
       '<input type="text" id="hb-r-desc-' + k + '-' + i + '" value="' + esc(String(r.desc || '')) + '" placeholder="What was bought" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px">' +
       '<button class="btn small" onclick="hubBillSetPay(\'' + k + '\',' + i + ',\'' + (onAcct ? 'reimburse' : 'account') + '\')" ' +
-        'style="background:' + (onAcct ? 'var(--muted)' : 'var(--info)') + ';color:#000;font-size:10px;padding:3px 7px;white-space:nowrap">' +
+        'style="background:' + (onAcct ? 'var(--muted)' : 'var(--info)') + ';color:#1b1f24;font-size:10px;padding:3px 7px;white-space:nowrap">' +
         (onAcct ? 'company card' : 'reimburse') + '</button>' +
       '<button class="btn small" onclick="hubBillRemoveReceipt(\'' + k + '\',' + i + ')" style="background:var(--surface);color:var(--danger);font-size:11px;padding:3px 8px">×</button>' +
     '</div>';
@@ -4517,7 +4517,7 @@ function invBuilderHtml(k, woId, wo) {
     ' style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:60px;resize:vertical;margin-top:4px">'+esc(wo.Invoice_Memo||wo.Description||'')+'</textarea>' +
     '</div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-    '<button id="inv-bill-btn-'+k+'" onclick="invBillThisJob(\''+k+'\')" style="flex:1;min-width:200px;background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:11px 16px;cursor:pointer">📤 Approve &amp; send to QuickBooks</button>' +
+    '<button id="inv-bill-btn-'+k+'" onclick="invBillThisJob(\''+k+'\')" style="flex:1;min-width:200px;background:var(--accent2);color:#1b1f24;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:11px 16px;cursor:pointer">📤 Approve &amp; send to QuickBooks</button>' +
     '<button onclick="saveDraftInvoice(\''+k+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;font-family:var(--font);font-size:12px;padding:11px 14px;cursor:pointer">💾 Save draft</button>' +
     '</div>' +
     '<div id="inv-msg-'+k+'" style="font-size:11.5px;color:var(--muted);padding:8px 0"></div>' +
@@ -5204,7 +5204,7 @@ function invRenderSuggestions(k, p, charge) {
     var picked = Math.abs(charge - price) < 0.005;
     return '<button onclick="invUsePrice(\'' + k + '\',' + price + ',\'' + mode + '\')" ' +
       'style="flex:1;min-width:150px;text-align:left;cursor:pointer;font-family:var(--font);' +
-      'background:' + (picked ? '#0f2417' : 'var(--surface)') + ';border:1px solid ' + (picked ? 'var(--accent2)' : 'var(--border)') + ';' +
+      'background:' + (picked ? '#eaf6ee' : 'var(--surface)') + ';border:1px solid ' + (picked ? 'var(--accent2)' : 'var(--border)') + ';' +
       'border-radius:6px;padding:9px 11px">' +
         '<div style="color:var(--muted);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase">' + label + (picked ? ' · using this' : '') + '</div>' +
         '<div style="color:' + (picked ? 'var(--accent2)' : 'var(--text)') + ';font-size:17px;font-weight:bold;margin:2px 0">$' + price.toFixed(2) + '</div>' +
@@ -5303,21 +5303,21 @@ function invRenderStatus(k, s) {
     el.innerHTML = '';
     if (btn) btn.textContent = '📤 Approve & send to QuickBooks';
   } else if (s.state === 'approved') {
-    el.innerHTML = band('var(--accent2)', '#0f2417',
+    el.innerHTML = band('var(--accent2)', '#eaf6ee',
       '✓ Approved at <b>$' + (parseFloat(s.row.customer_total) || 0).toFixed(2) + '</b> — not in QuickBooks yet.');
     if (btn) btn.textContent = '📤 Send to QuickBooks — $' + (parseFloat(s.row.customer_total) || 0).toFixed(2);
   } else if (s.state === 'partial') {
-    el.innerHTML = band('var(--warn)', '#2d1f06',
+    el.innerHTML = band('var(--warn)', '#fdf2e2',
       '⚠ Partly sent — customer invoice <b>' + esc(s.row.qb_invoice_id || '?') + '</b> is in QuickBooks, the vendor bill is not. ' +
       'Sending again creates only the missing vendor bill; it will not duplicate the invoice.');
     if (btn) btn.textContent = '📤 Finish sending — vendor bill only';
   } else if (s.state === 'sent') {
     // Only ever claimed with the QuickBooks ids in hand.
-    el.innerHTML = band('var(--accent2)', '#0f2417',
+    el.innerHTML = band('var(--accent2)', '#eaf6ee',
       '✓ In QuickBooks — invoice <b>' + esc(s.row.qb_invoice_id) + '</b>, vendor bill <b>' + esc(s.row.qb_bill_id) + '</b>.');
     if (btn) { btn.textContent = '✓ Already in QuickBooks'; btn.disabled = true; btn.style.opacity = '.5'; }
   } else if (s.state === 'reviewed_no_row') {
-    el.innerHTML = band('var(--warn)', '#2d1f06',
+    el.innerHTML = band('var(--warn)', '#fdf2e2',
       '⚠ This bill is marked reviewed but was <b>never queued for QuickBooks</b> — no invoice exists for it. ' +
       'That happens when a bill is marked reviewed directly instead of approved. Set the price and send it now.');
     // Deliberately still enabled: this is the one state where the job needs billing most.
@@ -5562,7 +5562,7 @@ function renderHubEstimateView(woId, estimates, holder) {
     }).join('') : '';
 
     var approvalBlock = isApproved
-      ? '<div style="margin-top:10px;background:#14532d;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
+      ? '<div style="margin-top:10px;background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
         '<span style="color:var(--accent2);font-weight:bold;font-size:11px">✓ APPROVED</span>' +
         (current.Approved_By ? '<span style="color:var(--muted);font-size:10px;margin-left:6px">by ' + esc(current.Approved_By) + (current.Approval_Note ? ' — ' + esc(current.Approval_Note) : '') + '</span>' : '') +
         '</div>'
@@ -5570,7 +5570,7 @@ function renderHubEstimateView(woId, estimates, holder) {
         '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
         '<input type="checkbox" id="est-deposit-' + woId + '"> Request deposit from customer (skip for small/known-customer jobs — owner approval alone is enough)' +
         '</label>' +
-        '<button class="btn small" style="background:var(--accent2);color:#000" onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve Estimate</button>' +
+        '<button class="btn small" style="background:var(--accent2);color:#1b1f24" onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve Estimate</button>' +
         '</div>';
 
     holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
@@ -5636,7 +5636,7 @@ function openHubEstimateEditor(woId) {
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">' +
       '<span style="font-weight:bold">Total: $<span id="hub-est-total-' + woId + '">0.00</span></span>' +
       '<div><button class="btn small" onclick="refreshHubEstimateView(\'' + woId + '\')">Cancel</button> ' +
-      '<button class="btn small" style="background:var(--accent2);color:#000" onclick="submitHubEstimate(\'' + woId + '\')">Submit</button></div></div>' +
+      '<button class="btn small" style="background:var(--accent2);color:#1b1f24" onclick="submitHubEstimate(\'' + woId + '\')">Submit</button></div></div>' +
       '</div>';
     updateHubEstTotal(woId);
     holder.querySelectorAll('textarea').forEach(function(t) { if (t.id.indexOf('reason') === -1) { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; } });
@@ -5735,7 +5735,7 @@ function renderHubReceipts(woId, receipts, holder) {
             '<input type="date" id="rc-date-'+woId+'" value="'+today+'" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px"></div>' +
           '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">STORE / SUPPLIER</label>' +
             '<input type="text" id="rc-store-'+woId+'" placeholder="Home Depot, Amazon…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px"></div>' +
-          '<div style="display:flex;align-items:flex-end"><button class="btn small" style="background:var(--accent2);color:#000;width:100%" onclick="submitHubReceipt(\''+woId+'\')">Add Receipt</button></div>' +
+          '<div style="display:flex;align-items:flex-end"><button class="btn small" style="background:var(--accent2);color:#1b1f24;width:100%" onclick="submitHubReceipt(\''+woId+'\')">Add Receipt</button></div>' +
         '</div>' +
         '<textarea id="rc-desc-'+woId+'" placeholder="Description: 3/4 inch copper fittings, HVAC filter, door hardware…" style="width:100%;min-height:50px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px"></textarea>' +
         '<div id="rc-msg-'+woId+'" style="margin-top:4px"></div>' +
@@ -5839,9 +5839,9 @@ function renderHubTimeSection(woId, entries, holder) {
     // are inside a bill they say so, because that is the answer to "did logging this do
     // anything" — and until then, saying BILLABLE alone is what made it look like it had.
     var billBadge = e.Billed_Bill_ID
-      ? '<span style="background:#1e3a5f;color:#7dd3fc;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">ON BILL #' + esc(String(e.Billed_Bill_ID)) + '</span>'
+      ? '<span style="background:#e8f0fb;color:#7dd3fc;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">ON BILL #' + esc(String(e.Billed_Bill_ID)) + '</span>'
       : ((e.Billable==='TRUE'||e.Billable===true)
-        ? '<span style="background:#14532d;color:#4ade80;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
+        ? '<span style="background:#eaf6ee;color:#166534;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
         : '');
     var dateStr = e.Start_DateTime ? esc(e.Start_DateTime.split('T')[0]) : (e.Created_Date||'').split('T')[0];
     return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
@@ -5953,7 +5953,7 @@ function buildHubTimeForm(woId) {
       '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px">' +
         '<input type="checkbox" id="ht-bill-'+woId+'" style="cursor:pointer"> Billable' +
       '</label>' +
-      '<button class="btn small" style="background:var(--accent2);color:#000" onclick="submitHubTimeEntry(\''+woId+'\')">Log Time</button>' +
+      '<button class="btn small" style="background:var(--accent2);color:#1b1f24" onclick="submitHubTimeEntry(\''+woId+'\')">Log Time</button>' +
     '</div>' +
     '<div id="ht-msg-'+woId+'" style="margin-top:6px"></div>' +
   '</div>';
@@ -6092,7 +6092,7 @@ function loadHubNearbyWOs(woId, detailBody) {
       return;
     }
     var rows = res.nearby.map(function(n) {
-      var priorityBadge = n.priority === 'urgent' ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
+      var priorityBadge = n.priority === 'urgent' ? '<span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
       return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap">' +
         '<div>' +
           '<span style="color:var(--info);font-size:11px;font-weight:bold">' + esc(n.id) + '</span>' + priorityBadge +
@@ -6151,7 +6151,7 @@ function renderBundlingOpportunities() {
     var cluster = e[0], items = e[1];
     html += '<div style="margin-bottom:10px;background:var(--surface);border-radius:6px;padding:10px">' +
       '<div style="font-weight:bold;font-size:12px;margin-bottom:6px;color:var(--text)">' +
-        '<span style="background:var(--accent);color:#000;font-size:10px;padding:2px 7px;border-radius:3px;margin-right:6px">' + esc(cluster) + '</span>' +
+        '<span style="background:var(--accent);color:#1b1f24;font-size:10px;padding:2px 7px;border-radius:3px;margin-right:6px">' + esc(cluster) + '</span>' +
         items.length + ' open WOs — consider scheduling together' +
       '</div>';
     items.slice(0, 5).forEach(function(item) {
@@ -6185,12 +6185,12 @@ function loadSendTrack() {
     if (!res || !res.ok) { el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:16px 0">Could not load invoices from QuickBooks'+(res&&res.error?': '+esc(res.error):'')+'. Try Refresh.</div>'; return; }
     renderSendTrack(res);
   }).catch(function(e){
-    el.innerHTML = '<div style="color:var(--danger,#e66);font-size:12px;padding:16px 0">Error loading invoices: '+esc(String(e&&e.message||e))+'</div>';
+    el.innerHTML = '<div style="color:var(--danger,#b42318);font-size:12px;padding:16px 0">Error loading invoices: '+esc(String(e&&e.message||e))+'</div>';
   });
 }
 
 function stChip(label, n, color) {
-  return '<span style="display:inline-block;background:'+color+';color:#000;border-radius:12px;padding:3px 10px;font-size:11px;font-weight:600;margin-right:8px">'+esc(label)+': '+n+'</span>';
+  return '<span style="display:inline-block;background:'+color+';color:#1b1f24;border-radius:12px;padding:3px 10px;font-size:11px;font-weight:600;margin-right:8px">'+esc(label)+': '+n+'</span>';
 }
 
 function stRow(inv, kind) {
@@ -6204,14 +6204,14 @@ function stRow(inv, kind) {
     var dis = inv.has_email ? '' : 'opacity:.45;cursor:default';
     var title = inv.has_email ? '' : ' title="No email on file — add one on the Owner or in QuickBooks before sending"';
     var oc = inv.has_email ? ' onclick="sendInvoiceNow(\''+esc(inv.id)+'\')"' : '';
-    right = '<button class="btn small" style="background:var(--accent);color:#000;'+dis+'"'+title+oc+'>'+label+'</button>';
+    right = '<button class="btn small" style="background:var(--accent);color:#1b1f24;'+dis+'"'+title+oc+'>'+label+'</button>';
   }
   var meta = [];
   if (inv.doc) meta.push('#'+esc(inv.doc));
   meta.push(money);
-  if (kind === 'overdue') meta.push('<b style="color:var(--danger,#e66)">'+inv.days_overdue+'d overdue</b>');
+  if (kind === 'overdue') meta.push('<b style="color:var(--danger,#b42318)">'+inv.days_overdue+'d overdue</b>');
   else if (kind === 'not_sent' && inv.txn_date) meta.push('created '+esc(inv.txn_date));
-  if (!inv.has_email && kind !== 'sent') meta.push('<span style="color:var(--danger,#e66)">no email</span>');
+  if (!inv.has_email && kind !== 'sent') meta.push('<span style="color:var(--danger,#b42318)">no email</span>');
   return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">'+
     '<div style="min-width:0"><div style="font-weight:600;font-size:13px">'+esc(inv.customer)+'</div>'+
     '<div style="color:var(--muted);font-size:11px">'+meta.join(' · ')+' · <a href="'+qbInvoiceLink(inv.id)+'" target="_blank" rel="noopener" style="color:var(--info)">open in QB</a></div></div>'+
@@ -6224,10 +6224,10 @@ function qbInvoiceLink(id){ return 'https://app.qbo.intuit.com/app/invoice?txnId
 function renderSendTrack(res) {
   var el = document.getElementById('st-board');
   var c = res.counts || {};
-  var chips = stChip('Not sent', c.not_sent||0, (c.not_sent>0?'#f5a623':'#8a8f98')) +
-              stChip('Overdue', c.overdue||0, (c.overdue>0?'#e66':'#8a8f98')) +
-              stChip('Sent · awaiting', c.sent||0, '#8a8f98') +
-              stChip('Paid', c.paid||0, '#3fb950');
+  var chips = stChip('Not sent', c.not_sent||0, (c.not_sent>0?'#b45309':'#66707c')) +
+              stChip('Overdue', c.overdue||0, (c.overdue>0?'#b42318':'#66707c')) +
+              stChip('Sent · awaiting', c.sent||0, '#66707c') +
+              stChip('Paid', c.paid||0, '#166534');
   var html = '<div style="margin-bottom:12px">'+chips+'</div>';
 
   var notSent = res.not_sent || [];
@@ -6463,7 +6463,7 @@ function renderIRCard(b, i) {
   // Flat rate flag: vendor hours > 3
   var flagHtml = '';
   if (billType === 'hourly' && hrs > 3) {
-    flagHtml = '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:var(--warn)">⚠ ' + hrs + ' hrs billed — consider flat rate override. Check job type below.</div>';
+    flagHtml = '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:var(--warn)">⚠ ' + hrs + ' hrs billed — consider flat rate override. Check job type below.</div>';
   }
 
   var laborLine = billType === 'hourly'
@@ -6503,20 +6503,20 @@ function renderIRCard(b, i) {
   var handledHtml = '';
   if (SETTLED_WO_STATUSES.indexOf(woStatus) > -1 && siblingBills > 1) {
     handledHtml =
-      '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.55">' +
+      '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.55">' +
         '⚠ This work order is marked ' + esc(String(wo.Status)) + ', but it has ' + siblingBills + ' bills still awaiting review. ' +
         'One vendor may have been settled while another is still owed — review each bill on its own before clearing anything.' +
       '</div>';
   }
   if (alreadyHandled) {
     handledHtml =
-      '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:12px;margin-bottom:12px">' +
+      '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:12px;margin-bottom:12px">' +
         '<div style="color:var(--accent2);font-size:11.5px;font-weight:bold;margin-bottom:4px">✓ This work order is already marked ' + esc(String(wo.Status)) + '</div>' +
         '<div style="color:var(--muted);font-size:11.5px;line-height:1.6;margin-bottom:10px">' +
           'It still shows here because the vendor bill itself was never marked reviewed — that only happens when you approve it on this screen. ' +
           'If you already settled this outside the Hub, clear it. Nothing is sent to QuickBooks and no invoice is created.' +
         '</div>' +
-        '<button onclick="irClearFromQueue(' + i + ')" id="ir-clear-btn-' + i + '" style="background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:9px 14px;cursor:pointer">✓ Already handled — clear from queue</button>' +
+        '<button onclick="irClearFromQueue(' + i + ')" id="ir-clear-btn-' + i + '" style="background:var(--accent2);color:#1b1f24;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:9px 14px;cursor:pointer">✓ Already handled — clear from queue</button>' +
       '</div>';
   }
 
@@ -6545,7 +6545,7 @@ function renderIRCard(b, i) {
     var dateLine = [schedLine, completedLine].filter(Boolean).join(' · ');
 
     jobHtml =
-      '<div style="background:#101a24;border:1px solid var(--info);border-radius:6px;padding:12px;margin-bottom:12px">' +
+      '<div style="background:#e8f0fb;border:1px solid var(--info);border-radius:6px;padding:12px;margin-bottom:12px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">' +
           '<span style="color:var(--info);font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:bold">🔧 The job</span>' +
           '<button onclick="irOpenWO(\'' + esc(woId) + '\',\'' + esc(String((b && b.ID) || '')) + '\')" style="background:var(--surface);border:1px solid var(--border);color:var(--info);border-radius:4px;font-family:var(--font);font-size:10px;padding:4px 8px;cursor:pointer;white-space:nowrap">Full work order ↗</button>' +
@@ -6559,7 +6559,7 @@ function renderIRCard(b, i) {
       '</div>';
   } else {
     jobHtml =
-      '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn)">' +
+      '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn)">' +
         '⚠ Work order ' + esc(woId) + ' not found — job details unavailable. Verify this bill before approving.' +
       '</div>';
   }
@@ -6781,7 +6781,7 @@ function irApprove(i) {
   }).then(function(res) {
     if (btn) { btn.disabled = false; btn.textContent = '✓ APPROVE — READY TO INVOICE'; }
     if (res.success || res.id) {
-      if (msg) msg.innerHTML = '<div style="color:var(--accent2);font-size:12px;padding:8px;background:#002d0f;border-radius:6px">✓ Approved! Customer total: $' + c.customerTotal.toFixed(2) + ' · Brett net: $' + c.brettNet.toFixed(2) + '</div>';
+      if (msg) msg.innerHTML = '<div style="color:var(--accent2);font-size:12px;padding:8px;background:#eaf6ee;border-radius:6px">✓ Approved! Customer total: $' + c.customerTotal.toFixed(2) + ' · Brett net: $' + c.brettNet.toFixed(2) + '</div>';
       // Remove card after delay
       setTimeout(function() {
         var card = document.getElementById('ir-card-'+i);
@@ -6822,7 +6822,7 @@ function irClearFromQueue(i) {
     fields: { Status: 'reviewed', Approved_By: 'Handled outside Hub', Reviewed_Date: new Date().toISOString().split('T')[0] }
   }).then(function(res) {
     if (res.success || res.id) {
-      if (msg) msg.innerHTML = '<div style="color:var(--accent2);font-size:12px;padding:8px;background:#002d0f;border-radius:6px">✓ Cleared from the queue.</div>';
+      if (msg) msg.innerHTML = '<div style="color:var(--accent2);font-size:12px;padding:8px;background:#eaf6ee;border-radius:6px">✓ Cleared from the queue.</div>';
       var card = document.getElementById('ir-card-'+i);
       if (card) { card.style.opacity = '0.4'; card.style.pointerEvents = 'none'; }
     } else {
@@ -6871,7 +6871,7 @@ function qbBillToLine(p) {
       return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">↳ ' + esc(b.note) +
         (b.property_id && b.owner_linked
           ? ' <button class="btn small" onclick="qbMakeSubFromPreview(\'' + esc(String(b.property_id)) + '\',this)" ' +
-            'style="background:var(--warn);color:#000;padding:1px 7px;font-size:10px;margin-left:4px">Create it now</button>'
+            'style="background:var(--warn);color:#1b1f24;padding:1px 7px;font-size:10px;margin-left:4px">Create it now</button>'
           : '') + '</div>';
     }
     var missing = b.property ? esc(b.property) : 'this property';
@@ -6931,7 +6931,7 @@ function qbPreviewEntity(label, kind, e) {
     sugLine +
     '<div style="display:flex;gap:6px;align-items:center">' +
       '<select id="qbpe-' + kind + '" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' + opts + '</select>' +
-      '<button class="btn small" onclick="qbPreviewLink(\'' + kind + '\',\'' + esc(String(recId)) + '\')" style="background:var(--accent2);color:#000;padding:4px 10px;font-size:11px">Link</button>' +
+      '<button class="btn small" onclick="qbPreviewLink(\'' + kind + '\',\'' + esc(String(recId)) + '\')" style="background:var(--accent2);color:#1b1f24;padding:4px 10px;font-size:11px">Link</button>' +
     '</div>' +
   '</div>';
   return body;
@@ -7014,7 +7014,7 @@ function loadPayables(save) {
     var toPay = rows.filter(function(r) { return r.state === 'PAY THE VENDOR'; });
     if (el) el.innerHTML =
       (toPay.length
-        ? '<div style="background:#002d0f;border:1px solid var(--accent2);border-radius:8px;padding:12px;margin-bottom:14px">' +
+        ? '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:8px;padding:12px;margin-bottom:14px">' +
           '<div style="color:var(--accent2);font-size:13px;font-weight:bold">' + toPay.length +
           ' vendor' + (toPay.length === 1 ? '' : 's') + ' waiting on $' + (parseFloat(res.owed_total) || 0).toFixed(2) +
           ' you have already collected</div>' +
@@ -7065,7 +7065,7 @@ function updatePaySelection() {
   var total = chk.reduce(function(s,c){ return s + (parseFloat(c.getAttribute('data-amt'))||0); }, 0);
   if (chk.length) {
     btn.disabled = false;
-    btn.style.background = 'var(--accent2)'; btn.style.color = '#000'; btn.style.cursor = 'pointer';
+    btn.style.background = 'var(--accent2)'; btn.style.color = '#f3f5f8'; btn.style.cursor = 'pointer';
     btn.textContent = 'Pay ' + chk.length + ' selected — $' + total.toFixed(2);
   } else {
     btn.disabled = true;
@@ -7169,7 +7169,7 @@ function qbSubRow(kind, row, qbList) {
       (row.suggest.confidence === 'weak' ? '? possibly ' : '→ looks like ') +
       esc(row.suggest.path || row.suggest.name) + '</span> ' +
       '<button class="btn small" onclick="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',\'' + esc(String(row.suggest.id)) + '\')" ' +
-        'style="background:' + colour + ';color:#000;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
+        'style="background:' + colour + ';color:#1b1f24;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
   } else if (parentMissing) {
     state = '<span style="color:var(--muted);font-size:10.5px">' +
       (kind === 'property' ? 'link its owner first' : 'link its property first') + '</span>';
@@ -7179,7 +7179,7 @@ function qbSubRow(kind, row, qbList) {
 
   if (!row.qb_id && !parentMissing) {
     action = '<button class="btn small" onclick="qbCreateSub(\'' + kind + '\',\'' + esc(String(row.id)) + '\')" ' +
-      'style="background:var(--info);color:#000;padding:2px 8px;font-size:10px;white-space:nowrap">+ Create</button>';
+      'style="background:var(--info);color:#1b1f24;padding:2px 8px;font-size:10px;white-space:nowrap">+ Create</button>';
   }
 
   var context = kind === 'property'
@@ -7332,7 +7332,7 @@ function qbMapRow(kind, row, qbList) {
     state = '<span style="color:' + colour + ';font-size:10.5px">' +
       (conf === 'weak' ? '? possible match: ' : '→ looks like: ') + esc(row.suggest.name) + ' (#' + esc(String(row.suggest.id)) + ')</span> ' +
       '<button class="btn small" onclick="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',\'' + esc(String(row.suggest.id)) + '\')" ' +
-        'style="background:' + colour + ';color:#000;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
+        'style="background:' + colour + ';color:#1b1f24;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
   } else {
     state = '<span style="color:var(--warn);font-size:10.5px">no match — will be CREATED in QuickBooks on first invoice</span>';
   }
@@ -7584,7 +7584,7 @@ function renderQBCard(r, i) {
   // Sending it again resumes the bill half — it does not create a second invoice — but say
   // so plainly, because "Preview & Send" on a row that already posted looks alarming.
   var partialHtml = (r.qb_status === 'partial')
-    ? '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--warn);line-height:1.5">' +
+    ? '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--warn);line-height:1.5">' +
         '⚠ Partly sent — invoice ' + esc(r.qb_invoice_id || '?') + ' is already in QuickBooks, the vendor bill is not. ' +
         'Sending again finishes the bill only; it will not duplicate the invoice.' +
       '</div>' : '';
@@ -7592,7 +7592,7 @@ function renderQBCard(r, i) {
   // Vendor_Cost of 0 means the bill half gets skipped silently and only the customer
   // invoice posts — the failure mode that reads as complete success.
   var zeroCostHtml = (r.vendor_cost_zero && r.qb_status !== 'partial')
-    ? '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--warn);line-height:1.5">' +
+    ? '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--warn);line-height:1.5">' +
         '⚠ Vendor cost is $0 — no vendor bill will be created in QuickBooks, only the customer invoice.' +
       '</div>' : '';
 
@@ -7670,7 +7670,7 @@ function renderQBPreview(p) {
   var note = (p.bill_to && p.bill_to.note) || '';
   var wlist = safeArray(p.warnings).filter(function(w){ return w !== note; });
   var warns = wlist.length ?
-    '<div style="background:#2d1f06;border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:8px;font-size:11px;color:var(--warn)">' + wlist.map(function(w){return '⚠ '+esc(w);}).join('<br>') + '</div>' : '';
+    '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:8px;font-size:11px;color:var(--warn)">' + wlist.map(function(w){return '⚠ '+esc(w);}).join('<br>') + '</div>' : '';
   var already = (p.already && (p.already.invoice||p.already.bill)) ?
     '<div style="color:var(--muted);font-size:11px;margin-top:6px">Already in QB → invoice ' + esc(p.already.invoice||'—') + ', bill ' + esc(p.already.bill||'—') + '</div>' : '';
   return '' +
@@ -7876,7 +7876,7 @@ function qbBatchSend() {
           <option value="">Whole property / single family</option>
         </select>
       </div>
-      <div id="mi-current-tenant-banner" style="display:none;grid-column:1/-1;background:#2d1a00;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--warn)">
+      <div id="mi-current-tenant-banner" style="display:none;grid-column:1/-1;background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--warn)">
         <!-- populated dynamically by onMoveInUnitChange -->
       </div>
       <div class="form-group"><label>First Name *</label><input type="text" id="mi-first" placeholder="e.g. Janice"></div>
@@ -8268,9 +8268,9 @@ async function submitMoveOut() {
 
     // Show "Add new tenant?" prompt inside modal before closing
     if (msgEl) msgEl.innerHTML =
-      '<div style="background:#14532d;border:1px solid var(--accent2);border-radius:6px;padding:10px;margin-top:8px;font-size:12px;color:#bbf7d0">'+
+      '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:10px;margin-top:8px;font-size:12px;color:#bbf7d0">'+
         '✓ Moved out successfully. PIN deactivated. WOs after move-out date updated automatically.' +
-        '<div style="margin-top:8px"><button class="btn" style="background:var(--accent2);color:#000" onclick="closeModal(\'modal-move-out\');openMoveInModal()">+ Add New Tenant?</button> '+
+        '<div style="margin-top:8px"><button class="btn" style="background:var(--accent2);color:#1b1f24" onclick="closeModal(\'modal-move-out\');openMoveInModal()">+ Add New Tenant?</button> '+
         '<button class="btn secondary" style="margin-left:6px" onclick="closeModal(\'modal-move-out\')">Done</button></div>'+
       '</div>';
     btn.style.display = 'none';
@@ -8378,7 +8378,7 @@ function voidVendorBill(billId, woId) {
           var items = [];
           try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
           var statusLabel = (bill.Status||'submitted').toUpperCase();
-          var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#f59e0b)';
+          var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#b45309)';
           var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
           var typeLabel = bill.Bill_Type === 'hourly' ? '⏱ By the hour' : '📋 Flat rate';
           return '<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
@@ -8640,7 +8640,7 @@ function repairInvoice(irId, apply, docNumber) {
         : '<div style="color:var(--warn);margin-top:4px">This invoice has no number. Leave the box blank to leave it unnumbered, ' +
           'or type the number you want:<br><input id="repair-doc" placeholder="e.g. 1042" style="width:140px;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px;margin-top:3px"></div>') +
       '<button class="btn small" onclick="repairInvoice(\'' + esc(irId) + '\',true,(document.getElementById(\'repair-doc\')||{}).value)" ' +
-        'style="background:var(--accent2);color:#000;margin-top:7px">Update it in QuickBooks</button></div>';
+        'style="background:var(--accent2);color:#1b1f24;margin-top:7px">Update it in QuickBooks</button></div>';
   }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
 }
 
@@ -8663,7 +8663,7 @@ function shareAttachments(apply) {
     if (el) el.innerHTML =
       '<div style="line-height:1.6">' + res.shareable + ' job photo(s)/video(s) on past work orders are still private ' +
       '(receipts &amp; bills are left alone). Sharing them lets vendors open them in the portal without signing into Google.' +
-      '<br><button class="btn small" onclick="shareAttachments(true)" style="background:var(--accent2);color:#000;margin-top:6px">Share them all</button></div>';
+      '<br><button class="btn small" onclick="shareAttachments(true)" style="background:var(--accent2);color:#1b1f24;margin-top:6px">Share them all</button></div>';
   }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
 }
 
@@ -8730,7 +8730,7 @@ function ownerToUser(fromId, toId, apply) {
         }).join('<br>') : 'Nothing else is attached to that row.') +
       '<br><span style="color:var(--muted);font-size:10.5px">The old owner row is then deactivated. Its PIN is cleared first so one PIN never matches two records.</span>' +
       '<br><button class="btn small" onclick="ownerToUser(\'' + esc(fromId) + '\',\'' + esc(toId) + '\',true)" ' +
-        'style="background:var(--accent2);color:#000;margin-top:6px">Do it</button></div>';
+        'style="background:var(--accent2);color:#1b1f24;margin-top:6px">Do it</button></div>';
   }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
 }
 
@@ -8770,7 +8770,7 @@ function checkDuplicateOwners() {
             // login is usually a second PERSON, and converting keeps them signed in.
             // A row without one is usually a stray duplicate, and merging is right.
             return '<button class="btn small" onclick="ownerToUser(\'' + esc(String(r.id)) + '\',\'' + esc(String(keeper.id)) + '\',false)" ' +
-                'style="background:var(--accent2);color:#000;font-size:10.5px">' +
+                'style="background:var(--accent2);color:#1b1f24;font-size:10.5px">' +
                 (r.has_login ? '★ ' : '') + 'Make ID ' + esc(String(r.id)) + ' a second login on ID ' + esc(String(keeper.id)) + '</button> ' +
               '<button class="btn small" onclick="mergeOwner(\'' + esc(String(r.id)) + '\',\'' + esc(String(keeper.id)) + '\',false)" ' +
                 'style="background:var(--surface2);color:var(--text);font-size:10.5px">Or merge it away</button>';

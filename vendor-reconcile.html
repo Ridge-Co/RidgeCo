@@ -5,14 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Vendor Reconciliation</title>
 <style>
-  :root{--bg:#0f0f0f;--surface:#1a1a1a;--surface2:#242424;--border:#2e2e2e;--text:#e8e6e1;--muted:#888;--accent:#e8a020;--accent2:#4ade80;--danger:#f87171;--warn:#fbbf24;--info:#60a5fa;--radius:6px;--font:'Courier New',monospace;}
+  :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--warn:#fbbf24;--info:#1d4ed8;--radius:6px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
   *{margin:0;padding:0;box-sizing:border-box;}
   body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1050px;margin:0 auto;}
   h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.12em;margin-bottom:4px;}
   p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;line-height:1.5;}
   .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
   .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
-  .btn{background:var(--accent);color:#000;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn{background:var(--accent);color:#1b1f24;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
   .btn:disabled{opacity:0.4;cursor:not-allowed;}
   .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
   input,select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
@@ -28,14 +28,14 @@
   .card .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;}
   .card .val{font-size:1.2rem;margin-top:4px;}
   .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;white-space:nowrap;}
-  .pill.act{background:#3a1414;color:#fca5a5;font-weight:bold;}
-  .pill.wait{background:#2d2006;color:var(--warn);}
-  .pill.paid{background:#1a3320;color:var(--accent2);}
-  .pill.nobill{background:#2a2a2a;color:var(--muted);}
+  .pill.act{background:#fdecea;color:#b42318;font-weight:bold;}
+  .pill.wait{background:#fdf2e2;color:var(--warn);}
+  .pill.paid{background:#eaf6ee;color:var(--accent2);}
+  .pill.nobill{background:#f3f5f8;color:var(--muted);}
   .empty{padding:20px;text-align:center;color:var(--muted);}
   .num{text-align:right;font-variant-numeric:tabular-nums;}
   .jobcard{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px;}
-  .jobcard.act{border-color:#7f1d1d;}
+  .jobcard.act{border-color:#b42318;}
   .jc-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:6px;}
   .jc-title{font-size:13px;color:var(--text);font-weight:bold;line-height:1.35;word-break:break-word;}
   .jc-desc{font-size:11px;color:var(--muted);line-height:1.45;margin-bottom:8px;word-break:break-word;}

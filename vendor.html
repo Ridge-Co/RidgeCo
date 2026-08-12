@@ -6,10 +6,10 @@
 <title>Ridge Co — Vendor Portal</title>
 <style>
 :root {
-  --bg:#040810;--surface:#0d1835;--surface2:#172d4e;--border:#2e4578;
-  --text:#edf2ff;--muted:#8aaed4;--accent:#4d7de8;--accent2:#4ade80;
-  --danger:#f87171;--warn:#f59e0b;--info:#7ab4f0;--purple:#c084fc;
-  --radius:8px;--font:'Courier New',monospace;
+  --bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;
+  --text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;
+  --danger:#b42318;--warn:#b45309;--info:#1d4ed8;--purple:#6d28d9;
+  --radius:8px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh;padding:16px;}
@@ -29,13 +29,13 @@ input:focus{outline:none;border-color:var(--accent);}
 .btn-sm{width:auto;padding:6px 12px;font-size:12px;margin-top:0;}
 .btn-outline{background:transparent;border:1px solid var(--accent);color:var(--accent);}
 .btn-outline:hover{background:var(--accent);color:#fff;}
-.btn-danger{background:var(--danger);color:#000;}
-.btn-green{background:var(--accent2);color:#000;}
-.btn-blue{background:var(--info);color:#000;}
+.btn-danger{background:var(--danger);color:#1b1f24;}
+.btn-green{background:var(--accent2);color:#1b1f24;}
+.btn-blue{background:var(--info);color:#1b1f24;}
 .msg{margin-top:12px;padding:10px;border-radius:6px;font-size:12px;text-align:center;}
-.msg.error{background:#3b0000;border:1px solid var(--danger);color:var(--danger);}
-.msg.warn{background:#2d2000;border:1px solid var(--warn);color:var(--warn);}
-.msg.success{background:#002d0f;border:1px solid var(--accent2);color:var(--accent2);}
+.msg.error{background:#fdecea;border:1px solid var(--danger);color:var(--danger);}
+.msg.warn{background:#fdf2e2;border:1px solid var(--warn);color:var(--warn);}
+.msg.success{background:#eaf6ee;border:1px solid var(--accent2);color:var(--accent2);}
 .attempt-dots{display:flex;gap:6px;justify-content:center;margin-top:10px;}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--border);}
 .dot.used{background:var(--danger);}
@@ -45,14 +45,14 @@ input:focus{outline:none;border-color:var(--accent);}
 .header-left .name{color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.1em;}
 .header-left .role{color:var(--muted);font-size:11px;}
 .badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;}
-.badge-urgent{background:#5c0000;color:var(--danger);border:1px solid var(--danger);}
-.badge-high{background:#3d2200;color:var(--warn);border:1px solid var(--warn);}
-.badge-normal{background:#1a2a1a;color:var(--accent2);border:1px solid var(--accent2);}
-.badge-low{background:#1a1a2a;color:var(--info);border:1px solid var(--info);}
+.badge-urgent{background:#fdecea;color:var(--danger);border:1px solid var(--danger);}
+.badge-high{background:#fdf2e2;color:var(--warn);border:1px solid var(--warn);}
+.badge-normal{background:#eaf6ee;color:var(--accent2);border:1px solid var(--accent2);}
+.badge-low{background:#e8f0fb;color:var(--info);border:1px solid var(--info);}
 .badge-status{background:var(--surface2);color:var(--muted);border:1px solid var(--border);}
-.badge-accepted{background:#1a2a1a;color:var(--accent2);border:1px solid var(--accent2);}
-.badge-inprogress{background:#1a2500;color:#86efac;border:1px solid #86efac;}
-.badge-onhold{background:#2a1a00;color:var(--warn);border:1px solid var(--warn);}
+.badge-accepted{background:#eaf6ee;color:var(--accent2);border:1px solid var(--accent2);}
+.badge-inprogress{background:#eaf6ee;color:#86efac;border:1px solid #86efac;}
+.badge-onhold{background:#fdf2e2;color:var(--warn);border:1px solid var(--warn);}
 
 .tabs{display:flex;gap:2px;margin-bottom:16px;background:var(--surface2);border-radius:6px;padding:3px;}
 .tab{flex:1;text-align:center;padding:7px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.06em;color:var(--muted);}
@@ -98,7 +98,7 @@ input:focus{outline:none;border-color:var(--accent);}
 .status-btn.s-accepted:hover,.status-btn.s-accepted.current{border-color:var(--accent2);color:var(--accent2);}
 .status-btn.s-inprogress:hover,.status-btn.s-inprogress.current{border-color:#86efac;color:#86efac;}
 .status-btn.s-onhold:hover,.status-btn.s-onhold.current{border-color:var(--warn);color:var(--warn);}
-.status-btn.s-complete:hover,.status-btn.s-complete.current{border-color:var(--accent2);color:var(--accent2);background:#002d0f;}
+.status-btn.s-complete:hover,.status-btn.s-complete.current{border-color:var(--accent2);color:var(--accent2);background:#eaf6ee;}
 textarea{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:12px;padding:8px;resize:vertical;min-height:60px;margin-bottom:8px;}
 textarea:focus{outline:none;border-color:var(--accent);}
 .btn-row{display:flex;gap:8px;}
@@ -123,7 +123,7 @@ input[type=file]{display:none;}
   .sched-custom{display:none;margin-top:8px;}
   .sched-notify-row{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--muted);}
   .sched-notify-row input{width:auto;padding:0;}
-  .sched-urgent-banner{background:#002d0f;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--accent2);margin-bottom:10px;display:none;}
+  .sched-urgent-banner{background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--accent2);margin-bottom:10px;display:none;}
 
   /* Scheduling modal */
   .sched-date-row{display:flex;gap:8px;margin-bottom:10px;}
@@ -133,7 +133,7 @@ input[type=file]{display:none;}
   .sched-custom{display:none;margin-top:8px;}
   .sched-notify-row{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--muted);}
   .sched-notify-row input{width:auto;padding:0;}
-  .sched-urgent-banner{background:#002d0f;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--accent2);margin-bottom:10px;display:none;}
+  .sched-urgent-banner{background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--accent2);margin-bottom:10px;display:none;}
 </style>
 </head>
 <body>
@@ -142,7 +142,7 @@ input[type=file]{display:none;}
 <div id="screenLogin" class="screen active">
   <div class="login-wrap">
     <div class="login-card">
-      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:0 auto 12px"><rect x="2" y="2" width="44" height="44" rx="8" fill="#142040" stroke="#4575d4" stroke-width="2"/><polygon points="24,8 40,38 8,38" fill="none" stroke="#4575d4" stroke-width="2" stroke-linejoin="round"/><polygon points="24,18 33,38 15,38" fill="#4575d4" fill-opacity="0.4"/></svg>
+      <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:0 auto 12px"><rect x="2" y="2" width="44" height="44" rx="8" fill="#f3f5f8" stroke="#1d4ed8" stroke-width="2"/><polygon points="24,8 40,38 8,38" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linejoin="round"/><polygon points="24,18 33,38 15,38" fill="#1d4ed8" fill-opacity="0.4"/></svg>
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub" data-i18n="VENDOR PORTAL">VENDOR PORTAL</div>
       <div style="margin-bottom:16px;">
@@ -341,8 +341,8 @@ function doLogout() {
 // Floating toast notification — used after async actions (estimate save, etc.)
 function toast(msg, type) {
   var el = document.createElement('div');
-  var bg = type === 'error' ? '#7f1d1d' : type === 'success' ? '#14532d' : '#1e293b';
-  var border = type === 'error' ? '#f87171' : type === 'success' ? '#4ade80' : '#475569';
+  var bg = type === 'error' ? '#fdecea' : type === 'success' ? '#eaf6ee' : '#e8f0fb';
+  var border = type === 'error' ? '#b42318' : type === 'success' ? '#166534' : '#e8f0fb';
   el.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);' +
     'background:' + bg + ';border:1px solid ' + border + ';color:#fff;padding:10px 18px;' +
     'border-radius:8px;font-family:var(--font);font-size:12px;z-index:9999;' +
@@ -488,11 +488,11 @@ function renderWOs(wos) {
         '<div class="detail-row"><span class="detail-label">Tenant</span><span class="detail-val">' + tenantHtml + '</span></div>' +
         (wo.Notes ? '<div class="detail-row"><span class="detail-label">Notes</span><span class="detail-val">' + esc(wo.Notes) + '</span></div>' : '') +
         (wo.Scheduled_Date ? '<div class="detail-row"><span class="detail-label">Scheduled</span><span class="detail-val">' + esc(wo.Scheduled_Date) + '</span></div>' : '') +
-        (wo.master_key ? '<div style="background:#1a2540;border:1px solid var(--info);border-radius:6px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px">' + '<span style="font-size:1.1rem">🔑</span>' + '<div><div style="color:var(--info);font-weight:bold;font-size:10px;letter-spacing:.06em">MASTER KEY REQUIRED</div>' + '<div style="color:var(--text);font-size:12px">' + esc(wo.master_key) + '</div></div></div>' : '') +
+        (wo.master_key ? '<div style="background:#e8f0fb;border:1px solid var(--info);border-radius:6px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px">' + '<span style="font-size:1.1rem">🔑</span>' + '<div><div style="color:var(--info);font-weight:bold;font-size:10px;letter-spacing:.06em">MASTER KEY REQUIRED</div>' + '<div style="color:var(--text);font-size:12px">' + esc(wo.master_key) + '</div></div></div>' : '') +
         (wo.vendor_has_access === false ? '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:10px;display:flex;align-items:center;gap:8px">' +
           '<span style="font-size:1.1rem">🔒</span><div><div style="color:var(--muted);font-size:10px;font-weight:bold;letter-spacing:.06em">NO PROPERTY ACCESS NEEDED</div>' +
           '<div style="color:var(--muted);font-size:11px">Access codes are not shared for this work order.</div></div></div>' :
-          ((wo.access_notes ? '<div style="background:#1a2d10;border:1px solid var(--accent2);border-radius:6px;padding:10px 12px;margin-bottom:10px">' +
+          ((wo.access_notes ? '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:10px 12px;margin-bottom:10px">' +
             '<div style="color:var(--accent2);font-size:10px;letter-spacing:.08em;font-weight:bold;margin-bottom:4px">⚠ ACCESS INSTRUCTIONS</div>' +
             '<div style="color:var(--text);font-size:12px;white-space:pre-wrap">' + esc(wo.access_notes) + '</div></div>' : '') +
             '<div style="margin-bottom:8px;"><div class="detail-label" style="margin-bottom:6px;">ACCESS KEYS</div>' + lbHtml + '</div>')) +
@@ -510,7 +510,7 @@ function renderWOs(wos) {
           '<textarea id="notes-' + idx + '" placeholder="Add notes (optional)…"></textarea>' +
           '<div class="btn-row">' +
             '<button class="btn btn-sm btn-green" onclick="submitStatus(\'' + wo.ID + '\',' + idx + ')">SAVE STATUS</button>' +
-            '<button class="btn btn-sm" style="background:var(--accent2);color:#000" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
+            '<button class="btn btn-sm" style="background:var(--accent2);color:#1b1f24" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
           '</div>' +
           '<div id="action-msg-' + idx + '"></div>' +
           '<div id="bill-summary-' + idx + '" style="margin-top:8px"></div>' +
@@ -574,7 +574,7 @@ function renderEstimateWidget(woId, idx) {
     var bannerMsg = depositRequested
       ? '✓ Approved — deposit is being requested from the customer. You\'ll be notified to proceed once received.'
       : '✓ Approved — no deposit required for this job. You\'re cleared to proceed.';
-    approvalBanner = '<div style="margin-top:8px;background:#14532d;border:1px solid #4ade80;border-radius:6px;padding:10px;font-size:12px;color:#bbf7d0">' +
+    approvalBanner = '<div style="margin-top:8px;background:#eaf6ee;border:1px solid #166534;border-radius:6px;padding:10px;font-size:12px;color:#bbf7d0">' +
       bannerMsg +
       (current.Approved_By ? '<div style="font-size:10px;color:#86efac;margin-top:4px">Approved by ' + esc(current.Approved_By) + '</div>' : '') +
       '</div>';
@@ -586,7 +586,7 @@ function renderEstimateWidget(woId, idx) {
     : '<button class="btn btn-sm btn-blue" onclick="openEstimateEditor(\'' + woId + '\',' + idx + ')">✎ Revise Estimate</button>';
 
   wrap.innerHTML =
-    '<div style="background:var(--surface2);border:1px solid ' + (isApproved ? '#4ade80' : 'var(--border)') + ';border-radius:6px;padding:10px;margin-bottom:8px">' +
+    '<div style="background:var(--surface2);border:1px solid ' + (isApproved ? '#166534' : 'var(--border)') + ';border-radius:6px;padding:10px;margin-bottom:8px">' +
     '<div style="font-size:10px;color:var(--muted);letter-spacing:.06em;margin-bottom:6px">VERSION ' + current.Version + (estimates.length > 1 ? ' (revised)' : '') + '</div>' +
     rows +
     '<div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
@@ -699,7 +699,7 @@ function loadVendorNearbyWOs(woId, idx) {
     if (!res.nearby || !res.nearby.length) return; // Nothing nearby — stay silent
     var cards = res.nearby.map(function(n) {
       var pBadge = n.priority === 'urgent'
-        ? '<span style="background:#7f1d1d;color:#fca5a5;font-size:9px;padding:1px 4px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
+        ? '<span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 4px;border-radius:3px;margin-left:4px">URGENT</span>' : '';
       var tenantBlock = (n.tenant_phone || n.tenant_name)
         ? '<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">' +
             (n.tenant_name ? '<span style="color:var(--muted);font-size:10px">' + esc(n.tenant_name) + '</span>' : '') +
@@ -1585,7 +1585,7 @@ function submitVendorSched(modalId) {
     <div id="bill-msg"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button onclick="closeBillModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
-      <button id="bill-submit-btn" onclick="submitVendorBill()" style="background:var(--accent2);color:#000;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT BILL</button>
+      <button id="bill-submit-btn" onclick="submitVendorBill()" style="background:var(--accent2);color:#1b1f24;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT BILL</button>
     </div>
   </div>
 </div>
@@ -1669,8 +1669,8 @@ function setReceiptPay(n, mode) {
   var rb = document.getElementById('r-pay-reimburse-'+n), ab = document.getElementById('r-pay-account-'+n);
   if (rb && ab) {
     var on = mode === 'reimburse';
-    rb.style.background = on ? 'var(--accent2)' : 'var(--surface2)'; rb.style.color = on ? '#000' : 'var(--muted)'; rb.style.borderColor = on ? 'var(--accent2)' : 'var(--border)';
-    ab.style.background = !on ? 'var(--warn)' : 'var(--surface2)'; ab.style.color = !on ? '#000' : 'var(--muted)'; ab.style.borderColor = !on ? 'var(--warn)' : 'var(--border)';
+    rb.style.background = on ? 'var(--accent2)' : 'var(--surface2)'; rb.style.color = on ? '#f3f5f8' : 'var(--muted)'; rb.style.borderColor = on ? 'var(--accent2)' : 'var(--border)';
+    ab.style.background = !on ? 'var(--warn)' : 'var(--surface2)'; ab.style.color = !on ? '#f3f5f8' : 'var(--muted)'; ab.style.borderColor = !on ? 'var(--warn)' : 'var(--border)';
   }
   calcBillTotal();
 }
@@ -1695,7 +1695,7 @@ function addReceiptRow() {
     '<div style="margin-top:8px">' +
       '<div style="font-size:10px;color:var(--muted);margin-bottom:4px">Who paid for this?</div>' +
       '<div style="display:flex;gap:6px">' +
-        '<button type="button" id="r-pay-reimburse-' + n + '" onclick="setReceiptPay(' + n + ',\'reimburse\')" style="flex:1;padding:6px;border-radius:5px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--accent2);background:var(--accent2);color:#000">Reimburse me</button>' +
+        '<button type="button" id="r-pay-reimburse-' + n + '" onclick="setReceiptPay(' + n + ',\'reimburse\')" style="flex:1;padding:6px;border-radius:5px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--accent2);background:var(--accent2);color:#1b1f24">Reimburse me</button>' +
         '<button type="button" id="r-pay-account-' + n + '" onclick="setReceiptPay(' + n + ',\'account\')" style="flex:1;padding:6px;border-radius:5px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--muted)">On company account</button>' +
       '</div>' +
     '</div>';
@@ -1835,7 +1835,7 @@ async function submitVendorBill() {
       // 2 seconds, so re-enabling the button on success reopened a live window where one
       // more tap posts the identical bill a second time. The guard stays claimed until
       // closeBillModal() runs; only the error paths below hand the button back.
-      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#002d0f;border-radius:6px">✓ Bill submitted! Total: $' + total.toFixed(2) + '</div>';
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#eaf6ee;border-radius:6px">✓ Bill submitted! Total: $' + total.toFixed(2) + '</div>';
       btn.textContent = '✓ SUBMITTED';
       setTimeout(function(){ closeBillModal(); loadWorkOrders(); }, 2000);
     } else {
@@ -1937,7 +1937,7 @@ function applyTranslations() {
     if (document.getElementById('mh-upd-banner')) return;
     var b = document.createElement('div');
     b.id = 'mh-upd-banner';
-    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#0b8a3e;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
+    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#1d4ed8;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
     b.textContent = 'Update ready — tap to refresh';
     b.onclick = function(){ location.reload(true); };
     document.body.appendChild(b);

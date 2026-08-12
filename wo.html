@@ -8,7 +8,7 @@
 <style>
   :root{
     --bg:#eceef1; --paper:#ffffff; --ink:#1b1f24; --muted:#66707c; --line:#dce0e6;
-    --accent:#0b6b3a; --accent-dk:#095c31; --navy:#1f2d3d; --warn:#b45309; --danger:#b42318;
+    --accent:#1d4ed8; --accent-dk:#1e40af; --navy:#1f2d3d; --warn:#b45309; --danger:#b42318;
     --info:#1d4ed8; --chip:#f3f5f8; --radius:10px;
     --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
@@ -386,8 +386,8 @@ function loadDoc(){
 }
 function reload(){ loadDoc(); }
 
-var STATUS_COLORS = {'New':'#6b7280','Assigned':'#1d4ed8','Accepted':'#1d4ed8','In Progress':'#b45309','On Hold':'#b42318','Complete':'#0b6b3a','Pending Invoice':'#0b6b3a','Invoiced':'#0b6b3a','Paid':'#0b6b3a','Cancelled':'#6b7280','Declined':'#b42318'};
-var PRIO_COLORS = {'Urgent':'#b42318','High':'#b45309','Normal':'#0b6b3a','Low':'#6b7280'};
+var STATUS_COLORS = {'New':'#6b7280','Assigned':'#1d4ed8','Accepted':'#1d4ed8','In Progress':'#b45309','On Hold':'#b42318','Complete':'#1d4ed8','Pending Invoice':'#1d4ed8','Invoiced':'#1d4ed8','Paid':'#1d4ed8','Cancelled':'#6b7280','Declined':'#b42318'};
+var PRIO_COLORS = {'Urgent':'#b42318','High':'#b45309','Normal':'#1d4ed8','Low':'#6b7280'};
 
 function renderDoc(){
   var wo=DATA.wo;
