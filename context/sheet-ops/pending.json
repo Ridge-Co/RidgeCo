@@ -1,0 +1,8 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Fix a WO-ID collision: a concurrent session created WO-1123/1124/1125 while my append was in flight, so my 1305 N Calvert electrical WO landed as a DUPLICATE WO-1123 (Property 71, at sheet row 126). Renumber that row's ID (column B) to WO-1126 (next free after 1125), and repoint client Note #2's WO_ID from WO-1123 to WO-1126. The other WO-1123 (Property 52) is a different session's real WO and is left untouched.",
+  "ops": [
+    { "type": "set_cell", "range": "Work_Orders!B126", "value": "WO-1126" },
+    { "type": "update_cell_by_id", "tab": "Notes", "id": "2", "fields": { "WO_ID": "WO-1126" } }
+  ]
+}
