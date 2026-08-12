@@ -80,8 +80,9 @@ t('the invoice total reads _invTime, which excludes billed hours',
 
 // ── The dead end that started this ──
 const noBill = grab(hsrc, 'function invNoBillHtml(');
-t('says what having no bill blocks, not just that there isn\'t one',
-  /Nothing can be priced, approved or invoiced until there is one/.test(noBill));
+t('the no-bill message says materials + your time can still be invoiced (a bill is only for owing a vendor)',
+  /invoice the customer for materials and your logged time/.test(noBill) &&
+  /a vendor bill is only needed when you actually owe a vendor/.test(noBill));
 t('offers the logged hours as a bill when there are any', /hubBillUseLoggedTime/.test(noBill));
 t('offers hand entry as well — not every bill comes from logged time',
   /hubBillOpen/.test(noBill));
@@ -117,7 +118,7 @@ t('with a bill already present it points at supervision instead of a second bill
 t('stays silent when every billable hour is already in a bill',
   /if \(!free\.length\) return ''/.test(nextStep));
 t('the badge distinguishes billable from billed',
-  /ON BILL #/.test(hsrc) && /e\.Billed_Bill_ID\n?\s*\? '<span style="background:#1e3a5f/.test(hsrc));
+  /ON BILL #/.test(hsrc) && /e\.Billed_Bill_ID\n?\s*\? '<span style="background:#e8f0fb/.test(hsrc));
 
 
 // ── Run it for real ──────────────────────────────────────────

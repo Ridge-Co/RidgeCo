@@ -4495,7 +4495,7 @@ function invBuilderHtml(k, woId, wo) {
       '<div style="color:var(--muted);font-size:10px;letter-spacing:.06em;margin-bottom:8px">ADD-ONS (feed the itemized price)</div>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
         '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text);cursor:pointer">' +
-          '<input type="checkbox" id="inv-onsite-'+k+'" onchange="calcInvoiceMarkup(\''+k+'\')" style="width:auto;padding:0"> On-site (Brett time)' +
+          '<input type="checkbox" id="inv-onsite-'+k+'" onchange="calcInvoiceMarkup(\''+k+'\');invLoadStatus(\''+k+'\')" style="width:auto;padding:0"> On-site (Brett time)' +
         '</label>' +
         '<input type="number" id="inv-brett-hrs-'+k+'" min="0.5" step="0.5" placeholder="hrs" oninput="calcInvoiceMarkup(\''+k+'\')"' +
         ' style="width:70px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:6px;border-radius:5px;text-align:center">' +
@@ -4613,6 +4613,7 @@ function loadInvoiceMaterials(k) {
     invRenderMaterials(k);
     invAutoPrice(k);
     calcInvoiceMarkup(k);
+    if (!_invBill[k]) invLoadStatus(k);   // enable the invoice once materials are known, even with no bill
   }).catch(function() { if (_invMatGen[k] === gen) _invMat[k] = []; });
 }
 
@@ -4628,6 +4629,7 @@ function invToggleMat(k, id) {
   invRenderMaterials(k);
   invAutoPrice(k);
   calcInvoiceMarkup(k);
+  if (!_invBill[k]) invLoadStatus(k);   // no vendor bill → whether the invoice can go depends on what's ticked
 }
 
 function invMatTotal(k) {
@@ -4757,6 +4759,7 @@ function loadInvoiceTime(k) {
     invRenderTime(k);
     invAutoPrice(k);
     calcInvoiceMarkup(k);
+    if (!_invBill[k]) invLoadStatus(k);   // enable the invoice once time is known, even with no bill
   }).catch(function() { if (_invTimeGen[k] === gen) _invTime[k] = []; });
 }
 
@@ -4776,6 +4779,7 @@ function invToggleTime(k, id) {
   invRenderTime(k);
   invAutoPrice(k);
   calcInvoiceMarkup(k);
+  if (!_invBill[k]) invLoadStatus(k);   // no vendor bill → whether the invoice can go depends on what's ticked
 }
 
 // Every hub entry written before the rate was fixed carries Billable_Amount '0.00',
@@ -4858,8 +4862,8 @@ function invNoBillHtml(k, headline) {
   var hrs = free.reduce(function(s, e) { return s + (parseFloat(e.Duration_Minutes) || 0) / 60; }, 0);
   var amt = free.reduce(function(s, e) { return s + invTimeAmount(e); }, 0);
 
-  return '<div style="color:var(--warn);font-size:11.5px;line-height:1.5">' + esc(headline) +
-    ' Nothing can be priced, approved or invoiced until there is one — the bill is what the invoice is built from.</div>' +
+  return '<div style="color:var(--muted);font-size:11.5px;line-height:1.5">' + esc(headline) +
+    ' You can still invoice the customer for materials and your logged time below — a vendor bill is only needed when you actually owe a vendor. To bill a vendor, add one:</div>' +
     (canEnter
       ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">' +
           (hrs > 0
@@ -4887,7 +4891,7 @@ function loadVendorBillForInvoice(k) {
     if (!Array.isArray(bills) || !bills.length) {
       el.innerHTML = invNoBillHtml(k, 'No bill on this job yet.');
       _invBill[k] = null;
-      invRenderStatus(k, null);
+      invLoadStatus(k);   // materials/time may still be invoiceable with no vendor bill
       return;
     }
     // Ignore voided bills, and bill against the newest live one.
@@ -4895,7 +4899,7 @@ function loadVendorBillForInvoice(k) {
     if (!live.length) {
       el.innerHTML = invNoBillHtml(k, 'Every bill on this job is voided.');
       _invBill[k] = null;
-      invRenderStatus(k, null);
+      invLoadStatus(k);   // materials/time may still be invoiceable with no vendor bill
       return;
     }
     // Honour the bill that was actually chosen (from the Review Bills queue, or the picker
@@ -4982,7 +4986,18 @@ function loadVendorBillForInvoice(k) {
 // the same bill so the difference is a choice you make, not a discrepancy you discover.
 function invPricing(k) {
   var bill = _invBill[k];
-  if (!bill) return null;
+  // No vendor bill on this job? Price straight from the materials you ticked and your logged
+  // time — a vendor bill is only needed when you actually owe a vendor. A synthetic zero-cost
+  // bill lets the rest of this function work unchanged (vendor payable comes out $0, so the
+  // send skips the vendor bill and posts the customer invoice only). Return null only when
+  // there is genuinely nothing to bill, so the button stays off until there is.
+  if (!bill) {
+    var onsiteOn = (document.getElementById('inv-onsite-' + k) || {}).checked;
+    if (invMatTotal(k) <= 0 && invTimeTotal(k) <= 0 && !onsiteOn) return null;
+    bill = { ID: '', Vendor_ID: '', Vendor_Name: '', Bill_Type: 'flat',
+             Hours: '0', Labor_Total: '0', Flat_Rate: '0', Truck_Stock: '0',
+             Receipts_Total: '0', Receipts_JSON: '[]' };
+  }
 
   var billType   = bill.Bill_Type || 'hourly';
   var hrs        = parseFloat(bill.Hours) || 0;
@@ -5258,41 +5273,51 @@ function invQBRows() {
 function invLoadStatus(k) {
   var woId = _invWO[k] || k;
   var bill = _invBill[k];
-  if (!bill) { invRenderStatus(k, null); return; }
-  if ((bill.Status || '').toLowerCase() !== 'reviewed') { invRenderStatus(k, { state: 'unapproved' }); return; }
+  if (!bill) {
+    // No vendor bill — but ticked materials / logged time may still be invoiceable. If there
+    // is nothing priceable, stay disabled; otherwise fall through and read the queue keyed on
+    // the work order (a bill-less review row is anchored to the WO, not a bill id).
+    if (!invPricing(k)) { invRenderStatus(k, null); return; }
+  } else if ((bill.Status || '').toLowerCase() !== 'reviewed') {
+    invRenderStatus(k, { state: 'unapproved' }); return;
+  }
 
-  // Approved. Ask for EVERY Invoice_Review row on this work order, at any status, and
-  // match the one belonging to THIS bill. `all=1` matters: the default queue hides sent
-  // rows, so an absent row would have to be read as "already sent" — inferring success
-  // from an empty read is exactly the mistake FEATURE_LOG rule 16 exists to prevent, and
-  // here it would disable the only button that can bill the job.
+  // Approved (or a bill-less job with something to bill). Ask for EVERY Invoice_Review row on
+  // this work order, at any status. `all=1` matters: the default queue hides sent rows, so an
+  // absent row would have to be read as "already sent" — inferring success from an empty read
+  // is exactly the mistake FEATURE_LOG rule 16 exists to prevent.
   invQBRows().then(function(all) {
     var rows = Array.isArray(all) ? all.filter(function(r) { return String(r.wo_id) === String(woId); }) : all;
     // Two quick taps on the bill picker can land these out of order. Bail if the panel has
     // moved on, so bill A's QuickBooks status never gets painted over bill B's numbers.
     if (_invBill[k] !== bill) return;
-    if (!Array.isArray(rows)) { invRenderStatus(k, { state: 'unknown' }); return; }
-    var row = rows.find(function(r) { return String(r.bill_id) === String(bill.ID); })
+    if (!Array.isArray(rows)) { invRenderStatus(k, bill ? { state: 'unknown' } : { state: 'unapproved' }); return; }
+    var row = (bill && rows.find(function(r) { return String(r.bill_id) === String(bill.ID); }))
+           || rows.find(function(r) { return String(r.wo_id) === String(woId) && !String(r.bill_id || ''); })
            || rows.find(function(r) { return String(r.wo_id) === String(woId); });
     _invIRRow[k] = row || null;
 
     if (!row) {
-      // Marked reviewed, but no Invoice_Review row exists. Nothing was ever queued for
-      // QuickBooks — most likely "Mark Reviewed" was used, or the approval half-failed.
-      invRenderStatus(k, { state: 'reviewed_no_row' });
+      // With a bill: reviewed but nothing was ever queued for QuickBooks. Without one: nothing
+      // has been approved yet, so the button should APPROVE rather than report a broken state.
+      invRenderStatus(k, bill ? { state: 'reviewed_no_row' } : { state: 'unapproved' });
       return;
     }
-    if (row.qb_invoice_id && row.qb_bill_id) { invRenderStatus(k, { state: 'sent', row: row }); return; }
+    // A materials/time-only invoice never has a vendor bill, so a missing QB bill id is
+    // EXPECTED and the job is done — it must not read as "partly sent" (which mirrors the
+    // Worker's own billNotOwed rule at send time).
+    var noVendorBill = !String(row.bill_id || '');
+    if (row.qb_invoice_id && (row.qb_bill_id || noVendorBill)) { invRenderStatus(k, { state: 'sent', row: row }); return; }
     if (row.qb_invoice_id && !row.qb_bill_id) { invRenderStatus(k, { state: 'partial', row: row }); return; }
     invRenderStatus(k, { state: 'approved', row: row });
-  }).catch(function() { invRenderStatus(k, { state: 'unknown' }); });
+  }).catch(function() { invRenderStatus(k, bill ? { state: 'unknown' } : { state: 'unapproved' }); });
 }
 
 function invRenderStatus(k, s) {
   var el  = document.getElementById('inv-status-' + k);
   var btn = document.getElementById('inv-bill-btn-' + k);
   if (!el) return;
-  if (!s) { el.innerHTML = ''; if (btn) { btn.disabled = true; btn.style.opacity = '.45'; btn.textContent = 'No vendor bill to invoice yet'; } return; }
+  if (!s) { el.innerHTML = ''; if (btn) { btn.disabled = true; btn.style.opacity = '.45'; btn.textContent = 'Add materials, time, or a bill to invoice'; } return; }
   if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
 
   function band(color, bg, html) {
@@ -5336,11 +5361,12 @@ function invBillThisJob(k) {
   var bill = _invBill[k];
   var msg  = document.getElementById('inv-msg-' + k);
   var btn  = document.getElementById('inv-bill-btn-' + k);
-  if (!bill) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">No vendor bill on this job.</span>'; return; }
 
   var charge = parseFloat((document.getElementById('inv-charge-' + k) || {}).value || 0);
   var p = invPricing(k);
-  if (!p) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">Could not read the bill.</span>'; return; }
+  // No priceable basis = nothing to invoice yet. With a bill that means the bill couldn't be
+  // read; without one it means no materials or logged time are ticked.
+  if (!p) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">' + (bill ? 'Could not read the bill.' : 'Tick some materials or logged time first — there is nothing to invoice yet.') + '</span>'; return; }
 
   // Already approved AND queued — skip straight to the preview-first send modal.
   // A bill marked reviewed with no Invoice_Review row behind it is NOT approved in any
@@ -5350,7 +5376,7 @@ function invBillThisJob(k) {
   // Only close the work-order modal when that is where we are. On a Review Bills card
   // there is no modal open, and closing one that isn't there would be a no-op at best.
   var inWOModal = (k === woId);
-  if ((bill.Status || '').toLowerCase() === 'reviewed' && known && known.id) {
+  if (bill && (bill.Status || '').toLowerCase() === 'reviewed' && known && known.id) {
     if (inWOModal) closeModal('modal-wo-detail');
     previewQBSend(known.id);
     return;
@@ -5381,10 +5407,10 @@ function invBillThisJob(k) {
   var markup = +(charge - fee - p.totalCost - p.brettTime - p.travel).toFixed(2);
 
   api('POST', '/invoice-review/approve', {
-    bill_id: bill.ID,
+    bill_id: bill ? bill.ID : '',
     wo_id: woId,
-    vendor_id: bill.Vendor_ID,
-    vendor_name: bill.Vendor_Name,
+    vendor_id: bill ? bill.Vendor_ID : '',
+    vendor_name: bill ? bill.Vendor_Name : '',
     job_type: p.billType === 'flat' ? 'flat' : 'standard',
     vendor_cost: p.vendorPayable.toFixed(2),
     own_materials: p.ownMaterials.toFixed(2),
@@ -5839,7 +5865,7 @@ function renderHubTimeSection(woId, entries, holder) {
     // are inside a bill they say so, because that is the answer to "did logging this do
     // anything" — and until then, saying BILLABLE alone is what made it look like it had.
     var billBadge = e.Billed_Bill_ID
-      ? '<span style="background:#e8f0fb;color:#7dd3fc;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">ON BILL #' + esc(String(e.Billed_Bill_ID)) + '</span>'
+      ? '<span style="background:#e8f0fb;color:#1d4ed8;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">ON BILL #' + esc(String(e.Billed_Bill_ID)) + '</span>'
       : ((e.Billable==='TRUE'||e.Billable===true)
         ? '<span style="background:#eaf6ee;color:#166534;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
         : '');

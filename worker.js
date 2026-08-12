@@ -1475,7 +1475,10 @@ async function approveInvoiceReview(env, body) {
     markup, processing_fee, customer_total, brett_net, approved_by,
     own_wage, profit, own_materials, own_material_ids,
   } = body;
-  if (!bill_id || !customer_total) return json({ error: 'bill_id and customer_total required' }, 400);
+  // A materials/time-only invoice (Brett did the job, or the vendor's materials went on our
+  // account with no labor bill) has NO vendor bill — so bill_id is optional, but we still need
+  // a work order to anchor the review row to.
+  if (!customer_total || (!bill_id && !wo_id)) return json({ error: 'customer_total and a bill_id or wo_id are required' }, 400);
   const today = new Date().toISOString().split('T')[0];
 
   // Approving twice must not create a second Invoice_Review row — the Hub can now approve
@@ -1483,7 +1486,11 @@ async function approveInvoiceReview(env, body) {
   // bill already has a live review row, hand that one back instead of logging another.
   try {
     const existingIR = await fetchTab(env, 'Invoice_Review');
-    const already = existingIR.find(r => r.Active !== 'FALSE' && String(r.Bill_ID) === String(bill_id));
+    const already = bill_id
+      ? existingIR.find(r => r.Active !== 'FALSE' && String(r.Bill_ID) === String(bill_id))
+      // No vendor bill on this job — the review is keyed to the work order instead, so a
+      // second approve of the same job hands the first one back rather than logging twice.
+      : existingIR.find(r => r.Active !== 'FALSE' && !String(r.Bill_ID || '') && String(r.WO_ID) === String(wo_id));
     if (already) {
       // Hand back the existing row rather than logging a second one — but say what it's
       // for. Approving again at a different number used to look like it worked while the
@@ -1503,8 +1510,9 @@ async function approveInvoiceReview(env, body) {
     ]);
   } catch (e) { /* the money fields below still land; only the split is lost */ }
 
-  // 1. Update Vendor_Bills row: mark reviewed, save markup fields
-  await updateRow(env, 'Vendor_Bills', bill_id, {
+  // 1. Update Vendor_Bills row: mark reviewed, save markup fields — only when there IS a
+  //    vendor bill. A materials/time-only invoice has none to update.
+  if (bill_id) await updateRow(env, 'Vendor_Bills', bill_id, {
     Status:         'reviewed',
     Job_Type:       job_type        || 'standard',
     Own_Materials:  own_materials   || '0',
@@ -1528,12 +1536,12 @@ async function approveInvoiceReview(env, body) {
   // out of addRow's response below.
   const reviewRow = {
     ID:                 'IR-' + Date.now(),
-    Bill_ID:            bill_id,
+    Bill_ID:            bill_id || '',
     WO_ID:              wo_id,
-    Vendor_ID:          vendor_id,
-    Vendor_Name:        vendor_name,
+    Vendor_ID:          vendor_id || '',
+    Vendor_Name:        vendor_name || '',
     Job_Type:           job_type,
-    Vendor_Cost:        vendor_cost,
+    Vendor_Cost:        vendor_cost || '0',
     Brett_Time:         brett_time,
     // Which receipts from the Receipts tab the customer is paying for. Recorded by id so
     // the send builds exactly the lines that were approved, not whatever is on the job by
