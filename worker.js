@@ -161,6 +161,7 @@ export default {
         if (path === '/ops-telemetry')          return await opsTelemetryRead(env, url);
         if (path === '/ops-review-log')         return await opsReviewLogRead(env, url);
         if (path === '/ar/aging')               return await arAging(env, url);
+        if (path === '/ar/invoices')            return await arInvoices(env, url);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/trash/properties')       return await trashListProperties(env);
@@ -287,6 +288,7 @@ export default {
         if (path === '/qb/reparent-unit')         return await qbReparentUnit(env, body);
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
+        if (path === '/qb/pay-bills')             return await qbPayBills(env, body);
         if (path === '/qb/clear-ir-bill')         return await qbClearIrBill(env, body);
         if (path === '/qb/reprice-invoice')       return await qbRepriceInvoice(env, body);
         if (path === '/qb/relabel-invoice')       return await qbRelabelInvoice(env, body);
@@ -3293,6 +3295,71 @@ async function arAging(env, url) {
   return json({ ok: true, as_of: new Date(now).toISOString().slice(0, 10), total_open: +totalOpen.toFixed(2), open_count: list.length, buckets, by_customer: customers, invoices: list.slice(0, 100) });
 }
 
+// GET /ar/invoices — READ-ONLY invoice status board, straight from QuickBooks. Solves the thing
+// QuickBooks' own UI can't filter: invoices Brett CREATED but never SENT (they sit). QuickBooks
+// exposes EmailStatus (NotSet / NeedToSend / EmailSent) — anything other than EmailSent = not yet
+// sent. Classifies every open/recent invoice into: not_sent → sent → overdue → paid, with
+// days_overdue so Brett can time reminders and not pester a customer prematurely. No writes.
+// NOTE: QuickBooks does NOT expose a "Viewed" state via the API (UI-only), so it is deliberately
+// not surfaced here — "Sent" is the reliable signal Brett asked for.
+// PURE — classify one QuickBooks invoice into the Send & Track board. Kept pure + exported-by-name
+// so it can be unit-tested without QuickBooks. Rules (in order): paid (balance≈0) wins; then a
+// not-yet-emailed invoice (EmailStatus ≠ 'EmailSent' — covers NotSet AND NeedToSend) is 'not_sent';
+// an emailed-but-unpaid invoice past its due date is 'overdue' (with days_overdue); otherwise 'sent'.
+function classifyArInvoice(inv, now) {
+  const bal = Number(inv.Balance) || 0;
+  const total = Number(inv.TotalAmt) || 0;
+  const cust = (inv.CustomerRef && (inv.CustomerRef.name || inv.CustomerRef.value)) || 'Unknown';
+  const email = (inv.BillEmail && inv.BillEmail.Address) || '';
+  const due = inv.DueDate || inv.TxnDate || '';
+  const dueT = Date.parse(due);
+  const daysOverdue = isNaN(dueT) ? 0 : Math.max(0, Math.floor((now - dueT) / 86400000));
+  const isSent = String(inv.EmailStatus || '') === 'EmailSent';
+  const row = {
+    id: String(inv.Id), doc: inv.DocNumber || '', customer: cust,
+    total: +total.toFixed(2), balance: +bal.toFixed(2), email, has_email: !!email,
+    txn_date: inv.TxnDate || '', due_date: inv.DueDate || '', days_overdue: daysOverdue,
+    email_status: inv.EmailStatus || '', sent: isSent,
+  };
+  if (bal <= 0.005) row.status = 'paid';
+  else if (!isSent) row.status = 'not_sent';
+  else if (daysOverdue > 0) row.status = 'overdue';
+  else row.status = 'sent';
+  return row;
+}
+
+async function arInvoices(env, url) {
+  const token = await qbAccessToken(env);
+  // SELECT * (not enumerated columns): BillEmail is a complex field that can fault when named
+  // explicitly in QBO's query language, and we need EmailStatus + BillEmail + balances together.
+  // Pull recent invoices and classify in code (QBO's WHERE on Balance is finicky); 1000 = Brett's scale.
+  const q = "SELECT * FROM Invoice ORDERBY TxnDate DESC MAXRESULTS 1000";
+  const r = await qbApi(env, `query?query=${encodeURIComponent(q)}&minorversion=73`, 'GET', null, token);
+  // A QB Fault (throttle/5xx/bad query) still returns JSON — treat it as failure, never as "all
+  // sent / nothing owed" on a money view. Throw so the caller falls back instead of showing false zeros.
+  if (r && r.Fault) throw new Error('QB query fault: ' + JSON.stringify(r.Fault).slice(0, 200));
+  const invs = (r && r.QueryResponse && r.QueryResponse.Invoice) || [];
+  const now = Date.now();
+  const not_sent = [], sent = [], overdue = [], paid = [];
+  for (const inv of invs) {
+    const row = classifyArInvoice(inv, now);
+    if (row.status === 'paid') paid.push(row);
+    else if (row.status === 'not_sent') not_sent.push(row);
+    else if (row.status === 'overdue') overdue.push(row);
+    else sent.push(row);
+  }
+  // Not-sent first (the pile to clear), then most-overdue first for reminder timing.
+  not_sent.sort((a, b) => Date.parse(a.txn_date || 0) - Date.parse(b.txn_date || 0));
+  overdue.sort((a, b) => b.days_overdue - a.days_overdue);
+  sent.sort((a, b) => Date.parse(a.txn_date || 0) - Date.parse(b.txn_date || 0));
+  return json({
+    ok: true, as_of: new Date(now).toISOString().slice(0, 10),
+    counts: { not_sent: not_sent.length, sent: sent.length, overdue: overdue.length, paid: paid.length },
+    not_sent, sent, overdue,
+    paid: paid.slice(0, 50),
+  });
+}
+
 // POST /ar/remind {invoice_ids:[...], preview?} — re-send the QuickBooks invoice email (with
 // pay link) to the billing address on file, for aging invoices. MONEY/CUSTOMER-FACING, so:
 //   • preview:true returns exactly who WOULD be emailed (re-checked balances + email) and sends
@@ -5413,6 +5480,15 @@ async function qbVendorReconcile(env, body) {
   try {
     const [vendors, bills, workorders, properties] = await fetchTabs(env, ['Vendors', 'Vendor_Bills', 'Work_Orders', 'Properties']);
     let units = []; try { units = await fetchTab(env, 'Units'); } catch (e) { units = []; }
+    // Invoice_Review carries the authoritative per-job QB_In_House flag (set at send time when the
+    // vendor was in-house = Brett's own work). A best-effort read: if it's unavailable we simply
+    // fall back to the vendor-level In_House flag below, never crashing the reconcile.
+    let invReview = []; try { invReview = await fetchTab(env, 'Invoice_Review'); } catch (e) { invReview = []; }
+    const irInHouseByWO = {};
+    for (const ir of (invReview || [])) {
+      const wo = String(ir.WO_ID || ''); if (!wo) continue;
+      if (String(ir.QB_In_House || '').toUpperCase() === 'TRUE') irInHouseByWO[wo] = true;
+    }
     const activeBills = (bills || []).filter(b => b.Active !== 'FALSE');
     const woById = {}; for (const w of (workorders || [])) woById[String(w.ID)] = w;
     const propById = {}; for (const p of (properties || [])) propById[String(p.ID)] = p;
@@ -5446,6 +5522,9 @@ async function qbVendorReconcile(env, body) {
     const vname = (vendorList.find(v => v.id === vid) || {}).name || ('V-' + vid);
     const vrow = (vendors || []).find(v => String(v.ID || '') === vid);
     const qboVendorId = vrow ? String(vrow.QBO_Vendor_ID || '').trim() : '';
+    // In-house = Brett IS the vendor, so there is no payable to reconcile (the customer's payment
+    // settles it). Vendor-level flag, used only as a fallback to the per-job QB_In_House signal.
+    const vendorInHouse = vrow ? String(vrow.In_House || '').toUpperCase() === 'TRUE' : false;
     const myBills = activeBills.filter(b => String(b.Vendor_ID || '') === vid);
     const billIds = myBills.map(b => (b.QB_Bill_ID || '').trim()).filter(Boolean);
     const invIds  = myBills.map(b => (b.QB_Invoice_ID || '').trim()).filter(Boolean);
@@ -5458,7 +5537,7 @@ async function qbVendorReconcile(env, body) {
     const ageOf = d => { const t = Date.parse(d); return isNaN(t) ? null : Math.max(0, Math.floor((now - t) / 86400000)); };
 
     let owedToVendor = 0, collectedNotPaid = 0, oldestOpen = 0;
-    const rows = myBills.map(b => {
+    const allRows = myBills.map(b => {
       const qbBillId = (b.QB_Bill_ID || '').trim();
       const qbInvId  = (b.QB_Invoice_ID || '').trim();
       const qbBill = qbBillId ? billById[qbBillId] : null;
@@ -5470,7 +5549,6 @@ async function qbVendorReconcile(env, body) {
       const invCust = (qbInv && qbInv.CustomerRef && qbInv.CustomerRef.name) || '';
       const dateStr = (qbBill && qbBill.TxnDate) || (qbInv && qbInv.TxnDate) || b.Created_Date || '';
       const age = ageOf(dateStr);
-      const { status, action } = qbReconcileStatus(!!qbBillId, !!qbBill, billBal, !!qbInvId, invBal);
 
       // Job context from the work order behind the bill, so the row says WHAT and WHERE, not
       // just a WO number: the property address, the unit, the trade, and the job description.
@@ -5482,11 +5560,25 @@ async function qbVendorReconcile(env, body) {
       const description = wo ? (wo.Description || '') : '';
       const trade = wo ? (wo.Trade || '') : '';
 
-      if (billBal !== null && billBal > 0.005) owedToVendor += billBal;
-      if (action) collectedNotPaid += (billBal || 0);
-      // "Open" for age = a real unpaid QB bill, a no-QB-bill row, or a broken link worth chasing.
-      const stillOpen = (!!qbBillId && !qbBill) || (billBal !== null && billBal > 0.005) || !qbBillId;
-      if (stillOpen && age !== null && age > oldestOpen) oldestOpen = age;
+      // In-house = Brett is the vendor, so there is nothing to pay out — the customer's payment IS
+      // the settlement, and no vendor payable is ever entered. These must NOT sit on the reconcile
+      // as "no QB bill" noise. SAFETY: a row with a REAL open QuickBooks bill is never treated as
+      // in-house (that is genuine money owed) — so a mislabelled vendor flag can't hide a payable.
+      const hasRealOpenBill = !!qbBill && billBal !== null && billBal > 0.005;
+      const inHouse = !hasRealOpenBill && (irInHouseByWO[String(b.WO_ID || '')] === true || (vendorInHouse && !qbBillId));
+
+      const { status, action } = inHouse
+        ? { status: 'In-house — no payable (settled by your invoice)', action: false }
+        : qbReconcileStatus(!!qbBillId, !!qbBill, billBal, !!qbInvId, invBal);
+
+      // In-house rows never count toward money owed, collected-not-paid, or the oldest-open age.
+      if (!inHouse) {
+        if (billBal !== null && billBal > 0.005) owedToVendor += billBal;
+        if (action) collectedNotPaid += (billBal || 0);
+        // "Open" for age = a real unpaid QB bill, a no-QB-bill row, or a broken link worth chasing.
+        const stillOpen = (!!qbBillId && !qbBill) || (billBal !== null && billBal > 0.005) || !qbBillId;
+        if (stillOpen && age !== null && age > oldestOpen) oldestOpen = age;
+      }
 
       return {
         bill_row_id: String(b.ID || ''), wo_id: String(b.WO_ID || ''), customer: invCust,
@@ -5494,9 +5586,13 @@ async function qbVendorReconcile(env, body) {
         qb_bill_id: qbBillId, qb_invoice_id: qbInvId, invoice_doc: (qbInv && qbInv.DocNumber) || '',
         bill_total: +billTot.toFixed(2), bill_balance: billBal === null ? null : +billBal.toFixed(2),
         inv_total: +invTot.toFixed(2), inv_balance: invBal === null ? null : +invBal.toFixed(2),
-        date: dateStr, age_days: age, status, action,
+        date: dateStr, age_days: age, status, action, in_house: inHouse,
       };
     });
+    // Keep in-house jobs OFF the main reconcile list (Brett's ask). They ride along in a separate
+    // bucket so the page can show a muted "N in-house jobs, nothing to pay" line if he wants them.
+    const rows = allRows.filter(r => !r.in_house);
+    const inHouseRows = allRows.filter(r => r.in_house);
     rows.sort((a, b) => (b.action ? 1 : 0) - (a.action ? 1 : 0) || (b.age_days || 0) - (a.age_days || 0));
 
     // The LIVE QuickBooks side — the "transaction report by vendor" Brett can't pull on mobile.
@@ -5539,14 +5635,15 @@ async function qbVendorReconcile(env, body) {
     }
 
     return json({
-      ok: true, mode: 'vendor', vendor: { id: vid, name: vname }, vendors: vendorList,
+      ok: true, mode: 'vendor', vendor: { id: vid, name: vname, in_house: vendorInHouse }, vendors: vendorList,
       summary: {
         bills: rows.length,
         owed_to_vendor: +owedToVendor.toFixed(2),
         collected_not_paid: +collectedNotPaid.toFixed(2),
         oldest_open_days: oldestOpen,
+        in_house_count: inHouseRows.length,
       },
-      rows, qb,
+      rows, in_house_rows: inHouseRows, qb,
     });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
@@ -6164,6 +6261,138 @@ async function qbRecordPaidBill(env, body) {
     return json({ ok: true, bill_id: String(bill.Id), bill_created: billCreated,
       bill_reused: !billCreated, payment_id: paymentId, paid, doc_number: docNum });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ── B-217A: Pay vendor bills from the Hub (GATED money-write) ──────────────────────────────────
+// Pays EXISTING QuickBooks vendor bills, preview-first, behind a SECOND factor on top of the admin
+// token: a passphrase Brett types as the final step, verified SERVER-SIDE against the Cloudflare
+// secret PAY_AUTH_CODE. The literal is never in the repo/HTML/JS — only in the Worker secret and
+// Brett's head (spec: brett332/data payment-auth-interim.md). Dormant until the secret is set.
+const PAY_AUTH_LOG_TAB  = 'Pay_Auth_Log';
+const PAY_AUTH_LOG_COLS = ['ID','Timestamp','Result','Detail','Amount','By'];
+const PAY_LOCK_WINDOW_MS = 15 * 60 * 1000;   // look back 15 minutes…
+const PAY_LOCK_MAX_BAD   = 5;                 // …and lock out after 5 wrong codes in that window.
+
+// PURE — the passphrase compare. Case-insensitive, trimmed, constant shape. Empty secret or empty
+// submission never matches (so a not-configured Worker can't be "unlocked" with a blank code).
+function payAuthOk(submitted, secret) {
+  const a = String(submitted == null ? '' : submitted).trim().toLowerCase();
+  const b = String(secret == null ? '' : secret).trim().toLowerCase();
+  return a.length > 0 && b.length > 0 && a === b;
+}
+
+// PURE — count wrong-code attempts inside the lock window, to decide lock-out. Reads the audit rows.
+function payRecentBadCount(logRows, now, windowMs) {
+  const cutoff = now - windowMs;
+  let n = 0;
+  for (const r of (logRows || [])) {
+    if (String(r.Result || '') !== 'bad_code') continue;
+    const t = Date.parse(r.Timestamp || '');
+    if (!isNaN(t) && t >= cutoff) n++;
+  }
+  return n;
+}
+
+async function payAuthLog(env, result, detail, amount, by) {
+  try {
+    await ensureTab(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
+    await ensureColumns(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
+    await addRow(env, PAY_AUTH_LOG_TAB, { Timestamp: new Date().toISOString(), Result: result, Detail: String(detail || '').slice(0, 300), Amount: amount != null ? String(amount) : '', By: String(by || 'hub') });
+  } catch (_) { /* audit is best-effort; never let logging block or fake a payment result */ }
+}
+
+// POST /qb/pay-bills { bill_ids:[qbBillId,...], pay_account_id, passphrase, preview?, by? }
+// preview:true → NO passphrase needed; returns exactly which bills would be paid (live balances),
+// the vendor, amounts, and the pay-from account, and sends NOTHING. Real pay requires the passphrase.
+async function qbPayBills(env, body) {
+  body = body || {};
+  const billIds = Array.isArray(body.bill_ids) ? body.bill_ids.map(String).map(s => s.trim()).filter(Boolean) : [];
+  const payAcct = String(body.pay_account_id || '').trim();
+  const preview = body.preview === true || body.preview === '1';
+  const by = String(body.by || 'who-to-pay').slice(0, 40);
+  if (!billIds.length) return json({ ok: false, error: 'Select at least one bill to pay.' }, 400);
+  if (billIds.length > 50) return json({ ok: false, error: 'Too many bills at once (max 50).' }, 400);
+
+  // Dormant until Brett sets the Cloudflare secret. Fail loud so the UI can say why.
+  if (!preview && !String(env.PAY_AUTH_CODE || '').trim())
+    return json({ ok: false, error: 'Bill pay is not turned on yet — set the Cloudflare secret PAY_AUTH_CODE first.' }, 503);
+
+  const token = await qbAccessToken(env);
+
+  // Re-fetch every bill from QuickBooks (source of truth): current VendorRef + Balance. Never trust
+  // the Hub's cached amount for a money-write, and never pay a bill that is already settled.
+  const bills = [];
+  for (const id of billIds) {
+    try {
+      const r = await qbApi(env, `bill/${encodeURIComponent(id)}?minorversion=73`, 'GET', null, token);
+      const b = r && r.Bill;
+      if (!b || !b.Id) { bills.push({ id, will_pay: false, reason: 'not found in QuickBooks' }); continue; }
+      const bal = Number(b.Balance != null ? b.Balance : b.TotalAmt) || 0;
+      const vId = (b.VendorRef && b.VendorRef.value) || '';
+      const vName = (b.VendorRef && b.VendorRef.name) || '';
+      if (bal <= 0.005) { bills.push({ id, doc: b.DocNumber || '', vendor: vName, vendor_id: vId, balance: 0, will_pay: false, reason: 'already paid' }); continue; }
+      if (!vId) { bills.push({ id, doc: b.DocNumber || '', balance: +bal.toFixed(2), will_pay: false, reason: 'no vendor on the bill' }); continue; }
+      bills.push({ id, doc: b.DocNumber || '', vendor: vName, vendor_id: vId, balance: +bal.toFixed(2), will_pay: true });
+    } catch (e) { bills.push({ id, will_pay: false, reason: 'lookup failed' }); }
+  }
+  const payable = bills.filter(b => b.will_pay);
+  const total = +payable.reduce((s, b) => s + (b.balance || 0), 0).toFixed(2);
+
+  // Resolve the pay-from account name for the preview so Brett sees WHERE the money leaves.
+  let payAcctName = '';
+  if (payAcct) {
+    try {
+      const ar = await qbApi(env, `account/${encodeURIComponent(payAcct)}?minorversion=73`, 'GET', null, token);
+      payAcctName = (ar && ar.Account && ar.Account.Name) || '';
+    } catch (_) { /* name is cosmetic for the preview */ }
+  }
+
+  if (preview) {
+    return json({ ok: true, preview: true, pay_account_id: payAcct, pay_account_name: payAcctName,
+      count: bills.length, to_pay: payable.length, total, bills });
+  }
+
+  // ── Real payment path ── second factor + lock-out ──
+  if (!payAcct) return json({ ok: false, error: 'Pick the account the money pays FROM before paying.' }, 400);
+  if (!payable.length) return json({ ok: false, error: 'None of the selected bills are payable (already paid or missing).', bills }, 400);
+
+  // Lock-out: too many wrong codes recently ⇒ refuse even a correct one.
+  let logRows = []; try { logRows = await fetchTab(env, PAY_AUTH_LOG_TAB); } catch (_) { logRows = []; }
+  const badCount = payRecentBadCount(logRows, Date.now(), PAY_LOCK_WINDOW_MS);
+  if (badCount >= PAY_LOCK_MAX_BAD) {
+    await payAuthLog(env, 'locked', `locked after ${badCount} bad attempts`, total, by);
+    return json({ ok: false, locked: true, error: 'Too many wrong codes. Locked for a few minutes — try again shortly.' }, 429);
+  }
+  if (!payAuthOk(body.passphrase, env.PAY_AUTH_CODE)) {
+    await payAuthLog(env, 'bad_code', `${payable.length} bill(s)`, total, by);
+    return json({ ok: false, bad_code: true, error: 'That code did not match. The payment was not made.' }, 401);
+  }
+
+  // Authorized. Pay, grouped by vendor — one BillPayment per vendor covers its selected bills.
+  const byVendor = {};
+  for (const b of payable) { (byVendor[b.vendor_id] = byVendor[b.vendor_id] || []).push(b); }
+  const results = [];
+  for (const [vendorId, vbills] of Object.entries(byVendor)) {
+    const amt = +vbills.reduce((s, b) => s + (b.balance || 0), 0).toFixed(2);
+    const payload = {
+      VendorRef: { value: vendorId },
+      TotalAmt: amt,
+      PayType: 'Check',
+      CheckPayment: { BankAccountRef: { value: payAcct } },
+      TxnDate: new Date().toISOString().split('T')[0],
+      Line: vbills.map(b => ({ Amount: b.balance, LinkedTxn: [{ TxnId: String(b.id), TxnType: 'Bill' }] })),
+    };
+    try {
+      const pr = await qbApi(env, 'billpayment?minorversion=73', 'POST', payload, token);
+      const pay = pr && pr.BillPayment;
+      if (!pay || !pay.Id) { results.push({ vendor_id: vendorId, vendor: vbills[0].vendor, paid: false, amount: amt, error: (qbFault(pr) || 'unknown error') }); continue; }
+      results.push({ vendor_id: vendorId, vendor: vbills[0].vendor, paid: true, amount: amt, payment_id: String(pay.Id), bill_ids: vbills.map(b => b.id) });
+    } catch (e) { results.push({ vendor_id: vendorId, vendor: vbills[0].vendor, paid: false, amount: amt, error: String((e && e.message) || e).slice(0, 150) }); }
+  }
+  const paidAmt = +results.filter(r => r.paid).reduce((s, r) => s + r.amount, 0).toFixed(2);
+  const allPaid = results.every(r => r.paid);
+  await payAuthLog(env, allPaid ? 'paid' : 'partial', results.map(r => (r.vendor || r.vendor_id) + (r.paid ? ' ✓' : ' ✗')).join('; '), paidAmt, by);
+  return json({ ok: true, paid: allPaid, paid_total: paidAmt, vendors_paid: results.filter(r => r.paid).length, results });
 }
 
 // POST /qb/clear-ir-bill  { ir_id }

@@ -1,3 +1,14 @@
+# WHERE THINGS STAND — Aug 12, 2026
+
+## ✅ Payflow trio: Send & Track + Pay vendor bills + reconcile excludes in-house (Aug 12, built + tested + validated; NOT yet pushed/live)
+Three things Brett asked for in one session, all built against the live code, all with tests, all
+ridgeco-validate PASS (bill-pay PASS-WITH-NOTES, 2 🟡 hardening only). **Held together per Brett; ready to push.** FEATURE_LOG rules 80–82.
+1. **Invoice Send & Track (rule 81)** — the fix for "invoices I created but never sent just sit, and QB can't filter them." `qbSendInvoice` only ever CREATED the invoice in QB (never emailed it), so every Hub invoice sat as EmailStatus `NeedToSend`. New read-only `GET /ar/invoices` classifies every invoice **not_sent → sent → overdue (days_overdue) → paid**; a "📤 Send & Track" board at the top of **Review Bills** lists the not-sent pile first with one-tap **Send** (reuses `/ar/remind`, preview-first → confirm → QB emails it). "Viewed" is intentionally omitted — QB doesn't expose it via API; Brett only needs Sent/Paid/Overdue.
+2. **Pay vendor bills from the Hub (rule 80, B-217A)** — Who-to-Pay rows in `PAY THE VENDOR` get checkboxes + a bank-account picker; **preview-first** (live balance re-fetch, skips paid) → confirm → **passphrase** (verified server-side vs Cloudflare secret `PAY_AUTH_CODE`, lock-out after 5 bad tries) → one `BillPayment` per vendor. **DORMANT until Brett sets `PAY_AUTH_CODE`** (real pay returns 503 until then). First live pay = a supervised single-bill tap.
+3. **Reconcile excludes in-house (rule 82)** — you-as-vendor / pass-through jobs have no payable (the customer's payment settles it), so they're kept OFF the Vendor Reconciliation list and its money totals (with a muted "N in-house jobs" line). SAFETY: a row with a real open QB bill is never hidden.
+
+**Brett's go-live list:** (a) set Cloudflare secret `PAY_AUTH_CODE` before using bill-pay; (b) confirm your own vendor record is flagged In-house (or that pass-through jobs carry `QB_In_House`) so reconcile hides them; (c) **rotate the classic PAT** you pasted into chat (still exposed — revoke + reissue).
+
 # WHERE THINGS STAND — Aug 11, 2026
 
 ## ✅ WO Room/Area field + bedroom-level keys — SHIPPED (Aug 11, Worker `2026-08-11.1`; index.html + vendor.html + `Work_Orders.Room`)

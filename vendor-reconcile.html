@@ -52,7 +52,8 @@
   Read-only. Pick a vendor to see every bill of theirs, joined to live QuickBooks: what's still
   owed to them, whether the owner has paid us on the matching invoice, and how old each is.
   <span class="pill act">COLLECTED — pay vendor</span> means you were paid but the vendor wasn't —
-  those are the ones to settle. Nothing here writes or sends anything.
+  those are the ones to settle. In-house jobs (where you're the vendor) have no payable, so they're
+  kept off this list — settled by the customer's payment. Nothing here writes or sends anything.
 </p>
 
 <div class="section">
@@ -155,8 +156,31 @@ function render(res){
   document.getElementById('summary-section').style.display='block';
 
   const rows = res.rows || [];
+  const inHouseRows = res.in_house_rows || [];
+  // In-house jobs = Brett is the vendor, so there's no payable — they're kept OFF the reconcile.
+  // A muted, collapsed line shows the count and can expand, so nothing is hidden without a trace.
+  const inHouseNote = inHouseRows.length
+    ? '<div class="empty" style="text-align:left;cursor:pointer" onclick="var b=document.getElementById(\'inhouse-list\');b.style.display=b.style.display===\'none\'?\'block\':\'none\'">'+
+        '🏠 '+inHouseRows.length+' in-house job'+(inHouseRows.length>1?'s':'')+' — nothing to pay (settled by your invoice). Tap to '+'show/hide.'+
+      '</div><div id="inhouse-list" style="display:none;opacity:.6;margin-top:8px">'+
+        inHouseRows.map(r => {
+          const w = esc(r.property || r.customer || 'Unknown property') + (r.unit ? ' · Unit '+esc(r.unit) : '');
+          const d = [r.trade, (r.description||'').trim()].filter(Boolean).map(esc).join(' — ');
+          return '<div class="jobcard"><div class="jc-top"><div class="jc-title">📍 '+w+'</div>'+
+            '<span class="pill">In-house</span></div>'+(d?'<div class="jc-desc">'+d+'</div>':'')+
+            '<div class="jc-foot">'+(r.wo_id?'<a href="index.html?wo='+encodeURIComponent(r.wo_id)+'" target="_blank" rel="noopener">Open WO '+esc(r.wo_id)+' →</a>':'<span>No work order</span>')+
+            '<span>invoice '+money(r.inv_total)+(r.invoice_doc?' #'+esc(r.invoice_doc):'')+'</span></div></div>';
+        }).join('')+
+      '</div>'
+    : '';
+
   const box = document.getElementById('rows');
-  if (!rows.length){ box.innerHTML = '<div class="empty">No bills recorded for this vendor.</div>'; document.getElementById('rows-section').style.display='block'; return; }
+  if (!rows.length){
+    box.innerHTML = (inHouseRows.length
+        ? '<div class="empty">Every job for this vendor is in-house — nothing to reconcile.</div>'+inHouseNote
+        : '<div class="empty">No bills recorded for this vendor.</div>');
+    document.getElementById('rows-section').style.display='block'; return;
+  }
   let html = '';
   rows.forEach(r => {
     const where = esc(r.property || r.customer || 'Unknown property') + (r.unit ? ' · Unit '+esc(r.unit) : '');
@@ -175,7 +199,7 @@ function render(res){
       '</div>'+
     '</div>';
   });
-  box.innerHTML = html;
+  box.innerHTML = html + inHouseNote;
   document.getElementById('rows-section').style.display='block';
   renderQB(res.qb);
   // Offer the reconcile/link step whenever this vendor is linked to QuickBooks.
