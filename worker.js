@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-12.3';
+const BUILD_VERSION = '2026-08-12.4';
 
 export default {
   async fetch(request, env) {
@@ -885,7 +885,10 @@ const RECEIPT_STOP = new Set(['the','and','for','with','apt','ste','unit','stree
 // WO's description/trade. Only OPEN work orders are returned (a receipt can only be billed onto work
 // that hasn't been invoiced yet); each carries its status so the caller can flag Invoiced/Paid.
 function rankReceiptWOs(receipt, wos) {
-  const blob = _rcNorm((Array.isArray(receipt.items) ? receipt.items.join(' ') : (receipt.items||'')) + ' ' + (receipt.po||''));
+  // Rank on the ITEM keywords only — NOT the PO/address. The property is already resolved, so
+  // letting address tokens ("3014","calvert") score would wrongly favor whichever WO's description
+  // repeats the address over the WO that actually matches the materials (caught in live testing).
+  const blob = _rcNorm(Array.isArray(receipt.items) ? receipt.items.join(' ') : (receipt.items||''));
   const kw = Array.from(new Set(blob.split(' ').filter(w => w.length >= 3 && !RECEIPT_STOP.has(w))));
   return (wos || []).map(w => {
     const desc = _rcNorm((w.Description||'') + ' ' + (w.Trade||''));
