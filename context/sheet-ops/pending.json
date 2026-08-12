@@ -1,0 +1,68 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Aug 12 2026 — file Jamuna Yalamanchili (new client, Owner 12) action items surfaced from the SMS mining. (1) Log 1305 N Calvert (Prop 71) electrical work order WO-1123 (knob-and-tube / electrical repairs; owner collecting multiple licensed-electrician estimates; Brett coordinating + supervising; targeted 8/17 for 2nd flr + part of 3rd; 3rd-flr tenant 'Gus' to coordinate; tenants withholding rent). (2) Register 931 Saint Paul St in Trash_Properties (recurring trash Jamuna asked to set up) — rate, collection/set-out day, and QB customer left blank pending confirmation (owner not yet a QuickBooks customer). (3) Client/onboarding Note #2 with all open items. NOTE: no vendor cost, markup, or door/access codes are written here (public repo) — codes go to the private data repo; the $105 on WO-1097 is the owner-approved customer price only. Units for 931 intentionally NOT changed — holding for the owner's tenant roster (texts show one unit per floor 1-4 + basement, which doesn't match the earlier 1F/1R/2F/2R/BF/BR guess).",
+  "ops": [
+    { "type": "append_row", "tab": "Work_Orders", "row": {
+      "Vendor_Needs_Access": "auto",
+      "ID": "WO-1123",
+      "Property_ID": "71",
+      "Type": "manual",
+      "Trade": "Electrical",
+      "Description": "Knob-and-tube wiring replacement / electrical repairs across units. Owner is collecting multiple licensed-electrician estimates; Brett coordinating + supervising. Brett walkthrough completed 8/6/26.",
+      "Priority": "high",
+      "Status": "In Progress",
+      "Scheduled_Date": "2026-08-17",
+      "Created_By": "admin",
+      "Created_Date": "2026-08-12",
+      "Notes": "Owner: Jamuna (Owner 12). Repairs targeted Mon 8/17 for 2nd floor + part of 3rd. 3rd-floor tenant = 'Gus' — coordinate his electrical scope directly (in online class until ~1pm, available after). Tenants have been withholding rent pending resolution — treat as priority. 4th-floor tenant out of town (no access yet). Brett's own electrician too booked for the full job; reviewing outside estimates with owner.",
+      "Property_Address": "1305 N Calvert St",
+      "Tenant_Visible": "FALSE",
+      "Tenant_Notify_Created": "FALSE",
+      "Tenant_Notify_Updates": "FALSE",
+      "Vendor_SMS_Sent": "FALSE",
+      "Tenant_SMS_Sent": "FALSE",
+      "Owner_Notified": "FALSE"
+    } },
+
+    { "type": "append_row", "tab": "Trash_Properties", "row": {
+      "ID": "6",
+      "Label": "931 SAINT PAUL ST",
+      "QBO_Customer_ID": "",
+      "Customer_Name": "931 Saint Paul St",
+      "QBO_Item_ID": "",
+      "Item_Name": "",
+      "Flat_Rate": "",
+      "Visits_Per_Week": "2",
+      "Nudge_Day": "",
+      "Grace_Days": "1",
+      "Active": "TRUE",
+      "Created_Date": "2026-08-12"
+    } },
+
+    { "type": "append_row", "tab": "Notes", "row": {
+      "ID": "2",
+      "Date": "2026-08-12",
+      "Category": "Client / Onboarding",
+      "Subject": "New client Jamuna Yalamanchili — 931 St Paul + 1305 N Calvert — open items",
+      "Body": "Introduced by Tom Fair (Ben Frederick) on 7/31/26. Owner of multiple Mt Vernon / Charles Village multifamily buildings incl. 931 Saint Paul St (Prop 70) and 1305 N Calvert St (Prop 71); self-manages from Gaithersburg; needs local contractor coordination + recurring trash at 931. OPEN ITEMS: (1) BILLING BLOCKER — 931 yard cleanup is priced + approved (WO-1097, owner-approved $105) but cannot be invoiced because Jamuna is not yet a QuickBooks customer; set up QB customers for Jamuna (both properties) then send. (2) 931 rodent citation Unit 2F + common areas — correct by 8/31 (see Note #1); needs deep clean + coordination + inspector extension. (3) 1305 N Calvert knob-and-tube electrical — see WO-1123; repairs targeted 8/17 (2nd flr + part 3rd); 3rd-flr tenant 'Gus' to coordinate; tenants withholding rent. (4) UPSELL (owner interested): electronic front-door locks + master-key system across her buildings. (5) Recurring trash at 931 — registered in Trash_Properties; confirm rate, collection/set-out day, and QB customer. Door/access codes for 931 are stored in the private data repo (not here). Tenant roster for both buildings still needed from owner (email request drafted).",
+      "Property_ID": "70",
+      "Property_Address": "931 Saint Paul St",
+      "Unit_ID": "",
+      "Unit_Label": "",
+      "WO_ID": "WO-1123",
+      "Owner_ID": "12",
+      "Vendor_ID": "",
+      "Tenant_ID": "",
+      "Contact_Name": "Jamuna Yalamanchili (Owner 12)",
+      "Contact_Phone": "",
+      "Contact_Email": "",
+      "Follow_Up_Date": "2026-08-17",
+      "Status": "Open",
+      "Author_Role": "admin",
+      "Shared_With": "",
+      "Source": "SMS thread mining + Brett, Aug 2026",
+      "Created_Date": "2026-08-12",
+      "Active": "TRUE"
+    } }
+  ]
+}
