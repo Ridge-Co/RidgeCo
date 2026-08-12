@@ -1,0 +1,8 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Merge duplicate James at 20 E Eager Apt 1. Tenant 27 IS James (already linked to unit 35 / Apt 1) but had the wrong phone (4436037450 — actually Kelsey's Apt 3 number). Per Brett, James's correct number is 2257217547. Fix: set tenant 27 Phone = 2257217547, and retire the duplicate tenant 98 (added earlier this session) by setting Active=FALSE. Unit 35 stays linked to tenant 27.",
+  "ops": [
+    { "type": "update_cell_by_id", "tab": "Tenants", "id": "27", "fields": { "Phone": "2257217547" } },
+    { "type": "update_cell_by_id", "tab": "Tenants", "id": "98", "fields": { "Active": "FALSE", "First_Name": "James (duplicate of #27 — retired)" } }
+  ]
+}
