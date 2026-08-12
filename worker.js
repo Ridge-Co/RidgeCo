@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-12.2';
+const BUILD_VERSION = '2026-08-12.3';
 
 export default {
   async fetch(request, env) {
@@ -195,6 +195,7 @@ export default {
         if (path === '/time-entry/add')           return await addTimeEntry(env, body);
         if (path === '/time-entry/delete')        return await updateRow(env, 'Time_Entries', body.id, { Active: 'FALSE' });
         if (path === '/receipt/add')              return await addReceipt(env, body);
+        if (path === '/receipt/suggest')          return await receiptSuggest(env, body);
         if (path === '/receipt/delete')           return await updateRow(env, 'Receipts', body.id, { Active: 'FALSE' });
         if (path === '/tenant/move-out')          return await processMoveOut(env, body);
         if (path === '/assign')                   return await assignVendor(env, body);
@@ -850,6 +851,98 @@ async function addReceipt(env, body) {
 
   await addRow(env, 'Receipts', { WO_ID: wo_id, Amount: amt.toFixed(2), Description: description||'', Store: store||'', Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''), Role: role||'hub', Created_Date: new Date().toISOString(), Active: 'TRUE' });
   return json({ success: true, amount: amt.toFixed(2) });
+}
+
+// ── RECEIPT RECONCILER (CAP-002) — deterministic matching engine, ZERO AI ──────────────────────
+// The token-saving core of the receipt pipeline. Given a receipt's already-extracted fields (PO,
+// total, date, store, items), it decides — with pure code, no model call — where the receipt
+// belongs and whether it's safe to bill: exclude company/customer-paid, resolve the property from
+// the PO, rank that property's OPEN work orders by keyword overlap, and raise duplicate /
+// already-invoiced guards. READ-ONLY; suggests, never writes. The only AI in the whole pipeline is
+// the one cheap per-image OCR (receiptExtract) that produces this input.
+function _rcNorm(s){ return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
+
+// PURE — resolve the property a receipt's PO/handwritten note points to, by token overlap on the
+// street address. A matched house-number is weighted double (it disambiguates same-street units).
+// Returns null below a confidence floor so an unmatched receipt is flagged, never mis-filed.
+function matchReceiptProperty(po, properties) {
+  const n = _rcNorm(po); if (!n) return null;
+  const nt = n.split(' ');
+  let best = null, bestScore = 0;
+  for (const p of (properties || [])) {
+    const a = _rcNorm(p.Address); if (!a) continue;
+    const at = new Set(a.split(' '));
+    let sc = 0; for (const t of nt) { if (t.length > 1 && at.has(t)) sc += /^\d+$/.test(t) ? 2 : 1; }
+    if (sc > bestScore) { bestScore = sc; best = p; }
+  }
+  return bestScore >= 2 ? { property: best, score: bestScore } : null;
+}
+
+const RECEIPT_OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
+const RECEIPT_STOP = new Set(['the','and','for','with','apt','ste','unit','street','saint','st','ave','rd','ln','pl','n','s','e','w','2x','x']);
+
+// PURE — rank a property's work orders by keyword overlap between the receipt (items + PO) and each
+// WO's description/trade. Only OPEN work orders are returned (a receipt can only be billed onto work
+// that hasn't been invoiced yet); each carries its status so the caller can flag Invoiced/Paid.
+function rankReceiptWOs(receipt, wos) {
+  const blob = _rcNorm((Array.isArray(receipt.items) ? receipt.items.join(' ') : (receipt.items||'')) + ' ' + (receipt.po||''));
+  const kw = Array.from(new Set(blob.split(' ').filter(w => w.length >= 3 && !RECEIPT_STOP.has(w))));
+  return (wos || []).map(w => {
+    const desc = _rcNorm((w.Description||'') + ' ' + (w.Trade||''));
+    let score = 0; for (const k of kw) if (desc.indexOf(k) >= 0) score++;
+    return { id: String(w.ID), status: w.Status, trade: w.Trade||'', unit: String(w.Unit_ID||''),
+             desc: String(w.Description||'').replace(/\s+/g,' ').slice(0, 70), score,
+             open: RECEIPT_OPEN_STATUSES.includes(w.Status) };
+  }).filter(w => w.open).sort((a,b) => b.score - a.score || String(a.id).localeCompare(String(b.id)));
+}
+
+// PURE — a receipt is a DUPLICATE if the same WO already carries an active receipt with the same
+// amount, date, and store. This is the exact class of double-post we hit twice by hand today.
+function receiptIsDuplicate(receipts, woId, amount, date, store) {
+  const amt = (Number(amount)||0).toFixed(2), st = _rcNorm(store);
+  return (receipts || []).some(r => r.Active !== 'FALSE' && String(r.WO_ID) === String(woId) &&
+    (Number(r.Amount)||0).toFixed(2) === amt && String(r.Date||'') === String(date||'') && _rcNorm(r.Store) === st);
+}
+
+// POST /receipt/suggest { po, total, date, store, items, card } — READ-ONLY. Returns the
+// deterministic reconciliation for one already-extracted receipt. Admin-gated; writes nothing.
+async function receiptSuggest(env, body) {
+  body = body || {};
+  const po = String(body.po || body.po_or_property || '').trim();
+  const total = Number(body.total) || 0;
+  const date = String(body.date || '').trim();
+  const store = String(body.store || body.vendor || '').trim();
+  const items = Array.isArray(body.items) ? body.items : (body.items ? [String(body.items)] : []);
+  const card = String(body.card || body.payment_card_last4 || '').replace(/\D/g,'').slice(-4);
+
+  // Exclusions first — never propose a WO for spend that isn't customer-billable.
+  const custCards = String(env.RECEIPT_CUSTOMER_CARDS || '').split(',').map(s => s.replace(/\D/g,'').slice(-4)).filter(Boolean);
+  if (total < 0) return json({ ok: true, category: 'refund', action: 'skip', reason: 'Negative total (return/refund).', po, total });
+  if (/\bbmore\b/i.test(po) || /\bbmore\b/i.test(String(body.customer_name||''))) return json({ ok: true, category: 'company', action: 'exclude', reason: 'PO "bmore" = company expense, not customer-billable.', po, total });
+  if (card && custCards.includes(card)) return json({ ok: true, category: 'customer_paid', action: 'exclude', reason: `Paid on a customer card (…${card}).`, po, total });
+
+  try {
+    const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
+    const m = matchReceiptProperty(po, properties);
+    if (!m) return json({ ok: true, category: 'billable', action: 'need_property', reason: 'Could not resolve a property from the PO — assign manually.', po, total, store, date });
+    const pid = String(m.property.ID);
+    const propWos = (workorders || []).filter(w => String(w.Property_ID) === pid);
+    const ranked = rankReceiptWOs({ items, po }, propWos);
+    const top = ranked[0] || null;
+    const flags = [];
+    if (top && receiptIsDuplicate(receipts, top.id, total, date, store)) flags.push('duplicate_on_wo');
+    if (top && ['Invoiced','Paid','Pending Payment'].includes(top.status)) flags.push('wo_already_invoiced');
+    if (!ranked.length) flags.push('no_open_wo');
+    return json({
+      ok: true, category: 'billable',
+      action: flags.includes('duplicate_on_wo') ? 'skip_duplicate' : (top ? 'suggest' : 'need_wo'),
+      po, total, store, date,
+      property: { id: pid, address: m.property.Address, match_score: m.score },
+      suggested_wo: top ? { id: top.id, status: top.status, trade: top.trade, desc: top.desc, keyword_score: top.score } : null,
+      alternates: ranked.slice(1, 4),
+      flags,
+    });
+  } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
 }
 
 // Brett's default hourly rate for his own (hub) time when a customer has no specific rate on
