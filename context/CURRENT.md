@@ -1,5 +1,18 @@
 # WHERE THINGS STAND — Aug 13, 2026
 
+## ⚡ NEW STANDING RULE — Session Efficiency Protocol v1.0 (LOCKED Aug 13) — ✅ ALWAYS-LOAD
+Brett was hitting his daily/5-hour/weekly limits. Fix = **load light, delegate heavy reads to
+subagents, break at phase boundaries.** Read `SESSION_EFFICIENCY_PROTOCOL_v1.0.md` — it now governs
+session loading and **supersedes brett-context Step 2's "read every file."** Highlights: (1) LIGHT LOAD
+default — minimal always-set only, everything else task-scoped/on-demand; grep BACKLOG/CAPTURE, never
+full-read. (2) Delegate mechanical reads/searches to cheap subagents (Brett's "automate the model" for
+sessions — he trades ~30–60s latency for big burn savings). (3) **Checkpoint-and-resume:** at ~15–20
+turns or a phase boundary, STOP → save `SESSION_STATE.md` → tell Brett to open a new chat with
+`resume ridgeco`. (4) Classify the task before loading (brett-flow Step 0). (5) Brett habits: PAT +
+`load context` + ask in ONE message is correct (don't split); front-load the whole task; new chat per
+new issue; prefix quick lookups (`quick:`). This is the SESSIONS meter; **B-127 is the separate APP
+API meter** — don't conflate.
+
 ## ✅ Receipt Reconciler Phase 2 SHIPPED — daily Drive scan + confirm-first UI (Aug 13, `2026-08-13.1`, live). 🔴 One manual step still needed to actually run.
 Closes the loop opened by Phase 1 (rule 84) per Brett's explicit "queue up phase 2" instruction. Full pipeline is built, deployed, and unit-tested (`test/receipt-suggest-core.test.mjs`, 11 assertions; full suite green, 25 files): a daily sweep (riding the 11:00 UTC digest cron) of the real **"Receipts and Invoices"** Drive folder → one cheap OCR call per new file (now also extracting line items + card last-4) → the zero-AI matching engine → a `Receipt_Recon_Queue` row Brett reviews on the new **`receipt-reconciler.html`** page (linked from 🧰 TOOLS) and taps **Confirm** (posts the real `Receipts` row via the same `addReceipt()` every other entry path uses) or **Skip**. Nothing bills itself. FEATURE_LOG rule 85 has the full breakdown.
 
@@ -263,6 +276,7 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 |---|---|---|---|
 | Brett_Context_Document_v1.12.md | v1.12 | ✅ ALWAYS | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-032 — adds PAT-031 route+instrument, PAT-032 continuous review), Session 5 log |
 | Brett_Cowork_Best_Practices_v1.4.md | **v1.4** | ✅ ALWAYS | Session workflow, common mistakes, how to work with Brett. **v1.4 (Aug 8): ⭐ standing rule — NEVER use the `AskUserQuestion` clickable widget on mobile (`<env>` `Client: mobile app`); it hangs. Ask lettered A/B/C options in plain text instead. Widget OK on desktop/laptop.** |
+| SESSION_EFFICIENCY_PROTOCOL_v1.0.md | **v1.0 LOCKED** | ✅ ALWAYS | **How to spend tokens — lowers Brett's session burn (daily/5-hr/weekly limits) with no quality loss.** LIGHT-LOAD default (supersedes brett-context "read every file"); delegate heavy reads to cheap subagents; checkpoint-and-resume (`resume ridgeco`); classify-before-load; Brett's own habit fixes. Governs session LOADING; B-127 governs the app's API bill (separate meter). Locked Aug 13. |
 | CREDENTIALS_MAP.md | v1.3 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality. **v1.3: two-service-accounts correction (Worker runtime = maintenance-hub-498819, NOT brett-os-sheets) + Worker var list + STAGING=1 warning** |
 | VENTURES.md | v1.0 | ✅ ALWAYS | Every venture — current state, stack, Claude access level, automation gaps |
 | FEATURE_LOG.md | **v1.28** | ✅ ALWAYS | What's working — check before every code change to prevent regressions. **v1.28 (Aug 11): rules 77–78 — WO Room/Area field (room-level vendor routing as a label dimension, no QB layer) + bedroom-level keys; `sheet-ops add_column_header` now auto-widens the grid (a lingering `pending.json` means the run failed mid-way — re-queue only un-applied ops).** **v1.13 (Aug 6–7): rules 44–49 — Cleaning books to Service item 43 not the category (44); query existing QB bills before a vendor-bill batch, the dup-bill lesson (45); new `/qb/record-paid-bill`, `/qb/clear-ir-bill`, `/qb/reprice-invoice` (46–48); Cowork deploys the Worker now, urllib-403 + Sheets-quota gotchas (49).** v1.11 (Aug 4–5): rules 35–39 — one trade list, a former tenant's phone does not travel, `ensureColumns` before writing a new column (rule 37, the silent-no-op that keeps recurring), sending an invoice creates the OWNER not the property (38), logged time is a record not a charge — the invoice is built from a BILL (39).** v1.10 (Aug 3): billing consolidated onto the work order (one pricing surface); duplicate-submission guards; rules 19-23 — silent no-ops from a wrong route AND a wrong column, vendor.html api() serialization (receipts/time entries had never worked), never infer 'sent to QuickBooks' from an absent row, multi-vendor bills per WO, dedupe must fail open.** v1.7: daily digest shipped. v1.6: rule 18 — the July 21 non-prod-branch-build → production deploy incident. Keep Cloudflare non-prod branch builds OFF until reconfigured to `wrangler versions upload`. |
