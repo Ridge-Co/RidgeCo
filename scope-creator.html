@@ -450,8 +450,9 @@ async function splitSelected(){
   }catch(e){ setStatus('items-status','⚠ '+e.message,'err'); }
 }
 
-/* photos */
-function scopeKey(){ return 'SCOPE-'+state.current.ID; }
+/* photos — before the WO exists, stage under a SCOPE-<id> key (re-keyed onto the WO at
+   conversion); once the WO exists, upload straight to the real WO so nothing orphans. */
+function scopeKey(){ return (state.current && state.current.WO_ID) ? state.current.WO_ID : ('SCOPE-'+state.current.ID); }
 async function loadScopePhotos(){
   var box=document.getElementById('photo-cards'); box.innerHTML='';
   try{
@@ -508,7 +509,16 @@ async function uploadScopePhotos(input){
   async function runner(){ while(idx<files.length){ var i=idx++; await uploadOne(files[i], cards[i]); } }
   var runners=[]; for(var k=0;k<CONC && (k+1)<files.length;k++) runners.push(runner());
   await Promise.all(runners);
-  tick();
+  // Read the attachments back from the server so the count reflects what ACTUALLY attached,
+  // not just what the browser thinks it sent — this is the check that it truly landed.
+  try{
+    var atts=await get('/attachments?wo_id='+encodeURIComponent(scopeKey()));
+    var attached=(atts||[]).filter(function(a){ return a.Active!=='FALSE'; }).length;
+    setStatus('photo-status', failed
+      ? ('⚠ '+done+' sent, '+failed+' failed — '+attached+' confirmed attached. Tap Add photos to retry the failed ones.')
+      : ('✅ '+attached+' photo(s) confirmed attached to this '+(state.current.WO_ID?('work order '+state.current.WO_ID):'scope')+'.'),
+      failed?'warn':'ok');
+  }catch(e){ tick(); }
 }
 
 /* approve + WO */
@@ -520,7 +530,7 @@ async function approveScope(){
 async function toWO(){
   if(state.current.WO_ID){ setStatus('wo-status','Already created: '+state.current.WO_ID,'warn'); return; }
   setStatus('wo-status','Creating work order…');
-  try{ var r=await post('/scope/to-wo',{ scope_id:state.current.ID }); await openScope(state.current.ID); setStatus('wo-status','✅ '+r.wo_id+' created (Estimate Requested)'+(r.photos_moved?(' · '+r.photos_moved+' photo(s) attached'):'')+'. Assign a vendor for the estimate from the Hub.','ok'); }
+  try{ var r=await post('/scope/to-wo',{ scope_id:state.current.ID }); await openScope(state.current.ID); setStatus('wo-status','✅ '+r.wo_id+' created (Estimate Requested) · '+(r.photos_moved||0)+' photo(s) attached to it (shown in section 3 below). Assign a vendor for the estimate from the Hub.','ok'); }
   catch(e){ setStatus('wo-status','⚠ '+e.message,'err'); }
 }
 
