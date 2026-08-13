@@ -109,7 +109,7 @@ was sending every labor line as `Qty:1, UnitPrice:laborAmt`, so a 2h/$150 job re
 $150/hr to the customer. It now splits into `Qty:hours, UnitPrice:Rate` — but ONLY when the
 bill's `Bill_Type==='hourly'` AND its stored `Rate × Hours` reconciles with `laborAmt` to the
 cent. **Do not loosen that gate.** On a marked-up vendor bill `laborAmt` (= Customer_Total −
-materials) carries markup + on-site + the 5% fee, so hours × the vendor rate will not tie out
+materials) carries markup + on-site + the card fee, so hours × the vendor rate will not tie out
 and it MUST fall back to the single combined line — deriving a rate from `laborAmt/hours`
 would print a fabricated $/hr and expose the markup. `Amount` is always `laborAmt`, so the
 invoice total is preserved either way. Pinned by `test/invoice-hours.test.mjs`.
@@ -120,7 +120,7 @@ for Goldszmidt / Phoenix / Casey Properties). `resolveHubHourlyRate()` resolves 
 WO→Property→Owner when a `role:'hub'` time entry is saved with no explicit rate; the Hub owner
 setup sets it (add-owner field + inline box on the owners list, via `/owner/update`).
 `HUB_HOURLY_RATE` client constant is now 85 and is a display fallback only. **The
-tiered/itemized markup's separate $75 on-site coordination rate is deliberately NOT this
+tiered/itemized markup's separate flat on-site coordination rate is deliberately NOT this
 rate — leave it unless Brett asks.** Vendor time entries keep their own rate.
 
 **42. Half-hour service charge on turning logged time into a bill.** `hubBillUseLoggedTime`
@@ -183,16 +183,16 @@ receipts on the job show; vendor-logged ones stay UNTICKED by default (one tap t
 silently — the `/receipts-billed` already-invoiced guard is unchanged. Known residual: no hard
 programmatic block if the same physical receipt sits in BOTH the Receipts tab and a bill's
 `Receipts_JSON` (non-silent — unticked + warning). (b) **Pass-through pricing is now the
-pre-selected default:** labor + materials at cost, no markup, no $75 admin, 5% card fee an
+pre-selected default:** labor + materials at cost, no markup, no admin fee, card fee only an
 OPTIONAL toggle (default OFF) — the right starting point for hourly customers (rate + materials,
 no surcharge). Tiered and Itemized unchanged, one tap away. The approve split
 (`invBillThisJob`) is mode-aware (`_invMode`/`_invPass5`, cleared in the Review-Bills reset) so
-a no-surcharge pass-through reports fee `0` and markup `0` instead of inventing a phantom 5%
+a no-surcharge pass-through reports fee `0` and markup `0` instead of inventing a phantom card fee
 split. `pricing-model.test.mjs` +8 assertions (29 total). (Aug 5, 2026.)
 
 ### Money (rules 28–31)
 **28. Brett's hours are a WAGE, not a cost.** Added AFTER the markup so they're never marked
-up; they DO carry the 5% processing fee. A job he does himself is worth its full ticket —
+up; they DO carry the card processing fee. A job he does himself is worth its full ticket —
 profit no longer subtracts labour that never left the business. `Own_Wage` and `Profit`
 are recorded separately on Invoice_Review.
 
@@ -200,7 +200,7 @@ are recorded separately on Invoice_Review.
 against a person the business doesn't owe. Status still reaches `sent`, not `partial`.
 
 **30. Materials bought outside the vendor's bill were invisible.** Receipts logged against a
-job never reached the panel, the cost basis, the markup, the 5%, or the invoice lines. Now
+job never reached the panel, the cost basis, the markup, the card fee, or the invoice lines. Now
 ticked per receipt, and a receipt is billable exactly ONCE — `/receipts-billed` checks the
 sheet, not what happens to be open.
 
@@ -258,7 +258,7 @@ opens the right work order. There is now ONE pricing surface; do not add a secon
 | Feature | Status | Notes | Last Verified |
 |---|---|---|---|
 | Google Contacts sync — read token + augment write-back | ✅ Shipped (deployed) | `CONTACTS_SYNC_TOKEN` (own secret, not `WORKER_SECRET`): GET on `/tenants /owners /vendors /properties /units` + POST `/contact/augment` ONLY. `augmentContact` fills BLANK fields from an allow-list (`Email` only) — never overwrites, never phone/ID, never creates rows, `ensureColumns` first, logs to self-creating `Contact_Augment_Log`. `preview:true` writes nothing. Engine = Apps Script under brett@bmoremanagement.com (one-way Hub→Contacts + augment-only back). Auth gate ~L49; handler after `updateRow`. Live smoke-tested: overwrite refused w/ read-back, Phone/ID rejected, other writes 401. | Aug 6, 2026 |
-| WO Invoice Builder — full billing flow | ✅ Shipped | `invPricing` / `invRenderSuggestions` / `invLoadStatus` / `invBillThisJob`. Both formulas shown side by side (tiered via `calcTieredEstimate`; itemized = MAX($75,$35×hrs)+Brett time+travel+5%). Brett always sets the final number. | Aug 3, 2026 (code + offline tests; runtime pending) |
+| WO Invoice Builder — full billing flow | ✅ Shipped | `invPricing` / `invRenderSuggestions` / `invLoadStatus` / `invBillThisJob`. Both formulas shown side by side (tiered via `calcTieredEstimate`; itemized = flat coordination fee / hourly + Brett time + travel + card fee — exact constants kept private). Brett always sets the final number. | Aug 3, 2026 (code + offline tests; runtime pending) |
 | Bill picker on multi-bill WOs | ✅ Shipped | A WO can carry bills from 2 vendors. `_invPreferBill` carries the chosen bill from the Review Bills card; picker chips switch. Prevents billing one vendor and stranding the other. | Aug 3, 2026 |
 | QuickBooks status band | ✅ Shipped | unapproved / approved-at-$X / partial / in-QuickBooks-with-both-ids / **reviewed_no_row**. "In QuickBooks" is ONLY claimed with the QB ids in hand. | Aug 3, 2026 |
 | `GET /qb/ready?all=1&wo_id=` | ✅ Shipped | Returns rows at any status, optionally per-WO, so the Hub reads a bill's real QB position instead of inferring it from an empty queue. Paramless calls behave exactly as before. | Aug 3, 2026 |
@@ -436,7 +436,7 @@ Own-purchase receipts ONLY (business / owned-property / personal-HSA). **WO/vend
 
 **47. `POST /qb/clear-ir-bill`** (secret) — clears `QB_Bill_ID`/`QB_Bill_Number` on an Invoice_Review row whose vendor bill was later deleted in QB, leaving the customer invoice id/number/status intact. Body: `{ir_id}`. Used after deleting the 3 duplicate Andrea bills (IR 10/11/14 → WO-1102/1103/1107) so the Hub stopped showing phantom payables.
 
-**48. `POST /qb/reprice-invoice`** (secret) — changes the dollar amount of an ALREADY-SENT customer invoice (unlike `/qb/repair-invoice`, which preserves the total and only fixes wording — it hard-refuses a total change). Rewrites the single sales line to a new amount, preserving its item/income account + description, and writes the new `Customer_Total`/`Markup`/`Processing_Fee` back to Invoice_Review. **Refuses a paid or multi-line invoice.** Body: `{ir_id, new_total, new_markup?, new_fee?}`. Used to rescale the 7 Andrea customer invoices over $200 to a $35 markup + 5% (new Andrea customer total $1,980.27).
+**48. `POST /qb/reprice-invoice`** (secret) — changes the dollar amount of an ALREADY-SENT customer invoice (unlike `/qb/repair-invoice`, which preserves the total and only fixes wording — it hard-refuses a total change). Rewrites the single sales line to a new amount, preserving its item/income account + description, and writes the new `Customer_Total`/`Markup`/`Processing_Fee` back to Invoice_Review. **Refuses a paid or multi-line invoice.** Body: `{ir_id, new_total, new_markup?, new_fee?}`. Used to rescale the 7 Andrea customer invoices per Brett's direction (pricing basis kept private; new Andrea customer total $1,980.27).
 
 **49. Cowork can now deploy the Worker (GitHub push-to-`main` → Cloudflare Workers Builds).** Verified across seven deploys Aug 6–7 (`2026-08-06.3` → `2026-08-07.3`). The "three stranded commits / apply this patch" warning that used to head CURRENT.md is obsolete — writes to `Ridge-Co/RidgeCo` succeed from this session. Two operational gotchas: Cloudflare's edge 403s a `Python-urllib` user-agent (scripted Worker calls must send a normal `User-Agent`), and the Sheets API has a per-minute read quota (space out large Hub batches or they fail mid-run).
 

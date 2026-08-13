@@ -184,8 +184,9 @@ Deployed Worker is `2026-08-07.3`.
   "three stranded commits / apply the patch" warning is retired — writes to `Ridge-Co/RidgeCo`
   succeed from this session. (Seven deploys landed Aug 6–7.)
 - **13 customer invoices** to Goldszmidt (8 Andrea + 5 Michelle) posted, all verified. Andrea's
-  seven over-$200 invoices were then **rescaled to a $35 markup + 5%** at Brett's direction →
-  Andrea customer total **$1,980.27**; Michelle 5 × $288.75 = $1,443.75. #31 stayed $168.
+  seven over-threshold invoices were then **rescaled at Brett's direction** (pricing basis kept
+  in private config, not here) → Andrea customer total **$1,980.27**; Michelle 5 × $288.75 =
+  $1,443.75. #31 stayed $168. (Customer totals are final prices — the markup/fee math is private.)
 - **Duplicate-bill lesson:** the push double-created Andrea's #24/#30/#31 vendor bills — they
   were already in QB (#0024/#0013/#0030). Brett deleted the 3 dupes; their Hub refs were scrubbed
   (`/qb/clear-ir-bill`). See FEATURE_LOG rule 45 — query existing QB bills before a vendor-bill batch.
@@ -255,11 +256,11 @@ is greyed out as "already billed as labour" and does NOT appear in the supervisi
 ## Still owed
 - **Notes system** — timestamped contact log, per-note sharing, vendors post-only. Specced
   and agreed, not built. This is the biggest outstanding item.
-- **Tiered vs itemized disagree by $75 on oversight jobs.** Tiered has a flat $75 built in
-  AND adds the logged hour, so it charges supervision twice ($445 vs $370). Needs a decision,
-  not a fix.
-- **Materials markup is asymmetric.** Tiered marks them up and adds 5%; itemized passes them
-  at cost + 5%. Both defensible; pick one.
+- **Tiered vs itemized disagree on oversight jobs.** Tiered has the flat coordination fee built
+  in AND adds the logged hour, so it charges supervision twice (the two modes produce different
+  customer totals). Needs a decision, not a fix. (Specific pricing constants are private.)
+- **Materials markup is asymmetric between the two modes.** One marks materials up and adds the
+  card fee; the other passes them at cost + the card fee. Both defensible; pick one. (Math private.)
 - **Bills already in QuickBooks still say Net 30.** Only new sends get the terms.
 
 ---
