@@ -213,14 +213,14 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
   - ~~Rob Whitley — Plumbing~~ (crossed off)
   - Ask for handyman referrals
   - Oscar Culver → follow up with Oscar on the job at **56 S Culver St**
-  - $300 extra to Cesar for floor?
+  - extra to Cesar for floor? (amount private)
 - Type: task (Ridge Co operations)
 - Status: new — leads dead-ended; active follow-ups remain
 - Sub-items:
   1. Source a reliable plumber/handyman sub — the three named leads (Marvin Calderon, Al Stratti, Rob Whitley) are crossed off / didn't pan out → **B-034**
   2. Ask existing contacts for handyman referrals → part of B-034
   3. **56 S Culver St job → Cesar got it** (V-003). Follow up with **Cesar on Monday** re: Culver → **B-035**. (The written note read "Oscar Culver," but the job ultimately went to Cesar.)
-  4. Confirm the **$300 extra paid to Cesar** (V-003) is booked in QB — it's for **floor prep on the 807 N Calvert St (bakery) install, NOT Culver** → **B-036**. Brett's read: legit — floor repairs were necessary before the install, so the extra $300 is owed, not an overpay.
+  4. Confirm the **extra paid to Cesar** (amount private) (V-003) is booked in QB — it's for **floor prep on the 807 N Calvert St (bakery) install, NOT Culver** → **B-036**. Brett's read: legit — floor repairs were necessary before the install, so the extra pay is owed, not an overpay.
   5. Follow up with **Cesar on Monday** on the **Gibbons** jobs → **B-037**
 - Links: BACKLOG B-034, B-035, B-036, B-037
 - Handwriting note: "Oscar Culver" is Name+Street shorthand (Culver = street), not a surname; the Culver job went to Cesar. The Cesar payment math (Scan_2032) and ledger (Scan_2032_1 bottom) are handwriting-only — not tracked as to-dos. Logged to HANDWRITING_KEY.

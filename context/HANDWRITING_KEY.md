@@ -17,11 +17,11 @@
 | 2026-07-19 | Scan_2019, "Al Strat_" | **Al Stratti** (double-t) — plumber lead |
 | 2026-07-19 | Scan_2019, "R_b Whitley" | **Rob Whitley** (Rob, not Roy/Ray) — plumber lead |
 | 2026-07-19 | Scan_2019, "Oscar Cul__r" | **Oscar Culver** = shorthand for "follow up with Oscar on the job at **56 S Culver St**." Culver = street. |
-| 2026-07-19 | Scan_2019, "$300 ... to _esar for floor" | **Cesar** (Cesar Gomez, V-003). "$300 extra to Cesar for floor" — legit; floor repairs were needed before install. |
+| 2026-07-19 | Scan_2019, "(amount) ... to _esar for floor" | **Cesar** (Cesar Gomez, V-003). "extra to Cesar for floor" (amount private) — legit; floor repairs were needed before install. |
 | 2026-07-19 | Scan_2020, list item 5 | **"Build email list + continue to add value"** (continue, not "nurture") |
 | 2026-07-19 | Scan_2032_1, journey note | "...small things like **making** things, fixing things..." (making, not "nailing"); "Side quests = **A.S.Q. → Answer a Specific Question (sometimes)**" |
 | 2026-07-19 | Scan_2032_1, bottom ledger | Unit #s (1214, 151, 153, 928) each with **170** to the right; "**Oscar 450 3014**". Payment shorthand — handwriting only, NOT a to-do. |
-| 2026-07-19 | Scan_2032, Cesar money slip | "**pay Cesar**", "**pay Potomac Edison**" (electric utility, not "Antonio Nelson"), "**toilet**", "**floor**". Cesar's $300 floor = **807 N Calvert St bakery** install, NOT Culver. Handwriting only — not a to-do. |
+| 2026-07-19 | Scan_2032, Cesar money slip | "**pay Cesar**", "**pay Potomac Edison**" (electric utility, not "Antonio Nelson"), "**toilet**", "**floor**". Cesar's floor job (amount private) = **807 N Calvert St bakery** install, NOT Culver. Handwriting only — not a to-do. |
 | 2026-07-19 | Scan_2030, M&T stmt (sideways blue ink) | Facebook-group posting list for BarrelCo barrel products: "online yard sale 16 / Balt city and co yard sale 17 / Balt the yard sale 18 / Balt easy online yard sale 19" (trailing numbers' meaning unknown). Handwriting only. |
 | 2026-07-19 | Job assignment (via Brett) | The **56 S Culver St** job went to **Cesar** (V-003); the written "Oscar Culver" note referenced a follow-up, but Cesar got the job. |
 | 2026-07-19 | Scan_2104 (TOPS legal-pad to-do list) | "**U-Haul**" read like "HALL"; "**detector**" read like "deduct"; "**1864 Kerns School Rd**" (not Kean); tenants "**William** 3014 #3 / **Julie** 115 #2 / 2930 **1R** / 115 #1"; "**Sergio** bills — entered/needs paid". Unit "151 #2" was actually **153 #2**. |
@@ -60,8 +60,8 @@
 ### Vendors (Ridge Co)
 | Name | ID | Note |
 |---|---|---|
-| Alex Mix | V-001 | $35/hr |
-| Oscar Padilla | V-002 | $50/hr |
+| Alex Mix | V-001 | (rate private) |
+| Oscar Padilla | V-002 | (rate private) |
 | Cesar Gomez | V-003 | rate TBD |
 | Eddie Smith | V-004 | rate TBD |
 | Alan George ("Mook") | V-005 | rate TBD — may write "Mook" |
@@ -90,7 +90,7 @@
 | PO Box 39692 | Baltimore mailing box |
 | Ashburton | Baltimore STREET name (job/site reference) |
 | 56 S Culver St | Job site — Cesar got this job (CAP-012); written note read "Oscar Culver" |
-| 807 N Calvert St (bakery) | Install job site — Cesar floor prep ($300 extra) |
+| 807 N Calvert St (bakery) | Install job site — Cesar floor prep (amount private) |
 | Gibbons | Job(s) — Cesar follow-up (confirm exact spelling/location) |
 | 1864 Kerns School Rd | Address on LLC renewal/report line (confirm entity) |
 | Barre St | Job/property (Kelly Knock; job canceled) |

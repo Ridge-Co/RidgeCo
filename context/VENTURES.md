@@ -34,8 +34,8 @@ Manages work orders, vendors, and billing for Baltimore-area rental properties. 
 ### Known Vendors
 | ID | Name | Rate |
 |---|---|---|
-| 2 | Alex Busey | $35/hr |
-| 4 | Oscar Padilla | $50/hr |
+| 2 | Alex Busey | (rate private) |
+| 4 | Oscar Padilla | (rate private) |
 
 ### Active Worker Endpoints (Session 1)
 - `GET /vendor-bills` — list bills, supports `?status=` filter

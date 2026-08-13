@@ -51,8 +51,8 @@ Tabs: Work_Orders, Vendors, Tenants, Units, Properties, Vendor_Bills, Materials,
 **Active Vendors:**
 | Vendor | ID | Hourly_Rate |
 |---|---|---|
-| Alex Mix | V-001 | $35 |
-| Oscar Padilla | V-002 | $50 |
+| Alex Mix | V-001 | (rate private) |
+| Oscar Padilla | V-002 | (rate private) |
 | Cesar Gomez | V-003 | TBD |
 | Eddie Smith | V-004 | TBD |
 | Alan George (Mook) | V-005 | TBD |

@@ -64,7 +64,7 @@ _Added Aug 10, 2026. Problem it solves: items get built or become moot but stay 
 **RIDGE CO — OPERATIONS / TO-DO**
 - B-034 · Source a reliable plumber/handyman subcontractor
 - B-035 · Follow up with Cesar (Mon) on the 56 S Culver St job
-- B-036 · Confirm $300 extra to Cesar (V-003) for 807 N Calvert St bakery floor pr
+- B-036 · Confirm extra pay to Cesar (V-003) (amount private) for 807 N Calvert St bakery floor pr
 - B-037 · Follow up with Cesar (Mon) on the Gibbons jobs
 - B-038 · MD taxes payment plan — set up
 - B-039 · LLC renewal + annual report
@@ -321,7 +321,7 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 |---|---|---|---|
 | B-034 | 🟠 | Source a reliable plumber/handyman subcontractor | Leads dead-ended: Marvin Calderon, Al Stratti (plumber), Rob Whitley (plumber). Action: ask existing contacts for handyman referrals. |
 | B-035 | 🟠 | Follow up with Cesar (Mon) on the 56 S Culver St job | Cesar got the Culver job (V-003). Written note read "Oscar Culver," but it went to Cesar. |
-| B-036 | 🟢 | Confirm $300 extra to Cesar (V-003) for 807 N Calvert St bakery floor prep is booked in QB | Legit per Brett — floor repairs were needed before the install (807 N Calvert St bakery, NOT Culver). Owed, not an overpay. |
+| B-036 | 🟢 | Confirm extra pay to Cesar (V-003) (amount private) for 807 N Calvert St bakery floor prep is booked in QB | Legit per Brett — floor repairs were needed before the install (807 N Calvert St bakery, NOT Culver). Owed, not an overpay. |
 | B-037 | 🟠 | Follow up with Cesar (Mon) on the Gibbons jobs | Captured from Scan_2032 session, July 19. |
 | B-038 | 🟠 | MD taxes payment plan — set up | From CAP-014. |
 | B-039 | 🟠 | LLC renewal + annual report | Entity address on note: 1864 Kerns School Rd. From CAP-014. |
@@ -579,7 +579,7 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 | — | Ridge Co | Invoice Review screen in index.html | July 16, 2026 |
 | — | Ridge Co | worker.js `/vendor-bills` status filter | July 16, 2026 |
 | — | Ridge Co | worker.js `POST /invoice-review/approve` endpoint | July 16, 2026 |
-| — | Ridge Co | Vendors tab — Hourly_Rate column, Alex=$35, Oscar=$50 | July 17, 2026 |
+| — | Ridge Co | Vendors tab — Hourly_Rate column (rates private) | July 17, 2026 |
 | — | Ridge Co | Invoice_Review tab created with 19-column header | July 17, 2026 |
 | — | Ridge Co | Photo upload fix — gallery + bulk + camera all work (removed capture attr from vendor.html) | July 17, 2026 |
 | — | Ridge Co | 4518 Fairfax Rd Apt 1 proposal v1.0 — 45 items, 3 packages, photo links, lead paint compliance | July 17, 2026 |
