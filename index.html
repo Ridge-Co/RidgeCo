@@ -819,8 +819,8 @@
 <div class="modal-overlay" id="modal-tenant-safety">
   <div class="modal" style="max-width:480px">
     <div class="modal-header"><div class="modal-title">TENANT ACCESS — CONFIRM BEFORE CREATING</div></div>
-    <p style="color:var(--muted);font-size:12px;margin-bottom:16px">These settings can be changed any time after creation. Defaults are shown below.</p>
-    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+    <p id="newwo-safety-intro" style="color:var(--muted);font-size:12px;margin-bottom:16px">These settings can be changed any time after creation. Defaults are shown below.</p>
+    <div id="newwo-safety-fields" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
         <input type="checkbox" id="safety-visible" checked style="width:auto;padding:0;font-size:16px">
         <div><div style="font-size:13px">Show this work order to tenant</div><div style="color:var(--muted);font-size:11px">Tenant can see it in their portal</div></div>
@@ -834,9 +834,15 @@
         <div><div style="font-size:13px">Notify tenant on status updates</div><div style="color:var(--muted);font-size:11px">Sends SMS when status changes to Complete etc.</div></div>
       </label>
     </div>
-    <div class="modal-actions">
+    <div class="modal-actions" id="newwo-safety-actions">
       <button class="btn secondary" onclick="closeModal('modal-tenant-safety')">← Back to Edit</button>
       <button class="btn" onclick="submitNewWO()">CREATE WORK ORDER</button>
+    </div>
+    <!-- Post-create: add photos/receipts to the WO just created (same before/after buttons as the detail view) -->
+    <div id="newwo-postcreate" style="display:none">
+      <div id="newwo-postcreate-head" style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12.5px;color:#166534;line-height:1.5">✓ Work order created. Add photos &amp; receipts below (optional) — Before / After / Receipt all attach to this same work order, even if the job is already done.</div>
+      <div id="newwo-photos"></div>
+      <div class="modal-actions"><button class="btn" onclick="finishNewWOPhotos()">Done</button></div>
     </div>
   </div>
 </div>
@@ -1429,7 +1435,17 @@ function openWODetail(woId) {
     '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:8px">AUDIT TRAIL</div>' +
     '<div id="auditTrailBody" style="font-size:11px"><div style="color:var(--muted)">Loading…</div></div>' +
   '</div>';
-  document.getElementById('detail-body').innerHTML = propHtml +
+  // Sticky action bar — Edit + quick status stay reachable at the top of the WO while you scroll,
+  // so you never have to scroll to the bottom to edit or change status (6A).
+  var _stStatuses = ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'];
+  var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:-24px -24px 14px;padding:12px 24px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+    '<button class="btn small" onclick="openEditWOModal(\''+woId+'\')">✏️ Edit</button>' +
+    '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:var(--radius)">' +
+    '<option value="">Status: '+(wo.Status||'—')+' ▾</option>' +
+    _stStatuses.map(function(s){ return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>'; }).join('') +
+    '</select>' +
+    '</div>';
+  document.getElementById('detail-body').innerHTML = stickyBar + propHtml +
     '<div style="margin-bottom:14px">' +
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">DESCRIPTION</div>' +
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto">' +
@@ -1886,6 +1902,7 @@ function openTenantSafetyScreen() {
   document.getElementById('safety-visible').checked = true;
   document.getElementById('safety-notify-created').checked = true;
   document.getElementById('safety-notify-updates').checked = true;
+  if (typeof resetNewWOSafetyModal === 'function') resetNewWOSafetyModal();
   openModal('modal-tenant-safety');
 }
 
@@ -1923,8 +1940,37 @@ function submitNewWO() {
     });
     chain.then(function(){ loadAll(); });
     toast('Created '+woId+(vendorId?' + assigned':'')+(schedDate?' + scheduled':''),'success');
-    closeModal('modal-new-wo'); closeModal('modal-tenant-safety');
+    closeModal('modal-new-wo');
+    // Keep the tenant-safety modal open and switch it to an "add photos & receipts" step
+    // for the WO just created — reuses the exact before/after/receipt component from the detail view.
+    showNewWOPhotoStep(woId, propId);
   }).catch(function(e){logError('Create WO',e.message);toast('Error: '+e.message,'error');});
+}
+
+// ── Add photos/receipts right after creating a WO (same buttons as the detail view) ──
+function showNewWOPhotoStep(woId, propId){
+  try {
+    ['newwo-safety-intro','newwo-safety-fields','newwo-safety-actions'].forEach(function(id){
+      var e=document.getElementById(id); if(e) e.style.display='none';
+    });
+    var post=document.getElementById('newwo-postcreate'); if(post) post.style.display='block';
+    var prop=safeArray(state.properties).find(function(p){return String(p.ID)===String(propId);});
+    var addr=prop?(prop.Address||''):'';
+    var host=document.getElementById('newwo-photos');
+    if(host && typeof buildPhotoSection==='function'){
+      host.innerHTML=buildPhotoSection(woId, addr, {canBefore:true,canAfter:true,canReport:false,canReceipt:true,viewAll:true});
+      if(typeof loadPortalAttachments==='function') loadPortalAttachments(woId);
+    }
+    openModal('modal-tenant-safety');
+  } catch(e){ closeModal('modal-tenant-safety'); resetNewWOSafetyModal(); }
+}
+function finishNewWOPhotos(){ closeModal('modal-tenant-safety'); resetNewWOSafetyModal(); }
+function resetNewWOSafetyModal(){
+  ['newwo-safety-intro','newwo-safety-fields','newwo-safety-actions'].forEach(function(id){
+    var e=document.getElementById(id); if(e) e.style.display='';
+  });
+  var post=document.getElementById('newwo-postcreate'); if(post) post.style.display='none';
+  var host=document.getElementById('newwo-photos'); if(host) host.innerHTML='';
 }
 
 // ── Properties page ──────────────────────────────────────────
