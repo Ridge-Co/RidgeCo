@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-13.1';
+const BUILD_VERSION = '2026-08-13.2';
 
 export default {
   async fetch(request, env) {
@@ -1266,11 +1266,12 @@ async function assignVendor(env, body) {
   let vendorSMSSent = false, tenantSMSSent = false;
   if (vendor.Phone) {
     const isSpanish = vendor.Language === 'es';
-    const tenantLine   = tenant ? ` Tenant: ${tenant.First_Name} ${tenant.Last_Name||''} ${tenant.Phone}.` : '';
-    const tenantLineES = tenant ? ` Inquilino: ${tenant.First_Name} ${tenant.Last_Name||''} ${tenant.Phone}.` : '';
+    // Access-gate: the lockbox code + tenant contact are NOT sent on dispatch — they unlock
+    // once the vendor accepts (reply YES or Accept in the portal). Accepting moves the status,
+    // which is what lets the tenant-notification automation fire.
     const msg = isSpanish
-      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} en ${address}. Problema: ${wo.Description}.${tenantLineES}${accessInfo} Responda SI para aceptar o NO para rechazar.`
-      : `[${body.wo_id}] New job: ${wo.Trade} at ${address}. Issue: ${wo.Description}.${tenantLine}${accessInfo} Reply YES to accept or NO to decline.`;
+      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} en ${address}. Problema: ${wo.Description}. Responda SI para aceptar — el código de la caja y el contacto del inquilino se desbloquean en su portal al aceptar. Responda NO para rechazar.`
+      : `[${body.wo_id}] New job: ${wo.Trade} at ${address}. Issue: ${wo.Description}. Reply YES to accept — the lockbox code & tenant contact unlock in your portal once you accept. Reply NO to decline.`;
     await sendSMS(env, vendor.Phone, msg);
     await logSMS(env, body.wo_id, 'vendor', vendor.ID, vendor.Phone, msg);
     vendorSMSSent = true;
@@ -1318,6 +1319,20 @@ async function updateStatus(env, body) {
     if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
   }
+  // Vendor accepted → notify the tenant that a technician has accepted and will reach out.
+  // This is the automation the acceptance gate exists to enable: the status moving to
+  // Accepted is the trigger, so a vendor who just starts the job no longer silently skips it.
+  if (body.status === 'Accepted') {
+    const [units, tenants, properties] = await fetchTabs(env, ['Units','Tenants','Properties']);
+    const unit = units.find(u => u.ID === wo.Unit_ID);
+    const tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID));
+    const property = properties.find(p => p.ID === wo.Property_ID);
+    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+      const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${wo.Trade} request at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
+      await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
+    }
+  }
   const notifyStatuses = ['Assigned','Scheduled','Complete','Invoiced'];
   if (notifyStatuses.includes(body.status)) {
     const notify = await shouldNotifyOwner(env, wo, body.status);
@@ -1358,7 +1373,7 @@ async function vendorWorkorders(env, url) {
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   const wos = workorders.filter(w => w.Vendor_ID === vendorId && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true }));
   enriched.sort((a, b) => { const pa = PRIORITY_ORDER[a.Priority?.toLowerCase()] ?? 2, pb = PRIORITY_ORDER[b.Priority?.toLowerCase()] ?? 2; return pa !== pb ? pa - pb : (a.property_address||'').localeCompare(b.property_address||''); });
   return json(enriched);
 }
@@ -1428,24 +1443,30 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
     }
     vendorHasAccess = tradeDefault !== 'FALSE';
   }
+  // Accept-gate (vendor portal only): the lockbox code + tenant contact are withheld until
+  // the vendor has ACCEPTED the work order. Accepting is what unlocks them — and accepting
+  // moves the status, which lets the tenant-notification automation fire. New/Assigned = gated.
+  const ACCEPTED_OR_LATER = ['Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid'];
+  const accessGated = !!opts.vendorView && !ACCEPTED_OR_LATER.includes((wo.Status||'').trim());
   const rawLockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit.Unit_Label||'');
-  const lockboxes = (opts.omitLockbox || !vendorHasAccess) ? [] : rawLockboxes;
-  const accessNotes = (!vendorHasAccess) ? '' : (property.Access_Notes||'');
-  const legacyLockbox = (!lockboxes.length && vendorHasAccess && property.Lockbox_Code) ? property.Lockbox_Code : '';
+  const lockboxes = (opts.omitLockbox || !vendorHasAccess || accessGated) ? [] : rawLockboxes;
+  const accessNotes = (!vendorHasAccess || accessGated) ? '' : (property.Access_Notes||'');
+  const legacyLockbox = (!lockboxes.length && vendorHasAccess && !accessGated && property.Lockbox_Code) ? property.Lockbox_Code : '';
   const base = {
     ...wo,
     property_address: property.Address||'', property_city: property.City||'', unit_label: unit.Unit_Label||'',
     tenant_name:  wo.WO_Contact_Name || (tenant.First_Name ? `${tenant.First_Name} ${tenant.Last_Name||''}`.trim() : ''),
     // A named WO contact is a deliberate override and stands on its own; the TENANT's
     // number is what gets withheld once they've moved out.
-    tenant_phone: opts.omitTenantPhone ? '' : (wo.WO_Contact_Phone || (tenantIsFormer ? '' : (tenant.Phone||''))),
+    tenant_phone: (opts.omitTenantPhone || accessGated) ? '' : (wo.WO_Contact_Phone || (tenantIsFormer ? '' : (tenant.Phone||''))),
     tenant_former: tenantIsFormer,
     tenant_record_name:  tenant.First_Name ? `${tenant.First_Name} ${tenant.Last_Name||''}`.trim() : '',
-    tenant_record_phone: (opts.omitTenantPhone || tenantIsFormer) ? '' : (tenant.Phone||''),
+    tenant_record_phone: (opts.omitTenantPhone || tenantIsFormer || accessGated) ? '' : (tenant.Phone||''),
     lockboxes,
     legacy_lockbox: legacyLockbox,
     access_notes: accessNotes,
     vendor_has_access: vendorHasAccess,
+    access_gated: accessGated,
   };
   if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; base.vendor_phone = ''; }
   if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; }
@@ -3007,10 +3028,12 @@ async function handleInboundSMS(env, request) {
   if(!recentWO) return twilioResponse('No open assignments found for your number.');
   const config=await fetchConfig(env); const vendorName=vendor.Name||`${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim();
   if(body==='YES'||body==='Y'){
-    await updateWOFields(env,recentWO.ID,{Status:'Accepted'});await logSMS(env,recentWO.ID,'vendor_reply',vendor.ID,from,body);
-    await logWOAudit(env,recentWO.ID,vendorName,'vendor','Status',recentWO.Status,'Accepted','Accepted via SMS reply');
+    // Route through updateStatus so accepting via SMS fires the same tenant-notification
+    // automation (and audit/telemetry) as accepting in the portal.
+    await updateStatus(env,{wo_id:recentWO.ID,status:'Accepted',updated_by:vendorName,updated_by_role:'vendor',vendor_id:vendor.ID});
+    await logSMS(env,recentWO.ID,'vendor_reply',vendor.ID,from,body);
     if(config.admin_phone) await sendSMS(env,config.admin_phone,`✅ ${vendorName} accepted ${recentWO.ID} (${recentWO.Trade} @ property ${recentWO.Property_ID}).`);
-    return twilioResponse(vendor.Language==='es'?`Entendido. Confirmado para ${recentWO.ID}. Contacte al inquilino para programar la fecha.`:`Got it! You're confirmed for ${recentWO.ID}. Contact the tenant to schedule.`);
+    return twilioResponse(vendor.Language==='es'?`Entendido. Confirmado para ${recentWO.ID}. El código de la caja y el contacto del inquilino ya están en su portal.`:`Got it! You're confirmed for ${recentWO.ID}. The lockbox code & tenant contact are now unlocked in your portal.`);
   }
   if(body==='NO'||body==='N'){
     await updateWOFields(env,recentWO.ID,{Status:'Declined',Vendor_ID:''});await logSMS(env,recentWO.ID,'vendor_reply',vendor.ID,from,body);
