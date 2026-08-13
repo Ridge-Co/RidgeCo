@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Scope Creator</title>
+<style>
+  :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--warn:#fbbf24;--info:#1d4ed8;--radius:6px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:16px;max-width:1000px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.10em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:14px;line-height:1.5;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px;}
+  .section.disabled{opacity:0.45;pointer-events:none;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;}
+  .step-badge{background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:9px;font-weight:bold;}
+  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  .btn.approve{background:var(--accent2);color:#fff;}
+  .btn.danger{background:var(--danger);color:#fff;}
+  .btn.small{padding:5px 10px;font-size:11px;}
+  input,select,textarea{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  textarea{width:100%;resize:vertical;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
+  .row label{color:var(--muted);font-size:11px;min-width:78px;}
+  .ok{color:var(--accent2);}.err{color:var(--danger);}.info{color:var(--muted);}.warn{color:#9a6b00;}
+  .empty{padding:18px;text-align:center;color:var(--muted);}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;white-space:nowrap;font-weight:bold;}
+  .pill.draft{background:#f3f5f8;color:var(--muted);}
+  .pill.approved{background:#eaf6ee;color:var(--accent2);}
+  .pill.wocreated{background:#eef2ff;color:var(--accent);}
+  .pill.estimated{background:#fdf2e2;color:#9a6b00;}
+  .pill.proposed{background:#eaf0ff;color:var(--accent);}
+  .scard{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;}
+  .scard:hover{border-color:var(--accent);}
+  .scard .t{font-size:13px;font-weight:bold;line-height:1.3;}
+  .scard .m{font-size:11px;color:var(--muted);margin-top:2px;}
+  .li{display:grid;grid-template-columns:22px 1fr;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:8px;margin-bottom:6px;align-items:start;}
+  .li .fields{display:grid;grid-template-columns:120px 110px 1fr;gap:6px;}
+  .li .fields .full{grid-column:1/-1;}
+  .li .fields input{width:100%;}
+  .li .fields label{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
+  .li .del{grid-column:2;justify-self:end;}
+  .toolbtns{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+  .status{font-size:11px;min-height:14px;margin-top:6px;}
+  pre.doc{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;line-height:1.5;font-family:var(--font);}
+  .raw{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;font-size:11px;line-height:1.5;max-height:180px;overflow:auto;color:var(--muted);}
+  .hide{display:none;}
+  a.link{color:var(--info);text-decoration:none;font-weight:bold;}
+  .drivefile{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:5px;font-size:11px;background:var(--surface2);}
+</style>
+</head>
+<body>
+<h1>📝 RIDGE CO — SCOPE CREATOR</h1>
+<p class="sub">
+  Turn handwritten notes, voice, or typed input into an organized <b>Scope of Work</b> → a work order
+  (request for estimate) → capture the vendor's estimate → generate the customer proposal. Edit at any
+  stage by hand or by command (e.g. <i>"remove the plumbing section — another vendor will do it"</i>),
+  and split part of a job into its own scope for a different vendor.
+</p>
+
+<div class="section" id="conn-section">
+  <div class="section-title">Connection</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
+  <div class="row"><label>Admin token</label><input id="auth-token" type="password" placeholder="paste if not remembered" style="flex:1"></div>
+  <div class="row"><button class="btn secondary small" onclick="boot()">↻ Reload</button><span id="conn-status" class="info"></span></div>
+</div>
+
+<!-- LIST VIEW -->
+<div id="view-list">
+  <div class="section">
+    <div class="section-title">Your scopes <button class="btn small" onclick="startNew()">+ New scope</button></div>
+    <div id="scope-list"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<!-- NEW SCOPE (property picker) -->
+<div id="view-new" class="hide">
+  <div class="section">
+    <div class="section-title">New scope — where is the work? <button class="btn small secondary" onclick="showList()">← Back</button></div>
+    <div class="row"><label>Find property</label><input id="prop-filter" placeholder="type address…" oninput="renderPropOptions()" style="flex:1"></div>
+    <div class="row"><label>Property</label><select id="prop-select" size="6" style="flex:1" onchange="onPropPick()"></select></div>
+    <div class="row"><label>Unit</label><select id="unit-select" style="flex:1"><option value="">— none / whole property —</option></select>
+      <button class="btn small secondary" onclick="toggleAddUnit()">+ Unit</button></div>
+    <div class="row hide" id="add-unit-row"><label>New unit</label><input id="new-unit-label" placeholder="e.g. Apt 2" style="flex:1"><button class="btn small" onclick="addUnit()">Add</button></div>
+    <div class="row"><label>Room / area</label><input id="scope-room" placeholder="optional — e.g. Kitchen" style="flex:1"></div>
+    <div class="row"><label>Title</label><input id="scope-title" placeholder="e.g. Full turnover — 4518 Fairfax Apt 1" style="flex:1"></div>
+    <div class="row"><button class="btn approve" onclick="createScope()">Create scope →</button><span id="new-status" class="status"></span></div>
+    <div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;">
+      <button class="btn small secondary" onclick="toggleAddProp()">+ Add a new property</button>
+      <div id="add-prop-box" class="hide" style="margin-top:8px;">
+        <div class="row"><label>Address</label><input id="np-address" placeholder="123 Main St" style="flex:1"></div>
+        <div class="row"><label>City</label><input id="np-city" placeholder="Baltimore" style="flex:1"></div>
+        <div class="row"><label>Owner</label><select id="np-owner" style="flex:1"></select></div>
+        <div class="row"><button class="btn small" onclick="addProperty()">Save property</button><span id="np-status" class="status"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- EDITOR VIEW -->
+<div id="view-editor" class="hide">
+  <div class="section">
+    <div class="section-title">
+      <span id="ed-title">Scope</span>
+      <span><span id="ed-status-pill"></span> <button class="btn small secondary" onclick="showList()">← All scopes</button></span>
+    </div>
+    <div class="m info" id="ed-loc" style="font-size:11px;"></div>
+  </div>
+
+  <!-- 1. INPUT -->
+  <div class="section" id="sec-input">
+    <div class="section-title">1 · Add notes <span class="step-badge">type · voice · photo · scan folder</span></div>
+    <textarea id="note-text" rows="3" placeholder="Type or dictate notes here…"></textarea>
+    <div class="toolbtns" style="margin-top:8px;">
+      <button class="btn small" onclick="ingestText()">+ Add typed note</button>
+      <button class="btn small secondary" id="mic-btn" onclick="toggleDictate()">🎤 Dictate</button>
+      <label class="btn small secondary" style="cursor:pointer;">📷 Upload handwriting<input type="file" accept="image/*,application/pdf" class="hide" onchange="uploadHandwriting(this)"></label>
+      <button class="btn small secondary" onclick="loadDriveFolder()">📁 Pick from scan folder</button>
+    </div>
+    <div id="drive-list" class="hide" style="margin-top:8px;"></div>
+    <div id="ingest-status" class="status"></div>
+    <div style="margin-top:10px;">
+      <div class="section-title" style="border:none;padding:0;margin-bottom:6px;">Collected notes</div>
+      <div id="raw-input" class="raw">—</div>
+    </div>
+    <div style="margin-top:10px;"><button class="btn" onclick="generate()">🧩 Organize into scope of work</button></div>
+  </div>
+
+  <!-- 2. LINE ITEMS -->
+  <div class="section" id="sec-items">
+    <div class="section-title">2 · Scope of work — review &amp; edit <span class="step-badge">the vendor estimates this</span></div>
+    <div id="items-wrap"><div class="empty">Organize your notes above to build the itemized scope.</div></div>
+    <div class="toolbtns" style="margin-top:8px;">
+      <button class="btn small secondary" onclick="addItem()">+ Add item</button>
+      <button class="btn small" onclick="saveItems()">💾 Save edits</button>
+      <button class="btn small secondary" onclick="splitSelected()">✂️ Split selected → new scope</button>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <input id="cmd-box" placeholder='Command: e.g. "remove the plumbing section, another vendor will do it"' style="flex:1">
+      <button class="btn small" onclick="applyCommand()">Apply</button>
+    </div>
+    <div id="items-status" class="status"></div>
+  </div>
+
+  <!-- 3. PHOTOS -->
+  <div class="section" id="sec-photos">
+    <div class="section-title">3 · Before photos <span class="step-badge">attach to the work order</span></div>
+    <label class="btn small secondary" style="cursor:pointer;">📷 Add before photos<input type="file" accept="image/*,video/*" multiple class="hide" onchange="uploadScopePhotos(this)"></label>
+    <div id="photo-cards" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;"></div>
+    <div id="photo-status" class="status"></div>
+  </div>
+
+  <!-- 4. APPROVE + WO -->
+  <div class="section" id="sec-approve">
+    <div class="section-title">4 · Approve &amp; create work order</div>
+    <div class="toolbtns">
+      <button class="btn approve" onclick="approveScope()">✅ Approve scope</button>
+      <button class="btn" onclick="toWO()">🔧 Create Work Order (request for estimate)</button>
+    </div>
+    <div id="wo-status" class="status"></div>
+  </div>
+
+  <!-- 5. ESTIMATE -->
+  <div class="section" id="sec-estimate">
+    <div class="section-title">5 · Capture the vendor's estimate</div>
+    <div class="row"><label>Vendor</label><select id="est-vendor" style="flex:1"><option value="">—</option></select></div>
+    <div class="row"><label>Estimate #</label><input id="est-number" placeholder="vendor's estimate/quote number" style="flex:1"></div>
+    <div class="row"><label>Amount $</label><input id="est-amount" type="number" step="0.01" placeholder="vendor's estimate total" style="flex:1"></div>
+    <div class="row"><label>Notes</label><input id="est-notes" placeholder="e.g. vendor swapped fixture X for Y; item Z not possible" style="flex:1"></div>
+    <div class="row"><button class="btn" onclick="saveEstimate()">💾 Save estimate</button><span id="est-status" class="status"></span></div>
+    <p class="sub" style="margin:6px 0 0;">You can update the estimate/scope any time — if the vendor proposes a different solution, edit the items above or run a command, then re-save.</p>
+  </div>
+
+  <!-- 6. PROPOSAL -->
+  <div class="section" id="sec-proposal">
+    <div class="section-title">6 · Generate the customer proposal</div>
+    <button class="btn" onclick="genProposal()">📄 Generate proposal from scope + estimate</button>
+    <div id="prop-status" class="status"></div>
+    <div id="proposal-out" class="hide" style="margin-top:10px;">
+      <pre class="doc" id="proposal-text"></pre>
+      <button class="btn small secondary" onclick="copyProposal()" style="margin-top:8px;">📋 Copy proposal</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var state = { properties:[], units:[], owners:[], vendors:[], scopes:[], current:null };
+
+function worker(){ return document.getElementById('worker-url').value.trim(); }
+function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
+(function(){ var t = localStorage.getItem('mh_auth'); if(t){ document.getElementById('auth-token').value = t; } })();
+document.getElementById('auth-token').addEventListener('change', function(e){ localStorage.setItem('mh_auth', e.target.value.trim()); });
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function setStatus(id,msg,cls){ var el=document.getElementById(id); if(el){ el.className='status '+(cls||'info'); el.textContent=msg||''; } }
+
+async function get(path){
+  var r = await fetch(worker()+path, { headers:{'X-Auth-Token':token()} });
+  var text = await r.text(); var data; try{ data=JSON.parse(text); }catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status===401) throw new Error('Unauthorized — check the admin token.');
+  return data;
+}
+async function post(path, body){
+  var r = await fetch(worker()+path, { method:'POST', headers:{'X-Auth-Token':token(),'Content-Type':'application/json'}, body:JSON.stringify(body||{}) });
+  var text = await r.text(); var data; try{ data=JSON.parse(text); }catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status===401) throw new Error('Unauthorized — check the admin token.');
+  if (!r.ok && data && data.error) throw new Error(data.error);
+  if (!r.ok) throw new Error('HTTP '+r.status);
+  return data;
+}
+
+function show(view){ ['list','new','editor'].forEach(function(v){ document.getElementById('view-'+v).classList.toggle('hide', v!==view); }); }
+function showList(){ show('list'); loadScopes(); }
+
+async function boot(){
+  setStatus('conn-status','Loading…');
+  try{
+    var res = await Promise.all([get('/properties'),get('/units'),get('/owners'),get('/vendors')]);
+    state.properties=res[0]||[]; state.units=res[1]||[]; state.owners=res[2]||[]; state.vendors=res[3]||[];
+    setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok');
+    populateOwners(); populateVendors();
+    await loadScopes();
+  }catch(e){ setStatus('conn-status','⚠ '+e.message,'err'); }
+}
+
+/* ---------- scope list ---------- */
+function statusPill(s){ var map={draft:'draft',approved:'approved','wo-created':'wocreated',estimated:'estimated',proposed:'proposed'}; var cls=map[s]||'draft'; return '<span class="pill '+cls+'">'+esc(s||'draft')+'</span>'; }
+async function loadScopes(){
+  try{ state.scopes = await get('/scopes'); }catch(e){ document.getElementById('scope-list').innerHTML='<div class="empty err">'+esc(e.message)+'</div>'; return; }
+  var el = document.getElementById('scope-list');
+  if(!state.scopes.length){ el.innerHTML='<div class="empty">No scopes yet. Tap “+ New scope”.</div>'; return; }
+  el.innerHTML = state.scopes.map(function(s){
+    var loc = propLabel(s.property_id) + (s.unit_id?(' · Unit '+unitLabel(s.unit_id)):'') ;
+    return '<div class="scard" onclick="openScope(\''+s.id+'\')"><div><div class="t">#'+esc(s.id)+' · '+esc(s.title||'Untitled')+'</div>'+
+      '<div class="m">'+esc(loc)+' · '+s.item_count+' item(s)'+(s.wo_id?(' · '+esc(s.wo_id)):'')+'</div></div>'+
+      '<div>'+statusPill(s.status)+'</div></div>';
+  }).join('');
+}
+
+/* ---------- helpers ---------- */
+function propLabel(id){ var p=state.properties.find(function(x){return x.ID===String(id);}); return p?(p.Address||('Property '+id)):('Property '+id); }
+function propLabelFull(id){ var p=state.properties.find(function(x){return x.ID===String(id);}); return p?((p.Address||'')+(p.City?(', '+p.City):'')):('Property '+id); }
+function unitLabel(id){ var u=state.units.find(function(x){return x.ID===String(id);}); return u?(u.Unit_Label||id):id; }
+function populateOwners(){ var sel=document.getElementById('np-owner'); if(!sel) return; sel.innerHTML=state.owners.map(function(o){ var nm=((o.First_Name||'')+' '+(o.Last_Name||'')).trim()||o.Company||('Owner '+o.ID); return '<option value="'+esc(o.ID)+'">'+esc(nm)+'</option>'; }).join(''); }
+function populateVendors(){ var sel=document.getElementById('est-vendor'); if(!sel) return; sel.innerHTML='<option value="">—</option>'+state.vendors.filter(function(v){return v.Active!=='FALSE';}).map(function(v){ var nm=((v.First_Name||'')+' '+(v.Last_Name||'')).trim()||v.Company||v.Name||('Vendor '+v.ID); return '<option value="'+esc(v.ID)+'">'+esc(nm)+'</option>'; }).join(''); }
+
+/* ---------- new scope ---------- */
+function startNew(){ show('new'); document.getElementById('prop-filter').value=''; document.getElementById('scope-room').value=''; document.getElementById('scope-title').value=''; document.getElementById('new-unit-label').value=''; setStatus('new-status',''); renderPropOptions(); }
+function renderPropOptions(){
+  var q=(document.getElementById('prop-filter').value||'').toLowerCase();
+  var list=state.properties.filter(function(p){ if(p.Active==='FALSE') return false; var s=((p.Address||'')+' '+(p.City||'')).toLowerCase(); return !q||s.indexOf(q)>=0; });
+  list.sort(function(a,b){ return (a.Address||'').localeCompare(b.Address||''); });
+  var sel=document.getElementById('prop-select');
+  sel.innerHTML=list.map(function(p){ return '<option value="'+esc(p.ID)+'">'+esc((p.Address||'')+(p.City?(', '+p.City):''))+'</option>'; }).join('');
+  if(list.length===1){ sel.value=list[0].ID; onPropPick(); }
+}
+function onPropPick(){
+  var pid=document.getElementById('prop-select').value;
+  var us=state.units.filter(function(u){ return String(u.Property_ID)===String(pid) && u.Active!=='FALSE'; });
+  var sel=document.getElementById('unit-select');
+  sel.innerHTML='<option value="">— none / whole property —</option>'+us.map(function(u){ return '<option value="'+esc(u.ID)+'">Unit '+esc(u.Unit_Label||u.ID)+'</option>'; }).join('');
+}
+function toggleAddUnit(){ document.getElementById('add-unit-row').classList.toggle('hide'); }
+async function addUnit(){
+  var pid=document.getElementById('prop-select').value; var label=document.getElementById('new-unit-label').value.trim();
+  if(!pid){ setStatus('new-status','Pick a property first','err'); return; }
+  if(!label){ setStatus('new-status','Enter a unit label','err'); return; }
+  setStatus('new-status','Adding unit…');
+  try{ var r=await post('/unit/add',{ Property_ID:pid, Unit_Label:label, Active:'TRUE' }); state.units.push({ ID:r.id, Property_ID:pid, Unit_Label:label, Active:'TRUE' }); onPropPick(); document.getElementById('unit-select').value=r.id; document.getElementById('new-unit-label').value=''; document.getElementById('add-unit-row').classList.add('hide'); setStatus('new-status','✅ unit added','ok'); }
+  catch(e){ setStatus('new-status','⚠ '+e.message,'err'); }
+}
+function toggleAddProp(){ document.getElementById('add-prop-box').classList.toggle('hide'); }
+async function addProperty(){
+  var addr=document.getElementById('np-address').value.trim();
+  if(!addr){ setStatus('np-status','Address required','err'); return; }
+  setStatus('np-status','Saving…');
+  try{
+    var body={ Address:addr, City:document.getElementById('np-city').value.trim(), Owner_ID:document.getElementById('np-owner').value, Active:'TRUE' };
+    var r=await post('/property/add', body);
+    var np={ ID:r.id, Address:addr, City:body.City, Owner_ID:body.Owner_ID, Active:'TRUE' };
+    state.properties.push(np);
+    document.getElementById('prop-filter').value=addr; renderPropOptions(); document.getElementById('prop-select').value=r.id; onPropPick();
+    document.getElementById('add-prop-box').classList.add('hide');
+    setStatus('np-status','✅ property added','ok');
+  }catch(e){ setStatus('np-status','⚠ '+e.message,'err'); }
+}
+async function createScope(){
+  var pid=document.getElementById('prop-select').value;
+  if(!pid){ setStatus('new-status','Pick or add a property','err'); return; }
+  setStatus('new-status','Creating…');
+  try{
+    var r=await post('/scope/create',{ property_id:pid, unit_id:document.getElementById('unit-select').value, room:document.getElementById('scope-room').value.trim(), title:document.getElementById('scope-title').value.trim()||'Untitled scope', created_by:'scope-creator' });
+    await openScope(r.id);
+  }catch(e){ setStatus('new-status','⚠ '+e.message,'err'); }
+}
+
+/* ---------- editor ---------- */
+var recognizer=null, dictating=false;
+async function openScope(id){
+  setStatus('conn-status','Loading scope…');
+  try{ state.current = await get('/scope?id='+encodeURIComponent(id)); }
+  catch(e){ setStatus('conn-status','⚠ '+e.message,'err'); return; }
+  setStatus('conn-status','✅ connected','ok');
+  show('editor');
+  renderEditor();
+}
+function renderEditor(){
+  var s=state.current;
+  document.getElementById('ed-title').textContent='Scope #'+s.ID+' · '+(s.Title||'Untitled');
+  document.getElementById('ed-status-pill').innerHTML=statusPill(s.Status);
+  document.getElementById('ed-loc').textContent = propLabelFull(s.Property_ID) + (s.Unit_ID?(' · Unit '+unitLabel(s.Unit_ID)):'') + (s.Room?(' · '+s.Room):'');
+  document.getElementById('raw-input').textContent = (s.Raw_Input||'').trim() || '—';
+  renderItems();
+  // estimate fields
+  document.getElementById('est-vendor').value=s.Vendor_ID||'';
+  document.getElementById('est-number').value=s.Estimate_Number||'';
+  document.getElementById('est-amount').value=s.Estimate_Amount||'';
+  document.getElementById('est-notes').value=s.Estimate_Notes||'';
+  // proposal
+  if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').textContent=s.Proposal_Text; }
+  else { document.getElementById('proposal-out').classList.add('hide'); }
+  gateSections();
+  loadScopePhotos();
+}
+function gateSections(){
+  var s=state.current; var items=(s.line_items||[]);
+  document.getElementById('sec-items').classList.toggle('disabled', false);
+  document.getElementById('sec-approve').classList.toggle('disabled', items.length===0);
+  var hasWO=!!s.WO_ID;
+  document.getElementById('sec-estimate').classList.toggle('disabled', !hasWO);
+  document.getElementById('sec-proposal').classList.toggle('disabled', !(parseFloat(s.Estimate_Amount)>0));
+  document.getElementById('wo-status').innerHTML = hasWO ? ('✅ Work order <b>'+esc(s.WO_ID)+'</b> created (Estimate Requested).') : '';
+}
+
+/* input / ingest */
+async function ingestText(){
+  var t=document.getElementById('note-text').value.trim();
+  if(!t){ setStatus('ingest-status','Nothing to add','err'); return; }
+  setStatus('ingest-status','Adding…');
+  try{ var r=await post('/scope/ingest',{ scope_id:state.current.ID, text:t }); state.current.Raw_Input=r.raw_input; document.getElementById('raw-input').textContent=r.raw_input; document.getElementById('note-text').value=''; setStatus('ingest-status','✅ added','ok'); }
+  catch(e){ setStatus('ingest-status','⚠ '+e.message,'err'); }
+}
+function toggleDictate(){
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ setStatus('ingest-status','Voice dictation is not supported in this browser — type instead.','warn'); return; }
+  if(dictating){ recognizer && recognizer.stop(); return; }
+  recognizer=new SR(); recognizer.lang='en-US'; recognizer.interimResults=true; recognizer.continuous=true;
+  var base=document.getElementById('note-text').value;
+  recognizer.onresult=function(ev){ var txt=''; for(var i=ev.resultIndex;i<ev.results.length;i++){ txt+=ev.results[i][0].transcript; } document.getElementById('note-text').value=(base?base+' ':'')+txt; };
+  recognizer.onend=function(){ dictating=false; document.getElementById('mic-btn').textContent='🎤 Dictate'; base=document.getElementById('note-text').value; };
+  recognizer.onerror=function(e){ setStatus('ingest-status','Mic error: '+e.error,'err'); };
+  recognizer.start(); dictating=true; document.getElementById('mic-btn').textContent='⏹ Stop';
+  setStatus('ingest-status','Listening… speak your notes, then Stop.','info');
+}
+function uploadHandwriting(input){
+  var f=input.files[0]; if(!f) return;
+  setStatus('ingest-status','Reading handwriting (OCR)…');
+  var reader=new FileReader();
+  reader.onload=async function(){
+    try{
+      var r=await post('/scope/ingest',{ scope_id:state.current.ID, image_b64:reader.result, mime:f.type||'image/jpeg', source_label:f.name });
+      state.current.Raw_Input=r.raw_input; document.getElementById('raw-input').textContent=r.raw_input;
+      setStatus('ingest-status','✅ transcribed '+ (r.extracted||'').length +' chars','ok');
+    }catch(e){ setStatus('ingest-status','⚠ '+e.message,'err'); }
+  };
+  reader.readAsDataURL(f); input.value='';
+}
+async function loadDriveFolder(){
+  var box=document.getElementById('drive-list'); box.classList.remove('hide'); box.innerHTML='<div class="info">Loading scan folder…</div>';
+  try{
+    var r=await get('/scope/drive-list');
+    if(!r.ok){ box.innerHTML='<div class="err">⚠ '+esc(r.error||'could not list folder')+'</div>'; return; }
+    if(!r.files.length){ box.innerHTML='<div class="info">No image/PDF files found in the scan folder.</div>'; return; }
+    box.innerHTML=r.files.map(function(f){ return '<div class="drivefile"><span>'+esc(f.name)+'</span><button class="btn small" onclick="ingestDrive(\''+esc(f.id)+'\',this)">OCR &amp; add</button></div>'; }).join('');
+  }catch(e){ box.innerHTML='<div class="err">⚠ '+esc(e.message)+'</div>'; }
+}
+async function ingestDrive(fileId,btn){
+  btn.disabled=true; btn.textContent='Reading…';
+  try{ var r=await post('/scope/ingest',{ scope_id:state.current.ID, drive_file_id:fileId }); state.current.Raw_Input=r.raw_input; document.getElementById('raw-input').textContent=r.raw_input; btn.textContent='✅ added'; setStatus('ingest-status','✅ transcribed from scan','ok'); }
+  catch(e){ btn.disabled=false; btn.textContent='OCR & add'; setStatus('ingest-status','⚠ '+e.message,'err'); }
+}
+async function generate(){
+  setStatus('ingest-status','Organizing notes into a scope of work…');
+  try{ var r=await post('/scope/generate',{ scope_id:state.current.ID }); state.current.line_items=r.line_items; renderItems(); gateSections(); setStatus('ingest-status','✅ organized '+r.line_items.length+' item(s)','ok'); }
+  catch(e){ setStatus('ingest-status','⚠ '+e.message,'err'); }
+}
+
+/* line items */
+function renderItems(){
+  var items=state.current.line_items||[];
+  var wrap=document.getElementById('items-wrap');
+  if(!items.length){ wrap.innerHTML='<div class="empty">No items yet. Organize your notes above, or “+ Add item”.</div>'; return; }
+  wrap.innerHTML=items.map(function(it){
+    return '<div class="li" data-id="'+esc(it.id)+'">'+
+      '<input type="checkbox" class="li-sel">'+
+      '<div class="fields">'+
+        '<div><label>Area</label><input class="f-area" value="'+esc(it.area)+'"></div>'+
+        '<div><label>Trade</label><input class="f-trade" value="'+esc(it.trade)+'"></div>'+
+        '<div><label>Qty</label><input class="f-qty" value="'+esc(it.qty)+'"></div>'+
+        '<div class="full"><label>Description</label><input class="f-desc" value="'+esc(it.description)+'"></div>'+
+        '<div class="full"><label>Note</label><input class="f-note" value="'+esc(it.note)+'"></div>'+
+        '<button class="btn small danger del" onclick="removeItem(this)">Remove</button>'+
+      '</div></div>';
+  }).join('');
+}
+function collectItems(){
+  var out=[];
+  document.querySelectorAll('#items-wrap .li').forEach(function(el){
+    out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value });
+  });
+  return out;
+}
+function addItem(){ var items=collectItems(); var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0); items.push({ id:'li'+(maxn+1), area:'', trade:'', qty:'', description:'', note:'' }); state.current.line_items=items; renderItems(); }
+function removeItem(btn){ var el=btn.closest('.li'); var id=el.dataset.id; state.current.line_items=collectItems().filter(function(it){ return it.id!==id; }); renderItems(); }
+async function saveItems(){
+  var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
+  setStatus('items-status','Saving…');
+  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items }); state.current.line_items=items; setStatus('items-status','✅ saved','ok'); gateSections(); }
+  catch(e){ setStatus('items-status','⚠ '+e.message,'err'); }
+}
+async function applyCommand(){
+  var cmd=document.getElementById('cmd-box').value.trim();
+  if(!cmd){ setStatus('items-status','Type a command','err'); return; }
+  // persist any manual edits first so the command runs against what's on screen
+  var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
+  setStatus('items-status','Applying: '+cmd);
+  try{
+    await post('/scope/update',{ scope_id:state.current.ID, line_items:items });
+    var r=await post('/scope/command',{ scope_id:state.current.ID, command:cmd });
+    state.current.line_items=r.line_items; renderItems(); document.getElementById('cmd-box').value='';
+    setStatus('items-status','✅ '+(r.summary||'updated'),'ok'); gateSections();
+  }catch(e){ setStatus('items-status','⚠ '+e.message,'err'); }
+}
+async function splitSelected(){
+  var ids=[]; document.querySelectorAll('#items-wrap .li').forEach(function(el){ if(el.querySelector('.li-sel').checked) ids.push(el.dataset.id); });
+  if(!ids.length){ setStatus('items-status','Tick the items to move into the new scope','err'); return; }
+  var title=prompt('Title for the new (split) scope — e.g. the trade/vendor it is for:', (state.current.Title||'Scope')+' — split');
+  if(title===null) return;
+  var removeFromParent=confirm('Also REMOVE these '+ids.length+' item(s) from this scope?\n\nOK = move them out.  Cancel = copy them (keep in both).');
+  setStatus('items-status','Splitting…');
+  try{
+    // save current edits first
+    await post('/scope/update',{ scope_id:state.current.ID, line_items:collectItems().filter(function(it){ return (it.description||'').trim(); }) });
+    var r=await post('/scope/split',{ scope_id:state.current.ID, line_item_ids:ids, new_title:title, remove_from_parent:removeFromParent });
+    setStatus('items-status','✅ created Scope #'+r.id+' with '+r.moved+' item(s). Open it from the list when ready.','ok');
+    await openScope(state.current.ID);
+  }catch(e){ setStatus('items-status','⚠ '+e.message,'err'); }
+}
+
+/* photos */
+function scopeKey(){ return 'SCOPE-'+state.current.ID; }
+async function loadScopePhotos(){
+  var box=document.getElementById('photo-cards'); box.innerHTML='';
+  try{
+    var atts=await get('/attachments?wo_id='+encodeURIComponent(scopeKey()));
+    (atts||[]).filter(function(a){ return a.Active!=='FALSE'; }).forEach(function(a){ addPhotoCard(a.File_Name||'photo', a.Drive_URL||'#'); });
+  }catch(e){}
+}
+function addPhotoCard(name,url){ var box=document.getElementById('photo-cards'); var c=document.createElement('div'); c.style.cssText='display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;'; c.innerHTML='📷 <a class="link" href="'+esc(url)+'" target="_blank">'+esc(String(name).slice(0,18))+'</a>'; box.appendChild(c); }
+function uploadScopePhotos(input){
+  var files=Array.from(input.files); if(!files.length) return;
+  var key=scopeKey(), prop=propLabel(state.current.Property_ID);
+  setStatus('photo-status','Uploading '+files.length+' file(s)…');
+  var chain=Promise.resolve(null);
+  files.forEach(function(file){
+    chain=chain.then(function(folder){
+      var body={ wo_id:key, property:prop, file_name:file.name, file_type:'before', mime_type:file.type||'image/jpeg', origin:'scope-creator' };
+      if(folder){ body.folder_id=folder.id; body.folder_url=folder.url; }
+      return post('/create-upload-session', body).then(function(res){
+        if(!res.upload_url){ setStatus('photo-status','⚠ '+(res.error||'session failed'),'err'); return folder; }
+        var nf={ id:res.wo_folder_id, url:res.wo_folder_url };
+        return fetch(res.upload_url,{ method:'PUT', headers:{'Content-Type':file.type||'application/octet-stream'}, body:file }).then(function(r){ return r.json(); }).then(function(fd){
+          if(fd && fd.id){ post('/log-attachment',{ wo_id:key, file_id:fd.id, file_url:fd.webViewLink||'', file_name:file.name, file_type:'before', mime_type:file.type||'', wo_folder_id:res.wo_folder_id, wo_folder_url:res.wo_folder_url }).catch(function(){}); addPhotoCard(file.name, fd.webViewLink||'#'); setStatus('photo-status','✅ uploaded','ok'); }
+          return nf;
+        });
+      });
+    });
+  });
+  input.value='';
+}
+
+/* approve + WO */
+async function approveScope(){
+  setStatus('wo-status','Approving…');
+  try{ await post('/scope/approve',{ scope_id:state.current.ID }); state.current.Status='approved'; document.getElementById('ed-status-pill').innerHTML=statusPill('approved'); setStatus('wo-status','✅ approved — ready to create the work order','ok'); }
+  catch(e){ setStatus('wo-status','⚠ '+e.message,'err'); }
+}
+async function toWO(){
+  if(state.current.WO_ID){ setStatus('wo-status','Already created: '+state.current.WO_ID,'warn'); return; }
+  setStatus('wo-status','Creating work order…');
+  try{ var r=await post('/scope/to-wo',{ scope_id:state.current.ID }); await openScope(state.current.ID); setStatus('wo-status','✅ '+r.wo_id+' created (Estimate Requested)'+(r.photos_moved?(' · '+r.photos_moved+' photo(s) attached'):'')+'. Assign a vendor for the estimate from the Hub.','ok'); }
+  catch(e){ setStatus('wo-status','⚠ '+e.message,'err'); }
+}
+
+/* estimate */
+async function saveEstimate(){
+  setStatus('est-status','Saving…');
+  try{
+    await post('/scope/estimate',{ scope_id:state.current.ID, vendor_id:document.getElementById('est-vendor').value, estimate_number:document.getElementById('est-number').value.trim(), estimate_amount:document.getElementById('est-amount').value, estimate_notes:document.getElementById('est-notes').value.trim() });
+    state.current.Estimate_Amount=document.getElementById('est-amount').value; state.current.Vendor_ID=document.getElementById('est-vendor').value;
+    if(['draft','approved','wo-created'].indexOf(state.current.Status)>=0){ state.current.Status='estimated'; document.getElementById('ed-status-pill').innerHTML=statusPill('estimated'); }
+    setStatus('est-status','✅ estimate saved','ok'); gateSections();
+  }catch(e){ setStatus('est-status','⚠ '+e.message,'err'); }
+}
+
+/* proposal */
+async function genProposal(){
+  setStatus('prop-status','Generating customer proposal…');
+  try{
+    var r=await post('/scope/proposal',{ scope_id:state.current.ID });
+    document.getElementById('proposal-out').classList.remove('hide');
+    document.getElementById('proposal-text').textContent=r.proposal_text;
+    state.current.Proposal_Text=r.proposal_text; state.current.Status='proposed'; document.getElementById('ed-status-pill').innerHTML=statusPill('proposed');
+    setStatus('prop-status','✅ proposal ready — total $'+Number(r.final_price).toFixed(2)+', deposit $'+Number(r.deposit).toFixed(2),'ok');
+  }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
+}
+function copyProposal(){ var t=document.getElementById('proposal-text').textContent; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 copied','ok'); }); }
+
+boot();
+</script>
+</body>
+</html>

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-13.3';
+const BUILD_VERSION = '2026-08-13.4';
 
 export default {
   async fetch(request, env) {
@@ -173,6 +173,9 @@ export default {
         if (path === '/deliveries')             return await deliveriesList(env, url);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
         if (path === '/proposal/signatures')    return await proposalList(env, url);
+        if (path === '/scopes')                 return await scopeList(env, url);
+        if (path === '/scope')                  return await scopeGet(env, url);
+        if (path === '/scope/drive-list')       return await scopeDriveList(env, url);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -313,6 +316,16 @@ export default {
         if (path === '/delivery/update')          return await updateRow(env, 'Deliveries', body.id, body.fields);
         if (path === '/proposal/sign')            return await proposalSign(env, body);
         if (path === '/proposal/book')            return await proposalBook(env, body);
+        if (path === '/scope/create')             return await scopeCreate(env, body);
+        if (path === '/scope/ingest')             return await scopeIngest(env, body);
+        if (path === '/scope/generate')           return await scopeGenerate(env, body);
+        if (path === '/scope/command')            return await scopeCommand(env, body);
+        if (path === '/scope/update')             return await scopeUpdate(env, body);
+        if (path === '/scope/split')              return await scopeSplit(env, body);
+        if (path === '/scope/approve')            return await scopeApprove(env, body);
+        if (path === '/scope/to-wo')              return await scopeToWO(env, body);
+        if (path === '/scope/estimate')           return await scopeEstimate(env, body);
+        if (path === '/scope/proposal')           return await scopeProposal(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -1079,6 +1092,268 @@ async function receiptReconSkip(env, body) {
   const id = body.id; if (!id) return json({ error: 'id required' }, 400);
   await updateRow(env, 'Receipt_Recon_Queue', id, { Status: 'skipped', Notes: body.reason || '' });
   return json({ ok: true, id });
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// SCOPE CREATOR (B-030/031/076) — the workflow: raw notes → organized Scope of
+// Work → WO (request for estimate, unassigned) → capture the vendor's estimate
+// onto the scope → generate the CUSTOMER proposal from scope+estimate. Inputs
+// are typed / voiced text, an uploaded handwriting photo (OCR), or a file picked
+// from Brett's handwriting-scan Drive folder. Editable at every stage — both
+// direct edits AND natural-language commands ("remove the plumbing section").
+// Splittable into per-vendor scopes. Reuses the Receipt-Reconciler Claude-vision
+// OCR pattern, the New-WO flow (createWorkOrder), the photo pipeline, and
+// calcTieredEstimate for the proposal. HARD RULE: markup is applied SERVER-SIDE
+// only and only FINAL customer prices ever leave scopeProposal — never cost,
+// markupPct, or the derivation. (Brett's #1 non-negotiable.)
+// ══════════════════════════════════════════════════════════════════════════
+const SCOPES_HEADERS = ['ID','Property_ID','Unit_ID','Room','Title','Status','Raw_Input','Line_Items','Source_Refs','Parent_Scope_ID','WO_ID','Vendor_ID','Estimate_Number','Estimate_Amount','Estimate_Notes','Proposal_Text','Created_By','Created_Date','Updated_Date','Notes','Active'];
+// Brett's handwriting scan Drive folder (scan-intake/processed.json). Overridable via
+// Config key `scope_scan_folder_id` or env SCOPE_SCAN_FOLDER_ID. NOTE: the Worker runtime
+// service account must be shared (Editor) on this folder or the Drive list returns 0 rows.
+const SCOPE_SCAN_FOLDER_DEFAULT = '1iXjjwsnPKF_GtlR8gesxS9uJppO4xntZ';
+
+async function scopesTab(env) { await ensureTab(env, 'Scopes', SCOPES_HEADERS); }
+function scopeParseItems(s) { try { const a = JSON.parse((s && s.Line_Items) || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
+function scopeCleanItems(arr) {
+  return (Array.isArray(arr) ? arr : []).map((it, i) => ({
+    id: (it && it.id) || ('li' + (i + 1)), area: (it && it.area) || '', trade: (it && it.trade) || '',
+    description: (it && it.description) || '', qty: (it && it.qty) || '', note: (it && it.note) || '',
+  })).filter(it => it.description);
+}
+async function scopeFind(env, id) { const rows = await fetchTab(env, 'Scopes'); return rows.find(r => r.ID === String(id)) || null; }
+
+// Claude text helper (mirrors generateEstimateText). media = optional image/document content block.
+async function scopeClaude(env, prompt, media, maxTokens) {
+  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  const content = media ? [media, { type: 'text', text: prompt }] : prompt;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens || 1200, messages: [{ role: 'user', content }] }) });
+  const data = await resp.json();
+  return (data.content && data.content[0] && data.content[0].text || '').trim();
+}
+function scopeParseJSON(txt) { try { return JSON.parse(String(txt).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return null; } }
+
+// OCR an uploaded/drive image or PDF of hand-written notes → verbatim transcription text.
+async function scopeOcr(env, bytes, mime) {
+  const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+  const media = isPdf
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+    : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+  const prompt = `You are transcribing a property-maintenance contractor's HAND-WRITTEN job notes (a scope of work). Transcribe EVERYTHING you can read, verbatim, preserving line breaks and any list/indent structure. Expand shorthand only where unambiguous. Do NOT invent items, do NOT add prices, do NOT summarize. If a word is unreadable, write [?]. Return ONLY the transcription text, no preamble.`;
+  return await scopeClaude(env, prompt, media, 1500);
+}
+
+async function scopeCreate(env, body) {
+  await scopesTab(env);
+  if (!body.property_id) return json({ error: 'property_id required' }, 400);
+  const now = new Date().toISOString();
+  return await addRow(env, 'Scopes', {
+    Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Room: body.room || '',
+    Title: body.title || 'Untitled scope', Status: 'draft', Raw_Input: body.raw_input || '',
+    Line_Items: '[]', Source_Refs: '[]', Parent_Scope_ID: body.parent_scope_id || '', WO_ID: '',
+    Vendor_ID: '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '', Proposal_Text: '',
+    Created_By: body.created_by || 'admin', Created_Date: now, Updated_Date: now, Notes: '', Active: 'TRUE',
+  });
+}
+
+async function scopeList(env, url) {
+  await scopesTab(env);
+  let rows = []; try { rows = await fetchTab(env, 'Scopes'); } catch (_) { return json([]); }
+  rows = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE');
+  const status = url && url.searchParams.get('status');
+  if (status && status !== 'all') rows = rows.filter(r => (r.Status || 'draft') === status);
+  rows.sort((a, b) => (parseInt(b.ID) || 0) - (parseInt(a.ID) || 0));
+  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: r.Status, wo_id: r.WO_ID, parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
+}
+
+async function scopeGet(env, url) {
+  const id = url.searchParams.get('id'); if (!id) return json({ error: 'id required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
+  return json(Object.assign({}, s, { line_items: scopeParseItems(s), source_refs: srcs }));
+}
+
+// GET /scope/drive-list?folder= — list image/pdf files in the handwriting scan folder to pick from.
+async function scopeDriveList(env, url) {
+  const cfg = await fetchConfig(env).catch(() => ({}));
+  const folder = (url && url.searchParams.get('folder')) || cfg.scope_scan_folder_id || env.SCOPE_SCAN_FOLDER_ID || SCOPE_SCAN_FOLDER_DEFAULT;
+  try {
+    const tok = await getAccessToken(env);
+    const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType,webViewLink,modifiedTime)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '100', orderBy: 'modifiedTime desc' });
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${tok}` } });
+    const data = await res.json();
+    if (data.error) return json({ ok: false, folder_id: folder, error: 'Drive list failed: ' + (data.error.message || ''), files: [] });
+    const files = (data.files || []).filter(f => /image|pdf/i.test(f.mimeType || ''));
+    return json({ ok: true, folder_id: folder, files });
+  } catch (e) { return json({ ok: false, error: e.message, files: [] }); }
+}
+
+// POST /scope/ingest — {scope_id, text | drive_file_id | image_b64(+mime), source_label?} → append to Raw_Input.
+async function scopeIngest(env, body) {
+  const id = body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  let added = '', label = body.source_label || '', type = 'text';
+  try {
+    if (body.text && String(body.text).trim()) { added = String(body.text).trim(); type = 'text'; label = label || 'typed/voice'; }
+    else if (body.drive_file_id) { const tok = await getAccessToken(env); const dl = await driveDownload(tok, body.drive_file_id); added = await scopeOcr(env, dl.bytes, dl.mime); type = 'drive'; label = label || ('drive:' + body.drive_file_id); }
+    else if (body.image_b64) { const raw = String(body.image_b64).replace(/^data:[^,]+,/, ''); const bin = Uint8Array.from(atob(raw), c => c.charCodeAt(0)); added = await scopeOcr(env, bin.buffer, body.mime || 'image/jpeg'); type = 'upload'; label = label || 'upload'; }
+    else return json({ error: 'text, drive_file_id, or image_b64 required' }, 400);
+  } catch (e) { return json({ error: 'ingest failed: ' + (e.message || e) }, 500); }
+  const raw = s.Raw_Input ? (s.Raw_Input + '\n\n' + added) : added;
+  let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
+  srcs.push({ type, label, ts: new Date().toISOString(), chars: added.length });
+  await updateRow(env, 'Scopes', id, { Raw_Input: raw, Source_Refs: JSON.stringify(srcs).slice(0, 8000), Updated_Date: new Date().toISOString() });
+  return json({ success: true, extracted: added, raw_input: raw });
+}
+
+// POST /scope/generate — organize Raw_Input into structured line items (no prices).
+async function scopeGenerate(env, body) {
+  const id = body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  const raw = (s.Raw_Input || '').trim();
+  if (!raw) return json({ error: 'No notes to organize yet — add typed/voice/OCR input first' }, 400);
+  const prompt = `You are a property-maintenance scope-of-work organizer. Turn the contractor's raw, messy job notes below into a clean, itemized scope of work — the list of work a VENDOR will estimate. Fix typos/slang/grammar. Split compound notes into separate concrete work items. Group by area (room/location) and trade where clear. Do NOT invent work that isn't implied. Do NOT include ANY prices, costs, or dollar amounts.\n\nRaw notes:\n"""\n${raw}\n"""\n\nReturn ONLY strict minified JSON: an array of items, each {"id":"li1","area":"","trade":"","description":"","qty":"","note":""}. Number ids li1, li2, li3… in order. area = room/location (e.g. "Kitchen", "Exterior"); trade = one of Plumbing, Electrical, HVAC, Carpentry, Drywall, Paint, Flooring, Appliance, Cleaning, General, or "" if unclear; description = the work, imperative and specific; qty = a count/measure if stated else ""; note = any caveat/detail. JSON array only, no prose.`;
+  const txt = await scopeClaude(env, prompt, null, 2000);
+  const items = scopeParseJSON(txt);
+  if (!Array.isArray(items)) return json({ error: 'Could not organize notes — model returned unparseable output', raw: String(txt).slice(0, 300) }, 502);
+  const clean = scopeCleanItems(items);
+  await updateRow(env, 'Scopes', id, { Line_Items: JSON.stringify(clean), Updated_Date: new Date().toISOString() });
+  return json({ success: true, line_items: clean });
+}
+
+// POST /scope/command — natural-language edit of the current line items ("remove the plumbing section").
+async function scopeCommand(env, body) {
+  const id = body.scope_id, command = body.command;
+  if (!id || !command) return json({ error: 'scope_id and command required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  const items = scopeParseItems(s);
+  const prompt = `You are editing a property-maintenance scope of work. Current line items as JSON:\n${JSON.stringify(items)}\n\nApply this instruction from the contractor:\n"""${command}"""\n\nReturn ONLY strict minified JSON: {"items":[...],"summary":"<one short sentence describing exactly what changed>"}. Each item keeps the shape {"id","area","trade","description","qty","note"}. Preserve the id of any item you keep; assign a fresh id (continue the li# numbering) to any new item. Remove items the instruction says to remove. Never add prices. JSON only.`;
+  const txt = await scopeClaude(env, prompt, null, 2000);
+  const parsed = scopeParseJSON(txt);
+  if (!parsed || !Array.isArray(parsed.items)) return json({ error: 'Could not apply command — model returned unparseable output', raw: String(txt).slice(0, 300) }, 502);
+  const clean = scopeCleanItems(parsed.items);
+  await updateRow(env, 'Scopes', id, { Line_Items: JSON.stringify(clean), Updated_Date: new Date().toISOString() });
+  return json({ success: true, line_items: clean, summary: parsed.summary || 'Updated.' });
+}
+
+// POST /scope/update — direct manual edits.
+async function scopeUpdate(env, body) {
+  const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
+  await scopesTab(env);
+  const fields = { Updated_Date: new Date().toISOString() };
+  if (Array.isArray(body.line_items)) fields.Line_Items = JSON.stringify(scopeCleanItems(body.line_items));
+  if (body.title !== undefined) fields.Title = body.title;
+  if (body.notes !== undefined) fields.Notes = body.notes;
+  if (body.room !== undefined) fields.Room = body.room;
+  if (body.raw_input !== undefined) fields.Raw_Input = body.raw_input;
+  if (body.status !== undefined) fields.Status = body.status;
+  await updateRow(env, 'Scopes', id, fields);
+  return json({ success: true });
+}
+
+// POST /scope/split — carve selected items into a new child scope (for a different vendor).
+async function scopeSplit(env, body) {
+  const id = body.scope_id; const ids = Array.isArray(body.line_item_ids) ? body.line_item_ids : [];
+  if (!id || !ids.length) return json({ error: 'scope_id and line_item_ids required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  const items = scopeParseItems(s);
+  const picked = items.filter(it => ids.includes(it.id));
+  if (!picked.length) return json({ error: 'None of the selected items were found' }, 400);
+  const now = new Date().toISOString();
+  const child = await addRow(env, 'Scopes', {
+    Property_ID: s.Property_ID, Unit_ID: s.Unit_ID, Room: s.Room,
+    Title: body.new_title || ((s.Title || 'Scope') + ' — split'), Status: 'draft', Raw_Input: '',
+    Line_Items: JSON.stringify(picked), Source_Refs: '[]', Parent_Scope_ID: s.ID, WO_ID: '',
+    Vendor_ID: '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '', Proposal_Text: '',
+    Created_By: body.created_by || 'admin', Created_Date: now, Updated_Date: now, Notes: 'Split from Scope #' + s.ID, Active: 'TRUE',
+  });
+  const cj = await child.json().catch(() => ({}));
+  if (body.remove_from_parent) {
+    const remain = items.filter(it => !ids.includes(it.id));
+    await updateRow(env, 'Scopes', s.ID, { Line_Items: JSON.stringify(remain), Updated_Date: now });
+  }
+  return json({ success: true, id: cj.id, moved: picked.length });
+}
+
+// POST /scope/approve — the review gate before a scope can become a WO.
+async function scopeApprove(env, body) {
+  const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  if (!scopeParseItems(s).length) return json({ error: 'Scope has no line items to approve' }, 400);
+  await updateRow(env, 'Scopes', id, { Status: 'approved', Updated_Date: new Date().toISOString() });
+  return json({ success: true });
+}
+
+// POST /scope/to-wo — convert an approved scope into a WORK ORDER tagged "Estimate Requested"
+// (unassigned), with the line items rendered into the description + checklist, and any photos
+// staged on the scope re-keyed onto the new WO as before-photos.
+async function scopeToWO(env, body) {
+  const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
+  if (s.WO_ID) return json({ error: 'Scope already has a work order: ' + s.WO_ID, wo_id: s.WO_ID }, 409);
+  const trades = [...new Set(items.map(it => (it.trade || '').trim()).filter(Boolean))];
+  const trade = trades.length === 1 ? trades[0] : '';
+  const byArea = {}; for (const it of items) { const a = it.area || 'General'; (byArea[a] = byArea[a] || []).push(it); }
+  let desc = 'REQUEST FOR ESTIMATE — Scope of Work (Scope #' + s.ID + ')\n';
+  for (const a of Object.keys(byArea)) { desc += '\n' + a + ':\n'; for (const it of byArea[a]) desc += '  • ' + (it.description || '') + (it.qty ? (' (qty ' + it.qty + ')') : '') + (it.trade ? (' [' + it.trade + ']') : '') + (it.note ? (' — ' + it.note) : '') + '\n'; }
+  const checklist = JSON.stringify(items.map(it => ({ text: (it.area ? (it.area + ': ') : '') + (it.description || ''), done: false })));
+  const woResp = await createWorkOrder(env, { property_id: s.Property_ID, unit_id: s.Unit_ID, room: s.Room, trade, type: 'estimate', priority: body.priority || 'normal', description: desc.trim(), notes: 'Request for estimate created from Scope #' + s.ID, checklist, created_by: body.created_by || 'scope-creator', vendor_needs_access: body.vendor_needs_access || 'auto' });
+  const wj = await woResp.json().catch(() => ({}));
+  const woId = wj.id; if (!woId) return json({ error: 'WO creation failed', detail: wj }, 500);
+  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) {}
+  await updateWOFields(env, woId, { Status: 'Estimate Requested', Scope_ID: s.ID });
+  let moved = 0;
+  try {
+    const atts = await fetchTab(env, 'Attachments'); const key = 'SCOPE-' + s.ID;
+    for (const a of atts) { if (a.WO_ID === key && String(a.Active || '').toUpperCase() !== 'FALSE') { await updateRow(env, 'Attachments', a.ID, { WO_ID: woId }); moved++; } }
+  } catch (_) {}
+  await updateRow(env, 'Scopes', id, { Status: 'wo-created', WO_ID: woId, Updated_Date: new Date().toISOString() });
+  return json({ success: true, wo_id: woId, photos_moved: moved });
+}
+
+// POST /scope/estimate — record the vendor's estimate number(s) + amount onto the scope
+// (editable afterward, since a vendor may propose a different solution or drop an item).
+async function scopeEstimate(env, body) {
+  const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  const fields = { Updated_Date: new Date().toISOString() };
+  if (body.vendor_id !== undefined) fields.Vendor_ID = body.vendor_id;
+  if (body.estimate_number !== undefined) fields.Estimate_Number = body.estimate_number;
+  if (body.estimate_amount !== undefined) fields.Estimate_Amount = String(body.estimate_amount);
+  if (body.estimate_notes !== undefined) fields.Estimate_Notes = body.estimate_notes;
+  if (['draft', 'approved', 'wo-created'].includes(s.Status)) fields.Status = 'estimated';
+  await updateRow(env, 'Scopes', id, fields);
+  return json({ success: true });
+}
+
+// POST /scope/proposal — build the CUSTOMER proposal from scope + estimate. calcTieredEstimate
+// applies the markup SERVER-SIDE; ONLY the final customer price + deposit are returned/stored.
+// No cost, markupPct, or derivation is ever emitted here (Brett's #1 non-negotiable).
+async function scopeProposal(env, body) {
+  const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
+  const estAmt = parseFloat(s.Estimate_Amount || '') || 0;
+  if (!estAmt || estAmt <= 0) return json({ error: 'Add the vendor estimate amount first — it is the basis for the customer price' }, 400);
+  let addr = ''; try { const props = await fetchTab(env, 'Properties'); const p = props.find(x => x.ID === s.Property_ID); if (p) addr = (p.Address || '') + (s.Unit_ID ? (' Unit ' + s.Unit_ID) : ''); } catch (_) {}
+  addr = addr || ('Property ' + s.Property_ID);
+  const pricing = calcTieredEstimate(estAmt); // markup applied here, server-side, never leaves this scope
+  const bulletsPrompt = `You are a property maintenance estimate writer. Rewrite the following scope-of-work line items into a polished, professional, scannable bulleted list for a CUSTOMER proposal. Correct typos/slang/grammar and group related items under bold category headers where sensible. Do NOT include ANY dollar amounts, costs, or pricing of any kind. Items:\n${items.map(it => `- ${(it.area ? it.area + ': ' : '') + (it.description || '')}${it.note ? (' (' + it.note + ')') : ''}`).join('\n')}\n\nReturn ONLY the rewritten scope as clean Markdown bullets — no preamble, no pricing, no other sections.`;
+  let scopeText = '';
+  try { scopeText = await scopeClaude(env, bulletsPrompt, null, 1200); } catch (_) { scopeText = items.map(it => '- ' + (it.description || '')).join('\n'); }
+  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this estimate and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.\n- This estimate is priced as a single, unified project. If individual line items are selectively removed after approval, remaining items are subject to a 15% price adjustment plus a $150 mobilization fee.`;
+  await updateRow(env, 'Scopes', id, { Proposal_Text: doc, Status: 'proposed', Updated_Date: new Date().toISOString() });
+  return json({ success: true, proposal_text: doc, final_price: pricing.finalPrice, deposit: pricing.deposit });
 }
 
 // Brett's default hourly rate for his own (hub) time when a customer has no specific rate on
