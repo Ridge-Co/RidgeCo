@@ -1,4 +1,20 @@
-# WHERE THINGS STAND — Aug 12, 2026
+# WHERE THINGS STAND — Aug 13, 2026
+
+## ✅ Receipt Reconciler Phase 2 SHIPPED — daily Drive scan + confirm-first UI (Aug 13, `2026-08-13.1`, live). 🔴 One manual step still needed to actually run.
+Closes the loop opened by Phase 1 (rule 84) per Brett's explicit "queue up phase 2" instruction. Full pipeline is built, deployed, and unit-tested (`test/receipt-suggest-core.test.mjs`, 11 assertions; full suite green, 25 files): a daily sweep (riding the 11:00 UTC digest cron) of the real **"Receipts and Invoices"** Drive folder → one cheap OCR call per new file (now also extracting line items + card last-4) → the zero-AI matching engine → a `Receipt_Recon_Queue` row Brett reviews on the new **`receipt-reconciler.html`** page (linked from 🧰 TOOLS) and taps **Confirm** (posts the real `Receipts` row via the same `addReceipt()` every other entry path uses) or **Skip**. Nothing bills itself. FEATURE_LOG rule 85 has the full breakdown.
+
+**🔴 BLOCKING: the Worker's runtime service account (`maintenance-hub-sheets@maintenance-hub-498819.iam.gserviceaccount.com`) is not shared on the "Receipts and Invoices" folder (or its "PAYABLES Inbox" parent) — checked live via `get_file_permissions`, only brett@/info@/the domain are on it.** That means `receiptReconScan`'s Drive listing call returns 0 results — always — until this is fixed. No tool available to any Claude session can grant Drive sharing; this is a **2-minute manual step for Brett**: open the "PAYABLES Inbox" folder in Drive → Share → paste `maintenance-hub-sheets@maintenance-hub-498819.iam.gserviceaccount.com` → Editor → Send. Once shared, the next daily cron run (or a manual "Scan now" tap on the new page) will pick up everything currently sitting in the folder.
+
+**Also left in that folder from testing:** `recon_smoke_test.png` — an obviously-fake test receipt image (labelled "SMOKE TEST — SAFE TO DELETE" right in the image) used to probe the sharing issue above. Safe to delete any time; it'll otherwise queue itself once sharing is fixed.
+
+**Small addition while in there:** `receiptSuggestCore` (the phase-1 decision engine) is now a single pure function shared by both the interactive endpoint and the new bulk scan — was two near-duplicate code paths before. The customer-card exclusion list can now also live in a Config sheet row (`receipt_customer_cards`), not just the Cloudflare secret `RECEIPT_CUSTOMER_CARDS` — same open pending item as before (Brett hasn't set either yet; the Jennifer/Goldszmidt Visa `7442` was the flagged candidate).
+
+## ✅ Payflow trio + back half of the Aug 12 session — reconciled and closed out
+The three-part payflow build (Send & Track invoices / pay vendor bills / in-house reconcile exclusion — rules 80–82) shipped and has been live since Aug 12. In the second half of that session: all fresh Alex Busey vendor invoices were entered and reconciled against Brett's own overlapping labor (new WOs created where his time had never been captured); a full-year purchase audit across brett@ and info@ Gmail found and reconciled ~45+ receipts across ~13 properties (3 new work orders, one new customer+property — Cohado/Paulo Gregory linked to the existing QB customer 341, not duplicated); and the 2930 St Paul St question was closed via Brett's uploaded QB transaction-history CSV (continuous invoicing confirmed, no gap). WO-1048 (151 W Lanvale Apt 1) is already status **Invoiced** — its two attached receipts ($179.40 + $83.90) will NOT auto-appear on a new customer invoice; Brett may want to reprice/re-send that WO if he intends to actually bill for them.
+
+**Still open from Aug 12, unchanged:** (a) set Cloudflare secret `PAY_AUTH_CODE` before using bill-pay (a made-up passphrase, NOT the QuickBooks login); (b) **rotate the classic GitHub PAT and the Hub admin token** both pasted into chat this session/last — still exposed.
+
+
 
 ## ✅ Payflow trio: Send & Track + Pay vendor bills + reconcile excludes in-house (Aug 12, built + tested + validated; NOT yet pushed/live)
 Three things Brett asked for in one session, all built against the live code, all with tests, all
