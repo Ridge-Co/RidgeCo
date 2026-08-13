@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-13.4';
+const BUILD_VERSION = '2026-08-13.5';
 
 export default {
   async fetch(request, env) {
@@ -120,6 +120,7 @@ export default {
         if (path === '/keys')                   return await getSheet(env, 'Keys');
         if (path === '/keys-history')           return await getSheet(env, 'Keys_History');
         if (path === '/config')                 return await getConfig(env);
+        if (path === '/pricing-config')         return json({ configured: !!(await getPricingConfig(env)), config: (await getPricingConfig(env)) || null });
         if (path === '/property')               return await getPropertyFull(env, url);
         if (path === '/building-info')          return await getBuildingInfo(env, url);
         if (path === '/cache')                  return await getSheet(env, 'Troubleshooting_Cache');
@@ -2223,10 +2224,27 @@ async function addEstimateVersion(env, body) {
   return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
 }
 
-function calcTieredEstimate(rawCost) {
+// Pricing constants (tier markups, admin fee, card-fee multiplier, itemized hourly/min,
+// rounding) are CONFIDENTIAL and live ONLY in a private store — the Cloudflare secret
+// `PRICING_CONFIG` (JSON) or the private Config-sheet row `pricing_config`. They are never
+// in this public repo. Shape:
+//   { "tiers": [[<maxCost>,<markupPct>], ..., [null,<markupPct>]],  // brackets low→high; null = "and above"
+//     "adminFee": <n>, "cardFeeMult": <n>, "itemizedHourly": <n>, "itemizedMinFee": <n>,
+//     "onsiteHourly": <n>, "onsiteMinFee": <n>, "passThroughFlat": <n>, "roundTo": <n> }
+// Unset → null → pricing SUGGESTIONS/estimates are dormant; manual invoicing still works.
+async function getPricingConfig(env) {
+  try { if (env && env.PRICING_CONFIG) return JSON.parse(env.PRICING_CONFIG); } catch(_) {}
+  try { const cfg = await fetchConfig(env); if (cfg && cfg.pricing_config) return JSON.parse(cfg.pricing_config); } catch(_) {}
+  return null;
+}
+// Pure, config-driven — no constants baked in. Returns null if pricing isn't configured.
+function calcTieredEstimate(rawCost, pc) {
+  if (!pc || !Array.isArray(pc.tiers) || !pc.tiers.length) return null;
   const cost = parseFloat(rawCost) || 0;
-  let pct; if (cost<=250) pct=0.35; else if (cost<=500) pct=0.33; else if (cost<=750) pct=0.31; else if (cost<=1000) pct=0.29; else if (cost<=1250) pct=0.27; else if (cost<=1500) pct=0.26; else pct=0.25;
-  const stepA=cost*(1+pct),stepB=stepA+75,stepC=stepB*1.05,finalPrice=Math.ceil(stepC/5)*5,deposit=finalPrice/2;
+  let pct = pc.tiers[pc.tiers.length-1][1];
+  for (const t of pc.tiers) { if (t[0] === null || cost <= t[0]) { pct = t[1]; break; } }
+  const round = pc.roundTo || 5, fee = (pc.cardFeeMult != null ? pc.cardFeeMult : 1), admin = pc.adminFee || 0;
+  const stepA=cost*(1+pct), stepB=stepA+admin, stepC=stepB*fee, finalPrice=Math.ceil(stepC/round)*round, deposit=finalPrice/2;
   return { rawCost:cost, markupPct:pct, stepA:+stepA.toFixed(2), stepB:+stepB.toFixed(2), stepC:+stepC.toFixed(2), finalPrice:+finalPrice.toFixed(2), deposit:+deposit.toFixed(2) };
 }
 
@@ -2328,7 +2346,10 @@ async function generateEstimateText(env, body) {
   const { property_address, issues, line_items, wo_id } = body;
   if (!property_address||!issues) return json({ error: 'property_address and issues required' }, 400);
   if (!Array.isArray(line_items)||!line_items.length) return json({ error: 'line_items required' }, 400);
-  const rawCost = line_items.reduce((sum,li)=>sum+(parseFloat(li.amount)||0),0), pricing = calcTieredEstimate(rawCost);
+  const rawCost = line_items.reduce((sum,li)=>sum+(parseFloat(li.amount)||0),0);
+  const _pc = await getPricingConfig(env);
+  if (!_pc) return json({ error: 'Pricing not configured — set PRICING_CONFIG (Cloudflare secret) or the Config sheet `pricing_config` row.' }, 400);
+  const pricing = calcTieredEstimate(rawCost, _pc);
   let includeIntegrityClause=false;
   if (wo_id) { try { const all=await fetchTab(env,'Estimates'); const versions=all.filter(e=>e.WO_ID===wo_id).sort((a,b)=>parseInt(a.Version||'1')-parseInt(b.Version||'1')); if(versions.length){const firstItems=JSON.parse(versions[0].Line_Items||'[]'); if(firstItems.length>1&&line_items.length<firstItems.length) includeIntegrityClause=true;} } catch(e){} }
   const itemsList=line_items.map(li=>`- ${li.desc}`).join('\n');
@@ -7196,7 +7217,7 @@ function qbBillDocNumber(billRow, ir, siblingIndex) {
 // Build customer-invoice lines: one line per receipt (materials) + one line for
 // truck/shop stock (if any) + a single labor summary line. Materials show at cost;
 // the labor line absorbs the remainder so the lines always sum to Customer_Total —
-// keeping the internal $75 first-hour / markup off the customer's invoice.
+// keeping the internal first-hour / markup (private) off the customer's invoice.
 function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts) {
   // An override is used when REPAIRING an existing invoice: the wording changes, the
   // account it posted to must not. Trade resolution has changed since some invoices were
@@ -7263,7 +7284,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   //
   // CRITICAL: only split when the bill is genuinely hourly AND its STORED rate reconciles
   // with the labor amount to the cent. `laborAmt` is Customer_Total − materials, which on a
-  // marked-up vendor bill carries markup + on-site time + the 5% fee — so hours × the
+  // marked-up vendor bill carries markup + on-site time + the card fee — so hours × the
   // vendor's rate would NOT tie out, and deriving a rate from laborAmt/hours would print a
   // fabricated $/hr that quietly exposes the markup. Reconciling against the bill's own
   // stored Rate (hrs × Rate === Labor_Total === laborAmt) is true only when the labor passes

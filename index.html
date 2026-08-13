@@ -949,22 +949,28 @@ var AUTH_TOKEN = '';
 var state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };
 function esc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
-// Mirrors worker's calcTieredEstimate — micro-tier markup → $75 admin fee →
-// 5% processing → round up to nearest $5. Used to auto-suggest invoice charges.
+// Pricing constants are CONFIDENTIAL — not in this file. They're fetched at runtime from the
+// admin-gated GET /pricing-config (backed by the private PRICING_CONFIG secret / Config row)
+// into PRICING_CFG. Mirrors the worker's config-driven calcTieredEstimate exactly.
+// Returns null when pricing isn't configured (suggestions hide; manual invoicing still works).
+var PRICING_CFG = null;
+function loadPricingConfig() {
+  try {
+    return api('GET','/pricing-config').then(function(r){ PRICING_CFG = (r && r.configured) ? r.config : null; return PRICING_CFG; })
+      .catch(function(){ PRICING_CFG = null; });
+  } catch(e){ PRICING_CFG = null; }
+}
 function calcTieredEstimate(rawCost) {
+  var pc = PRICING_CFG;
+  if (!pc || !pc.tiers || !pc.tiers.length) return null;
   var cost = parseFloat(rawCost) || 0;
-  var pct;
-  if (cost <= 250) pct = 0.35;
-  else if (cost <= 500) pct = 0.33;
-  else if (cost <= 750) pct = 0.31;
-  else if (cost <= 1000) pct = 0.29;
-  else if (cost <= 1250) pct = 0.27;
-  else if (cost <= 1500) pct = 0.26;
-  else pct = 0.25;
+  var pct = pc.tiers[pc.tiers.length-1][1];
+  for (var i=0;i<pc.tiers.length;i++){ var t=pc.tiers[i]; if (t[0]===null || cost<=t[0]) { pct=t[1]; break; } }
+  var round = pc.roundTo || 5, fee = (pc.cardFeeMult!=null?pc.cardFeeMult:1), admin = pc.adminFee || 0;
   var stepA = cost * (1 + pct);
-  var stepB = stepA + 75;
-  var stepC = stepB * 1.05;
-  var finalPrice = Math.ceil(stepC / 5) * 5;
+  var stepB = stepA + admin;
+  var stepC = stepB * fee;
+  var finalPrice = Math.ceil(stepC / round) * round;
   return { finalPrice: finalPrice, deposit: finalPrice / 2, markupPct: pct };
 }
 // ── TRADES ───────────────────────────────────────────────────
@@ -1178,6 +1184,7 @@ function processNotificationsBackground() {
 
 function loadAll() {
   populateTradeControls();   // idempotent; fills every trade control from the one list
+  loadPricingConfig();       // fetch the private pricing constants once (admin-gated endpoint)
   // Returns the promise. voidVendorBill() does `loadAll().then(...)` to re-open the WO
   // detail after a void — with no return value that was calling .then on undefined and
   // throwing, so the re-render it was supposed to guarantee never ran.
@@ -5117,7 +5124,7 @@ function invPricing(k) {
   } catch (e) {}
 
   // Materials bought outside the vendor's bill. Money out of the business, so they belong
-  // in the pricing basis — which is what makes the markup and the 5% apply to them, the
+  // in the pricing basis — which is what makes the markup and the card fee apply to them, the
   // same as everything else on the job.
   var ownMaterials = invMatTotal(k);
 
@@ -5138,39 +5145,38 @@ function invPricing(k) {
   // Your time comes from two places and both belong on the invoice: the manual on-site
   // charge, and whatever logged time entries you ticked above.
   var loggedTime = invTimeTotal(k);
-  var brettTime = (onsite ? Math.max(75, brettHrs * 75) : 0) + loggedTime;
   var travel    = parseFloat((document.getElementById('inv-travel-' + k) || {}).value) || 0;
 
-  // A — tiered: one move off total cost, scales the percentage down as jobs get bigger.
-  // Your time and travel are added on top and the result re-rounded. Without this the
-  // DEFAULT price ignored the ticked time while the panel above it displayed "+$150.00
-  // going on the invoice" — the price would have quietly excluded the very thing the
-  // section exists to add.
-  var tieredBase = calcTieredEstimate(totalCost);
-  // Your time and travel are added AFTER the markup — they are never marked up, because
-  // your hour is a wage, not a job you're pricing. They DO carry the 5% processing fee:
-  // when the customer pays the whole ticket by card, the processor takes its cut of all
-  // of it, including your hour.
-  var tieredWithExtras = Math.ceil((tieredBase.finalPrice + (brettTime + travel) * 1.05) / 5) * 5;
+  // Pricing constants come from the private config (PRICING_CFG). Logged time is real stored
+  // money and always counts; the on-site charge is valued from the config, so it (and the
+  // tiered/itemized suggestions) are dormant until pricing is configured.
+  var pc = PRICING_CFG, configured = !!(pc && pc.tiers && pc.tiers.length);
+  var fee   = configured && pc.cardFeeMult != null ? pc.cardFeeMult : 1;   // card-fee multiplier
+  var round = configured && pc.roundTo ? pc.roundTo : 5;
+  var brettTime = (onsite && configured ? Math.max(pc.onsiteMinFee || 0, brettHrs * (pc.onsiteHourly || 0)) : 0) + loggedTime;
 
-  // B — itemized: the Review Bills math. Markup is MAX($75, $35/hr), then your on-site
-  // time and travel on top, then the 5% processing fee.
-  var itemMarkup   = Math.max(75, 35 * hrs);
-  var itemSubtotal = totalCost + brettTime + travel + itemMarkup;
-  var itemFee      = itemSubtotal * 0.05;
-  var itemized     = Math.ceil((itemSubtotal + itemFee) / 5) * 5;
+  // Your own hours on this job, whichever hat you were wearing.
+  var ownWage = inHouseLabor + brettTime;
 
-  // C — pass-through: labor + materials at cost, plus your time and travel. NO markup,
-  // NO $75 admin. This is the starting point for hourly customers, who pay a rate plus
-  // materials without a surcharge. The 5% card-processing fee is OPTIONAL here (default
-  // off) and toggled per panel — when on, it rides on the whole ticket like the others.
+  // A — tiered, B — itemized: both need the private config, so they're null until it's set.
+  var tieredWithExtras = null, tieredBaseFinal = null, tieredPctVal = null, itemMarkup = null, itemized = null;
+  if (configured) {
+    var tieredBase = calcTieredEstimate(totalCost);
+    // Time + travel are added AFTER the markup (never marked up) but DO carry the card fee.
+    tieredWithExtras = Math.ceil((tieredBase.finalPrice + (brettTime + travel) * fee) / round) * round;
+    tieredBaseFinal = tieredBase.finalPrice; tieredPctVal = Math.round(tieredBase.markupPct * 100);
+    itemMarkup   = Math.max(pc.itemizedMinFee || 0, (pc.itemizedHourly || 0) * hrs);
+    var itemSubtotal = totalCost + brettTime + travel + itemMarkup;
+    var itemFee      = itemSubtotal * (fee - 1);
+    itemized     = Math.ceil((itemSubtotal + itemFee) / round) * round;
+  }
+
+  // C — pass-through: labor + materials at cost + your time + travel. No markup, no admin fee —
+  // so it works even without the config. The card fee is OPTIONAL (default off) and only
+  // applies when configured.
   var passFeeOn   = !!_invPass5[k];
   var passBase    = totalCost + brettTime + travel;
-  var passthrough = +(passFeeOn ? passBase * 1.05 : passBase).toFixed(2);
-
-  // Your own hours on this job, whichever hat you were wearing: the whole job when it's
-  // in-house, or the oversight hour when someone else did the work.
-  var ownWage = inHouseLabor + brettTime;
+  var passthrough = +((passFeeOn && configured) ? passBase * fee : passBase).toFixed(2);
 
   return {
     billType: billType, hrs: hrs, laborTotal: laborTotal, truckStock: truckStock,
@@ -5178,7 +5184,8 @@ function invPricing(k) {
     totalCost: totalCost, vendorPayable: vendorPayable, ownMaterials: ownMaterials,
     vendorInHouse: vendorInHouse, inHouseLabor: inHouseLabor, cashOut: cashOut, ownWage: ownWage,
     brettTime: brettTime, brettHrs: brettHrs, travel: travel, loggedTime: loggedTime,
-    tieredPrice: tieredWithExtras, tieredBase: tieredBase.finalPrice, tieredPct: Math.round(tieredBase.markupPct * 100),
+    configured: configured,
+    tieredPrice: tieredWithExtras, tieredBase: tieredBaseFinal, tieredPct: tieredPctVal,
     itemizedPrice: itemized, itemMarkup: itemMarkup,
     passthroughPrice: passthrough, passBase: passBase, passFeeOn: passFeeOn,
   };
@@ -5203,6 +5210,8 @@ function invAutoPrice(k) {
   if (!p || !(p.totalCost > 0)) return;
   var mode = _invMode[k] || 'passthrough';
   var basis = mode === 'tiered' ? p.tieredPrice : mode === 'itemized' ? p.itemizedPrice : p.passthroughPrice;
+  if (basis == null) basis = p.passthroughPrice;   // tiered/itemized dormant until pricing is configured
+  if (basis == null) return;
   var suggested = Number(basis).toFixed(2);
   var current = String(el.value || '');
   var isOurs = current === '' || current === _invAutoPrice[k];
@@ -5257,7 +5266,7 @@ function calcInvoiceMarkup(k) {
     if (pForLabel) {
       var m = _invMode[k] || 'passthrough';
       if (m === 'passthrough' && Math.abs(charge - pForLabel.passthroughPrice) < 0.005) {
-        modeLabel = pForLabel.passFeeOn ? ' · pass-through + 5%, no markup' : ' · pass-through at cost — no markup';
+        modeLabel = pForLabel.passFeeOn ? ' · pass-through + card fee, no markup' : ' · pass-through at cost — no markup';
       } else if (m === 'tiered' && Math.abs(charge - pForLabel.tieredPrice) < 0.005) {
         modeLabel = ' · tiered markup';
       } else if (m === 'itemized' && Math.abs(charge - pForLabel.itemizedPrice) < 0.005) {
@@ -5323,28 +5332,42 @@ function invRenderSuggestions(k, p, charge) {
       '</button>';
   }
 
-  var itemSub = 'MAX($75, $35×' + p.hrs + 'h) = $' + p.itemMarkup.toFixed(0) +
-    (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
-    (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : '') + ' + 5%';
+  // Constants (admin fee, itemized hourly/min, card-fee %) come from the fetched private config
+  // (pc.*), never from literals in this file. Tiered/Itemized only render when configured.
+  var pc = PRICING_CFG, configured = !!p.configured;
+  var feePct = (configured && pc && pc.cardFeeMult != null) ? Math.round((pc.cardFeeMult - 1) * 100) : null;
+  var feeLabel = feePct != null ? (' + ' + feePct + '%') : '';
 
   var passSub = 'Cost $' + p.totalCost.toFixed(2) +
     (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
     (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : '') +
-    (p.passFeeOn ? ' + 5%' : ' · no markup');
+    (p.passFeeOn ? feeLabel : ' · no markup');
+
+  var cards = card('Pass-through', p.passthroughPrice, passSub, 'passthrough');
+  if (configured && p.tieredPrice != null) {
+    cards += card('Tiered', p.tieredPrice, '+' + p.tieredPct + '% on $' + p.totalCost.toFixed(2) +
+      (pc.adminFee ? ' + $' + pc.adminFee : '') + feeLabel +
+      (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
+      (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : ''), 'tiered');
+  }
+  if (configured && p.itemizedPrice != null) {
+    var itemSub = 'MAX($' + (pc.itemizedMinFee||0) + ', $' + (pc.itemizedHourly||0) + '×' + p.hrs + 'h) = $' + p.itemMarkup.toFixed(0) +
+      (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
+      (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : '') + feeLabel;
+    cards += card('Itemized', p.itemizedPrice, itemSub, 'itemized');
+  }
+
+  var toggle = configured ?
+    ('<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);cursor:pointer;margin-top:7px">' +
+      '<input type="checkbox"' + (p.passFeeOn ? ' checked' : '') + ' onchange="invTogglePass5(\'' + k + '\')" style="width:auto;padding:0">' +
+      'Add card-processing fee to the pass-through price' +
+    '</label>') : '';
+  var note = configured ? '' :
+    '<div style="color:var(--warn);font-size:10.5px;margin-top:6px">Tiered &amp; itemized suggestions are off until pricing is configured. Pass-through (at cost) and manual pricing still work.</div>';
 
   box.innerHTML =
     '<div style="color:var(--muted);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Suggested prices — tap one, or type your own above</div>' +
-    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
-      card('Pass-through', p.passthroughPrice, passSub, 'passthrough') +
-      card('Tiered', p.tieredPrice, '+' + p.tieredPct + '% on $' + p.totalCost.toFixed(2) + ' + $75 + 5%' +
-        (p.brettTime ? ' + $' + p.brettTime.toFixed(0) + ' your time' : '') +
-        (p.travel ? ' + $' + p.travel.toFixed(0) + ' travel' : ''), 'tiered') +
-      card('Itemized', p.itemizedPrice, itemSub, 'itemized') +
-    '</div>' +
-    '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);cursor:pointer;margin-top:7px">' +
-      '<input type="checkbox"' + (p.passFeeOn ? ' checked' : '') + ' onchange="invTogglePass5(\'' + k + '\')" style="width:auto;padding:0">' +
-      'Add 5% card-processing to the pass-through price' +
-    '</label>';
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' + cards + '</div>' + toggle + note;
 }
 
 // ── Where this bill stands ───────────────────────────────────
@@ -5491,9 +5514,9 @@ function invBillThisJob(k) {
   if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
   if (msg) msg.innerHTML = '<span style="color:var(--muted)">Approving the bill…</span>';
 
-  // The processing fee is carried as the 5% share of whatever price you settled on, so the
+  // The processing fee is carried as the card-fee share of whatever price you settled on, so the
   // Invoice_Review row reconciles against the number actually being invoiced — not against
-  // whichever formula happened to suggest it. A pass-through price with the 5% toggle OFF
+  // whichever formula happened to suggest it. A pass-through price with the card-fee toggle OFF
   // carries NO card fee, so reporting one would invent money that was never charged; in that
   // case the fee is zero and the whole gap over cost is markup (zero at true pass-through,
   // or whatever Brett typed above cost).
@@ -5915,7 +5938,7 @@ var HUB_BILLABLE_DEFAULT = { 'Admin / Coordination': false, 'Site Visit / Inspec
 // The authoritative rate is now resolved on the server per customer (Owners.Hourly_Rate,
 // else the default) when a hub time entry is saved, so this constant is used only for
 // display math (e.g. detecting a single rate across entries) when a stored rate is missing.
-// Kept in step with the server default. NOTE: the $75 in the tiered/itemized markup formula
+// Kept in step with the server default. NOTE: the admin fee in the tiered/itemized markup formula (value in private config)
 // is a separate coordination markup, not this billing rate — it is intentionally unchanged.
 var HUB_HOURLY_RATE = 85;
 
@@ -6785,7 +6808,11 @@ function irCalc(i) {
   var onsiteWrap = document.getElementById('ir-onsite-wrap-'+i);
   if (onsiteWrap) onsiteWrap.style.display = onsiteChecked ? 'flex' : 'none';
   var brettHrs = onsiteChecked ? (parseFloat((document.getElementById('ir-brett-hrs-'+i)||{}).value)||1) : 0;
-  var brettTime = onsiteChecked ? Math.max(75, brettHrs * 75) : 0;
+  // Pricing constants from the private config (PRICING_CFG). Dormant (markup 0, no fee) until set.
+  var pc = PRICING_CFG, cfgOn = !!(pc && pc.tiers && pc.tiers.length);
+  var feeMult = cfgOn && pc.cardFeeMult != null ? pc.cardFeeMult : 1;
+  var roundBase = cfgOn && pc.roundTo ? pc.roundTo : 5;
+  var brettTime = (onsiteChecked && cfgOn) ? Math.max(pc.onsiteMinFee||0, brettHrs * (pc.onsiteHourly||0)) : 0;
 
   // Travel
   var travel = parseFloat((document.getElementById('ir-travel-'+i)||{}).value)||0;
@@ -6794,24 +6821,25 @@ function irCalc(i) {
   var markup = 0;
   var markupLabel = '';
   if (jobType === 'standard') {
-    markup = Math.max(75, 35 * hrs);
-    markupLabel = 'MAX($75, $35 × ' + hrs + ' hrs) = $' + markup.toFixed(2);
+    if (cfgOn) { markup = Math.max(pc.itemizedMinFee||0, (pc.itemizedHourly||0) * hrs);
+      markupLabel = 'MAX($' + (pc.itemizedMinFee||0) + ', $' + (pc.itemizedHourly||0) + ' × ' + hrs + ' hrs) = $' + markup.toFixed(2); }
+    else { markupLabel = 'Pricing not configured — set the price manually'; }
   } else if (jobType === 'flat') {
     var custFlat = parseFloat((document.getElementById('ir-flat-price-'+i)||{}).value)||0;
     markup = custFlat - totalCost;
     markupLabel = 'Flat: $' + custFlat.toFixed(2) + ' − $' + totalCost.toFixed(2) + ' cost = $' + markup.toFixed(2);
   } else {
-    // pass-through: small fixed markup $25-35
-    markup = 30;
-    markupLabel = 'Pass-through: $30 flat';
+    // pass-through: fixed markup from config (0 / at cost when unconfigured)
+    if (cfgOn && pc.passThroughFlat != null) { markup = pc.passThroughFlat; markupLabel = 'Pass-through: $' + markup + ' flat'; }
+    else { markup = 0; markupLabel = 'Pass-through: at cost'; }
   }
 
   // Suggested (fee-included) price — guidance only; Brett sets the real number.
   var subtotal = totalCost + brettTime + travel + markup;
-  var processingFee = subtotal * 0.05;
+  var processingFee = cfgOn ? subtotal * (feeMult - 1) : 0;
   var suggested = subtotal + processingFee;
-  var round5 = Math.ceil(suggested / 5) * 5;
-  var round10 = Math.ceil(suggested / 10) * 10;
+  var round5 = Math.ceil(suggested / roundBase) * roundBase;
+  var round10 = Math.ceil(suggested / (roundBase*2)) * (roundBase*2);
 
   var finalEl = document.getElementById('ir-final-price-'+i);
   var entered = finalEl ? parseFloat(finalEl.value) : NaN;
@@ -6825,7 +6853,7 @@ function irCalc(i) {
     '<div style="font-size:11px;color:var(--muted);line-height:2;margin-bottom:8px">' +
       '<div>Vendor labor: <span style="color:var(--text)">$' + laborTotal.toFixed(2) + '</span></div>' +
       '<div>Materials (billed to customer): <span style="color:var(--text)">$' + customerMaterials.toFixed(2) + '</span>' + (accountReceipts > 0 ? ' <span style="font-size:10px">(incl. $' + accountReceipts.toFixed(2) + ' on your account)</span>' : '') + '</div>' +
-      (brettTime > 0 ? '<div>On-site coordination: <span style="color:var(--text)">$' + brettTime.toFixed(2) + '</span> (' + brettHrs + ' hrs × $75, min $75)</div>' : '') +
+      (brettTime > 0 ? '<div>On-site coordination: <span style="color:var(--text)">$' + brettTime.toFixed(2) + '</span> (' + brettHrs + ' hrs × $' + ((pc&&pc.onsiteHourly)||0) + ', min $' + ((pc&&pc.onsiteMinFee)||0) + ')</div>' : '') +
       (travel > 0 ? '<div>Travel surcharge: <span style="color:var(--text)">$' + travel.toFixed(2) + '</span></div>' : '') +
       '<div>Suggested markup (' + jobType + '): <span style="color:var(--warn)">$' + markup.toFixed(2) + '</span> <span style="font-size:10px">' + esc(markupLabel) + '</span></div>' +
       '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">Vendor payable (QB bill): <span style="color:var(--text)">$' + vendorPayable.toFixed(2) + '</span></div>' +
