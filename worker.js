@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-13.2';
+const BUILD_VERSION = '2026-08-13.3';
 
 export default {
   async fetch(request, env) {
@@ -201,6 +201,7 @@ export default {
         if (path === '/tenant/move-out')          return await processMoveOut(env, body);
         if (path === '/assign')                   return await assignVendor(env, body);
         if (path === '/status')                   return await updateStatus(env, body);
+        if (path === '/wo/checklist')             return await saveChecklist(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
         if (path === '/property/add')             return await addRow(env, 'Properties', body);
@@ -1204,6 +1205,9 @@ async function processMoveOut(env, body) {
 }
 
 async function createWorkOrder(env, body) {
+  // If a checklist was defined at creation, make sure the column exists BEFORE we read the
+  // header row — otherwise the field maps to a non-existent header and is silently dropped.
+  if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
@@ -1219,7 +1223,7 @@ async function createWorkOrder(env, body) {
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
   const woId = `WO-${nextWONum}`, now = new Date().toISOString();
-  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto' }[h] ?? ''));
+  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'' }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   try {
     const tenants = await fetchTab(env, 'Tenants');
@@ -1347,6 +1351,21 @@ async function updateStatus(env, body) {
     }
   }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_status', Skill_Or_Endpoint:'/status', Success:'TRUE', Notes:`status=${body.status||''}` }); } catch(_){}
+  return json({ success: true });
+}
+
+// Save a WO's itemized checklist state (admin defines items; vendor checks them off /
+// marks not-done with a reason). Stored as JSON on Work_Orders.Checklist. Callable by the
+// Hub (admin secret) and the vendor portal (scoped). ensureColumns self-provisions the
+// column so the first write can't silently drop the field (FL rule 37).
+async function saveChecklist(env, body) {
+  if (!body.wo_id) return json({ error: 'Missing wo_id' }, 400);
+  await ensureColumns(env, 'Work_Orders', ['Checklist']);
+  const value = typeof body.checklist === 'string' ? body.checklist : JSON.stringify(body.checklist || []);
+  await updateWOFields(env, body.wo_id, { Checklist: value });
+  if (body.updated_by) {
+    try { await logWOAudit(env, body.wo_id, body.updated_by, body.updated_by_role || 'vendor', 'Checklist', '', 'updated', body.note || ''); } catch(_){}
+  }
   return json({ success: true });
 }
 
@@ -4071,7 +4090,7 @@ async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 const ROLE_SCOPES = {
-  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos'],
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos'],
   tenant: ['/tenant-by-pin','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
   owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo'],
 };

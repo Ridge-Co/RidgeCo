@@ -584,6 +584,7 @@
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
       <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
       <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
+      <div class="form-group full"><label>Checklist / line items <span style="font-weight:normal;color:var(--muted)">(optional — one item per line; the vendor checks each off and must resolve every item to complete the job)</span></label><textarea id="wo-checklist" placeholder="One per line, e.g.&#10;Replace faucet cartridge&#10;Re-caulk around sink&#10;Run water & check for leaks"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
       <div class="form-group full">
         <label>Vendor Access to Property <span style="font-weight:normal;color:var(--muted)">— share lockbox/entry codes with vendor?</span></label>
@@ -770,6 +771,7 @@
       <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
       <div class="form-group full"><label>Description</label><textarea id="ewo-description" style="min-height:120px;resize:vertical"></textarea></div>
       <div class="form-group full"><label>Notes</label><textarea id="ewo-notes"></textarea></div>
+      <div class="form-group full"><label>Checklist / line items <span style="font-weight:normal;color:var(--muted)">(one per line; vendor checks each off — items the vendor already ticked stay ticked)</span></label><textarea id="ewo-checklist" placeholder="One per line"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(owner's internal tracking number)</span></label><input type="text" id="ewo-owner-ref" placeholder="e.g. PM-4821"></div>
       <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">CONTACT OVERRIDE <span style="font-weight:normal;text-transform:none;letter-spacing:0">— overrides tenant record on this WO only. Edit the tenant record itself in the Tenants tab.</span></div></div>
       <div class="form-group"><label>Tenant on this WO</label><select id="ewo-tenant-id" style="width:100%"><option value="">— linked tenant (default) —</option></select></div>
@@ -1491,6 +1493,7 @@ function openWODetail(woId) {
     '</div>'
   ) : '';
   document.getElementById('detail-body').insertAdjacentHTML('beforeend', statusHtml);
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', hubChecklistHtml(wo));
 
   // ── B: Photo upload section ────────────────────────────
   var propForUpload = prop ? (prop.Address||'') : '';
@@ -1906,6 +1909,35 @@ function openTenantSafetyScreen() {
   openModal('modal-tenant-safety');
 }
 
+// Turn a textarea (one item per line) into the stored checklist JSON. Empty -> '' (no column write).
+// If existingJson is passed (editing), carry over the vendor's done/reason state for unchanged lines.
+function checklistFromText(text, existingJson){
+  var items = (text||'').split('\n').map(function(l){return l.trim();}).filter(function(l){return l.length;});
+  if(!items.length) return '';
+  var prev=[]; try{ prev=JSON.parse(existingJson||'[]')||[]; }catch(e){}
+  return JSON.stringify(items.map(function(t){
+    var m=prev.find(function(p){return (p.t||'')===t;});
+    return m?{t:t,done:!!m.done,code:m.code||'',why:m.why||''}:{t:t,done:false,code:'',why:''};
+  }));
+}
+// Read-only checklist progress for the Hub WO detail (so Brett sees what the vendor did).
+function hubChecklistHtml(wo){
+  var items=[]; try{ items=JSON.parse((wo&&wo.Checklist)||'[]')||[]; }catch(e){ return ''; }
+  if(!items.length) return '';
+  var CODES={na:'Not applicable',separate:'Separate WO',estimate:'Needs estimate',access:'Couldn’t access',parts:'Needs parts'};
+  var done=items.filter(function(i){return i.done;}).length;
+  var rows=items.map(function(it){
+    var mark=it.done?'<span style="color:var(--accent2)">✓</span>':(it.code?'<span style="color:var(--warn)">●</span>':'<span style="color:var(--muted)">○</span>');
+    var reason=(!it.done&&it.code)?' <span style="color:var(--warn);font-size:10px">— '+esc(CODES[it.code]||it.code)+(it.why?': '+esc(it.why):'')+'</span>':'';
+    return '<div style="font-size:12px;padding:3px 0">'+mark+' <span style="'+(it.done?'text-decoration:line-through;color:var(--muted)':'')+'">'+esc(it.t||'')+'</span>'+reason+'</div>';
+  }).join('');
+  return '<div style="margin-bottom:14px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">CHECKLIST ('+done+'/'+items.length+' done)</div>'+rows+'</div>';
+}
+// Turn stored checklist JSON back into editable text (one item per line).
+function checklistToText(json){
+  try { var a=JSON.parse(json||'[]'); return (a||[]).map(function(i){return i.t||'';}).filter(Boolean).join('\n'); }
+  catch(e){ return ''; }
+}
 function submitNewWO() {
   var propId = document.getElementById('wo-property').value;
   var trade  = document.getElementById('wo-trade').value;
@@ -1923,6 +1955,7 @@ function submitNewWO() {
     description:document.getElementById('wo-desc').value,
     notes:document.getElementById('wo-notes').value,
     room:(document.getElementById('wo-room')||{value:''}).value.trim(),
+    checklist:checklistFromText((document.getElementById('wo-checklist')||{value:''}).value),
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
@@ -2466,6 +2499,7 @@ function openEditWOModal(woId) {
     if (tn && tn.value) { tn.style.height='auto'; tn.style.height=Math.max(80,tn.scrollHeight)+'px'; }
   }, 30);
   document.getElementById('ewo-notes').value = wo.Notes||'';
+  var ewoCl = document.getElementById('ewo-checklist'); if (ewoCl) ewoCl.value = checklistToText(wo.Checklist||'');
   var ewoRoom = document.getElementById('ewo-room'); if (ewoRoom) ewoRoom.value = wo.Room||'';
   document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
   document.getElementById('ewo-contact-name').value = wo.WO_Contact_Name||'';
@@ -2528,8 +2562,14 @@ function submitEditWO() {
   };
   var newTenant = document.getElementById('ewo-tenant-id').value;
   if (newTenant) fields.Tenant_ID = newTenant;
+  var _woPrev = safeArray(state.workorders).find(function(w){return w.ID===woId;}) || {};
+  var checklistVal = checklistFromText((document.getElementById('ewo-checklist')||{value:''}).value, _woPrev.Checklist||'');
   api('POST','/wo/admin-update',{wo_id:woId, fields:fields, admin_name:'Admin'}).then(function(res){
-    if(res.error){logError('Edit WO',res.error);toast('Error: '+res.error,'error');return;}
+    if(res && res.error){ throw new Error(res.error); }
+    // Save the checklist through its own endpoint (ensures the column exists, preserves vendor progress)
+    return api('POST','/wo/checklist',{wo_id:woId, checklist:checklistVal, updated_by:'Admin', updated_by_role:'admin'});
+  }).then(function(res2){
+    if(res2 && res2.error){ throw new Error(res2.error); }
     toast('Work order updated','success');closeModal('modal-edit-wo');loadAll();
   }).catch(function(e){logError('Edit WO',e.message);toast('Error: '+e.message,'error');});
 }

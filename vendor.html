@@ -470,6 +470,8 @@ function renderWOs(wos) {
       return '<button class="status-btn ' + s[1] + (isCurrent ? ' current' : '') + '" onclick="setStatus(\'' + wo.ID + '\',' + idx + ',\'' + s[0] + '\')">' + s[0] + '</button>';
     }).join('');
 
+    var clHtml = buildVendorChecklist(wo, idx);
+
     html += '<div class="wo-card ' + pri + '" id="card-' + idx + '">' +
       '<div class="wo-header" onclick="toggleCard(' + idx + ')">' +
         '<div class="wo-header-left">' +
@@ -515,6 +517,7 @@ function renderWOs(wos) {
           '<div class="action-title">ESTIMATE</div>' +
           '<div id="est-wrap-' + idx + '"><span style="color:var(--muted);font-size:11px">Loading…</span></div>' +
         '</div>' +
+        clHtml +
         '<div class="action-section">' +
           '<div class="action-title">UPDATE STATUS</div><!-- i18n:UPDATE STATUS -->' +
           '<div class="status-btns">' + statusBtns + '</div>' +
@@ -1037,6 +1040,16 @@ function submitStatus(woId, idx) {
     showActionMsg(idx, 'Select a status first.', 'warn');
     return;
   }
+  // Checklist gate: can't mark Complete until every item is checked or has a reason.
+  if (status === 'Complete') {
+    var g = checklistGate(idx);
+    if (!g.ok) { showActionMsg(idx, g.msg, 'warn'); return; }
+  }
+  // Persist checklist state alongside the status change (best-effort) so reasons are saved.
+  if (window._checklists && window._checklists[idx] && window._checklists[idx].length) {
+    api('/wo/checklist', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ wo_id: woId, checklist: checklistState(idx), updated_by: session.vendor_name, updated_by_role: 'vendor' }) }).catch(function(){});
+  }
   showActionMsg(idx, 'Saving…', '');
   api('/status', {
     method: 'POST',
@@ -1091,6 +1104,64 @@ function declineWO(woId, idx) {
     if (data && data.success) { showActionMsg(idx, 'Declined — thank you.', 'success'); setTimeout(loadWorkOrders, 900); }
     else { showActionMsg(idx, 'Could not decline. Try again.', 'error'); }
   }).catch(function() { showActionMsg(idx, 'Connection error.', 'error'); });
+}
+
+// ── Job checklist (itemized, vendor checks off) ──────────────
+window._checklists = window._checklists || {};
+var CL_REASONS = [
+  ['na', 'Not applicable'],
+  ['separate', 'Save for separate work order'],
+  ['estimate', 'Needs an estimate first'],
+  ['access', "Couldn't access / blocked"],
+  ['parts', 'Needs parts / materials'],
+];
+function buildVendorChecklist(wo, idx) {
+  var items = [];
+  try { items = JSON.parse(wo.Checklist || '[]') || []; } catch (e) { items = []; }
+  if (!items.length) return '';
+  window._checklists[idx] = items;
+  var rows = items.map(function(it, i) {
+    var reasonSel = '<select onchange="setChecklistReason(' + idx + ',' + i + ',this.value)" style="width:100%;margin-top:6px;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:5px;background:var(--surface2);color:var(--text)">' +
+      '<option value="">Why not done? (pick one)</option>' +
+      CL_REASONS.map(function(r) { return '<option value="' + r[0] + '"' + (it.code === r[0] ? ' selected' : '') + '>' + r[1] + '</option>'; }).join('') +
+      '</select>';
+    var whyInput = '<input type="text" oninput="setChecklistWhy(' + idx + ',' + i + ',this.value)" value="' + esc(it.why || '') + '" placeholder="Add a note (optional)" style="width:100%;margin-top:6px;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:5px;background:var(--surface2);color:var(--text)">';
+    var reasonWrap = '<div id="cl-reason-' + idx + '-' + i + '" style="display:' + (it.done ? 'none' : 'block') + ';padding-left:26px">' + reasonSel + whyInput + '</div>';
+    return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">' +
+      '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
+      '<input type="checkbox" ' + (it.done ? 'checked' : '') + ' onchange="toggleChecklistItem(' + idx + ',' + i + ',this.checked)" style="width:auto;margin-top:2px;flex-shrink:0">' +
+      '<span id="cl-txt-' + idx + '-' + i + '" style="font-size:13px;' + (it.done ? 'text-decoration:line-through;color:var(--muted)' : 'color:var(--text)') + '">' + esc(it.t || '') + '</span>' +
+      '</label>' + reasonWrap + '</div>';
+  }).join('');
+  return '<div class="action-section"><div class="action-title">JOB CHECKLIST</div>' +
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Check off each item as you finish. To complete the job, every item must be checked — or marked with a reason if you couldn\'t do it.</div>' +
+    rows +
+    '<button class="btn btn-sm" style="margin-top:10px" onclick="saveChecklistProgress(' + idx + ')">💾 Save checklist progress</button>' +
+    '<div id="cl-msg-' + idx + '" style="font-size:11px;margin-top:6px"></div>' +
+    '</div>';
+}
+function toggleChecklistItem(idx, i, checked) {
+  var it = window._checklists[idx][i]; it.done = checked; if (checked) { it.code = ''; it.why = ''; }
+  var rw = document.getElementById('cl-reason-' + idx + '-' + i); if (rw) rw.style.display = checked ? 'none' : 'block';
+  var tx = document.getElementById('cl-txt-' + idx + '-' + i);
+  if (tx) { tx.style.textDecoration = checked ? 'line-through' : ''; tx.style.color = checked ? 'var(--muted)' : 'var(--text)'; }
+}
+function setChecklistReason(idx, i, code) { window._checklists[idx][i].code = code; }
+function setChecklistWhy(idx, i, val) { window._checklists[idx][i].why = val; }
+function checklistState(idx) { return JSON.stringify(window._checklists[idx] || []); }
+function checklistGate(idx) {
+  var items = window._checklists[idx]; if (!items || !items.length) return { ok: true };
+  var unresolved = items.filter(function(it) { return !it.done && !it.code; });
+  if (unresolved.length) return { ok: false, msg: 'Check off every item, or pick a reason for the ones you couldn\'t do (' + unresolved.length + ' left).' };
+  return { ok: true };
+}
+function saveChecklistProgress(idx) {
+  var woId = (window._wos && window._wos[idx]) ? window._wos[idx].ID : null; if (!woId) return;
+  var el = document.getElementById('cl-msg-' + idx); if (el) { el.style.color = 'var(--muted)'; el.textContent = 'Saving…'; }
+  api('/wo/checklist', { method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ wo_id: woId, checklist: checklistState(idx), updated_by: session.vendor_name, updated_by_role: 'vendor' }) })
+  .then(function(d) { if (el) { el.style.color = (d && d.success) ? 'var(--accent2)' : 'var(--danger)'; el.textContent = (d && d.success) ? '✓ Saved' : 'Could not save'; } })
+  .catch(function() { if (el) { el.style.color = 'var(--danger)'; el.textContent = 'Connection error'; } });
 }
 
 // ── Photo Upload ─────────────────────────────────────────────
