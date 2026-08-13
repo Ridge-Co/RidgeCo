@@ -297,6 +297,7 @@ export default {
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
         if (path === '/qb/pay-bills')             return await qbPayBills(env, body);
         if (path === '/qb/clear-ir-bill')         return await qbClearIrBill(env, body);
+        if (path === '/qb/set-ir-bill')           return await qbSetIrBill(env, body);
         if (path === '/qb/reprice-invoice')       return await qbRepriceInvoice(env, body);
         if (path === '/qb/relabel-invoice')       return await qbRelabelInvoice(env, body);
         if (path === '/qb/set-bill-docnumber')    return await qbSetBillDocNumber(env, body);
@@ -7015,6 +7016,60 @@ async function qbClearIrBill(env, body) {
     await updateRow(env, 'Invoice_Review', irId, { QB_Bill_ID: '', QB_Bill_Number: '' });
     return json({ ok: true, ir_id: irId, wo_id: ir.WO_ID || '',
       cleared: { qb_bill_id: prevBill, qb_bill_number: prevBillNum },
+      kept: { qb_invoice_id: ir.QB_Invoice_ID || '', status: ir.QB_Invoice_Status || '' } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/set-ir-bill  { ir_id, qb_bill_id, apply?, force? }
+// Inverse of /qb/clear-ir-bill: RE-ATTACHES an existing QuickBooks vendor bill to an
+// Invoice_Review row whose QB_Bill_ID was blanked — e.g. after a duplicate-bill cleanup that
+// deleted the pushed bill but left the real bill standing in QuickBooks. Without this link the
+// Hub's who-to-pay (/qb/payables) reports the row as "nothing to pay" and never surfaces
+// "PAY THE VENDOR" when the owner pays. Reads the bill live to confirm it exists and belongs to
+// the row's vendor, then writes QB_Bill_ID + QB_Bill_Number. Preview-first: without apply:true it
+// reports what WOULD change and writes nothing. Only the bill fields are touched — the customer
+// invoice id/number/status are left exactly as they are.
+async function qbSetIrBill(env, body) {
+  try {
+    const irId = String(body.ir_id || '').trim();
+    const billId = String(body.qb_bill_id || '').trim();
+    if (!irId || !billId) return json({ ok: false, error: 'ir_id and qb_bill_id are required' }, 400);
+    const [irs, vendors] = await fetchTabs(env, ['Invoice_Review', 'Vendors']);
+    const ir = irs.find(r => String(r.ID) === irId);
+    if (!ir) return json({ ok: false, error: 'Invoice_Review row ' + irId + ' not found' }, 404);
+
+    // Read the bill live from QuickBooks to confirm it exists + capture DocNumber / vendor / balance.
+    const token = await qbAccessToken(env);
+    const got = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
+    const bill = got && got.Bill;
+    if (!bill) return json({ ok: false, error: qbFault(got) || ('QuickBooks has no bill with id ' + billId) }, 404);
+    const docNumber = bill.DocNumber || '';
+    const billVendorId = String((bill.VendorRef && bill.VendorRef.value) || '');
+    const billVendorName = (bill.VendorRef && bill.VendorRef.name) || '';
+    const total = Number(bill.TotalAmt || 0);
+    const balance = Number(bill.Balance != null ? bill.Balance : bill.TotalAmt);
+
+    // Safety: the bill's vendor must match the IR row's vendor (when the row's vendor is QB-linked).
+    const vrow = vendors.find(v => String(v.ID) === String(ir.Vendor_ID));
+    const rowVendorQbo = vrow ? String(vrow.QBO_Vendor_ID || '').trim() : '';
+    const vendorMatch = rowVendorQbo ? (rowVendorQbo === billVendorId) : null;
+    if (vendorMatch === false && !body.force)
+      return json({ ok: false, error: `Vendor mismatch: bill ${billId} belongs to QBO vendor ${billVendorId} (${billVendorName}), but Invoice_Review ${irId} is vendor ${ir.Vendor_ID} → QBO ${rowVendorQbo}. Pass force:true only if you are certain.` }, 409);
+
+    const prev = { qb_bill_id: ir.QB_Bill_ID || '', qb_bill_number: ir.QB_Bill_Number || '' };
+    const next = { qb_bill_id: billId, qb_bill_number: docNumber };
+
+    if (!body.apply) {
+      return json({ ok: true, preview: true, ir_id: irId, wo_id: ir.WO_ID || '',
+        bill: { id: billId, doc: docNumber, vendor_qbo_id: billVendorId, vendor: billVendorName, total, balance },
+        vendor_match: vendorMatch, current: prev, would_write: next,
+        kept: { qb_invoice_id: ir.QB_Invoice_ID || '', status: ir.QB_Invoice_Status || '' } });
+    }
+
+    await updateRow(env, 'Invoice_Review', irId, { QB_Bill_ID: billId, QB_Bill_Number: docNumber });
+    return json({ ok: true, applied: true, ir_id: irId, wo_id: ir.WO_ID || '',
+      bill: { id: billId, doc: docNumber, vendor: billVendorName, total, balance },
+      vendor_match: vendorMatch, was: prev, now: next,
       kept: { qb_invoice_id: ir.QB_Invoice_ID || '', status: ir.QB_Invoice_Status || '' } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
