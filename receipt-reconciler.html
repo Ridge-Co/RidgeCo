@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Receipt Reconciler</title>
+<style>
+  :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--warn:#fbbf24;--info:#1d4ed8;--radius:6px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1050px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.12em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;line-height:1.5;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  .btn.danger{background:var(--danger);color:#fff;}
+  .btn.small{padding:5px 10px;font-size:11px;}
+  input,select,textarea{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  textarea{width:100%;resize:vertical;min-height:34px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
+  .row label{color:var(--muted);font-size:11px;min-width:100px;}
+  .ok{color:var(--accent2);}.err{color:var(--danger);}.info{color:var(--muted);}.warn{color:#9a6b00;}
+  .empty{padding:20px;text-align:center;color:var(--muted);}
+  .tabs{display:flex;gap:6px;margin-bottom:12px;}
+  .tab{padding:6px 12px;border-radius:12px;font-size:11px;font-weight:bold;cursor:pointer;background:var(--surface2);border:1px solid var(--border);color:var(--muted);}
+  .tab.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;white-space:nowrap;font-weight:bold;}
+  .pill.suggest{background:#eaf6ee;color:var(--accent2);}
+  .pill.warn{background:#fdf2e2;color:#9a6b00;}
+  .pill.danger{background:#fdecea;color:#b42318;}
+  .pill.muted{background:#f3f5f8;color:var(--muted);}
+  .rcard{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px;}
+  .rcard.excl{opacity:0.7;}
+  .rc-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;}
+  .rc-title{font-size:13px;font-weight:bold;line-height:1.35;}
+  .rc-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+  .rc-meta{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:8px;}
+  .rc-meta > div{font-size:12px;}
+  .rc-meta .lbl{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:1px;}
+  .rc-items{font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5;}
+  .rc-flags{margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;}
+  .rc-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;}
+  .rc-fields .full{grid-column:1/-1;}
+  .rc-fields label{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px;}
+  .rc-fields input,.rc-fields select,.rc-fields textarea{width:100%;}
+  .rc-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:8px;}
+  .rc-foot a{color:var(--info);text-decoration:none;font-weight:bold;font-size:11px;}
+  .rc-status{font-size:11px;min-height:14px;}
+</style>
+</head>
+<body>
+<h1>🧾 RIDGE CO — RECEIPT RECONCILER</h1>
+<p class="sub">
+  Every receipt dropped in the <b>Receipts and Invoices</b> Drive folder gets OCR'd once, matched
+  against your <b>open</b> work orders by description, and checked for duplicates — all with zero-AI
+  pure code (CAP-002). Nothing bills itself. Confirm posts the receipt to the work order exactly
+  like a manual entry; Skip dismisses it. The daily sweep runs on its own; use "Scan now" to pull
+  in anything dropped since the last run.
+</p>
+
+<div class="section">
+  <div class="section-title">Connection</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
+  <div class="row"><label>Admin token</label><input id="auth-token" type="password" placeholder="paste if not remembered" style="flex:1"></div>
+  <div class="row">
+    <button class="btn" onclick="scanNow()">Scan now</button>
+    <button class="btn secondary" onclick="loadQueue()">↻ Refresh</button>
+    <span id="conn-status" style="font-size:11px;color:var(--muted)"></span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="tabs" id="tabs"></div>
+  <div id="list"><div class="empty">Loading…</div></div>
+</div>
+
+<script>
+const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['skipped','Skipped'], ['all','All'] ];
+let curStatus = 'pending';
+let allWOs = [];
+
+function worker(){ return document.getElementById('worker-url').value.trim(); }
+function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
+(function(){ const t = localStorage.getItem('mh_auth'); if(t){ document.getElementById('auth-token').value = t; } })();
+document.getElementById('auth-token').addEventListener('change', e => localStorage.setItem('mh_auth', e.target.value.trim()));
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function money(n){ return (n===null||n===undefined||n==='') ? '' : (Number(n)||0).toFixed(2); }
+
+async function get(path){
+  const r = await fetch(worker()+path, { headers:{'X-Auth-Token':token()} });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
+  return data;
+}
+async function post(path, body){
+  const r = await fetch(worker()+path, { method:'POST', headers:{'X-Auth-Token':token(),'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
+  if (!r.ok && !data.error) throw new Error('HTTP '+r.status);
+  return data;
+}
+
+function renderTabs(){
+  document.getElementById('tabs').innerHTML = STATUSES.map(([k,label]) =>
+    '<div class="tab'+(k===curStatus?' active':'')+'" onclick="setStatus(\''+k+'\')">'+esc(label)+'</div>').join('');
+}
+function setStatus(s){ curStatus = s; renderTabs(); loadQueue(); }
+
+async function scanNow(){
+  const status = document.getElementById('conn-status');
+  status.textContent = 'Scanning Drive folder…';
+  try {
+    const res = await post('/receipt-recon/scan', {});
+    if (res.ok === false) throw new Error(res.error||'scan failed');
+    status.textContent = '✅ scanned '+res.scanned+' new file(s)'+((res.errors&&res.errors.length)?' — '+res.errors.length+' error(s)':'');
+    await loadQueue();
+  } catch(e){ status.textContent = '❌ '+e.message; }
+}
+
+async function loadQueue(){
+  const status = document.getElementById('conn-status');
+  const list = document.getElementById('list');
+  list.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const [rows, wos] = await Promise.all([
+      get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
+      allWOs.length ? Promise.resolve(allWOs) : get('/workorders').catch(()=>[]),
+    ]);
+    allWOs = wos || [];
+    render(rows || []);
+    status.textContent = '✅ '+(rows||[]).length+' '+curStatus;
+  } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
+}
+
+function flagPill(f){
+  const map = {
+    duplicate_on_wo: ['danger','Duplicate — already on that WO'],
+    wo_already_invoiced: ['warn','Suggested WO already invoiced/paid'],
+    no_open_wo: ['warn','No open WO at this property'],
+  };
+  const [cls,label] = map[f] || ['muted', f];
+  return '<span class="pill '+cls+'">'+esc(label)+'</span>';
+}
+function categoryPill(cat, action){
+  if (cat === 'refund') return '<span class="pill muted">Refund/return — skip</span>';
+  if (cat === 'company') return '<span class="pill muted">BMore business expense — not billable</span>';
+  if (cat === 'customer_paid') return '<span class="pill muted">Paid on customer card — not billable</span>';
+  if (action === 'need_property') return '<span class="pill warn">Can\'t resolve property — assign manually</span>';
+  if (action === 'skip_duplicate') return '<span class="pill danger">Duplicate</span>';
+  if (action === 'need_wo') return '<span class="pill warn">No open WO — needs a work order</span>';
+  return '<span class="pill suggest">Suggested match</span>';
+}
+
+function woOptions(sug, selectedId){
+  const cur = allWOs.find(w => String(w.ID) === String(selectedId));
+  let opts = '';
+  const seen = new Set();
+  const add = (id, label) => { if (seen.has(id)) return; seen.add(id); opts += '<option value="'+esc(id)+'"'+(String(id)===String(selectedId)?' selected':'')+'>'+esc(label)+'</option>'; };
+  if (sug && sug.suggested_wo) add(sug.suggested_wo.id, sug.suggested_wo.id+' — '+sug.suggested_wo.desc+' ('+sug.suggested_wo.status+')');
+  if (sug && sug.alternates) sug.alternates.forEach(a => add(a.id, a.id+' — '+a.desc+' ('+a.status+')'));
+  if (cur && !seen.has(String(cur.ID))) add(cur.ID, cur.ID+' — '+(cur.Description||'').slice(0,60));
+  if (!opts) opts = '<option value="">— pick a WO —</option>';
+  else opts = '<option value="">— pick a WO —</option>' + opts;
+  return opts;
+}
+
+function render(rows){
+  const list = document.getElementById('list');
+  if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; return; }
+  list.innerHTML = rows.map(r => rowCard(r)).join('');
+}
+
+function rowCard(r){
+  const sug = r.suggestion || {};
+  const excluded = ['refund','company','customer_paid'].includes(sug.category);
+  const isPendingLike = (r.Status||'pending') === 'pending';
+  const woId = (sug.suggested_wo && sug.suggested_wo.id) || '';
+  const idAttr = 'rc'+r.ID;
+  let html = '<div class="rcard'+(excluded?' excl':'')+'" id="'+idAttr+'">';
+  html += '<div class="rc-top"><div><div class="rc-title">'+esc(r.Vendor||'(vendor unknown)')+' — $'+money(r.Total)+'</div>'
+        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(r.PO_Reference?' · '+esc(r.PO_Reference):'')+'</div></div>'
+        + '<div>'+categoryPill(sug.category, sug.action)+'</div></div>';
+
+  if (r.items && r.items.length) html += '<div class="rc-items">Items: '+r.items.map(esc).join(', ')+'</div>';
+
+  const flags = sug.flags || [];
+  if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
+
+  if (sug.property) html += '<div class="rc-meta"><div><span class="lbl">Property</span>'+esc(sug.property.address)+'</div></div>';
+
+  if (!excluded && isPendingLike) {
+    html += '<div class="rc-fields">'
+      + '<div><label>Work order</label><select id="'+idAttr+'-wo" onchange="document.getElementById(\''+idAttr+'-wo-manual\').value=\'\'">'+woOptions(sug, woId)+'</select></div>'
+      + '<div><label>...or type WO-#### to override</label><input id="'+idAttr+'-wo-manual" placeholder="WO-1234"></div>'
+      + '<div><label>Amount</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
+      + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
+      + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
+      + '<div class="full"><label>Description (goes on the WO)</label><textarea id="'+idAttr+'-desc">'+esc((sug.suggested_wo&&sug.suggested_wo.desc)||r.PO_Reference||r.Vendor||'')+'</textarea></div>'
+      + '</div>';
+  }
+
+  const fileLink = r.Source_File_URL ? '<a href="'+esc(r.Source_File_URL)+'" target="_blank">View receipt →</a>' : '<span class="info">no file link</span>';
+  html += '<div class="rc-foot">' + fileLink + '<div>';
+  if (isPendingLike) {
+    if (!excluded) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\')">✓ Confirm</button> ';
+    html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\')">Skip</button>';
+  } else {
+    html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+'</span>';
+  }
+  html += '</div></div>';
+  html += '<div class="rc-status" id="'+idAttr+'-status"></div>';
+  html += '</div>';
+  return html;
+}
+
+async function confirmRow(id){
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const woSel = document.getElementById(idAttr+'-wo');
+  const woManual = document.getElementById(idAttr+'-wo-manual');
+  const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
+  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) first.</span>'; return; }
+  const amount = document.getElementById(idAttr+'-amt').value.trim();
+  const store = document.getElementById(idAttr+'-store').value.trim();
+  const date = document.getElementById(idAttr+'-date').value.trim();
+  const description = document.getElementById(idAttr+'-desc').value.trim();
+  statusEl.innerHTML = '<span class="info">Posting…</span>';
+  try {
+    const res = await post('/receipt-recon/confirm', { id, wo_id, amount, store, date, description });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = res.duplicate
+      ? '<span class="warn">Already on that WO — skipped, not double-posted.</span>'
+      : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.</span>';
+    setTimeout(loadQueue, 900);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; }
+}
+
+async function skipRow(id){
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  statusEl.innerHTML = '<span class="info">Skipping…</span>';
+  try {
+    const res = await post('/receipt-recon/skip', { id, reason: 'dismissed from Receipt Reconciler' });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">Skipped.</span>';
+    setTimeout(loadQueue, 500);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; }
+}
+
+renderTabs();
+loadQueue();
+</script>
+</body>
+</html>

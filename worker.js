@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-12.4';
+const BUILD_VERSION = '2026-08-13.1';
 
 export default {
   async fetch(request, env) {
@@ -164,6 +164,7 @@ export default {
         if (path === '/ar/invoices')            return await arInvoices(env, url);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
+        if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
         if (path === '/trash/properties')       return await trashListProperties(env);
         if (path === '/trash/week')             return await trashWeek(env, url);
         if (path === '/trash/unbilled')         return await trashUnbilled(env, url);
@@ -300,6 +301,9 @@ export default {
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
+        if (path === '/receipt-recon/scan')       return await receiptReconScan(env);
+        if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
+        if (path === '/receipt-recon/skip')       return await receiptReconSkip(env, body);
         if (path === '/trash/property/add')       return await trashAddProperty(env, body);
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
         if (path === '/trash/log-visit')          return await trashLogVisit(env, body);
@@ -339,6 +343,11 @@ export default {
     // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
     // the confirm-first queue. Read + queue only; no money, no customer contact.
     try { await receiptScan(env); } catch (e) { /* non-fatal */ }
+    // Receipt RECONCILER sweep (CAP-002 phase 2) — separate pipeline, separate folder: polls the
+    // real "Receipts and Invoices" Drive folder Brett drops purchase receipts into, OCRs new
+    // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
+    // read + queue only — nothing bills until Brett taps Confirm in the Hub.
+    try { await receiptReconScan(env); } catch (e) { /* non-fatal */ }
     // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
     // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
     // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
@@ -907,45 +916,168 @@ function receiptIsDuplicate(receipts, woId, amount, date, store) {
     (Number(r.Amount)||0).toFixed(2) === amt && String(r.Date||'') === String(date||'') && _rcNorm(r.Store) === st);
 }
 
+// PURE — the whole reconciliation decision, no I/O. Given an already-extracted receipt and
+// already-fetched tabs, decides category/action. Factored out of receiptSuggest() so the SAME
+// logic drives both the interactive POST /receipt/suggest endpoint and the bulk cron scan
+// (receiptReconScan) below — one source of truth, and fully unit-testable with no live Sheets.
+function receiptSuggestCore(input, properties, workorders, receipts, custCards) {
+  const po = String(input.po || '').trim();
+  const total = Number(input.total) || 0;
+  const date = String(input.date || '').trim();
+  const store = String(input.store || '').trim();
+  const items = Array.isArray(input.items) ? input.items : (input.items ? [String(input.items)] : []);
+  const card = String(input.card || '').replace(/\D/g,'').slice(-4);
+  const cc = custCards || [];
+
+  // Exclusions first — never propose a WO for spend that isn't customer-billable.
+  if (total < 0) return { ok: true, category: 'refund', action: 'skip', reason: 'Negative total (return/refund).', po, total };
+  if (/\bbmore\b/i.test(po) || /\bbmore\b/i.test(String(input.customer_name||''))) return { ok: true, category: 'company', action: 'exclude', reason: 'PO "bmore" = company expense, not customer-billable.', po, total };
+  if (card && cc.includes(card)) return { ok: true, category: 'customer_paid', action: 'exclude', reason: `Paid on a customer card (…${card}).`, po, total };
+
+  const m = matchReceiptProperty(po, properties);
+  if (!m) return { ok: true, category: 'billable', action: 'need_property', reason: 'Could not resolve a property from the PO — assign manually.', po, total, store, date };
+  const pid = String(m.property.ID);
+  const propWos = (workorders || []).filter(w => String(w.Property_ID) === pid);
+  const ranked = rankReceiptWOs({ items, po }, propWos);
+  const top = ranked[0] || null;
+  const flags = [];
+  if (top && receiptIsDuplicate(receipts, top.id, total, date, store)) flags.push('duplicate_on_wo');
+  if (top && ['Invoiced','Paid','Pending Payment'].includes(top.status)) flags.push('wo_already_invoiced');
+  if (!ranked.length) flags.push('no_open_wo');
+  return {
+    ok: true, category: 'billable',
+    action: flags.includes('duplicate_on_wo') ? 'skip_duplicate' : (top ? 'suggest' : 'need_wo'),
+    po, total, store, date,
+    property: { id: pid, address: m.property.Address, match_score: m.score },
+    suggested_wo: top ? { id: top.id, status: top.status, trade: top.trade, desc: top.desc, keyword_score: top.score } : null,
+    alternates: ranked.slice(1, 4),
+    flags,
+  };
+}
+
+// Customer-card list can live in the Cloudflare secret (RECEIPT_CUSTOMER_CARDS) OR, so Brett
+// never has to touch the Cloudflare dashboard, a Config sheet row 'receipt_customer_cards' —
+// either works, comma-separated last-4s.
+async function receiptCustomerCards(env) {
+  const cfg = await fetchConfig(env).catch(() => ({}));
+  return String(env.RECEIPT_CUSTOMER_CARDS || cfg.receipt_customer_cards || '').split(',').map(s => s.replace(/\D/g,'').slice(-4)).filter(Boolean);
+}
+
 // POST /receipt/suggest { po, total, date, store, items, card } — READ-ONLY. Returns the
 // deterministic reconciliation for one already-extracted receipt. Admin-gated; writes nothing.
 async function receiptSuggest(env, body) {
   body = body || {};
-  const po = String(body.po || body.po_or_property || '').trim();
-  const total = Number(body.total) || 0;
-  const date = String(body.date || '').trim();
-  const store = String(body.store || body.vendor || '').trim();
-  const items = Array.isArray(body.items) ? body.items : (body.items ? [String(body.items)] : []);
-  const card = String(body.card || body.payment_card_last4 || '').replace(/\D/g,'').slice(-4);
-
-  // Exclusions first — never propose a WO for spend that isn't customer-billable.
-  const custCards = String(env.RECEIPT_CUSTOMER_CARDS || '').split(',').map(s => s.replace(/\D/g,'').slice(-4)).filter(Boolean);
-  if (total < 0) return json({ ok: true, category: 'refund', action: 'skip', reason: 'Negative total (return/refund).', po, total });
-  if (/\bbmore\b/i.test(po) || /\bbmore\b/i.test(String(body.customer_name||''))) return json({ ok: true, category: 'company', action: 'exclude', reason: 'PO "bmore" = company expense, not customer-billable.', po, total });
-  if (card && custCards.includes(card)) return json({ ok: true, category: 'customer_paid', action: 'exclude', reason: `Paid on a customer card (…${card}).`, po, total });
-
   try {
+    const custCards = await receiptCustomerCards(env);
     const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
-    const m = matchReceiptProperty(po, properties);
-    if (!m) return json({ ok: true, category: 'billable', action: 'need_property', reason: 'Could not resolve a property from the PO — assign manually.', po, total, store, date });
-    const pid = String(m.property.ID);
-    const propWos = (workorders || []).filter(w => String(w.Property_ID) === pid);
-    const ranked = rankReceiptWOs({ items, po }, propWos);
-    const top = ranked[0] || null;
-    const flags = [];
-    if (top && receiptIsDuplicate(receipts, top.id, total, date, store)) flags.push('duplicate_on_wo');
-    if (top && ['Invoiced','Paid','Pending Payment'].includes(top.status)) flags.push('wo_already_invoiced');
-    if (!ranked.length) flags.push('no_open_wo');
-    return json({
-      ok: true, category: 'billable',
-      action: flags.includes('duplicate_on_wo') ? 'skip_duplicate' : (top ? 'suggest' : 'need_wo'),
-      po, total, store, date,
-      property: { id: pid, address: m.property.Address, match_score: m.score },
-      suggested_wo: top ? { id: top.id, status: top.status, trade: top.trade, desc: top.desc, keyword_score: top.score } : null,
-      alternates: ranked.slice(1, 4),
-      flags,
-    });
+    const result = receiptSuggestCore({
+      po: body.po || body.po_or_property || '', total: body.total, date: body.date,
+      store: body.store || body.vendor || '', items: body.items,
+      card: body.card || body.payment_card_last4 || '', customer_name: body.customer_name,
+    }, properties, workorders, receipts, custCards);
+    return json(result);
   } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
+}
+
+// ── RECEIPT RECONCILER — PHASE 2 (CAP-002) — daily automation wrapper ──────────────────────
+// Polls the real "Receipts and Invoices" Drive folder (under PAYABLES Inbox — the folder Brett
+// already drops scans into) once a day via the existing digest cron, OCRs each new file with the
+// one cheap vision call (receiptExtract), runs it through the zero-AI engine above, and drops the
+// verdict in a confirm-first queue. NOTHING bills itself — every row sits until Brett taps
+// Confirm (POST /receipt-recon/confirm, which calls the same addReceipt() the vendor portal and
+// every manual entry this session used) or Skip. A pending row costs one OCR call and zero other
+// AI tokens; the daily sweep of an empty folder costs nothing at all.
+const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active'];
+// "Receipts and Invoices" under PAYABLES Inbox (Drive) — the folder Brett has been dropping
+// scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
+const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
+
+// POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
+// folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
+async function receiptReconScan(env) {
+  const cfg = await fetchConfig(env).catch(() => ({}));
+  const folder = cfg.receipt_recon_folder_id || env.RECEIPT_RECON_FOLDER_ID || RECEIPT_RECON_FOLDER_ID_DEFAULT;
+  const tok = await getAccessToken(env);
+  const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType,webViewLink)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '100' });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${tok}` } });
+  const data = await res.json();
+  if (data.error) return json({ ok: false, error: 'Drive list failed: ' + (data.error.message || JSON.stringify(data.error)) }, 500);
+  const files = (data.files || []).filter(f => /image|pdf/i.test(f.mimeType || ''));
+
+  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
+  const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
+  const newFiles = files.filter(f => !seen.has(f.id));
+  if (!newFiles.length) return json({ ok: true, folder_id: folder, scanned: 0, already_queued: files.length });
+
+  const custCards = await receiptCustomerCards(env);
+  const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
+  let n = 0; const errs = [];
+  for (const f of newFiles) {
+    try {
+      const dl = await driveDownload(tok, f.id);
+      const ex = await receiptExtract(env, dl.bytes, dl.mime);
+      const po = ex.po_reference || ex.handwritten_note || '';
+      const items = Array.isArray(ex.items) ? ex.items : [];
+      const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '' }, properties, workorders, receipts, custCards);
+      await addRow(env, 'Receipt_Recon_Queue', {
+        Source_File_ID: f.id, Source_File_URL: f.webViewLink || '', File_Name: f.name || '',
+        Received_Date: new Date().toISOString(), Vendor: ex.vendor || '', Receipt_Date: ex.date || '',
+        Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
+        PO_Reference: po, Items: JSON.stringify(items), Card_Last4: ex.card_last4 || '', Invoice_Number: ex.invoice_number || '',
+        Suggestion: JSON.stringify(suggestion).slice(0, 4000), Status: 'pending',
+        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: '', Active: 'TRUE',
+      });
+      n++;
+    } catch (e) { errs.push((f.name || f.id) + ': ' + (e.message || 'err')); }
+  }
+  return json({ ok: true, folder_id: folder, scanned: n, errors: errs });
+}
+
+// GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
+async function listReceiptReconQueue(env, url) {
+  let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json([]); }
+  const status = url.searchParams.get('status') || 'pending';
+  return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (status === 'all' || (r.Status || 'pending') === status))
+    .map(r => {
+      let suggestion = null; try { suggestion = JSON.parse(r.Suggestion || 'null'); } catch (e) {}
+      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
+      return { ...r, suggestion, items };
+    }));
+}
+
+// POST /receipt-recon/confirm { id, wo_id, amount, description, store, date } — the ONLY write
+// path in this pipeline. Brett (or the UI, pre-filled from the suggestion) picks the WO; this
+// calls the exact same addReceipt() every other entry path uses, so its duplicate guard and
+// Receipts-tab shape are identical no matter how the receipt got there.
+async function receiptReconConfirm(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (row.Status === 'confirmed') return json({ error: 'already confirmed', id }, 409);
+  const wo_id = body.wo_id || ''; if (!wo_id) return json({ error: 'wo_id required' }, 400);
+  const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : row.Total;
+  const description = body.description || row.PO_Reference || row.Vendor || '';
+  const store = body.store || row.Vendor || '';
+  const date = body.date || row.Receipt_Date || '';
+  const addResp = await addReceipt(env, { wo_id, amount, description, store, date, added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub' });
+  const addJson = await addResp.json().catch(() => ({}));
+  if (addJson && addJson.success) {
+    await updateRow(env, 'Receipt_Recon_Queue', id, {
+      Status: addJson.duplicate ? 'skipped' : 'confirmed',
+      Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
+      Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
+    });
+  }
+  return json({ ok: true, wo_id, ...addJson });
+}
+
+// POST /receipt-recon/skip { id, reason? } — dismiss without billing anything.
+async function receiptReconSkip(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  await updateRow(env, 'Receipt_Recon_Queue', id, { Status: 'skipped', Notes: body.reason || '' });
+  return json({ ok: true, id });
 }
 
 // Brett's default hourly rate for his own (hub) time when a customer has no specific rate on
@@ -3532,12 +3664,12 @@ async function receiptExtract(env, bytes, mime) {
   const media = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
-  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 600, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }) });
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased — e.g. "3x Smoke & Carbon combo hardwired"; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
+  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 700, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }) });
   const data = await resp.json();
   const txt = (data.content?.[0]?.text || '').trim();
   try { return JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim()); }
-  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', suggested_category: '', confidence: 0 }; }
+  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], card_last4: '', suggested_category: '', confidence: 0 }; }
 }
 
 // Best-effort auto-link to a WO (by "WO-1234" in the note) or a property (address token).
