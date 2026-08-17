@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-13.5';
+const BUILD_VERSION = '2026-08-17.1';
 
 export default {
   async fetch(request, env) {
@@ -1678,10 +1678,13 @@ async function tenantWorkorders(env, url) {
   const tenantId = url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys']);
+  const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
   const tenant = tenants.find(t => t.ID === tenantId); if (!tenant) return json([]);
   const wos = workorders.filter(w => { if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true }));
+  // tenants get the assigned vendor's name/phone/trade so they can coordinate access —
+  // enrichWO never resolved Vendor_ID -> a name/phone at all before this (tenant.html and
+  // owner.html both had a "Technician: —" row wired up with nothing to fill it).
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true, vendors }));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
 }
@@ -1690,10 +1693,12 @@ async function ownerWorkorders(env, url) {
   const ownerId = url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys']);
+  const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
   const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true }));
+  // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
+  // vendor relationship mediated through Brett rather than owners going around him.
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors }));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
 }
@@ -1748,6 +1753,20 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
   const lockboxes = (opts.omitLockbox || !vendorHasAccess || accessGated) ? [] : rawLockboxes;
   const accessNotes = (!vendorHasAccess || accessGated) ? '' : (property.Access_Notes||'');
   const legacyLockbox = (!lockboxes.length && vendorHasAccess && !accessGated && property.Lockbox_Code) ? property.Lockbox_Code : '';
+  // Resolve the assigned vendor's name/phone/trade when a vendor directory was handed in.
+  // This never happened before — tenant.html and owner.html both had a "Technician" /
+  // "Vendor" row template referencing wo.vendor_name, but nothing ever populated it, so it
+  // always rendered blank/"—". Only callers that pass opts.vendors get it resolved; callers
+  // that don't (vendor's own view, generic admin reads) are unaffected.
+  let vendorName = '', vendorPhone = '', vendorTrade = '';
+  if (opts.vendors && wo.Vendor_ID) {
+    const v = opts.vendors.find(vv => vv.ID === wo.Vendor_ID);
+    if (v) {
+      vendorName = v.Name || `${v.First_Name||''} ${v.Last_Name||''}`.trim();
+      vendorPhone = v.Phone || '';
+      vendorTrade = v.Trade || '';
+    }
+  }
   const base = {
     ...wo,
     property_address: property.Address||'', property_city: property.City||'', unit_label: unit.Unit_Label||'',
@@ -1763,9 +1782,14 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
     access_notes: accessNotes,
     vendor_has_access: vendorHasAccess,
     access_gated: accessGated,
+    vendor_name: vendorName, vendor_phone: vendorPhone, vendor_trade: vendorTrade,
   };
-  if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; base.vendor_phone = ''; }
-  if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; }
+  // Tenants get the full technician contact (name+phone+trade) so they can coordinate
+  // access directly once someone's assigned — that's the whole point of showing it.
+  if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; }
+  // Owners see WHO is on the job (name+trade) but not a direct line to the vendor — keeps
+  // the vendor relationship mediated through Brett rather than owners going around him.
+  if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; base.vendor_phone = ''; }
   return base;
 }
 
@@ -1915,6 +1939,10 @@ async function addVendorBill(env, body) {
   // Vendor_Bills has no column for the vendor's own invoice number until something needs
   // one, and addRow maps by header — a write to a missing column stores nothing silently.
   if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) {} }
+  // Same pattern for the vendor's own invoice FILE (the actual document/photo, not just the
+  // number) — B-fix Aug 17: vendors had no way to attach their invoice, only receipts had an
+  // upload control. Drive_File_ID kept alongside the URL so the Hub can open it directly.
+  if (body.Invoice_File_URL) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_File_URL', 'Invoice_File_ID']); } catch (e) {} }
 
   // Hours logged on the job can BE the bill — that is the whole point when Brett is the
   // vendor. The ids ride in on the body but are not a Vendor_Bills column, so they come

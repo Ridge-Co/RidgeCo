@@ -388,7 +388,13 @@ function buildDetail(wo, idx) {
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">DETAILS</div>';
   if (wo.vendor_name) {
-    html += '<div class="detail-row"><span class="dl">Technician</span><span class="dv">' + esc(wo.vendor_name) + '</span></div>';
+    html += '<div class="detail-row"><span class="dl">Technician</span><span class="dv">' + esc(wo.vendor_name) + (wo.vendor_trade ? ' (' + esc(wo.vendor_trade) + ')' : '') + '</span></div>';
+    // Phone was never sent to this portal before (enrichWO didn't resolve a vendor at all) —
+    // tenants had no way to reach the person assigned to their job. tel: link so it dials
+    // straight from the detail row on mobile.
+    if (wo.vendor_phone) {
+      html += '<div class="detail-row"><span class="dl">Technician phone</span><span class="dv"><a href="tel:' + esc(wo.vendor_phone) + '" style="color:inherit;text-decoration:underline">' + esc(wo.vendor_phone) + '</a></span></div>';
+    }
   }
   if (wo.Scheduled_Date) {
     html += '<div class="detail-row"><span class="dl">Scheduled</span><span class="dv">' + esc(wo.Scheduled_Date) + '</span></div>';

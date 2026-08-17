@@ -1225,7 +1225,16 @@ function esc(str) {
 // ══════════════════════════════════════════════════════════════
 
 // Core upload: get Drive session from worker → PUT file directly to Drive
-function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
+// Photo/video upload with automatic retry -- FIX for "sometimes photos just don't upload"
+// (Oscar, Philadelphia Rd, Aug 17). Root cause: this PUTs the file bytes directly from the
+// vendor's phone to Google Drive over the phone's own connection, with zero retry -- one
+// dropped packet on a job-site cell connection silently failed the whole photo, and there
+// was no way to recover except re-picking the file. Now: up to 3 attempts total (a fresh
+// upload session each retry -- simpler and always correct vs. resuming a partial byte
+// range), short backoff between, and a manual "Retry" tap if all 3 still fail.
+var MAX_UPLOAD_ATTEMPTS = 3;
+function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attempt) {
+  attempt = attempt || 1;
   var reqBody = {
     wo_id: woId, property: propAddr || 'Unknown Property',
     file_name: file.name, file_type: fileType || 'photo',
@@ -1234,14 +1243,26 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
   };
   if (folderInfo) { reqBody.folder_id = folderInfo.id; reqBody.folder_url = folderInfo.url; }
 
+  function fail(msg, nextFolder) {
+    if (attempt < MAX_UPLOAD_ATTEMPTS) {
+      card.style.borderColor = 'var(--warn)'; card.style.color = 'var(--muted)';
+      card.textContent = '\u21bb Retrying\u2026 (' + (attempt+1) + '/' + MAX_UPLOAD_ATTEMPTS + ')';
+      setTimeout(function() { _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, attempt+1); }, attempt * 1200);
+      return;
+    }
+    card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
+    card.innerHTML = '\u26a0 ' + esc(msg) + ' <span data-retry-btn style="text-decoration:underline;cursor:pointer">Retry</span>';
+    var retryEl = card.querySelector('[data-retry-btn]');
+    if (retryEl) retryEl.onclick = function(ev) { ev.stopPropagation(); _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, 1); };
+  }
+
   return api('POST', '/create-upload-session', reqBody).then(function(res) {
     if (!res.success || !res.upload_url) {
-      card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-      card.textContent = '\u26a0 ' + (res.error || 'Session failed');
+      fail(res.error || 'Session failed', folderInfo);
       return folderInfo;
     }
     var nextFolder = { id: res.wo_folder_id, url: res.wo_folder_url };
-    card.textContent = '\u2191 Uploading\u2026';
+    card.textContent = '\u2191 Uploading\u2026' + (attempt > 1 ? ' (attempt ' + attempt + ')' : '');
 
     return fetch(res.upload_url, {
       method: 'PUT',
@@ -1251,8 +1272,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
     .then(function(r) { return r.json(); })
     .then(function(fileData) {
       if (!fileData || !fileData.id) {
-        card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-        card.textContent = '\u26a0 Upload failed';
+        fail('Upload failed', nextFolder);
         return nextFolder;
       }
       api('POST', '/log-attachment', {
@@ -1270,10 +1290,13 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
       return nextFolder;
     })
     .catch(function(e) {
-      card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-      card.textContent = '\u26a0 ' + e.message;
+      // The dropped-mid-PUT case -- exactly what a flaky job-site connection does.
+      fail(e.message || 'Connection dropped', nextFolder);
       return nextFolder;
     });
+  }).catch(function(e) {
+    fail(e.message || 'Connection error', folderInfo);
+    return folderInfo;
   });
 }
 
@@ -1304,6 +1327,12 @@ function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
 }
 
 // Load and display attachments grouped by type
+// Per-WO combined photo/video set, in type order (before, after, report, receipt, other) —
+// this is what the lightbox swipes through as ONE album, regardless of which type section
+// you tapped into. Fixes "no album view / only back-and-forth one photo / two lists instead
+// of an album."
+var _rcWoItems = {};
+
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
   api('GET', '/attachments?wo_id=' + woId).then(function(items) {
@@ -1314,9 +1343,27 @@ function loadPortalAttachments(woId, opts) {
       if (!byType[t]) byType[t] = [];
       byType[t].push(f);
     });
-    ['before','after','report','receipt','other'].forEach(function(type) {
+    var TYPE_ORDER = ['before','after','report','receipt','other'];
+    var TYPE_LABELS = { before:'Before', after:'After', report:'Report Issue', receipt:'Receipt', other:'File' };
+    var combined = []; // built once per load, in TYPE_ORDER, for the lightbox to swipe across
+    TYPE_ORDER.forEach(function(type) {
+      (byType[type] || []).forEach(function(f) {
+        var mime = (f.Mime_Type || '').toLowerCase();
+        var isVideo = mime.indexOf('video/') === 0;
+        var isImage = mime.indexOf('image/') === 0 || (!mime && !!f.Drive_File_ID); // older rows may lack Mime_Type
+        combined.push({
+          fileId: f.Drive_File_ID || '', driveUrl: f.Drive_URL || '#', name: f.File_Name || 'file',
+          typeLabel: TYPE_LABELS[type] || 'File', isVideo: isVideo, isViewable: isVideo || isImage,
+        });
+      });
+    });
+    _rcWoItems[woId] = combined;
+
+    var runningIdx = 0;
+    TYPE_ORDER.forEach(function(type) {
       var el = document.getElementById('uploads-' + type + '-' + woId);
-      if (!el) return;
+      var typeCount = (byType[type] || []).length;
+      if (!el) { runningIdx += typeCount; return; }
       // This is the only renderer in the portal that appends instead of replacing, and it
       // runs once per work order on every renderWOs() pass — including on every keystroke
       // in the job search box. Overlapping passes each appended the full list again, so a
@@ -1327,23 +1374,105 @@ function loadPortalAttachments(woId, opts) {
       // container — the upload would still finish, but its progress, its Drive link and any
       // error would be written into a node that is no longer on the page. A vendor whose
       // chip vanishes mid-upload uploads again, which is the duplicate we're here to stop.
-      Array.prototype.slice.call(el.querySelectorAll('a[data-att-chip]')).forEach(function(n) { n.remove(); });
+      Array.prototype.slice.call(el.querySelectorAll('[data-att-chip]')).forEach(function(n) { n.remove(); });
       var ph = el.querySelector('.upload-ph');
-      if (!byType[type] || !byType[type].length) return;
+      if (!typeCount) { runningIdx += typeCount; return; }
       if (ph) ph.remove();
-      byType[type].forEach(function(f) {
+      byType[type].forEach(function(f, i) {
+        var itemIdx = runningIdx + i;
+        var item = combined[itemIdx];
         var icon = type === 'after' ? '\u2705' : type === 'before' ? '📷' :
                    type === 'receipt' ? '🧾' : type === 'report' ? '\u26a0\ufe0f' : '📎';
-        var a = document.createElement('a');
-        a.setAttribute('data-att-chip', '1');   // marks it ours, so the next pass can clear it
-        a.href = f.Drive_URL || '#'; a.target = '_blank';
-        a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
-        a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
-        el.appendChild(a);
+        if (item && item.isViewable && item.fileId) {
+          // Real thumbnail, tap opens the in-app lightbox positioned at this photo -- not a
+          // bare link out to Google Drive's own single-file viewer anymore.
+          var thumb = document.createElement('div');
+          thumb.setAttribute('data-att-chip', '1');
+          thumb.style.cssText = 'position:relative;width:56px;height:56px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border)';
+          thumb.onclick = (function(woIdC, idxC){ return function(){ rcOpenLightbox(_rcWoItems[woIdC], idxC); }; })(woId, itemIdx);
+          var imgTag = '<img src="https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w150" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\'">';
+          var videoBadge = item.isVideo ? '<span style="position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.65);color:#fff;font-size:9px;border-radius:3px;padding:1px 3px">&#9658;</span>' : '';
+          var typeBadge = '<span style="position:absolute;left:2px;top:2px;font-size:10px;text-shadow:0 0 3px rgba(0,0,0,.8)">' + icon + '</span>';
+          thumb.innerHTML = imgTag + videoBadge + typeBadge;
+          el.appendChild(thumb);
+        } else {
+          // Non-image/video (e.g. a PDF receipt) or a pre-fix row with no Drive_File_ID --
+          // keep the plain link-out chip, same as before.
+          var a = document.createElement('a');
+          a.setAttribute('data-att-chip', '1');
+          a.href = f.Drive_URL || '#'; a.target = '_blank';
+          a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
+          a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
+          el.appendChild(a);
+        }
       });
+      runningIdx += typeCount;
     });
   }).catch(function(){});
 }
+
+// -- Photo Lightbox -- in-app swipeable viewer --------------------------------
+// Replaces "tap a chip, bounce out to Google Drive's own one-at-a-time file viewer" with a
+// real in-app gallery: swipe or use the arrows through every photo/video on the work order
+// as one combined set, no matter which type section (Before/After/Report/Receipt) you
+// tapped into. See _rcWoItems above for how the set is built.
+var _rcLbItems = [];
+var _rcLbIdx = 0;
+
+function rcOpenLightbox(items, idx) {
+  if (!items || !items.length) return;
+  _rcLbItems = items;
+  _rcLbIdx = idx;
+  rcRenderLightbox();
+  document.getElementById('rc-lightbox').style.display = 'flex';
+}
+function rcCloseLightbox() {
+  var lb = document.getElementById('rc-lightbox');
+  if (lb) lb.style.display = 'none';
+  var v = document.getElementById('rc-lb-video');
+  if (v) { try { v.pause(); } catch(e){} v.removeAttribute('src'); v.load(); }
+}
+function rcLightboxNav(delta) {
+  if (!_rcLbItems.length) return;
+  _rcLbIdx = (_rcLbIdx + delta + _rcLbItems.length) % _rcLbItems.length;
+  rcRenderLightbox();
+}
+function rcRenderLightbox() {
+  var it = _rcLbItems[_rcLbIdx];
+  if (!it) return;
+  var body = document.getElementById('rc-lb-body');
+  var counter = document.getElementById('rc-lb-counter');
+  var label = document.getElementById('rc-lb-label');
+  if (counter) counter.textContent = (_rcLbIdx+1) + ' / ' + _rcLbItems.length;
+  if (label) label.textContent = (it.typeLabel||'') + (it.name ? ' - ' + it.name.substring(0,28) : '');
+  if (!body) return;
+  if (it.isVideo) {
+    body.innerHTML = '<video id="rc-lb-video" controls autoplay playsinline style="max-width:100%;max-height:78vh" src="https://drive.google.com/uc?export=download&id=' + it.fileId + '"></video>' +
+      '<div style="text-align:center;margin-top:8px"><a href="' + esc(it.driveUrl) + '" target="_blank" style="color:#8fb8ff;font-size:12px">Won\'t play? Open in Drive &rarr;</a></div>';
+  } else {
+    body.innerHTML = '<img src="https://drive.google.com/thumbnail?id=' + it.fileId + '&sz=w1600" style="max-width:100%;max-height:82vh;object-fit:contain" onerror="this.onerror=null;this.src=\'' + esc(it.driveUrl) + '\'">';
+  }
+}
+var _rcTouchX = null;
+document.addEventListener('touchstart', function(e){
+  var lb = document.getElementById('rc-lightbox');
+  if (!lb || lb.style.display === 'none') return;
+  _rcTouchX = e.touches[0].clientX;
+});
+document.addEventListener('touchend', function(e){
+  if (_rcTouchX === null) return;
+  var dx = e.changedTouches[0].clientX - _rcTouchX;
+  _rcTouchX = null;
+  if (Math.abs(dx) < 40) return;
+  rcLightboxNav(dx < 0 ? 1 : -1);
+});
+document.addEventListener('keydown', function(e){
+  var lb = document.getElementById('rc-lightbox');
+  if (!lb || lb.style.display === 'none') return;
+  if (e.key === 'ArrowRight') rcLightboxNav(1);
+  else if (e.key === 'ArrowLeft') rcLightboxNav(-1);
+  else if (e.key === 'Escape') rcCloseLightbox();
+});
 
 // Build a full categorized photo section for a WO
 function buildPhotoSection(woId, propAddr, opts) {
@@ -1389,6 +1518,20 @@ function buildPhotoSection(woId, propAddr, opts) {
 
 
 </script>
+
+<!-- PHOTO LIGHTBOX — in-app swipeable viewer (see rcOpenLightbox / _rcWoItems) -->
+<div id="rc-lightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:9999;flex-direction:column;align-items:center;justify-content:center;padding:16px">
+  <div style="position:absolute;top:10px;left:14px;right:14px;display:flex;justify-content:space-between;align-items:center;color:#fff;font-size:12px;gap:8px">
+    <span id="rc-lb-label" style="opacity:.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+    <span style="display:flex;align-items:center;gap:14px;flex-shrink:0">
+      <span id="rc-lb-counter"></span>
+      <span onclick="rcCloseLightbox()" style="cursor:pointer;font-size:22px;line-height:1;padding:4px">&times;</span>
+    </span>
+  </div>
+  <div onclick="rcLightboxNav(-1)" style="position:absolute;left:2px;top:50%;transform:translateY(-50%);color:#fff;font-size:34px;cursor:pointer;padding:12px;user-select:none;opacity:.85">&#8249;</div>
+  <div id="rc-lb-body" style="max-width:100%;max-height:80vh;display:flex;flex-direction:column;align-items:center;justify-content:center"></div>
+  <div onclick="rcLightboxNav(1)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);color:#fff;font-size:34px;cursor:pointer;padding:12px;user-select:none;opacity:.85">&#8250;</div>
+</div>
 
 <!-- FEEDBACK MODAL -->
 <div class="modal-overlay" id="modalFeedback" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;align-items:center;justify-content:center;padding:16px">
@@ -1674,6 +1817,20 @@ function submitVendorSched(modalId) {
       <div style="color:var(--muted);font-size:11px;margin-top:4px">This is what we'll reference when we pay you.</div>
     </div>
 
+    <!-- VENDOR'S OWN INVOICE FILE — the actual document/photo, not just the number.
+         Only the invoice NUMBER had a field before; there was no way to attach the file
+         itself. Mirrors the receipt upload pattern but stores a single file. -->
+    <div style="margin-bottom:14px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">YOUR INVOICE FILE (optional)</label>
+      <div style="display:flex;align-items:center;gap:8px">
+        <label id="bill-invoice-file-lbl" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;cursor:pointer;font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px">
+          📄 Upload Invoice<input type="file" accept="image/*,application/pdf" onchange="uploadBillInvoiceFile(this)" style="display:none">
+        </label>
+        <span id="bill-invoice-file-status" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <div style="color:var(--muted);font-size:11px;margin-top:4px">A photo or PDF of your invoice, if you have one.</div>
+    </div>
+
     <!-- NOTES -->
     <div style="margin-bottom:14px">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">NOTES (optional)</label>
@@ -1704,6 +1861,8 @@ var _billSubmitting = false; // guard against double-tap
 var _vendorRate = 0;
 var _receiptCount = 0;
 var _uploadedPhotos = {};
+var _invoiceFileURL = '';
+var _invoiceFileId = '';
 
 function openBillModal(woId, vendorName) {
   _billWOId = woId;
@@ -1711,6 +1870,8 @@ function openBillModal(woId, vendorName) {
   _billSubmitting = false; // reset on every open
   _receiptCount = 0;
   _uploadedPhotos = {};
+  _invoiceFileURL = '';
+  _invoiceFileId = '';
 
   document.getElementById('bill-wo-id-label').textContent = woId;
   document.getElementById('bill-hours').value = '';
@@ -1718,6 +1879,11 @@ function openBillModal(woId, vendorName) {
   document.getElementById('bill-truck-desc').value = '';
   document.getElementById('bill-truck-amt').value = '';
   document.getElementById('bill-notes').value = '';
+  document.getElementById('bill-invoice-no').value = ''; // was never reset — a prior job's invoice # could carry over
+  document.getElementById('bill-invoice-file-status').textContent = '';
+  document.getElementById('bill-invoice-file-status').style.color = 'var(--muted)';
+  document.getElementById('bill-invoice-file-lbl').style.borderColor = 'var(--border)';
+  document.getElementById('bill-invoice-file-lbl').style.color = 'var(--text)';
   document.getElementById('bill-truck-toggle').checked = false;
   document.getElementById('bill-truck-section').style.display = 'none';
   document.getElementById('bill-receipts-list').innerHTML = '';
@@ -1843,6 +2009,37 @@ function uploadReceiptPhoto(n, input) {
     }).catch(function(){ statusEl.textContent = '⚠ Error'; statusEl.style.color = 'var(--danger)'; });
 }
 
+// Upload the vendor's own invoice document (photo or PDF). Same /upload-photo path as
+// receipts, file_type 'invoice' — that already routes to the private "_Internal — Vendor
+// Bills" folder (NON_SHARE_FILE_TYPES in worker.js) and is never customer-shared.
+function uploadBillInvoiceFile(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var statusEl = document.getElementById('bill-invoice-file-status');
+  var lblEl = document.getElementById('bill-invoice-file-lbl');
+  statusEl.textContent = 'Uploading…';
+  statusEl.style.color = 'var(--muted)';
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('wo_id', _billWOId);
+  fd.append('file_type', 'invoice');
+  fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body:fd })
+    .then(function(r){return r.json();})
+    .then(function(res){
+      if (res.url) {
+        _invoiceFileURL = res.url;
+        _invoiceFileId = res.fileId || '';
+        statusEl.textContent = '✓ Uploaded';
+        statusEl.style.color = 'var(--accent2)';
+        lblEl.style.borderColor = 'var(--accent2)';
+        lblEl.style.color = 'var(--accent2)';
+      } else {
+        statusEl.textContent = '⚠ Upload failed — ' + (res.error || 'try again');
+        statusEl.style.color = 'var(--danger)';
+      }
+    }).catch(function(){ statusEl.textContent = '⚠ Error — tap to retry'; statusEl.style.color = 'var(--danger)'; });
+}
+
 function calcBillTotal() {
   var labor = 0, flat = 0, truck = 0, receipts = 0;
   var breakdown = [];
@@ -1928,6 +2125,8 @@ async function submitVendorBill() {
     Status: 'submitted',
     Created_Date: new Date().toISOString().split('T')[0],
     Vendor_Invoice_No: (document.getElementById('bill-invoice-no') || {}).value || '',
+    Invoice_File_URL: _invoiceFileURL,
+    Invoice_File_ID: _invoiceFileId,
     Notes: document.getElementById('bill-notes').value,
     Active: 'TRUE',
   };

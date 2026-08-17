@@ -4584,6 +4584,12 @@ function invBuilderHtml(k, woId, wo) {
     '<input type="number" id="inv-charge-'+k+'" placeholder="0.00" min="0" step="0.01"' +
     ' value="'+esc(wo.Customer_Charge||'')+'"' +
     ' oninput="calcInvoiceMarkup(\''+k+'\')"' +
+    // Autosave on blur — this box used to only persist on an explicit "Save draft" tap,
+    // so typing a charge/memo then tapping away (another WO, the backdrop, a nav link)
+    // silently threw it away with no warning. Blur fires before the click that takes focus
+    // elsewhere completes, so this catches the "accidentally clicked away" case the manual
+    // button never covered. saveDraftInvoice() still shows Saving…/✓ Saved in inv-msg.
+    ' onblur="saveDraftInvoice(\''+k+'\')"' +
     ' style="flex:1;min-width:0;box-sizing:border-box;background:var(--surface2);border:1px solid var(--accent);color:var(--text);font-family:var(--font);font-size:18px;padding:8px;border-radius:6px">' +
     '</div>' +
     '<div id="inv-invoice-total-'+k+'" style="font-size:12px;margin-top:6px;color:var(--muted)"></div>' +
@@ -4617,6 +4623,7 @@ function invBuilderHtml(k, woId, wo) {
     '<div style="margin-bottom:10px">' +
     '<label style="color:var(--muted);font-size:11px;letter-spacing:.06em">MEMO FOR CUSTOMER INVOICE</label>' +
     '<textarea id="inv-memo-'+k+'" placeholder="What was done (visible on customer invoice)…"' +
+    ' onblur="saveDraftInvoice(\''+k+'\')"' + // same click-away autosave as the charge box above
     ' style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:60px;resize:vertical;margin-top:4px">'+esc(wo.Invoice_Memo||wo.Description||'')+'</textarea>' +
     '</div>' +
     '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
@@ -6617,6 +6624,14 @@ function renderIRCard(b, i) {
   var materialLine = materials > 0
     ? '<div>Materials/receipts: <b>$' + materials.toFixed(2) + '</b></div>' : '';
   var noteLine = notes ? '<div style="color:var(--muted);font-style:italic;margin-top:4px">"' + esc(notes) + '"</div>' : '';
+  // Vendor's own invoice — the file (Invoice_File_URL) had no upload control anywhere until
+  // now (vendor.html uploadBillInvoiceFile), and even the number (Vendor_Invoice_No) was
+  // captured on submit but never shown back to Brett on this card. Surface both together.
+  var vendorInvLine = (b.Vendor_Invoice_No || b.Invoice_File_URL)
+    ? '<div style="margin-top:4px;font-size:11.5px">Vendor invoice' +
+      (b.Vendor_Invoice_No ? ' #' + esc(b.Vendor_Invoice_No) : '') +
+      (b.Invoice_File_URL ? ' — <a href="' + esc(b.Invoice_File_URL) + '" target="_blank" style="color:var(--info)">view file ↗</a>' : '') +
+      '</div>' : '';
 
   // Work order info from state. String-compare the property id — Sheets hands numeric-looking
   // ids back as strings inconsistently, and a strict === silently dropped the address.
@@ -6736,6 +6751,7 @@ function renderIRCard(b, i) {
       '<div>' + laborLine + '</div>' +
       materialLine +
       noteLine +
+      vendorInvLine +
     '</div>' +
 
     flagHtml +
@@ -9056,7 +9072,15 @@ function runAdminTool(tool) {
 // ══════════════════════════════════════════════════════════════
 
 // Core upload: get Drive session from worker → PUT file directly to Drive
-function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
+// Photo/video upload with automatic retry -- FIX for "sometimes photos just don't upload"
+// (Oscar, Philadelphia Rd, Aug 17). Root cause: this PUTs the file bytes directly from the
+// browser to Google Drive over its own connection, with zero retry -- one dropped packet on
+// a flaky connection silently failed the whole photo, no way to recover except re-picking
+// the file. Now: up to 3 attempts (a fresh upload session each retry), short backoff, and a
+// manual "Retry" tap if all 3 still fail. Mirrors vendor.html's identical fix.
+var MAX_UPLOAD_ATTEMPTS = 3;
+function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attempt) {
+  attempt = attempt || 1;
   var reqBody = {
     wo_id: woId, property: propAddr || 'Unknown Property',
     file_name: file.name, file_type: fileType || 'photo',
@@ -9065,14 +9089,26 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
   };
   if (folderInfo) { reqBody.folder_id = folderInfo.id; reqBody.folder_url = folderInfo.url; }
 
+  function fail(msg, nextFolder) {
+    if (attempt < MAX_UPLOAD_ATTEMPTS) {
+      card.style.borderColor = 'var(--warn)'; card.style.color = 'var(--muted)';
+      card.textContent = '\u21bb Retrying\u2026 (' + (attempt+1) + '/' + MAX_UPLOAD_ATTEMPTS + ')';
+      setTimeout(function() { _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, attempt+1); }, attempt * 1200);
+      return;
+    }
+    card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
+    card.innerHTML = '\u26a0 ' + esc(msg) + ' <span data-retry-btn style="text-decoration:underline;cursor:pointer">Retry</span>';
+    var retryEl = card.querySelector('[data-retry-btn]');
+    if (retryEl) retryEl.onclick = function(ev) { ev.stopPropagation(); _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, 1); };
+  }
+
   return api('POST', '/create-upload-session', reqBody).then(function(res) {
     if (!res.success || !res.upload_url) {
-      card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-      card.textContent = '\u26a0 ' + (res.error || 'Session failed');
+      fail(res.error || 'Session failed', folderInfo);
       return folderInfo;
     }
     var nextFolder = { id: res.wo_folder_id, url: res.wo_folder_url };
-    card.textContent = '\u2191 Uploading\u2026';
+    card.textContent = '\u2191 Uploading\u2026' + (attempt > 1 ? ' (attempt ' + attempt + ')' : '');
 
     return fetch(res.upload_url, {
       method: 'PUT',
@@ -9082,8 +9118,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
     .then(function(r) { return r.json(); })
     .then(function(fileData) {
       if (!fileData || !fileData.id) {
-        card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-        card.textContent = '\u26a0 Upload failed';
+        fail('Upload failed', nextFolder);
         return nextFolder;
       }
       api('POST', '/log-attachment', {
@@ -9101,10 +9136,12 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
       return nextFolder;
     })
     .catch(function(e) {
-      card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
-      card.textContent = '\u26a0 ' + e.message;
+      fail(e.message || 'Connection dropped', nextFolder);
       return nextFolder;
     });
+  }).catch(function(e) {
+    fail(e.message || 'Connection error', folderInfo);
+    return folderInfo;
   });
 }
 
@@ -9162,6 +9199,12 @@ function deleteAttachment(attachId, woId, wrapEl) {
   }
 }
 
+// Per-WO combined photo/video set, in type order (before, after, report, receipt, other) --
+// this is what the lightbox swipes through as ONE album, regardless of which type section
+// you tapped into. Fixes "no album view / only back-and-forth one photo / two lists instead
+// of an album." Same pattern as vendor.html's loadPortalAttachments.
+var _rcWoItems = {};
+
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
   api('GET', '/attachments?wo_id=' + woId).then(function(items) {
@@ -9172,33 +9215,132 @@ function loadPortalAttachments(woId, opts) {
       if (!byType[t]) byType[t] = [];
       byType[t].push(f);
     });
-    ['before','after','report','receipt','other'].forEach(function(type) {
+    var TYPE_ORDER = ['before','after','report','receipt','other'];
+    var TYPE_LABELS = { before:'Before', after:'After', report:'Report Issue', receipt:'Receipt', other:'File' };
+    var combined = [];
+    TYPE_ORDER.forEach(function(type) {
+      (byType[type] || []).forEach(function(f) {
+        var mime = (f.Mime_Type || '').toLowerCase();
+        var isVideo = mime.indexOf('video/') === 0;
+        var isImage = mime.indexOf('image/') === 0 || (!mime && !!f.Drive_File_ID);
+        combined.push({
+          fileId: f.Drive_File_ID || '', driveUrl: f.Drive_URL || '#', name: f.File_Name || 'file',
+          typeLabel: TYPE_LABELS[type] || 'File', isVideo: isVideo, isViewable: isVideo || isImage,
+        });
+      });
+    });
+    _rcWoItems[woId] = combined;
+
+    var runningIdx = 0;
+    TYPE_ORDER.forEach(function(type) {
       var el = document.getElementById('uploads-' + type + '-' + woId);
-      if (!el || !byType[type] || !byType[type].length) return;
+      var typeCount = (byType[type] || []).length;
+      if (!el || !typeCount) { runningIdx += typeCount; return; }
       // Remove loading placeholder
       var ph = el.querySelector('.upload-ph');
       if (ph) ph.remove();
-      byType[type].forEach(function(f) {
+      byType[type].forEach(function(f, i) {
+        var itemIdx = runningIdx + i;
+        var item = combined[itemIdx];
         var icon = type === 'after' ? '\u2705' : type === 'before' ? '📷' :
                    type === 'receipt' ? '🧾' : type === 'report' ? '\u26a0\ufe0f' : '📎';
-        // Wrapper: link + delete button side by side
-        var wrap = document.createElement('span');
-        wrap.style.cssText = 'display:inline-flex;align-items:center;gap:0;margin:2px 4px 2px 0';
-        var a = document.createElement('a');
-        a.href = f.Drive_URL || '#'; a.target = '_blank';
-        a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px 0 0 4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
-        a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
-        var del = document.createElement('button');
-        del.textContent = '×';
-        del.title = 'Remove from work order';
-        del.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-left:none;border-radius:0 4px 4px 0;color:var(--muted);cursor:pointer;font-size:13px;padding:2px 6px;line-height:1';
-        del.onclick = function() { deleteAttachment(f.ID, woId, wrap); };
-        wrap.appendChild(a); wrap.appendChild(del);
-        el.appendChild(wrap);
+        if (item && item.isViewable && item.fileId) {
+          // Real thumbnail, tap opens the in-app lightbox at this photo -- with a small
+          // delete "x" overlay in the corner (admin-only capability this page already had).
+          var thumb = document.createElement('span');
+          thumb.style.cssText = 'position:relative;display:inline-block;width:56px;height:56px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border);margin:2px 4px 2px 0;vertical-align:top';
+          thumb.onclick = (function(woIdC, idxC){ return function(){ rcOpenLightbox(_rcWoItems[woIdC], idxC); }; })(woId, itemIdx);
+          var imgTag = '<img src="https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w150" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\'">';
+          var videoBadge = item.isVideo ? '<span style="position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.65);color:#fff;font-size:9px;border-radius:3px;padding:1px 3px">&#9658;</span>' : '';
+          var typeBadge = '<span style="position:absolute;left:2px;top:2px;font-size:10px;text-shadow:0 0 3px rgba(0,0,0,.8)">' + icon + '</span>';
+          thumb.innerHTML = imgTag + videoBadge + typeBadge;
+          var del = document.createElement('button');
+          del.textContent = '\u00d7';
+          del.title = 'Remove from work order';
+          del.style.cssText = 'position:absolute;right:2px;top:2px;background:rgba(0,0,0,.6);border:none;border-radius:3px;color:#fff;cursor:pointer;font-size:12px;line-height:1;padding:1px 4px';
+          del.onclick = function(ev) { ev.stopPropagation(); deleteAttachment(f.ID, woId, thumb); };
+          thumb.appendChild(del);
+          el.appendChild(thumb);
+        } else {
+          // Non-image/video (e.g. a PDF receipt) -- keep the plain link + delete-button chip.
+          var wrap = document.createElement('span');
+          wrap.style.cssText = 'display:inline-flex;align-items:center;gap:0;margin:2px 4px 2px 0';
+          var a = document.createElement('a');
+          a.href = f.Drive_URL || '#'; a.target = '_blank';
+          a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px 0 0 4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
+          a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
+          var del2 = document.createElement('button');
+          del2.textContent = '\u00d7';
+          del2.title = 'Remove from work order';
+          del2.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-left:none;border-radius:0 4px 4px 0;color:var(--muted);cursor:pointer;font-size:13px;padding:2px 6px;line-height:1';
+          del2.onclick = function() { deleteAttachment(f.ID, woId, wrap); };
+          wrap.appendChild(a); wrap.appendChild(del2);
+          el.appendChild(wrap);
+        }
       });
+      runningIdx += typeCount;
     });
   }).catch(function(){});
 }
+
+// -- Photo Lightbox -- in-app swipeable viewer (mirrors vendor.html's) --------------------
+var _rcLbItems = [];
+var _rcLbIdx = 0;
+
+function rcOpenLightbox(items, idx) {
+  if (!items || !items.length) return;
+  _rcLbItems = items;
+  _rcLbIdx = idx;
+  rcRenderLightbox();
+  document.getElementById('rc-lightbox').style.display = 'flex';
+}
+function rcCloseLightbox() {
+  var lb = document.getElementById('rc-lightbox');
+  if (lb) lb.style.display = 'none';
+  var v = document.getElementById('rc-lb-video');
+  if (v) { try { v.pause(); } catch(e){} v.removeAttribute('src'); v.load(); }
+}
+function rcLightboxNav(delta) {
+  if (!_rcLbItems.length) return;
+  _rcLbIdx = (_rcLbIdx + delta + _rcLbItems.length) % _rcLbItems.length;
+  rcRenderLightbox();
+}
+function rcRenderLightbox() {
+  var it = _rcLbItems[_rcLbIdx];
+  if (!it) return;
+  var body = document.getElementById('rc-lb-body');
+  var counter = document.getElementById('rc-lb-counter');
+  var label = document.getElementById('rc-lb-label');
+  if (counter) counter.textContent = (_rcLbIdx+1) + ' / ' + _rcLbItems.length;
+  if (label) label.textContent = (it.typeLabel||'') + (it.name ? ' - ' + it.name.substring(0,28) : '');
+  if (!body) return;
+  if (it.isVideo) {
+    body.innerHTML = '<video id="rc-lb-video" controls autoplay playsinline style="max-width:100%;max-height:78vh" src="https://drive.google.com/uc?export=download&id=' + it.fileId + '"></video>' +
+      '<div style="text-align:center;margin-top:8px"><a href="' + esc(it.driveUrl) + '" target="_blank" style="color:#8fb8ff;font-size:12px">Won\'t play? Open in Drive &rarr;</a></div>';
+  } else {
+    body.innerHTML = '<img src="https://drive.google.com/thumbnail?id=' + it.fileId + '&sz=w1600" style="max-width:100%;max-height:82vh;object-fit:contain" onerror="this.onerror=null;this.src=\'' + esc(it.driveUrl) + '\'">';
+  }
+}
+var _rcTouchX = null;
+document.addEventListener('touchstart', function(e){
+  var lb = document.getElementById('rc-lightbox');
+  if (!lb || lb.style.display === 'none') return;
+  _rcTouchX = e.touches[0].clientX;
+});
+document.addEventListener('touchend', function(e){
+  if (_rcTouchX === null) return;
+  var dx = e.changedTouches[0].clientX - _rcTouchX;
+  _rcTouchX = null;
+  if (Math.abs(dx) < 40) return;
+  rcLightboxNav(dx < 0 ? 1 : -1);
+});
+document.addEventListener('keydown', function(e){
+  var lb = document.getElementById('rc-lightbox');
+  if (!lb || lb.style.display === 'none') return;
+  if (e.key === 'ArrowRight') rcLightboxNav(1);
+  else if (e.key === 'ArrowLeft') rcLightboxNav(-1);
+  else if (e.key === 'Escape') rcCloseLightbox();
+});
 
 // Build a full categorized photo section for a WO
 function buildPhotoSection(woId, propAddr, opts) {
@@ -9351,6 +9493,20 @@ function setWOFilter(filterVal, priorityVal) {
       <button class="btn" id="mo-submit-btn" onclick="submitMoveOut()" style="background:var(--danger);color:#fff">CONFIRM MOVE OUT</button>
     </div>
   </div>
+</div>
+
+<!-- PHOTO LIGHTBOX — in-app swipeable viewer (see rcOpenLightbox / _rcWoItems) -->
+<div id="rc-lightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:9999;flex-direction:column;align-items:center;justify-content:center;padding:16px">
+  <div style="position:absolute;top:10px;left:14px;right:14px;display:flex;justify-content:space-between;align-items:center;color:#fff;font-size:12px;gap:8px">
+    <span id="rc-lb-label" style="opacity:.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+    <span style="display:flex;align-items:center;gap:14px;flex-shrink:0">
+      <span id="rc-lb-counter"></span>
+      <span onclick="rcCloseLightbox()" style="cursor:pointer;font-size:22px;line-height:1;padding:4px">&times;</span>
+    </span>
+  </div>
+  <div onclick="rcLightboxNav(-1)" style="position:absolute;left:2px;top:50%;transform:translateY(-50%);color:#fff;font-size:34px;cursor:pointer;padding:12px;user-select:none;opacity:.85">&#8249;</div>
+  <div id="rc-lb-body" style="max-width:100%;max-height:80vh;display:flex;flex-direction:column;align-items:center;justify-content:center"></div>
+  <div onclick="rcLightboxNav(1)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);color:#fff;font-size:34px;cursor:pointer;padding:12px;user-select:none;opacity:.85">&#8250;</div>
 </div>
 </body>
 </html>
