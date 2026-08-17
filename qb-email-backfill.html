@@ -12,9 +12,10 @@
   p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;line-height:1.5;}
   .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
   .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
-  .btn{background:var(--accent);color:#1b1f24;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  /* Rule 86 (Aug 13): every colored button carries WHITE text, never dark-on-color. */
+  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
   .btn:disabled{opacity:0.4;cursor:not-allowed;}
-  .btn.success{background:var(--accent2);color:#1b1f24;}
+  .btn.success{background:var(--accent2);color:#fff;}
   .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
   input{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
   .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;}
@@ -71,7 +72,7 @@
   <p class="sub" style="margin-bottom:10px">These sub-customers already carry an email, so the backfill leaves them alone. If one is <b>wrong or stale</b> (e.g. a property that should bill to its owner's address), tick it and tap <b>Force the parent's email</b> — that OVERWRITES the existing address with the one from its parent in QuickBooks (a property → its owner; a unit → its property). The "Will copy from" column names the exact source. Rows whose parent has no email can't be forced.</p>
   <div id="already"></div>
   <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
-    <button class="btn" id="force-btn" onclick="forceApply()" disabled style="background:var(--danger);color:#1b1f24">Force the parent's email onto selected</button>
+    <button class="btn" id="force-btn" onclick="forceApply()" disabled style="background:var(--danger);color:#fff">Force the parent's email onto selected</button>
     <span id="force-count" style="color:var(--muted);font-size:11px"></span>
   </div>
   <div id="force-log"></div>
@@ -90,7 +91,7 @@
   <div id="all-list" style="margin-top:8px"><div class="empty">Preview first to load QuickBooks.</div></div>
   <div class="row" style="margin-top:12px"><label>Email to set</label><input id="ground-email" placeholder="e.g. goldszmidtproperties@gmail.com" style="flex:1"></div>
   <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
-    <button class="btn" id="ground-btn" onclick="groundApply()" disabled style="background:var(--accent);color:#1b1f24">Set email on checked (writes to QuickBooks)</button>
+    <button class="btn" id="ground-btn" onclick="groundApply()" disabled style="background:var(--accent);color:#fff">Set email on checked (writes to QuickBooks)</button>
     <span id="ground-count" style="color:var(--muted);font-size:11px"></span>
   </div>
   <div id="ground-log"></div>
@@ -157,7 +158,8 @@ function renderToSet(){
   rows.forEach(r => {
     html += '<tr>'+
       '<td><input type="checkbox" class="pick" value="'+esc(r.id)+'" checked onchange="updateSel()"></td>'+
-      '<td>'+esc(r.name)+(r.inherited_from_grandparent?' <span class="pill skip">via owner</span>':'')+'</td>'+
+      '<td>'+esc(r.name)+(r.inherited_from_grandparent?' <span class="pill skip">via owner</span>':'')+
+        (r.bill_with_parent?' <span class="pill skip" title="This customer has \'Bill with parent\' on in QuickBooks — it may keep routing invoice emails to its parent no matter what email is set here.">bills via parent</span>':'')+'</td>'+
       '<td><span class="mono-email">'+esc(r.email)+'</span></td>'+
       '<td class="info">'+esc(r.source_name)+'</td>'+
     '</tr>';
@@ -243,7 +245,7 @@ function renderAlready(){
     const canForce = !!r.owner_email && r.owner_email !== r.current_email;
     html += '<tr>'+
       '<td>'+(canForce ? '<input type="checkbox" class="apick" value="'+esc(r.id)+'" onchange="updateForceSel()">' : '')+'</td>'+
-      '<td>'+esc(r.name)+'</td>'+
+      '<td>'+esc(r.name)+(r.bill_with_parent?' <span class="pill skip" title="This customer has \'Bill with parent\' on in QuickBooks — forcing its own email here may not change where QuickBooks actually sends invoices. Fix it on the parent, or uncheck \'Bill with parent\' on this customer in QuickBooks.">bills via parent</span>':'')+'</td>'+
       '<td class="mono-email">'+esc(r.current_email)+'</td>'+
       '<td>'+(r.owner_email
               ? (canForce ? '<span class="mono-email">'+esc(r.owner_email)+'</span>'+

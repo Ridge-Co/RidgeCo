@@ -4403,7 +4403,7 @@ function hubBillRenderReceipts(k) {
       '<input type="number" step="0.01" min="0" id="hb-r-amt-' + k + '-' + i + '" value="' + esc(String(r.amount || '')) + '" oninput="hubBillCalc(\'' + k + '\')" placeholder="0.00" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px">' +
       '<input type="text" id="hb-r-desc-' + k + '-' + i + '" value="' + esc(String(r.desc || '')) + '" placeholder="What was bought" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px">' +
       '<button class="btn small" onclick="hubBillSetPay(\'' + k + '\',' + i + ',\'' + (onAcct ? 'reimburse' : 'account') + '\')" ' +
-        'style="background:' + (onAcct ? 'var(--muted)' : 'var(--info)') + ';color:#1b1f24;font-size:10px;padding:3px 7px;white-space:nowrap">' +
+        'style="background:' + (onAcct ? 'var(--muted)' : 'var(--info)') + ';color:#fff;font-size:10px;padding:3px 7px;white-space:nowrap">' +
         (onAcct ? 'company card' : 'reimburse') + '</button>' +
       '<button class="btn small" onclick="hubBillRemoveReceipt(\'' + k + '\',' + i + ')" style="background:var(--surface);color:var(--danger);font-size:11px;padding:3px 8px">×</button>' +
     '</div>';
@@ -6352,7 +6352,8 @@ function loadSendTrack() {
 }
 
 function stChip(label, n, color) {
-  return '<span style="display:inline-block;background:'+color+';color:#1b1f24;border-radius:12px;padding:3px 10px;font-size:11px;font-weight:600;margin-right:8px">'+esc(label)+': '+n+'</span>';
+  // Rule 86 (Aug 13): colored chips carry white text, same as every other colored button/pill.
+  return '<span style="display:inline-block;background:'+color+';color:#fff;border-radius:12px;padding:3px 10px;font-size:11px;font-weight:600;margin-right:8px">'+esc(label)+': '+n+'</span>';
 }
 
 function stRow(inv, kind) {
@@ -7345,7 +7346,7 @@ function qbSubRow(kind, row, qbList) {
       (row.suggest.confidence === 'weak' ? '? possibly ' : '→ looks like ') +
       esc(row.suggest.path || row.suggest.name) + '</span> ' +
       '<button class="btn small" onclick="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',\'' + esc(String(row.suggest.id)) + '\')" ' +
-        'style="background:' + colour + ';color:#1b1f24;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
+        'style="background:' + colour + ';color:#fff;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
   } else if (parentMissing) {
     state = '<span style="color:var(--muted);font-size:10.5px">' +
       (kind === 'property' ? 'link its owner first' : 'link its property first') + '</span>';
@@ -7508,7 +7509,7 @@ function qbMapRow(kind, row, qbList) {
     state = '<span style="color:' + colour + ';font-size:10.5px">' +
       (conf === 'weak' ? '? possible match: ' : '→ looks like: ') + esc(row.suggest.name) + ' (#' + esc(String(row.suggest.id)) + ')</span> ' +
       '<button class="btn small" onclick="qbSetMap(\'' + kind + '\',\'' + esc(String(row.id)) + '\',\'' + esc(String(row.suggest.id)) + '\')" ' +
-        'style="background:' + colour + ';color:#1b1f24;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
+        'style="background:' + colour + ';color:#fff;padding:1px 7px;font-size:10px;margin-left:4px">Link</button>';
   } else {
     state = '<span style="color:var(--warn);font-size:10.5px">no match — will be CREATED in QuickBooks on first invoice</span>';
   }

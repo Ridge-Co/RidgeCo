@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-17.3';
+const BUILD_VERSION = '2026-08-17.4';
 
 export default {
   async fetch(request, env) {
@@ -5250,7 +5250,7 @@ async function qbListEntities(env, kind, token, force) {
   // FullyQualifiedName and ParentRef are what make sub-customers legible: without them a
   // property under one owner is indistinguishable from the same address under another.
   const fields = type === 'Customer'
-    ? 'Id, DisplayName, CompanyName, PrimaryEmailAddr, Active, FullyQualifiedName, ParentRef, Job, Level'
+    ? 'Id, DisplayName, CompanyName, PrimaryEmailAddr, Active, FullyQualifiedName, ParentRef, Job, Level, BillWithParent'
     : 'Id, DisplayName, CompanyName, PrimaryEmailAddr, Active';
   const q = encodeURIComponent(`select ${fields} from ${type} where Active = true maxresults 1000`);
   const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
@@ -5265,6 +5265,12 @@ async function qbListEntities(env, kind, token, force) {
     path: r.FullyQualifiedName || r.DisplayName || '',
     is_sub: r.Job === true || !!(r.ParentRef && r.ParentRef.value),
     level: typeof r.Level === 'number' ? r.Level : 0,
+    // "Bill with parent" is QuickBooks' own setting for a sub-customer/job — when true, QB
+    // routes invoice emails and statements to the PARENT's contact, not this record's own
+    // PrimaryEmailAddr, no matter what's set here. Surfaced so "I set this address and it
+    // still doesn't go where I want" has a visible answer instead of looking like a broken
+    // write (B-fix Aug 17 — see qbResolveEmailBackfill).
+    bill_with_parent: r.BillWithParent === true,
   })).filter(r => r.name && r.active);
   _qbEntityCache[key] = list;
   _qbEntityCache[atKey] = Date.now();
@@ -5830,6 +5836,7 @@ function qbResolveEmailBackfill(customers) {
         current_email: norm(c.email), owner_email: ancEmail,
         source_id: ancId, source_name: ancName,
         inherited_from_grandparent: fromGrandparent,
+        bill_with_parent: !!c.bill_with_parent,
       });
       continue;
     }
@@ -5839,6 +5846,7 @@ function qbResolveEmailBackfill(customers) {
         id: String(c.id), name: label, path: c.path || c.name || '',
         current_email: '', email: ancEmail, source_id: ancId,
         source_name: ancName, inherited_from_grandparent: fromGrandparent,
+        bill_with_parent: !!c.bill_with_parent,
       });
     } else {
       skipped.push({
@@ -5906,7 +5914,16 @@ async function qbBackfillEmails(env, body) {
           if (!cust) { failed.push({ id, name: nm, error: qbFault(got) || 'could not read customer from QuickBooks' }); continue; }
           const patch = { Id: String(id), SyncToken: cust.SyncToken, sparse: true, PrimaryEmailAddr: { Address: explicitEmail } };
           const r = await qbApi(env, 'customer?minorversion=73', 'POST', patch, token);
-          if (r && r.Customer) updated.push({ id, name: nm, email: explicitEmail });
+          // Verify the write actually stuck rather than trusting a 200. QuickBooks can accept
+          // a sparse update and hand back a Customer object that still doesn't carry the new
+          // email — seen on sub-customers with "Bill with parent" on, where QB routes billing
+          // to the parent and appears to disregard the sub's own PrimaryEmailAddr. Report that
+          // distinctly so "I set it and it didn't take" has a real answer instead of a mystery.
+          const wroteEmail = (r && r.Customer && r.Customer.PrimaryEmailAddr && r.Customer.PrimaryEmailAddr.Address) || '';
+          if (wroteEmail === explicitEmail) updated.push({ id, name: nm, email: explicitEmail });
+          else if (r && r.Customer) failed.push({ id, name: nm, error: cust.BillWithParent
+            ? 'QuickBooks accepted the write but the email didn\'t stick — this customer has "Bill with parent" on in QuickBooks, so it may be ignoring its own email. Turn that off (Customer → Edit → uncheck "Bill with parent") or fix the email on its parent instead.'
+            : 'QuickBooks accepted the write but the email came back different or blank — try again, or set it directly in QuickBooks.' });
           else failed.push({ id, name: nm, error: qbFault(r) || 'QuickBooks refused the update' });
         } catch (e) { failed.push({ id, name: nm, error: e.message }); }
       }
@@ -5945,8 +5962,15 @@ async function qbBackfillEmails(env, body) {
 
         const patch = { Id: String(id), SyncToken: cust.SyncToken, sparse: true, PrimaryEmailAddr: { Address: c.email } };
         const r = await qbApi(env, 'customer?minorversion=73', 'POST', patch, token);
-        if (r && r.Customer) {
+        // Same verify-after-write as the explicit-set path above — don't report success on a
+        // 200 that didn't actually change the email (the "Bill with parent" case).
+        const wroteEmail = (r && r.Customer && r.Customer.PrimaryEmailAddr && r.Customer.PrimaryEmailAddr.Address) || '';
+        if (wroteEmail === c.email) {
           updated.push({ id, name: c.name, email: c.email, source_name: c.source_name, overwrote: c.overwrite ? true : undefined });
+        } else if (r && r.Customer) {
+          failed.push({ id, name: c.name, error: cust.BillWithParent
+            ? 'QuickBooks accepted the write but the email didn\'t stick — this customer has "Bill with parent" on in QuickBooks. Turn that off (Customer → Edit → uncheck "Bill with parent") or fix the email on its parent instead.'
+            : 'QuickBooks accepted the write but the email came back different or blank — try again, or set it directly in QuickBooks.' });
         } else {
           failed.push({ id, name: c.name, error: qbFault(r) || 'QuickBooks refused the update' });
         }
@@ -6044,7 +6068,9 @@ async function qbBackfillInvoiceEmails(env, body) {
         if (invc.BillEmail && invc.BillEmail.Address) { updated.push({ id, doc: t.doc, email: invc.BillEmail.Address, already_had: true }); continue; }
         const patch = { Id: String(id), SyncToken: invc.SyncToken, sparse: true, BillEmail: { Address: t.email } };
         const r = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
-        if (r && r.Invoice) updated.push({ id, doc: t.doc, email: t.email, customer: t.customer });
+        const wroteEmail = (r && r.Invoice && r.Invoice.BillEmail && r.Invoice.BillEmail.Address) || '';
+        if (wroteEmail === t.email) updated.push({ id, doc: t.doc, email: t.email, customer: t.customer });
+        else if (r && r.Invoice) failed.push({ id, doc: t.doc, error: 'QuickBooks accepted the write but BillEmail came back different or blank — try again, or set it directly in QuickBooks.' });
         else failed.push({ id, doc: t.doc, error: qbFault(r) || 'QuickBooks refused the update' });
       } catch (e) { failed.push({ id, doc: t.doc, error: e.message }); }
     }
@@ -8058,10 +8084,13 @@ function buildTrashInvoiceLines(property, visits) {
     const base = +(Number(rawBase) || 0).toFixed(2);
     if (base > 0) {
       total += base;
+      // Description is just "Trash Service" — no address, no date. Brett's call (Aug 17):
+      // the address doesn't belong on a customer-facing line (same reasoning as the generic
+      // item below), and the date is redundant with the invoice's own transaction date.
       lines.push({
         DetailType: 'SalesItemLineDetail',
         Amount: base,
-        Description: ('Trash service — ' + ((v && v.Visit_Date) || '')).slice(0, 4000),
+        Description: 'Trash Service',
         SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: base },
       });
     }
