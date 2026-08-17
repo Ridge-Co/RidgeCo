@@ -2,75 +2,60 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Last checkpoint: Aug 17, 2026 — vendor bug fixes, tenant visibility, QuickBooks email/grid fixes
+## Last checkpoint: Aug 17, 2026 — Review Bills bulk-approve, Sheets quota fix, access-code visibility
 
-### What this session did (DONE + pushed to `Ridge-Co/RidgeCo`, Worker live at `2026-08-17.6`)
-Six shipped changes, FEATURE_LOG rules 92–97, commits `a29561d`..`8062a6d`:
+### What this session did (DONE + pushed to `Ridge-Co/RidgeCo`, commit `823b2d3`; Worker deploy `2026-08-17.7` pending Cloudflare auto-build off this push)
+Three shipped changes from Brett's own three asks this session, FEATURE_LOG rules 98–100:
 
-1. **Rule 92 — vendor bug-report fixes** (index.html + vendor.html + tenant.html + worker.js). From
-   Brett's original voice report + Oscar/Philadelphia Rd + Eddie/Gladden Ave incidents: (a) in-app
-   swipeable photo/video **lightbox** (`_rcWoItems`/`rcOpenLightbox`) replacing separate per-type link
-   chips; (b) photo/video **upload retry** (3 attempts, backoff, manual retry) — likely explanation for
-   Oscar's failure; (c) **vendor invoice FILE upload** (only the invoice *number* had a field before);
-   (d) **invoice-field autosave** (`onblur` on Customer Charge/Memo — the "clicked away and lost it" bug);
-   (e) **tenant + owner portal vendor contact** — `enrichWO` never resolved `Vendor_ID` to a name for any
-   non-vendor view; now tenants get name+phone+trade, owners get name+trade only (phone withheld, keeps
-   vendor relationship mediated through Brett). **🔴 Eddie's Gladden Ave photo access is NOT code-fixable
-   from Cowork** — it's the still-unactioned Aug-8 photo-sharing backfill; needs Brett's own tap on
-   "Share them all" in the live Hub.
-2. **Rule 93 — tenant portal hides pre-move-in work orders.** Matt at 151 W Lanvale Apt 2 could see a
-   turnover-cleaning WO opened right around his move-in. `isTenantNotifiable` (SMS) already skipped
-   pre-move-in WOs; `tenantWorkorders` (the portal's own list) never applied the same check. Extracted
-   shared `isBackgroundWO(tenant, wo)`, used by both — automatic, retroactive, no admin action. Also
-   relabeled the Hub's existing "Show to Tenant" toggle with the actual tenant's name + an
-   "🚫 Auto-hidden" banner when the date rule is why a WO isn't showing.
-3. **Rule 94 — trash-service invoices got no send-to email.** `trashInvoice`'s QuickBooks payload never
-   set `BillEmail` (the exact gap rule 60 already fixed on the main invoice flow; this newer path never
-   got it). Now reads the QB customer's email live and stamps `BillEmail` before posting, with retry-
-   without-it-on-rejection. Also warns in Preview, before Send.
-4. **Rule 95 — QB backfill tools were lying about success + trash description + button contrast.**
-   `qbBackfillEmails`/`qbBackfillInvoiceEmails` treated any 200 response as success even when QuickBooks
-   silently ignored the write — happens on a customer with **"Bill with parent" ON**, which routes
-   billing to the parent regardless of what's set on the sub's own email. Both endpoints now verify the
-   email QuickBooks actually kept before reporting success; `qbListEntities` now reads `BillWithParent`
-   and `qb-email-backfill.html` shows a **"bills via parent"** badge proactively. Also: trash invoice line
-   descriptions are now literally **"Trash Service"** (Brett's explicit call — no address, no date).
-   Button-contrast sweep (black-text-on-color, rule 86 violation) fixed across both QB tools,
-   `index.html`'s Send & Track chips + QB Mapping Link buttons + a bill-receipt toggle, and
-   `tenant.html`/`owner.html`'s green/blue buttons.
-5. **Rule 96 — "Fix email" button added directly to Send & Track.** Rule 95's fix wasn't retroactive —
-   Brett correctly called this out from a screenshot showing the same 3 stuck trash invoices still "no
-   email" after rule 95 shipped. Added a one-tap **"Fix email"** button on any no-email row (calls the
-   same verified backfill endpoint scoped to just that invoice) so there's no separate tool/admin-token
-   step needed.
-6. **Rule 97 — `ensureColumns` now grows a sheet's grid before writing a new header.** Brett hit
-   `Range (Work_Orders!AO1) exceeds grid limits. Max rows: 998, max columns: 40` saving a WO edit
-   (checklist was the first field to land on column 41). Root cause was systemic — any tab hits this the
-   moment its real column count crosses whatever grid width it started with — not just Work_Orders.
-   `ensureColumns` now checks `gridProperties.columnCount` and grows it (+20 headroom) before writing.
+1. **Rule 98 — Review Bills bulk-approve.** "need to select multiple items for review bills, not one at
+   a time then refresh after each one." Added a "☑ Select multiple" toggle + sticky selection bar
+   (count + running $ total) + "Approve selected," sending one batch to new
+   `POST /invoice-review/approve-bulk` (one read + one batched write of Vendor_Bills/Invoice_Review
+   regardless of batch size, cap 50) instead of N single approvals. Extracted the single-card approve's
+   validation/pricing math into `invBuildApprovalPayload` so single and bulk share identical money math.
+   Approved cards now fade out of the list immediately (both paths) — the direct fix for "doesn't leave
+   the queue until I refresh." Bulk deliberately does NOT touch QuickBooks — Send-to-QB stays the
+   existing one-at-a-time, preview-first, confirmed step.
+2. **Rule 99 — Sheets API quota fix.** Brett hit "Quota exceeded — Read requests per minute per user"
+   updating WOs back-to-back; root cause is every screen firing several serial reads while the whole app
+   (admin/vendor/tenant/owner/crons) shares ONE service account's 60-reads/minute bucket. Fixed at the
+   source: `sheetsRequest` retries 429 (any method) and 5xx (GET only, never POST — avoids a double-
+   write) with backoff; `fetchTabs` batches many tabs into one `batchGet`; `getAccessToken` caches its
+   hour-long token; new `GET /hub-bootstrap` loads the Hub's 8 core tabs in one call (index.html's
+   `loadAll()` uses it, old 8-call path kept as automatic fallback); short in-isolate cache absorbs
+   duplicate reads within a burst. Front-end `api()` also got its own 3s GET de-dup cache.
+3. **Rule 100 — per-code access visibility + broadened type map.** 828 S Charles St's electronic door
+   code wasn't showing on its WO at all — `getWOLockboxes`'s TYPE_MAP only covered legacy Key_Type
+   strings (current-vocabulary codes fell through unlabeled) AND the admin widget separately filtered on
+   the literal string `'Lockbox'` only. Both fixed: broadened TYPE_MAP, widget now renders every active
+   code by type. Added `Keys.Visibility` (blank=Auto / `Brett Only`) with a per-code dropdown in the
+   WO-detail widget (`setKeyVisibility`); `enrichWO` filters `Brett Only` codes out of every
+   vendor/tenant/owner/shared-link view unconditionally, EXCEPT when the assigned vendor is Brett's own
+   in-house record. **Brett still needs to tap the new dropdown himself** to actually mark 828 S Charles
+   St's code Brett Only — this session fixed visibility (bug) but can't set that one Sheets row's value
+   without Sheets write access from Cowork.
 
-**Verified every step:** `node --check` on worker.js, Python-extracted inline-`<script>` syntax check on
-every touched HTML file, full test suite 24/26 after every change (the 2 failures — `pricing-model`,
-`scope-core` — are pre-existing/unrelated, confirmed via `git stash` against unmodified `main` back in
-the Aug 17 session's first checkpoint; not touched or caused by anything this session). Grepped every
-diff for cost/markup/margin leakage before each push (hard rule) — clean throughout.
+**Verified every step:** `node --check worker.js` clean, both `index.html` inline `<script>` blocks
+syntax-clean (Python extraction), full test suite 26/28 (2 new test files —
+`access-code-visibility.test.mjs`, `invoice-review-bulk.test.mjs` — both green; `read-layer.test.mjs` and
+`invoice-no-bill.test.mjs` updated for the refactor, both green; the 2 failures — `pricing-model`,
+`scope-core` — are pre-existing/unrelated, confirmed via `git stash` against unmodified `main`). Grepped
+the full diff for cost/markup/margin leakage before push (hard rule) — clean; the only matches are
+existing Review Bills admin-only UI text (internal authenticated page), not new leaks. Full manual
+`git diff` read-through of both worker.js and index.html completed before commit.
 
 ### Open / Brett's to-do (things to physically check/click)
-- **Verify rule 97**: reopen the WO that errored (WO-1133) and confirm Save Changes now goes through.
-- **Verify rule 96**: on Send & Track, tap "Fix email" on 151 W Lanvale St #1652 / 115 W 29th St #1651 /
-  153 W Lanvale St #1654 and confirm each resolves or explains why not.
-- **Verify rule 95**: re-preview `qb-email-backfill.html` — check whether 1106 N Bond St / 1110 N
-  Dukeland St now show a "bills via parent" badge (if so, the real fix is unchecking "Bill with parent"
-  on those two in QuickBooks directly, not another Force click).
-- **Verify rule 93**: check Matt's tenant portal — the turnover-cleaning WO should be gone.
-- **Verify rule 92**: tap a multi-photo WO thumbnail (swipe lightbox), submit a vendor bill with an
-  invoice file, type-then-click-away on an invoice memo, check a tenant/owner login shows the vendor's
-  name.
-- **🔴 Eddie/Gladden Ave**: tap "Share them all" in the live Hub — not code-fixable from here.
-- **Rotate the classic GitHub PAT** — still exposed in chat history (pasted again at the start of this
-  session too); this has now been flagged across at least two sessions, worth actually doing.
+- **Verify rule 98**: on Review Bills, tap "Select multiple," check 2-3 priced bills, tap "Approve
+  selected," confirm the total matches, confirm cards clear without a manual refresh.
+- **Verify rule 99**: work through several WOs back-to-back like when the quota error hit — should not
+  error; if still momentarily busy, should retry/recover instead of showing the red error box.
+- **Verify rule 100**: open 828 S Charles St's WO, confirm the electronic code now shows in "ACCESS
+  CODES (live)." **Then set it to "Brett Only" via the new dropdown** — this is the one part that needed
+  Brett's own tap, not just a bug fix.
+- **Rotate the classic GitHub PAT** — pasted into chat again at the start of this session (third+ time
+  flagged across sessions now); worth actually doing.
 
-### Carried forward, unchanged, NOT touched this session (from the Aug 13 checkpoint)
+### Carried forward, unchanged, NOT touched this session (from the earlier Aug 17 checkpoint / Aug 13)
 - **B-127** (DIY multi-model router) — specced (`MODEL_ROUTING_BUILD_BRIEF_v1.0`), not built. Top-level
   priority for its own focused session per the Aug 13 checkpoint.
 - Set Cloudflare secret **`PAY_AUTH_CODE`** before bill-pay works live (rule 80/B-217A is dormant without
@@ -80,17 +65,19 @@ diff for cost/markup/margin leakage before each push (hard rule) — clean throu
   tool can grant Drive sharing remotely.
 - Set **`receipt_customer_cards`** (Cloudflare secret or Config sheet row) — Jennifer/Goldszmidt Visa
   `7442` was the flagged candidate.
-- B-203 corrected finding (from the Aug 17 session's early turns, before this checkpoint's numbered
-  work): `processMoveOut` already clears `Units.Tenant_ID` — BACKLOG.md's description of this is stale
-  and hasn't been corrected in the file yet. Real remaining gap: no UI to reactivate/transfer an existing
-  tenant record without creating a duplicate.
+- B-203 corrected finding: `processMoveOut` already clears `Units.Tenant_ID` — BACKLOG.md's description
+  of this is stale and hasn't been corrected in the file yet. Real remaining gap: no UI to
+  reactivate/transfer an existing tenant record without creating a duplicate.
 - B-217 (vendor bill-pay write path) — flagged as needing its own focused build/review; not started.
-- Dormant `WO_Tenants` link table (`/wo-tenants`, `/wo-tenant/add`, `/wo-tenant/remove`) — pre-dates this
-  session, confirmed dead code (nothing in any frontend calls it, `tenantWorkorders` doesn't consult it).
-  Left as-is; flagged so a future session doesn't assume it's load-bearing.
+- Dormant `WO_Tenants` link table (`/wo-tenants`, `/wo-tenant/add`, `/wo-tenant/remove`) — pre-dates
+  recent sessions, confirmed dead code (nothing in any frontend calls it, `tenantWorkorders` doesn't
+  consult it). Left as-is; flagged so a future session doesn't assume it's load-bearing.
+- **🔴 Eddie/Gladden Ave photo access** (from the earlier Aug 17 checkpoint, rule 92) — still needs
+  Brett's tap on "Share them all" (Hub → Dev Log → 🖼 Fix photo/video sharing); not code-fixable from
+  Cowork.
 
 ### Next step (when Brett returns)
-No pending build mid-flight. When Brett's back: confirm the 6 verify-items above landed clean (a quick
+No pending build mid-flight. When Brett's back: confirm the 3 verify-items above landed clean (a quick
 "how'd it go" is enough — don't re-verify code that's already tested and pushed), then either pick up
 **B-127** (its own focused session) or take whatever new ask he brings, classified under the Session
 Efficiency Protocol as usual.
