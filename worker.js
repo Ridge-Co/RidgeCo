@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-17.1';
+const BUILD_VERSION = '2026-08-17.2';
 
 export default {
   async fetch(request, env) {
@@ -757,12 +757,25 @@ function currentTenantForDispatch(tenants, unit, wo) {
   return isTenantCurrent(t) ? t : null;
 }
 
+// A WO opened before the tenant's Move_In_Date is "background" to them — work tied to
+// whoever lived there before (e.g. a turnover-cleaning WO opened while the unit was being
+// prepped for their move-in). Shared by isTenantNotifiable (SMS) and tenantWorkorders (portal
+// list) so a tenant is neither texted about nor shown a WO that predates them. B-fix Aug 17:
+// this check previously lived only in isTenantNotifiable, so a tenant wouldn't be TEXTED about
+// a pre-move-in WO but could still SEE it by opening the tenant portal — the SMS gate and the
+// portal-visibility gate had quietly drifted apart. Real case: tenant "Matt" at 151 W Lanvale
+// St Apt 2 could see a turnover-cleaning WO opened right around his move-in date.
+function isBackgroundWO(tenant, wo) {
+  if (!tenant || !tenant.Move_In_Date || !wo || !wo.Created_Date) return false;
+  return new Date(tenant.Move_In_Date) > new Date(wo.Created_Date);
+}
+
 function isTenantNotifiable(tenant, wo) {
   if (!tenant || !tenant.Phone) return false;
   // Delegates the "do they still live there" question rather than restating it. Three
   // near-copies of this check is why one of them ended up not being applied.
   if (!isTenantCurrent(tenant)) return false;
-  if (tenant.Move_In_Date && wo && wo.Created_Date) { if (new Date(tenant.Move_In_Date) > new Date(wo.Created_Date)) return false; }
+  if (isBackgroundWO(tenant, wo)) return false;
   return true;
 }
 
@@ -1680,7 +1693,10 @@ async function tenantWorkorders(env, url) {
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
   const tenant = tenants.find(t => t.ID === tenantId); if (!tenant) return json([]);
-  const wos = workorders.filter(w => { if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
+  // isBackgroundWO: don't show a WO opened before this tenant moved in — matches the rule
+  // isTenantNotifiable already applies to SMS, so "won't text them about it" and "won't show
+  // it in their portal" stay in sync instead of drifting apart (see isBackgroundWO comment).
+  const wos = workorders.filter(w => { if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (isBackgroundWO(tenant, w)) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
   // tenants get the assigned vendor's name/phone/trade so they can coordinate access —
   // enrichWO never resolved Vendor_ID -> a name/phone at all before this (tenant.html and
   // owner.html both had a "Technician: —" row wired up with nothing to fill it).

@@ -1632,11 +1632,21 @@ function openWODetail(woId) {
     el.innerHTML = rows;
   }).catch(function(){ var el=document.getElementById('auditTrailBody'); if(el) el.innerHTML='<span style="color:var(--muted)">Unavailable</span>'; });
 
-  // Tenant visibility controls in detail
+  // Tenant visibility controls in detail. Label names the actual current tenant (when known)
+  // instead of a generic "Tenant" — this button IS "remove [tenant] from this work order": it's
+  // the same Tenant_Visible flag tenantWorkorders() checks to leave a WO out of the portal list.
+  var _tvName = tenant && (tenant.First_Name || tenant.Last_Name) ? ((tenant.First_Name||'')+' '+(tenant.Last_Name||'')).trim() : '';
+  var _tvShowLabel = _tvName ? ('Show to '+_tvName) : 'Show to Tenant';
+  // Auto-hidden note: worker.js now hides a WO from the portal on its own when it predates the
+  // tenant's move-in date (isBackgroundWO, B-fix Aug 17) — same rule that already governed SMS.
+  // Surface that here so "why isn't Matt seeing this" has an answer without digging into code,
+  // and so it's obvious the Show-to toggle below isn't what's hiding it in that case.
+  var _tvAutoHidden = tenant && tenant.Move_In_Date && wo.Created_Date && new Date(tenant.Move_In_Date) > new Date(wo.Created_Date);
   var tvSection = '<div style="margin-top:14px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">TENANT ACCESS SETTINGS</div>' +
+    (_tvAutoHidden ? '<div style="font-size:11px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:10px">🚫 Auto-hidden from '+esc(_tvName||'this tenant')+' — this WO was opened before their move-in date, so it\'s treated as background work and left out of their portal automatically.</div>' : '') +
     '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
-    tenantToggle('Tenant_Visible',wo.Tenant_Visible,'Show to Tenant',woId) +
+    tenantToggle('Tenant_Visible',wo.Tenant_Visible,_tvShowLabel,woId) +
     tenantToggle('Tenant_Notify_Created',wo.Tenant_Notify_Created,'Notify on Creation',woId) +
     tenantToggle('Tenant_Notify_Updates',wo.Tenant_Notify_Updates,'Notify on Updates',woId) +
     '</div></div>';
