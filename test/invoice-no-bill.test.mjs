@@ -53,9 +53,12 @@ t('a bill-less sent invoice reads DONE, never "partly sent" (mirrors the Worker 
   /var noVendorBill = !String\(row\.bill_id \|\| ''\)/.test(loadStatus) &&
   /row\.qb_invoice_id && \(row\.qb_bill_id \|\| noVendorBill\)/.test(loadStatus));
 
-const doJob = grab(hsrc, 'function invBillThisJob(');
-t('approve payload tolerates a missing bill', /bill_id: bill \? bill\.ID : ''/.test(doJob));
-t('the already-reviewed fast-path is guarded against a null bill', /if \(bill && \(bill\.Status/.test(doJob));
+// invBillThisJob delegates payload-building (and the already-reviewed fast-path check) to
+// invBuildApprovalPayload — shared with the Review Bills bulk-approve path so both use the
+// IDENTICAL money math instead of two hand-written copies. The guards live there now.
+const buildPayload = grab(hsrc, 'function invBuildApprovalPayload(');
+t('approve payload tolerates a missing bill', /bill_id: bill \? bill\.ID : ''/.test(buildPayload));
+t('the already-reviewed fast-path is guarded against a null bill', /if \(bill && \(bill\.Status/.test(buildPayload));
 
 // ── The double-bill guard this whole change rests on ──
 // Materials reach the invoice as own-materials (invMatTotal), NOT by being copied into a bill.

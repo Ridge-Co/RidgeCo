@@ -102,6 +102,7 @@ export default {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
+        if (path === '/hub-bootstrap')          return await hubBootstrap(env);
         if (path === '/properties')             return await getSheet(env, 'Properties');
         if (path === '/public/entities-feed')   return await getEntitiesFeed(env);
         if (path === '/units')                  return await getSheet(env, 'Units');
@@ -282,6 +283,7 @@ export default {
         if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
+        if (path === '/invoice-review/approve-bulk') return await approveInvoiceReviewBulk(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
@@ -620,13 +622,45 @@ function getWOLockboxes(keys, woPropertyId, woUnitId, woUnitLabel) {
     .map(k => {
       const kUnit = (k.Unit_ID || k.Unit_Label || '').toString().trim();
       const isBuilding = kUnit === '' || kUnit === '0';
-      const TYPE_MAP = { 'Lockbox':'Lockbox','lockbox':'Lockbox','Door Code':'Door Code','Door_Code':'Door Code','Electronic':'Electronic Code','Front Door':'Front Door','front door':'Front Door','Unit Key':'Unit Key','unit key':'Unit Key','Key':'Key','Gate Code':'Gate Code','Gate_Code':'Gate Code','Building Code':'Building Code','Building_Code':'Building Code','Other':'Access' };
+      // Canonical type vocabulary. Three different tools have written Key_Type over time —
+      // the original flat legacy strings (Lockbox, Door Code, Electronic, ...), keys.html's
+      // own flat set (Front Door, Gate Code, Garage Code, Mailbox, Utility, Rear Access,
+      // Other), and the current Building-*/Unit-* hyphenated scheme used by index.html's
+      // "Add Access Item" modal and the CSV importer's inferKeyType. TYPE_MAP is kept in
+      // sync with index.html's renderKeysView TYPE_LABEL map (same key set) so a code never
+      // silently falls through to a raw/garbled label — every scheme currently written
+      // anywhere in the app resolves to a real, human label here.
+      const TYPE_MAP = {
+        // Current hyphenated scheme
+        'Building-FrontDoorKey':'Front Door Key','Building-FrontDoorCode':'Electronic Code (Front Door)',
+        'Building-Lockbox':'Lockbox','Building-Padlock':'Padlock','Building-GateCode':'Gate Code',
+        'Building-CustomKey':'Key','Building-CustomLockbox':'Lockbox','Building-CustomCode':'Access Code',
+        'Unit-Key':'Unit Key','Unit-DoorCode':'Electronic Code','Unit-Lockbox':'Lockbox',
+        'Unit-MailboxKey':'Mailbox Key','Unit-Padlock':'Padlock',
+        // Legacy / keys.html flat vocabulary
+        'Lockbox':'Lockbox','lockbox':'Lockbox','Door Code':'Electronic Code','Door_Code':'Electronic Code',
+        'Electronic':'Electronic Code','electronic':'Electronic Code',
+        'Front Door':'Front Door Key','front door':'Front Door Key',
+        'Unit Key':'Unit Key','unit key':'Unit Key','Key':'Key',
+        'Gate Code':'Gate Code','Gate_Code':'Gate Code','Garage Code':'Garage Code',
+        'Building Code':'Building Code','Building_Code':'Building Code',
+        'Mailbox':'Mailbox Key','Utility':'Utility Key','Rear Access':'Rear Access',
+        'Other':'Access',
+      };
       const typeLabel = TYPE_MAP[k.Key_Type] || (k.Key_Type || 'Key');
       const unitDisplay = kUnit || woUnitLabel || '';
       const label = isBuilding ? `Building — ${typeLabel}` : `${unitDisplay ? 'Unit '+unitDisplay+' — ' : ''}${typeLabel}`;
       const code = k.Key_Code || k.Lockbox_Code || k.Code || k.code || '';
       const location = k.Lockbox_Location || k.Location || k.Notes || '';
-      return { label, code, location, notes: k.Notes||'', type: k.Key_Type||'', scope: isBuilding ? 'building' : 'unit' };
+      // Visibility (Keys.Visibility): '' / 'Auto' = this code follows the normal trade/WO
+      // sharing toggle like every other code (unchanged behavior); 'Brett Only' = never hand
+      // THIS ONE code to a vendor, no matter the trade default or per-WO toggle — the ONLY
+      // way it still reaches a vendor-facing view is if the vendor actually assigned to that
+      // WO IS Brett himself (Vendors.In_House), handled in enrichWO. This is what makes
+      // sharing controllable per CODE, independent of its type (lock code, lockbox code,
+      // electronic door code, gate code, ...) instead of one all-or-nothing WO-level switch.
+      const visibility = (k.Visibility || '').trim();
+      return { id: k.ID||'', label, code, location, notes: k.Notes||'', type: k.Key_Type||'', scope: isBuilding ? 'building' : 'unit', visibility };
     })
     .filter(k => k.code || k.location)
     .sort((a, b) => a.scope === 'building' && b.scope !== 'building' ? -1 : 1);
@@ -647,6 +681,11 @@ async function updateKeyWithHistory(env, body) {
       await sheetsRequest(env, 'POST', `/values/Keys_History:append?valueInputOption=RAW`, { values: [newRow] });
     }
   }
+  // Keys was never given an ensureColumns call anywhere — updateRow maps strictly by
+  // existing header name, so writing Visibility (new, per-code sharing control) or
+  // Last_Changed on a sheet that's never had them silently drops the write with no error.
+  // Grow the header row first; no-ops instantly once the columns exist.
+  await ensureColumns(env, 'Keys', ['Visibility', 'Last_Changed']);
   return await updateRow(env, 'Keys', body.id, { ...body.fields, Last_Changed: now });
 }
 
@@ -1675,14 +1714,17 @@ async function vendorWorkorders(env, url) {
   const vendorId = url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [[workorders, properties, units, tenants, keys], config] = await Promise.all([
-    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys']),
+  const [[workorders, properties, units, tenants, keys, vendors], config] = await Promise.all([
+    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']),
     fetchConfig(env),
   ]);
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   const wos = workorders.filter(w => w.Vendor_ID === vendorId && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true }));
+  // vendors passed through so enrichWO can tell whether THIS vendor is Brett's own
+  // in-house record — that's what lets a "Brett Only" code still surface on a WO
+  // that's actually assigned to him (see enrichWO's visibleLockboxes).
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true, vendors }));
   enriched.sort((a, b) => { const pa = PRIORITY_ORDER[a.Priority?.toLowerCase()] ?? 2, pb = PRIORITY_ORDER[b.Priority?.toLowerCase()] ?? 2; return pa !== pb ? pa - pb : (a.property_address||'').localeCompare(b.property_address||''); });
   return json(enriched);
 }
@@ -1765,24 +1807,34 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
   // moves the status, which lets the tenant-notification automation fire. New/Assigned = gated.
   const ACCEPTED_OR_LATER = ['Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid'];
   const accessGated = !!opts.vendorView && !ACCEPTED_OR_LATER.includes((wo.Status||'').trim());
-  const rawLockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit.Unit_Label||'');
-  const lockboxes = (opts.omitLockbox || !vendorHasAccess || accessGated) ? [] : rawLockboxes;
-  const accessNotes = (!vendorHasAccess || accessGated) ? '' : (property.Access_Notes||'');
-  const legacyLockbox = (!lockboxes.length && vendorHasAccess && !accessGated && property.Lockbox_Code) ? property.Lockbox_Code : '';
-  // Resolve the assigned vendor's name/phone/trade when a vendor directory was handed in.
-  // This never happened before — tenant.html and owner.html both had a "Technician" /
-  // "Vendor" row template referencing wo.vendor_name, but nothing ever populated it, so it
-  // always rendered blank/"—". Only callers that pass opts.vendors get it resolved; callers
-  // that don't (vendor's own view, generic admin reads) are unaffected.
-  let vendorName = '', vendorPhone = '', vendorTrade = '';
+  // Resolve the assigned vendor's name/phone/trade/in-house status when a vendor directory
+  // was handed in. This never happened before — tenant.html and owner.html both had a
+  // "Technician" / "Vendor" row template referencing wo.vendor_name, but nothing ever
+  // populated it, so it always rendered blank/"—". Only callers that pass opts.vendors get
+  // it resolved; callers that don't (generic admin reads) are unaffected. Resolved BEFORE
+  // the lockboxes are filtered below, because a "Brett Only" code's one exception is a WO
+  // whose assigned vendor IS Brett (In_House).
+  let vendorName = '', vendorPhone = '', vendorTrade = '', vendorInHouse = false;
   if (opts.vendors && wo.Vendor_ID) {
     const v = opts.vendors.find(vv => vv.ID === wo.Vendor_ID);
     if (v) {
       vendorName = v.Name || `${v.First_Name||''} ${v.Last_Name||''}`.trim();
       vendorPhone = v.Phone || '';
       vendorTrade = v.Trade || '';
+      vendorInHouse = String(v.In_House||'').toUpperCase() === 'TRUE';
     }
   }
+  const rawLockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit.Unit_Label||'');
+  // Per-code visibility, independent of the per-WO/per-trade share toggle above: a code
+  // marked "Brett Only" (see getWOLockboxes) is stripped out of every external render —
+  // enrichWO is ONLY ever used to build vendor/tenant/owner/shared-link views, never the
+  // admin Hub, which reads Keys directly and always sees everything — UNLESS the vendor
+  // actually assigned to this WO is Brett's own in-house record, matching "viewable for me,
+  // and on the work order assigned to me" (FEATURE_LOG access-visibility fix).
+  const visibleLockboxes = vendorInHouse ? rawLockboxes : rawLockboxes.filter(lb => lb.visibility !== 'Brett Only');
+  const lockboxes = (opts.omitLockbox || !vendorHasAccess || accessGated) ? [] : visibleLockboxes;
+  const accessNotes = (!vendorHasAccess || accessGated) ? '' : (property.Access_Notes||'');
+  const legacyLockbox = (!lockboxes.length && vendorHasAccess && !accessGated && property.Lockbox_Code) ? property.Lockbox_Code : '';
   const base = {
     ...wo,
     property_address: property.Address||'', property_city: property.City||'', unit_label: unit.Unit_Label||'',
@@ -2164,6 +2216,105 @@ async function approveInvoiceReview(env, body) {
   return json({ success: true, id: realId });
 }
 
+// POST /invoice-review/approve-bulk { approvals: [ {bill_id, wo_id, vendor_id, vendor_name,
+// job_type, vendor_cost, brett_time, brett_hrs, travel, markup, processing_fee,
+// customer_total, brett_net, own_wage, profit, own_materials, own_material_ids, approved_by},
+// ... ] }
+//
+// Same business logic as approveInvoiceReview (dedup-by-bill/WO, mark the Vendor_Bills row
+// reviewed, append an Invoice_Review row) applied to a WHOLE BATCH sharing ONE read of each
+// tab and ONE write of each kind, instead of ~7 Sheets calls PER bill. Built for the Review
+// Bills bulk-select UI: Brett was hitting Google's per-minute Sheets quota (the "not moving
+// fast" error) partly because approving bills one at a time really did mean N × ~7 reads.
+// This does NOT touch QuickBooks — it only moves bills from "submitted" to "approved,
+// awaiting QuickBooks" (Invoice_Review, QB_Invoice_Status:'pending'), exactly like a single
+// approve does. Sending to QuickBooks stays on the existing Send-to-QB screen, which already
+// has its own preview-first, one-at-a-time-confirmed batch-sequential send — money leaving
+// the building through QuickBooks keeps that explicit per-item gate; only the REVIEW step
+// (which creates no QuickBooks record) is now bulk.
+async function approveInvoiceReviewBulk(env, body) {
+  const approvals = Array.isArray(body.approvals) ? body.approvals : [];
+  if (!approvals.length) return json({ error: 'approvals array required' }, 400);
+  if (approvals.length > 50) return json({ error: 'Max 50 approvals per batch' }, 400);
+  const today = new Date().toISOString().split('T')[0];
+
+  try {
+    await Promise.all([
+      ensureColumns(env, 'Vendor_Bills',   ['Own_Wage', 'Profit', 'Own_Materials']),
+      ensureColumns(env, 'Invoice_Review', ['Own_Wage', 'Profit', 'Own_Materials', 'Own_Material_IDs']),
+    ]);
+  } catch (e) { /* the money fields below still land; only the split is lost */ }
+
+  const [vendorBillsData, irData] = await Promise.all([
+    sheetsRequest(env, 'GET', '/values/Vendor_Bills'),
+    sheetsRequest(env, 'GET', '/values/Invoice_Review'),
+  ]);
+  const vbHeaders = (vendorBillsData.values || [])[0] || [];
+  const vbBody = (vendorBillsData.values || []).slice(1);
+  const irHeaders = (irData.values || [])[0] || [];
+  const irRowsRaw = (irData.values || []).slice(1);
+  const irBody = irRowsRaw.map(r => { const o = {}; irHeaders.forEach((h, i) => o[h] = r[i] || ''); return o; });
+
+  const _idcVB = idColIndex(vbHeaders);
+  let nextIRId = nextSafeId(irData.values || []);
+
+  const results = [], billUpdates = [], newIRRows = [];
+
+  for (const a of approvals) {
+    const bill_id = a.bill_id, wo_id = a.wo_id;
+    if (!a.customer_total || (!bill_id && !wo_id)) {
+      results.push({ bill_id, wo_id, success: false, error: 'customer_total and a bill_id or wo_id are required' });
+      continue;
+    }
+    // Same dedup rule as the single-item approve: approving the same bill/job twice hands
+    // back the existing row instead of logging a duplicate.
+    const already = bill_id
+      ? irBody.find(r => r.Active !== 'FALSE' && String(r.Bill_ID) === String(bill_id))
+      : irBody.find(r => r.Active !== 'FALSE' && !String(r.Bill_ID || '') && String(r.WO_ID) === String(wo_id));
+    if (already) {
+      results.push({ bill_id, wo_id, success: true, already_approved: true, id: String(already.ID),
+        approved_total: already.Customer_Total || '', differs: String(already.Customer_Total || '') !== String(a.customer_total || '') });
+      continue;
+    }
+
+    if (bill_id) {
+      const rowIndex = vbBody.findIndex(r => r[_idcVB] === String(bill_id));
+      if (rowIndex === -1) { results.push({ bill_id, wo_id, success: false, error: 'Vendor bill not found' }); continue; }
+      const sheetRow = rowIndex + 2;
+      const fields = {
+        Status: 'reviewed', Job_Type: a.job_type || 'standard', Own_Materials: a.own_materials || '0',
+        Brett_Time: a.brett_time || '0', Brett_Hrs: a.brett_hrs || '0', Travel: a.travel || '0',
+        Markup: a.markup || '0', Processing_Fee: a.processing_fee || '0', Customer_Total: a.customer_total,
+        Brett_Net: a.brett_net || '0', Own_Wage: a.own_wage || '0', Profit: a.profit || '0',
+        Approved_By: a.approved_by || 'Brett', Reviewed_Date: today,
+      };
+      for (const [field, value] of Object.entries(fields)) {
+        const colIndex = vbHeaders.indexOf(field);
+        if (colIndex !== -1) billUpdates.push({ range: `Vendor_Bills!${col(colIndex)}${sheetRow}`, values: [[value]] });
+      }
+    }
+
+    const irId = nextIRId; nextIRId += 1;
+    const reviewRowObj = {
+      ID: String(irId), Bill_ID: bill_id || '', WO_ID: wo_id, Vendor_ID: a.vendor_id || '', Vendor_Name: a.vendor_name || '',
+      Job_Type: a.job_type, Vendor_Cost: a.vendor_cost || '0', Brett_Time: a.brett_time,
+      Own_Materials: a.own_materials || '0', Own_Material_IDs: a.own_material_ids || '',
+      Travel: a.travel, Markup: a.markup, Processing_Fee: a.processing_fee, Customer_Total: a.customer_total,
+      Brett_Net: a.brett_net, Own_Wage: a.own_wage || '0', Profit: a.profit || '0',
+      QB_Invoice_Status: 'pending', QB_Invoice_ID: '', QB_Bill_ID: '', Approved_By: a.approved_by || 'Brett',
+      Approved_Date: today, Active: 'TRUE',
+    };
+    newIRRows.push(irHeaders.map(h => reviewRowObj[h] !== undefined ? String(reviewRowObj[h]) : ''));
+    results.push({ bill_id, wo_id, success: true, id: String(irId) });
+  }
+
+  // Exactly two writes total, however many bills are in the batch — versus 2N before.
+  if (billUpdates.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: billUpdates });
+  if (newIRRows.length) await sheetsRequest(env, 'POST', '/values/Invoice_Review:append?valueInputOption=RAW', { values: newIRRows });
+
+  return json({ success: true, results });
+}
+
 // ── ESTIMATES ────────────────────────────────────────────────
 
 async function listEstimates(env, url) {
@@ -2410,12 +2561,28 @@ async function generateEstimateText(env, body) {
 // ── WO AUDIT ─────────────────────────────────────────────────
 
 async function logWOAudit(env, woId, changedBy, changedByRole, field, oldValue, newValue, notes='') {
+  return logWOAuditMany(env, [{ woId, changedBy, changedByRole, field, oldValue, newValue, notes }]);
+}
+
+// Batched version — one GET (to find the next ID) + one multi-row append covering ALL
+// entries, instead of a GET+POST pair per field. adminUpdateWO/ownerUpdateWO/tenant-access
+// updates were each calling logWOAudit once PER CHANGED FIELD in a loop, which used to mean
+// N re-reads of the SAME WO_Audit tab for one save (each read racing the one the previous
+// loop iteration had just written seconds — sometimes milliseconds — earlier). This is one of
+// the concrete contributors to the "quota exceeded" error Brett hit after an ordinary WO edit.
+async function logWOAuditMany(env, entries) {
+  if (!entries || !entries.length) return;
   try {
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
     const rows = data.values||[]; if (!rows.length) return;
     const headers = rows[0], now = new Date().toISOString();
-    const newRow = headers.map(h => ({ ID:String(nextSafeId(rows)), WO_ID:woId||'', Changed_By:changedBy||'unknown', Changed_By_Role:changedByRole||'unknown', Field:field||'', Old_Value:String(oldValue??''), New_Value:String(newValue??''), Timestamp:now, Notes:notes||'' }[h]??''));
-    await sheetsRequest(env, 'POST', `/values/WO_Audit:append?valueInputOption=RAW`, { values:[newRow] });
+    let nextId = nextSafeId(rows);
+    const newRows = entries.map(e => {
+      const row = headers.map(h => ({ ID:String(nextId), WO_ID:e.woId||'', Changed_By:e.changedBy||'unknown', Changed_By_Role:e.changedByRole||'unknown', Field:e.field||'', Old_Value:String(e.oldValue??''), New_Value:String(e.newValue??''), Timestamp:now, Notes:e.notes||'' }[h]??''));
+      nextId += 1;
+      return row;
+    });
+    await sheetsRequest(env, 'POST', `/values/WO_Audit:append?valueInputOption=RAW`, { values:newRows });
   } catch(e) { /* never break main operation */ }
 }
 
@@ -2494,7 +2661,8 @@ async function ownerUpdateWO(env, body) {
   const prop = properties.find(p => p.ID === wo.Property_ID);
   if (!prop || String(prop.Owner_ID) !== String(body.owner_id)) return json({ error: 'Unauthorized' }, 403);
   await updateRow(env, 'Work_Orders', body.wo_id, allowed);
-  for (const [field, newVal] of Object.entries(allowed)) { if (String(wo[field]||'') !== String(newVal||'')) await logWOAudit(env, body.wo_id, body.owner_name, 'owner', field, wo[field]||'', newVal, 'Owner updated via portal'); }
+  const _ownerEntries = Object.entries(allowed).filter(([field,newVal]) => String(wo[field]||'') !== String(newVal||'')).map(([field,newVal]) => ({ woId: body.wo_id, changedBy: body.owner_name, changedByRole: 'owner', field, oldValue: wo[field]||'', newValue: newVal, notes: 'Owner updated via portal' }));
+  await logWOAuditMany(env, _ownerEntries);
   return json({ success: true });
 }
 
@@ -2502,7 +2670,10 @@ async function adminUpdateWO(env, body) {
   const adminName = body.admin_name||'Admin'; if (!body.wo_id||!body.fields) return json({ error: 'Missing wo_id or fields' }, 400);
   const workorders = await fetchTab(env, 'Work_Orders'); const wo = workorders.find(w => w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   await updateRow(env, 'Work_Orders', body.wo_id, body.fields);
-  for (const [field, newVal] of Object.entries(body.fields)) { if (String(wo[field]||'') !== String(newVal||'')) await logWOAudit(env, body.wo_id, adminName, 'admin', field, wo[field]||'', newVal, 'Admin updated via portal'); }
+  // One batched audit write covering every changed field, instead of a GET+POST pair per
+  // field — a 3-field edit used to mean 3 extra re-reads of WO_Audit in one save.
+  const _adminEntries = Object.entries(body.fields).filter(([field,newVal]) => String(wo[field]||'') !== String(newVal||'')).map(([field,newVal]) => ({ woId: body.wo_id, changedBy: adminName, changedByRole: 'admin', field, oldValue: wo[field]||'', newValue: newVal, notes: 'Admin updated via portal' }));
+  await logWOAuditMany(env, _adminEntries);
   return json({ success: true });
 }
 
@@ -2524,7 +2695,8 @@ async function setTenantVisibility(env, body) {
   if (!Object.keys(updates).length) return json({ error: 'No valid fields' }, 400);
   const workorders = await fetchTab(env, 'Work_Orders'); const wo = workorders.find(w => w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   await updateRow(env, 'Work_Orders', body.wo_id, updates);
-  for (const [field, newVal] of Object.entries(updates)) { if (String(wo[field]||'') !== String(newVal||'')) await logWOAudit(env, body.wo_id, body.changed_by||'admin', body.changed_by_role||'admin', field, wo[field]||'', newVal, 'Tenant visibility setting changed'); }
+  const _tvEntries = Object.entries(updates).filter(([field,newVal]) => String(wo[field]||'') !== String(newVal||'')).map(([field,newVal]) => ({ woId: body.wo_id, changedBy: body.changed_by||'admin', changedByRole: body.changed_by_role||'admin', field, oldValue: wo[field]||'', newValue: newVal, notes: 'Tenant visibility setting changed' }));
+  await logWOAuditMany(env, _tvEntries);
   return json({ success: true });
 }
 
@@ -4282,7 +4454,12 @@ async function woSharedRead(env, url){
   const vendorRec = vendors.find(v=>v.ID===auth.vid)||{};
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e){}
-  const e = enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults });
+  // NOTE: deliberately NOT passing vendorView:true here — that would also turn on the
+  // accept-gate (accessGated), a behavior change to the shared-link flow this task didn't
+  // ask for. vendors IS passed so the new per-code "Brett Only" filter (which applies
+  // unconditionally in enrichWO, independent of vendorView) can still make the one
+  // exception for a link whose own vendor record is Brett's in-house one.
+  const e = enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendors });
   // Explicit vendor-safe whitelist — never spread the raw WO (that would leak owner ids,
   // QB refs, internal flags). Owner data is omitted entirely.
   const safe = {
@@ -4469,6 +4646,57 @@ async function signRS256(input, key) {
   return btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
 
+// Very short-lived in-isolate read cache for whole-tab Sheets reads. Google's Sheets API
+// caps reads at 60/min PER USER, and this whole app authenticates as ONE shared service
+// account for every admin/vendor/tenant/owner request plus the crons — so every request's
+// reads pile onto the same bucket. Investigation into the "quota exceeded" error Brett hit
+// (Aug 17) found the real cause wasn't rapid clicking: a single "save a WO edit" click alone
+// re-reads Work_Orders 3-4 SEPARATE times across adminUpdateWO/updateRow/ensureColumns/
+// updateWOFields (each one re-fetching the exact same tab a previous helper in the SAME
+// request had just fetched microseconds earlier), and the Hub's own list-load (loadAll) fires
+// 8-9 unbatched single-tab reads. None of that is Brett "moving fast" — it's the app being
+// wasteful with its own quota.
+//
+// This cache is a pure best-effort optimization, not a source of truth: every WRITE
+// (append/batchUpdate) immediately invalidates whatever tab(s) it touched, so the very next
+// read of that tab is always guaranteed fresh — a read-after-write within the same request (or
+// the next request) never sees stale data. Reads of a DIFFERENT tab within the ~6s window can
+// be up to that old, which is an explicit, deliberate trade for staying under the quota; 6s is
+// short enough that no money-facing flow in this app depends on sub-6-second cross-tab
+// consistency. Only WHOLE-tab GETs (`/values/TabName`, no range) are cached — every such call
+// site in this file (fetchTab/getSheet/addRow/updateRow/updateWOFields/ensureColumns/
+// logWOAudit/…) already reads the full tab, so caching by tab name alone is safe: nothing here
+// ever GETs a narrower range that this cache could serve a wrong shape for. This is a
+// single-isolate cache (Workers can and do spin up more than one isolate under load) — it
+// reduces quota pressure across a burst of requests hitting the same isolate, it does not
+// (and cannot, without a KV/Durable Object binding this environment doesn't have) guarantee
+// zero duplicate reads globally.
+const __tabCache = new Map(); // tabName -> { data, exp }
+const TAB_CACHE_MS = 6000;
+function __tabCacheKey(path) {
+  // Matches "/values/TabName" or "/values/TabName:append...", NEVER "/values/TabName!A1:Z9"
+  // (a real range read) or "/values:batchGet"/"/values:batchUpdate" (handled by their own
+  // callers) — only the plain whole-tab shape every helper in this file actually uses.
+  const m = /^\/values\/([^!:?]+)$|^\/values\/([^!:?]+):/.exec(path);
+  return m ? decodeURIComponent(m[1] || m[2]) : null;
+}
+function invalidateTabCache(tab) { if (tab) __tabCache.delete(tab); }
+function __invalidateFromWrite(path, body) {
+  const tabs = new Set();
+  const m = /^\/values\/([^!:?]+)/.exec(path);
+  if (m) tabs.add(decodeURIComponent(m[1]));
+  if (path.startsWith('/values:batchUpdate') && body && Array.isArray(body.data)) {
+    for (const d of body.data) { const t = (d.range || '').split('!')[0]; if (t) tabs.add(t); }
+  }
+  if (path.endsWith(':batchUpdate') && !path.startsWith('/values')) {
+    // Spreadsheet-structure change (grid resize, addSheet, ...) — cheap and rare; safest to
+    // drop everything rather than reason about which tabs a structural change could affect.
+    __tabCache.clear();
+    return;
+  }
+  tabs.forEach(t => __tabCache.delete(t));
+}
+
 // Google throttles Sheets reads on a "read requests per minute per user" quota,
 // and the whole Hub shares ONE service-account identity, so every user's reads
 // pile onto the same per-user bucket. When it trips, Google returns a 429 and the
@@ -4479,6 +4707,13 @@ async function signRS256(input, key) {
 // is ambiguous — the write may have landed — so those are retried ONLY for GET,
 // never for a POST/PUT that could double-write a bill or row.
 async function sheetsRequest(env, method, path, body) {
+  if (method === 'GET') {
+    const cacheKey = __tabCacheKey(path);
+    if (cacheKey) {
+      const hit = __tabCache.get(cacheKey);
+      if (hit && hit.exp > Date.now()) return hit.data;
+    }
+  }
   const MAX_ATTEMPTS=4;
   for(let attempt=1;;attempt++){
     const token=await getAccessToken(env);
@@ -4494,6 +4729,12 @@ async function sheetsRequest(env, method, path, body) {
         continue;
       }
       throw new Error(`Sheets API error on ${method} ${path}: ${data.error.message||JSON.stringify(data.error)}`);
+    }
+    if (method === 'GET') {
+      const cacheKey = __tabCacheKey(path);
+      if (cacheKey) __tabCache.set(cacheKey, { data, exp: Date.now() + TAB_CACHE_MS });
+    } else {
+      __invalidateFromWrite(path, body);
     }
     return data;
   }
@@ -4514,18 +4755,45 @@ async function fetchTab(env, tab) {
 // per-minute quota) now costs a single read. Returns an array of row-object lists
 // in the SAME ORDER as `tabs` (batchGet preserves request order), each parsed
 // exactly like fetchTab — so callers just swap `Promise.all([fetchTab,...])` for
-// `fetchTabs(env,[...])` with no change to the data shape. Still a fresh read
-// every time: no caching, no staleness risk to money data.
+// `fetchTabs(env,[...])` with no change to the data shape. Participates in the same
+// ~6s __tabCache as sheetsRequest's single-tab GETs (see its comment) — any tab
+// already cached (e.g. another handler in this same burst already read it via
+// fetchTab/getSheet) is served from cache and dropped from the actual batchGet
+// request; only genuinely-missing tabs go over the wire, and whatever comes back
+// is cached the same way so a LATER fetchTab/getSheet call for the same tab is
+// also a cache hit. Writes still invalidate exactly like any other read path.
 async function fetchTabs(env, tabs) {
   if(!tabs||!tabs.length) return [];
-  const qs=tabs.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
-  const data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
-  const ranges=data.valueRanges||[];
-  return tabs.map((_,i)=>{
-    const values=(ranges[i]&&ranges[i].values)||[];
+  const now = Date.now();
+  const missing = tabs.filter(t => { const hit = __tabCache.get(t); return !(hit && hit.exp > now); });
+  if (missing.length) {
+    const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
+    const data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
+    const ranges=data.valueRanges||[];
+    missing.forEach((t,i)=>{
+      const values=(ranges[i]&&ranges[i].values)||[];
+      __tabCache.set(t, { data: { values }, exp: Date.now()+TAB_CACHE_MS });
+    });
+  }
+  return tabs.map(t=>{
+    const hit = __tabCache.get(t);
+    const values = (hit && hit.data && hit.data.values) || [];
     if(values.length<2) return [];
     const [headers,...rows]=values; return rows.map(row=>{const o={};headers.forEach((h,idx)=>o[h]=row[idx]||'');return o;});
   });
+}
+
+// The admin Hub's own bootstrap load (loadAll in index.html) used to fire 8 SEPARATE
+// GET requests (Properties/Units/Tenants/Vendors/Work_Orders/Invoices/Owners/Keys), each
+// its own Sheets read-quota unit, every single time the Hub loads or does a full refresh
+// after a save. One batched call via fetchTabs turns that into 1 Sheets read (or 0, if
+// everything's still warm in __tabCache from something else in the same burst). Response
+// shape mirrors the individual endpoints exactly (array per tab) so the client can just
+// destructure straight into `state`.
+async function hubBootstrap(env) {
+  const [properties, units, tenants, vendors, workorders, invoices, owners, keys] =
+    await fetchTabs(env, ['Properties','Units','Tenants','Vendors','Work_Orders','Invoices','Owners','Keys']);
+  return json({ properties, units, tenants, vendors, workorders, invoices, owners, keys });
 }
 
 async function health(env) {

@@ -25,6 +25,21 @@ function grab(src, sig) {
   return src.slice(start, i + 1);
 }
 
+function grabRange(src, startSig, endSig) {
+  const start = src.indexOf(startSig);
+  if (start < 0) throw new Error('not found: ' + startSig);
+  const end = src.indexOf(endSig, start);
+  if (end < 0) throw new Error('end not found: ' + endSig);
+  return src.slice(start, end);
+}
+
+// sheetsRequest and fetchTabs both close over the in-isolate __tabCache (added to absorb
+// duplicate reads within a request/short burst — see worker.js comments). Grab that whole
+// block too and prepend it inside each `new Function(...)` body so every makeSR/makeFT call
+// gets its OWN fresh `const __tabCache = new Map()` — isolated per test block, no
+// cross-contamination between assertions that happen to hit the same tab name.
+const cacheSrc = grabRange(wsrc, 'const __tabCache = new Map();', '// Google throttles Sheets reads');
+
 let pass = 0, fail = 0;
 const t = (n, c) => { if (c) { pass++; } else { fail++; console.log('FAIL:', n); } };
 const okThrow = async (fn) => { try { await fn(); return false; } catch { return true; } };
@@ -33,7 +48,7 @@ const okThrow = async (fn) => { try { await fn(); return false; } catch { return
 const srSrc = grab(wsrc, 'async function sheetsRequest(');
 const makeSR = (fetchImpl) => new Function(
   'getAccessToken', 'fetch', 'setTimeout',
-  srSrc + '\nreturn { sheetsRequest };'
+  cacheSrc + '\n' + srSrc + '\nreturn { sheetsRequest };'
 )(async () => 'tok', fetchImpl, (fn) => fn()); // setTimeout fires immediately → no real waiting
 
 const resp = (obj) => ({ json: async () => obj });
@@ -87,7 +102,7 @@ const ERR500 = { error: { code: 500, message: 'Backend error' } };
 const ftSrc = grab(wsrc, 'async function fetchTabs(');
 const makeFT = (batchResp, capture) => new Function(
   'sheetsRequest',
-  ftSrc + '\nreturn { fetchTabs };'
+  cacheSrc + '\n' + ftSrc + '\nreturn { fetchTabs };'
 )(async (env, method, path) => { if (capture) capture.path = path; return batchResp; });
 
 {

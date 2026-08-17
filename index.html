@@ -346,11 +346,24 @@
 
     <div style="border-top:1px solid var(--border);margin:22px 0 14px"></div>
 
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
       <div class="section-title" style="margin:0">💰 VENDOR BILL REVIEW</div>
-      <button class="btn secondary" onclick="loadInvoiceReview()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
+      <div style="display:flex;gap:8px">
+        <button id="ir-bulk-toggle-btn" class="btn secondary" onclick="irToggleBulkMode()" style="font-size:11px;padding:6px 12px">☑ Select multiple</button>
+        <button class="btn secondary" onclick="loadInvoiceReview()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
+      </div>
     </div>
-    <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Review each vendor bill, set markup, and approve to create a customer invoice.</p>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Review each vendor bill, set markup, and approve to create a customer invoice. Price each bill you want to approve, then either approve it on its own card or select several and approve them together.</p>
+    <div id="ir-bulk-bar" style="display:none;position:sticky;top:0;z-index:5;background:var(--surface);border:1px solid var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+          <input type="checkbox" onchange="irSelectAllVisible(this.checked)"> Select all visible
+        </label>
+        <span id="ir-bulk-count" style="font-size:12px;color:var(--muted);flex:1">0 selected</span>
+        <button id="ir-bulk-approve-btn" class="btn" onclick="irBulkApprove()" disabled style="font-size:12px;padding:8px 14px;font-weight:bold">📤 Approve selected</button>
+      </div>
+      <div id="ir-bulk-status"></div>
+    </div>
     <div id="ir-filters"></div>
     <div id="ir-list"><div class="loading"><span class="spinner"></span>Loading bills…</div></div>
   </div>
@@ -1167,19 +1180,116 @@ if (stored) {
   }).catch(function() { localStorage.removeItem(SECRET_KEY); AUTH_TOKEN = ''; });
 }
 
+// Short-lived GET de-dup cache (3s). Several UI paths independently fetch the exact same
+// endpoint within one burst of clicks — e.g. opening a WO detail fetches /vendor-bills?wo_id=
+// directly for the bill-history list AND loadInvoiceBuilder fetches the identical URL again
+// a moment later for the pricing panel. Each of those round-trips is its own Sheets read on
+// the Worker side, and this was one of the concrete contributors to the "quota exceeded"
+// error (see hub-bootstrap/tabCache comments in worker.js for the full picture). Any POST
+// (write) clears the whole cache, so a save is always followed by fresh reads — this never
+// serves stale data across a write, only coalesces truly-duplicate reads inside a short window.
+var _getCache = {};
+var GET_CACHE_MS = 3000;
 function api(method, path, body) {
   var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
   if (body) opts.body = JSON.stringify(body);
-  return fetch(WORKER + path, opts).then(function(res){
+  if (method === 'GET') {
+    var hit = _getCache[path];
+    if (hit && hit.exp > Date.now()) return hit.promise;
+  } else {
+    _getCache = {};
+  }
+  var p = fetch(WORKER + path, opts).then(function(res){
     return res.json().then(function(data){
       if (data.error === 'Unauthorized') throw new Error('Unauthorized');
       return data;
     });
   });
+  if (method === 'GET') {
+    _getCache[path] = { promise: p, exp: Date.now() + GET_CACHE_MS };
+    p.catch(function(){ delete _getCache[path]; });
+  }
+  return p;
 }
+
+// Canonical Key_Type vocabulary, shared by every place that displays an access code
+// (the WO-detail "current codes" widget, the Keys/Lockboxes registry page, and mirrored
+// server-side in worker.js's getWOLockboxes TYPE_MAP). Three tools have written Key_Type
+// over the years — this file's own "Add Access Item" modal (Building-*/Unit-* hyphenated),
+// the older keys.html tool (flat strings), and the CSV importer — so every scheme any of
+// them has ever produced needs a real label here, or a code silently renders as a raw,
+// unrecognizable string (or — the 828 S Charles St bug — gets filtered out of a view
+// entirely because it doesn't match one hardcoded literal).
+var KEY_TYPE_GROUP = {
+  // Building items
+  'Building-FrontDoorKey':'Building','Building-FrontDoorCode':'Building','Building-Lockbox':'Building',
+  'Building-Padlock':'Building','Building-GateCode':'Building','Building-CustomKey':'Building',
+  'Building-CustomLockbox':'Building','Building-CustomCode':'Building',
+  // Legacy types → Building
+  'Front Door':'Building','Building Code':'Building','Gate Code':'Building','Lockbox':'Building',
+  // Unit items
+  'Unit-Key':'Unit','Unit-DoorCode':'Unit','Unit-Lockbox':'Unit','Unit-MailboxKey':'Unit','Unit-Padlock':'Unit',
+  // Legacy types → Unit
+  'Unit Key':'Unit','Door Code':'Unit','Key':'Unit',
+};
+var KEY_TYPE_LABEL = {
+  'Building-FrontDoorKey':'Front Door Key (code to cut)',
+  'Building-FrontDoorCode':'Front Door Code (electronic)',
+  'Building-Lockbox':'Building Lockbox',
+  'Building-Padlock':'Building Padlock',
+  'Building-GateCode':'Gate Code',
+  'Building-CustomKey':'Custom Location Key',
+  'Building-CustomLockbox':'Custom Location Lockbox',
+  'Building-CustomCode':'Custom Code',
+  'Unit-Key':'Unit Key',
+  'Unit-DoorCode':'Unit Door Code (electronic)',
+  'Unit-Lockbox':'Unit Lockbox',
+  'Unit-MailboxKey':'Mailbox Key',
+  'Unit-Padlock':'Unit Padlock',
+  // Legacy / keys.html flat vocabulary
+  'Lockbox':'Lockbox', 'Door Code':'Electronic Code', 'Door_Code':'Electronic Code',
+  'Electronic':'Electronic Code', 'Front Door':'Front Door Key',
+  'Unit Key':'Unit Key', 'Key':'Key',
+  'Gate Code':'Gate Code', 'Gate_Code':'Gate Code', 'Garage Code':'Garage Code',
+  'Building Code':'Building Code', 'Building_Code':'Building Code',
+  'Mailbox':'Mailbox Key', 'Utility':'Utility Key', 'Rear Access':'Rear Access', 'Other':'Access',
+};
+function keyTypeLabel(type) { return KEY_TYPE_LABEL[type] || (type || 'Key'); }
 
 function processNotificationsBackground() {
   api('GET','/notifications/pending').catch(function(){});
+}
+
+var _names8 = ['properties','units','tenants','vendors','workorders','invoices','owners','keys'];
+
+function _loadAllFinish(loaded) {
+  renderDashboard(); renderWOPage(); renderPropertiesPage();
+  renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
+  loadWishlist();
+  setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
+  processNotificationsBackground();
+  toast('Loaded '+loaded+'/8 data sets','success');
+}
+
+// Fallback path — the original 8 separate requests. Only used if /hub-bootstrap itself
+// errors (e.g. an older deployed Worker without the route yet), so a stale client never
+// just breaks.
+function _loadAllFallback() {
+  return Promise.allSettled([
+    api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
+    api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners'), api('GET','/keys')
+  ]).then(function(results) {
+    results.forEach(function(r,i) {
+      if (r.status === 'fulfilled') {
+        state[_names8[i]] = Array.isArray(r.value) ? r.value : [];
+        if (!Array.isArray(r.value)) logError('Load '+_names8[i], 'Not array: '+JSON.stringify(r.value).substring(0,100));
+      } else {
+        state[_names8[i]] = [];
+        logError('Load '+_names8[i], r.reason?.message || 'Failed');
+      }
+    });
+    _loadAllFinish(results.filter(function(r){return r.status==='fulfilled';}).length);
+  });
 }
 
 function loadAll() {
@@ -1188,27 +1298,22 @@ function loadAll() {
   // Returns the promise. voidVendorBill() does `loadAll().then(...)` to re-open the WO
   // detail after a void — with no return value that was calling .then on undefined and
   // throwing, so the re-render it was supposed to guarantee never ran.
-  return Promise.allSettled([
-    api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
-    api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners'), api('GET','/keys')
-  ]).then(function(results) {
-    var names = ['properties','units','tenants','vendors','workorders','invoices','owners','keys'];
-    results.forEach(function(r,i) {
-      if (r.status === 'fulfilled') {
-        state[names[i]] = Array.isArray(r.value) ? r.value : [];
-        if (!Array.isArray(r.value)) logError('Load '+names[i], 'Not array: '+JSON.stringify(r.value).substring(0,100));
-      } else {
-        state[names[i]] = [];
-        logError('Load '+names[i], r.reason?.message || 'Failed');
-      }
+  //
+  // Single batched call instead of 8 separate GETs (each its own Sheets read-quota unit) —
+  // this is one of the direct fixes for the "Sheets API quota exceeded" error: a plain WO
+  // list load, or the full refresh after any save, used to cost 8 reads on its own.
+  return api('GET','/hub-bootstrap').then(function(res) {
+    if (!res || typeof res !== 'object') throw new Error('bad /hub-bootstrap response');
+    var loaded = 0;
+    _names8.forEach(function(name) {
+      var v = res[name];
+      state[name] = Array.isArray(v) ? v : [];
+      if (Array.isArray(v)) loaded++; else logError('Load '+name, 'Not array: '+JSON.stringify(v).substring(0,100));
     });
-    renderDashboard(); renderWOPage(); renderPropertiesPage();
-    renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
-    loadWishlist();
-    setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
-    processNotificationsBackground();
-    var loaded = results.filter(function(r){return r.status==='fulfilled';}).length;
-    toast('Loaded '+loaded+'/8 data sets','success');
+    _loadAllFinish(loaded);
+  }).catch(function(e) {
+    logError('hub-bootstrap', (e && e.message) || 'Failed — falling back to per-tab loads');
+    return _loadAllFallback();
   });
 }
 
@@ -1588,22 +1693,43 @@ function openWODetail(woId) {
       : '/keys-by-property?property_id='+wo.Property_ID;
     api('GET', keysUrl).then(function(freshKeys) {
       if (Array.isArray(freshKeys) && freshKeys.length) {
-        var lockboxes = freshKeys.filter(function(k){ return k.Key_Type==='Lockbox'; });
-        if (lockboxes.length) {
-          var lbHtml = lockboxes.map(function(lb){
-            var sc = (lb.scope||'building')==='building' ? 'var(--muted)' : 'var(--info)';
-            var lbl = lb.label || (lb.scope==='unit'?'Unit Lockbox':'Building Lockbox');
-            return '<div style="margin-bottom:6px">' +
-              '<div style="color:'+sc+';font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px">'+lbl+'</div>' +
-              '<span style="color:var(--accent);font-weight:bold;letter-spacing:.08em;font-size:14px">'+(lb.code||lb.Lockbox_Code||lb.Key_Code||'—')+'</span>' +
-              ((lb.location||lb.Lockbox_Location)?'<span style="color:var(--muted);font-size:11px"> · '+(lb.location||lb.Lockbox_Location)+'</span>':'') +
+        // FIX (Aug 2026): this used to filter to the single literal string Key_Type ===
+        // 'Lockbox' — a legacy value almost nothing currently written actually uses (the
+        // live vocabulary is the Building-*/Unit-* hyphenated scheme, e.g. an electronic
+        // door code saves as Building-FrontDoorCode/Unit-DoorCode). That silently hid EVERY
+        // access code from this admin widget except old-format rows — the exact bug behind
+        // "828 S Charles St's electronic door code isn't appearing on the WO in the Hub at
+        // all." Show every active code for this property/unit, not just literal lockboxes —
+        // this is the Hub's own admin view, so it always shows everything regardless of the
+        // vendor-sharing settings below (those only govern what a VENDOR sees).
+        var codes = freshKeys.filter(function(k){ return k.Active !== 'FALSE'; });
+        if (codes.length) {
+          var lbHtml = codes.map(function(lb){
+            var group = KEY_TYPE_GROUP[lb.Key_Type] || 'Building';
+            var sc = group==='Building' ? 'var(--muted)' : 'var(--info)';
+            var lbl = keyTypeLabel(lb.Key_Type) + (group==='Unit' ? ' (Unit)' : '');
+            var code = lb.Key_Code || lb.Lockbox_Code || lb.Code || '—';
+            var loc = lb.Lockbox_Location || lb.Location || '';
+            var vis = (lb.Visibility||'').trim() || 'Auto';
+            var visColor = vis==='Brett Only' ? 'var(--danger)' : 'var(--muted)';
+            return '<div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">' +
+              '<div>' +
+              '<div style="color:'+sc+';font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px">'+esc(lbl)+'</div>' +
+              '<span style="color:var(--accent);font-weight:bold;letter-spacing:.08em;font-size:14px">'+esc(code)+'</span>' +
+              (loc?'<span style="color:var(--muted);font-size:11px"> · '+esc(loc)+'</span>':'') +
+              '</div>' +
+              '<select onchange="setKeyVisibility(\''+lb.ID+'\',this.value)" title="Who can see this specific code, on top of the Vendor Access toggle below" style="font-size:10px;padding:3px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface);color:'+visColor+';font-family:var(--font)">' +
+              ['Auto','Brett Only'].map(function(o){ return '<option value="'+o+'"'+(vis===o?' selected':'')+'>'+(o==='Auto'?'Auto (normal sharing rules)':'🔒 Brett only')+'</option>'; }).join('') +
+              '</select>' +
               '</div>';
           }).join('');
           var lbEl = document.querySelector('#detail-body .pf-val.sensitive');
           if (!lbEl) {
             var lbDiv = document.createElement('div');
             lbDiv.style.cssText = 'padding:10px 14px;background:var(--surface2);border-top:1px solid var(--border);font-size:12px';
-            lbDiv.innerHTML = '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">CURRENT LOCKBOXES (live)</span><div style="margin-top:6px">'+lbHtml+'</div>';
+            lbDiv.innerHTML = '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">ACCESS CODES (live)</span>' +
+              '<div style="font-size:10px;color:var(--muted);margin:4px 0 8px">Per-code visibility overrides the Vendor Access toggle below for that ONE code — "Brett only" never reaches a vendor, even one with access, unless the WO is assigned to your own in-house vendor record.</div>' +
+              '<div style="margin-top:6px">'+lbHtml+'</div>';
             var db = document.getElementById('detail-body');
             if (db) db.insertAdjacentElement('afterbegin', lbDiv);
           }
@@ -3661,34 +3787,10 @@ function renderKeysView() {
     };
     var DEFAULT_BADGE = POSS_BADGE['Unknown'];
 
-    var TYPE_GROUP = {
-      // Building items
-      'Building-FrontDoorKey':'Building','Building-FrontDoorCode':'Building','Building-Lockbox':'Building',
-      'Building-Padlock':'Building','Building-GateCode':'Building','Building-CustomKey':'Building',
-      'Building-CustomLockbox':'Building','Building-CustomCode':'Building',
-      // Legacy types → Building
-      'Front Door':'Building','Building Code':'Building','Gate Code':'Building','Lockbox':'Building',
-      // Unit items
-      'Unit-Key':'Unit','Unit-DoorCode':'Unit','Unit-Lockbox':'Unit','Unit-MailboxKey':'Unit','Unit-Padlock':'Unit',
-      // Legacy types → Unit
-      'Unit Key':'Unit','Door Code':'Unit','Key':'Unit',
-    };
-
-    var TYPE_LABEL = {
-      'Building-FrontDoorKey':'Front Door Key (code to cut)',
-      'Building-FrontDoorCode':'Front Door Code (electronic)',
-      'Building-Lockbox':'Building Lockbox',
-      'Building-Padlock':'Building Padlock',
-      'Building-GateCode':'Gate Code',
-      'Building-CustomKey':'Custom Location Key',
-      'Building-CustomLockbox':'Custom Location Lockbox',
-      'Building-CustomCode':'Custom Code',
-      'Unit-Key':'Unit Key',
-      'Unit-DoorCode':'Unit Door Code',
-      'Unit-Lockbox':'Unit Lockbox',
-      'Unit-MailboxKey':'Mailbox Key',
-      'Unit-Padlock':'Unit Padlock',
-    };
+    // Shared with the WO-detail "current codes" widget and worker.js — see KEY_TYPE_GROUP/
+    // KEY_TYPE_LABEL definitions near the top of this file.
+    var TYPE_GROUP = KEY_TYPE_GROUP;
+    var TYPE_LABEL = KEY_TYPE_LABEL;
 
     var html = '';
     props.forEach(function(p) {
@@ -5489,48 +5591,32 @@ function invRenderStatus(k, s) {
   }
 }
 
-// ── One button: approve the bill, then preview and send it ───
-// This is the whole job now. It used to be: read the bill here, leave for Review Bills to
-// approve it, come back here to send it, with the approved number visible on neither screen.
-function invBillThisJob(k) {
+// Builds the exact /invoice-review/approve payload for card k, with the same validation
+// invBillThisJob has always done — extracted so the bulk-approve path (irBulkApprove) uses
+// the IDENTICAL money math instead of a second hand-written copy that could quietly drift
+// from this one. Returns { error } if nothing priceable / no price set, { belowCost:true,
+// cost, charge, woId } if the price is under cost and opts.allowBelowCost was not set
+// (caller decides how to handle that — a single card asks with confirm() then calls again
+// with allowBelowCost:true; bulk mode just excludes it and says so), { alreadyKnownId, woId }
+// if this job is already approved and queued, or { payload, memo, charge, woId, bill } when
+// clear to send.
+function invBuildApprovalPayload(k, opts) {
+  opts = opts || {};
   var woId = _invWO[k] || k;
   var bill = _invBill[k];
-  var msg  = document.getElementById('inv-msg-' + k);
-  var btn  = document.getElementById('inv-bill-btn-' + k);
-
   var charge = parseFloat((document.getElementById('inv-charge-' + k) || {}).value || 0);
   var p = invPricing(k);
-  // No priceable basis = nothing to invoice yet. With a bill that means the bill couldn't be
-  // read; without one it means no materials or logged time are ticked.
-  if (!p) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">' + (bill ? 'Could not read the bill.' : 'Tick some materials or logged time first — there is nothing to invoice yet.') + '</span>'; return; }
+  if (!p) return { error: bill ? 'Could not read the bill.' : 'Tick some materials or logged time first — there is nothing to invoice yet.' };
 
-  // Already approved AND queued — skip straight to the preview-first send modal.
-  // A bill marked reviewed with no Invoice_Review row behind it is NOT approved in any
-  // meaningful sense (nothing is queued, no invoice exists), so it falls through and gets
-  // approved properly rather than bouncing off a "nothing to send" message.
   var known = _invIRRow[k];
-  // Only close the work-order modal when that is where we are. On a Review Bills card
-  // there is no modal open, and closing one that isn't there would be a no-op at best.
-  var inWOModal = (k === woId);
   if (bill && (bill.Status || '').toLowerCase() === 'reviewed' && known && known.id) {
-    if (inWOModal) closeModal('modal-wo-detail');
-    previewQBSend(known.id);
-    return;
+    return { alreadyKnownId: known.id, woId: woId };
   }
 
-  if (!(charge > 0)) {
-    if (msg) msg.innerHTML = '<span style="color:var(--danger)">Set the customer price first — that is the amount the invoice is created for.</span>';
-    return;
-  }
-  if (charge < p.totalCost) {
-    if (!confirm('$' + charge.toFixed(2) + ' is BELOW your cost of $' + p.totalCost.toFixed(2) + '.\n\nYou would lose $' +
-                 (p.totalCost - charge).toFixed(2) + ' on this job. Approve it anyway?')) return;
-  }
+  if (!(charge > 0)) return { error: 'Set the customer price first — that is the amount the invoice is created for.' };
+  if (charge < p.totalCost && !opts.allowBelowCost) return { belowCost: true, cost: p.totalCost, charge: charge, woId: woId };
 
   var memo = (document.getElementById('inv-memo-' + k) || {}).value || '';
-  if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
-  if (msg) msg.innerHTML = '<span style="color:var(--muted)">Approving the bill…</span>';
-
   // The processing fee is carried as the card-fee share of whatever price you settled on, so the
   // Invoice_Review row reconciles against the number actually being invoiced — not against
   // whichever formula happened to suggest it. A pass-through price with the card-fee toggle OFF
@@ -5542,28 +5628,64 @@ function invBillThisJob(k) {
   var fee    = carries5 ? +(charge - charge / 1.05).toFixed(2) : 0;
   var markup = +(charge - fee - p.totalCost - p.brettTime - p.travel).toFixed(2);
 
-  api('POST', '/invoice-review/approve', {
-    bill_id: bill ? bill.ID : '',
-    wo_id: woId,
-    vendor_id: bill ? bill.Vendor_ID : '',
-    vendor_name: bill ? bill.Vendor_Name : '',
-    job_type: p.billType === 'flat' ? 'flat' : 'standard',
-    vendor_cost: p.vendorPayable.toFixed(2),
-    own_materials: p.ownMaterials.toFixed(2),
-    own_material_ids: invMatPickedIds(k).join(','),
-    brett_time: p.brettTime.toFixed(2),
-    brett_hrs: String(p.brettHrs || 0),
-    travel: p.travel.toFixed(2),
-    markup: markup.toFixed(2),
-    processing_fee: fee.toFixed(2),
-    customer_total: charge.toFixed(2),
-    // Cash in minus cash OUT — your own hours were never cash out, so they no longer
-    // reduce this. own_wage records how much of it is your wage rather than profit.
-    brett_net: (charge - p.cashOut).toFixed(2),
-    own_wage: p.ownWage.toFixed(2),
-    profit: (charge - p.cashOut - p.ownWage).toFixed(2),
-    approved_by: 'Brett',
-  }).then(function(res) {
+  return {
+    woId: woId, bill: bill, charge: charge, memo: memo,
+    payload: {
+      bill_id: bill ? bill.ID : '',
+      wo_id: woId,
+      vendor_id: bill ? bill.Vendor_ID : '',
+      vendor_name: bill ? bill.Vendor_Name : '',
+      job_type: p.billType === 'flat' ? 'flat' : 'standard',
+      vendor_cost: p.vendorPayable.toFixed(2),
+      own_materials: p.ownMaterials.toFixed(2),
+      own_material_ids: invMatPickedIds(k).join(','),
+      brett_time: p.brettTime.toFixed(2),
+      brett_hrs: String(p.brettHrs || 0),
+      travel: p.travel.toFixed(2),
+      markup: markup.toFixed(2),
+      processing_fee: fee.toFixed(2),
+      customer_total: charge.toFixed(2),
+      // Cash in minus cash OUT — your own hours were never cash out, so they no longer
+      // reduce this. own_wage records how much of it is your wage rather than profit.
+      brett_net: (charge - p.cashOut).toFixed(2),
+      own_wage: p.ownWage.toFixed(2),
+      profit: (charge - p.cashOut - p.ownWage).toFixed(2),
+      approved_by: 'Brett',
+    },
+  };
+}
+
+// ── One button: approve the bill, then preview and send it ───
+// This is the whole job now. It used to be: read the bill here, leave for Review Bills to
+// approve it, come back here to send it, with the approved number visible on neither screen.
+function invBillThisJob(k) {
+  var msg  = document.getElementById('inv-msg-' + k);
+  var btn  = document.getElementById('inv-bill-btn-' + k);
+
+  var built = invBuildApprovalPayload(k);
+  if (built.error) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">' + esc(built.error) + '</span>'; return; }
+
+  // Already approved AND queued — skip straight to the preview-first send modal.
+  if (built.alreadyKnownId) {
+    var inWOModal0 = (k === built.woId);
+    if (inWOModal0) closeModal('modal-wo-detail');
+    previewQBSend(built.alreadyKnownId);
+    return;
+  }
+
+  if (built.belowCost) {
+    if (!confirm('$' + built.charge.toFixed(2) + ' is BELOW your cost of $' + built.cost.toFixed(2) + '.\n\nYou would lose $' +
+                 (built.cost - built.charge).toFixed(2) + ' on this job. Approve it anyway?')) return;
+    built = invBuildApprovalPayload(k, { allowBelowCost: true });
+    if (built.error) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">' + esc(built.error) + '</span>'; return; }
+  }
+
+  var woId = built.woId, bill = built.bill, charge = built.charge, memo = built.memo;
+  var inWOModal = (k === woId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
+  if (msg) msg.innerHTML = '<span style="color:var(--muted)">Approving the bill…</span>';
+
+  api('POST', '/invoice-review/approve', built.payload).then(function(res) {
     if (btn) { btn.disabled = false; btn.textContent = '📤 Approve & send to QuickBooks'; }
     if (!(res.success || res.id)) {
       if (msg) msg.innerHTML = '<span style="color:var(--danger)">Approve failed: ' + esc(res.error || '?') + '</span>';
@@ -5587,6 +5709,13 @@ function invBillThisJob(k) {
         .then(function(r) { if (!woUpdateLanded(r)) console.warn('[invBillThisJob] memo save did not land', r); })
         .catch(function(){});
     }
+
+    // The bill is now Status:'reviewed' on the server, so it will not come back on the next
+    // Review Bills load (?status=submitted excludes it) — reflect that immediately instead of
+    // leaving the approved card sitting there looking unactioned until the next manual
+    // refresh. This is the direct fix for "approve doesn't visibly leave the queue," the
+    // reason Brett was hitting Refresh after every single approval.
+    irHideCard(k);
 
     if (res.id) {
       if (msg) msg.innerHTML = '<span style="color:var(--accent2)">✓ Approved at $' + charge.toFixed(2) + ' — opening the QuickBooks preview…</span>';
@@ -6763,8 +6892,11 @@ function renderIRCard(b, i) {
   return '<div id="ir-card-'+i+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">' +
 
     // Header
-    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">' +
-      '<div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:10px">' +
+      '<div class="ir-bulk-check-wrap" style="display:'+(_irBulkMode?'':'none')+';padding-top:2px">' +
+        '<input type="checkbox" class="ir-bulk-check" data-i="'+i+'" onchange="irUpdateBulkBar()">' +
+      '</div>' +
+      '<div style="flex:1">' +
         '<div style="color:var(--accent);font-weight:bold;font-size:.95rem">' + esc(vendorName) + '</div>' +
         '<div style="color:var(--muted);font-size:11px">' + esc(woId) + ' · ' + esc(addr) + '</div>' +
         ownerRow +
@@ -7003,6 +7135,135 @@ function irApprove(i) {
 function irSkip(i) {
   var card = document.getElementById('ir-card-'+i);
   if (card) { card.style.display = 'none'; }
+}
+
+// Fades + disables the Review Bills card for scope key k = 'ir<i>' once that bill is
+// approved (server-side Status is 'reviewed', so it's already gone from the underlying
+// queue — this just makes the screen agree immediately instead of waiting for a manual
+// refresh). No-op for any k that isn't a Review Bills card (e.g. the WO-detail modal, where
+// k === the work order id, not 'ir'+i).
+function irHideCard(k) {
+  if (typeof k !== 'string' || k.indexOf('ir') !== 0) return;
+  var i = k.slice(2);
+  if (!/^\d+$/.test(i)) return;
+  var card = document.getElementById('ir-card-' + i);
+  if (card) { card.style.opacity = '0.4'; card.style.pointerEvents = 'none'; }
+  irUpdateBulkBar();
+}
+
+// ── Review Bills bulk-select ─────────────────────────────────────────────────
+// Brett's ask: select several bills at once and approve them together instead of one at a
+// time with a refresh in between. Reuses the same checkbox + floating action-bar pattern
+// already used for bulk WO status changes and bulk PIN sends. The actual approval math for
+// every selected card is invBuildApprovalPayload — identical to a single-card approve — sent
+// in ONE request to /invoice-review/approve-bulk (see worker.js) instead of N. This does NOT
+// send anything to QuickBooks; it only moves selected bills from "submitted" to "approved,
+// awaiting QuickBooks," same as a single approve. QuickBooks sends stay on the existing
+// Send-to-QB screen with its own preview-first, per-item confirm — that money-leaving-the-
+// building gate is deliberately untouched.
+var _irBulkMode = false;
+
+function irToggleBulkMode() {
+  _irBulkMode = !_irBulkMode;
+  var bar = document.getElementById('ir-bulk-bar');
+  document.querySelectorAll('.ir-bulk-check-wrap').forEach(function(el) { el.style.display = _irBulkMode ? '' : 'none'; });
+  if (!_irBulkMode) document.querySelectorAll('.ir-bulk-check').forEach(function(cb) { cb.checked = false; });
+  var toggleBtn = document.getElementById('ir-bulk-toggle-btn');
+  if (toggleBtn) toggleBtn.textContent = _irBulkMode ? '✕ Cancel select' : '☑ Select multiple';
+  if (bar) bar.style.display = _irBulkMode ? '' : 'none';
+  irUpdateBulkBar();
+}
+
+function irSelectAllVisible(checked) {
+  document.querySelectorAll('.ir-bulk-check').forEach(function(cb) {
+    var card = document.getElementById('ir-card-' + cb.getAttribute('data-i'));
+    if (card && card.style.display !== 'none') cb.checked = checked;
+  });
+  irUpdateBulkBar();
+}
+
+function irUpdateBulkBar() {
+  var bar = document.getElementById('ir-bulk-bar');
+  if (!bar) return;
+  var checks = Array.prototype.slice.call(document.querySelectorAll('.ir-bulk-check:checked'));
+  var total = 0;
+  checks.forEach(function(cb) {
+    var i = cb.getAttribute('data-i');
+    var el = document.getElementById('inv-charge-' + 'ir' + i);
+    total += parseFloat((el || {}).value || 0);
+  });
+  var countEl = document.getElementById('ir-bulk-count');
+  if (countEl) countEl.textContent = checks.length + ' selected' + (checks.length ? ' — $' + total.toFixed(2) + ' total' : '');
+  var btn = document.getElementById('ir-bulk-approve-btn');
+  if (btn) btn.disabled = !checks.length;
+}
+
+function irBulkApprove() {
+  var checks = Array.prototype.slice.call(document.querySelectorAll('.ir-bulk-check:checked'));
+  if (!checks.length) return;
+  var btn = document.getElementById('ir-bulk-approve-btn');
+  var statusEl = document.getElementById('ir-bulk-status');
+
+  var ready = [], belowCost = [], errors = [], alreadyApproved = [];
+  checks.forEach(function(cb) {
+    var i = cb.getAttribute('data-i'), k = 'ir' + i;
+    var built = invBuildApprovalPayload(k);
+    if (built.error) { errors.push({ i: i, k: k, error: built.error }); return; }
+    if (built.alreadyKnownId) { alreadyApproved.push({ i: i, k: k }); irHideCard(k); return; }
+    // A below-cost item needs its own explicit "you'd lose money" confirmation — firing N
+    // browser confirm() dialogs back to back in a batch is a bad experience and easy to
+    // blow through by reflex. Simplest safe rule: exclude it from the batch and say so;
+    // Brett approves that one individually where the existing single-item confirm protects it.
+    if (built.belowCost) { belowCost.push({ i: i, k: k, cost: built.cost, charge: built.charge }); return; }
+    ready.push({ i: i, k: k, built: built });
+  });
+
+  if (!ready.length) {
+    var why = belowCost.length ? (belowCost.length + ' selected bill(s) are priced BELOW cost — approve those individually, they need their own confirmation.')
+      : (errors.length ? 'None of the selected bills have a price set yet.' : 'Nothing left to approve — those were already approved.');
+    if (statusEl) statusEl.innerHTML = '<div style="color:var(--warn);font-size:12px;margin-top:8px">' + esc(why) + '</div>';
+    return;
+  }
+
+  var total = ready.reduce(function(s, r) { return s + (parseFloat(r.built.payload.customer_total) || 0); }, 0);
+  var msg = 'Approve ' + ready.length + ' bill' + (ready.length === 1 ? '' : 's') + ' — $' + total.toFixed(2) + ' total?' +
+    (belowCost.length ? '\n\n(' + belowCost.length + ' other selected bill(s) are below cost and will be SKIPPED — approve those one at a time.)' : '') +
+    '\n\nThis moves them to "approved, awaiting QuickBooks." Nothing is sent to QuickBooks yet — you still send each one from Send & Track / Send to QB.';
+  if (!confirm(msg)) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
+  if (statusEl) statusEl.innerHTML = '<div style="color:var(--muted);font-size:12px;margin-top:8px">Approving ' + ready.length + ' bill(s)…</div>';
+
+  api('POST', '/invoice-review/approve-bulk', { approvals: ready.map(function(r) { return r.built.payload; }) })
+    .then(function(res) {
+      if (btn) { btn.disabled = false; btn.textContent = '📤 Approve selected'; }
+      var results = (res && Array.isArray(res.results)) ? res.results : [];
+      var okCount = 0;
+      ready.forEach(function(r, idx) {
+        var rr = results[idx];
+        if (rr && rr.success) {
+          okCount++;
+          irHideCard(r.k);
+          // Same memo-save the single path does — best-effort, doesn't block anything.
+          if (r.built.memo) {
+            api('POST', '/workorder/update', { id: r.built.woId, fields: { Invoice_Memo: r.built.memo, Customer_Charge: r.built.payload.customer_total } }).catch(function(){});
+          }
+          invRefreshMaterialsForWO(r.built.woId);
+        }
+      });
+      var failCount = ready.length - okCount;
+      var summary = '✓ Approved ' + okCount + ' bill' + (okCount === 1 ? '' : 's') + (total ? ' — $' + total.toFixed(2) + ' total' : '') + '.' +
+        (failCount ? ' ' + failCount + ' failed — check them individually.' : '') +
+        (belowCost.length ? ' ' + belowCost.length + ' below-cost bill(s) skipped.' : '') +
+        ' Go to Send & Track to send them to QuickBooks.';
+      if (statusEl) statusEl.innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:8px">' + esc(summary) + '</div>';
+      toast(okCount + ' bill(s) approved', 'success');
+      irUpdateBulkBar();
+    })
+    .catch(function(e) {
+      if (btn) { btn.disabled = false; btn.textContent = '📤 Approve selected'; }
+      if (statusEl) statusEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:8px">Bulk approve failed: ' + esc(e.message || '?') + '</div>';
+    });
 }
 
 // Retire a bill that was settled outside the Hub — paid straight through QuickBooks, voided
@@ -8390,6 +8651,19 @@ function submitAddKey() {
     if (res.id||res.success) { toast('Access item added','success'); closeModal('modal-add-key'); renderKeysView(); }
     else document.getElementById('ak-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+(res.error||'Error')+'</div>';
   });
+}
+
+// Per-code sharing control (WO-detail "ACCESS CODES (live)" widget). 'Brett Only' withholds
+// THIS ONE code from every vendor view no matter its type or the trade/WO-level toggle —
+// it still shows on a WO assigned to Brett's own in-house vendor record, and always shows
+// here in the Hub regardless (see worker.js enrichWO/getWOLockboxes comments).
+function setKeyVisibility(keyId, value) {
+  api('POST','/key/update', { id: keyId, fields: { Visibility: value === 'Auto' ? '' : value } })
+    .then(function(res){
+      if (res && (res.success || res.id)) toast(value === 'Brett Only' ? '🔒 Marked Brett-only' : 'Set to auto sharing', 'success');
+      else toast('Could not update visibility: ' + ((res && res.error) || 'unknown error'), 'error');
+    })
+    .catch(function(){ toast('Could not update visibility', 'error'); });
 }
 
 var _moveOutTenantId = null;
