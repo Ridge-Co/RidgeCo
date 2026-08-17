@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-17.2';
+const BUILD_VERSION = '2026-08-17.3';
 
 export default {
   async fetch(request, env) {
@@ -8308,6 +8308,16 @@ async function trashInvoice(env, body) {
       if (!p.QBO_Customer_ID) warnings.push('No QuickBooks customer set on this property — set one before sending.');
       if (!hasOwnItem) warnings.push('Will bill the shared generic "Trash Service" item — keeps the invoice free of any address.');
       if (!photoCount) warnings.push('No photos on these visits — the invoice will carry no photo proof.');
+      // Early heads-up for the same email gap the send path now fixes (below) — surfaced here too
+      // so Brett sees "no email on file" before tapping Send, not only after a failed attempt.
+      if (p.QBO_Customer_ID) {
+        try {
+          const pvToken = await qbAccessToken(env);
+          const cg = await qbApi(env, `customer/${encodeURIComponent(p.QBO_Customer_ID)}?minorversion=73`, 'GET', null, pvToken);
+          const custEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address || '').trim();
+          if (!custEmail) warnings.push('No email on this QuickBooks customer, so the invoice has no saved send-to address — add one on the customer in QuickBooks.');
+        } catch (e) { /* best-effort — never block the preview over this */ }
+      }
       return json({ preview: {
         property: p.Label, week,
         customer: { id: p.QBO_Customer_ID || '', name: p.Customer_Name || '' },
@@ -8336,8 +8346,29 @@ async function trashInvoice(env, body) {
       Line: lines, TxnDate: txnDate,
       PrivateNote: `RidgeCo Trash — ${p.Label} — week ${week}`,
     };
-    const r = await qbApi(env, 'invoice?minorversion=73', 'POST', payload, token);
-    const invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    // Put a send-to email ON THE INVOICE. QuickBooks does NOT copy the customer's email onto an
+    // API-created invoice — same "the customer record has an email but the invoice doesn't"
+    // gap rule 60 fixed for the main Hub invoice flow (worker.js ~7789), just never applied
+    // here. Trash_Properties has no email field of its own (it only stores QBO_Customer_ID), so
+    // the address has to be read back from QuickBooks itself right before posting.
+    try {
+      const cg = await qbApi(env, `customer/${encodeURIComponent(p.QBO_Customer_ID)}?minorversion=73`, 'GET', null, token);
+      const custEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address || '').trim();
+      const emailOk = custEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(custEmail);
+      if (custEmail && emailOk) payload.BillEmail = { Address: custEmail };
+      else if (custEmail && !emailOk) warnings.push(`The email on the QuickBooks customer ("${custEmail}") doesn't look valid, so it was left off the invoice.`);
+      else warnings.push('No email on this QuickBooks customer, so the invoice has no saved send-to address — add one on the customer in QuickBooks.');
+    } catch (e) { warnings.push('Could not read the QuickBooks customer’s email — invoice will post without a saved send-to address.'); }
+    let r = await qbApi(env, 'invoice?minorversion=73', 'POST', payload, token);
+    let invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    if (!invoiceId && payload.BillEmail) {
+      // Never let a rejected email block the invoice itself — retry once without it.
+      const triedEmail = payload.BillEmail.Address;
+      delete payload.BillEmail;
+      r = await qbApi(env, 'invoice?minorversion=73', 'POST', payload, token);
+      invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+      if (invoiceId) warnings.push(`QuickBooks rejected the email "${triedEmail}", so the invoice was created without a saved send-to address — set it in QuickBooks before emailing it.`);
+    }
     const invoiceNumber = (r && r.Invoice && r.Invoice.DocNumber) || '';
     if (!invoiceId) return json({ ok: false, error: 'Invoice: ' + (qbFault(r) || 'unknown error'), warnings }, 500);
 
