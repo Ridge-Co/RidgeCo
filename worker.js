@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-17.5';
+const BUILD_VERSION = '2026-08-17.6';
 
 export default {
   async fetch(request, env) {
@@ -5519,6 +5519,31 @@ async function ensureColumns(env, tab, columns) {
   if (!missing.length) return;
 
   const width = rows.reduce((w, r) => Math.max(w, (r && r.length) || 0), headers.length);
+  const neededWidth = width + missing.length;
+
+  // The sheet's own grid can be narrower than the data actually needs. A tab created from a
+  // template (or just never resized) has a fixed gridProperties.columnCount — 40 on
+  // Work_Orders — that has nothing to do with how many real columns end up in use over time.
+  // Writing a header past that cap doesn't get truncated or padded, it fails outright with
+  // "Range (Work_Orders!AO1) exceeds grid limits" — and because this runs on the FIRST write
+  // of any new field, it can surface on something as ordinary as saving a WO edit (the
+  // Checklist column landing on column 41 is what did it here). Grow the grid first, with
+  // headroom, so the next new field doesn't hit this same wall again.
+  try {
+    const meta = await sheetsRequest(env, 'GET', `?fields=sheets.properties(sheetId,title,gridProperties)`);
+    const sheetMeta = (meta.sheets || []).find(s => s.properties && s.properties.title === tab);
+    const curCols = sheetMeta && sheetMeta.properties.gridProperties && sheetMeta.properties.gridProperties.columnCount;
+    if (sheetMeta && typeof curCols === 'number' && curCols < neededWidth) {
+      await sheetsRequest(env, 'POST', ':batchUpdate', {
+        requests: [{
+          updateSheetProperties: {
+            properties: { sheetId: sheetMeta.properties.sheetId, gridProperties: { columnCount: neededWidth + 20 } },
+            fields: 'gridProperties.columnCount',
+          },
+        }],
+      });
+    }
+  } catch (e) { /* best-effort — if the grid genuinely can't grow, the write below reports the real error */ }
 
   // Single-cell writes via batchUpdate, the same shape updateRow uses. Rewriting the entire
   // header row would mean two concurrent calls each read the old headers and the second
