@@ -6368,6 +6368,13 @@ function stRow(inv, kind) {
     var title = inv.has_email ? '' : ' title="No email on file — add one on the Owner or in QuickBooks before sending"';
     var oc = inv.has_email ? ' onclick="sendInvoiceNow(\''+esc(inv.id)+'\')"' : '';
     right = '<button class="btn small" style="background:var(--accent);color:#fff;'+dis+'"'+title+oc+'>'+label+'</button>';
+    // "no email" invoice: this board can fix it right here instead of sending Brett to a
+    // separate tool — pulls the customer's (or owner-above-it's) email from QuickBooks and
+    // stamps BillEmail on just this one invoice via the same backfill endpoint the standalone
+    // qb-invoice-email-backfill.html page uses. B-fix Aug 17 (rule 95's follow-up): the fix
+    // for the underlying gap doesn't retroactively touch invoices already sitting in
+    // QuickBooks — someone has to actually trigger the backfill on them once.
+    if (!inv.has_email) right += ' <button class="btn small" style="background:var(--info);color:#fff;margin-left:6px" onclick="fixInvoiceEmail(\''+esc(inv.id)+'\',this)">Fix email</button>';
   }
   var meta = [];
   if (inv.doc) meta.push('#'+esc(inv.doc));
@@ -6383,6 +6390,24 @@ function stRow(inv, kind) {
 }
 // Deep-link to the invoice inside QuickBooks Online (where the UI shows Viewed, history, etc.)
 function qbInvoiceLink(id){ return 'https://app.qbo.intuit.com/app/invoice?txnId='+encodeURIComponent(id); }
+
+// One-invoice version of the qb-invoice-email-backfill.html tool, called right from a "no
+// email" row: resolves the send-to address from the invoice's customer (or the owner above
+// it) in QuickBooks and stamps BillEmail — same endpoint, verified-write-or-honest-error same
+// as the standalone tool (rule 95). If it can't find an email anywhere up the chain, or the
+// customer has "Bill with parent" on and QuickBooks won't keep it, this says so plainly.
+function fixInvoiceEmail(id, btn) {
+  btn.disabled = true; btn.textContent = 'Fixing…';
+  api('POST','/qb/backfill-invoice-emails',{ apply:true, ids:[id] }).then(function(r){
+    if (!r || !r.ok) { toast('Error: '+((r&&r.error)||'could not reach QuickBooks'),'error'); btn.disabled=false; btn.textContent='Fix email'; return; }
+    var fail = (r.failed||[])[0];
+    if (fail) { toast('Not fixed: '+fail.error,'error'); btn.disabled=false; btn.textContent='Fix email'; return; }
+    var ok = (r.updated_list||[])[0];
+    if (ok) { toast('Email set: '+ok.email,'success'); loadSendTrack(); return; }
+    toast('No email found on this customer or its owner in QuickBooks — set one there first','error');
+    btn.disabled = false; btn.textContent = 'Fix email';
+  }).catch(function(e){ toast('Error: '+e.message,'error'); btn.disabled=false; btn.textContent='Fix email'; });
+}
 
 function renderSendTrack(res) {
   var el = document.getElementById('st-board');
