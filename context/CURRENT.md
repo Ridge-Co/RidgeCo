@@ -1,3 +1,8 @@
+# WHERE THINGS STAND — Aug 18, 2026
+
+## ✅ Hub + vendor site now force a hard refresh every time they're opened SHIPPED (Aug 18, GitHub Pages only — no Worker change). FEATURE_LOG rule 101.
+Brett: "still don't have access to the site" + wants both sites to force-refresh on every open, flagged urgent/recurring. Likely explanation: GitHub Pages sets no cache-control headers, so a browser can serve a fully-cached `index.html`/`vendor.html` forever with zero network check — "no access" was plausibly a stale cached page, not an auth failure. Fixed in both files: a synchronous cache-busting redirect fires on every fresh open (before anything else parses, preserves all existing query params like `?page=`/`?wo=`), a `pageshow` guard forces a real reload if mobile's back-forward cache restores a stale in-memory copy, and both pages now poll `/version` and reload/banner immediately on foreground-return (not just every 60s) — the Hub never had this live-poll at all before; vendor.html had a softer version (B-093) that's now also open-time-forced. `node --check` clean on every inline script in both files. **Verify (Brett):** open the Hub and vendor portal fresh — should load normally (URL will show a harmless `?_hr=...` param). Next deploy after this one, confirm an already-open tab picks up the update within a few seconds of switching back to it.
+
 # WHERE THINGS STAND — Aug 17, 2026
 
 ## ✅ Access-code visibility fixed — 828 S Charles St's electronic code now shows on its WO SHIPPED (Aug 17, Worker `2026-08-17.7`, live). FEATURE_LOG rule 100. 🔴 Needs one tap from Brett.
