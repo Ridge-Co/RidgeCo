@@ -1177,10 +1177,21 @@ function buildPhotoSection(woId, propAddr, opts) {
 <script>
 (function(){
   var VER_URL = WORKER + '/version', booted = null;
+  var LAST_KEY = 'rc_build_ver';
   function dirty(){
     var el = document.activeElement;
     if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
     return !!document.querySelector('[data-unsaved="1"]');
+  }
+  function reloadFresh(){
+    // Only THIS reload (a confirmed real staleness case) pays for a network-forced
+    // re-fetch — routine loads are left alone so a flaky connection never has to
+    // redownload this whole file for nothing.
+    try {
+      var u = new URL(location.href);
+      u.searchParams.set('_hr', Date.now().toString(36));
+      location.replace(u.toString());
+    } catch (e) { location.reload(true); }
   }
   function banner(){
     if (document.getElementById('mh-upd-banner')) return;
@@ -1188,18 +1199,31 @@ function buildPhotoSection(woId, propAddr, opts) {
     b.id = 'mh-upd-banner';
     b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#1d4ed8;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
     b.textContent = 'Update ready — tap to refresh';
-    b.onclick = function(){ location.reload(true); };
+    b.onclick = function(){ reloadFresh(); };
     document.body.appendChild(b);
   }
   function check(){
     fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
       if (!d || !d.version) return;
-      if (booted === null){ booted = d.version; return; }
-      if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
+      if (booted === null){
+        booted = d.version;
+        var last = null;
+        try { last = localStorage.getItem(LAST_KEY); } catch(e){}
+        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){}
+        // This page already loaded and ran successfully just now (we're executing at the
+        // end of <body>) — if the version we booted with is already behind what the
+        // server has right now, THIS load was a stale cached copy. Catch it here, after
+        // everything already works, instead of gating the page load on it.
+        if (last && last !== d.version) { dirty() ? banner() : reloadFresh(); }
+        return;
+      }
+      if (d.version !== booted){ dirty() ? banner() : reloadFresh(); }
     }).catch(function(){});
   }
   check();
   setInterval(check, 60000);
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
 })();
 </script>
 

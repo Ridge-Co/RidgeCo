@@ -6,27 +6,19 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<!-- Force-refresh on open (Brett, Aug 18 2026): every fresh navigation to this page is
-     redirected once to a cache-busted URL so the browser is forced to fetch the current
-     deploy from the network instead of serving a stale cached copy. All existing query
-     params (page=, wo=, etc.) are preserved. A stale bookmarked _hr (>3s old) is treated
-     as "not from this redirect" and re-fires, so an old shared link still self-heals. Must
-     run before anything else parses. -->
+<!-- Stale-cache guard (Brett, Aug 18 2026, revised — the original blocking version of
+     this caused a real regression: forcing a full network re-fetch of this whole file on
+     EVERY open meant any flaky mobile connection could cut the load off mid-download,
+     leaving the login box visible but its script (further down the file) never finished
+     loading — "the button does nothing" with zero error, because doLogin() itself hadn't
+     loaded yet. Fixed by moving the staleness check to AFTER this page has already loaded
+     and run successfully (see the version-poll script near the end of <body>), which also
+     now remembers the last-seen build across visits (localStorage) so a genuinely stale
+     open still self-heals — just never at the cost of a working page. This head block now
+     only guards the mobile back-forward cache (bfcache), which is safe because a bfcache
+     entry only exists for a page that already finished loading once. -->
 <script>
-(function(){
-  try {
-    var url = new URL(location.href);
-    var hr = url.searchParams.get('_hr');
-    var age = hr ? (Date.now() - parseInt(hr, 36)) : Infinity;
-    if (!hr || isNaN(age) || age > 3000) {
-      url.searchParams.set('_hr', Date.now().toString(36));
-      location.replace(url.toString());
-    }
-  } catch (e) {}
-})();
 window.addEventListener('pageshow', function(e){
-  // Mobile back-forward cache (bfcache) can restore this page from memory on app-switch-back
-  // without re-fetching anything — force a real reload so a stale in-memory copy never sticks.
   if (e.persisted) location.reload();
 });
 </script>
@@ -9855,10 +9847,21 @@ function setWOFilter(filterVal, priorityVal) {
 <script>
 (function(){
   var VER_URL = WORKER + '/version', booted = null;
+  var LAST_KEY = 'rc_build_ver';
   function dirty(){
     var el = document.activeElement;
     if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
     return !!document.querySelector('[data-unsaved="1"]');
+  }
+  function reloadFresh(){
+    // Only THIS reload (a confirmed real staleness case) pays for a network-forced
+    // re-fetch — routine loads are left alone so a flaky connection never has to
+    // redownload this whole file for nothing.
+    try {
+      var u = new URL(location.href);
+      u.searchParams.set('_hr', Date.now().toString(36));
+      location.replace(u.toString());
+    } catch (e) { location.reload(true); }
   }
   function banner(){
     if (document.getElementById('mh-upd-banner')) return;
@@ -9866,14 +9869,25 @@ function setWOFilter(filterVal, priorityVal) {
     b.id = 'mh-upd-banner';
     b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#1d4ed8;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
     b.textContent = 'Update ready — tap to refresh';
-    b.onclick = function(){ location.reload(true); };
+    b.onclick = function(){ reloadFresh(); };
     document.body.appendChild(b);
   }
   function check(){
     fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
       if (!d || !d.version) return;
-      if (booted === null){ booted = d.version; return; }
-      if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
+      if (booted === null){
+        booted = d.version;
+        var last = null;
+        try { last = localStorage.getItem(LAST_KEY); } catch(e){}
+        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){}
+        // This page already loaded and ran successfully just now (we're executing at the
+        // end of <body>) — if the version we booted with is already behind what the
+        // server has right now, THIS load was a stale cached copy. Catch it here, after
+        // everything already works, instead of gating the page load on it.
+        if (last && last !== d.version) { dirty() ? banner() : reloadFresh(); }
+        return;
+      }
+      if (d.version !== booted){ dirty() ? banner() : reloadFresh(); }
     }).catch(function(){});
   }
   check();
