@@ -1174,18 +1174,56 @@ function ewoPropertySelected() {
 }
 
 // ── Login ────────────────────────────────────────────────────
+// Hardened Aug 18 2026 (Brett: tapped Enter, "truly nothing" happened — no error, no
+// dashboard, confirmed via a clean controlled test). Two real bugs found:
+// (1) ZERO visual feedback between tap and success/failure — if the request was slow, or
+//     any unexpected exception occurred before reaching .catch(), the screen would sit
+//     exactly as it was, indistinguishable from "the tap didn't register" — which is what
+//     was reported. Now shows "Checking…" the instant Enter is tapped.
+// (2) api()'s 3-second GET de-dup cache is keyed by PATH ONLY ('/config'), not by which
+//     AUTH_TOKEN was active when the request was made — if anything else had already
+//     called /config in the prior 3s (e.g. the stored-token auto-login below, which runs
+//     on every fresh page load), doLogin() could silently be handed back THAT request's
+//     result instead of making a fresh one with what was just typed. doLogin() now clears
+//     the cache first so it always fires its own request.
+// Also: wrapped in try/catch + an 8s timeout, both of which now show real, specific text
+// in #login-error instead of relying solely on the fetch promise's own .catch().
 function doLogin() {
   var val = document.getElementById('login-input').value.trim();
+  var errEl = document.getElementById('login-error');
+  errEl.textContent = 'Checking…';
+  errEl.style.color = 'var(--muted)';
+  errEl.style.display = 'block';
   AUTH_TOKEN = val;
-  api('GET','/config').then(function() {
-    localStorage.setItem(SECRET_KEY, val);
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
-    Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
-  }).catch(function() {
-    AUTH_TOKEN = '';
-    document.getElementById('login-error').style.display = 'block';
-  });
+  _getCache = {}; // never let a stale/other request's cached response answer this login
+  var settled = false;
+  var timer = setTimeout(function(){
+    if (settled) return;
+    errEl.textContent = 'Still waiting on the server after 8s — check your connection and try again.';
+    errEl.style.color = 'var(--danger)';
+  }, 8000);
+  try {
+    api('GET','/config').then(function() {
+      settled = true; clearTimeout(timer);
+      localStorage.setItem(SECRET_KEY, val);
+      errEl.style.display = 'none';
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
+    }).catch(function(e) {
+      settled = true; clearTimeout(timer);
+      AUTH_TOKEN = '';
+      var extra = (e && e.message && e.message !== 'Unauthorized') ? (' — ' + e.message) : '';
+      errEl.textContent = 'Incorrect access code' + extra;
+      errEl.style.color = 'var(--danger)';
+      errEl.style.display = 'block';
+    });
+  } catch (e) {
+    settled = true; clearTimeout(timer);
+    errEl.textContent = 'Login error: ' + (e && e.message ? e.message : e);
+    errEl.style.color = 'var(--danger)';
+    errEl.style.display = 'block';
+  }
 }
 document.getElementById('login-input').addEventListener('keydown', function(e) { if(e.key==='Enter') doLogin(); });
 
