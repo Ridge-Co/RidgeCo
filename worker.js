@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-20.1';
+const BUILD_VERSION = '2026-08-20.2';
 
 export default {
   async fetch(request, env) {
@@ -4679,32 +4679,39 @@ async function arReportSend(env, body) {
   if (!ids.length) return json({ error: 'owner_ids required' }, 400);
   if (ids.length > 100) return json({ error: 'too many at once (max 100)' }, 400);
   const preview = body.preview === true || body.preview === '1';
+  // Optional admin override: send a REAL customer's REAL report data to a different inbox (Brett's
+  // own, typically) so he can preview a send before any customer sees it. Bypasses the eligibility
+  // and on-file-email gates (this is an explicit manual test, not a real customer send) but the
+  // report content and link are still the authentic owner's data — nothing is faked.
+  const testEmail = typeof body.test_email === 'string' ? body.test_email.trim() : '';
   const { groups } = await arReportRollup(env, {});
   const results = [];
   for (const ownerId of ids) {
     const group = groups.find(g => String(g.owner_id) === ownerId);
     if (!group) { results.push({ owner_id: ownerId, sent: false, reason: 'no open items found' }); continue; }
-    if (!group.eligible) { results.push({ owner_id: ownerId, sent: false, reason: group.reason, total_open: group.total_open }); continue; }
-    if (!group.owner_email) { results.push({ owner_id: ownerId, sent: false, reason: 'no billing email on file', total_open: group.total_open }); continue; }
-    if (preview) { results.push({ owner_id: ownerId, sent: false, willSend: true, email: group.owner_email, total_open: group.total_open, invoice_count: group.invoices.length }); continue; }
+    if (!testEmail && !group.eligible) { results.push({ owner_id: ownerId, sent: false, reason: group.reason, total_open: group.total_open }); continue; }
+    const sendTo = testEmail || group.owner_email;
+    if (!sendTo) { results.push({ owner_id: ownerId, sent: false, reason: 'no billing email on file', total_open: group.total_open }); continue; }
+    if (preview) { results.push({ owner_id: ownerId, sent: false, willSend: true, email: sendTo, test: !!testEmail, total_open: group.total_open, invoice_count: group.invoices.length }); continue; }
     let link = '';
     try {
       const linkToken = await arReportLinkToken(env, ownerId);
       const base = (body.page_base || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/, '');
       link = `${base}/ar-report.html?t=${encodeURIComponent(linkToken)}`;
       const html = buildArReportEmailHtml(group, link);
-      await gmailSendEmail(env, { to: group.owner_email, subject: 'Ridge Co — your open balance summary', html });
-      results.push({ owner_id: ownerId, sent: true, email: group.owner_email, total_open: group.total_open });
+      const subject = testEmail ? `[TEST] Ridge Co — ${group.owner_name || 'customer'}'s open balance summary` : 'Ridge Co — your open balance summary';
+      await gmailSendEmail(env, { to: sendTo, subject, html });
+      results.push({ owner_id: ownerId, sent: true, email: sendTo, test: !!testEmail, total_open: group.total_open });
       try {
         await ensureTab(env, AR_REPORT_LOG_TAB, AR_REPORT_LOG_COLS);
-        await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: group.owner_email, Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: 'sent', Trigger: body.trigger || 'manual' });
+        await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: sendTo, Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: testEmail ? 'sent (test)' : 'sent', Trigger: testEmail ? 'manual-test' : (body.trigger || 'manual') });
       } catch (_) { /* audit log best-effort; the send already happened */ }
     } catch (e) {
       const reason = String((e && e.message) || e).slice(0, 200);
       results.push({ owner_id: ownerId, sent: false, reason });
       try {
         await ensureTab(env, AR_REPORT_LOG_TAB, AR_REPORT_LOG_COLS);
-        await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: group.owner_email || '', Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: 'FAILED: ' + reason, Trigger: body.trigger || 'manual' });
+        await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: sendTo || '', Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: 'FAILED: ' + reason, Trigger: testEmail ? 'manual-test' : (body.trigger || 'manual') });
       } catch (_) {}
     }
   }

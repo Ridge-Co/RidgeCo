@@ -56,6 +56,15 @@
     <button class="btn" onclick="loadAll()">↻ Refresh</button>
     <span id="conn-status" style="font-size:11px;color:var(--muted)"></span>
   </div>
+  <div class="row">
+    <label>Test email</label>
+    <input id="test-email" type="email" placeholder="leave blank to send to the real customer" style="flex:1">
+  </div>
+  <p class="sub" style="margin-bottom:0;">
+    If <b>Test email</b> is filled in, "Send now" sends that customer's real report (real balance, real
+    link) to this address instead of their billing email — and skips the eligibility check, so you can
+    preview any customer's report on demand. Leave blank for a real send.
+  </p>
 </div>
 
 <div class="section">
@@ -140,22 +149,30 @@ async function toggleOptIn(ownerId, enabled){
 async function sendOne(ownerId, btn){
   const card = btn.closest('.card');
   const status = card.querySelector('.c-status');
+  const testEmail = document.getElementById('test-email').value.trim();
   btn.disabled = true;
   status.className = 'c-status info'; status.textContent = 'Previewing…';
   try {
-    const prev = await post('/ar/report/send', { owner_ids: [ownerId], preview: true });
+    const prevBody = { owner_ids: [ownerId], preview: true };
+    if (testEmail) prevBody.test_email = testEmail;
+    const prev = await post('/ar/report/send', prevBody);
     const item = (prev.results||[])[0];
     if (!item || !item.willSend){
       status.className = 'c-status err'; status.textContent = 'Cannot send: ' + (item ? item.reason : 'unknown');
       btn.disabled = false; return;
     }
-    if (!confirm('Send open item report to ' + item.email + ' — ' + money(item.total_open) + ' across ' + item.invoice_count + ' invoice(s)?')){
+    const confirmMsg = (testEmail
+      ? ('TEST SEND — this customer\'s real report (' + money(item.total_open) + ' across ' + item.invoice_count + ' invoice(s)) will go to your test address ' + item.email + ' instead of their real billing email. Continue?')
+      : ('Send open item report to ' + item.email + ' — ' + money(item.total_open) + ' across ' + item.invoice_count + ' invoice(s)?'));
+    if (!confirm(confirmMsg)){
       status.textContent = ''; btn.disabled = false; return;
     }
     status.textContent = 'Sending…';
-    const real = await post('/ar/report/send', { owner_ids: [ownerId], preview: false, trigger: 'manual' });
+    const sendBody = { owner_ids: [ownerId], preview: false, trigger: 'manual' };
+    if (testEmail) sendBody.test_email = testEmail;
+    const real = await post('/ar/report/send', sendBody);
     const r = (real.results||[])[0];
-    if (r && r.sent){ status.className = 'c-status ok'; status.textContent = '✓ Sent to ' + r.email; }
+    if (r && r.sent){ status.className = 'c-status ok'; status.textContent = (r.test ? '✓ Test sent to ' : '✓ Sent to ') + r.email; }
     else { status.className = 'c-status err'; status.textContent = 'Failed: ' + (r ? r.reason : 'unknown error'); }
   } catch(e){ status.className = 'c-status err'; status.textContent = 'Error: ' + e.message; }
   btn.disabled = false;
