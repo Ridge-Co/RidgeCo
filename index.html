@@ -1233,30 +1233,26 @@ function doLogin() {
   errEl.style.display = 'block';
   AUTH_TOKEN = val;
   _getCache = {}; // never let a stale/other request's cached response answer this login
-  var settled = false;
-  var timer = setTimeout(function(){
-    if (settled) return;
-    errEl.textContent = 'Still waiting on the server after 8s — check your connection and try again.';
-    errEl.style.color = 'var(--danger)';
-  }, 8000);
   try {
-    api('GET','/config').then(function() {
-      settled = true; clearTimeout(timer);
+    // Real 8s timeout (Aug 18 2026: was a soft setTimeout that only changed the message —
+    // the underlying fetch kept running forever in the background either way). Now uses
+    // api()'s AbortController timeout, so a stall genuinely gives up at 8s instead of
+    // leaving this hanging indefinitely with just a "still waiting" label on top of it.
+    api('GET','/config', null, 8000).then(function() {
       localStorage.setItem(SECRET_KEY, val);
       errEl.style.display = 'none';
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('app').style.display = 'block';
       Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
     }).catch(function(e) {
-      settled = true; clearTimeout(timer);
       AUTH_TOKEN = '';
+      var timedOut = e && e.message && e.message.indexOf('timed out') !== -1;
       var extra = (e && e.message && e.message !== 'Unauthorized') ? (' — ' + e.message) : '';
-      errEl.textContent = 'Incorrect access code' + extra;
+      errEl.textContent = timedOut ? e.message : ('Incorrect access code' + extra);
       errEl.style.color = 'var(--danger)';
       errEl.style.display = 'block';
     });
   } catch (e) {
-    settled = true; clearTimeout(timer);
     errEl.textContent = 'Login error: ' + (e && e.message ? e.message : e);
     errEl.style.color = 'var(--danger)';
     errEl.style.display = 'block';
@@ -1264,14 +1260,29 @@ function doLogin() {
 }
 document.getElementById('login-input').addEventListener('keydown', function(e) { if(e.key==='Enter') doLogin(); });
 
+// Auto-login using the saved access code. Hardened Aug 18 2026 (Brett: "before it would
+// autoload with my password, now I have to select the login area and paste it in manually
+// every time") — root cause was the SAME missing-timeout bug as loadAll()/doLogin(): this
+// fetch had no timeout at all, so on a stalled connection it just hung silently forever,
+// leaving the manual login screen sitting there with no explanation — which looks EXACTLY
+// like "auto-login stopped working," because from Brett's side, nothing ever visibly
+// happened. Two fixes: (1) a real 12s timeout so a stall gives up promptly instead of
+// hanging. (2) On failure, only clear the saved token (forcing a real re-login) when the
+// server actually rejected it (Unauthorized) — a timeout/network error now leaves the saved
+// code in place and just falls through to the manual login screen, so a bad connection
+// can't silently log Brett out of a code that was never actually wrong.
 var stored = localStorage.getItem(SECRET_KEY);
 if (stored) {
   AUTH_TOKEN = stored;
-  api('GET','/config').then(function() {
+  api('GET','/config', null, 12000).then(function() {
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
-  }).catch(function() { localStorage.removeItem(SECRET_KEY); AUTH_TOKEN = ''; });
+  }).catch(function(e) {
+    AUTH_TOKEN = '';
+    if (e && e.message === 'Unauthorized') localStorage.removeItem(SECRET_KEY);
+    // else: timeout/network error — leave the saved code alone, just show the login screen.
+  });
 }
 
 // Short-lived GET de-dup cache (3s). Several UI paths independently fetch the exact same
