@@ -182,6 +182,11 @@
     <div id="proposal-out" class="hide" style="margin-top:10px;">
       <pre class="doc" id="proposal-text"></pre>
       <button class="btn small secondary" onclick="copyProposal()" style="margin-top:8px;">📋 Copy proposal</button>
+      <button class="btn small" onclick="getProposalLink()" style="margin-top:8px;">🔗 Get shareable link</button>
+      <div id="link-out" class="hide" style="margin-top:8px;">
+        <input id="link-text" readonly style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;" onclick="this.select()">
+        <button class="btn small secondary" onclick="copyLink()" style="margin-top:6px;">📋 Copy link</button>
+      </div>
     </div>
   </div>
 </div>
@@ -557,6 +562,21 @@ async function genProposal(){
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
 }
 function copyProposal(){ var t=document.getElementById('proposal-text').textContent; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 copied','ok'); }); }
+
+// Customer-facing link (Aug 18 2026): mints a signed, revocable link to a read-only page
+// showing this exact proposal — no e-sign yet, just a real shareable page instead of only
+// having plain text to paste somewhere yourself. Minting again returns the SAME link until
+// you revoke it, so it's safe to tap more than once.
+async function getProposalLink(){
+  setStatus('prop-status','Creating link…');
+  try{
+    var r=await post('/scope/proposal/link',{ scope_id:state.current.ID });
+    document.getElementById('link-out').classList.remove('hide');
+    document.getElementById('link-text').value=r.url;
+    setStatus('prop-status','✅ link ready — copy and send it','ok');
+  }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
+}
+function copyLink(){ var t=document.getElementById('link-text').value; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 link copied','ok'); }); }
 
 boot();
 </script>
