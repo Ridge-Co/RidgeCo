@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-18.7';
+const BUILD_VERSION = '2026-08-18.8';
 
 export default {
   async fetch(request, env) {
@@ -356,6 +356,7 @@ export default {
         if (path === '/insp/availability/update')  return await updateRow(env, 'Insp_Availability_Rules', body.id, body.fields);
         if (path === '/insp/blackout/add')         return await inspBlackoutAdd(env, body);
         if (path === '/insp/blackout/update')      return await updateRow(env, 'Insp_Blackouts', body.id, body.fields);
+        if (path === '/insp/bulk-import')          return await inspBulkImport(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -9347,7 +9348,7 @@ const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone'
 const INSP_PROPERTY_HEADERS = ['ID','Customer_ID','Address','Zip','Type','Unit_Count','Visit_Duration_Min','Notes','Active','Created_Date'];
 const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_Phone','Notes','Active','Created_Date'];
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
-const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
+const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
   Insp_Properties: INSP_PROPERTY_HEADERS,
@@ -9454,10 +9455,15 @@ async function inspAvailabilityAdd(env, body) {
 // "nothing after 3pm on Fridays" (recurring weekly), and "nothing on Christmas"
 // (recurring annual) in one model:
 //   'date'   — one-off. `dates` (array) adds several rows in ONE action, so Brett
-//              can multi-select a batch of dates (e.g. a week off) at once.
+//              can multi-select a batch of dates (e.g. a week off) at once. Each
+//              entry is either a plain 'YYYY-MM-DD' string (a single day) or an
+//              {from,to} object — a date RANGE stored as ONE row (Date/Date_End)
+//              rather than exploding into one row per day.
 //   'weekly' — Day_Of_Week + optional Start_Time/End_Time (blank Start_Time = all
 //              day; a Start_Time with no End_Time means "to end of day").
 //   'annual' — Month_Day ('MM-DD'), recurs every year at that calendar date.
+// All shapes share one optional Start_Time/End_Time (the "time range" within the
+// day/days) applied to the whole batch being saved.
 async function inspBlackoutAdd(env, body) {
   if (!body || !body.Type) return json({ error: 'Type required (date|weekly|annual)' }, 400);
   await ensureInspTabs(env);
@@ -9466,23 +9472,126 @@ async function inspBlackoutAdd(env, body) {
     Reason: body.Reason || '', Active: 'TRUE', Created_Date: new Date().toISOString().slice(0,10),
   };
   if (body.Type === 'date') {
-    const dates = Array.isArray(body.dates) && body.dates.length ? body.dates : (body.Date ? [body.Date] : []);
-    if (!dates.length) return json({ error: 'At least one date required' }, 400);
+    const entries = Array.isArray(body.dates) && body.dates.length ? body.dates : (body.Date ? [body.Date] : []);
+    if (!entries.length) return json({ error: 'At least one date (or range) required' }, 400);
+    const MAX_RANGE_DAYS = 731; // ~2 years — guards against a fat-fingered range
+    const rowsToAdd = [];
+    for (const e of entries) {
+      if (e && typeof e === 'object' && e.from) {
+        const from = String(e.from).slice(0,10);
+        const to = String(e.to || e.from).slice(0,10);
+        const fromD = new Date(from + 'T12:00:00Z'), toD = new Date(to + 'T12:00:00Z');
+        if (isNaN(fromD) || isNaN(toD)) continue;
+        const spanDays = Math.round((toD - fromD) / 86400000);
+        if (spanDays < 0) return json({ error: `Range end (${to}) is before start (${from})` }, 400);
+        if (spanDays > MAX_RANGE_DAYS) return json({ error: `Range ${from} to ${to} is over ${MAX_RANGE_DAYS} days — split it up` }, 400);
+        rowsToAdd.push({ Type: 'date', Date: from, Date_End: from === to ? '' : to, Day_Of_Week: '', Month_Day: '' });
+      } else {
+        rowsToAdd.push({ Type: 'date', Date: String(e).slice(0,10), Date_End: '', Day_Of_Week: '', Month_Day: '' });
+      }
+    }
+    if (!rowsToAdd.length) return json({ error: 'No valid dates/ranges to add' }, 400);
     const results = [];
-    for (const d of dates) {
-      results.push(await addRow(env, 'Insp_Blackouts', Object.assign({ Type: 'date', Date: String(d).slice(0,10), Day_Of_Week: '', Month_Day: '' }, base)));
+    for (const r of rowsToAdd) {
+      results.push(await addRow(env, 'Insp_Blackouts', Object.assign(r, base)));
     }
     return json({ success: true, count: results.length });
   }
   if (body.Type === 'weekly') {
     if (!INSP_DOW.includes(body.Day_Of_Week)) return json({ error: 'Day_Of_Week (Mon..Sun) required for a weekly blackout' }, 400);
-    return await addRow(env, 'Insp_Blackouts', Object.assign({ Type: 'weekly', Date: '', Day_Of_Week: body.Day_Of_Week, Month_Day: '' }, base));
+    return await addRow(env, 'Insp_Blackouts', Object.assign({ Type: 'weekly', Date: '', Date_End: '', Day_Of_Week: body.Day_Of_Week, Month_Day: '' }, base));
   }
   if (body.Type === 'annual') {
     if (!/^\d{2}-\d{2}$/.test(body.Month_Day || '')) return json({ error: 'Month_Day (MM-DD) required for an annual blackout' }, 400);
-    return await addRow(env, 'Insp_Blackouts', Object.assign({ Type: 'annual', Date: '', Day_Of_Week: '', Month_Day: body.Month_Day }, base));
+    return await addRow(env, 'Insp_Blackouts', Object.assign({ Type: 'annual', Date: '', Date_End: '', Day_Of_Week: '', Month_Day: body.Month_Day }, base));
   }
   return json({ error: 'Unknown Type — use date, weekly, or annual' }, 400);
+}
+
+// ── Bulk import (Brett: "I don't want to onboard hundreds of units manually — I'll
+// import them generally plus add one-off units as needed"). One row per unit, grouped
+// by Address into properties. Reads Insp_Properties/Insp_Units ONCE (not once per row)
+// and appends via a single batched :append per tab — hundreds of rows stay a handful
+// of Sheets API calls, not hundreds of them. Idempotent-ish: matches an existing
+// property by normalized Address, and skips a unit whose Property+Label+(Phone|Name)
+// signature already exists, so re-pasting the same import (or overlapping batches)
+// doesn't create duplicates.
+async function inspBulkImport(env, body) {
+  if (!body || !body.Customer_ID || !Array.isArray(body.rows) || !body.rows.length)
+    return json({ error: 'Customer_ID and rows[] required' }, 400);
+  if (body.rows.length > 2000) return json({ error: 'Max 2000 rows per import call — split into batches (the Import screen does this automatically)' }, 400);
+  await ensureInspTabs(env);
+
+  const normAddr = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const custId = String(body.Customer_ID);
+
+  const propData = await sheetsRequest(env, 'GET', '/values/Insp_Properties');
+  const propAll = propData.values || [[]];
+  const propHeaders = propAll[0] && propAll[0].length ? propAll[0] : INSP_PROPERTY_HEADERS;
+  const existingProps = propAll.slice(1).map(r => { const o = {}; propHeaders.forEach((h, i) => o[h] = r[i] || ''); return o; });
+
+  const unitData = await sheetsRequest(env, 'GET', '/values/Insp_Units');
+  const unitAll = unitData.values || [[]];
+  const unitHeaders = unitAll[0] && unitAll[0].length ? unitAll[0] : INSP_UNIT_HEADERS;
+  const existingUnits = unitAll.slice(1).map(r => { const o = {}; unitHeaders.forEach((h, i) => o[h] = r[i] || ''); return o; });
+
+  const propByAddr = {};
+  existingProps.forEach(p => { if (p.Active !== 'FALSE' && p.Customer_ID === custId) propByAddr[normAddr(p.Address)] = p; });
+  const unitSig = new Set();
+  existingUnits.forEach(u => { if (u.Active !== 'FALSE') unitSig.add(u.Property_ID + '|' + normAddr(u.Label) + '|' + normAddr(u.Tenant_Phone || u.Tenant_Name || '')); });
+
+  const groups = {}; const order = [];
+  for (const r of body.rows) {
+    const addr = String((r && r.Address) || '').trim();
+    if (!addr) continue;
+    const key = normAddr(addr);
+    if (!groups[key]) { groups[key] = { address: addr, zip: String((r && r.Zip) || '').trim(), rows: [] }; order.push(key); }
+    groups[key].rows.push(r);
+  }
+
+  let nextPropId = existingProps.reduce((m, p) => { const n = parseInt(p.ID || '0'); return Number.isFinite(n) && n > m ? n : m; }, 0) + 1;
+  let nextUnitId = existingUnits.reduce((m, u) => { const n = parseInt(u.ID || '0'); return Number.isFinite(n) && n > m ? n : m; }, 0) + 1;
+
+  const newPropRows = [], newUnitRows = [];
+  let propertiesCreated = 0, propertiesMatched = 0, unitsCreated = 0, unitsSkipped = 0;
+  const createdDate = new Date().toISOString().slice(0, 10);
+
+  for (const key of order) {
+    const g = groups[key];
+    let prop = propByAddr[key];
+    const isMulti = g.rows.length > 1 || g.rows.some(r => r && r.Unit_Label);
+    if (!prop) {
+      const id = String(nextPropId++);
+      prop = {
+        ID: id, Customer_ID: custId, Address: g.address, Zip: g.zip,
+        Type: isMulti ? 'multifamily' : 'single_family', Unit_Count: String(g.rows.length),
+        Visit_Duration_Min: String(Number(g.rows[0].Visit_Duration_Min || 30) || 30),
+        Notes: '', Active: 'TRUE', Created_Date: createdDate,
+      };
+      newPropRows.push(propHeaders.map(h => prop[h] !== undefined ? prop[h] : ''));
+      propByAddr[key] = prop;
+      propertiesCreated++;
+    } else {
+      propertiesMatched++;
+    }
+    for (const r of g.rows) {
+      const label = (r && r.Unit_Label) || (isMulti ? '' : 'Unit');
+      const tenantName = (r && r.Tenant_Name) || '';
+      const tenantPhone = (r && r.Tenant_Phone) ? normalizePhone(r.Tenant_Phone) : '';
+      const sig = prop.ID + '|' + normAddr(label) + '|' + normAddr(tenantPhone || tenantName);
+      if (unitSig.has(sig)) { unitsSkipped++; continue; }
+      const uid = String(nextUnitId++);
+      const urow = { ID: uid, Property_ID: prop.ID, Label: label || 'Unit', Tenant_Name: tenantName, Tenant_Phone: tenantPhone, Notes: '', Active: 'TRUE', Created_Date: createdDate };
+      newUnitRows.push(unitHeaders.map(h => urow[h] !== undefined ? urow[h] : ''));
+      unitSig.add(sig);
+      unitsCreated++;
+    }
+  }
+
+  if (newPropRows.length) await sheetsRequest(env, 'POST', '/values/Insp_Properties:append?valueInputOption=RAW', { values: newPropRows });
+  if (newUnitRows.length) await sheetsRequest(env, 'POST', '/values/Insp_Units:append?valueInputOption=RAW', { values: newUnitRows });
+
+  return json({ success: true, properties_created: propertiesCreated, properties_matched: propertiesMatched, units_created: unitsCreated, units_skipped_duplicate: unitsSkipped });
 }
 
 // ── UTILITY ──────────────────────────────────────────────────

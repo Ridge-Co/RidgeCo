@@ -114,6 +114,7 @@
             <b>Properties</b>
             <button class="btn sm" onclick="toggleZipSort()" id="zip-sort-btn">Sort by zip</button>
           </div>
+          <input id="prop-filter" placeholder="Search address or zip…" oninput="renderProperties()" style="margin-top:10px">
           <div id="prop-list" style="margin-top:10px"><p class="muted">Loading…</p></div>
         </div>
         <div class="card">
@@ -132,6 +133,15 @@
             <label class="fld">Notes</label>
             <textarea id="pr-notes" rows="2" placeholder="optional"></textarea>
             <button class="btn primary" style="width:100%;margin-top:14px" onclick="addProperty(this)">Save property</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row" onclick="toggleSection('bulk-import')" style="cursor:pointer"><b>+ Bulk import properties/units</b><span class="muted" id="bulk-import-caret">show</span></div>
+          <div id="bulk-import" class="hide" style="margin-top:10px">
+            <p class="muted">Paste rows from a spreadsheet (tab- or comma-separated), first row = headers: <code>Address, Zip, Unit_Label, Tenant_Name, Tenant_Phone, Visit_Duration_Min</code>. Leave Unit_Label/Tenant blank for single-family. Multiple rows with the same Address become one property with multiple units.</p>
+            <textarea id="bi-paste" rows="6" placeholder="Address, Zip, Unit_Label, Tenant_Name, Tenant_Phone&#10;123 Main St, 21201, , John Smith, 4105551234&#10;456 Oak Ave, 21202, Apt 1, Jane Doe, 4105555678&#10;456 Oak Ave, 21202, Apt 2, , "></textarea>
+            <button class="btn" style="width:100%;margin-top:8px" onclick="previewBulkImport()">Preview</button>
+            <div id="bi-preview" style="margin-top:10px"></div>
           </div>
         </div>
       </div>
@@ -169,7 +179,21 @@
               <div style="flex:2"><input id="bo-date-input" type="date"></div>
               <div style="flex:1"><button class="btn" style="width:100%" onclick="addBlackoutDateChip()">+ Add</button></div>
             </div>
+            <label class="fld">Or add a date range</label>
+            <div class="two-col">
+              <div><input id="bo-range-from" type="date" placeholder="From"></div>
+              <div><input id="bo-range-to" type="date" placeholder="To"></div>
+            </div>
+            <button class="btn" style="width:100%;margin-top:6px" onclick="addBlackoutRangeChip()">+ Add range</button>
+            <label class="fld">Or paste a batch of dates (comma, space, or one per line — YYYY-MM-DD)</label>
+            <textarea id="bo-bulk-dates" rows="2" placeholder="2026-12-24, 2026-12-25, 2026-12-31"></textarea>
+            <button class="btn" style="width:100%;margin-top:6px" onclick="parseBulkDates()">+ Add pasted dates</button>
             <div class="chip-row" id="bo-date-chips"></div>
+            <div class="two-col" style="margin-top:8px">
+              <div><label class="fld">Time from (blank = all day)</label><input id="bo-date-start" type="time"></div>
+              <div><label class="fld">Time to (blank = end of day)</label><input id="bo-date-end" type="time"></div>
+            </div>
+            <p class="muted">Times apply to every date/range above — e.g. all day Dec 24–26, or just 1pm–5pm on a one-off date.</p>
           </div>
 
           <div id="bo-weekly-fields" class="hide">
@@ -404,27 +428,51 @@ function toggleZipSort(){
 function loadProperties(){
   return api('GET','/insp/properties?customer_id='+encodeURIComponent(curCustomerId)).then(function(list){
     properties = Array.isArray(list)?list:[];
-    return Promise.all(properties.map(function(p){
-      return api('GET','/insp/units?property_id='+encodeURIComponent(p.ID)).then(function(u){ unitsByProp[p.ID]=Array.isArray(u)?u:[]; });
-    }));
+    // One unfiltered fetch of ALL units, grouped client-side — avoids N redundant
+    // full-tab reads (one per property) once a customer has hundreds of units.
+    return api('GET','/insp/units');
+  }).then(function(all){
+    unitsByProp = {};
+    (Array.isArray(all)?all:[]).forEach(function(u){
+      if(!unitsByProp[u.Property_ID]) unitsByProp[u.Property_ID]=[];
+      unitsByProp[u.Property_ID].push(u);
+    });
   }).then(renderProperties);
 }
+var expandedProps = {};
+function togglePropUnits(pid){ expandedProps[pid]=!expandedProps[pid]; renderProperties(); }
 function renderProperties(){
   var el=document.getElementById('prop-list');
-  if(!properties.length){ el.innerHTML='<p class="muted">No properties yet for this customer. Add one below.</p>'; return; }
+  if(!properties.length){ el.innerHTML='<p class="muted">No properties yet for this customer. Add one below, or use Bulk import.</p>'; return; }
+  var filterEl=document.getElementById('prop-filter');
+  var filterVal=(filterEl&&filterEl.value||'').trim().toLowerCase();
   var list=properties.slice();
+  if(filterVal){
+    list=list.filter(function(p){
+      return String(p.Address||'').toLowerCase().indexOf(filterVal)!==-1 || String(p.Zip||'').toLowerCase().indexOf(filterVal)!==-1;
+    });
+  }
   if(zipSortOn) list.sort(function(a,b){ return String(a.Zip||'').localeCompare(String(b.Zip||'')); });
+  if(!list.length){ el.innerHTML='<p class="muted">No properties match that search.</p>'; return; }
   el.innerHTML = list.map(function(p){
     var units=unitsByProp[p.ID]||[];
     var typeBadge = p.Type==='multifamily' ? '<span class="pill new">Multifamily · '+esc(p.Unit_Count||units.length)+' units</span>' : '<span class="pill ok">Single-family</span>';
-    var unitRows = units.map(function(u){
-      return '<div class="unit-row"><div><b>'+esc(u.Label||'Unit')+'</b>'+(u.Tenant_Name?(' — '+esc(u.Tenant_Name)):'')+(u.Tenant_Phone?('<div class="muted">'+esc(u.Tenant_Phone)+'</div>'):'')+'</div>'
-        + '<button class="btn sm" onclick="openUnitEdit(\''+p.ID+'\',\''+u.ID+'\')">Edit</button></div>';
-    }).join('') || '<p class="muted" style="margin:6px 0">No units added yet.</p>';
+    var unitsBlock;
+    if(!units.length){
+      unitsBlock = '<p class="muted" style="margin:6px 0">No units added yet.</p>';
+    } else if(!expandedProps[p.ID]){
+      unitsBlock = '<div class="row" style="cursor:pointer;margin-top:4px" onclick="togglePropUnits(\''+p.ID+'\')"><span class="muted">'+units.length+' unit(s) — tap to view</span><span class="muted">▾</span></div>';
+    } else {
+      var unitRows = units.map(function(u){
+        return '<div class="unit-row"><div><b>'+esc(u.Label||'Unit')+'</b>'+(u.Tenant_Name?(' — '+esc(u.Tenant_Name)):'')+(u.Tenant_Phone?('<div class="muted">'+esc(u.Tenant_Phone)+'</div>'):'')+'</div>'
+          + '<button class="btn sm" onclick="openUnitEdit(\''+p.ID+'\',\''+u.ID+'\')">Edit</button></div>';
+      }).join('');
+      unitsBlock = '<div class="row" style="cursor:pointer" onclick="togglePropUnits(\''+p.ID+'\')"><span class="muted">'+units.length+' unit(s)</span><span class="muted">▴ hide</span></div>' + unitRows;
+    }
     return '<div class="prop-card">'
       + '<div class="row"><div><b>'+esc(p.Address)+'</b> '+typeBadge+'<div class="muted">Zip '+esc(p.Zip||'—')+' · '+esc(p.Visit_Duration_Min||30)+' min/unit</div></div>'
       + '<button class="btn sm" onclick="openPropertyEdit(\''+p.ID+'\')">Edit</button></div>'
-      + '<div style="margin-top:8px">' + unitRows + '</div>'
+      + '<div style="margin-top:8px">' + unitsBlock + '</div>'
       + '<div style="margin-top:8px;display:flex;gap:6px">'
       + '<input id="qu-label-'+p.ID+'" placeholder="Unit label" style="flex:1">'
       + '<input id="qu-tname-'+p.ID+'" placeholder="Tenant name" style="flex:1">'
@@ -565,7 +613,8 @@ function fmtBlackout(b){
     var parts=(b.Month_Day||'').split('-'); var mn=MONTH_NAMES[Number(parts[0])-1]||b.Month_Day;
     return 'Every year — '+mn+' '+(parts[1]||'');
   }
-  return b.Date + (b.Start_Time||b.End_Time ? (' · '+(b.Start_Time||'00:00')+'–'+(b.End_Time||'23:59')) : '');
+  var dateStr = (b.Date_End && b.Date_End!==b.Date) ? (b.Date+' → '+b.Date_End) : b.Date;
+  return dateStr + (b.Start_Time||b.End_Time ? (' · '+(b.Start_Time||'00:00')+'–'+(b.End_Time||'23:59')) : '');
 }
 function renderBlackouts(){
   var el=document.getElementById('blackout-list');
@@ -599,20 +648,48 @@ function addBlackoutDateChip(){
   var v=document.getElementById('bo-date-input').value;
   if(!v){ toast('Pick a date first'); return; }
   if(boDateChips.indexOf(v)===-1) boDateChips.push(v);
+  document.getElementById('bo-date-input').value='';
   renderDateChips();
 }
+function addBlackoutRangeChip(){
+  var f=document.getElementById('bo-range-from').value, t=document.getElementById('bo-range-to').value;
+  if(!f){ toast('Pick a start date'); return; }
+  if(!t) t=f;
+  if(t<f){ toast('End date is before start date'); return; }
+  boDateChips.push({from:f,to:t});
+  document.getElementById('bo-range-from').value=''; document.getElementById('bo-range-to').value='';
+  renderDateChips();
+}
+function parseBulkDates(){
+  var raw=document.getElementById('bo-bulk-dates').value;
+  if(!raw.trim()){ toast('Paste some dates first'); return; }
+  var tokens=raw.split(/[\s,;]+/).map(function(s){return s.trim();}).filter(Boolean);
+  var added=0, bad=0;
+  tokens.forEach(function(tok){
+    if(/^\d{4}-\d{2}-\d{2}$/.test(tok)){
+      if(boDateChips.indexOf(tok)===-1){ boDateChips.push(tok); added++; }
+    } else bad++;
+  });
+  document.getElementById('bo-bulk-dates').value='';
+  renderDateChips();
+  toast(added+' date(s) added'+(bad?(', '+bad+' skipped (bad format)'):''));
+}
+function chipLabel(d){ return (d && typeof d==='object') ? (d.from===d.to ? d.from : (d.from+' → '+d.to)) : d; }
+function chipKey(d){ return (d && typeof d==='object') ? ('r:'+d.from+':'+d.to) : ('d:'+d); }
 function renderDateChips(){
   document.getElementById('bo-date-chips').innerHTML = boDateChips.map(function(d){
-    return '<span class="chip">'+esc(d)+' <span class="x" onclick="removeDateChip(\''+d+'\')">✕</span></span>';
+    return '<span class="chip">'+esc(chipLabel(d))+' <span class="x" onclick="removeDateChip(\''+chipKey(d)+'\')">✕</span></span>';
   }).join('');
 }
-function removeDateChip(d){ boDateChips=boDateChips.filter(function(x){return x!==d;}); renderDateChips(); }
+function removeDateChip(k){ boDateChips=boDateChips.filter(function(x){return chipKey(x)!==k;}); renderDateChips(); }
 function saveBlackout(btn){
   var reason=document.getElementById('bo-reason').value.trim();
   var body={ Type:boType, Reason:reason };
   if(boType==='date'){
-    if(!boDateChips.length){ toast('Add at least one date'); return; }
+    if(!boDateChips.length){ toast('Add at least one date or range'); return; }
     body.dates=boDateChips.slice();
+    body.Start_Time=document.getElementById('bo-date-start').value;
+    body.End_Time=document.getElementById('bo-date-end').value;
   } else if(boType==='weekly'){
     body.Day_Of_Week=document.getElementById('bo-weekly-day').value;
     body.Start_Time=document.getElementById('bo-weekly-start').value;
@@ -625,9 +702,97 @@ function saveBlackout(btn){
   btn.disabled=true; btn.textContent='Saving…';
   api('POST','/insp/blackout/add',body).then(function(r){
     btn.disabled=false; btn.textContent='Save blackout';
-    if(r&&(r.success||r.ID)){ toast('Blackout saved'); boDateChips=[]; renderDateChips(); document.getElementById('bo-reason').value=''; loadAvailability(); }
+    if(r&&(r.success||r.ID)){ toast('Blackout saved'); boDateChips=[]; renderDateChips(); document.getElementById('bo-reason').value='';
+      document.getElementById('bo-date-start').value=''; document.getElementById('bo-date-end').value=''; loadAvailability(); }
     else toast((r&&r.error)||'Could not save');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Save blackout'; toast('Error: '+e.message); });
+}
+
+// ── Bulk import (properties/units) ──────────────────────────
+var biParsedRows = [];
+function parseDelimited(raw){
+  var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim().length; });
+  if(!lines.length) return [];
+  var delim = lines[0].indexOf('\t')!==-1 ? '\t' : ',';
+  function splitLine(l){
+    var out=[], cur='', inQ=false;
+    for(var i=0;i<l.length;i++){
+      var ch=l[i];
+      if(ch==='"'){ inQ=!inQ; continue; }
+      if(ch===delim && !inQ){ out.push(cur); cur=''; continue; }
+      cur+=ch;
+    }
+    out.push(cur);
+    return out.map(function(s){ return s.trim(); });
+  }
+  var header = splitLine(lines[0]).map(function(h){ return h.toLowerCase().replace(/\s+/g,'_'); });
+  var rows=[];
+  for(var i=1;i<lines.length;i++){
+    var cells = splitLine(lines[i]);
+    if(!cells.some(function(c){ return c; })) continue;
+    var o={};
+    header.forEach(function(h,idx){ o[h]=cells[idx]!==undefined?cells[idx]:''; });
+    rows.push(o);
+  }
+  return rows;
+}
+function previewBulkImport(){
+  if(!curCustomerId){ toast('Pick a customer first'); return; }
+  var raw=document.getElementById('bi-paste').value;
+  var parsed=parseDelimited(raw);
+  if(!parsed.length){ toast('Paste some rows first'); return; }
+  var rows = parsed.map(function(p){
+    return {
+      Address: p.address || p.addr || '',
+      Zip: p.zip || '',
+      Unit_Label: p.unit_label || p.unit || p.label || '',
+      Tenant_Name: p.tenant_name || p.tenant || p.name || '',
+      Tenant_Phone: p.tenant_phone || p.phone || '',
+      Visit_Duration_Min: p.visit_duration_min || p.duration || ''
+    };
+  }).filter(function(r){ return r.Address; });
+  biParsedRows = rows;
+  if(!rows.length){ document.getElementById('bi-preview').innerHTML='<div class="banner">No rows had an Address column — check your header row.</div>'; return; }
+  var addrSet={}; rows.forEach(function(r){ addrSet[r.Address.trim().toLowerCase()]=1; });
+  var propCount=Object.keys(addrSet).length;
+  var badCount=parsed.length-rows.length;
+  document.getElementById('bi-preview').innerHTML =
+    '<div class="banner">Found <b>'+rows.length+'</b> unit row(s) across <b>'+propCount+'</b> propert'+(propCount===1?'y':'ies')+'.'
+    + (badCount ? (' '+badCount+' row(s) skipped (no address).') : '')
+    + ' Existing properties/units are matched by address — re-importing won’t duplicate.</div>'
+    + '<button class="btn go" style="width:100%" onclick="confirmBulkImport(this)">Confirm import ('+rows.length+' rows)</button>';
+}
+function confirmBulkImport(btn){
+  if(!biParsedRows.length) return;
+  var rows=biParsedRows.slice();
+  var CHUNK=150;
+  var chunks=[];
+  for(var i=0;i<rows.length;i+=CHUNK) chunks.push(rows.slice(i,i+CHUNK));
+  btn.disabled=true;
+  var totals={properties_created:0,properties_matched:0,units_created:0,units_skipped_duplicate:0};
+  var idx=0;
+  function next(){
+    if(idx>=chunks.length){
+      document.getElementById('bi-preview').innerHTML='<div class="banner">Import complete — '+totals.properties_created+' propert'+(totals.properties_created===1?'y':'ies')+' created, '
+        +totals.properties_matched+' matched, '+totals.units_created+' unit(s) created, '+totals.units_skipped_duplicate+' duplicate(s) skipped.</div>';
+      document.getElementById('bi-paste').value=''; biParsedRows=[];
+      loadProperties();
+      return;
+    }
+    btn.textContent='Importing… ('+(idx+1)+'/'+chunks.length+')';
+    api('POST','/insp/bulk-import',{ Customer_ID: curCustomerId, rows: chunks[idx] }).then(function(r){
+      if(r&&r.success){
+        totals.properties_created+=r.properties_created||0;
+        totals.properties_matched+=r.properties_matched||0;
+        totals.units_created+=r.units_created||0;
+        totals.units_skipped_duplicate+=r.units_skipped_duplicate||0;
+        idx++; next();
+      } else {
+        btn.disabled=false; toast((r&&r.error)||('Import failed on batch '+(idx+1)));
+      }
+    }).catch(function(e){ btn.disabled=false; toast('Error: '+e.message); });
+  }
+  next();
 }
 </script>
 </body>
