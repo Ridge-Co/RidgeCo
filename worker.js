@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-18.4';
+const BUILD_VERSION = '2026-08-18.5';
 
 export default {
   async fetch(request, env) {
@@ -5022,6 +5022,14 @@ async function health(env) {
     try { const rows = await fetchTab(env, t); out.tabs[t] = rows.length; }
     catch (e) { out.ok = false; out.tabs[t] = 'ERROR: ' + (e && e.message ? e.message : String(e)); }
   }
+  // Pricing-config presence check (Aug 18 2026, rule 110): NEVER exposes the actual values —
+  // just whether something is set, where, and whether it actually parses into a usable
+  // config — so a bad setup (wrong Worker/environment, wrong Sheet key/typo, malformed JSON)
+  // can be diagnosed from a plain curl instead of needing the admin token or guessing.
+  out.pricing = { secret_set: false, sheet_set: false, parses_ok: false };
+  try { out.pricing.secret_set = !!(env && env.PRICING_CONFIG); } catch (_) {}
+  try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (_) {}
+  try { const pc = await getPricingConfig(env); out.pricing.parses_ok = !!(pc && Array.isArray(pc.tiers) && pc.tiers.length > 0); } catch (_) {}
   return json(out);
 }
 
