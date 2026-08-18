@@ -234,6 +234,8 @@ export default {
         if (path === '/wo/admin-update')          return await adminUpdateWO(env, body);
         if (path === '/wo/append-description')    return await appendDescription(env, body);
         if (path === '/wo/set-tenant-visibility') return await setTenantVisibility(env, body);
+        if (path === '/turnover/start')           return await startTurnoverManual(env, body);
+        if (path === '/tenant/schedule-move-out') return await scheduleMoveOutWithTurnover(env, body);
         if (path === '/schedule')                 return await scheduleWO(env, body);
         if (path === '/owner/notifications')      return await saveOwnerNotifications(env, body);
         if (path === '/owner-user/add')           return await addRow(env, 'Owner_Users', body);
@@ -361,6 +363,14 @@ export default {
     // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
     // the confirm-first queue. Read + queue only; no money, no customer contact.
     try { await receiptScan(env); } catch (e) { /* non-fatal */ }
+    // Turnover cleaning date-fallback release (B-100). A blocked Cleaning WO normally
+    // releases the moment its sibling Repairs+Paint WOs both hit Complete (see the hook in
+    // updateStatus) — this sweep is the OTHER half of "whichever comes first": if the
+    // turnover's target move-in date arrives (Turnover_Release_Date <= today) before the
+    // other two ever finish, release Cleaning anyway so a late vendor doesn't block the
+    // one job that has to happen right before a new tenant moves in. Read-then-write only
+    // on WOs that actually qualify; a normal day with nothing due does one harmless read.
+    try { await releaseTurnoverByDate(env); } catch (e) { /* non-fatal */ }
     // Receipt RECONCILER sweep (CAP-002 phase 2) — separate pipeline, separate folder: polls the
     // real "Receipts and Invoices" Drive folder Brett drops purchase receipts into, OCRs new
     // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
@@ -1666,6 +1676,14 @@ async function updateStatus(env, body) {
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
   }
+  // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
+  // each other, but Cleaning is created On Hold and must wait until BOTH finish (or the
+  // date-fallback sweep in scheduled() releases it first). This only ever fires for a WO
+  // that's actually part of a turnover group and just went Complete — everything else is a
+  // no-op single extra field read.
+  if (body.status === 'Complete' && wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
+    try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { /* non-fatal */ }
+  }
   const notifyStatuses = ['Assigned','Scheduled','Complete','Invoiced'];
   if (notifyStatuses.includes(body.status)) {
     const notify = await shouldNotifyOwner(env, wo, body.status);
@@ -2698,6 +2716,171 @@ async function setTenantVisibility(env, body) {
   const _tvEntries = Object.entries(updates).filter(([field,newVal]) => String(wo[field]||'') !== String(newVal||'')).map(([field,newVal]) => ({ woId: body.wo_id, changedBy: body.changed_by||'admin', changedByRole: body.changed_by_role||'admin', field, oldValue: wo[field]||'', newValue: newVal, notes: 'Tenant visibility setting changed' }));
   await logWOAuditMany(env, _tvEntries);
   return json({ success: true });
+}
+
+// ── TURNOVER TRIGGER (B-100) ──────────────────────────────────
+// One trigger, three connected work orders: Repairs + Paint run in parallel from day one
+// (so Brett can line up vendors well ahead of a knee-jerk, last-minute turnover instead of
+// scrambling once the unit is actually empty); Cleaning is created On Hold and only releases
+// once BOTH finish, or the target move-in date arrives — whichever comes first. All three
+// share one Turnover_Group_ID so the release check and the Hub UI can always find siblings.
+// Two entry points funnel into the same createTurnoverWOs() core (PAT-001 — one place this
+// logic lives): a manual "Start Turnover" button (startTurnoverManual) and setting a future
+// move-out date on a still-active tenant (scheduleMoveOutWithTurnover) — the latter does NOT
+// touch Tenants.Active/PIN/Unit pointer the way the existing destructive /tenant/move-out
+// does; the tenant keeps living there and using their portal right up to the real date.
+const TURNOVER_ROLES = ['Repairs', 'Paint', 'Cleaning'];
+const TURNOVER_TRADE_BY_ROLE = { Repairs: 'General', Paint: 'Painting', Cleaning: 'Cleaning' };
+const TURNOVER_DESC_BY_ROLE = {
+  Repairs: 'Standard turnover — repairs (checklist TBD).',
+  Paint: 'Standard turnover — paint (checklist TBD).',
+  Cleaning: 'Standard turnover — cleaning (checklist TBD). Waits on Repairs + Paint, or the day before the target move-in date, whichever comes first.',
+};
+// "Done" for the purposes of unblocking Cleaning — Cancelled counts too, so one dead/void
+// leg of a turnover can't permanently wedge the cleaner behind a job that will never finish.
+const TURNOVER_RELEASE_DONE_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Closed'];
+
+function dayBefore(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T12:00:00'); // noon avoids DST edge cases shifting the date
+  if (isNaN(d)) return '';
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().split('T')[0];
+}
+
+function nextTurnoverGroupId(workorders) {
+  const nums = workorders
+    .map(w => (w.Turnover_Group_ID || '').match(/^TO-(\d+)$/))
+    .filter(Boolean)
+    .map(m => parseInt(m[1], 10))
+    .filter(n => Number.isFinite(n) && n > 0);
+  return `TO-${nums.length ? Math.max(...nums) + 1 : 1001}`;
+}
+
+// Core: create the 3 connected WOs for one unit. Reuses createWorkOrder() for every field
+// this shares with a normal WO (ID assignment, WO_Tenants linking, telemetry) instead of
+// re-deriving that logic — the turnover-specific bits (Turnover_Group_ID/Role, Cleaning's
+// On Hold start + release date) are stamped on afterward with their own ensureColumns call.
+async function createTurnoverWOs(env, body) {
+  const unitId = body.unit_id;
+  if (!unitId) return json({ error: 'unit_id required' }, 400);
+  const [units, workorders] = await fetchTabs(env, ['Units', 'Work_Orders']);
+  const unit = units.find(u => u.ID === unitId);
+  if (!unit) return json({ error: 'Unit not found' }, 404);
+
+  // Idempotency guard — don't stack a second turnover on a unit that already has one running.
+  // "Running" = any WO on this unit carrying a Turnover_Group_ID whose status isn't done yet.
+  const existingGroup = workorders.find(w => w.Unit_ID === unitId && w.Turnover_Group_ID
+    && !TURNOVER_RELEASE_DONE_STATUSES.includes(w.Status));
+  if (existingGroup) {
+    return json({ error: `A turnover is already active for this unit (${existingGroup.Turnover_Group_ID}).`, existing_group_id: existingGroup.Turnover_Group_ID }, 409);
+  }
+
+  const groupId = nextTurnoverGroupId(workorders);
+  const releaseDate = dayBefore(body.target_move_in_date || '');
+
+  const woIds = {};
+  // Sequential, not Promise.all — each createWorkOrder() call re-reads the current max WO
+  // number, so three concurrent calls could compute the same "next" number and collide.
+  for (const role of TURNOVER_ROLES) {
+    const resp = await createWorkOrder(env, {
+      property_id: unit.Property_ID,
+      unit_id: unitId,
+      type: 'turnover',
+      trade: TURNOVER_TRADE_BY_ROLE[role],
+      description: TURNOVER_DESC_BY_ROLE[role],
+      priority: body.priority || 'normal',
+      created_by: body.created_by || 'admin',
+      // No current tenant to show this to — the outgoing tenant is on the way out and there
+      // may be no incoming tenant yet. Admin can flip visibility per-WO later if it's ever needed.
+      tenant_visible: false,
+      tenant_notify_created: false,
+      tenant_notify_updates: false,
+    });
+    const respBody = await resp.json();
+    if (respBody.error) return json({ error: `Failed creating ${role} WO: ${respBody.error}` }, 500);
+    woIds[role] = respBody.id;
+  }
+
+  // Hold_Reason doesn't exist on Work_Orders yet (the B-127 notes model that would have
+  // added it never merged) — ensure it here too, since Cleaning's initial On Hold write
+  // below needs it, not just the three Turnover_* columns.
+  await ensureColumns(env, 'Work_Orders', ['Turnover_Group_ID', 'Turnover_Role', 'Turnover_Release_Date', 'Hold_Reason']);
+  await updateWOFields(env, woIds.Repairs, { Turnover_Group_ID: groupId, Turnover_Role: 'Repairs' });
+  await updateWOFields(env, woIds.Paint, { Turnover_Group_ID: groupId, Turnover_Role: 'Paint' });
+  await updateWOFields(env, woIds.Cleaning, {
+    Turnover_Group_ID: groupId,
+    Turnover_Role: 'Cleaning',
+    Status: 'On Hold',
+    Hold_Reason: 'Turnover — waiting on Repairs + Paint (or the day before move-in, whichever comes first).',
+    Turnover_Release_Date: releaseDate,
+  });
+
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_start', Skill_Or_Endpoint: '/turnover', Success: 'TRUE', Notes: `unit=${unitId} group=${groupId} source=${body.source || 'manual'}` }); } catch (_) {}
+
+  return json({ success: true, group_id: groupId, wo_ids: woIds, release_date: releaseDate || null });
+}
+
+// Manual "Start Turnover" button — unit is already vacant, or Brett just wants the jobs
+// queued now regardless of a tenant/move-out record.
+async function startTurnoverManual(env, body) {
+  return createTurnoverWOs(env, { unit_id: body.unit_id, target_move_in_date: body.target_move_in_date, priority: body.priority, created_by: body.created_by, source: 'manual' });
+}
+
+// Setting a FUTURE move-out date on a tenant who is still living there. Deliberately does
+// NOT call processMoveOut()/deactivate the tenant — that stays a separate, immediate,
+// destructive action for the actual day. This just books the date and gets the turnover
+// vendors queued with lead time, which is the whole point Brett raised: last-minute
+// turnovers are unschedulable, this gives Repairs/Paint a head start before the unit is even empty.
+async function scheduleMoveOutWithTurnover(env, body) {
+  const { tenant_id, move_out_date, target_move_in_date, created_by } = body;
+  if (!tenant_id || !move_out_date) return json({ error: 'tenant_id and move_out_date required' }, 400);
+  const tenants = await fetchTab(env, 'Tenants');
+  const tenant = tenants.find(t => t.ID === tenant_id);
+  if (!tenant) return json({ error: 'Tenant not found' }, 404);
+  if (!tenant.Unit_ID) return json({ error: 'This tenant has no Unit_ID on file — turnover requires a unit-level tenant. Add the unit first, or use "Start Turnover" directly on the unit.' }, 400);
+
+  await ensureColumns(env, 'Tenants', ['Scheduled_Move_Out_Date']);
+  await updateRow(env, 'Tenants', tenant_id, { Scheduled_Move_Out_Date: move_out_date });
+
+  const turnover = await createTurnoverWOs(env, {
+    unit_id: tenant.Unit_ID,
+    target_move_in_date,
+    created_by,
+    source: 'scheduled_move_out',
+  });
+  const turnoverBody = await turnover.json();
+  // A 409 (turnover already running on this unit) is not a failure of THIS action — the
+  // move-out date still got saved. Report both halves so the Hub can show "date saved,
+  // turnover already in progress" instead of a bare error.
+  return json({ success: true, move_out_date, turnover: turnoverBody, turnover_created: !turnoverBody.error });
+}
+
+// Repairs/Paint just went Complete — check whether Cleaning can release now.
+async function releaseTurnoverCleaningIfReady(env, groupId) {
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const siblings = workorders.filter(w => w.Turnover_Group_ID === groupId);
+  const cleaning = siblings.find(w => w.Turnover_Role === 'Cleaning');
+  if (!cleaning || cleaning.Status !== 'On Hold') return; // already released, or no cleaning leg
+  const others = siblings.filter(w => w.Turnover_Role && w.Turnover_Role !== 'Cleaning');
+  const allDone = others.length > 0 && others.every(w => TURNOVER_RELEASE_DONE_STATUSES.includes(w.Status));
+  if (allDone) {
+    await updateWOFields(env, cleaning.ID, { Status: 'New', Hold_Reason: '' });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'updateStatus', Success: 'TRUE', Notes: `group=${groupId} reason=repairs_paint_complete` }); } catch (_) {}
+  }
+}
+
+// Daily cron sweep (B-100 date fallback) — release any Cleaning WO still On Hold whose
+// Turnover_Release_Date has arrived, even if Repairs/Paint haven't finished.
+async function releaseTurnoverByDate(env) {
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const today = new Date().toISOString().split('T')[0];
+  const due = workorders.filter(w => w.Turnover_Role === 'Cleaning' && w.Status === 'On Hold'
+    && w.Turnover_Release_Date && w.Turnover_Release_Date <= today);
+  for (const w of due) {
+    await updateWOFields(env, w.ID, { Status: 'New', Hold_Reason: '' });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'scheduled/turnover-date', Success: 'TRUE', Notes: `wo=${w.ID} group=${w.Turnover_Group_ID} reason=date_fallback` }); } catch (_) {}
+  }
 }
 
 // ── MASTER KEYS / TEMPLATES / MATERIALS ──────────────────────
