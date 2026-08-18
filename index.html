@@ -3,6 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<!-- Force-refresh on open (Brett, Aug 18 2026): every fresh navigation to this page is
+     redirected once to a cache-busted URL so the browser is forced to fetch the current
+     deploy from the network instead of serving a stale cached copy. All existing query
+     params (page=, wo=, etc.) are preserved. A stale bookmarked _hr (>3s old) is treated
+     as "not from this redirect" and re-fires, so an old shared link still self-heals. Must
+     run before anything else parses. -->
+<script>
+(function(){
+  try {
+    var url = new URL(location.href);
+    var hr = url.searchParams.get('_hr');
+    var age = hr ? (Date.now() - parseInt(hr, 36)) : Infinity;
+    if (!hr || isNaN(age) || age > 3000) {
+      url.searchParams.set('_hr', Date.now().toString(36));
+      location.replace(url.toString());
+    }
+  } catch (e) {}
+})();
+window.addEventListener('pageshow', function(e){
+  // Mobile back-forward cache (bfcache) can restore this page from memory on app-switch-back
+  // without re-fetching anything — force a real reload so a stale in-memory copy never sticks.
+  if (e.persisted) location.reload();
+});
+</script>
 <title>Ridge Co — Maintenance Hub</title>
 <style>
   :root {
@@ -9818,5 +9845,42 @@ function setWOFilter(filterVal, priorityVal) {
   <div id="rc-lb-body" style="max-width:100%;max-height:80vh;display:flex;flex-direction:column;align-items:center;justify-content:center"></div>
   <div onclick="rcLightboxNav(1)" style="position:absolute;right:2px;top:50%;transform:translateY(-50%);color:#fff;font-size:34px;cursor:pointer;padding:12px;user-select:none;opacity:.85">&#8250;</div>
 </div>
+
+<!-- Auto-refresh while open (Brett, Aug 18 2026): the cache-bust redirect in <head> covers
+     "opening" the Hub; this covers the Hub staying open across a deploy — polls /version and
+     reloads onto the new build. Checks immediately + on every foreground return (not just
+     every 60s), so a backgrounded tab/app picks up a new deploy the moment Brett comes back
+     to it. Never yanks a form mid-entry — shows a tap-to-refresh banner instead when
+     something looks unsaved. Mirrors vendor.html's B-093 pattern (the Hub never had it). -->
+<script>
+(function(){
+  var VER_URL = WORKER + '/version', booted = null;
+  function dirty(){
+    var el = document.activeElement;
+    if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
+    return !!document.querySelector('[data-unsaved="1"]');
+  }
+  function banner(){
+    if (document.getElementById('mh-upd-banner')) return;
+    var b = document.createElement('div');
+    b.id = 'mh-upd-banner';
+    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#1d4ed8;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
+    b.textContent = 'Update ready — tap to refresh';
+    b.onclick = function(){ location.reload(true); };
+    document.body.appendChild(b);
+  }
+  function check(){
+    fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      if (!d || !d.version) return;
+      if (booted === null){ booted = d.version; return; }
+      if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
+    }).catch(function(){});
+  }
+  check();
+  setInterval(check, 60000);
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
+})();
+</script>
 </body>
 </html>

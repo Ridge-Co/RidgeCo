@@ -3,6 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<!-- Force-refresh on open (Brett, Aug 18 2026): every fresh navigation to this page is
+     redirected once to a cache-busted URL so the browser is forced to fetch the current
+     deploy from the network instead of serving a stale cached copy. All existing query
+     params are preserved. A stale bookmarked _hr (>3s old) is treated as "not from this
+     redirect" and re-fires, so an old shared link still self-heals. Must run before
+     anything else parses. -->
+<script>
+(function(){
+  try {
+    var url = new URL(location.href);
+    var hr = url.searchParams.get('_hr');
+    var age = hr ? (Date.now() - parseInt(hr, 36)) : Infinity;
+    if (!hr || isNaN(age) || age > 3000) {
+      url.searchParams.set('_hr', Date.now().toString(36));
+      location.replace(url.toString());
+    }
+  } catch (e) {}
+})();
+window.addEventListener('pageshow', function(e){
+  // Mobile back-forward cache (bfcache) can restore this page from memory on app-switch-back
+  // without re-fetching anything — force a real reload so a stale in-memory copy never sticks.
+  if (e.persisted) location.reload();
+});
+</script>
 <title>Ridge Co — Vendor Portal</title>
 <style>
 :root {
@@ -2257,6 +2284,8 @@ function applyTranslations() {
   }
   check();
   setInterval(check, 60000);
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
 })();
 </script>
 </body>
