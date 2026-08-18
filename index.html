@@ -1360,10 +1360,20 @@ function _loadAllFinish(loaded) {
 // Fallback path — the original 8 separate requests. Only used if /hub-bootstrap itself
 // errors (e.g. an older deployed Worker without the route yet), so a stale client never
 // just breaks.
+//
+// Hardened Aug 18 2026 alongside loadAll()'s own timeout, same root cause: each of these
+// used to be a bare fetch() with no timeout, so if the FIRST attempt (hub-bootstrap) timed
+// out because of a genuinely bad connection rather than a server error, this fallback could
+// just as easily hang forever too — same silent-spinner symptom, one level deeper. Every
+// call here is now individually timed (20s) so one stuck tab can't block the others, and
+// if EVERYTHING fails (all 8 timed out or errored), the loading spinners are replaced with
+// a clear retry message instead of sitting on "Loading..." indefinitely with no explanation.
 function _loadAllFallback() {
   return Promise.allSettled([
-    api('GET','/properties'), api('GET','/units'), api('GET','/tenants'),
-    api('GET','/vendors'), api('GET','/workorders'), api('GET','/invoices'), api('GET','/owners'), api('GET','/keys')
+    apiWithTimeout(api('GET','/properties'), 20000), apiWithTimeout(api('GET','/units'), 20000),
+    apiWithTimeout(api('GET','/tenants'), 20000), apiWithTimeout(api('GET','/vendors'), 20000),
+    apiWithTimeout(api('GET','/workorders'), 20000), apiWithTimeout(api('GET','/invoices'), 20000),
+    apiWithTimeout(api('GET','/owners'), 20000), apiWithTimeout(api('GET','/keys'), 20000)
   ]).then(function(results) {
     results.forEach(function(r,i) {
       if (r.status === 'fulfilled') {
@@ -1374,7 +1384,16 @@ function _loadAllFallback() {
         logError('Load '+_names8[i], r.reason?.message || 'Failed');
       }
     });
-    _loadAllFinish(results.filter(function(r){return r.status==='fulfilled';}).length);
+    var okCount = results.filter(function(r){return r.status==='fulfilled';}).length;
+    if (okCount === 0) {
+      var msg = '<div class="loading" style="color:var(--danger)">Couldn\'t load data — check your connection. '
+        + '<span style="cursor:pointer;color:var(--info);text-decoration:underline" onclick="loadAll()">Retry</span></div>';
+      var d1 = document.getElementById('dashboard-wo-list'); if (d1) d1.innerHTML = msg;
+      var d2 = document.getElementById('wo-list-full'); if (d2) d2.innerHTML = msg;
+      toast('Failed to load data — check your connection and retry','error');
+      return;
+    }
+    _loadAllFinish(okCount);
   });
 }
 
@@ -1388,7 +1407,16 @@ function loadAll() {
   // Single batched call instead of 8 separate GETs (each its own Sheets read-quota unit) —
   // this is one of the direct fixes for the "Sheets API quota exceeded" error: a plain WO
   // list load, or the full refresh after any save, used to cost 8 reads on its own.
-  return api('GET','/hub-bootstrap').then(function(res) {
+  //
+  // Hardened Aug 18 2026 (Brett: logged in fine, but the WO list sat on its "Loading..."
+  // spinner for a full minute — nothing ever appeared). Root cause: this was a bare fetch()
+  // with no timeout at all. On a weak/degraded mobile connection a stalled TCP connection can
+  // sit open far longer than any human will wait before the browser itself gives up — the
+  // spinner never had a reason to go away because the promise never rejected. Wrapped in the
+  // same apiWithTimeout() helper already used elsewhere in this file, so a stall now surfaces
+  // within 20s and automatically falls back to the 8 separate per-tab requests below (each
+  // ALSO now individually timed, so one still-stuck tab can't hang the rest).
+  return apiWithTimeout(api('GET','/hub-bootstrap'), 20000).then(function(res) {
     if (!res || typeof res !== 'object') throw new Error('bad /hub-bootstrap response');
     var loaded = 0;
     _names8.forEach(function(name) {
