@@ -1283,7 +1283,17 @@ if (stored) {
 // serves stale data across a write, only coalesces truly-duplicate reads inside a short window.
 var _getCache = {};
 var GET_CACHE_MS = 3000;
-function api(method, path, body) {
+// Optional 4th arg `timeoutMs` (Aug 18 2026): earlier timeout handling elsewhere in this file
+// (apiWithTimeout) only raced a fetch against a timer — on timeout the JS stopped WAITING on
+// the fetch, but never actually cancelled it, so the real network request (and the browser's
+// connection-pool slot for it) stayed alive in the background. On a bad connection that meant
+// a "timed-out" hub-bootstrap load could still be quietly occupying a connection when the
+// fallback's 8 requests immediately tried to fire — Chrome caps concurrent connections per
+// origin, so the abandoned request could starve the very fallback that was supposed to save
+// the load, making things look like they hang even longer/"very slowly" instead of failing
+// cleanly. Passing timeoutMs here uses a real AbortController, so a timeout actually cancels
+// the in-flight request and frees its connection for whatever tries next.
+function api(method, path, body, timeoutMs) {
   var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
   if (body) opts.body = JSON.stringify(body);
   if (method === 'GET') {
@@ -1292,11 +1302,19 @@ function api(method, path, body) {
   } else {
     _getCache = {};
   }
+  var controller = (timeoutMs && typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = null;
+  if (controller) { opts.signal = controller.signal; timer = setTimeout(function(){ controller.abort(); }, timeoutMs); }
   var p = fetch(WORKER + path, opts).then(function(res){
+    if (timer) clearTimeout(timer);
     return res.json().then(function(data){
       if (data.error === 'Unauthorized') throw new Error('Unauthorized');
       return data;
     });
+  }).catch(function(e){
+    if (timer) clearTimeout(timer);
+    if (e && e.name === 'AbortError') throw new Error('Request timed out after ' + (timeoutMs/1000) + 's — check network or retry');
+    throw e;
   });
   if (method === 'GET') {
     _getCache[path] = { promise: p, exp: Date.now() + GET_CACHE_MS };
@@ -1372,15 +1390,18 @@ function _loadAllFinish(loaded) {
 // used to be a bare fetch() with no timeout, so if the FIRST attempt (hub-bootstrap) timed
 // out because of a genuinely bad connection rather than a server error, this fallback could
 // just as easily hang forever too — same silent-spinner symptom, one level deeper. Every
-// call here is now individually timed (20s) so one stuck tab can't block the others, and
-// if EVERYTHING fails (all 8 timed out or errored), the loading spinners are replaced with
-// a clear retry message instead of sitting on "Loading..." indefinitely with no explanation.
+// call here is now individually timed (20s) via api()'s real AbortController timeout (NOT
+// apiWithTimeout — that only raced the promise without cancelling the underlying fetch, which
+// could leave a stalled hub-bootstrap request quietly occupying a connection-pool slot and
+// starving these very fallback requests, making a bad connection look like it hangs even
+// longer). If EVERYTHING still fails (all 8 timed out or errored), the loading spinners are
+// replaced with a clear retry message instead of sitting on "Loading..." indefinitely.
 function _loadAllFallback() {
   return Promise.allSettled([
-    apiWithTimeout(api('GET','/properties'), 20000), apiWithTimeout(api('GET','/units'), 20000),
-    apiWithTimeout(api('GET','/tenants'), 20000), apiWithTimeout(api('GET','/vendors'), 20000),
-    apiWithTimeout(api('GET','/workorders'), 20000), apiWithTimeout(api('GET','/invoices'), 20000),
-    apiWithTimeout(api('GET','/owners'), 20000), apiWithTimeout(api('GET','/keys'), 20000)
+    api('GET','/properties', null, 20000), api('GET','/units', null, 20000),
+    api('GET','/tenants', null, 20000), api('GET','/vendors', null, 20000),
+    api('GET','/workorders', null, 20000), api('GET','/invoices', null, 20000),
+    api('GET','/owners', null, 20000), api('GET','/keys', null, 20000)
   ]).then(function(results) {
     results.forEach(function(r,i) {
       if (r.status === 'fulfilled') {
@@ -1419,11 +1440,11 @@ function loadAll() {
   // spinner for a full minute — nothing ever appeared). Root cause: this was a bare fetch()
   // with no timeout at all. On a weak/degraded mobile connection a stalled TCP connection can
   // sit open far longer than any human will wait before the browser itself gives up — the
-  // spinner never had a reason to go away because the promise never rejected. Wrapped in the
-  // same apiWithTimeout() helper already used elsewhere in this file, so a stall now surfaces
-  // within 20s and automatically falls back to the 8 separate per-tab requests below (each
-  // ALSO now individually timed, so one still-stuck tab can't hang the rest).
-  return apiWithTimeout(api('GET','/hub-bootstrap'), 20000).then(function(res) {
+  // spinner never had a reason to go away because the promise never rejected. Uses api()'s
+  // real AbortController timeout (see api() comment) rather than the older apiWithTimeout()
+  // race, which only stopped waiting without cancelling the request — so a stall now both
+  // surfaces within 20s AND actually frees the connection for the fallback requests below.
+  return api('GET','/hub-bootstrap', null, 20000).then(function(res) {
     if (!res || typeof res !== 'object') throw new Error('bad /hub-bootstrap response');
     var loaded = 0;
     _names8.forEach(function(name) {
