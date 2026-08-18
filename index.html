@@ -1271,19 +1271,41 @@ document.getElementById('login-input').addEventListener('keydown', function(e) {
 // server actually rejected it (Unauthorized) — a timeout/network error now leaves the saved
 // code in place and just falls through to the manual login screen, so a bad connection
 // can't silently log Brett out of a code that was never actually wrong.
-var stored = localStorage.getItem(SECRET_KEY);
-if (stored) {
-  AUTH_TOKEN = stored;
-  api('GET','/config', null, 12000).then(function() {
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
-    Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
-  }).catch(function(e) {
-    AUTH_TOKEN = '';
-    if (e && e.message === 'Unauthorized') localStorage.removeItem(SECRET_KEY);
-    // else: timeout/network error — leave the saved code alone, just show the login screen.
-  });
-}
+// THE ACTUAL BUG (found Aug 18 2026 via a headless-DOM reproduction, after several rounds of
+// network-timeout fixes that didn't touch this): this block runs at the top level, in document
+// order, BEFORE `var _getCache = {}` (a few dozen lines down) and BEFORE `var _names8 = [...]`
+// (used inside loadAll(), further down still) ever get their values assigned. `var` hoists the
+// DECLARATION but not the assignment — so the instant a returning user's saved code makes
+// `stored` truthy, `api('GET','/config',...)` runs immediately and does `_getCache[path]`
+// against a still-`undefined` `_getCache`, throwing a plain, uncaught, SYNCHRONOUS TypeError.
+// That halts every remaining top-level statement in this (huge) inline script for the rest of
+// the page's life — `_getCache = {}` and `_names8 = [...]` never run at all. Net effect, for
+// ANY user with a saved login code (i.e. every returning user, including Brett): auto-login
+// silently never completes (matches "used to autoload, now I have to paste it manually"), and
+// even after a manual login "works" (doLogin() happens to repair `_getCache` itself via its
+// own `_getCache = {};` line), loadAll() then throws on the still-undefined `_names8` — so
+// work orders never render either, no matter how good the network/timeout handling is. This
+// was never a connection problem. Fix: defer this whole block to `setTimeout(..., 0)`, which
+// always runs AFTER the current synchronous script has finished executing top to bottom — so
+// every var this touches, directly or through loadAll()/maybeOpenWOFromURL(), is guaranteed to
+// already be initialized by the time this actually runs. Verified via jsdom: with a stored
+// token, `_getCache` is `undefined` immediately post-load without this fix; work orders and
+// the dashboard render normally once it's deferred.
+setTimeout(function(){
+  var stored = localStorage.getItem(SECRET_KEY);
+  if (stored) {
+    AUTH_TOKEN = stored;
+    api('GET','/config', null, 12000).then(function() {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
+    }).catch(function(e) {
+      AUTH_TOKEN = '';
+      if (e && e.message === 'Unauthorized') localStorage.removeItem(SECRET_KEY);
+      // else: timeout/network error — leave the saved code alone, just show the login screen.
+    });
+  }
+}, 0);
 
 // Short-lived GET de-dup cache (3s). Several UI paths independently fetch the exact same
 // endpoint within one burst of clicks — e.g. opening a WO detail fetches /vendor-bills?wo_id=

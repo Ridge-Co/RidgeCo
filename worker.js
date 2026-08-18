@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-18.7';
+const BUILD_VERSION = '2026-08-18.8';
 
 export default {
   async fetch(request, env) {
@@ -45,7 +45,10 @@ export default {
       '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/receipt','/wo/shared/note',
       // Weekly Open Item Report link (Aug 18 session): same pattern — public at the gate, but
       // every handler self-verifies a signed ar-report share token before doing anything.
-      '/ar-report/view','/ar-report/pay-link'];
+      '/ar-report/view','/ar-report/pay-link',
+      // Scope-creator customer proposal link (Aug 18 session, rule 113): same pattern — public
+      // at the gate, but scopeProposalView self-verifies a signed scope-proposal share token.
+      '/scope-proposal/view'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -184,6 +187,7 @@ export default {
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
         if (path === '/scope/drive-list')       return await scopeDriveList(env, url);
+        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
@@ -346,6 +350,8 @@ export default {
         if (path === '/scope/to-wo')              return await scopeToWO(env, body);
         if (path === '/scope/estimate')           return await scopeEstimate(env, body);
         if (path === '/scope/proposal')           return await scopeProposal(env, body);
+        if (path === '/scope/proposal/link')        return await scopeProposalLink(env, body);
+        if (path === '/scope/proposal/link-revoke') return await scopeProposalLinkRevoke(env, body);
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
@@ -1456,6 +1462,60 @@ async function scopeProposal(env, body) {
   const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this estimate and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.\n- This estimate is priced as a single, unified project. If individual line items are selectively removed after approval, remaining items are subject to a 15% price adjustment plus a $150 mobilization fee.`;
   await updateRow(env, 'Scopes', id, { Proposal_Text: doc, Status: 'proposed', Updated_Date: new Date().toISOString() });
   return json({ success: true, proposal_text: doc, final_price: pricing.finalPrice, deposit: pricing.deposit });
+}
+
+// ── Scope proposal customer link (Aug 18 2026, rule 113) ───────────────────
+// Brett: "I need the proposal generator to actually generate a proposal" — scopeProposal()
+// above only ever produced text saved on the Scope record with no way to hand it to a
+// customer. Same signed-link pattern already proven twice today (Shareable Work Order B-117,
+// AR Report link) — HMAC-off-WORKER_SECRET token, revoke-by-bumping-a-rev-column, no separate
+// token-storage table. No e-sign yet (Brett flagged Documenso as a possible future path for
+// that) — this just gets a real, working, sendable link live for today.
+const SCOPE_PROPOSAL_LINK_TTL = 60 * 60 * 24 * 90; // 90 days — revoke any time via the rev bump
+async function scopeProposalLinkToken(env, scopeId) {
+  try { await ensureColumns(env, 'Scopes', ['Link_Rev']); } catch (e) {}
+  const s = await scopeFind(env, scopeId);
+  if (!s) return null;
+  const rev = String(s.Link_Rev || '0');
+  return await makeSessionToken({ scope: 'scope-proposal', id: String(scopeId), rev }, env.WORKER_SECRET, SCOPE_PROPOSAL_LINK_TTL);
+}
+async function scopeProposalLinkAuth(env, tok) {
+  const payload = await verifySessionToken(String(tok || ''), env.WORKER_SECRET);
+  if (!payload || payload.scope !== 'scope-proposal') return null;
+  const s = await scopeFind(env, payload.id);
+  if (!s) return null;
+  if (String(s.Link_Rev || '0') !== String(payload.rev)) return null;
+  return { scopeId: payload.id, s };
+}
+// POST /scope/proposal/link {scope_id} — admin-gated. Requires Proposal_Text already set
+// (generate it first via /scope/proposal) so a customer never lands on an empty page. Minting
+// again before a revoke returns the SAME link (same rev) — safe to call repeatedly.
+async function scopeProposalLink(env, body) {
+  const id = body && body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  if (!(s.Proposal_Text || '').trim()) return json({ error: 'Generate the proposal text first (Generate proposal), then create the link.' }, 400);
+  const token = await scopeProposalLinkToken(env, id);
+  return json({ success: true, url: `${PORTAL_BASE}/scope-proposal.html?t=${encodeURIComponent(token)}` });
+}
+// ADMIN: revoke every outstanding link for one scope's proposal by bumping its rev — same
+// one-tap revoke UX as the WO share link and the AR report link.
+async function scopeProposalLinkRevoke(env, body) {
+  const id = body && body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  const next = String((parseInt(s.Link_Rev || '0', 10) || 0) + 1);
+  await updateRow(env, 'Scopes', id, { Link_Rev: next });
+  return json({ success: true, rev: next });
+}
+// PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Just
+// serves back the already-generated Proposal_Text verbatim — that text was built server-side
+// by scopeProposal() with ONLY the final customer price/deposit baked in (never cost, markup%,
+// or the vendor estimate), so there's nothing further to filter here.
+async function scopeProposalView(env, url) {
+  const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
+  if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
+  const s = auth.s;
+  let addr = ''; try { const props = await fetchTab(env, 'Properties'); const p = props.find(x => x.ID === s.Property_ID); if (p) addr = (p.Address || '') + (s.Unit_ID ? (' Unit ' + s.Unit_ID) : ''); } catch (_) {}
+  return json({ ok: true, address: addr || ('Property ' + s.Property_ID), title: s.Title || '', proposal_text: s.Proposal_Text || '', status: s.Status || '' });
 }
 
 // Brett's default hourly rate for his own (hub) time when a customer has no specific rate on
