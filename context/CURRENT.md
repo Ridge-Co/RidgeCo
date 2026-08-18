@@ -1,5 +1,12 @@
 # WHERE THINGS STAND — Aug 18, 2026
 
+## 🔧 Pricing engine extended for Brett's real markup model — code SHIPPED, config NOT YET SET (Aug 18, live). FEATURE_LOG rule 109. 🔴 Needs Brett to paste the config in.
+Brett gave his real numbers: 35% markup up to $1,000 (never less than $50), 30% from $1,001–$2,000, 25% above $2,001, an $85 admin fee only on jobs $3,000+, and 5% processing added on top of everything, never broken out as its own line. The old pricing formula couldn't express a per-tier dollar floor or a conditional admin fee, so extended it (both the Worker and the Hub's mirror, kept in sync) to support both without changing anything for configs that don't use them. Hand-verified the math against 6 sample amounts. **This is a code change only — nothing is live pricing-wise until Brett actually saves the config.** The exact JSON to paste in (Cloudflare Worker secret `PRICING_CONFIG` is the recommended spot — keeps it off the shared Sheet):
+```
+{"tiers":[[1000,0.35,50],[2000,0.30,0],[null,0.25,0]],"adminFee":85,"adminFeeThreshold":3000,"cardFeeMult":1.05,"roundTo":5}
+```
+**Verify (Brett): after saving that, re-try "Generate proposal from scope + estimate" and confirm the total looks right for a job you can do the math on by hand (e.g. a $3,500 job should land at $4,685).**
+
 ## 🔧 scope-creator "Generate proposal" fixed — always crashed on a missing pricing arg SHIPPED (Aug 18, live). FEATURE_LOG rule 108. 🔴 Needs Brett's confirm.
 Brett hit "Cannot read properties of null (reading 'finalPrice')" every time on scope-creator.html's "Generate proposal from scope + estimate" — this was never a regression, the server function was calling its own pricing-math helper with a missing argument so it could never have worked. Fixed to fetch the pricing config first and pass it through, same pattern used correctly elsewhere in the file. **Verify (Brett): on scope-creator.html, with an approved scope + saved vendor estimate, tap "Generate proposal from scope + estimate" and confirm a real proposal with a total and deposit shows up.**
 
