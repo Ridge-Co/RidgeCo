@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-18.1';
+const BUILD_VERSION = '2026-08-18.2';
 
 export default {
   async fetch(request, env) {
@@ -1411,7 +1411,14 @@ async function scopeProposal(env, body) {
   if (!estAmt || estAmt <= 0) return json({ error: 'Add the vendor estimate amount first — it is the basis for the customer price' }, 400);
   let addr = ''; try { const props = await fetchTab(env, 'Properties'); const p = props.find(x => x.ID === s.Property_ID); if (p) addr = (p.Address || '') + (s.Unit_ID ? (' Unit ' + s.Unit_ID) : ''); } catch (_) {}
   addr = addr || ('Property ' + s.Property_ID);
-  const pricing = calcTieredEstimate(estAmt); // markup applied here, server-side, never leaves this scope
+  // Bug fix (Aug 18 2026): this call was missing its 2nd arg (the pricing config), so
+  // calcTieredEstimate's own `if (!pc...) return null` guard fired EVERY time, and the
+  // .finalPrice access below threw "Cannot read properties of null" on every single
+  // proposal generation — never worked. Same fetch-and-guard pattern generateEstimateText
+  // already uses correctly a few hundred lines down.
+  const _pc = await getPricingConfig(env);
+  if (!_pc) return json({ error: 'Pricing not configured — set PRICING_CONFIG (Cloudflare secret) or the Config sheet `pricing_config` row.' }, 400);
+  const pricing = calcTieredEstimate(estAmt, _pc); // markup applied here, server-side, never leaves this scope
   const bulletsPrompt = `You are a property maintenance estimate writer. Rewrite the following scope-of-work line items into a polished, professional, scannable bulleted list for a CUSTOMER proposal. Correct typos/slang/grammar and group related items under bold category headers where sensible. Do NOT include ANY dollar amounts, costs, or pricing of any kind. Items:\n${items.map(it => `- ${(it.area ? it.area + ': ' : '') + (it.description || '')}${it.note ? (' (' + it.note + ')') : ''}`).join('\n')}\n\nReturn ONLY the rewritten scope as clean Markdown bullets — no preamble, no pricing, no other sections.`;
   let scopeText = '';
   try { scopeText = await scopeClaude(env, bulletsPrompt, null, 1200); } catch (_) { scopeText = items.map(it => '- ' + (it.description || '')).join('\n'); }
