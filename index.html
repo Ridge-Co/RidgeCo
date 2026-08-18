@@ -1021,18 +1021,24 @@ function loadPricingConfig() {
       .catch(function(){ PRICING_CFG = null; });
   } catch(e){ PRICING_CFG = null; }
 }
+// Mirrors worker.js's calcTieredEstimate EXACTLY (Aug 18 2026: added per-tier minMarkupAmt —
+// tiers[i][2], a dollar floor on the markup — and adminFeeThreshold, so adminFee only applies
+// above a cost threshold instead of on every job). Keep these two in sync.
 function calcTieredEstimate(rawCost) {
   var pc = PRICING_CFG;
   if (!pc || !pc.tiers || !pc.tiers.length) return null;
   var cost = parseFloat(rawCost) || 0;
-  var pct = pc.tiers[pc.tiers.length-1][1];
-  for (var i=0;i<pc.tiers.length;i++){ var t=pc.tiers[i]; if (t[0]===null || cost<=t[0]) { pct=t[1]; break; } }
-  var round = pc.roundTo || 5, fee = (pc.cardFeeMult!=null?pc.cardFeeMult:1), admin = pc.adminFee || 0;
-  var stepA = cost * (1 + pct);
+  var tier = pc.tiers[pc.tiers.length-1];
+  for (var i=0;i<pc.tiers.length;i++){ var t=pc.tiers[i]; if (t[0]===null || cost<=t[0]) { tier=t; break; } }
+  var pct = tier[1], minMarkup = tier[2] || 0;
+  var markup = Math.max(cost * pct, minMarkup);
+  var round = pc.roundTo || 5, fee = (pc.cardFeeMult!=null?pc.cardFeeMult:1);
+  var admin = (cost >= (pc.adminFeeThreshold || 0)) ? (pc.adminFee || 0) : 0;
+  var stepA = cost + markup;
   var stepB = stepA + admin;
   var stepC = stepB * fee;
   var finalPrice = Math.ceil(stepC / round) * round;
-  return { finalPrice: finalPrice, deposit: finalPrice / 2, markupPct: pct };
+  return { finalPrice: finalPrice, deposit: finalPrice / 2, markupPct: pct, markupAmt: markup };
 }
 // ── TRADES ───────────────────────────────────────────────────
 // One list, rendered everywhere. There were four hardcoded copies and they had drifted:

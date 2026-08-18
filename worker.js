@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-18.2';
+const BUILD_VERSION = '2026-08-18.3';
 
 export default {
   async fetch(request, env) {
@@ -2449,8 +2449,11 @@ async function addEstimateVersion(env, body) {
 // rounding) are CONFIDENTIAL and live ONLY in a private store — the Cloudflare secret
 // `PRICING_CONFIG` (JSON) or the private Config-sheet row `pricing_config`. They are never
 // in this public repo. Shape:
-//   { "tiers": [[<maxCost>,<markupPct>], ..., [null,<markupPct>]],  // brackets low→high; null = "and above"
-//     "adminFee": <n>, "cardFeeMult": <n>, "itemizedHourly": <n>, "itemizedMinFee": <n>,
+//   { "tiers": [[<maxCost>,<markupPct>,<minMarkupAmt?>], ..., [null,<markupPct>,<minMarkupAmt?>]],
+//     // brackets low→high; null maxCost = "and above"; minMarkupAmt (optional, default 0) is a
+//     // per-tier floor on the DOLLAR markup, e.g. 35% with a $50 minimum on small jobs.
+//     "adminFee": <n>, "adminFeeThreshold": <n>,  // adminFee only applies when rawCost >= this (default 0 = always)
+//     "cardFeeMult": <n>, "itemizedHourly": <n>, "itemizedMinFee": <n>,
 //     "onsiteHourly": <n>, "onsiteMinFee": <n>, "passThroughFlat": <n>, "roundTo": <n> }
 // Unset → null → pricing SUGGESTIONS/estimates are dormant; manual invoicing still works.
 async function getPricingConfig(env) {
@@ -2459,14 +2462,24 @@ async function getPricingConfig(env) {
   return null;
 }
 // Pure, config-driven — no constants baked in. Returns null if pricing isn't configured.
+// Aug 18 2026: added per-tier minMarkupAmt (dollar floor on markup, e.g. Brett's "$50 minimum"
+// on the up-to-$1000 tier) and adminFeeThreshold (admin fee only kicks in above a cost
+// threshold, e.g. "$85 admin on $3000+" — previously adminFee applied unconditionally to
+// every job, which nothing had actually shipped with yet since PRICING_CONFIG had never been
+// set). Neither changes behavior for a tier/config that doesn't use them (minMarkupAmt/
+// adminFeeThreshold both default to 0, i.e. "no floor" / "always applies", matching the old
+// formula exactly) — this mirror MUST stay in sync with index.html's copy of this function.
 function calcTieredEstimate(rawCost, pc) {
   if (!pc || !Array.isArray(pc.tiers) || !pc.tiers.length) return null;
   const cost = parseFloat(rawCost) || 0;
-  let pct = pc.tiers[pc.tiers.length-1][1];
-  for (const t of pc.tiers) { if (t[0] === null || cost <= t[0]) { pct = t[1]; break; } }
-  const round = pc.roundTo || 5, fee = (pc.cardFeeMult != null ? pc.cardFeeMult : 1), admin = pc.adminFee || 0;
-  const stepA=cost*(1+pct), stepB=stepA+admin, stepC=stepB*fee, finalPrice=Math.ceil(stepC/round)*round, deposit=finalPrice/2;
-  return { rawCost:cost, markupPct:pct, stepA:+stepA.toFixed(2), stepB:+stepB.toFixed(2), stepC:+stepC.toFixed(2), finalPrice:+finalPrice.toFixed(2), deposit:+deposit.toFixed(2) };
+  let tier = pc.tiers[pc.tiers.length-1];
+  for (const t of pc.tiers) { if (t[0] === null || cost <= t[0]) { tier = t; break; } }
+  const pct = tier[1], minMarkup = tier[2] || 0;
+  const markup = Math.max(cost * pct, minMarkup);
+  const round = pc.roundTo || 5, fee = (pc.cardFeeMult != null ? pc.cardFeeMult : 1);
+  const admin = (cost >= (pc.adminFeeThreshold || 0)) ? (pc.adminFee || 0) : 0;
+  const stepA=cost+markup, stepB=stepA+admin, stepC=stepB*fee, finalPrice=Math.ceil(stepC/round)*round, deposit=finalPrice/2;
+  return { rawCost:cost, markupPct:pct, markupAmt:+markup.toFixed(2), stepA:+stepA.toFixed(2), stepB:+stepB.toFixed(2), stepC:+stepC.toFixed(2), finalPrice:+finalPrice.toFixed(2), deposit:+deposit.toFixed(2) };
 }
 
 // ── LOCATION / CLUSTER ───────────────────────────────────────
