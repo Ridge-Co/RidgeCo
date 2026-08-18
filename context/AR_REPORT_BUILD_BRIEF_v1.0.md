@@ -1,0 +1,47 @@
+# Weekly Open Item Report — Build Brief v1.0
+**Built:** Aug 18, 2026 session. **Status:** Code shipped to `main`; DORMANT until Brett completes the Gmail OAuth prerequisite and opts in customers. No live send has happened yet.
+
+## What Brett asked for
+Automate sending an open-item (AR aging) report to clients: weekly, only when there's actually something open, with a manual "by customer with sub-customers" trigger, and — if possible — a direct link into each invoice from that report.
+
+## Decisions locked (in order asked)
+1. **Cadence:** fully automatic weekly send, no tap required once a customer is opted in.
+2. **Report body + delivery:** a real combined report we build ourselves (not QuickBooks' own single-invoice email), sent via the Gmail API from `ridgecomaintenance@gmail.com`.
+3. **Invoice link:** our own hosted page, not a dependency on QuickBooks exposing a customer pay-link (see "InvoiceLink" note below).
+4. **Recipients:** opt-in list Brett curates in the Hub — nobody is auto-emailed by default.
+5. **Eligibility threshold** (added after initial plan): a customer is due a report once their rolled-up open balance hits **$75**, OR their oldest open invoice has been open **more than 10 days** — whichever trips first. Prevents a stale small balance from going unreported forever just because it never crosses the dollar floor.
+6. **Payment options on the page, v1:** QuickBooks Payments only (already on). Venmo/CashApp/PayPal.me deep-links and a cheaper-ACH processor (Zelle via M&T, Stripe ACH) are parked for a later round — Brett is checking with M&T on Zelle-for-Business eligibility on a regular (non-Treasury) business account.
+
+## Architecture
+- **Rollup engine** (`buildArReportGroups`, pure function, worker.js): walks each open invoice's `CustomerRef` up its QuickBooks `ParentRef` chain to the top-level customer (Ridge Co's existing Owner → Property → Unit hierarchy), combining balances from every sub-customer into one group per Owner. Tested standalone in `test/ar-report-core.test.mjs` (14 assertions: threshold rules, multi-sub-customer rollup, 3-level hierarchy, paid invoices excluded).
+- **`arReportRollup(env, opts)`** — live wrapper: pulls open invoices + the QuickBooks customer list, runs the rollup, and matches each group's root QB customer id against `Owners.QBO_Customer_ID` to find the local Owner record. A group with no local match is shown in the admin tool (flagged "not linked") but can never be opted in or sent — there's nowhere to hang a revocable link or an opt-in row.
+- **Admin endpoints** (`WORKER_SECRET`-gated): `GET /ar/report/preview` (optionally `?customer_id=`), `POST /ar/report/send` `{owner_ids, preview}` (preview-first, same pattern as `/ar/remind`), `POST /ar/report/opt-in` `{owner_id, enabled}`, `POST /ar/report/revoke` `{owner_id}`.
+- **Customer link — no new token-storage table.** Reused the exact HMAC-off-`WORKER_SECRET` scheme the Shareable Work Order (B-117) already proved out: a signed token `{scope:'ar-report', owner, rev}`, 120-day TTL. Revoke = bump the new `Owners.AR_Report_Rev` column (auto-added via `ensureColumns`); a token whose `rev` no longer matches is dead. This is why there's no `Invoice_Links` sheet tab in this build — the original plan sketch — the token IS the link, and the Owner row already exists to anchor its revocation counter.
+- **Customer-facing endpoints** (PUBLIC, self-verify the token, no `WORKER_SECRET`): `GET /ar-report/view?t=` (live re-pull from QuickBooks — never trusts the balance baked into the original email) and `POST /ar-report/pay-link {t, invoice_id}`.
+- **Pay-link security:** before doing anything, re-derives the invoice's own root customer from QuickBooks and confirms it matches the token's owner — a valid link for one customer can never touch another customer's invoice by guessing an id.
+- **Pay-link mechanism (needs one live check — see Open Items):** if the fetched invoice carries QuickBooks' `InvoiceLink` field, the customer is redirected straight to QuickBooks' own hosted pay page. If not (this field is inconsistent across QBO accounts depending on Online Invoicing/Payments settings, and hasn't been confirmed live against Brett's company), it falls back to triggering QuickBooks' own invoice resend — the exact proven mechanism `/ar/remind` already uses — so the customer gets a real, working pay link by email instead. Either way the customer always gets a working path to pay; the difference is one click vs. checking email again.
+- **Email send** (`gmailSendEmail`/`gmailAccessToken`, B-210): real Gmail API implementation — OAuth refresh-token exchange, `users.messages.send` with a base64url RFC822 message. Deliberately **fails loud** (throws a specific error) when `GMAIL_CLIENT_ID`/`GMAIL_CLIENT_SECRET`/`GMAIL_REFRESH_TOKEN` aren't set, unlike the internal digest's silent stub — this is a real customer-facing send path, so a misconfiguration must surface in the send result, never look like "nothing to send."
+- **Weekly cron:** `runWeeklyArReport(env)`, wired to a new Cloudflare Cron Trigger `0 13 * * 1` (Monday 13:00 UTC / 9am EDT, an hour after the daily digest slot — added to `wrangler.toml`). Gated by Config key `ar_report_enabled` (default unset/FALSE — dormant, same safe-by-design pattern as `digest_enabled`). Reads `AR_Report_OptIn`, sends to every opted-in owner whose group is currently eligible, logs every attempt.
+- **New sheet tabs** (self-provisioning via `ensureTab`, same pattern as `AR_Reminders`): `AR_Report_Log` (audit trail — timestamp, owner, email, total, invoice count, link, result, trigger) and `AR_Report_OptIn` (owner_id, enabled, updated_at/by).
+- **New pages:** `ar-report.html` (customer-facing, no login, token in URL, styled to match `customer.html`'s visual system — lists open invoices with amount/due date/linked WO description, a Pay Now button per invoice) and `ar-report-admin.html` (Hub tool page, same pattern as `receipt-reconciler.html`/`vendor-reconcile.html` — lists every customer with an open balance, eligibility flag + reason, weekly-auto-send checkbox, "Send now" with preview-then-confirm). Linked from Hub → Dev Log → 🧰 TOOLS → 💵 MONEY & QUICKBOOKS as **📋 Open Item Report**.
+
+## Open items — nothing is live yet
+1. **🔴 Gmail OAuth setup — only Brett can do this.** Create the OAuth client + refresh token for `ridgecomaintenance@gmail.com` (~15 min, at a computer, not on the phone). Set the resulting values as Cloudflare Worker secrets: `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_SENDER=ridgecomaintenance@gmail.com`. Until these are set, any send attempt fails loud with a clear "Gmail not configured" error — nothing silently no-ops.
+2. **🔴 Live-verify the QuickBooks `InvoiceLink` field** against a real invoice in Brett's company before trusting the instant-redirect path. If it's never present on this account, the fallback (resend → email pay link) becomes the only path in practice — still fully functional, just always a two-step (click Pay → check email) instead of sometimes one-step.
+3. **Opt in the first customers.** Nobody gets an automatic weekly email until Brett checks them in `ar-report-admin.html`. Recommend starting with Goldszmidt (the example that prompted this build) as the first live test via "Send now" (manual, preview-first) before turning on the weekly cron for anyone.
+4. **Turn on the weekly cron** by setting Config `ar_report_enabled=TRUE` once satisfied with manual sends. Until then the cron fires every Monday and no-ops (logged as `dormant`).
+5. **WO photo enrichment was scoped out of v1.** The report page shows the linked work order's *description* (via `Invoice_Review.QB_Invoice_ID → WO_ID → Work_Orders.Description`) but not its photos — full photo-gallery integration was judged out of scope for this build to keep it shippable; flagged here rather than silently dropped, can be added as a follow-up.
+6. **Payment options beyond QuickBooks Payments** (Venmo/CashApp/PayPal.me deep-links, Zelle via M&T, Stripe ACH) — researched (see chat), parked per Brett's "for now" call. M&T Zelle-for-Business eligibility on a regular (non-Treasury) business checking account is unconfirmed — needs a direct call to M&T business banking.
+7. **Two pre-existing test failures, unrelated to this build** — `test/pricing-model.test.mjs` and `test/scope-core.test.mjs` both fail on `main` before this session's changes too (confirmed via `git stash`). Not introduced by this build; worth a look in a future session.
+
+## Payment processor rates researched this session (for the later round)
+| Method | Rate to receive | Source |
+|---|---|---|
+| QuickBooks Payments — ACH | 1%, no cap found on current pricing | quickbooks.intuit.com/payments/payment-rates |
+| QuickBooks Payments — invoiced card | 2.99% (keyed 3.5%, swiped/tap 2.5%) | same |
+| PayPal Invoicing — Pay by Bank (ACH) | 1%, capped at $10/transaction | paypal.com/us/business/paypal-business-fees |
+| PayPal Invoicing — card | 2.99% + $0.49 | same |
+| Venmo Business Profile | 1.9% + $0.10 (QR/direct); 2.9% + $0.09 (Tap to Pay) | venmo.com/business/profiles |
+| Cash App for Business | ~2.75% (multiple current secondary sources; not independently confirmed on cash.app directly) | — |
+| Stripe ACH Direct Debit | 0.8%, capped at $5 — cheapest ACH found, not currently in the stack | stripe.com/payments/us-bank-debits |
+| Zelle | Typically $0 to receive if the bank offers Zelle for Business specifically — bank-dependent, M&T unconfirmed | zelle.com, mtb.com |

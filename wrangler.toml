@@ -19,8 +19,11 @@ workers_dev = true
 # max issue-detection lag from 7 days to ~3.5. The scheduled() handler branches on
 # event.cron and runs runWeeklyReview for BOTH the Monday and Wednesday crons; each reads
 # Ops_Telemetry, ranks a proposal, logs to Ops_Review_Log, and delivers only if digest_enabled=TRUE.
+# Weekly Open Item Report (Aug 18 session) — Monday 13:00 UTC (9am EDT/8am EST), an hour after
+# the daily digest slot. Dormant until Config ar_report_enabled=TRUE AND AR_Report_OptIn has
+# rows — see runWeeklyArReport in worker.js.
 [triggers]
-crons = ["0 11 * * *", "0 12 * * 1", "0 12 * * 3"]
+crons = ["0 11 * * *", "0 12 * * 1", "0 12 * * 3", "0 13 * * 1"]
 
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 

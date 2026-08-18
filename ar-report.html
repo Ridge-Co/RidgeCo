@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ridge Co — Open Balance Summary</title>
+<style>
+:root{
+  --bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;
+  --text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;
+  --danger:#b42318;--warn:#b45309;--info:#1d4ed8;
+  --radius:8px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;min-height:100vh;}
+.app-header{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;gap:10px;}
+.logo-text{color:var(--accent);font-size:1rem;letter-spacing:.15em;font-weight:bold;}
+.main{padding:20px 16px 60px;max-width:560px;margin:0 auto;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;}
+.total-card{text-align:center;}
+.total-label{color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;}
+.total-amt{font-size:2rem;font-weight:bold;color:var(--text);}
+.as-of{color:var(--muted);font-size:11px;margin-top:6px;}
+.inv-row{border-bottom:1px solid var(--border);padding:14px 0;}
+.inv-row:last-child{border-bottom:none;}
+.inv-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
+.inv-doc{font-weight:bold;font-size:13px;}
+.inv-amt{font-weight:bold;font-size:15px;}
+.inv-due{color:var(--muted);font-size:11px;margin-top:2px;}
+.inv-due.overdue{color:var(--danger);}
+.inv-desc{color:var(--muted);font-size:12px;margin-top:8px;line-height:1.5;}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;letter-spacing:.03em;padding:10px 16px;cursor:pointer;width:100%;margin-top:10px;}
+.btn:disabled{opacity:.5;cursor:not-allowed;}
+.btn-small{width:auto;padding:8px 14px;font-size:12px;margin-top:10px;}
+.msg{margin:12px 0;padding:12px 14px;border-radius:6px;font-size:12px;line-height:1.6;}
+.msg.error{background:#fdecea;border:1px solid var(--danger);color:var(--danger);}
+.msg.success{background:#eaf6ee;border:1px solid var(--accent2);color:var(--accent2);}
+.msg.info{background:#e8f0fb;border:1px solid var(--info);color:var(--info);}
+.loading{text-align:center;color:var(--muted);padding:60px 20px;}
+.footer-note{text-align:center;color:var(--muted);font-size:11px;margin-top:20px;line-height:1.6;}
+.hidden{display:none;}
+</style>
+</head>
+<body>
+
+<div class="app-header">
+  <span class="logo-text">RIDGE CO</span>
+</div>
+
+<div class="main">
+  <div id="loading" class="loading">Loading your account…</div>
+  <div id="content" class="hidden"></div>
+</div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var params = new URLSearchParams(window.location.search);
+var TOKEN = params.get('t') || '';
+
+function esc(s){ var d=document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; }
+function money(n){ return '$' + (Number(n)||0).toFixed(2); }
+
+function payLink(invoiceId, btn){
+  btn.disabled = true; btn.textContent = 'Working…';
+  fetch(WORKER + '/ar-report/pay-link', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ t: TOKEN, invoice_id: invoiceId })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (d.error){ btn.disabled = false; btn.textContent = 'Pay Now'; alert(d.message || 'Something went wrong — please try again or contact Ridge Co.'); return; }
+    if (d.paid){ btn.textContent = 'Already Paid'; return; }
+    if (d.redirect){ window.location.href = d.redirect; return; }
+    if (d.sent_to_email){ btn.textContent = 'Check Your Email'; btn.disabled = true;
+      var note = document.createElement('div'); note.className = 'msg info';
+      note.textContent = 'A secure payment link has been sent to ' + d.email + '.';
+      btn.parentNode.appendChild(note);
+      return;
+    }
+    btn.disabled = false; btn.textContent = 'Pay Now';
+  }).catch(function(){ btn.disabled = false; btn.textContent = 'Pay Now'; alert('Network error — please try again.'); });
+}
+
+function render(d){
+  document.getElementById('loading').classList.add('hidden');
+  var el = document.getElementById('content');
+  el.classList.remove('hidden');
+
+  if (!d.invoices || !d.invoices.length){
+    el.innerHTML = '<div class="card"><h2>Hi ' + esc(d.owner_name) + '</h2>'
+      + '<div class="msg success">' + esc(d.message || 'No open balance right now — thank you!') + '</div></div>';
+    return;
+  }
+
+  var html = '<div class="card total-card">'
+    + '<div class="total-label">Total Open Balance</div>'
+    + '<div class="total-amt">' + money(d.total_open) + '</div>'
+    + '<div class="as-of">as of ' + esc(d.as_of) + '</div>'
+    + '</div>';
+
+  html += '<div class="card"><h3 style="margin-bottom:6px;">Hi ' + esc(d.owner_name) + '</h3>'
+    + '<p style="color:var(--muted);font-size:12px;">Here are your currently open invoices with Ridge Co.</p></div>';
+
+  d.invoices.forEach(function(inv){
+    var overdue = inv.age_days > 0;
+    html += '<div class="card inv-row" style="border-bottom:none;">'
+      + '<div class="inv-top"><div class="inv-doc">' + esc(inv.doc || ('#' + inv.id)) + '</div><div class="inv-amt">' + money(inv.balance) + '</div></div>'
+      + '<div class="inv-due' + (overdue ? ' overdue' : '') + '">' + (inv.due ? ('Due ' + esc(inv.due) + (overdue ? ' — ' + inv.age_days + ' days past due' : '')) : '') + '</div>'
+      + (inv.wo_description ? '<div class="inv-desc">' + esc(inv.wo_description) + '</div>' : '')
+      + '<button class="btn btn-small" onclick="payLink(\'' + esc(inv.id) + '\', this)">Pay Now</button>'
+      + '</div>';
+  });
+
+  html += '<div class="footer-note">Questions about any of these invoices? Reply to the email this link came from, or contact Ridge Co directly.</div>';
+  el.innerHTML = html;
+}
+
+if (!TOKEN){
+  document.getElementById('loading').classList.add('hidden');
+  document.getElementById('content').classList.remove('hidden');
+  document.getElementById('content').innerHTML = '<div class="card"><div class="msg error">This link is missing its access code. Please use the link from your email, or contact Ridge Co for a current statement.</div></div>';
+} else {
+  fetch(WORKER + '/ar-report/view?t=' + encodeURIComponent(TOKEN))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d.error){
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('content').classList.remove('hidden');
+        document.getElementById('content').innerHTML = '<div class="card"><div class="msg error">' + esc(d.message || 'This link is invalid or has expired.') + '</div></div>';
+        return;
+      }
+      render(d);
+    })
+    .catch(function(){
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('content').classList.remove('hidden');
+      document.getElementById('content').innerHTML = '<div class="card"><div class="msg error">Could not load your account right now. Please try again shortly.</div></div>';
+    });
+}
+</script>
+</body>
+</html>

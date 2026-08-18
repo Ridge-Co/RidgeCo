@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Open Item Report</title>
+<style>
+  :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--warn:#fbbf24;--info:#1d4ed8;--radius:6px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;padding:20px;max-width:1050px;margin:0 auto;}
+  h1{color:var(--accent);font-size:1.1rem;letter-spacing:0.12em;margin-bottom:4px;}
+  p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;line-height:1.5;}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
+  .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
+  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+  .btn.green{background:var(--accent2);color:#fff;}
+  .btn.small{padding:5px 10px;font-size:11px;}
+  input,select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
+  .row label{color:var(--muted);font-size:11px;min-width:100px;}
+  .ok{color:var(--accent2);}.err{color:var(--danger);}.info{color:var(--muted);}.warn{color:#9a6b00;}
+  .empty{padding:20px;text-align:center;color:var(--muted);}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;white-space:nowrap;font-weight:bold;}
+  .pill.eligible{background:#eaf6ee;color:var(--accent2);}
+  .pill.below{background:#f3f5f8;color:var(--muted);}
+  .pill.optin{background:#e8f0fb;color:var(--info);}
+  .card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px;}
+  .c-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:6px;flex-wrap:wrap;}
+  .c-title{font-size:13px;font-weight:bold;}
+  .c-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+  .c-amt{font-size:16px;font-weight:bold;}
+  .c-inv{font-size:11px;color:var(--muted);margin:6px 0;line-height:1.6;}
+  .c-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:8px;margin-top:8px;}
+  .c-status{font-size:11px;min-height:14px;}
+  label.chk{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text);cursor:pointer;}
+  .preview-box{background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:10px;margin-top:8px;font-size:11px;}
+</style>
+</head>
+<body>
+<h1>📋 RIDGE CO — OPEN ITEM REPORT</h1>
+<p class="sub">
+  Rolls open QuickBooks invoices up to the parent customer (sub-customers/properties included).
+  A customer is <b>eligible</b> once their open total hits $75 or their oldest open invoice passes
+  10 days — whichever comes first. Toggle <b>Weekly auto-send</b> to add/remove a customer from the
+  Monday morning automatic report; nobody is auto-emailed until they're checked here. "Send now"
+  always previews first — nothing goes out until you confirm.
+</p>
+
+<div class="section">
+  <div class="section-title">Connection</div>
+  <div class="row"><label>Worker URL</label><input id="worker-url" value="https://maintenance-hub.brett-2f8.workers.dev" style="flex:1"></div>
+  <div class="row"><label>Admin token</label><input id="auth-token" type="password" placeholder="paste if not remembered" style="flex:1"></div>
+  <div class="row">
+    <button class="btn" onclick="loadAll()">↻ Refresh</button>
+    <span id="conn-status" style="font-size:11px;color:var(--muted)"></span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Customers with an open balance</div>
+  <div id="list"><div class="empty">Loading…</div></div>
+</div>
+
+<script>
+let optInIds = [];
+let allGroups = [];
+
+function worker(){ return document.getElementById('worker-url').value.trim(); }
+function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
+(function(){ const t = localStorage.getItem('mh_auth'); if(t){ document.getElementById('auth-token').value = t; } })();
+document.getElementById('auth-token').addEventListener('change', e => localStorage.setItem('mh_auth', e.target.value.trim()));
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function money(n){ return '$' + (Number(n)||0).toFixed(2); }
+
+async function get(path){
+  const r = await fetch(worker()+path, { headers:{'X-Auth-Token':token()} });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
+  return data;
+}
+async function post(path, body){
+  const r = await fetch(worker()+path, { method:'POST', headers:{'X-Auth-Token':token(),'Content-Type':'application/json'}, body: JSON.stringify(body||{}) });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
+  if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
+  if (!r.ok && !data.error) throw new Error('HTTP '+r.status);
+  return data;
+}
+
+async function loadAll(){
+  document.getElementById('conn-status').textContent = 'Loading…';
+  document.getElementById('list').innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const [preview, optin] = await Promise.all([get('/ar/report/preview'), get('/ar/report/opt-in')]);
+    if (preview.error) throw new Error(preview.error);
+    allGroups = preview.groups || [];
+    optInIds = (optin.opt_in || []).map(String);
+    document.getElementById('conn-status').textContent = allGroups.length + ' customer(s) with an open balance, ' + preview.eligible_count + ' eligible.';
+    render();
+  } catch(e){
+    document.getElementById('conn-status').textContent = 'Error: ' + e.message;
+    document.getElementById('list').innerHTML = '<div class="empty err">' + esc(e.message) + '</div>';
+  }
+}
+
+function render(){
+  const list = document.getElementById('list');
+  if (!allGroups.length){ list.innerHTML = '<div class="empty">No open invoices right now.</div>'; return; }
+  list.innerHTML = allGroups.map(g => {
+    const isOptIn = optInIds.includes(String(g.owner_id));
+    const linked = g.linked;
+    const invLines = g.invoices.slice(0,6).map(i => esc(i.doc || ('#'+i.id)) + ' · ' + money(i.balance) + ' · ' + (i.age_days>0 ? i.age_days+'d overdue' : 'due '+esc(i.due))).join('<br>');
+    return '<div class="card" data-owner="' + esc(g.owner_id||g.root_qb_id) + '">'
+      + '<div class="c-top">'
+      +   '<div><div class="c-title">' + esc(g.owner_name || g.root_name) + '</div>'
+      +   '<div class="c-sub">' + g.invoices.length + ' open invoice(s)' + (linked ? '' : ' — ⚠ not linked to a local Owner record, cannot send') + '</div></div>'
+      +   '<div class="c-amt">' + money(g.total_open) + '</div>'
+      + '</div>'
+      + '<span class="pill ' + (g.eligible?'eligible':'below') + '">' + (g.eligible ? ('eligible · ' + g.reason) : 'below threshold') + '</span> '
+      + (isOptIn ? '<span class="pill optin">weekly auto-send ON</span>' : '')
+      + '<div class="c-inv">' + invLines + '</div>'
+      + '<div class="c-foot">'
+      +   (linked ? ('<label class="chk"><input type="checkbox" ' + (isOptIn?'checked':'') + ' onchange="toggleOptIn(\'' + esc(g.owner_id) + '\', this.checked)"> Weekly auto-send</label>') : '<span></span>')
+      +   (linked ? ('<button class="btn small" onclick="sendOne(\'' + esc(g.owner_id) + '\', this)">Send now</button>') : '')
+      + '</div>'
+      + '<div class="c-status"></div>'
+      + '</div>';
+  }).join('');
+}
+
+async function toggleOptIn(ownerId, enabled){
+  try { await post('/ar/report/opt-in', { owner_id: ownerId, enabled }); await loadAll(); }
+  catch(e){ alert('Could not update: ' + e.message); }
+}
+
+async function sendOne(ownerId, btn){
+  const card = btn.closest('.card');
+  const status = card.querySelector('.c-status');
+  btn.disabled = true;
+  status.className = 'c-status info'; status.textContent = 'Previewing…';
+  try {
+    const prev = await post('/ar/report/send', { owner_ids: [ownerId], preview: true });
+    const item = (prev.results||[])[0];
+    if (!item || !item.willSend){
+      status.className = 'c-status err'; status.textContent = 'Cannot send: ' + (item ? item.reason : 'unknown');
+      btn.disabled = false; return;
+    }
+    if (!confirm('Send open item report to ' + item.email + ' — ' + money(item.total_open) + ' across ' + item.invoice_count + ' invoice(s)?')){
+      status.textContent = ''; btn.disabled = false; return;
+    }
+    status.textContent = 'Sending…';
+    const real = await post('/ar/report/send', { owner_ids: [ownerId], preview: false, trigger: 'manual' });
+    const r = (real.results||[])[0];
+    if (r && r.sent){ status.className = 'c-status ok'; status.textContent = '✓ Sent to ' + r.email; }
+    else { status.className = 'c-status err'; status.textContent = 'Failed: ' + (r ? r.reason : 'unknown error'); }
+  } catch(e){ status.className = 'c-status err'; status.textContent = 'Error: ' + e.message; }
+  btn.disabled = false;
+}
+
+loadAll();
+</script>
+</body>
+</html>
