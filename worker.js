@@ -42,7 +42,10 @@ export default {
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
       // last-4-of-phone gate + per-WO lockout live INSIDE these handlers, not here.
-      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/receipt','/wo/shared/note'];
+      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/receipt','/wo/shared/note',
+      // Weekly Open Item Report link (Aug 18 session): same pattern — public at the gate, but
+      // every handler self-verifies a signed ar-report share token before doing anything.
+      '/ar-report/view','/ar-report/pay-link'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -164,6 +167,9 @@ export default {
         if (path === '/ops-review-log')         return await opsReviewLogRead(env, url);
         if (path === '/ar/aging')               return await arAging(env, url);
         if (path === '/ar/invoices')            return await arInvoices(env, url);
+        if (path === '/ar/report/preview')      return await arReportPreview(env, url);
+        if (path === '/ar/report/opt-in')       return await arReportOptInRead(env, url);
+        if (path === '/ar-report/view')         return await arReportView(env, url);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
@@ -285,6 +291,10 @@ export default {
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
+        if (path === '/ar/report/send')           return await arReportSend(env, body);
+        if (path === '/ar/report/opt-in')         return await arReportSetOptIn(env, body);
+        if (path === '/ar/report/revoke')         return await arReportRevoke(env, body);
+        if (path === '/ar-report/pay-link')       return await arReportPayLink(env, body);
         if (path === '/ops-approve')              return await opsApprove(env, body);
         if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
@@ -364,6 +374,13 @@ export default {
     // Mid-week (Wed) run added per greenlit ID-1 to halve max issue-detection lag (7d → ~3.5d).
     if (cron === '0 12 * * 1' || cron === '0 12 * * 3') {
       try { await runWeeklyReview(env, { deliver: true, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
+      return;
+    }
+    // Weekly Open Item Report (Aug 18 session) — Monday 13:00 UTC (9am EDT/8am EST), one hour
+    // after the daily digest slot so it never collides. Fully dormant until Brett sets Config
+    // ar_report_enabled=TRUE AND adds owners to AR_Report_OptIn — see runWeeklyArReport.
+    if (cron === '0 13 * * 1') {
+      try { await runWeeklyArReport(env); } catch (e) { /* non-fatal */ }
       return;
     }
     // Daily digest (existing) — 11:00 UTC. Now self-instruments a telemetry row so the
@@ -4421,6 +4438,359 @@ async function arRemind(env, body) {
     } catch (e) { items.push({ id, doc, customer: cust, balance: +bal.toFixed(2), email, willSend: true, sent: false, reason: String((e && e.message) || e).slice(0, 150) }); }
   }
   return json({ ok: true, preview, count: items.length, to_send: items.filter(i => i.willSend).length, sent: items.filter(i => i.sent).length, skipped: items.filter(i => !i.willSend).length, items });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  WEEKLY OPEN ITEM REPORT  (Aug 18 session — Brett's "automate the open-item report" ask)
+//  Rolls open invoices up from sub-customer (property) to top-level parent (Owner), the same
+//  Owner/Property/Job hierarchy QuickBooks already carries (ParentRef/Level, read by
+//  qbListEntities). Eligibility = $75+ open, OR the oldest invoice in the group has been open
+//  more than 10 days — whichever trips first, so a small balance doesn't sit unreported forever.
+//  Two send paths share one core (arReportSend): the admin "Send Open Item Report" button
+//  (preview-first, any owner) and the weekly cron (fully automatic, opted-in owners only,
+//  gated by Config ar_report_enabled — dormant until Brett flips it on, same pattern as the
+//  daily digest). The customer-facing link reuses the exact HMAC-signed-token pattern the
+//  Shareable Work Order (B-117) already proved out — {scope:'ar-report', owner, rev} off
+//  WORKER_SECRET, revocable by bumping Owners.AR_Report_Rev — no new token-storage table needed.
+// ══════════════════════════════════════════════════════════════
+const AR_REPORT_FLOOR = 75;
+const AR_REPORT_AGE_DAYS = 10;
+const AR_REPORT_LINK_TTL = 60 * 60 * 24 * 120; // 120 days — outlives several weekly cycles; revoke any time
+const AR_REPORT_LOG_TAB = 'AR_Report_Log';
+const AR_REPORT_LOG_COLS = ['ID', 'Timestamp', 'Owner_ID', 'Owner_Name', 'Email', 'Total_Open', 'Invoice_Count', 'Link', 'Result', 'Trigger'];
+const AR_OPTIN_TAB = 'AR_Report_OptIn';
+const AR_OPTIN_COLS = ['ID', 'Owner_ID', 'Owner_Name', 'Enabled', 'Updated_At', 'Updated_By'];
+
+// PURE — rolls open invoices up from sub-customer to their top-level parent (Owner in Ridge
+// Co's QuickBooks structure), and flags which rolled-up groups are due a report. Kept pure +
+// exported by name so it's unit-testable without QuickBooks (mirrors classifyArInvoice).
+// custById: { [qbCustomerId]: { id, name, parent_id, level } }
+function buildArReportGroups(invoices, custById, now) {
+  const groups = {};
+  for (const inv of invoices) {
+    const bal = Number(inv.Balance) || 0;
+    if (bal <= 0.005) continue;
+    const custId = (inv.CustomerRef && String(inv.CustomerRef.value)) || '';
+    const custName = (inv.CustomerRef && inv.CustomerRef.name) || 'Unknown';
+    // Walk ParentRef up to the top-level customer — the billing parent (Owner) a rolled-up
+    // report groups under, even when the invoice itself sits on a sub-customer several levels down.
+    let rootId = custId, rootName = custName, hops = 0;
+    while (custById[rootId] && custById[rootId].parent_id && hops < 10) {
+      rootId = custById[rootId].parent_id;
+      rootName = custById[rootId] ? custById[rootId].name : rootName;
+      hops++;
+    }
+    const due = inv.DueDate || inv.TxnDate || '';
+    const dueT = Date.parse(due);
+    const ageDays = isNaN(dueT) ? 0 : Math.floor((now - dueT) / 86400000);
+    const g = (groups[rootId] = groups[rootId] || { root_qb_id: rootId, root_name: rootName, total_open: 0, oldest_days: 0, invoices: [] });
+    g.total_open += bal;
+    if (ageDays > g.oldest_days) g.oldest_days = ageDays;
+    g.invoices.push({ id: inv.Id, doc: inv.DocNumber || '', customer: custName, balance: +bal.toFixed(2), due, age_days: ageDays });
+  }
+  return Object.values(groups).map(g => {
+    g.total_open = +g.total_open.toFixed(2);
+    g.invoices.sort((a, b) => b.age_days - a.age_days);
+    const overFloor = g.total_open >= AR_REPORT_FLOOR;
+    const overAge = g.oldest_days > AR_REPORT_AGE_DAYS;
+    g.eligible = overFloor || overAge;
+    g.reason = overFloor && overAge ? 'floor+aged' : overFloor ? 'floor' : overAge ? 'aged' : 'below threshold';
+    return g;
+  });
+}
+
+// qbCustomerId -> local Owners row, for every Owner that has a QBO_Customer_ID on file.
+async function arQboOwnerMap(env) {
+  const owners = await fetchTab(env, 'Owners');
+  const map = {};
+  for (const o of owners) { const q = (o.QBO_Customer_ID || '').trim(); if (q) map[q] = o; }
+  return map;
+}
+
+// Live QuickBooks pull + rollup + local Owner match. opts.customer_id filters to one owner
+// (by Owners.ID) — used by both the single-customer preview and the token-gated view page.
+async function arReportRollup(env, opts) {
+  opts = opts || {};
+  const token = await qbAccessToken(env);
+  const q = "SELECT Id,DocNumber,TxnDate,DueDate,TotalAmt,Balance,CustomerRef FROM Invoice ORDERBY TxnDate DESC MAXRESULTS 1000";
+  const r = await qbApi(env, `query?query=${encodeURIComponent(q)}&minorversion=73`, 'GET', null, token);
+  if (r && r.Fault) throw new Error('QB query fault: ' + JSON.stringify(r.Fault).slice(0, 200));
+  const invs = (r && r.QueryResponse && r.QueryResponse.Invoice) || [];
+  const customers = await qbListEntities(env, 'customer', token);
+  const custById = {}; customers.forEach(c => { custById[c.id] = c; });
+  const now = Date.now();
+  let groups = buildArReportGroups(invs, custById, now);
+  const ownerMap = await arQboOwnerMap(env);
+  groups = groups.map(g => {
+    const owner = ownerMap[g.root_qb_id];
+    return {
+      ...g,
+      owner_id: owner ? owner.ID : '',
+      owner_name: owner ? (`${owner.First_Name || ''} ${owner.Last_Name || ''}`.trim() || g.root_name) : g.root_name,
+      owner_email: owner ? (owner.Billing_Email || owner.Email || '') : '',
+      linked: !!owner,
+    };
+  });
+  if (opts.customer_id) groups = groups.filter(g => String(g.owner_id) === String(opts.customer_id) || String(g.root_qb_id) === String(opts.customer_id));
+  groups.sort((a, b) => b.oldest_days - a.oldest_days || b.total_open - a.total_open);
+  return { as_of: new Date(now).toISOString().slice(0, 10), groups };
+}
+
+// GET /ar/report/preview — admin-gated, read-only. All rolled-up groups (or one, via
+// ?customer_id=/?owner_id=), each flagged eligible/not so the admin tool page can show exactly
+// why (below the $75 floor and not yet 10 days old ⇒ not eligible this week).
+async function arReportPreview(env, url) {
+  const customerId = url.searchParams.get('customer_id') || url.searchParams.get('owner_id') || '';
+  const { as_of, groups } = await arReportRollup(env, { customer_id: customerId });
+  return json({ ok: true, as_of, count: groups.length, eligible_count: groups.filter(g => g.eligible).length, groups });
+}
+
+function buildArReportEmailHtml(group, link) {
+  const rows = group.invoices.map(inv => `
+    <tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${inv.doc || ('#' + inv.id)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${inv.due || ''}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:right;">$${inv.balance.toFixed(2)}</td>
+    </tr>`).join('');
+  return `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1b1f24;">
+    <h2 style="color:#1d4ed8;">Ridge Co — Open Balance Summary</h2>
+    <p>Hi ${group.owner_name || 'there'},</p>
+    <p>Here's a summary of your currently open invoices with Ridge Co, totaling <strong>$${group.total_open.toFixed(2)}</strong>.</p>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+      <thead><tr><th style="text-align:left;padding:8px 12px;border-bottom:2px solid #1b1f24;">Invoice</th><th style="text-align:left;padding:8px 12px;border-bottom:2px solid #1b1f24;">Due</th><th style="text-align:right;padding:8px 12px;border-bottom:2px solid #1b1f24;">Amount</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p style="text-align:center;margin:24px 0;"><a href="${link}" style="background:#1d4ed8;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">View &amp; Pay Online</a></p>
+    <p style="color:#66707c;font-size:12px;">Questions about any of these? Just reply to this email. — Ridge Co</p>
+  </div>`;
+}
+
+// Signed link token — same HMAC-off-WORKER_SECRET scheme as the Shareable Work Order (B-117),
+// scoped to {owner, rev}. Revoke = bump Owners.AR_Report_Rev; a token whose rev no longer
+// matches is dead. No separate token-storage table — the sheet row IS the source of truth.
+async function arReportLinkToken(env, ownerId) {
+  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {}
+  const owners = await fetchTab(env, 'Owners');
+  const owner = owners.find(o => String(o.ID) === String(ownerId));
+  const rev = String((owner && owner.AR_Report_Rev) || '0');
+  return await makeSessionToken({ scope: 'ar-report', owner: String(ownerId), rev }, env.WORKER_SECRET, AR_REPORT_LINK_TTL);
+}
+
+async function arReportLinkAuth(env, tok) {
+  const payload = await verifySessionToken(String(tok || ''), env.WORKER_SECRET);
+  if (!payload || payload.scope !== 'ar-report') return null;
+  const owners = await fetchTab(env, 'Owners');
+  const owner = owners.find(o => String(o.ID) === String(payload.owner));
+  if (!owner) return null;
+  if (String(owner.AR_Report_Rev || '0') !== String(payload.rev)) return null;
+  return { ownerId: String(payload.owner), owner };
+}
+
+// ADMIN: revoke every outstanding report link for one customer by bumping their rev — same
+// one-tap revoke UX as the WO share link's woShareRevoke.
+async function arReportRevoke(env, body) {
+  const ownerId = String((body && body.owner_id) || '').trim();
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {}
+  const owners = await fetchTab(env, 'Owners');
+  const owner = owners.find(o => String(o.ID) === ownerId);
+  if (!owner) return json({ error: 'Owner not found' }, 404);
+  const next = String((parseInt(owner.AR_Report_Rev || '0', 10) || 0) + 1);
+  await updateRow(env, 'Owners', ownerId, { AR_Report_Rev: next });
+  return json({ success: true, owner_id: ownerId, rev: next });
+}
+
+// POST /ar/report/send {owner_ids:[...], preview?, trigger?} — admin-gated (also called
+// internally by the weekly cron with preview:false). preview:true reports exactly who WOULD be
+// emailed and sends NOTHING. Real send mints a fresh link token, builds the report email, sends
+// via Gmail, and logs every attempt (success or failure) to AR_Report_Log.
+async function arReportSend(env, body) {
+  body = body || {};
+  const ids = Array.isArray(body.owner_ids) ? body.owner_ids.map(String).filter(Boolean) : [];
+  if (!ids.length) return json({ error: 'owner_ids required' }, 400);
+  if (ids.length > 100) return json({ error: 'too many at once (max 100)' }, 400);
+  const preview = body.preview === true || body.preview === '1';
+  const { groups } = await arReportRollup(env, {});
+  const results = [];
+  for (const ownerId of ids) {
+    const group = groups.find(g => String(g.owner_id) === ownerId);
+    if (!group) { results.push({ owner_id: ownerId, sent: false, reason: 'no open items found' }); continue; }
+    if (!group.eligible) { results.push({ owner_id: ownerId, sent: false, reason: group.reason, total_open: group.total_open }); continue; }
+    if (!group.owner_email) { results.push({ owner_id: ownerId, sent: false, reason: 'no billing email on file', total_open: group.total_open }); continue; }
+    if (preview) { results.push({ owner_id: ownerId, sent: false, willSend: true, email: group.owner_email, total_open: group.total_open, invoice_count: group.invoices.length }); continue; }
+    let link = '';
+    try {
+      const linkToken = await arReportLinkToken(env, ownerId);
+      const base = (body.page_base || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/, '');
+      link = `${base}/ar-report.html?t=${encodeURIComponent(linkToken)}`;
+      const html = buildArReportEmailHtml(group, link);
+      await gmailSendEmail(env, { to: group.owner_email, subject: 'Ridge Co — your open balance summary', html });
+      results.push({ owner_id: ownerId, sent: true, email: group.owner_email, total_open: group.total_open });
+      try {
+        await ensureTab(env, AR_REPORT_LOG_TAB, AR_REPORT_LOG_COLS);
+        await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: group.owner_email, Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: 'sent', Trigger: body.trigger || 'manual' });
+      } catch (_) { /* audit log best-effort; the send already happened */ }
+    } catch (e) {
+      const reason = String((e && e.message) || e).slice(0, 200);
+      results.push({ owner_id: ownerId, sent: false, reason });
+      try {
+        await ensureTab(env, AR_REPORT_LOG_TAB, AR_REPORT_LOG_COLS);
+        await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: group.owner_email || '', Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: 'FAILED: ' + reason, Trigger: body.trigger || 'manual' });
+      } catch (_) {}
+    }
+  }
+  return json({ ok: true, preview, sent: results.filter(r => r.sent).length, results });
+}
+
+async function arReportOptInList(env) {
+  let rows = [];
+  try { rows = await fetchTab(env, AR_OPTIN_TAB); } catch (e) { if (!isMissingTabError(e)) throw e; }
+  return rows;
+}
+
+async function arReportOptInRead(env, url) {
+  const rows = await arReportOptInList(env);
+  return json({ ok: true, opt_in: rows.filter(r => String(r.Enabled || '').toUpperCase() === 'TRUE').map(r => String(r.Owner_ID)), rows });
+}
+
+// POST /ar/report/opt-in {owner_id, enabled} — nobody is auto-emailed until Brett adds them here.
+async function arReportSetOptIn(env, body) {
+  const ownerId = String((body && body.owner_id) || '').trim();
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const enabled = body && (body.enabled === true || body.enabled === '1' || body.enabled === 'TRUE');
+  await ensureTab(env, AR_OPTIN_TAB, AR_OPTIN_COLS);
+  const rows = await fetchTab(env, AR_OPTIN_TAB).catch(() => []);
+  const existing = rows.find(r => String(r.Owner_ID) === ownerId);
+  const owners = await fetchTab(env, 'Owners');
+  const owner = owners.find(o => String(o.ID) === ownerId);
+  const ownerName = owner ? `${owner.First_Name || ''} ${owner.Last_Name || ''}`.trim() : '';
+  if (existing) {
+    await updateRow(env, AR_OPTIN_TAB, existing.ID, { Enabled: enabled ? 'TRUE' : 'FALSE', Updated_At: new Date().toISOString(), Updated_By: (body && body.by) || 'admin' });
+  } else {
+    await addRow(env, AR_OPTIN_TAB, { Owner_ID: ownerId, Owner_Name: ownerName, Enabled: enabled ? 'TRUE' : 'FALSE', Updated_At: new Date().toISOString(), Updated_By: (body && body.by) || 'admin' });
+  }
+  return json({ ok: true, owner_id: ownerId, enabled });
+}
+
+// PUBLIC (link-token gated): the customer-safe payload ar-report.html renders. Always a live
+// re-pull from QuickBooks (never trusts the balance baked into the original email) — same
+// "never show a stale money number" discipline as arRemind.
+async function arReportView(env, url) {
+  const auth = await arReportLinkAuth(env, url.searchParams.get('t'));
+  if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current statement.' }, 401);
+  const { groups } = await arReportRollup(env, { customer_id: auth.ownerId });
+  const group = groups.find(g => String(g.owner_id) === String(auth.ownerId));
+  const owner = auth.owner;
+  const ownerName = `${owner.First_Name || ''} ${owner.Last_Name || ''}`.trim();
+  if (!group || !group.invoices.length) {
+    return json({ ok: true, owner_name: ownerName, as_of: new Date().toISOString().slice(0, 10), total_open: 0, invoices: [], message: 'No open balance right now — thank you!' });
+  }
+  // Best-effort enrichment: show the linked work order's description under each invoice line,
+  // when one exists (Invoice_Review.QB_Invoice_ID → Invoice_Review.WO_ID → Work_Orders).
+  let irs = [], wos = [];
+  try { [irs, wos] = await Promise.all([fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders')]); } catch (e) {}
+  const invoices = group.invoices.map(inv => {
+    const ir = irs.find(r => String(r.QB_Invoice_ID || '').trim() === String(inv.id));
+    const wo = ir ? wos.find(w => String(w.ID) === String(ir.WO_ID)) : null;
+    return { ...inv, wo_id: wo ? wo.ID : '', wo_description: wo ? String(wo.Description || '').slice(0, 300) : '' };
+  });
+  return json({ ok: true, owner_name: ownerName || group.owner_name, as_of: new Date().toISOString().slice(0, 10), total_open: group.total_open, invoices });
+}
+
+// PUBLIC (link-token gated): POST {t, invoice_id} — one invoice's pay path. Verifies the
+// invoice's own customer chain actually roots at the token's owner before doing anything (never
+// let a valid link for one customer touch another's invoice by guessing an id). Prefers
+// QuickBooks' own hosted pay link when the API exposes one on this account; otherwise falls back
+// to the exact proven mechanism /ar/remind already uses — triggering QuickBooks' own resend so
+// the customer gets a real, working pay link by email.
+async function arReportPayLink(env, body) {
+  const auth = await arReportLinkAuth(env, body && body.t);
+  if (!auth) return json({ error: 'invalid_link' }, 401);
+  const invoiceId = String((body && body.invoice_id) || '').trim();
+  if (!invoiceId) return json({ error: 'invoice_id required' }, 400);
+  const token = await qbAccessToken(env);
+  let inv;
+  try {
+    const r = await qbApi(env, `invoice/${encodeURIComponent(invoiceId)}?minorversion=73`, 'GET', null, token);
+    if (r && r.Fault) throw new Error('fault');
+    inv = r && r.Invoice;
+  } catch (e) { return json({ error: 'lookup_failed', message: 'Could not look up that invoice right now. Please try again shortly.' }, 502); }
+  if (!inv) return json({ error: 'not_found' }, 404);
+  const customers = await qbListEntities(env, 'customer', token);
+  const custById = {}; customers.forEach(c => { custById[c.id] = c; });
+  const invCustId = (inv.CustomerRef && String(inv.CustomerRef.value)) || '';
+  let rootId = invCustId, hops = 0;
+  while (custById[rootId] && custById[rootId].parent_id && hops < 10) { rootId = custById[rootId].parent_id; hops++; }
+  if (String(rootId) !== String(auth.owner.QBO_Customer_ID || '')) return json({ error: 'not_authorized' }, 403);
+  const bal = Number(inv.Balance) || 0;
+  if (bal <= 0.005) return json({ ok: true, paid: true, message: 'This invoice is already paid — thank you!' });
+  if (inv.InvoiceLink) return json({ ok: true, redirect: inv.InvoiceLink });
+  const email = (inv.BillEmail && inv.BillEmail.Address) || auth.owner.Billing_Email || auth.owner.Email || '';
+  if (!email) return json({ error: 'no_email', message: 'No email on file for this invoice — please contact Ridge Co.' }, 400);
+  try {
+    const rr = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(invoiceId)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
+    const sres = await rr.json().catch(() => null);
+    if (!rr.ok || !sres || sres.Fault || !sres.Invoice) throw new Error('send not confirmed');
+    return json({ ok: true, sent_to_email: true, email });
+  } catch (e) { return json({ error: 'send_failed', message: 'Could not send a payment link right now — please contact Ridge Co directly.' }, 502); }
+}
+
+// Weekly cron entry point — fully automatic per Brett's decision, opted-in owners only, gated
+// by Config ar_report_enabled (default off/dormant — same safe-by-design pattern as the daily
+// digest). Silently skips anyone below the eligibility threshold; logs everyone it does try.
+async function runWeeklyArReport(env) {
+  const _t0 = Date.now();
+  const cfg = await fetchConfig(env);
+  if (String(cfg.ar_report_enabled || '').toUpperCase() !== 'TRUE') return { delivered: false, reason: 'ar_report_enabled not TRUE (dormant)' };
+  const optin = await arReportOptInList(env);
+  const ownerIds = optin.filter(r => String(r.Enabled || '').toUpperCase() === 'TRUE').map(r => String(r.Owner_ID)).filter(Boolean);
+  if (!ownerIds.length) return { delivered: false, reason: 'no opted-in customers' };
+  const resp = await arReportSend(env, { owner_ids: ownerIds, preview: false, trigger: 'weekly-cron' });
+  const data = await resp.json().catch(() => ({}));
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ar_weekly_report', Skill_Or_Endpoint: 'scheduled/ar-report', Success: 'TRUE', Latency_ms: Date.now() - _t0, Notes: `sent ${data.sent || 0}/${ownerIds.length}` }); } catch (_) {}
+  return { delivered: true, sent: data.sent || 0, results: data.results || [] };
+}
+
+// ── GMAIL SEND (B-210) — real outbound email from ridgecomaintenance@gmail.com ──────────────
+// OAuth refresh-token flow: exchange GMAIL_REFRESH_TOKEN for a short-lived access token, then
+// call Gmail's users.messages.send with a base64url RFC822 message. FAILS LOUD (throws) when
+// misconfigured or rejected — this is a real customer-facing send path, not the internal
+// digest's silent stub, so a misconfiguration must surface, never look like "nothing to send."
+let _gmailTokenCache = { token: null, at: 0 };
+async function gmailAccessToken(env) {
+  if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET || !env.GMAIL_REFRESH_TOKEN) {
+    throw new Error('Gmail not configured — set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN/GMAIL_SENDER in Cloudflare Worker secrets.');
+  }
+  if (_gmailTokenCache.token && (Date.now() - _gmailTokenCache.at) < 50 * 60 * 1000) return _gmailTokenCache.token;
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: env.GMAIL_REFRESH_TOKEN, grant_type: 'refresh_token' }),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.access_token) throw new Error('Gmail token refresh failed: ' + JSON.stringify(data || {}).slice(0, 200));
+  _gmailTokenCache = { token: data.access_token, at: Date.now() };
+  return data.access_token;
+}
+
+function _utf8B64url(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = ''; for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function gmailSendEmail(env, { to, subject, html }) {
+  if (!to) throw new Error('gmailSendEmail: to required');
+  const accessToken = await gmailAccessToken(env);
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
+  const raw = [`From: Ridge Co <${from}>`, `To: ${to}`, `Subject: ${subjectEncoded}`, 'MIME-Version: 1.0', 'Content-Type: text/html; charset="UTF-8"', '', html || ''].join('\r\n');
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: _utf8B64url(raw) }),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id };
 }
 
 function bytesToB64(buf) {
