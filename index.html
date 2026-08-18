@@ -9882,5 +9882,75 @@ function setWOFilter(filterVal, priorityVal) {
   window.addEventListener('focus', check);
 })();
 </script>
+
+<!-- Voice-to-text on every text block, now and going forward (Brett, Aug 18 2026): attaches
+     a 🎤 button to every <textarea> — on load AND any added later (modals, dynamically-built
+     forms) via MutationObserver, so a future textarea needs zero extra wiring. Web Speech API
+     (Chrome/Android — Brett's primary device); feature-detected, so it silently does nothing
+     on browsers without support (iOS Safari) rather than breaking typing. Tap mic → speak →
+     tap again (or pause) to stop; the final transcript appends to whatever was already typed. -->
+<script>
+(function(){
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  var seen = (typeof WeakSet !== 'undefined') ? new WeakSet() : { has:function(){return false;}, add:function(){} };
+  function attach(ta){
+    if (!ta || ta.tagName !== 'TEXTAREA' || seen.has(ta) || ta.disabled || ta.readOnly) return;
+    if (ta.parentNode && ta.parentNode.classList && ta.parentNode.classList.contains('rc-voice-wrap')) return;
+    seen.add(ta);
+    var wrap = document.createElement('span');
+    wrap.className = 'rc-voice-wrap';
+    wrap.style.cssText = 'position:relative;display:block;width:100%';
+    ta.parentNode.insertBefore(wrap, ta);
+    wrap.appendChild(ta);
+    var pr = parseInt(getComputedStyle(ta).paddingRight) || 0;
+    if (pr < 32) ta.style.paddingRight = '32px';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = 'Voice to text';
+    btn.textContent = '🎤';
+    btn.style.cssText = 'position:absolute;right:6px;bottom:6px;z-index:5;width:24px;height:24px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:12px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.15)';
+    var rec = null, listening = false, base = '';
+    function stopUI(){
+      listening = false; btn.textContent = '🎤';
+      btn.style.background = 'var(--surface)'; btn.style.color = 'var(--muted)';
+    }
+    btn.onclick = function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      if (listening) { rec && rec.stop(); return; }
+      rec = new SR();
+      rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = true;
+      base = ta.value;
+      rec.onresult = function(e){
+        var txt = '';
+        for (var i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript;
+        ta.value = (base && !/\s$/.test(base) ? base + ' ' : base) + txt;
+        ta.dispatchEvent(new Event('input', {bubbles:true}));
+      };
+      rec.onend = function(){ stopUI(); base = ta.value; };
+      rec.onerror = function(){ stopUI(); };
+      try { rec.start(); listening = true; btn.textContent = '⏺'; btn.style.background = 'var(--danger)'; btn.style.color = '#fff'; }
+      catch (e) { stopUI(); }
+    };
+    wrap.appendChild(btn);
+  }
+  function scan(root){
+    var list = (root || document).querySelectorAll('textarea');
+    for (var i = 0; i < list.length; i++) attach(list[i]);
+  }
+  scan();
+  new MutationObserver(function(muts){
+    for (var i = 0; i < muts.length; i++) {
+      var added = muts[i].addedNodes;
+      for (var j = 0; j < added.length; j++) {
+        var n = added[j];
+        if (n.nodeType !== 1) continue;
+        if (n.tagName === 'TEXTAREA') attach(n);
+        else if (n.querySelectorAll) scan(n);
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+})();
+</script>
 </body>
 </html>
