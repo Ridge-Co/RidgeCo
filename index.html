@@ -239,18 +239,47 @@ window.addEventListener('pageshow', function(e){
         </select>
       </div>
     </div>
-    <!-- Bulk action bar -->
-    <div id="bulk-wo-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
-      <span style="color:var(--accent);font-size:12px;font-weight:bold" id="bulk-count">0 selected</span>
-      <span style="color:var(--muted);font-size:12px">Change status to:</span>
-      <select id="bulk-status-sel" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;border-radius:var(--radius)">
-        <option value="">— select —</option>
-        <option>Assigned</option><option>Accepted</option><option>In Progress</option>
-        <option>On Hold</option><option>Complete</option><option>Pending Invoice</option>
-        <option>Invoiced</option><option>Paid</option><option>Cancelled</option>
-      </select>
-      <button class="btn small" id="bulk-apply-btn" onclick="applyBulkStatus()">Apply</button>
-      <button class="btn small secondary" onclick="document.querySelectorAll('.wo-bulk-check').forEach(function(c){c.checked=false;});document.getElementById('bulk-count').textContent='0 selected'">Deselect All</button>
+    <!-- Bulk action bar. Deliberately NOT "do everything" — one action type applied at a
+         time, so a batch update is always one clear, reviewable thing (esp. important given
+         Cancel needs its own hard-to-misfire confirmation, below). -->
+    <div id="bulk-wo-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="color:var(--accent);font-size:12px;font-weight:bold" id="bulk-count">0 selected</span>
+        <button class="btn small secondary" onclick="document.querySelectorAll('.wo-bulk-check').forEach(function(c){c.checked=false;});document.getElementById('bulk-count').textContent='0 selected'">Deselect All</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:12px;min-width:90px">Status</span>
+        <select id="bulk-status-sel" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;border-radius:var(--radius)">
+          <option value="">— select —</option>
+          <option>Assigned</option><option>Accepted</option><option>In Progress</option>
+          <option>On Hold</option><option>Complete</option><option>Pending Invoice</option>
+          <option>Invoiced</option><option>Paid</option><option>Cancelled</option>
+        </select>
+        <button class="btn small" id="bulk-apply-btn" onclick="applyBulkStatus()">Apply</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:12px;min-width:90px">Reassign to</span>
+        <select id="bulk-vendor-sel" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;border-radius:var(--radius);min-width:160px">
+          <option value="">— select vendor —</option>
+        </select>
+        <button class="btn small" onclick="applyBulkReassign()">Apply</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:12px;min-width:90px">Priority</span>
+        <select id="bulk-priority-sel" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;border-radius:var(--radius)">
+          <option value="">— select —</option>
+          <option value="urgent">Urgent</option><option value="normal">Normal</option><option value="low">Low</option>
+        </select>
+        <button class="btn small" onclick="applyBulkPriority()">Apply</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:12px;min-width:90px">Tenant can see</span>
+        <button class="btn small secondary" onclick="applyBulkTenantFlag('Tenant_Visible','TRUE')">Show</button>
+        <button class="btn small secondary" onclick="applyBulkTenantFlag('Tenant_Visible','FALSE')">Hide</button>
+        <span style="color:var(--muted);font-size:12px;min-width:90px;margin-left:8px">Tenant notified</span>
+        <button class="btn small secondary" onclick="applyBulkTenantFlag('Tenant_Notify_Updates','TRUE')">On</button>
+        <button class="btn small secondary" onclick="applyBulkTenantFlag('Tenant_Notify_Updates','FALSE')">Off</button>
+      </div>
     </div>
     <!-- Filter Panel -->
     <div id="filterPanel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px">
@@ -1421,7 +1450,7 @@ function woCard(w) {
   return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
     '<div class="wo-id">'+w.ID+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
-    '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+'</div></div>' +
+    '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+(w.Turnover_Group_ID?' <span style="background:#e8f0fb;color:var(--accent);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">🔄 '+esc(w.Turnover_Group_ID)+' · '+esc(w.Turnover_Role||'')+'</span>':'')+'</div></div>' +
     (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
     ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\'" style="width:auto;margin-right:6px;cursor:pointer" />' : '') +
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
@@ -1449,6 +1478,12 @@ function populateFilterDropdowns() {
     var cur3 = vendSel.value;
     vendSel.innerHTML = '<option value="">All Vendors</option>' +
       safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){ return '<option value="'+v.ID+'"'+(v.ID===cur3?' selected':'')+'>'+v.Name+'</option>'; }).join('');
+  }
+  var bulkVendSel = document.getElementById('bulk-vendor-sel');
+  if (bulkVendSel) {
+    var curB = bulkVendSel.value;
+    bulkVendSel.innerHTML = '<option value="">— select vendor —</option>' +
+      safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){ return '<option value="'+v.ID+'"'+(v.ID===curB?' selected':'')+'>'+v.Name+' — '+v.Trade+'</option>'; }).join('');
   }
 }
 
@@ -1629,7 +1664,8 @@ function openWODetail(woId) {
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;color:var(--muted)">' +
     linkify(wo.Notes) + '</div></div>' : '') +
     '<table class="data-table" style="margin-bottom:16px">' +
-    '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span></td></tr>' +
+    '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span>'+(wo.Status==='On Hold'&&wo.Hold_Reason?' <span style="color:var(--muted);font-size:11px">— '+esc(wo.Hold_Reason)+'</span>':'')+'</td></tr>' +
+    (wo.Turnover_Group_ID ? '<tr><td style="color:var(--muted)">Turnover</td><td>🔄 '+esc(wo.Turnover_Group_ID)+' · '+esc(wo.Turnover_Role||'')+(wo.Turnover_Release_Date?' · releases by '+esc(wo.Turnover_Release_Date):'')+'</td></tr>' : '') +
     '<tr><td style="color:var(--muted)">Trade</td><td>'+(wo.Trade||'—')+'</td></tr>' +
     (wo.Room ? '<tr><td style="color:var(--muted)">Room / Area</td><td>'+esc(wo.Room)+'</td></tr>' : '') +
     '<tr><td style="color:var(--muted)">Priority</td><td>'+(wo.Priority||'normal')+'</td></tr>' +
@@ -2373,6 +2409,21 @@ function openUnitDetail(propId, unitId) {
     '</div>' +
   '</div>';
 
+  // Turnover (B-100) — active group badge if one's already running on this unit, else a
+  // Start button. Requires a real Unit_ID (turnover is unit-scoped); whole-property/single-
+  // family records without a unit don't get the button.
+  if (unitId) {
+    var activeTurnoverWO = safeArray(state.workorders).find(function(w) {
+      var doneStatuses = ['Complete','Pending Invoice','Invoiced','Paid','Cancelled','Closed'];
+      return String(w.Unit_ID) === String(unitId) && w.Turnover_Group_ID && doneStatuses.indexOf(w.Status) === -1;
+    });
+    html += '<div style="margin-bottom:14px">' +
+      (activeTurnoverWO
+        ? '<div style="background:#e8f0fb;border:1px solid var(--accent);border-radius:6px;padding:8px 10px;font-size:12px">🔄 Turnover <b>'+esc(activeTurnoverWO.Turnover_Group_ID)+'</b> in progress for this unit</div>'
+        : '<button class="btn small secondary" onclick="openStartTurnoverModal(\''+unitId+'\')">🔄 Start Turnover</button>') +
+    '</div>';
+  }
+
   // Tenants section
   html += '<div style="margin-bottom:14px">' +
     '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px">👤 TENANTS</div>';
@@ -2389,10 +2440,12 @@ function openUnitDetail(propId, unitId) {
             (t.Phone ? '<div><a href="tel:'+esc(t.Phone)+'" style="color:var(--accent);font-size:12px;text-decoration:none">'+esc(t.Phone)+'</a></div>' : '') +
             (t.Email ? '<div style="color:var(--muted);font-size:11px">'+esc(t.Email)+'</div>' : '') +
             (t.Move_In_Date ? '<div style="color:var(--muted);font-size:10px">Move-in: '+esc(t.Move_In_Date)+'</div>' : '') +
+            (t.Scheduled_Move_Out_Date ? '<div style="color:var(--warn);font-size:10px">📅 Scheduled move-out: '+esc(t.Scheduled_Move_Out_Date)+'</div>' : '') +
             (t.PIN ? '<div style="color:var(--accent2);font-size:10px;letter-spacing:.08em">PIN: '+esc(t.PIN)+'</div>' : '<div style="color:var(--danger);font-size:10px">No PIN set</div>') +
           '</div>' +
           '<div style="display:flex;flex-direction:column;gap:4px">' +
             '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+            '<button class="btn small secondary" onclick="closeModal(\'modal-unit-detail\');openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅 Schedule Move-Out</button>' +
             '<button class="btn small" style="background:var(--danger)20;border:1px solid var(--danger);color:var(--danger);font-size:10px" onclick="closeModal(\'modal-unit-detail\');openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">Move Out</button>' +
           '</div>' +
         '</div>' +
@@ -2574,6 +2627,7 @@ function renderTenantsPage() {
         '<td style="'+pinColor+';font-weight:bold;letter-spacing:0.1em">'+(t.PIN||'—')+'</td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+        '<button class="btn small secondary" onclick="openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅</button>' +
         '<button class="btn small secondary" onclick="openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')" style="background:var(--danger)20;border-color:var(--danger);color:var(--danger)">Move Out</button>' +
         '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+esc(t.Phone||'')+'\')" title="Set PIN">PIN</button>' +
         (canSend?'<button class="btn small" style="background:var(--info);color:#fff" onclick="previewSendPin(\'tenant\',\''+t.ID+'\',\''+esc(t.First_Name)+'\',\''+esc(t.Phone||'')+'\')">📱</button>':'') +
@@ -8838,22 +8892,97 @@ function toggleBulkMode() {
   else renderWOPage(); // re-render with checkboxes
 }
 
+function getBulkCheckedWOIds() {
+  return Array.from(document.querySelectorAll('.wo-bulk-check:checked')).map(function(cb){ return cb.dataset.woid; });
+}
+
 function applyBulkStatus() {
   var status = document.getElementById('bulk-status-sel').value;
   if (!status) { toast('Select a status','error'); return; }
-  var checked = Array.from(document.querySelectorAll('.wo-bulk-check:checked'));
-  if (!checked.length) { toast('Select at least one WO','error'); return; }
-  if (!confirm('Change '+checked.length+' work order'+(checked.length>1?'s':'')+" to '"+status+"'?")) return;
-  var ids = checked.map(function(cb){ return cb.dataset.woid; });
-  var btn = document.getElementById('bulk-apply-btn');
-  btn.disabled = true; btn.textContent = 'Applying…';
-  Promise.all(ids.map(function(id){
+  var ids = getBulkCheckedWOIds();
+  if (!ids.length) { toast('Select at least one WO','error'); return; }
+  // Cancel gets its own high-friction confirmation (checkbox + typed word), not a plain
+  // confirm() — bulk-cancelling the wrong batch is the one bulk action Brett specifically
+  // flagged as needing double protection.
+  if (status === 'Cancelled') { openBulkCancelConfirm(ids); return; }
+  if (!confirm('Change '+ids.length+' work order'+(ids.length>1?'s':'')+" to '"+status+"'?")) return;
+  runBulkWOUpdate(ids, function(id){
     return api('POST','/status',{ wo_id:id, status:status, updated_by:'Admin', updated_by_role:'admin' });
-  })).then(function(){
-    toast('Updated '+ids.length+' work order'+(ids.length>1?'s':''),'success');
+  }, document.getElementById('bulk-apply-btn'), 'Updated');
+}
+
+function applyBulkReassign() {
+  var vendorId = document.getElementById('bulk-vendor-sel').value;
+  if (!vendorId) { toast('Select a vendor','error'); return; }
+  var ids = getBulkCheckedWOIds();
+  if (!ids.length) { toast('Select at least one WO','error'); return; }
+  var vendor = safeArray(state.vendors).find(function(v){ return v.ID===vendorId; });
+  if (!confirm('Reassign '+ids.length+' work order'+(ids.length>1?'s':'')+' to '+(vendor?vendor.Name:vendorId)+'? Each vendor will get the normal dispatch text.')) return;
+  runBulkWOUpdate(ids, function(id){
+    return api('POST','/assign',{ wo_id:id, vendor_id:vendorId });
+  }, event.target, 'Reassigned');
+}
+
+function applyBulkPriority() {
+  var priority = document.getElementById('bulk-priority-sel').value;
+  if (!priority) { toast('Select a priority','error'); return; }
+  var ids = getBulkCheckedWOIds();
+  if (!ids.length) { toast('Select at least one WO','error'); return; }
+  runBulkWOUpdate(ids, function(id){
+    return api('POST','/wo/admin-update',{ wo_id:id, fields:{ Priority: priority }, admin_name:'Admin' });
+  }, event.target, 'Updated priority on');
+}
+
+function applyBulkTenantFlag(field, value) {
+  var ids = getBulkCheckedWOIds();
+  if (!ids.length) { toast('Select at least one WO','error'); return; }
+  runBulkWOUpdate(ids, function(id){
+    var fields = {}; fields[field] = value;
+    return api('POST','/wo/set-tenant-visibility',{ wo_id:id, fields:fields, changed_by:'Admin', changed_by_role:'admin' });
+  }, event.target, 'Updated');
+}
+
+// Shared runner for every bulk action bar button — one Promise.all of the existing
+// single-item endpoint per selected WO (same pattern the original bulk-status used), one
+// toast, one refresh. Keeps every bulk action as a thin loop over already-tested endpoints
+// instead of new bespoke bulk-write logic per action.
+function runBulkWOUpdate(ids, callFn, btn, verbLabel) {
+  var origText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+  Promise.all(ids.map(callFn)).then(function(results) {
+    var errs = results.filter(function(r){ return r && r.error; });
+    if (errs.length) toast(verbLabel+' '+(ids.length-errs.length)+'/'+ids.length+' — '+errs.length+' failed: '+errs[0].error, 'error');
+    else toast(verbLabel+' '+ids.length+' work order'+(ids.length>1?'s':''),'success');
     toggleBulkMode();
     loadAll();
-  }).finally(function(){ btn.disabled=false; btn.textContent='Apply'; });
+  }).catch(function(e){ toast('Error: '+e.message,'error'); }).finally(function(){ if (btn) { btn.disabled=false; btn.textContent=origText; } });
+}
+
+// ── Bulk Cancel — double protection (checkbox + typed confirmation) ────────
+var _bulkCancelIds = [];
+
+function openBulkCancelConfirm(ids) {
+  _bulkCancelIds = ids;
+  document.getElementById('bcc-count').textContent = ids.length;
+  document.getElementById('bcc-check').checked = false;
+  document.getElementById('bcc-type').value = '';
+  document.getElementById('bcc-submit-btn').disabled = true;
+  openModal('modal-bulk-cancel');
+}
+
+function bccUpdateGate() {
+  var ok = document.getElementById('bcc-check').checked &&
+    document.getElementById('bcc-type').value.trim().toUpperCase() === 'CANCEL';
+  document.getElementById('bcc-submit-btn').disabled = !ok;
+}
+
+function submitBulkCancel() {
+  if (document.getElementById('bcc-submit-btn').disabled) return;
+  var ids = _bulkCancelIds;
+  closeModal('modal-bulk-cancel');
+  runBulkWOUpdate(ids, function(id){
+    return api('POST','/status',{ wo_id:id, status:'Cancelled', updated_by:'Admin', updated_by_role:'admin' });
+  }, document.getElementById('bulk-apply-btn'), 'Cancelled');
 }
 
 
@@ -9845,6 +9974,77 @@ function setWOFilter(filterVal, priorityVal) {
   if (typeof renderWOPage === 'function') renderWOPage();
 }
 
+// ── Turnover trigger (B-100) ─────────────────────────────────────────────
+// Two entry points, one modal each, both hit the Worker's shared createTurnoverWOs() core:
+// "Start Turnover" (manual, on a unit) and "Schedule Move-Out" (a future date on a still-
+// active tenant — does NOT deactivate them, unlike the red "Move Out" button).
+var _turnoverUnitId = null;
+
+function openStartTurnoverModal(unitId) {
+  _turnoverUnitId = unitId;
+  document.getElementById('sto-msg').innerHTML = '';
+  document.getElementById('sto-target-movein').value = '';
+  document.getElementById('sto-submit-btn').disabled = false;
+  document.getElementById('sto-submit-btn').textContent = 'Start Turnover';
+  openModal('modal-start-turnover');
+}
+
+function submitStartTurnover() {
+  var targetMoveIn = document.getElementById('sto-target-movein').value || '';
+  var btn = document.getElementById('sto-submit-btn');
+  var msgEl = document.getElementById('sto-msg');
+  btn.disabled = true; btn.textContent = 'Starting…';
+  api('POST','/turnover/start', { unit_id: _turnoverUnitId, target_move_in_date: targetMoveIn, created_by: 'Admin' })
+    .then(function(res) {
+      if (res && res.error) throw new Error(res.error);
+      toast('Turnover started: ' + res.group_id + ' (Repairs + Paint open now, Cleaning on hold)', 'success');
+      closeModal('modal-start-turnover');
+      loadAll();
+    })
+    .catch(function(e) {
+      btn.disabled = false; btn.textContent = 'Start Turnover';
+      if (msgEl) msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
+    });
+}
+
+var _smoTenantId = null;
+var _smoTenantName = '';
+
+function openScheduleMoveOutModal(tenantId, tenantName) {
+  _smoTenantId = tenantId;
+  _smoTenantName = tenantName;
+  document.getElementById('smo-tenant-name').textContent = tenantName;
+  document.getElementById('smo-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('smo-target-movein').value = '';
+  document.getElementById('smo-msg').innerHTML = '';
+  document.getElementById('smo-submit-btn').disabled = false;
+  document.getElementById('smo-submit-btn').textContent = 'Schedule Move-Out';
+  openModal('modal-schedule-move-out');
+}
+
+function submitScheduleMoveOut() {
+  var date = document.getElementById('smo-date').value;
+  var targetMoveIn = document.getElementById('smo-target-movein').value || '';
+  var btn = document.getElementById('smo-submit-btn');
+  var msgEl = document.getElementById('smo-msg');
+  if (!date) { if (msgEl) msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Pick a move-out date.</div>'; return; }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  api('POST','/tenant/schedule-move-out', { tenant_id: _smoTenantId, move_out_date: date, target_move_in_date: targetMoveIn, created_by: 'Admin' })
+    .then(function(res) {
+      if (res && res.error) throw new Error(res.error);
+      var turnoverMsg = res.turnover_created
+        ? ' Turnover started: ' + res.turnover.group_id + '.'
+        : (res.turnover && res.turnover.error ? ' (' + res.turnover.error + ')' : '');
+      toast('Move-out scheduled for ' + esc(_smoTenantName) + ' on ' + date + '.' + turnoverMsg, 'success');
+      closeModal('modal-schedule-move-out');
+      loadAll();
+    })
+    .catch(function(e) {
+      btn.disabled = false; btn.textContent = 'Schedule Move-Out';
+      if (msgEl) msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
+    });
+}
+
 </script>
 
 <!-- MOVE OUT TENANT MODAL -->
@@ -9858,6 +10058,82 @@ function setWOFilter(filterVal, priorityVal) {
     <div class="modal-actions" style="margin-top:14px">
       <button class="btn secondary" onclick="closeModal('modal-move-out')">Cancel</button>
       <button class="btn" id="mo-submit-btn" onclick="submitMoveOut()" style="background:var(--danger);color:#fff">CONFIRM MOVE OUT</button>
+    </div>
+  </div>
+</div>
+
+<!-- START TURNOVER MODAL (B-100) -->
+<div class="modal-overlay" id="modal-start-turnover">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header">
+      <div class="modal-title">START TURNOVER</div>
+      <button class="modal-close" onclick="closeModal('modal-start-turnover')">✕</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      Creates 3 connected work orders: <b>Repairs</b> and <b>Paint</b> open right away so vendors can be lined up ahead of time.
+      <b>Cleaning</b> is created on hold and releases automatically once Repairs + Paint are both done — or the day before the
+      target move-in date below, whichever comes first.
+    </div>
+    <div class="form-group">
+      <label>Target move-in date (optional — leave blank if no incoming tenant yet)</label>
+      <input type="date" id="sto-target-movein" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:var(--font)">
+    </div>
+    <div id="sto-msg"></div>
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn secondary" onclick="closeModal('modal-start-turnover')">Cancel</button>
+      <button class="btn" id="sto-submit-btn" onclick="submitStartTurnover()">Start Turnover</button>
+    </div>
+  </div>
+</div>
+
+<!-- SCHEDULE MOVE-OUT MODAL (B-100) — books a future date without deactivating the tenant -->
+<div class="modal-overlay" id="modal-schedule-move-out">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header">
+      <div class="modal-title">SCHEDULE MOVE-OUT</div>
+      <button class="modal-close" onclick="closeModal('modal-schedule-move-out')">✕</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      For <b id="smo-tenant-name"></b>. This does <u>not</u> move them out yet — they stay active with a working PIN/portal.
+      It books the date and starts the turnover (Repairs + Paint) now, so there's lead time to schedule vendors instead of
+      scrambling once the unit is actually empty. Use the red "Move Out" button on the actual day.
+    </div>
+    <div class="form-group">
+      <label>Move-out date</label>
+      <input type="date" id="smo-date" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:var(--font)">
+    </div>
+    <div class="form-group">
+      <label>Target move-in date (optional — sets when Cleaning auto-releases if repairs/paint run long)</label>
+      <input type="date" id="smo-target-movein" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:var(--font)">
+    </div>
+    <div id="smo-msg"></div>
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn secondary" onclick="closeModal('modal-schedule-move-out')">Cancel</button>
+      <button class="btn" id="smo-submit-btn" onclick="submitScheduleMoveOut()">Schedule Move-Out</button>
+    </div>
+  </div>
+</div>
+
+<!-- BULK CANCEL CONFIRM MODAL — double protection: checkbox + typed word -->
+<div class="modal-overlay" id="modal-bulk-cancel">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <div class="modal-title" style="color:var(--danger)">CANCEL <span id="bcc-count">0</span> WORK ORDERS?</div>
+      <button class="modal-close" onclick="closeModal('modal-bulk-cancel')">✕</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      This cannot be undone from the Hub. Double-check the selection before continuing.
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:10px;cursor:pointer">
+      <input type="checkbox" id="bcc-check" onchange="bccUpdateGate()"> I understand this cancels every selected work order.
+    </label>
+    <div class="form-group">
+      <label>Type CANCEL to confirm</label>
+      <input type="text" id="bcc-type" oninput="bccUpdateGate()" autocomplete="off" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:6px;font-family:var(--font);text-transform:uppercase">
+    </div>
+    <div class="modal-actions" style="margin-top:14px">
+      <button class="btn secondary" onclick="closeModal('modal-bulk-cancel')">Back out</button>
+      <button class="btn" id="bcc-submit-btn" onclick="submitBulkCancel()" disabled style="background:var(--danger);color:#fff">CONFIRM CANCEL</button>
     </div>
   </div>
 </div>
