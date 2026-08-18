@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-18.3';
+const BUILD_VERSION = '2026-08-18.4';
 
 export default {
   async fetch(request, env) {
@@ -178,6 +178,10 @@ export default {
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
         if (path === '/scope/drive-list')       return await scopeDriveList(env, url);
+        if (path === '/insp/customers')         return await inspCustomersList(env);
+        if (path === '/insp/properties')        return await inspPropertiesList(env, url);
+        if (path === '/insp/units')             return await inspUnitsList(env, url);
+        if (path === '/insp/availability')      return await inspAvailabilityGet(env);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -332,6 +336,16 @@ export default {
         if (path === '/scope/to-wo')              return await scopeToWO(env, body);
         if (path === '/scope/estimate')           return await scopeEstimate(env, body);
         if (path === '/scope/proposal')           return await scopeProposal(env, body);
+        if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
+        if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
+        if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
+        if (path === '/insp/property/update')     return await updateRow(env, 'Insp_Properties', body.id, body.fields);
+        if (path === '/insp/unit/add')             return await inspUnitAdd(env, body);
+        if (path === '/insp/unit/update')          return await updateRow(env, 'Insp_Units', body.id, body.fields);
+        if (path === '/insp/availability/add')     return await inspAvailabilityAdd(env, body);
+        if (path === '/insp/availability/update')  return await updateRow(env, 'Insp_Availability_Rules', body.id, body.fields);
+        if (path === '/insp/blackout/add')         return await inspBlackoutAdd(env, body);
+        if (path === '/insp/blackout/update')      return await updateRow(env, 'Insp_Blackouts', body.id, body.fields);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -8936,6 +8950,161 @@ async function trashInvoice(env, body) {
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INSPECTION SCHEDULER (B-226) — Phase 1: data model + admin onboarding
+// New venture line: annual rental-property inspections (SFH + multifamily, batched
+// per-tenant slots inside one site visit) + AMSCRE one-off routing (see #527 in the
+// Gemini archive — undocumented gig income, $50/inspection via amscre.com). Full
+// design: context/INSPECTION_SCHEDULER_BUILD_BRIEF_v1.0.md. Same one-Worker/
+// one-Sheet stack as everything else — Cal.com and Easy!Appointments were researched
+// as a "Calendly backbone" and rejected (neither runs on Cloudflare Workers; both
+// need a second server + database). Phase 1 ships ONLY the data model + Brett's own
+// onboarding screens (customers, properties, units, availability rules, blackouts) —
+// no outreach/SMS/booking-link yet, that's Phase 2. Tabs self-provision on first
+// write, exact same pattern as Trash Service (ensureTrashTabs) just above.
+// ─────────────────────────────────────────────────────────────────────────────
+const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date'];
+const INSP_PROPERTY_HEADERS = ['ID','Customer_ID','Address','Zip','Type','Unit_Count','Visit_Duration_Min','Notes','Active','Created_Date'];
+const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_Phone','Notes','Active','Created_Date'];
+const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
+const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
+const INSP_TABS = {
+  Insp_Customers: INSP_CUSTOMER_HEADERS,
+  Insp_Properties: INSP_PROPERTY_HEADERS,
+  Insp_Units: INSP_UNIT_HEADERS,
+  Insp_Availability_Rules: INSP_AVAIL_HEADERS,
+  Insp_Blackouts: INSP_BLACKOUT_HEADERS,
+};
+const INSP_DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+// Self-provisions all 5 Phase-1 tabs in one batchUpdate (mirrors ensureTrashTabs) —
+// no manual sheet-ops step, no separate service-account share needed (same RidgeCo
+// Main sheet, already shared with the maintenance-hub-498819 runtime SA).
+async function ensureInspTabs(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  const need = Object.keys(INSP_TABS).filter(t => !titles.includes(t));
+  if (need.length) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  }
+  for (const [tab, headers] of Object.entries(INSP_TABS)) {
+    await ensureColumns(env, tab, headers);
+  }
+}
+
+// ── Customers (a "customer" here is a whole inspection line — the new PM rental
+// customer, or a synthetic AMSCRE row for Phase 3's routing) ──────────────────
+async function inspCustomersList(env) {
+  let rows = [];
+  try { rows = await fetchTab(env, 'Insp_Customers'); } catch (e) {}
+  return json(rows.filter(r => r.Active !== 'FALSE'));
+}
+async function inspCustomerAdd(env, body) {
+  if (!body || !body.Name) return json({ error: 'Name required' }, 400);
+  await ensureInspTabs(env);
+  return await addRow(env, 'Insp_Customers', {
+    Name: body.Name, Line: body.Line === 'amscre' ? 'amscre' : 'rental',
+    Contact_Name: body.Contact_Name || '', Contact_Phone: body.Contact_Phone ? normalizePhone(body.Contact_Phone) : '',
+    Contact_Email: body.Contact_Email || '', Notes: body.Notes || '',
+    Active: 'TRUE', Created_Date: new Date().toISOString().slice(0,10),
+  });
+}
+
+// ── Properties ───────────────────────────────────────────────
+async function inspPropertiesList(env, url) {
+  const cid = (url && url.searchParams.get('customer_id')) || '';
+  let rows = [];
+  try { rows = await fetchTab(env, 'Insp_Properties'); } catch (e) {}
+  rows = rows.filter(r => r.Active !== 'FALSE' && (!cid || r.Customer_ID === cid));
+  return json(rows);
+}
+async function inspPropertyAdd(env, body) {
+  if (!body || !body.Customer_ID || !body.Address) return json({ error: 'Customer_ID and Address required' }, 400);
+  await ensureInspTabs(env);
+  const type = body.Type === 'multifamily' ? 'multifamily' : 'single_family';
+  return await addRow(env, 'Insp_Properties', {
+    Customer_ID: String(body.Customer_ID), Address: body.Address, Zip: String(body.Zip || '').trim(),
+    Type: type, Unit_Count: type === 'multifamily' ? (Number(body.Unit_Count || 2) || 2) : 1,
+    Visit_Duration_Min: Number(body.Visit_Duration_Min || 30) || 30,
+    Notes: body.Notes || '', Active: 'TRUE', Created_Date: new Date().toISOString().slice(0,10),
+  });
+}
+
+// ── Units (one row per tenant/occupant to schedule — a single-family property gets
+// exactly one synthetic unit) ───────────────────────────────────────────────────
+async function inspUnitsList(env, url) {
+  const pid = (url && url.searchParams.get('property_id')) || '';
+  let rows = [];
+  try { rows = await fetchTab(env, 'Insp_Units'); } catch (e) {}
+  rows = rows.filter(r => r.Active !== 'FALSE' && (!pid || r.Property_ID === pid));
+  return json(rows);
+}
+async function inspUnitAdd(env, body) {
+  if (!body || !body.Property_ID) return json({ error: 'Property_ID required' }, 400);
+  await ensureInspTabs(env);
+  return await addRow(env, 'Insp_Units', {
+    Property_ID: String(body.Property_ID), Label: body.Label || 'Unit',
+    Tenant_Name: body.Tenant_Name || '', Tenant_Phone: body.Tenant_Phone ? normalizePhone(body.Tenant_Phone) : '',
+    Notes: body.Notes || '', Active: 'TRUE', Created_Date: new Date().toISOString().slice(0,10),
+  });
+}
+
+// ── Availability rules + blackouts ──────────────────────────────────────────
+// One combined read — the admin screen always needs both together (same reasoning
+// as hubBootstrap batching several tabs into one call).
+async function inspAvailabilityGet(env) {
+  let rules = [], blackouts = [];
+  try { rules = await fetchTab(env, 'Insp_Availability_Rules'); } catch (e) {}
+  try { blackouts = await fetchTab(env, 'Insp_Blackouts'); } catch (e) {}
+  return json({
+    rules: rules.filter(r => r.Active !== 'FALSE'),
+    blackouts: blackouts.filter(r => r.Active !== 'FALSE'),
+  });
+}
+async function inspAvailabilityAdd(env, body) {
+  if (!body || !INSP_DOW.includes(body.Day_Of_Week) || !body.Start_Time || !body.End_Time)
+    return json({ error: 'Day_Of_Week (Mon..Sun), Start_Time, End_Time required' }, 400);
+  await ensureInspTabs(env);
+  return await addRow(env, 'Insp_Availability_Rules', {
+    Day_Of_Week: body.Day_Of_Week, Start_Time: body.Start_Time, End_Time: body.End_Time,
+    Active: 'TRUE', Created_Date: new Date().toISOString().slice(0,10),
+  });
+}
+// Blackouts support three shapes (Type) — covers "block these specific dates",
+// "nothing after 3pm on Fridays" (recurring weekly), and "nothing on Christmas"
+// (recurring annual) in one model:
+//   'date'   — one-off. `dates` (array) adds several rows in ONE action, so Brett
+//              can multi-select a batch of dates (e.g. a week off) at once.
+//   'weekly' — Day_Of_Week + optional Start_Time/End_Time (blank Start_Time = all
+//              day; a Start_Time with no End_Time means "to end of day").
+//   'annual' — Month_Day ('MM-DD'), recurs every year at that calendar date.
+async function inspBlackoutAdd(env, body) {
+  if (!body || !body.Type) return json({ error: 'Type required (date|weekly|annual)' }, 400);
+  await ensureInspTabs(env);
+  const base = {
+    Start_Time: body.Start_Time || '', End_Time: body.End_Time || '',
+    Reason: body.Reason || '', Active: 'TRUE', Created_Date: new Date().toISOString().slice(0,10),
+  };
+  if (body.Type === 'date') {
+    const dates = Array.isArray(body.dates) && body.dates.length ? body.dates : (body.Date ? [body.Date] : []);
+    if (!dates.length) return json({ error: 'At least one date required' }, 400);
+    const results = [];
+    for (const d of dates) {
+      results.push(await addRow(env, 'Insp_Blackouts', Object.assign({ Type: 'date', Date: String(d).slice(0,10), Day_Of_Week: '', Month_Day: '' }, base)));
+    }
+    return json({ success: true, count: results.length });
+  }
+  if (body.Type === 'weekly') {
+    if (!INSP_DOW.includes(body.Day_Of_Week)) return json({ error: 'Day_Of_Week (Mon..Sun) required for a weekly blackout' }, 400);
+    return await addRow(env, 'Insp_Blackouts', Object.assign({ Type: 'weekly', Date: '', Day_Of_Week: body.Day_Of_Week, Month_Day: '' }, base));
+  }
+  if (body.Type === 'annual') {
+    if (!/^\d{2}-\d{2}$/.test(body.Month_Day || '')) return json({ error: 'Month_Day (MM-DD) required for an annual blackout' }, 400);
+    return await addRow(env, 'Insp_Blackouts', Object.assign({ Type: 'annual', Date: '', Day_Of_Week: '', Month_Day: body.Month_Day }, base));
+  }
+  return json({ error: 'Unknown Type — use date, weekly, or annual' }, 400);
 }
 
 // ── UTILITY ──────────────────────────────────────────────────

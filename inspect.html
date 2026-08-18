@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Inspection Scheduler — Ridge Co</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --surface:#fff; --border:#dfe3e8; --text:#1c2430; --muted:#6b7684;
+    --accent:#1d4ed8; --accent2:#1a7f4b; --danger:#c0392b; --warn:#b8860b; --chip:#eef2f7;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px}
+  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;z-index:10}
+  header h1{font-size:18px;margin:0}
+  header .ver{font-size:11px;color:var(--muted)}
+  .tabs{position:sticky;top:49px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;z-index:9}
+  .tabs button{flex:1;padding:12px 4px;border:none;background:none;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent}
+  .tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+  main{padding:14px 14px 60px;max-width:640px;margin:0 auto}
+  .page{display:none} .page.active{display:block}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .muted{color:var(--muted);font-size:13px}
+  .btn{padding:11px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:15px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.go{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:6px 11px;font-size:13px}
+  .btn:active{opacity:.85}
+  .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--chip);color:var(--muted)}
+  .pill.ok{background:#e7f6ec;color:var(--accent2)} .pill.due{background:#fdf3e0;color:var(--warn)} .pill.new{background:#eaf1fd;color:var(--accent)}
+  input,select,textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text);font-family:inherit}
+  label.fld{display:block;margin:10px 0 4px;font-size:13px;color:var(--muted);font-weight:600}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center;z-index:50}
+  .modal.open{display:flex}
+  .sheet{background:var(--surface);width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:16px;max-height:92vh;overflow:auto}
+  .sheet h2{margin:2px 0 12px;font-size:18px}
+  .hide{display:none}
+  .banner{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s}
+  .toast.show{opacity:1}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+  .seg{display:flex;gap:6px;margin:10px 0}
+  .seg button{flex:1;padding:10px 4px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:13px;font-weight:600;cursor:pointer}
+  .seg button.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .chip-row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--chip);border:1px solid var(--border);border-radius:8px;padding:5px 9px;font-size:13px}
+  .chip .x{cursor:pointer;color:var(--danger);font-weight:700}
+  .unit-row{border-top:1px solid var(--border);padding:8px 0;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .prop-card{border-top:1px solid var(--border);padding:10px 0}
+  .prop-card:first-child{border-top:none}
+  .two-col{display:flex;gap:8px}
+  .two-col>div{flex:1}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>Inspection Scheduler</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized — try again.</p>
+  <button class="btn primary" style="width:100%;margin-top:12px" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <header>
+    <h1>Inspection Scheduler</h1>
+    <span class="ver" id="ver"></span>
+  </header>
+  <div class="tabs">
+    <button class="active" data-tab="customers" onclick="switchTab('customers')">Customers</button>
+    <button data-tab="props" onclick="switchTab('props')">Properties &amp; Units</button>
+    <button data-tab="avail" onclick="switchTab('avail')">Availability</button>
+  </div>
+  <main>
+
+    <!-- ── CUSTOMERS ── -->
+    <div class="page active" id="page-customers">
+      <div class="card">
+        <div class="row"><b>Customers</b><span class="muted" id="cust-count"></span></div>
+        <div id="cust-list" style="margin-top:10px"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <div class="row" onclick="toggleSection('cust-add')" style="cursor:pointer"><b>+ Add customer</b><span class="muted" id="cust-add-caret">show</span></div>
+        <div id="cust-add" class="hide" style="margin-top:10px">
+          <label class="fld">Name</label>
+          <input id="c-name" placeholder="e.g. Phoenix Estate Rentals — Inspections">
+          <label class="fld">Line of business</label>
+          <select id="c-line"><option value="rental">Rental portfolio (batched inspections)</option><option value="amscre">AMSCRE (one-off routing)</option></select>
+          <div class="two-col">
+            <div><label class="fld">Contact name</label><input id="c-cname" placeholder="optional"></div>
+            <div><label class="fld">Contact phone</label><input id="c-cphone" type="tel" placeholder="optional"></div>
+          </div>
+          <label class="fld">Contact email</label>
+          <input id="c-cemail" type="email" placeholder="optional">
+          <label class="fld">Notes</label>
+          <textarea id="c-notes" rows="2" placeholder="optional"></textarea>
+          <button class="btn primary" style="width:100%;margin-top:14px" onclick="addCustomer(this)">Save customer</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PROPERTIES & UNITS ── -->
+    <div class="page" id="page-props">
+      <div class="card">
+        <label class="fld">Customer</label>
+        <select id="p-customer-picker" onchange="onCustomerPick()"><option value="">— pick a customer —</option></select>
+      </div>
+      <div id="props-body" class="hide">
+        <div class="card">
+          <div class="row">
+            <b>Properties</b>
+            <button class="btn sm" onclick="toggleZipSort()" id="zip-sort-btn">Sort by zip</button>
+          </div>
+          <div id="prop-list" style="margin-top:10px"><p class="muted">Loading…</p></div>
+        </div>
+        <div class="card">
+          <div class="row" onclick="toggleSection('prop-add')" style="cursor:pointer"><b>+ Add property</b><span class="muted" id="prop-add-caret">show</span></div>
+          <div id="prop-add" class="hide" style="margin-top:10px">
+            <label class="fld">Address</label>
+            <input id="pr-address" placeholder="123 Main St, Baltimore MD">
+            <div class="two-col">
+              <div><label class="fld">Zip</label><input id="pr-zip" inputmode="numeric" placeholder="21201"></div>
+              <div><label class="fld">Type</label><select id="pr-type" onchange="onPropTypeChange()"><option value="single_family">Single-family</option><option value="multifamily">Multifamily</option></select></div>
+            </div>
+            <div class="two-col">
+              <div id="pr-units-wrap" class="hide"><label class="fld">Unit count</label><input id="pr-units" type="number" inputmode="numeric" value="2"></div>
+              <div><label class="fld">Visit length (min/unit)</label><input id="pr-duration" type="number" inputmode="numeric" value="30"></div>
+            </div>
+            <label class="fld">Notes</label>
+            <textarea id="pr-notes" rows="2" placeholder="optional"></textarea>
+            <button class="btn primary" style="width:100%;margin-top:14px" onclick="addProperty(this)">Save property</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── AVAILABILITY ── -->
+    <div class="page" id="page-avail">
+      <div class="card">
+        <div class="row"><b>Default weekly hours</b></div>
+        <div id="avail-list" style="margin-top:10px"><p class="muted">Loading…</p></div>
+        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+          <div class="two-col">
+            <div><label class="fld">Day</label><select id="av-day"><option>Mon</option><option>Tue</option><option>Wed</option><option>Thu</option><option>Fri</option><option>Sat</option><option>Sun</option></select></div>
+            <div><label class="fld">Start</label><input id="av-start" type="time" value="09:00"></div>
+            <div><label class="fld">End</label><input id="av-end" type="time" value="15:00"></div>
+          </div>
+          <button class="btn primary" style="width:100%;margin-top:10px" onclick="addAvailRule(this)">+ Add hours</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row"><b>Blackouts</b><span class="muted">off-limits dates &amp; times</span></div>
+        <div id="blackout-list" style="margin-top:10px"><p class="muted">Loading…</p></div>
+
+        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+          <div class="seg" id="bo-type-seg">
+            <button class="sel" data-t="date" onclick="setBoType('date',this)">One-off date(s)</button>
+            <button data-t="weekly" onclick="setBoType('weekly',this)">Recurring weekly</button>
+            <button data-t="annual" onclick="setBoType('annual',this)">Recurring annual</button>
+          </div>
+
+          <div id="bo-date-fields">
+            <label class="fld">Pick a date, tap Add — repeat for multiple, then Save</label>
+            <div class="two-col">
+              <div style="flex:2"><input id="bo-date-input" type="date"></div>
+              <div style="flex:1"><button class="btn" style="width:100%" onclick="addBlackoutDateChip()">+ Add</button></div>
+            </div>
+            <div class="chip-row" id="bo-date-chips"></div>
+          </div>
+
+          <div id="bo-weekly-fields" class="hide">
+            <label class="fld">Day</label>
+            <select id="bo-weekly-day"><option>Mon</option><option>Tue</option><option>Wed</option><option>Thu</option><option>Fri</option><option>Sat</option><option>Sun</option></select>
+            <div class="two-col">
+              <div><label class="fld">From (blank = all day)</label><input id="bo-weekly-start" type="time"></div>
+              <div><label class="fld">To (blank = end of day)</label><input id="bo-weekly-end" type="time"></div>
+            </div>
+            <p class="muted">e.g. Fri + From 15:00, To blank = "nothing after 3pm on Fridays."</p>
+          </div>
+
+          <div id="bo-annual-fields" class="hide">
+            <label class="fld">Recurs every year on</label>
+            <div class="two-col">
+              <div><label class="fld">Month</label><select id="bo-annual-month"></select></div>
+              <div><label class="fld">Day</label><select id="bo-annual-day"></select></div>
+            </div>
+          </div>
+
+          <label class="fld">Reason</label>
+          <input id="bo-reason" placeholder="e.g. Christmas, family time, no drive-time left">
+          <button class="btn primary" style="width:100%;margin-top:10px" onclick="saveBlackout(this)">Save blackout</button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Edit customer sheet -->
+<div class="modal" id="cust-edit-modal">
+  <div class="sheet">
+    <h2>Edit customer</h2>
+    <input type="hidden" id="ce-id">
+    <label class="fld">Name</label><input id="ce-name">
+    <label class="fld">Line of business</label>
+    <select id="ce-line"><option value="rental">Rental portfolio</option><option value="amscre">AMSCRE</option></select>
+    <div class="two-col">
+      <div><label class="fld">Contact name</label><input id="ce-cname"></div>
+      <div><label class="fld">Contact phone</label><input id="ce-cphone" type="tel"></div>
+    </div>
+    <label class="fld">Contact email</label><input id="ce-cemail" type="email">
+    <label class="fld">Notes</label><textarea id="ce-notes" rows="2"></textarea>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeModal('cust-edit-modal')">Cancel</button>
+      <button class="btn primary" style="flex:2" onclick="saveCustomerEdit(this)">Save changes</button>
+    </div>
+    <button class="btn" style="width:100%;margin-top:10px;color:var(--danger);border-color:var(--danger)" onclick="removeCustomer()">Remove this customer</button>
+  </div>
+</div>
+
+<!-- Edit property sheet -->
+<div class="modal" id="prop-edit-modal">
+  <div class="sheet">
+    <h2>Edit property</h2>
+    <input type="hidden" id="pe-id">
+    <label class="fld">Address</label><input id="pe-address">
+    <div class="two-col">
+      <div><label class="fld">Zip</label><input id="pe-zip" inputmode="numeric"></div>
+      <div><label class="fld">Type</label><select id="pe-type" onchange="onPropEditTypeChange()"><option value="single_family">Single-family</option><option value="multifamily">Multifamily</option></select></div>
+    </div>
+    <div class="two-col">
+      <div id="pe-units-wrap"><label class="fld">Unit count</label><input id="pe-units" type="number" inputmode="numeric"></div>
+      <div><label class="fld">Visit length (min/unit)</label><input id="pe-duration" type="number" inputmode="numeric"></div>
+    </div>
+    <label class="fld">Notes</label><textarea id="pe-notes" rows="2"></textarea>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeModal('prop-edit-modal')">Cancel</button>
+      <button class="btn primary" style="flex:2" onclick="savePropertyEdit(this)">Save changes</button>
+    </div>
+    <button class="btn" style="width:100%;margin-top:10px;color:var(--danger);border-color:var(--danger)" onclick="removeProperty()">Remove this property</button>
+  </div>
+</div>
+
+<!-- Edit unit sheet -->
+<div class="modal" id="unit-edit-modal">
+  <div class="sheet">
+    <h2>Edit unit</h2>
+    <input type="hidden" id="ue-id">
+    <label class="fld">Label</label><input id="ue-label" placeholder="e.g. Unit 2, Apt B">
+    <label class="fld">Tenant name</label><input id="ue-tname">
+    <label class="fld">Tenant phone</label><input id="ue-tphone" type="tel">
+    <label class="fld">Notes</label><textarea id="ue-notes" rows="2"></textarea>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeModal('unit-edit-modal')">Cancel</button>
+      <button class="btn primary" style="flex:2" onclick="saveUnitEdit(this)">Save changes</button>
+    </div>
+    <button class="btn" style="width:100%;margin-top:10px;color:var(--danger);border-color:var(--danger)" onclick="removeUnit()">Remove this unit</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';                  // shared with the Hub — same access code
+var AUTH_TOKEN = '';
+var customers = [], properties = [], unitsByProp = {}, availRules = [], blackouts = [];
+var curCustomerId = '';
+var zipSortOn = false;
+var boType = 'date';
+var boDateChips = [];
+
+function api(method, path, body){
+  var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.json().then(function(data){
+      if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
+      return data;
+    });
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';},2200); }
+function toggleSection(id){
+  var f=document.getElementById(id); var open=f.classList.toggle('hide')===false;
+  var caret=document.getElementById(id+'-caret'); if(caret) caret.textContent=open?'hide':'show';
+}
+function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+
+// ── Login ────────────────────────────────────────────────────
+function doLogin(){
+  var v=document.getElementById('login-input').value.trim(); AUTH_TOKEN=v;
+  api('GET','/insp/customers').then(function(){ localStorage.setItem(SECRET_KEY,v); enterApp(); })
+    .catch(function(){ AUTH_TOKEN=''; document.getElementById('login-error').classList.remove('hide'); });
+}
+document.getElementById('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored=localStorage.getItem(SECRET_KEY);
+  if(stored){ AUTH_TOKEN=stored; api('GET','/insp/customers').then(enterApp).catch(function(){ AUTH_TOKEN=''; }); }
+})();
+function enterApp(){
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').classList.remove('hide');
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  populateAnnualPicker();
+  loadCustomers(); loadAvailability();
+}
+
+// ── Tabs ─────────────────────────────────────────────────────
+function switchTab(name){
+  Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){ b.classList.toggle('active', b.getAttribute('data-tab')===name); });
+  Array.prototype.forEach.call(document.querySelectorAll('.page'),function(p){ p.classList.remove('active'); });
+  document.getElementById('page-'+name).classList.add('active');
+}
+
+// ── Customers ────────────────────────────────────────────────
+function loadCustomers(){
+  return api('GET','/insp/customers').then(function(list){
+    customers = Array.isArray(list)?list:[];
+    document.getElementById('cust-count').textContent = customers.length ? (customers.length+' total') : '';
+    var el=document.getElementById('cust-list');
+    if(!customers.length){ el.innerHTML='<p class="muted">No customers yet. Add one below.</p>'; }
+    else el.innerHTML = customers.map(function(c){
+      var lineBadge = c.Line==='amscre' ? '<span class="pill new">AMSCRE</span>' : '<span class="pill ok">Rental</span>';
+      return '<div class="prop-card"><div class="row"><div><b>'+esc(c.Name)+'</b> '+lineBadge+'<div class="muted">'+esc(c.Contact_Name||'')+(c.Contact_Phone?(' · '+esc(c.Contact_Phone)):'')+'</div></div>'
+        + '<button class="btn sm" onclick="openCustomerEdit(\''+c.ID+'\')">Edit</button></div></div>';
+    }).join('');
+    refreshCustomerPicker();
+  });
+}
+function refreshCustomerPicker(){
+  var sel=document.getElementById('p-customer-picker');
+  var keep=sel.value;
+  sel.innerHTML='<option value="">— pick a customer —</option>'+customers.map(function(c){
+    return '<option value="'+esc(c.ID)+'"'+(c.ID===keep?' selected':'')+'>'+esc(c.Name)+'</option>';
+  }).join('');
+  if(keep && customers.some(function(c){return c.ID===keep;})){ sel.value=keep; }
+}
+function addCustomer(btn){
+  var name=document.getElementById('c-name').value.trim();
+  if(!name){ toast('Enter a name'); return; }
+  var body={ Name:name, Line:document.getElementById('c-line').value,
+    Contact_Name:document.getElementById('c-cname').value.trim(), Contact_Phone:document.getElementById('c-cphone').value.trim(),
+    Contact_Email:document.getElementById('c-cemail').value.trim(), Notes:document.getElementById('c-notes').value.trim() };
+  btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/customer/add',body).then(function(r){
+    btn.disabled=false; btn.textContent='Save customer';
+    if(r&&r.success){ toast('Customer added'); document.getElementById('c-name').value=''; document.getElementById('c-cname').value='';
+      document.getElementById('c-cphone').value=''; document.getElementById('c-cemail').value=''; document.getElementById('c-notes').value='';
+      loadCustomers(); }
+    else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save customer'; toast('Error: '+e.message); });
+}
+function openCustomerEdit(id){
+  var c=customers.find(function(x){return x.ID===id;}); if(!c) return;
+  document.getElementById('ce-id').value=c.ID;
+  document.getElementById('ce-name').value=c.Name||'';
+  document.getElementById('ce-line').value=c.Line==='amscre'?'amscre':'rental';
+  document.getElementById('ce-cname').value=c.Contact_Name||'';
+  document.getElementById('ce-cphone').value=c.Contact_Phone||'';
+  document.getElementById('ce-cemail').value=c.Contact_Email||'';
+  document.getElementById('ce-notes').value=c.Notes||'';
+  document.getElementById('cust-edit-modal').classList.add('open');
+}
+function saveCustomerEdit(btn){
+  var id=document.getElementById('ce-id').value;
+  var fields={ Name:document.getElementById('ce-name').value.trim(), Line:document.getElementById('ce-line').value,
+    Contact_Name:document.getElementById('ce-cname').value.trim(), Contact_Phone:document.getElementById('ce-cphone').value.trim(),
+    Contact_Email:document.getElementById('ce-cemail').value.trim(), Notes:document.getElementById('ce-notes').value.trim() };
+  btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/customer/update',{ id:id, fields:fields }).then(function(r){
+    btn.disabled=false; btn.textContent='Save changes';
+    if(r&&r.success){ toast('Saved'); closeModal('cust-edit-modal'); loadCustomers(); }
+    else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save changes'; toast('Error: '+e.message); });
+}
+function removeCustomer(){
+  var id=document.getElementById('ce-id').value;
+  if(!confirm('Remove this customer? Its properties/units stay on file but hidden.')) return;
+  api('POST','/insp/customer/update',{ id:id, fields:{ Active:'FALSE' } }).then(function(r){
+    if(r&&r.success){ toast('Removed'); closeModal('cust-edit-modal'); loadCustomers(); }
+    else toast((r&&r.error)||'Could not remove');
+  }).catch(function(e){ toast('Error: '+e.message); });
+}
+
+// ── Properties & Units ──────────────────────────────────────
+function onCustomerPick(){
+  curCustomerId = document.getElementById('p-customer-picker').value;
+  var body=document.getElementById('props-body');
+  if(!curCustomerId){ body.classList.add('hide'); return; }
+  body.classList.remove('hide');
+  loadProperties();
+}
+function toggleZipSort(){
+  zipSortOn=!zipSortOn;
+  document.getElementById('zip-sort-btn').textContent = zipSortOn ? 'Sort by added' : 'Sort by zip';
+  renderProperties();
+}
+function loadProperties(){
+  return api('GET','/insp/properties?customer_id='+encodeURIComponent(curCustomerId)).then(function(list){
+    properties = Array.isArray(list)?list:[];
+    return Promise.all(properties.map(function(p){
+      return api('GET','/insp/units?property_id='+encodeURIComponent(p.ID)).then(function(u){ unitsByProp[p.ID]=Array.isArray(u)?u:[]; });
+    }));
+  }).then(renderProperties);
+}
+function renderProperties(){
+  var el=document.getElementById('prop-list');
+  if(!properties.length){ el.innerHTML='<p class="muted">No properties yet for this customer. Add one below.</p>'; return; }
+  var list=properties.slice();
+  if(zipSortOn) list.sort(function(a,b){ return String(a.Zip||'').localeCompare(String(b.Zip||'')); });
+  el.innerHTML = list.map(function(p){
+    var units=unitsByProp[p.ID]||[];
+    var typeBadge = p.Type==='multifamily' ? '<span class="pill new">Multifamily · '+esc(p.Unit_Count||units.length)+' units</span>' : '<span class="pill ok">Single-family</span>';
+    var unitRows = units.map(function(u){
+      return '<div class="unit-row"><div><b>'+esc(u.Label||'Unit')+'</b>'+(u.Tenant_Name?(' — '+esc(u.Tenant_Name)):'')+(u.Tenant_Phone?('<div class="muted">'+esc(u.Tenant_Phone)+'</div>'):'')+'</div>'
+        + '<button class="btn sm" onclick="openUnitEdit(\''+p.ID+'\',\''+u.ID+'\')">Edit</button></div>';
+    }).join('') || '<p class="muted" style="margin:6px 0">No units added yet.</p>';
+    return '<div class="prop-card">'
+      + '<div class="row"><div><b>'+esc(p.Address)+'</b> '+typeBadge+'<div class="muted">Zip '+esc(p.Zip||'—')+' · '+esc(p.Visit_Duration_Min||30)+' min/unit</div></div>'
+      + '<button class="btn sm" onclick="openPropertyEdit(\''+p.ID+'\')">Edit</button></div>'
+      + '<div style="margin-top:8px">' + unitRows + '</div>'
+      + '<div style="margin-top:8px;display:flex;gap:6px">'
+      + '<input id="qu-label-'+p.ID+'" placeholder="Unit label" style="flex:1">'
+      + '<input id="qu-tname-'+p.ID+'" placeholder="Tenant name" style="flex:1">'
+      + '<button class="btn sm" onclick="quickAddUnit(\''+p.ID+'\')">+ Unit</button></div>'
+      + '</div>';
+  }).join('');
+}
+function quickAddUnit(pid){
+  var label=document.getElementById('qu-label-'+pid).value.trim();
+  var tname=document.getElementById('qu-tname-'+pid).value.trim();
+  if(!label){ toast('Enter a unit label'); return; }
+  api('POST','/insp/unit/add',{ Property_ID:pid, Label:label, Tenant_Name:tname }).then(function(r){
+    if(r&&r.success){ toast('Unit added'); loadProperties(); } else toast((r&&r.error)||'Could not add');
+  }).catch(function(e){ toast('Error: '+e.message); });
+}
+function onPropTypeChange(){
+  document.getElementById('pr-units-wrap').classList.toggle('hide', document.getElementById('pr-type').value!=='multifamily');
+}
+function addProperty(btn){
+  if(!curCustomerId){ toast('Pick a customer first'); return; }
+  var address=document.getElementById('pr-address').value.trim();
+  if(!address){ toast('Enter an address'); return; }
+  var type=document.getElementById('pr-type').value;
+  var body={ Customer_ID:curCustomerId, Address:address, Zip:document.getElementById('pr-zip').value.trim(),
+    Type:type, Unit_Count:document.getElementById('pr-units').value||2,
+    Visit_Duration_Min:document.getElementById('pr-duration').value||30, Notes:document.getElementById('pr-notes').value.trim() };
+  btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/property/add',body).then(function(r){
+    btn.disabled=false; btn.textContent='Save property';
+    if(r&&r.success){ toast('Property added'); document.getElementById('pr-address').value=''; document.getElementById('pr-zip').value='';
+      document.getElementById('pr-notes').value=''; loadProperties(); }
+    else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save property'; toast('Error: '+e.message); });
+}
+function openPropertyEdit(id){
+  var p=properties.find(function(x){return x.ID===id;}); if(!p) return;
+  document.getElementById('pe-id').value=p.ID;
+  document.getElementById('pe-address').value=p.Address||'';
+  document.getElementById('pe-zip').value=p.Zip||'';
+  document.getElementById('pe-type').value=p.Type==='multifamily'?'multifamily':'single_family';
+  document.getElementById('pe-units').value=p.Unit_Count||2;
+  document.getElementById('pe-duration').value=p.Visit_Duration_Min||30;
+  document.getElementById('pe-notes').value=p.Notes||'';
+  onPropEditTypeChange();
+  document.getElementById('prop-edit-modal').classList.add('open');
+}
+function onPropEditTypeChange(){
+  document.getElementById('pe-units-wrap').classList.toggle('hide', document.getElementById('pe-type').value!=='multifamily');
+}
+function savePropertyEdit(btn){
+  var id=document.getElementById('pe-id').value;
+  var fields={ Address:document.getElementById('pe-address').value.trim(), Zip:document.getElementById('pe-zip').value.trim(),
+    Type:document.getElementById('pe-type').value, Unit_Count:document.getElementById('pe-units').value||2,
+    Visit_Duration_Min:document.getElementById('pe-duration').value||30, Notes:document.getElementById('pe-notes').value.trim() };
+  btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/property/update',{ id:id, fields:fields }).then(function(r){
+    btn.disabled=false; btn.textContent='Save changes';
+    if(r&&r.success){ toast('Saved'); closeModal('prop-edit-modal'); loadProperties(); }
+    else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save changes'; toast('Error: '+e.message); });
+}
+function removeProperty(){
+  var id=document.getElementById('pe-id').value;
+  if(!confirm('Remove this property? Its units stay on file but hidden.')) return;
+  api('POST','/insp/property/update',{ id:id, fields:{ Active:'FALSE' } }).then(function(r){
+    if(r&&r.success){ toast('Removed'); closeModal('prop-edit-modal'); loadProperties(); }
+    else toast((r&&r.error)||'Could not remove');
+  }).catch(function(e){ toast('Error: '+e.message); });
+}
+function openUnitEdit(pid,uid){
+  var u=(unitsByProp[pid]||[]).find(function(x){return x.ID===uid;}); if(!u) return;
+  document.getElementById('ue-id').value=u.ID;
+  document.getElementById('ue-label').value=u.Label||'';
+  document.getElementById('ue-tname').value=u.Tenant_Name||'';
+  document.getElementById('ue-tphone').value=u.Tenant_Phone||'';
+  document.getElementById('ue-notes').value=u.Notes||'';
+  document.getElementById('unit-edit-modal').classList.add('open');
+}
+function saveUnitEdit(btn){
+  var id=document.getElementById('ue-id').value;
+  var fields={ Label:document.getElementById('ue-label').value.trim(), Tenant_Name:document.getElementById('ue-tname').value.trim(),
+    Tenant_Phone:document.getElementById('ue-tphone').value.trim(), Notes:document.getElementById('ue-notes').value.trim() };
+  btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/unit/update',{ id:id, fields:fields }).then(function(r){
+    btn.disabled=false; btn.textContent='Save changes';
+    if(r&&r.success){ toast('Saved'); closeModal('unit-edit-modal'); loadProperties(); }
+    else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save changes'; toast('Error: '+e.message); });
+}
+function removeUnit(){
+  var id=document.getElementById('ue-id').value;
+  if(!confirm('Remove this unit?')) return;
+  api('POST','/insp/unit/update',{ id:id, fields:{ Active:'FALSE' } }).then(function(r){
+    if(r&&r.success){ toast('Removed'); closeModal('unit-edit-modal'); loadProperties(); }
+    else toast((r&&r.error)||'Could not remove');
+  }).catch(function(e){ toast('Error: '+e.message); });
+}
+
+// ── Availability: weekly rules + blackouts ──────────────────
+function loadAvailability(){
+  return api('GET','/insp/availability').then(function(d){
+    availRules = (d&&d.rules)||[]; blackouts = (d&&d.blackouts)||[];
+    renderAvailRules(); renderBlackouts();
+  });
+}
+var DOW_ORDER = {Mon:0,Tue:1,Wed:2,Thu:3,Fri:4,Sat:5,Sun:6};
+function renderAvailRules(){
+  var el=document.getElementById('avail-list');
+  if(!availRules.length){ el.innerHTML='<p class="muted">No hours set yet — add your default availability below.</p>'; return; }
+  var sorted=availRules.slice().sort(function(a,b){ return (DOW_ORDER[a.Day_Of_Week]||0)-(DOW_ORDER[b.Day_Of_Week]||0); });
+  el.innerHTML = sorted.map(function(r){
+    return '<div class="row" style="border-top:1px solid var(--border);padding-top:8px;margin-top:8px">'
+      + '<div><b>'+esc(r.Day_Of_Week)+'</b> '+esc(r.Start_Time)+' – '+esc(r.End_Time)+'</div>'
+      + '<button class="btn sm" onclick="removeAvailRule(\''+r.ID+'\')">Remove</button></div>';
+  }).join('');
+}
+function addAvailRule(btn){
+  var body={ Day_Of_Week:document.getElementById('av-day').value, Start_Time:document.getElementById('av-start').value, End_Time:document.getElementById('av-end').value };
+  if(!body.Start_Time||!body.End_Time){ toast('Set a start and end time'); return; }
+  btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/availability/add',body).then(function(r){
+    btn.disabled=false; btn.textContent='+ Add hours';
+    if(r&&r.success){ toast('Hours added'); loadAvailability(); } else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='+ Add hours'; toast('Error: '+e.message); });
+}
+function removeAvailRule(id){
+  api('POST','/insp/availability/update',{ id:id, fields:{ Active:'FALSE' } }).then(function(r){
+    if(r&&r.success){ toast('Removed'); loadAvailability(); } else toast((r&&r.error)||'Could not remove');
+  }).catch(function(e){ toast('Error: '+e.message); });
+}
+
+function fmtBlackout(b){
+  if(b.Type==='weekly'){
+    var t = b.Start_Time && b.End_Time ? (b.Start_Time+'–'+b.End_Time) : b.Start_Time ? ('after '+b.Start_Time) : b.End_Time ? ('before '+b.End_Time) : 'all day';
+    return 'Every '+b.Day_Of_Week+', '+t;
+  }
+  if(b.Type==='annual'){
+    var parts=(b.Month_Day||'').split('-'); var mn=MONTH_NAMES[Number(parts[0])-1]||b.Month_Day;
+    return 'Every year — '+mn+' '+(parts[1]||'');
+  }
+  return b.Date + (b.Start_Time||b.End_Time ? (' · '+(b.Start_Time||'00:00')+'–'+(b.End_Time||'23:59')) : '');
+}
+function renderBlackouts(){
+  var el=document.getElementById('blackout-list');
+  if(!blackouts.length){ el.innerHTML='<p class="muted">No blackouts set.</p>'; return; }
+  var sorted=blackouts.slice().sort(function(a,b){ return (a.Date||a.Day_Of_Week||a.Month_Day||'').localeCompare(b.Date||b.Day_Of_Week||b.Month_Day||''); });
+  el.innerHTML = sorted.map(function(b){
+    return '<div class="row" style="border-top:1px solid var(--border);padding-top:8px;margin-top:8px">'
+      + '<div><b>'+esc(fmtBlackout(b))+'</b>'+(b.Reason?('<div class="muted">'+esc(b.Reason)+'</div>'):'')+'</div>'
+      + '<button class="btn sm" onclick="removeBlackout(\''+b.ID+'\')">Remove</button></div>';
+  }).join('');
+}
+function removeBlackout(id){
+  api('POST','/insp/blackout/update',{ id:id, fields:{ Active:'FALSE' } }).then(function(r){
+    if(r&&r.success){ toast('Removed'); loadAvailability(); } else toast((r&&r.error)||'Could not remove');
+  }).catch(function(e){ toast('Error: '+e.message); });
+}
+var MONTH_NAMES=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function populateAnnualPicker(){
+  var ms=document.getElementById('bo-annual-month'); ms.innerHTML=MONTH_NAMES.map(function(m,i){ return '<option value="'+(i+1)+'">'+m+'</option>'; }).join('');
+  var ds=document.getElementById('bo-annual-day'); var opts=''; for(var d=1;d<=31;d++){ opts+='<option value="'+d+'">'+d+'</option>'; } ds.innerHTML=opts;
+}
+function setBoType(t,btn){
+  boType=t;
+  Array.prototype.forEach.call(document.querySelectorAll('#bo-type-seg button'),function(b){ b.classList.remove('sel'); });
+  btn.classList.add('sel');
+  document.getElementById('bo-date-fields').classList.toggle('hide', t!=='date');
+  document.getElementById('bo-weekly-fields').classList.toggle('hide', t!=='weekly');
+  document.getElementById('bo-annual-fields').classList.toggle('hide', t!=='annual');
+}
+function addBlackoutDateChip(){
+  var v=document.getElementById('bo-date-input').value;
+  if(!v){ toast('Pick a date first'); return; }
+  if(boDateChips.indexOf(v)===-1) boDateChips.push(v);
+  renderDateChips();
+}
+function renderDateChips(){
+  document.getElementById('bo-date-chips').innerHTML = boDateChips.map(function(d){
+    return '<span class="chip">'+esc(d)+' <span class="x" onclick="removeDateChip(\''+d+'\')">✕</span></span>';
+  }).join('');
+}
+function removeDateChip(d){ boDateChips=boDateChips.filter(function(x){return x!==d;}); renderDateChips(); }
+function saveBlackout(btn){
+  var reason=document.getElementById('bo-reason').value.trim();
+  var body={ Type:boType, Reason:reason };
+  if(boType==='date'){
+    if(!boDateChips.length){ toast('Add at least one date'); return; }
+    body.dates=boDateChips.slice();
+  } else if(boType==='weekly'){
+    body.Day_Of_Week=document.getElementById('bo-weekly-day').value;
+    body.Start_Time=document.getElementById('bo-weekly-start').value;
+    body.End_Time=document.getElementById('bo-weekly-end').value;
+  } else {
+    var mm=String(document.getElementById('bo-annual-month').value).padStart(2,'0');
+    var dd=String(document.getElementById('bo-annual-day').value).padStart(2,'0');
+    body.Month_Day=mm+'-'+dd;
+  }
+  btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/blackout/add',body).then(function(r){
+    btn.disabled=false; btn.textContent='Save blackout';
+    if(r&&(r.success||r.ID)){ toast('Blackout saved'); boDateChips=[]; renderDateChips(); document.getElementById('bo-reason').value=''; loadAvailability(); }
+    else toast((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save blackout'; toast('Error: '+e.message); });
+}
+</script>
+</body>
+</html>
