@@ -2,6 +2,18 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
+## Planning note: Aug 19, 2026 — Hybrid/materials-service vendor payments (locksmith), PLANNED not started
+Brett picked up keys from a locksmith (materials + a bit of labor), needs to pay them directly like a
+labor vendor while billing the customer as materials, alongside the actual labor vendor on the job —
+plus the general goal of paying materials vendors (Home Depot-style AND ACH-style hybrid vendors) as
+soon as the customer pays. Full investigation + phased plan + 5 open questions for Brett:
+**`context/HYBRID_VENDOR_PAYMENTS_BUILD_BRIEF_v1.0.md`**. Key finding: most of this already works
+(three job types, "✍ Enter a bill by hand" already lets Brett pick ANY vendor and create a second
+Vendor_Bills row on a WO, `/qb/pay-bills` BillPayment already built-but-dormant). The one real gap:
+`qbSendInvoice` only ever sends ONE Invoice_Review row at a time — two vendor bills on one WO today
+produce two separate QuickBooks customer invoices, not the one combined invoice Brett wants. Read the
+brief before starting any build here; do NOT re-derive this from scratch.
+
 ## Last checkpoint: Aug 17, 2026 — Review Bills bulk-approve, Sheets quota fix, access-code visibility
 
 ### What this session did (DONE + pushed to `Ridge-Co/RidgeCo`, commit `823b2d3`; Worker deploy `2026-08-17.7` pending Cloudflare auto-build off this push)
