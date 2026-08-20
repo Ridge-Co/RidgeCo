@@ -1,6 +1,8 @@
 # Hybrid / Materials-Service Vendor Payments — Build Brief v1.0
 
-**Status:** PLANNED, not started. Written Aug 19, 2026 from a full code-grounded investigation
+**Status:** Q1–Q5 answered Aug 20, 2026 (see Section 5). Phase 1 built + tested (`2026-08-20.1`),
+awaiting Brett's push confirmation. Phase 3 (combined invoice) is now the critical-path item per Q4 —
+see `context/SESSION_STATE.md` for the current handoff. Originally written Aug 19, 2026 from a full code-grounded investigation
 (worker.js + index.html + vendor.html + FEATURE_LOG + BACKLOG). Nothing below has been built yet.
 **Trigger:** Brett picked up keys from a locksmith (materials + a bit of labor), will pick up locks
 tomorrow. This locksmith needs to be paid directly (like a labor vendor, via the business account —
@@ -178,36 +180,23 @@ already fully settled at time of purchase; this is bookkeeping polish only.
 
 ---
 
-## 5. Open questions for Brett (answer inline, plain text — no widget needed)
+## 5. Open questions for Brett — ANSWERED Aug 20, 2026
 
-**Q1 — Is literal ACH required, or is QuickBooks' existing bank-account BillPayment ("Check" PayType)
-close enough?**
-(A) Fine as-is — it's an electronic payment out of our account either way, ship it.
-(B) I actually need true ACH via QuickBooks' own ACH/Bill Pay feature — needs its own research pass
-before Phase 3/4.
+**Q1 — ANSWERED: A.** QuickBooks' existing bank-account BillPayment is fine as-is. No true-ACH research
+needed.
 
-**Q2 — Does a hybrid vendor like this locksmith need their own vendor.html PIN portal login, or will
-Brett always hand-enter their invoices himself?**
-(A) I'll always enter it myself via "Enter a bill by hand" — no portal needed for this vendor class.
-(B) Some of these vendors should get normal portal access like a labor vendor.
+**Q2 — ANSWERED: expands past A/B.** Hand-enter for now, but Brett also wants some hybrid vendors to
+get real portal access, plus scan-to-invoice and email-to-invoice support. Investigated (FEATURE_LOG
+117b): portal access is already ~free (any Vendor with a Phone auto-gets a PIN); scan-to-invoice already
+works (vendor.html already has `Invoice_File_URL` upload); email-to-invoice is genuinely new — no
+ingestion pipeline exists, needs its own design pass before any code.
 
-**Q3 — On the customer invoice once Phase 3 ships, should each vendor's line(s) be itemized
-separately (e.g. "Labor — Eddie Smith" / "Materials — keys & locks") or rolled into the existing
-generic labor/materials line structure with no vendor names shown (matches today's no-address,
-no-vendor-name-shown philosophy elsewhere)?**
-(A) Keep it generic like today — no vendor names on the customer-facing invoice.
-(B) Itemize by vendor/description so the customer sees what each line covers.
+**Q3 — ANSWERED: A.** Keep it generic like today — no vendor names on the customer-facing invoice.
 
-**Q4 — Sequencing: ship Phase 1+2 (Vendor_Type + hand-bill upgrades) this week so the locksmith can be
-logged properly right now, with Phase 3 (invoice consolidation) as its own later focused session — or
-hold off entering this bill at all until Phase 3 is done, so it's never split across two invoices?**
-(A) Ship Phase 1+2 now — I'll live with two invoices for THIS one job if it comes to that.
-(B) Hold — don't want this bill entered until the full combined-invoice flow exists.
+**Q4 — ANSWERED: B.** Hold — don't enter the locksmith's bill until the full combined-invoice flow
+(Phase 3) exists. This makes Phase 3 the actual critical-path item, not the schema work.
 
-**Q5 — The Cloudflare secret `PAY_AUTH_CODE` (needed before ANY vendor bill-pay — old pattern or new —
-can actually run) has been open since Aug 17. Set it yet?**
-(A) I'll set it before we build further.
-(B) Not yet — walk me through it next session.
+**Q5 — ANSWERED: B.** `PAY_AUTH_CODE` not set yet — walk-through deferred to a future session.
 
 ---
 

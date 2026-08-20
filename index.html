@@ -773,6 +773,8 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Email (optional)</label><input type="email" id="v-email" placeholder="mike@example.com"></div>
       <div class="form-group"><label>Hourly Rate ($)</label><input type="number" id="v-rate" placeholder="40" min="0" step="0.01"></div>
       <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
+      <div class="form-group"><label>Vendor Type</label><select id="v-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
+      <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="v-payaddr" placeholder="123 Main St, City, ST 00000"></div>
       <div class="form-group full"><label>Trades — check all that apply</label><div id="v-trades-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;margin-top:4px"></div></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="v-rates" placeholder="Hourly rate, trip charge, etc..."></textarea></div>
     </div>
@@ -860,6 +862,8 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Email</label><input type="email" id="ev-email"></div>
       <div class="form-group"><label>Trade</label><select id="ev-trade"></select></div>
       <div class="form-group"><label>Markets</label><input type="text" id="ev-markets"></div>
+      <div class="form-group"><label>Vendor Type</label><select id="ev-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
+      <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="ev-payaddr"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
@@ -2796,7 +2800,7 @@ function submitAddProperty() {
 function openAddVendorModal(){openModal('modal-add-vendor');}
 function submitAddVendor(){
   var trades = Array.from(document.querySelectorAll('.v-trade-check:checked')).map(function(c){return c.value;}).join(',');
-  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
+  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Vendor_Type:document.getElementById('v-type').value||'labor',Payment_Address:document.getElementById('v-payaddr').value.trim(),Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
   if(!body.Name){toast('Name required','error');return;}
   if(!body.Phone){toast('Phone required','error');return;}
   api('POST','/vendor/add',body).then(function(res){
@@ -2931,11 +2935,12 @@ function openEditVendorModal(id) {
   evTrade.innerHTML = tradeOptions(v.Trade || 'General', false);
   evTrade.value = v.Trade || 'General';
   document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
+  document.getElementById('ev-type').value=v.Vendor_Type||'labor'; document.getElementById('ev-payaddr').value=v.Payment_Address||'';
   openModal('modal-edit-vendor');
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
-  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Rate_Notes:document.getElementById('ev-rates').value};
+  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
     toast('Vendor updated','success');closeModal('modal-edit-vendor');loadAll();
@@ -4491,7 +4496,7 @@ function hubBillHtml(k, woId, wo) {
   var opts = ['<option value="">— pick a vendor —</option>'].concat(vendors.map(function(v) {
     var nm = (v.Name || v.Company || ((v.First_Name || '') + ' ' + (v.Last_Name || '')).trim() || 'Vendor ' + v.ID);
     return '<option value="' + esc(String(v.ID)) + '"' + (String(v.ID) === assigned ? ' selected' : '') + ' data-rate="' +
-      esc(String(parseFloat(v.Hourly_Rate) || 0)) + '">' + esc(nm) + (String(v.ID) === assigned ? ' (assigned)' : '') + '</option>';
+      esc(String(parseFloat(v.Hourly_Rate) || 0)) + '" data-vtype="' + esc(v.Vendor_Type || 'labor') + '">' + esc(nm) + (String(v.ID) === assigned ? ' (assigned)' : '') + '</option>';
   })).join('');
 
   return '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px" id="hubbill-' + k + '">' +
@@ -4508,6 +4513,15 @@ function hubBillHtml(k, woId, wo) {
       '<div style="margin-bottom:8px">' +
         '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px">BILLING AS</label>' +
         '<select id="hb-vendor-' + k + '" onchange="hubBillVendorChanged(\'' + k + '\')" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px">' + opts + '</select>' +
+      '</div>' +
+
+      '<div style="margin-bottom:8px">' +
+        '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px">HOW THIS GETS PAID</label>' +
+        '<select id="hb-paymethod-' + k + '" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px">' +
+          '<option value="reimburse_via_labor_bill">Reimburse — rolls into another vendor\'s bill</option>' +
+          '<option value="separate_vendor_billpay">Pay this vendor directly (their own bill)</option>' +
+          '<option value="credit_card_no_bill">Already paid — card/account, no payable</option>' +
+        '</select>' +
       '</div>' +
 
       '<div style="display:flex;gap:6px;margin-bottom:8px">' +
@@ -4650,6 +4664,17 @@ function hubBillVendorChanged(k) {
   var rate = opt ? parseFloat(opt.getAttribute('data-rate')) || 0 : 0;
   if (!rateEl.value || rateEl.dataset.auto === '1') { rateEl.value = rate > 0 ? String(rate) : ''; rateEl.dataset.auto = '1'; }
   rateEl.addEventListener('input', function() { rateEl.dataset.auto = '0'; }, { once: true });
+  // B-227 Phase 2: default HOW THIS GETS PAID from the picked vendor's Vendor_Type — a
+  // materials_hybrid/materials_store vendor almost never rides on someone else's labor bill,
+  // so don't make Brett flip the dropdown every time for a vendor class it's never right for.
+  // Only auto-sets while untouched (same "dataset.auto" guard as the rate field above).
+  var payEl = document.getElementById('hb-paymethod-' + k);
+  if (payEl && (payEl.dataset.auto === undefined || payEl.dataset.auto === '1')) {
+    var vtype = opt ? opt.getAttribute('data-vtype') : 'labor';
+    payEl.value = (vtype === 'materials_hybrid' || vtype === 'materials_store') ? 'separate_vendor_billpay' : 'reimburse_via_labor_bill';
+    payEl.dataset.auto = '1';
+    payEl.addEventListener('change', function() { payEl.dataset.auto = '0'; }, { once: true });
+  }
   hubBillCalc(k);
 }
 
@@ -4824,6 +4849,7 @@ function hubBillSubmit(k, woId) {
     Status: 'submitted',
     Created_Date: new Date().toISOString().split('T')[0],
     Vendor_Invoice_No: (document.getElementById('hb-invno-' + k) || {}).value || '',
+    Payment_Method: (document.getElementById('hb-paymethod-' + k) || {}).value || 'reimburse_via_labor_bill',
     Notes: (document.getElementById('hb-notes-' + k) || {}).value || '',
     Entered_By: 'hub',
     Active: 'TRUE',

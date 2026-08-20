@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-18.9';
+const BUILD_VERSION = '2026-08-20.1';
 
 export default {
   async fetch(request, env) {
@@ -233,8 +233,12 @@ export default {
         if (path === '/owner/update')             return await updateRow(env, 'Owners', body.id, body.fields);
         if (path === '/owner/billing')            return await updateOwnerBilling(env, body);
         if (path === '/owner/get-billing')        return await getOwnerBilling(env, url);
-        if (path === '/vendor/add')               return await addRow(env, 'Vendors', body);
-        if (path === '/vendor/update')            return await updateRow(env, 'Vendors', body.id, body.fields);
+        // B-227 Phase 1: Vendor_Type (labor/materials_store/materials_hybrid) + Payment_Address
+        // are new Vendors columns — addRow/updateRow map fields by existing header only, so a
+        // write to a not-yet-created column stores nothing silently (same trap Vendor_Invoice_No
+        // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
+        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await addRow(env, 'Vendors', body); }
+        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await updateRow(env, 'Vendors', body.id, body.fields); }
         if (path === '/set-pin')                  return await updateRow(env, 'Tenants', body.tenant_id, { PIN: body.pin });
         if (path === '/vendor/set-pin')           return await updateRow(env, 'Vendors', body.vendor_id, { PIN: body.pin });
         if (path === '/owner/set-pin')            return await updateRow(env, 'Owners', body.owner_id, { PIN: body.pin });
@@ -2124,6 +2128,10 @@ async function addVendorBill(env, body) {
   // Vendor_Bills has no column for the vendor's own invoice number until something needs
   // one, and addRow maps by header — a write to a missing column stores nothing silently.
   if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) {} }
+  // B-227 Phase 1/2: Payment_Method (reimburse_via_labor_bill default / separate_vendor_billpay /
+  // credit_card_no_bill) — same lazy-ensureColumns pattern, only touches the sheet when a caller
+  // actually sends one (the vendor portal doesn't send this field, so it stays untouched there).
+  if (body.Payment_Method) { try { await ensureColumns(env, 'Vendor_Bills', ['Payment_Method']); } catch (e) {} }
   // Same pattern for the vendor's own invoice FILE (the actual document/photo, not just the
   // number) — B-fix Aug 17: vendors had no way to attach their invoice, only receipts had an
   // upload control. Drive_File_ID kept alongside the URL so the Hub can open it directly.

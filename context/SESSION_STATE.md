@@ -2,19 +2,48 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Planning note: Aug 19, 2026 — Hybrid/materials-service vendor payments (locksmith), PLANNED not started
-Brett picked up keys from a locksmith (materials + a bit of labor), needs to pay them directly like a
-labor vendor while billing the customer as materials, alongside the actual labor vendor on the job —
-plus the general goal of paying materials vendors (Home Depot-style AND ACH-style hybrid vendors) as
-soon as the customer pays. Full investigation + phased plan + 5 open questions for Brett:
-**`context/HYBRID_VENDOR_PAYMENTS_BUILD_BRIEF_v1.0.md`**. Key finding: most of this already works
-(three job types, "✍ Enter a bill by hand" already lets Brett pick ANY vendor and create a second
-Vendor_Bills row on a WO, `/qb/pay-bills` BillPayment already built-but-dormant). The one real gap:
-`qbSendInvoice` only ever sends ONE Invoice_Review row at a time — two vendor bills on one WO today
-produce two separate QuickBooks customer invoices, not the one combined invoice Brett wants. Read the
-brief before starting any build here; do NOT re-derive this from scratch.
+## Last checkpoint: Aug 20, 2026 — B-227 Phase 1 built (schema), Phase 3 is now the real priority
 
-## Last checkpoint: Aug 17, 2026 — Review Bills bulk-approve, Sheets quota fix, access-code visibility
+### Where B-227 stands (full context: `context/HYBRID_VENDOR_PAYMENTS_BUILD_BRIEF_v1.0.md`, FEATURE_LOG 117/117b)
+Brett answered the brief's 5 open questions this session: **Q1=A** (QuickBooks' existing bank-account
+BillPayment is fine, no true-ACH research needed) · **Q2=hand-enter, but also give some hybrid vendors
+real portal access + wants scan/email-to-invoice support** (expands past the original A/B — see below)
+· **Q3=A** (customer invoice stays generic, no vendor names shown) · **Q4=B — hold: don't enter the
+locksmith's bill until Phase 3 (combined invoice) exists**, don't want it split across two QuickBooks
+invoices · **Q5=B** (`PAY_AUTH_CODE` still not set, walk-through deferred to a future session).
+
+**Built + tested this session (`2026-08-20.1`, NOT YET PUSHED — awaiting Brett's go):** Phase 1 —
+additive `Vendors.Vendor_Type` (labor default/materials_hybrid/materials_store) + `Vendors.Payment_Address`
++ `Vendor_Bills.Payment_Method`, all `ensureColumns`-gated (existing rows untouched), Add/Edit Vendor
+forms updated, "Enter a bill by hand" gets a HOW THIS GETS PAID selector that auto-defaults from vendor
+type. `node --check` clean, all 5 index.html inline scripts syntax-clean, test suite 28/30 (same 2
+pre-existing unrelated failures as Aug 17 — `pricing-model`, `scope-core`). No money-posting code touched.
+
+**Q2 investigation (FEATURE_LOG 117b), so the next session doesn't re-derive it:**
+- Portal access for a hybrid vendor — already close to free. Any Vendor with a Phone auto-gets a PIN on
+  create; portal login isn't gated by vendor type today. Just needs Brett to decide which vendors get one.
+- "Scan to invoice" — **already fully built.** vendor.html already uploads `Invoice_File_URL`/`Invoice_File_ID`
+  on a portal bill submission; index.html already renders it as a "view file ↗" link. Confirmed in code,
+  not assumed.
+- "Email to invoice" — **genuinely new, no ingestion pipeline exists anywhere in this codebase.** Needs
+  its own design pass (Cloudflare Email Routing → Worker endpoint → draft Vendor_Bills row for review,
+  vs. a third-party inbound-parse service) before any code. Not started.
+
+**Per Q4, Phase 3 (`qbSendInvoice`/`buildInvoiceLines` combining every approved Invoice_Review row
+sharing a WO_ID into ONE customer invoice) is now the actual critical-path item** — it's what's really
+blocking the locksmith job, not the schema work. This is money-posting code: needs its own focused
+trace of `qbSendInvoice`/`buildInvoiceLines` (worker.js ~8532+), full `test-verified-builds` +
+`ridgeco-validate` pass, preview-first, and Brett's own supervised first live send before it's trusted.
+Do NOT start Phase 3 without re-reading this note and the brief's Section 4 first.
+
+### Next step (when Brett returns / continues)
+1. Confirm the Phase 1 diff (summarized in chat) and push — Brett's explicit go required (GATED: schema
+   change to a live Vendor/Vendor_Bills tab, per `AUTONOMY_GUARDRAILS_v1.0.md`).
+2. Decide on email-to-invoice (new scope, 117b) — build it, defer it, or drop it.
+3. Start Phase 3 — the combined-invoice build — as its own focused pass. This is the one that actually
+   unblocks entering the locksmith's bill per Q4.
+
+## Earlier checkpoint: Aug 17, 2026 — Review Bills bulk-approve, Sheets quota fix, access-code visibility
 
 ### What this session did (DONE + pushed to `Ridge-Co/RidgeCo`, commit `823b2d3`; Worker deploy `2026-08-17.7` pending Cloudflare auto-build off this push)
 Three shipped changes from Brett's own three asks this session, FEATURE_LOG rules 98–100:
