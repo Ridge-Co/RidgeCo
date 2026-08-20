@@ -8297,6 +8297,13 @@ function renderQBCard(r, i) {
     ? '<div style="color:var(--text);font-size:11.5px;line-height:1.55;margin:6px 0 8px;padding:8px;background:var(--surface2);border-radius:5px">' + esc(String(r.description).substring(0, 240)) + (String(r.description).length > 240 ? '…' : '') + '</div>'
     : '';
 
+  // B-227 Phase 3: this WO has other open bills that will combine into ONE invoice with
+  // this one on send — say so before Brett taps Preview, not just inside the preview.
+  var combineHtml = (r.combines_with > 0)
+    ? '<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--accent);line-height:1.5">' +
+        '🔗 +' + r.combines_with + ' more bill(s) on this job — Send combines them into ONE customer invoice (still separate vendor bills).' +
+      '</div>' : '';
+
   return '<div id="qb-card-'+i+'" data-irid="'+esc(r.id)+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">' +
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">' +
       '<div>' +
@@ -8310,7 +8317,7 @@ function renderQBCard(r, i) {
         '<div style="font-size:12px;color:var(--warn)">vendor $' + vc.toFixed(2) + '</div>' +
       '</div>' +
     '</div>' +
-    partialHtml + zeroCostHtml + jobLine +
+    partialHtml + zeroCostHtml + combineHtml + jobLine +
     '<button onclick="previewQBSend(\''+esc(r.id)+'\')" style="width:100%;background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px;cursor:pointer">👁 Preview &amp; Send</button>' +
     '<button onclick="withdrawApproval(\''+esc(r.id)+'\','+ct.toFixed(2)+')" style="width:100%;margin-top:5px;background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:11.5px;padding:6px;cursor:pointer">↩ Withdraw approval — reprice this job</button>' +
     '<div id="qb-msg-'+esc(r.id)+'" style="margin-top:6px"></div>' +
@@ -8357,6 +8364,26 @@ function previewQBSend(id) {
   });
 }
 
+// One vendor-bill block, shared by the single-vendor and combined preview renderers so
+// they can never drift apart on what a bill line actually shows.
+function renderQBBillBlock(bill, vendor) {
+  return '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL' + (vendor && vendor.display ? ' — ' + esc(vendor.display) : '') + '</div>' +
+    ((bill.terms && !bill.skipped)
+      ? '<div style="color:var(--muted);font-size:11px;margin-bottom:3px">Terms: <b style="color:var(--text)">' + esc(bill.terms) + '</b></div>'
+      : '') +
+    ((bill.doc_number && !bill.skipped)
+      ? '<div style="color:var(--muted);font-size:11px;margin-bottom:3px">Bill number: <b style="color:var(--text)">' + esc(bill.doc_number) + '</b>' +
+        (bill.doc_from === 'vendor' ? ' (their invoice number)' : ' (no vendor invoice number — using the job number)') + '</div>'
+      : '') +
+    (bill.in_house ? '<div style="color:var(--accent2)">' + esc((vendor && vendor.display) || 'This vendor') + ' is in-house — no bill, so no payable to you.' +
+      '<div style="color:var(--muted);font-size:10.5px;margin-top:3px">The full invoice is income. Your hours are shown separately as your time, not subtracted as a cost.</div></div>' :
+     bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
+      '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc((vendor && vendor.display) || 'vendor') + '</span><span style="color:var(--warn)">$' + (parseFloat(bill.total)||0).toFixed(2) + '</span></div>') +
+    ((bill && bill.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + bill.attach_receipts + ' receipt(s) attach to this bill (not shown to customer)</div>' : '') +
+  '</div>';
+}
+
 function renderQBPreview(p) {
   var lines = (p.invoice.lines||[]).map(function(l){
     return '<div style="display:flex;justify-content:space-between;gap:8px"><span style="color:var(--muted)">' + esc(l.desc) + '</span><span style="color:var(--text)">$' + (parseFloat(l.amount)||0).toFixed(2) + '</span></div>';
@@ -8370,6 +8397,30 @@ function renderQBPreview(p) {
     '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:8px;font-size:11px;color:var(--warn)">' + wlist.map(function(w){return '⚠ '+esc(w);}).join('<br>') + '</div>' : '';
   var already = (p.already && (p.already.invoice||p.already.bill)) ?
     '<div style="color:var(--muted);font-size:11px;margin-top:6px">Already in QB → invoice ' + esc(p.already.invoice||'—') + ', bill ' + esc(p.already.bill||'—') + '</div>' : '';
+
+  // B-227 Phase 3: p.combined means this WO's other open bills folded into this ONE invoice
+  // preview — render N vendor-bill blocks instead of one, everything else (customer, lines,
+  // total, warnings) unaffected because the Worker already combined them server-side.
+  if (p.combined) {
+    var combineBanner = '<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11.5px;color:var(--accent)">' +
+      '🔗 Combining ' + p.combined_count + ' vendor bills on this job into ONE customer invoice.</div>';
+    var billBlocks = safeArray(p.bills).map(function(b){ return renderQBBillBlock(b, b.vendor); }).join('');
+    return combineBanner + '' +
+      '<div style="font-size:12px;line-height:1.7">' +
+        qbPreviewEntity('Customer', 'owner', p.customer) +
+        qbBillToLine(p) +
+        '<div style="margin:6px 0;color:var(--muted)">Trade: ' + esc(p.trade) + '</div>' +
+      '</div>' +
+      '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
+        '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">CUSTOMER INVOICE (combined)</div>' +
+        lines +
+        '<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;font-weight:bold"><span>Invoice total</span><span style="color:var(--accent2)">$' + (parseFloat(p.invoice.total)||0).toFixed(2) + '</span></div>' +
+      '</div>' +
+      billBlocks +
+      (p.photo_link ? '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:11px;color:var(--muted)">🖼 Customer invoice links job photos</div>' : '') +
+      warns + already;
+  }
+
   return '' +
     '<div style="font-size:12px;line-height:1.7">' +
       qbPreviewEntity('Customer', 'owner', p.customer) +
@@ -8383,21 +8434,7 @@ function renderQBPreview(p) {
       '<div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);margin-top:4px;padding-top:4px;font-weight:bold"><span>Invoice total</span><span style="color:var(--accent2)">$' + (parseFloat(p.invoice.total)||0).toFixed(2) + '</span></div>' +
       ((p.invoice && p.invoice.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + p.invoice.attach_receipts + ' receipt(s) attached for the customer</div>' : '') +
     '</div>' +
-    '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:12px">' +
-      '<div style="color:var(--muted);font-size:10px;letter-spacing:.08em;margin-bottom:4px">VENDOR BILL</div>' +
-      ((p.bill.terms && !p.bill.skipped)
-        ? '<div style="color:var(--muted);font-size:11px;margin-bottom:3px">Terms: <b style="color:var(--text)">' + esc(p.bill.terms) + '</b></div>'
-        : '') +
-      ((p.bill.doc_number && !p.bill.skipped)
-        ? '<div style="color:var(--muted);font-size:11px;margin-bottom:3px">Bill number: <b style="color:var(--text)">' + esc(p.bill.doc_number) + '</b>' +
-          (p.bill.doc_from === 'vendor' ? ' (their invoice number)' : ' (no vendor invoice number — using the job number)') + '</div>'
-        : '') +
-      (p.bill.in_house ? '<div style="color:var(--accent2)">' + esc(p.vendor.display || 'This vendor') + ' is in-house — no bill, so no payable to you.' +
-        '<div style="color:var(--muted);font-size:10.5px;margin-top:3px">The full invoice is income. Your hours are shown separately as your time, not subtracted as a cost.</div></div>' :
-       p.bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
-        '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc(p.vendor.display||'vendor') + '</span><span style="color:var(--warn)">$' + (parseFloat(p.bill.total)||0).toFixed(2) + '</span></div>') +
-      ((p.bill && p.bill.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + p.bill.attach_receipts + ' receipt(s) attach to this bill (not shown to customer)</div>' : '') +
-    '</div>' +
+    renderQBBillBlock(p.bill, p.vendor) +
     (p.photo_link ? '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:11px;color:var(--muted)">🖼 Customer invoice links job photos</div>' : '') +
     warns + already;
 }
@@ -8410,7 +8447,14 @@ function confirmQBSend() {
   document.getElementById('qb-send-msg').innerHTML = '';
   api('POST', '/qb/send-invoice', { id: id }).then(function(res){
     if (res.ok || res.already_sent) {
-      var txt = res.already_sent ? 'Already in QuickBooks.' : ('✓ Created — invoice ' + (res.invoice_id||'—') + ', bill ' + (res.bill_id||'—'));
+      // Combined sends (B-227 Phase 3) return bill_ids (array, one per vendor) instead of a
+      // single bill_id — normalize to one flag/count so the rest of this stays unchanged.
+      var billIds = safeArray(res.bill_ids).filter(Boolean);
+      var anyBill = res.bill_id || billIds.length > 0;
+      var billTxt = res.bill_ids ? (billIds.length + ' bill(s)') : (res.bill_id || '—');
+      var txt = res.already_sent ? 'Already in QuickBooks.' :
+        ('✓ Created — invoice ' + (res.invoice_id||'—') + ', ' + billTxt +
+         (res.combined_count > 1 ? ' (combined ' + res.combined_count + ' vendor bills into this one invoice)' : ''));
       // The Worker returns warnings — "Vendor_Cost is 0, the vendor bill will be skipped"
       // being the important one — and this screen used to drop them on the floor, so a send
       // that quietly created no vendor bill read as a clean success.
@@ -8419,7 +8463,7 @@ function confirmQBSend() {
         warnHtml = '<div style="color:var(--warn);font-size:11.5px;margin-top:6px;line-height:1.5">⚠ ' +
           res.warnings.map(function(w){ return esc(w); }).join('<br>⚠ ') + '</div>';
       }
-      if (!res.already_sent && !res.bill_id) {
+      if (!res.already_sent && !anyBill) {
         warnHtml += '<div style="color:var(--warn);font-size:11.5px;margin-top:6px;line-height:1.5">⚠ No vendor bill was created in QuickBooks — only the customer invoice. Check the vendor cost on this job.</div>';
       }
       document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + esc(txt) + '</div>' + warnHtml;

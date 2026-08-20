@@ -1,9 +1,12 @@
 # Hybrid / Materials-Service Vendor Payments — Build Brief v1.0
 
-**Status:** Q1–Q5 answered Aug 20, 2026 (see Section 5). Phase 1 built + tested (`2026-08-20.1`),
-awaiting Brett's push confirmation. Phase 3 (combined invoice) is now the critical-path item per Q4 —
-see `context/SESSION_STATE.md` for the current handoff. Originally written Aug 19, 2026 from a full code-grounded investigation
-(worker.js + index.html + vendor.html + FEATURE_LOG + BACKLOG). Nothing below has been built yet.
+**Status:** Q1–Q5 answered Aug 20, 2026 (see Section 5). Phase 1 built, tested, and **pushed** (commit
+`b2c390f`, `2026-08-20.1`). Phase 3 (combined invoice — the actual critical-path item per Q4) built,
+tested, ridgeco-validated, and **pushed** (`2026-08-20.4`, rebased cleanly onto an unrelated Aug 21
+push from another session) — **still needs Brett's live Preview & Send test on a real 2-vendor WO
+before he trusts Confirm on a real job.** See `context/SESSION_STATE.md` and `FEATURE_LOG.md` rule 121
+for the current handoff. Originally written Aug 19, 2026 from a full code-grounded investigation
+(worker.js + index.html + vendor.html + FEATURE_LOG + BACKLOG).
 **Trigger:** Brett picked up keys from a locksmith (materials + a bit of labor), will pick up locks
 tomorrow. This locksmith needs to be paid directly (like a labor vendor, via the business account —
 "ACH" in Brett's words) while still billing the customer as materials, alongside — not instead of —

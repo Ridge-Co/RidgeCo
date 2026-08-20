@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-20.3';
+const BUILD_VERSION = '2026-08-20.4';
 
 export default {
   async fetch(request, env) {
@@ -8421,6 +8421,21 @@ function qbBillDocNumber(billRow, ir, siblingIndex) {
 // truck/shop stock (if any) + a single labor summary line. Materials show at cost;
 // the labor line absorbs the remainder so the lines always sum to Customer_Total —
 // keeping the internal first-hour / markup (private) off the customer's invoice.
+// B-227 Phase 3: which Invoice_Review rows combine into one QuickBooks customer invoice.
+// Every OTHER approved row on the SAME WO that hasn't been invoiced yet (blank QB_Invoice_ID)
+// joins the group — a WO with only one such row groups with itself (length 1), which is
+// today's ordinary single-vendor job and behaves identically to before this existed. A row
+// that ALREADY has an invoice (haveInv true) never groups — it is returned alone, so an
+// already-sent invoice is never silently reopened or merged into.
+function qbGroupOpenRows(irRows, ir) {
+  const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
+  const groupRows = haveInv ? [ir] : irRows.filter(r =>
+    r.Active !== 'FALSE' && String(r.WO_ID) === String(ir.WO_ID) &&
+    !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim()));
+  if (!groupRows.some(r => r.ID === ir.ID)) groupRows.push(ir);
+  return groupRows;
+}
+
 function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts) {
   // An override is used when REPAIRING an existing invoice: the wording changes, the
   // account it posted to must not. Trade resolution has changed since some invoices were
@@ -8617,6 +8632,17 @@ async function qbReadyQueue(env, url) {
       if (wantAll) return true;
       return OPEN_QB.includes((r.QB_Invoice_Status || '').toLowerCase().trim());
     });
+    // B-227 Phase 3: how many OTHER rows on this same WO will combine into one invoice with
+    // this one, per qbGroupOpenRows' own rule (not-yet-invoiced + same WO_ID). Computed
+    // against the full irRows, not just `pending`, so a row already flagged 'partial' still
+    // counts correctly toward its siblings.
+    const woOpenCounts = {};
+    irRows.forEach(r => {
+      if (r.Active === 'FALSE') return;
+      if (r.QB_Invoice_ID && r.QB_Invoice_ID.trim()) return;
+      const k = String(r.WO_ID);
+      woOpenCounts[k] = (woOpenCounts[k] || 0) + 1;
+    });
     const out = pending.map(r => {
       const wo = findWO(wos, r.WO_ID) || {};
       const rawStatus = (r.QB_Invoice_Status || '').toLowerCase().trim();
@@ -8639,6 +8665,10 @@ async function qbReadyQueue(env, url) {
         // Surfaced so the screen can warn BEFORE sending: a zero vendor cost means the
         // vendor bill will be skipped and only the customer invoice will post.
         vendor_cost_zero: !(parseFloat(r.Vendor_Cost) > 0),
+        // B-227 Phase 3: how many OTHER open bills on this WO will fold into the same
+        // invoice as this one. 0 means this bill sends/invoices alone (today's ordinary case).
+        combines_with: !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim())
+          ? Math.max(0, (woOpenCounts[String(r.WO_ID)] || 1) - 1) : 0,
       };
     });
     return json(out);
@@ -8700,6 +8730,20 @@ async function qbSendInvoice(env, body) {
     if (!owner) warnings.push('No owner found for this property — set the property owner before sending.');
     const billToNote = qbBillToNote(billTo, prop, unit);
     if (billToNote) warnings.push(billToNote);
+
+    // B-227 Phase 3: if other approved-but-not-yet-invoiced bills share this WO, combine
+    // them into ONE customer invoice (still one QB Bill per vendor) instead of the old
+    // one-Invoice_Review-row-at-a-time path below. groupRows.length === 1 is the ordinary
+    // single-vendor job — falls straight through to the unchanged code beneath, zero
+    // behavior change for the ~95% of jobs that only ever had one vendor bill.
+    const groupRows = qbGroupOpenRows(irRows, ir);
+    if (groupRows.length > 1) {
+      return await qbSendCombinedInvoice(env, {
+        groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName,
+        warnings, previewOnly, batch: body.batch,
+      });
+    }
+
     const custTotal  = Number(ir.Customer_Total) || 0;
     const vendorCost = Number(ir.Vendor_Cost) || 0;
     if (custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
@@ -9022,6 +9066,299 @@ async function qbSendInvoice(env, body) {
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId,
                   invoice_number: invoiceDocNumber, bill_number: billDocAssigned,
                   status, errors, warnings });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
+
+// B-227 Phase 3 — the actual gap this whole build exists to close: send ONE combined
+// QuickBooks customer invoice for every not-yet-invoiced approved Invoice_Review row sharing
+// a WO_ID (the labor vendor's bill + the hybrid materials vendor's bill, etc.), while still
+// posting one separate QB Bill per distinct vendor — Bills were already correctly separated
+// per vendor before this existed; only the invoice side ever collapsed multiple bills into
+// multiple invoices. Mirrors qbSendInvoice's single-row logic exactly, just looped per group
+// member for the per-vendor pieces (bill, receipts, mapping) and combined once for the invoice.
+// Called ONLY from qbSendInvoice when qbGroupOpenRows finds more than one row — never invoked
+// directly, so it inherits that function's route-level auth.
+async function qbSendCombinedInvoice(env, ctx) {
+  const { groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName, previewOnly } = ctx;
+  const warnings = (ctx.warnings || []).slice();
+  try {
+    // Date on an already-approved bill: use the earliest approval in the group so the
+    // combined invoice isn't dated later than work Brett already did. Falls back to today
+    // only if every row is missing an Approved_Date (hand-edited data).
+    const approvedDates = groupRows.map(r => r.Approved_Date).filter(Boolean).sort();
+    const txnDate = approvedDates[0] || new Date().toISOString().split('T')[0];
+    const woId = groupRows[0].WO_ID;
+
+    // Per-row build: each row keeps its own vendor, bill, receipts, and invoice lines —
+    // exactly what buildInvoiceLines already computes for a single row, just called once
+    // per group member instead of once for the whole function.
+    let ownReceiptsAll = null;
+    const rowBuilds = [];
+    for (const r of groupRows) {
+      const vendor = vendors.find(v => v.ID === r.Vendor_ID) || {};
+      const billRow = bills.find(b => b.ID === r.Bill_ID) || {};
+      const custTotal = Number(r.Customer_Total) || 0;
+      const vendorCost = Number(r.Vendor_Cost) || 0;
+      if (custTotal <= 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: Customer_Total is 0 — nothing to invoice for this line.`);
+      if (vendorCost <= 0) warnings.push(`Bill ${r.Bill_ID || r.ID} (${vendor.Name || r.Vendor_Name || 'vendor'}): Vendor_Cost is 0 — its vendor bill will be skipped.`);
+
+      let ownReceipts = [];
+      const ownIds = String(r.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
+      if (ownIds.length) {
+        try {
+          if (!ownReceiptsAll) ownReceiptsAll = await fetchTab(env, 'Receipts');
+          ownReceipts = ownReceiptsAll.filter(rc => ownIds.includes(String(rc.ID)) && rc.Active !== 'FALSE');
+          if (ownReceipts.length !== ownIds.length) {
+            warnings.push(`Bill ${r.Bill_ID || r.ID}: ${ownIds.length - ownReceipts.length} approved receipt(s) are no longer on this job.`);
+          }
+        } catch (e) { warnings.push('Could not read the Receipts tab for bill ' + (r.Bill_ID || r.ID) + '.'); }
+      }
+
+      const inv = buildInvoiceLines(r, billRow, trade, tradeName, wo, null, ownReceipts);
+      if (inv.laborAmt < 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: materials exceed its customer total — labor line is negative, check the bill.`);
+
+      const vendDisplay = vendor.Name || r.Vendor_Name || ('Vendor ' + (r.Vendor_ID || ''));
+      const vendorInHouse = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+      const priorSameVendor = bills.filter(b =>
+        b.Active !== 'FALSE' && String(b.WO_ID) === String(r.WO_ID) &&
+        String(b.Vendor_ID) === String(r.Vendor_ID) && String(b.ID) !== String(r.Bill_ID) &&
+        Number(b.ID) < Number(r.Bill_ID)).length;
+      const billDoc = qbBillDocNumber(billRow, r, priorSameVendor);
+      const termDays = vendorTermDays(vendor);
+
+      rowBuilds.push({ row: r, vendor, billRow, custTotal, vendorCost, inv, vendDisplay, vendorInHouse, billDoc, termDays });
+    }
+
+    const combinedLines = rowBuilds.reduce((acc, rb) => acc.concat(rb.inv.lines), []);
+    const combinedTotal = +rowBuilds.reduce((s, rb) => s + rb.custTotal, 0).toFixed(2);
+    const note = `RidgeCo IR ${groupRows.map(r => r.ID).join('+')} · WO ${woId} · Bill ${groupRows.map(r => r.Bill_ID).join('+')}`;
+
+    const photoFolderId  = wo.Drive_Folder_ID || '';
+    const photoFolderUrl = wo.Drive_Folder_URL || (photoFolderId ? ('https://drive.google.com/drive/folders/' + photoFolderId) : '');
+    const memoParts = [];
+    if (photoFolderUrl) memoParts.push('View job photos: ' + photoFolderUrl);
+    const customerMemo = memoParts.join('\n');
+
+    const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
+    const invoicePayload = { Line: combinedLines, TxnDate: txnDate, PrivateNote: note };
+    if (customerMemo) invoicePayload.CustomerMemo = { value: customerMemo.slice(0, 1000) };
+
+    if (previewOnly) {
+      let custSuggest = null, qbCustomers = [];
+      const billsPreview = [];
+      try {
+        const ptok = await qbAccessToken(env);
+        if (!(owner && (owner.QBO_Customer_ID || '').trim())) {
+          qbCustomers = await qbListEntities(env, 'customer', ptok, false);
+          custSuggest = qbMatchEntity(qbCustomers, custDisplay, (owner && (owner.Billing_Email || owner.Email)) || '');
+        }
+        for (const rb of rowBuilds) {
+          let vendSuggestRow = null;
+          if (!(rb.vendor.QBO_Vendor_ID || '').trim()) {
+            const qbVendorsRow = await qbListEntities(env, 'vendor', ptok, false);
+            vendSuggestRow = qbMatchEntity(qbVendorsRow, rb.vendDisplay, rb.vendor.Email || '');
+          }
+          if (rb.vendorInHouse && rb.vendorCost > 0) warnings.push(`No vendor bill will be created — ${rb.vendDisplay} is marked in-house.`);
+          billsPreview.push({
+            bill_id: rb.row.Bill_ID,
+            vendor: { display: rb.vendDisplay, existing_id: rb.vendor.QBO_Vendor_ID || '', vendor_id: rb.vendor.ID || '', suggest: vendSuggestRow },
+            total: +rb.vendorCost.toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
+            doc_number: rb.billDoc.number, doc_from: rb.billDoc.source,
+            skipped: rb.vendorCost <= 0 || rb.vendorInHouse, in_house: rb.vendorInHouse,
+          });
+        }
+      } catch (e) { warnings.push('Could not read the QuickBooks customer/vendor list — no match suggestions.'); }
+
+      if (!photoFolderUrl) warnings.push('No job-photo folder on this work order, so the invoice will carry no photo link.');
+
+      return json({ preview: {
+        ir_id: groupRows[0].ID, group_ids: groupRows.map(r => r.ID), wo_id: woId, trade: tradeName,
+        combined: true, combined_count: groupRows.length,
+        bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
+                   property: qbPropertyDisplayName(prop), unit: qbUnitLabel(unit),
+                   property_id: prop.ID || '', unit_id: (unit && unit.ID) || '',
+                   note: qbBillToNote(billTo, prop, unit),
+                   owner_linked: !!((owner && owner.QBO_Customer_ID) || '').trim() },
+        customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && (owner.Billing_Email || owner.Email)) || '',
+                    owner_id: (owner && owner.ID) || '', suggest: custSuggest, qb_list: qbCustomers },
+        invoice: { total: combinedTotal, lines: combinedLines.map(l => ({ desc: l.Description, amount: l.Amount })) },
+        bills: billsPreview,
+        photo_link: photoFolderUrl,
+        warnings,
+      }});
+    }
+
+    // ---- CONFIRM (writes to QuickBooks) ----
+    if (!owner) return json({ ok: false, error: 'No owner on this property — cannot create a QB customer.', warnings });
+    if (combinedTotal <= 0) return json({ ok: false, error: 'Combined Customer_Total is 0 — nothing to invoice.', warnings });
+
+    const token = await qbAccessToken(env);
+    const errors = [];
+
+    if (photoFolderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, photoFolderId); } catch (e) { warnings.push('Photo-link share failed'); } }
+
+    // Batch send skips the preview, same risk the single-row path guards against: without
+    // this, a combined send could quietly create a duplicate QuickBooks customer or vendor
+    // for anything that looked like a plausible-but-not-exact match. Checked across EVERY
+    // vendor in the group, not just one — a group send touches all of them.
+    if (ctx.batch) {
+      const unmapped = [];
+      let checkFailed = '';
+      const needsCust = !!(owner && !(owner.QBO_Customer_ID || '').trim());
+      try {
+        if (needsCust) {
+          const m = qbMatchEntity(await qbListEntities(env, 'customer', token, false), custDisplay, owner.Billing_Email || owner.Email || '');
+          if (m && m.confidence !== 'exact') unmapped.push(`customer "${custDisplay}"`);
+        }
+        for (const rb of rowBuilds) {
+          const needsVend = !!(rb.vendorCost > 0 && rb.vendor && rb.vendor.ID && !(rb.vendor.QBO_Vendor_ID || '').trim() && !rb.vendorInHouse);
+          if (needsVend) {
+            const m = qbMatchEntity(await qbListEntities(env, 'vendor', token, false), rb.vendDisplay, rb.vendor.Email || '');
+            if (m && m.confidence !== 'exact') unmapped.push(`vendor "${rb.vendDisplay}"`);
+          }
+        }
+      } catch (e) { checkFailed = e.message || 'could not read the QuickBooks list'; }
+
+      const anyVendorNeedsCheck = rowBuilds.some(rb => rb.vendorCost > 0 && !rb.vendorInHouse && !(rb.vendor.QBO_Vendor_ID || '').trim());
+      if (checkFailed && (needsCust || anyVendorNeedsCheck)) {
+        return json({ ok: false, needs_mapping: true, warnings,
+          error: `Not sent: couldn't check QuickBooks for an existing customer/vendor (${checkFailed}). Use Preview & Send for this job so nothing gets created twice.` });
+      }
+      if (unmapped.length) {
+        return json({ ok: false, needs_mapping: true, warnings,
+          error: `Not sent: ${unmapped.join(' and ')} may already exist in QuickBooks. Link ${unmapped.length > 1 ? 'them' : 'it'} on the QB Mapping screen, or use Preview & Send to decide.` });
+      }
+    }
+
+    let customerId = '';
+    if (billTo.level !== 'owner' && billTo.qb_id) customerId = billTo.qb_id;
+    else { try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); } catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); } }
+
+    invoicePayload.CustomerRef = { value: customerId };
+    let billEmail = (owner && (owner.Billing_Email || owner.Email) || '').trim();
+    if (!billEmail) {
+      const ownerQbId = (owner && (owner.QBO_Customer_ID || '')).trim();
+      if (ownerQbId) {
+        try {
+          const cg = await qbApi(env, `customer/${encodeURIComponent(ownerQbId)}?minorversion=73`, 'GET', null, token);
+          billEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address) || '';
+        } catch (e) {}
+      }
+    }
+    const emailOk = billEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail);
+    if (billEmail && emailOk) invoicePayload.BillEmail = { Address: billEmail };
+    else if (billEmail && !emailOk) warnings.push(`The billing email on file ("${billEmail}") doesn't look valid, so it was left off the invoice.`);
+    else warnings.push('No email on the customer or owner, so this invoice has no saved send-to address.');
+
+    let r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+    let invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    if (!invoiceId && invoicePayload.BillEmail) {
+      const triedEmail = invoicePayload.BillEmail.Address;
+      delete invoicePayload.BillEmail;
+      r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+      invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+      if (invoiceId) warnings.push(`QuickBooks rejected the email "${triedEmail}", so the invoice was created without a saved send-to address.`);
+    }
+    let invoiceDocNumber = '';
+    if (!invoiceId) errors.push('Invoice: ' + (qbFault(r) || 'unknown error'));
+    else {
+      invoiceDocNumber = (r.Invoice && r.Invoice.DocNumber) || '';
+      if (!invoiceDocNumber) warnings.push('QuickBooks left the invoice number blank. Turn OFF Settings → Sales → Sales form content → Custom transaction numbers.');
+      else {
+        try {
+          const dupQ = encodeURIComponent(`select Id, DocNumber from Invoice where DocNumber = '${qbEscape(invoiceDocNumber)}'`);
+          const dupR = await qbApi(env, `query?query=${dupQ}&minorversion=73`, 'GET', null, token);
+          const hits = (dupR && dupR.QueryResponse && dupR.QueryResponse.Invoice) || [];
+          const others = hits.filter(x => String(x.Id) !== String(invoiceId));
+          if (others.length) warnings.push(`Invoice number ${invoiceDocNumber} is already used by invoice ${others.map(o => o.Id).join(', ')}.`);
+        } catch (e) {}
+      }
+    }
+
+    // One QB Bill per distinct vendor — unchanged mechanics, just looped across the group.
+    // CRITICAL (ridgeco-validate caught this before push): start from the row's OWN existing
+    // Bill id and only create one when it doesn't already have one — mirrors the single-row
+    // path's `!haveBill` guard (worker.js above). Without this, a row left in the reachable
+    // "Bill exists, Invoice blank" partial state (shared invoice POST failed, this vendor's
+    // bill still succeeded) would get re-billed from scratch on the very next retry, since
+    // qbGroupOpenRows only checks QB_Invoice_ID — it never looks at QB_Bill_ID at all.
+    for (const rb of rowBuilds) {
+      let billId = (rb.row.QB_Bill_ID && rb.row.QB_Bill_ID.trim()) || '';
+      // Preserve the already-recorded bill number on a reused/retried bill — only a freshly
+      // CREATED bill below overwrites this. Without a starting value here, a retry that finds
+      // billId already set (the branch above) would otherwise blank out QB_Bill_Number on write-back.
+      rb.billDocAssigned = rb.row.QB_Bill_Number || '';
+      if (!billId && rb.vendorCost > 0 && !rb.vendorInHouse) {
+        let vendorId = '';
+        try { vendorId = await qbFindOrCreateVendor(env, rb.vendor, rb.vendDisplay, token); }
+        catch (e) { errors.push('Vendor (' + rb.vendDisplay + '): ' + e.message); }
+        if (vendorId) {
+          const dueDate = new Date(txnDate + 'T12:00:00');
+          dueDate.setDate(dueDate.getDate() + rb.termDays);
+          const billPayload = {
+            Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +rb.vendorCost.toFixed(2),
+                      Description: (rb.vendDisplay + ' — ' + tradeName + ' — WO ' + rb.row.WO_ID).slice(0, 4000),
+                      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+            TxnDate: txnDate, PrivateNote: `RidgeCo IR ${rb.row.ID} · WO ${rb.row.WO_ID} · Bill ${rb.row.Bill_ID}`,
+            DueDate: rb.termDays > 0 ? dueDate.toISOString().split('T')[0] : txnDate,
+            VendorRef: { value: vendorId },
+          };
+          if (rb.billDoc.number) billPayload.DocNumber = rb.billDoc.number;
+          if (rb.billDoc.overlong) warnings.push(`Vendor invoice number "${rb.billDoc.overlong}" is too long for QuickBooks, so bill ${rb.row.Bill_ID} is numbered ${rb.billDoc.number} instead.`);
+          const dueTermId = await qbTermForDays(env, token, rb.termDays);
+          if (dueTermId) billPayload.SalesTermRef = { value: dueTermId };
+          else warnings.push(`QuickBooks has no "${vendorTermLabel(rb.vendor)}" term for bill ${rb.row.Bill_ID} — due date is right, Terms field is blank.`);
+          let br = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+          billId = (br && br.Bill && br.Bill.Id) || '';
+          if (!billId && billPayload.DocNumber && qbIsDocNumberFault(br)) {
+            warnings.push('QuickBooks would not accept bill number "' + billPayload.DocNumber + '" (' + (qbFault(br) || '') + ') — created without one.');
+            delete billPayload.DocNumber;
+            br = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+            billId = (br && br.Bill && br.Bill.Id) || '';
+          }
+          if (!billId) errors.push('Bill (' + rb.vendDisplay + '): ' + (qbFault(br) || 'unknown error'));
+          else rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+        }
+      } else if (rb.vendorInHouse && rb.vendorCost > 0) {
+        warnings.push(`No vendor bill created — ${rb.vendDisplay} is marked in-house, so there's no payable.`);
+      }
+      rb.billId = billId;
+      // Attach this row's own receipts: all → the shared invoice, reimbursable → this row's own bill.
+      if (invoiceId || billId) { try { await qbAttachReceipts(env, token, invoiceId, billId, rb.billRow, warnings); } catch (e) { warnings.push('Attachments error (' + rb.vendDisplay + '): ' + (e.message || '')); } }
+    }
+
+    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); }
+    catch (e) { warnings.push('Could not record which ledger this billed to — the invoice and bill ids are still saved.'); }
+
+    // Write EVERY group member's own status — each row keeps its own Bill_ID's outcome,
+    // all sharing the same invoice id/number. This is the line that actually closes the
+    // Phase 3 gap: before this, only the single row that was ir got the QB_Invoice_ID —
+    // its siblings kept a blank one and would send AGAIN as a second invoice.
+    for (const rb of rowBuilds) {
+      const billNotOwed = rb.vendorCost <= 0 || rb.vendorInHouse;
+      rb.status = (invoiceId && (rb.billId || billNotOwed)) ? 'sent' : (invoiceId || rb.billId) ? 'partial' : 'pending';
+      await updateRow(env, 'Invoice_Review', rb.row.ID, {
+        QB_Invoice_ID: invoiceId, QB_Bill_ID: rb.billId || '', QB_Invoice_Status: rb.status,
+        QB_Invoice_Number: invoiceDocNumber, QB_Bill_Number: rb.billDocAssigned || '',
+        QB_Bill_To: billTo.level + (billTo.display ? ': ' + billTo.display : ''),
+        QB_In_House: rb.vendorInHouse ? 'TRUE' : 'FALSE',
+      });
+    }
+    // Only flip the WO to Invoiced once EVERY row in the group cleanly resolved — mirrors
+    // the single-row rule (status === 'sent') extended across the whole group, so a WO with
+    // one clean bill and one still-partial bill stays open rather than reading Invoiced early.
+    const allSent = !!invoiceId && rowBuilds.every(rb => rb.status === 'sent');
+    if (allSent) {
+      try {
+        await updateWOFields(env, woId, { Status: 'Invoiced' });
+        if (invoiceDocNumber) await updateWOFields(env, woId, { QBO_Invoice_Number: invoiceDocNumber });
+      } catch (e) {}
+    }
+
+    return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_ids: rowBuilds.map(rb => rb.billId || ''),
+                  invoice_number: invoiceDocNumber, combined_count: groupRows.length, errors, warnings });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }

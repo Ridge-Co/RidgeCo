@@ -2,7 +2,56 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Last checkpoint: Aug 20, 2026 — B-227 Phase 1 built (schema), Phase 3 is now the real priority
+## Last checkpoint: Aug 20, 2026 (part 2) — B-227 Phase 3 built, validated, PUSHED. Live testing is the only remaining step — DO NOT REBUILD.
+
+**If you are reading this at the start of a new session: this work is DONE and PUSHED (commit visible in
+`git log` on `main` as the "B-227 Phase 3" commit, `worker.js` has `qbSendCombinedInvoice` and
+`qbGroupOpenRows` in it, `BUILD_VERSION` is `2026-08-20.4` or later). Confirm that with a quick
+`grep -n "qbSendCombinedInvoice" worker.js` before assuming ANYTHING here still needs building. The
+only actual remaining step is Brett's live Preview & Send test (see below) — not more code.**
+
+Phase 1 (below) is pushed — commit `b2c390f`, `2026-08-20.1`, live. Same session, continued straight
+into **Phase 3 — the actual combined-invoice gap** since Brett said "let's do the invoice, it's
+blocking" after Phase 1 landed.
+
+**Built, tested, ridgeco-validated, and PUSHED (`2026-08-20.4`):** `qbSendInvoice` now combines every
+not-yet-invoiced approved `Invoice_Review` row sharing a WO_ID into ONE QuickBooks customer Invoice,
+still one QB Bill per distinct vendor. New pure helper `qbGroupOpenRows(irRows, ir)`; new
+`qbSendCombinedInvoice` (only reached when the group has >1 row — the ordinary single-vendor job, ~95%
+of jobs, falls through to the completely untouched original single-row code, zero behavior change
+there). `qbReadyQueue` surfaces `combines_with`; index.html shows a "🔗 Combining N vendor bills"
+banner + one bill block per vendor in preview. Full details, including the ridgeco-validate pass that
+caught and fixed a real duplicate-Bill-on-retry bug before push: **FEATURE_LOG rule 121 — read this
+before touching Phase 3/4 again, do not re-derive it from scratch.**
+
+**Reconciliation note (why the version jumped .2 → .4 and the rule number is 121 not 118):** between
+building this and pushing it, an unrelated session (Aug 21, tenant work-order submit toggle, FEATURE_LOG
+rules 118-120) pushed to `main` first. Rebased cleanly — the only real collision was the `BUILD_VERSION`
+line (trivial, resolved to `.4`) and the FEATURE_LOG rule number (their rule 118 was already taken, so
+this work is numbered 121 instead). No code-logic conflicts at all — the two changes touch completely
+different regions of `worker.js`. This is exactly the kind of thing to check for on every push from now
+on: **before pushing, always `git fetch` + diff against `origin/main` first**, don't assume it hasn't
+moved.
+
+**Brett still needs to run a live Preview & Send test before trusting Confirm on a real job** (preview
+is read-only, zero writes — the code being live/pushed does NOT mean any QuickBooks write has happened)
+— pick a real WO with two open vendor bills, tap Preview & Send on either one, confirm the combined
+banner shows both vendors correctly and the total is the sum of both, before ever tapping Confirm on a
+real job. This is money-posting code (Rung 3, `AUTONOMY_GUARDRAILS_v1.0.md`) — his own eyes on a live
+preview is the gate, not just the validator pass, and not just the code being deployed.
+
+### Next step (when Brett returns / continues, Phase 3)
+1. **Check state first** (see the bolded note at the top of this section) — this is likely already done.
+2. Get Brett to run the live Preview & Send test above (needs a real WO with 2+ open vendor bills — the
+   locksmith job itself, once its bill is entered, is the natural test case).
+3. Non-blocking follow-ups flagged by the validator, not yet built: a concurrent-send lock (two sibling
+   sends truly simultaneous), and the pre-existing receipt-re-attach-on-retry quirk (not new, just newly
+   reachable via the combined path).
+4. THEN Brett can actually enter the locksmith's bill via "Enter a bill by hand" (per Q4) without it
+   splitting across two QuickBooks invoices.
+5. Decide on email-to-invoice (new scope, 117b) — build it, defer it, or drop it. Still open.
+
+## Earlier checkpoint, same day: Aug 20, 2026 (part 1) — B-227 Phase 1 built (schema)
 
 ### Where B-227 stands (full context: `context/HYBRID_VENDOR_PAYMENTS_BUILD_BRIEF_v1.0.md`, FEATURE_LOG 117/117b)
 Brett answered the brief's 5 open questions this session: **Q1=A** (QuickBooks' existing bank-account
