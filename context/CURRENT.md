@@ -1,3 +1,52 @@
+# WHERE THINGS STAND — Aug 21, 2026
+
+## 🕸️ Venture Web + skills review + two BACKLOG skills delivered (Aug 21, Cowork/mobile session).
+Brett brought a transcript of a Matt Wolfe video reviewing 9 external Claude Code/Codex skills
+(GStack, Stop Slop, Graphify, Understand Anything, Last 30 Days, Anthropic's Front-End Design, the
+Taste skill, Remotion, HyperFrames) and asked which were worth having. Reviewed each against what
+Brett already runs: 5 of 9 lost to a skill he already has tuned to his stack specifically (Stop Slop
+→ `humanize-text`; GStack's review/QA role → `ridgeco-validate`; Understand Anything → `ridgeco-map`);
+3 are genuinely useful but situational, not worth installing as standing skills (Last 30 Days,
+Front-End Design/Taste, Remotion/HyperFrames); 1 was a real gap. Built **`venture-web`** for that
+gap — an interactive cross-venture connection graph (mobile-first HTML, published as an Artifact)
+mined from `business_map.md`/`theme_map.md` in `brett332/data`, surfacing 9 "bridge" connections
+across ventures that don't show up working one venture at a time (e.g. BarrelCo and Winchester
+Hauling independently built near-identical Facebook Marketplace bot logic; the Fluid Truck
+bankruptcy claim has no single owner, split across Fleet & Vehicles and Finance). **Delivered as
+`venture-web.skill`, Brett saved it** (first attempt failed — `description` field was over the
+1024-char limit and silently broke "Save skill"; fixed and redelivered).
+
+Brett then asked what else had been built in past sessions but never installed. Checked the record
+(BACKLOG/CAPTURE_INBOX/CURRENT.md session log) rather than relying on memory: `brett-flow`,
+`ridgeco-map`, `brett-amplify`, `ridgeco-validate` were all already delivered-and-saved historically
+— nothing was actually pending. Found one loose end instead: a stale, superseded draft of the
+brett-context skill sitting at `brett332/data/skill/brettcontextSKILLFIXED.md` (pre-dates the
+light-load/session-efficiency version currently installed). **Deleted it from the private repo**
+(the currently-installed brett-context skill itself lives in Brett's account, not this repo, and
+was untouched). Also surfaced two never-built BACKLOG ideas (B-031, B-017) and built both on request:
+
+- **B-031 → `ridgeco-scope.skill`** — scope intake from typed/dictated/photographed notes into a
+  clean itemized scope, no invented line items, questions asked instead of assumed. Deliberately
+  **does not compute or state pricing** — that's scoped down from the original ask because
+  scope-creator.html already applies markup server-side (`calcTieredEstimate`) per the Aug 10 hard
+  rule (rule 73), which postdates this backlog item. Flags multi-trade/descope situations for the
+  existing cherry-pick upcharge language but reads the live numbers at proposal time rather than
+  memorizing them into the skill.
+- **B-017 → `brett-skillsmith.skill`** — a meta-skill for building future Brett-specific skills
+  consistently: checks for overlap with what Brett already has before building (the same discipline
+  used in the 9-skills review above), follows house SKILL.md conventions, checks the description
+  length before packaging (see the venture-web bug above), and logs each build here + in BACKLOG so
+  this exact "what haven't I installed" question stays answerable from the repo alone next time.
+  Note: **B-177 "Flows"** (the bigger in-app event-trigger automation engine) is the larger thing
+  B-017 originally pointed toward and remains separate/open — this skill covers the literal
+  "reusable Cowork skill for building skills" ask, not Flows.
+
+**🔴 Needs Brett:** tap **Save skill** on `ridgeco-scope.skill` and `brett-skillsmith.skill` (both
+delivered this session, neither confirmed saved yet — do not mark BACKLOG/this row "saved" until
+confirmed, same as `venture-web` wasn't marked done until the second delivery actually worked).
+Also: Brett pasted `BRETT_GH_PAT` into this chat to load context (his documented workflow) — per the
+standing CREDENTIALS_MAP rule, rotate it (revoke + reissue) after this session closes.
+
 # WHERE THINGS STAND — Aug 18, 2026 (end of day)
 
 ## 📋 Open Item Report — admin test-send override added SHIPPED (Aug 18, not yet usable). FEATURE_LOG rule 117. 🔴 Still needs Brett's Gmail OAuth setup before any send works.

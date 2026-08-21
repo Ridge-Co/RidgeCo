@@ -95,14 +95,14 @@ _Added Aug 10, 2026. Problem it solves: items get built or become moot but stay 
 - B-090 · Fleet Vehicle roster sheet — VIN/plate → current holder (Kingbee/GiddyUp
 **RIDGE CO — ESTIMATING**
 - B-030 · Estimating template system — reusable proposal generator
-- B-031 · Estimating skill/agent — scope intake, photo review, line item generatio
+- B-031 · Estimating skill/agent — scope intake, photo review, line item generation — ✅ DELIVERED Aug 21 as `ridgeco-scope.skill` — save it.
 - B-032 · Proposal PDF export — one-click PDF with hyperlinks from HTML proposal
 - B-076 · Estimate-acceptance workflow — accept-all-in-section or cherry-pick w/ r
 **BRETTOS INFRASTRUCTURE**
 - B-013 · Scheduled context update — auto-push session log after each session
 - B-014 · QB refresh token auto-renewal monitoring
 - B-016 · Multi-venture dashboard — one page, all ventures status
-- B-017 · Agent builder — create reusable agents for common tasks
+- B-017 · Agent builder — create reusable agents for common tasks — ✅ DELIVERED Aug 21 as `brett-skillsmith.skill` — save it. (B-177 "Flows" is the separate, bigger in-app automation engine this backlog item pointed toward — still open.)
 - B-018 · Automated session log append after every Cowork session
 - B-033 · Best Practices doc update — no AI-obvious filenames, no PDF header/foote
 - B-051 · Daily digest of next steps + small wins — ✅ SHIPPED July 22 (GET /daily-digest + 7am cron; delivery dormant until Twilio; see FEATURE_LOG v1.7)
@@ -361,7 +361,7 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 | ID | Priority | Item | Notes |
 |---|---|---|---|
 | B-030 | 🟠 | Estimating template system — reusable proposal generator | Intake form (Sheet or structured input) → auto-generated HTML proposal. Base design on 4518 Fairfax Rd v1.1 as reference. ~2hr build session. |
-| B-031 | 🟠 | Estimating skill/agent — scope intake, photo review, line item generation | Replace Gemini workflow. Ask questions, stick to provided scope, no invented items, build memory of Brett's pricing patterns. |
+| B-031 | 🟠 | Estimating skill/agent — scope intake, photo review, line item generation | Replace Gemini workflow. Ask questions, stick to provided scope, no invented items, build memory of Brett's pricing patterns. ✅ **DELIVERED Aug 21 as `ridgeco-scope.skill`** — save it. Scoped down from the original ask: does intake/organize/photo-review only, and deliberately does **not** compute or state pricing — that math stays server-side in scope-creator.html's `calcTieredEstimate` per the Aug 10 hard rule (rule 73), which postdates this backlog item. It flags multi-trade/descope situations for the existing cherry-pick upcharge language but leaves the live numbers to be read at proposal time, not memorized. |
 | B-032 | 🟡 | Proposal PDF export — one-click PDF with hyperlinks from HTML proposal | Chromium headless print-to-PDF. Links to Drive photos must survive. |
 | B-076 | 🔵 IN PROGRESS | Estimate/proposal-acceptance workflow → QB | **Core shipped Aug 10 (`2026-08-10.1`, FEATURE_LOG rule 72):** customer e-signs HTML proposal → `POST /proposal/sign` stores it → Hub `signed-proposals.html` → Brett previews → `POST /proposal/book` creates QB customer invoice (first payment) + vendor bill (base). Preview-first, idempotent, server-authoritative amounts. **Amounts + identities are PRIVATE — held in the Cloudflare env `PROPOSAL_CONFIG`, never in this public repo (see FEATURE_LOG rule 76: cost/markup confidentiality breach + locked rule).** **Remaining:** first supervised live-QB booking; set `PROPOSAL_SIGN_TOKEN` + `PROPOSAL_CONFIG` env; milestone vendor bills; move config to a private Sheet tab; version-poll auto-refresh; **purge markup from git history (deferred).** Ties B-030/B-032/B-126. |
 
@@ -374,7 +374,7 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 | B-013 | 🟠 | Scheduled context update — auto-push session log after each session | GitHub Actions or Cowork scheduled task. Recurring reminder now set. |
 | B-014 | 🟠 | QB refresh token auto-renewal monitoring | Alert Brett 2 weeks before 100-day expiry |
 | B-016 | 🟡 | Multi-venture dashboard — one page, all ventures status | BrettOS homepage |
-| B-017 | 🟡 | Agent builder — create reusable agents for common tasks | Cowork skill |
+| B-017 | 🟡 | Agent builder — create reusable agents for common tasks | Cowork skill. ✅ **DELIVERED Aug 21 as `brett-skillsmith.skill`** — save it. Builds future Brett-specific skills following house conventions (overlap check first, guardrails section, description under 1024 chars) and logs each build here + in CURRENT.md. Note: B-177 "Flows" (the in-app event-trigger automation engine) is the larger thing this item was pointing toward and remains separate/open — this skill covers the literal "build me a reusable Cowork skill" ask, not Flows. |
 | B-018 | 🟢 | Automated session log append after every Cowork session | Claude writes session summary to BACKLOG + SESSION_LOG |
 | B-033 | 🟡 | Best Practices doc update — no AI-obvious filenames, no PDF header/footer rule | Add as Section 14 to Brett_Cowork_Best_Practices_v1.3 → v1.4 |
 | B-051 | 🟠 | Daily digest of next steps + small wins | Attach new entries to major projects; leave space for more entries (FU's, invoices). From CAP-015. |
