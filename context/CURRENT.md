@@ -1,5 +1,22 @@
 # WHERE THINGS STAND — Aug 21, 2026
 
+## 🔓 Gladden un-gated + proposal text is now editable in the tool. FEATURE_LOG rule 127.
+Brett: "add the prices to the items on the page itself so we can fix it going forward and i can
+have full access to the link... i should be able to paste the text into the bottom proposal
+section... i don't want to send the link unless i can edit something in it if needed." Populated
+real per-item vendor costs on scope id=1 (Eddie's actual $3,600 quote, matched item-by-item — every
+one reproduces the already-quoted price at the 1.375x flat markup) via `/scope/update`'s
+`line_items` path only — confirmed live that `Proposal_Text`/`Status`/`Estimate_Amount` didn't
+move. `itemsFullyPriced()` is now true, owner-billing was already satisfied, so the proposal
+section is un-greyed. Also swapped the read-only proposal-text `<pre>` for an editable `<textarea>`
++ **Save** button, so Brett can edit/paste the proposal text directly going forward instead of
+needing an API call each time. Worker `2026-08-21.6`. **🔴 Do not tap "Generate proposal" on
+Gladden** — it recomputes through the new per-item engine and would overwrite the $4,950
+combined/standalone text with a recomputed $5,175 (per rule 125); edit the text box directly
+instead. **Verify (Brett):** open Gladden in Scope Creator, confirm the section is unlocked, the
+text box shows the existing proposal, Save works, and Get Shareable Link still returns the same
+link.
+
 ## ✅ SHIPPED — Owner ↔ Property linking gap fixed. FEATURE_LOG rule 126.
 Brett: "can't add owner to property or property to owner for new owner jeannie... not sure if this
 is a bug." Checked first whether this was a regression from today's other sessions — it wasn't:
