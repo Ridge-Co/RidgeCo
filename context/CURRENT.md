@@ -1,5 +1,26 @@
 # WHERE THINGS STAND — Aug 21, 2026
 
+## 🔧 FIXED — Gladden's live customer link was actively broken ($0.00, blank, signable). FEATURE_LOG rule 125.
+Brett: "I may have had an old one running on that, and there's also the esign... check to make sure
+the esign is done." Checking that surfaced something worse than the greyed-out button he'd reported:
+the customer's ALREADY-SENT shareable link for scope id=1 (Gladden) was live-broken right now — rule
+123's rewrite made `scope-proposal.html` render only `Proposal_Items_JSON` with no fallback, so a
+scope priced before that rewrite (Gladden's 14 items have no `variants`) was serving a blank scope of
+work, a **$0.00 total**, and a working sign form. Live-curled the real link to confirm before touching
+anything. Fixed additively — `render()` now falls back to the exact pre-rewrite flat-text renderer
+(restored from `de121b8`) whenever an item array is empty; any scope with real per-item data renders
+exactly as before, untouched. Verified against Gladden's live payload: correct $4,950/$2,475 and the
+full combined-vs-standalone breakdown, byte for byte. **Deliberately did NOT run Gladden through the
+new per-item pricing engine** — simulated it first against Eddie's real vendor costs and it computes
+$5,175, not $4,950 (the $50-per-item minimum markup applies once per item, not once per job); forcing
+fake vendor costs to hit $4,950 would also mis-price Eddie's real prorated vendor bill under rule 124's
+QB booking. Brett's call: keep this one as a flat-text proposal outside the new engine ("we are
+supposed to send the original amount... I want both on the proposal"). **E-sign itself: still shipped
++ unit-tested, still NOT field-verified** — live-checked `Scope_Signatures`, zero rows, nobody has
+signed anything yet; needs Brett's first live pass same as rule 123 already flagged. Worker
+`2026-08-21.5`. **Verify (Brett): reopen Gladden's existing link (same URL) and confirm it now shows
+the real proposal instead of a blank $0 page.**
+
 ## ✅ SHIPPED — Scope proposal → QuickBooks booking, Phase 2. FEATURE_LOG rule 124.
 Brett, same session as the `ac1470a` recovery right below: "give me the instructions to start the
 quickbooks invoice from signature workflow/code. I want that for my current proposal at gladden."

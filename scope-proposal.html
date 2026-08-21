@@ -21,6 +21,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 .addr{font-size:1.1rem;font-weight:bold;margin-bottom:2px;}
 .addr-sub{color:var(--muted);font-size:12px;}
 .section-hd{color:var(--accent);font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:.06em;margin:0 0 12px;}
+.subhd{font-weight:bold;font-size:13.5px;margin:14px 0 4px;}
+.subhd:first-child{margin-top:0;}
+.body-text ul{margin:0 0 6px 20px;padding:0;}
+.body-text li{margin-bottom:4px;}
+.body-text p{margin-bottom:10px;}
+.body-text .total-line{font-size:15px;font-weight:bold;}
 .item{padding:14px 0;border-bottom:1px solid var(--border);}
 .item:last-child{border-bottom:none;padding-bottom:0;}
 .item-area{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;}
@@ -85,6 +91,50 @@ var DATA = null;
 
 function esc(s){ var d=document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; }
 function money(n){ return '$' + Number(n||0).toFixed(2); }
+function boldify(s){ return s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'); }
+
+// Legacy fallback (pre-per-item-pricing proposals, e.g. a scope priced/sent before Aug 21 2026):
+// renders scopeProposal()'s flat Proposal_Text doc the same way this page always used to, for a
+// scope that has no Proposal_Items_JSON yet. Format is stable but not guaranteed — anything
+// unexpected just falls back to a plain paragraph, so a generator tweak never breaks this page.
+function renderParagraph(para){
+  var lines = para.split('\n').filter(function(l){ return l.length; });
+  if (!lines.length) return '';
+  var i = 0;
+  var html = '';
+  if (/^\*\*(.+)\*\*$/.test(lines[0].trim())) {
+    html += '<div class="subhd">' + esc(lines[0].trim().replace(/^\*\*|\*\*$/g,'')) + '</div>';
+    i = 1;
+  }
+  var rest = lines.slice(i);
+  var allBullets = rest.length > 0 && rest.every(function(l){ return l.trim().indexOf('-') === 0; });
+  if (allBullets) {
+    html += '<ul>' + rest.map(function(l){ return '<li>' + boldify(esc(l.trim().replace(/^-\s*/,''))) + '</li>'; }).join('') + '</ul>';
+    return html;
+  }
+  if (lines.length === 1 && lines[0].trim().length < 40 && /:$/.test(lines[0].trim())) {
+    return '<div class="section-hd">' + esc(lines[0].trim()) + '</div>';
+  }
+  html += '<p>' + rest.map(function(l){
+    var t = l.trim();
+    if (/^Total Estimated Cost:/.test(t) || /^Required 50% Deposit:/.test(t)) return '<span class="total-line">' + boldify(esc(l)) + '</span>';
+    return boldify(esc(l));
+  }).join('<br>') + '</p>';
+  return html;
+}
+function renderLegacyText(d){
+  var parts = String(d.proposal_text || '').split('\n\n');
+  if (parts.length && parts[0].trim() === String(d.address || '').trim()) parts.shift();
+  var body = parts.map(renderParagraph).join('');
+  var html = '<div class="card">'
+    + '<div class="addr">' + esc(d.address || '') + '</div>'
+    + (d.title ? '<div class="addr-sub">' + esc(d.title) + '</div>' : '')
+    + '</div>'
+    + '<div class="card body-text">' + body + '</div>'
+    + '<div class="card msg" style="background:#eef3fd;border:1px solid var(--border);color:var(--text);">To approve this proposal, reply to the message this link came from, or contact Ridge Co directly — we\'ll confirm and send your deposit invoice.</div>'
+    + '<div class="footer-note">Questions about this proposal? Reply to the message this link came from, or contact Ridge Co directly.</div>';
+  document.getElementById('content').innerHTML = html;
+}
 
 function itemHtml(it, locked, signedSelections){
   var selKey = locked ? (signedSelections && signedSelections[it.id]) : it.selected_key;
@@ -223,6 +273,15 @@ function render(d){
 
   var locked = !!d.signed;
   var items = d.items || [];
+
+  // Legacy proposal (no per-item pricing on file yet) — render the flat text doc instead of an
+  // empty/zero-dollar interactive view. Click-to-sign isn't offered here since there's no
+  // structured item/selection data to attach a signature to; approval happens the way it did
+  // before e-sign existed (reply/call/text), same as this page always worked pre-Aug-19.
+  if (!items.length && !locked && (d.proposal_text || '').trim()) {
+    renderLegacyText(d);
+    return;
+  }
   var itemsHtml = items.map(function(it){ return itemHtml(it, locked, locked ? d.signed.selections : null); }).join('');
   var subtotal = locked ? d.signed.subtotal : d.subtotal;
   var deposit = locked ? d.signed.deposit : d.deposit;
