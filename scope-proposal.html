@@ -20,20 +20,49 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px;margin-bottom:16px;}
 .addr{font-size:1.1rem;font-weight:bold;margin-bottom:2px;}
 .addr-sub{color:var(--muted);font-size:12px;}
-.section-hd{color:var(--accent);font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:.06em;margin:20px 0 8px;padding-top:14px;border-top:1px solid var(--border);}
-.section-hd:first-of-type{margin-top:6px;padding-top:0;border-top:none;}
-.subhd{font-weight:bold;font-size:13.5px;margin:14px 0 4px;}
-.subhd:first-child{margin-top:0;}
-.body-text ul{margin:0 0 6px 20px;padding:0;}
-.body-text li{margin-bottom:4px;}
-.body-text p{margin-bottom:10px;}
-.total-line{font-size:15px;font-weight:bold;}
+.section-hd{color:var(--accent);font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:.06em;margin:0 0 12px;}
+.item{padding:14px 0;border-bottom:1px solid var(--border);}
+.item:last-child{border-bottom:none;padding-bottom:0;}
+.item-area{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px;}
+.item-desc{font-weight:bold;font-size:14px;margin-bottom:8px;}
+.item-note{color:var(--muted);font-size:12px;margin-top:-4px;margin-bottom:8px;}
+.item-price-row{display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:bold;color:var(--accent);}
+.variant-group{display:flex;flex-direction:column;gap:6px;}
+.vopt{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:6px;padding:10px 12px;cursor:pointer;}
+.vopt:has(input:checked){border-color:var(--accent);background:#eef3fd;}
+.vopt input{flex:none;width:16px;height:16px;}
+.vlabel{flex:1;font-size:13.5px;}
+.vprice{font-weight:bold;color:var(--accent);font-size:13.5px;}
+.vopt.locked{cursor:default;}
+.vopt.locked.selected{border-color:var(--accent2);background:#eaf6ee;}
+.vopt.locked.selected .vprice{color:var(--accent2);}
+.totals{margin-top:4px;}
+.total-line{display:flex;justify-content:space-between;font-size:14px;padding:6px 0;}
+.total-line.grand{font-size:16px;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:10px;}
+.total-line.deposit{color:var(--accent);font-weight:bold;}
+.terms p, .terms li{color:var(--muted);font-size:12.5px;margin-bottom:6px;}
+.terms ul{margin-left:18px;}
+.sign-row{margin-bottom:14px;}
+.sign-row label{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;}
+.sign-row input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:var(--font);}
+.pad-wrap{border:1px solid var(--border);border-radius:6px;background:#fbfbfc;position:relative;}
+.pad-wrap canvas{display:block;width:100%;height:150px;touch-action:none;cursor:crosshair;}
+.pad-hint{position:absolute;top:8px;left:12px;color:#b8bfc8;font-size:12px;pointer-events:none;}
+.pad-actions{display:flex;justify-content:flex-end;margin-top:6px;}
+.link-btn{background:none;border:none;color:var(--accent);font-size:12px;font-weight:bold;cursor:pointer;padding:4px;}
+.agree-row{display:flex;align-items:flex-start;gap:8px;margin:14px 0;font-size:12.5px;color:var(--text);}
+.agree-row input{margin-top:2px;flex:none;}
+.submit-btn{width:100%;background:var(--accent2);color:#fff;border:none;border-radius:6px;padding:14px;font-size:15px;font-weight:bold;font-family:var(--font);cursor:pointer;}
+.submit-btn:disabled{background:#a9b2bd;cursor:not-allowed;}
 .msg{margin:12px 0;padding:12px 14px;border-radius:6px;font-size:12px;line-height:1.6;}
 .msg.error{background:#fdecea;border:1px solid var(--danger);color:var(--danger);}
+.msg.ok{background:#eaf6ee;border:1px solid var(--accent2);color:var(--accent2);}
+.signed-banner{background:#eaf6ee;border:1px solid var(--accent2);color:var(--accent2);border-radius:6px;padding:12px 14px;font-size:13px;margin-bottom:16px;}
+.signed-banner b{display:block;font-size:14px;margin-bottom:2px;}
 .loading{text-align:center;color:var(--muted);padding:60px 20px;}
 .footer-note{text-align:center;color:var(--muted);font-size:11px;margin-top:20px;line-height:1.6;}
 .hidden{display:none;}
-@media print { .app-header .print-btn { display:none; } body{background:#fff;} .card{border:none;} }
+@media print { .app-header .print-btn, .sign-card, .agree-row, .submit-btn { display:none; } body{background:#fff;} .card{border:none;} .vopt{border:1px solid #ccc;} }
 </style>
 </head>
 <body>
@@ -52,80 +81,220 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
 var params = new URLSearchParams(window.location.search);
 var TOKEN = params.get('t') || '';
+var DATA = null;
 
 function esc(s){ var d=document.createElement('div'); d.textContent = s==null?'':String(s); return d.innerHTML; }
-function boldify(s){ return s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'); }
+function money(n){ return '$' + Number(n||0).toFixed(2); }
 
-// Renders scopeProposal()'s plain-text doc (see worker.js) into readable HTML. Format is
-// stable but not guaranteed — anything unexpected just falls back to a plain paragraph, so a
-// future tweak to the generator text never breaks this page, it just renders a bit plainer.
-function renderParagraph(para){
-  var lines = para.split('\n').filter(function(l){ return l.length; });
-  if (!lines.length) return '';
-  var i = 0;
-  var html = '';
-  if (/^\*\*(.+)\*\*$/.test(lines[0].trim())) {
-    html += '<div class="subhd">' + esc(lines[0].trim().replace(/^\*\*|\*\*$/g,'')) + '</div>';
-    i = 1;
+function itemHtml(it, locked, signedSelections){
+  var selKey = locked ? (signedSelections && signedSelections[it.id]) : it.selected_key;
+  var multi = it.variants && it.variants.length > 1;
+  var body = '';
+  if (multi) {
+    body = '<div class="variant-group">' + it.variants.map(function(v){
+      var checked = v.key === selKey;
+      if (locked) {
+        return '<div class="vopt locked' + (checked?' selected':'') + '"><span class="vlabel">' + (checked?'&#10003; ':'') + esc(v.label || v.key) + '</span><span class="vprice">' + money(v.price) + '</span></div>';
+      }
+      return '<label class="vopt"><input type="radio" name="item-' + esc(it.id) + '" value="' + esc(v.key) + '"' + (checked?' checked':'') + ' onchange="recalc()"><span class="vlabel">' + esc(v.label || v.key) + '</span><span class="vprice">' + money(v.price) + '</span></label>';
+    }).join('') + '</div>';
+  } else {
+    var only = it.variants && it.variants[0];
+    body = '<div class="item-price-row"><span></span><span>' + money(only ? only.price : 0) + '</span></div>';
   }
-  var rest = lines.slice(i);
-  var allBullets = rest.length > 0 && rest.every(function(l){ return l.trim().indexOf('-') === 0; });
-  if (allBullets) {
-    html += '<ul>' + rest.map(function(l){ return '<li>' + boldify(esc(l.trim().replace(/^-\s*/,''))) + '</li>'; }).join('') + '</ul>';
-    return html;
-  }
-  if (lines.length === 1 && lines[0].trim().length < 40 && /:$/.test(lines[0].trim())) {
-    return '<div class="section-hd">' + esc(lines[0].trim()) + '</div>';
-  }
-  html += '<p>' + rest.map(function(l){
-    var t = l.trim();
-    if (/^Total Estimated Cost:/.test(t) || /^Required 50% Deposit:/.test(t)) return '<span class="total-line">' + boldify(esc(l)) + '</span>';
-    return boldify(esc(l));
-  }).join('<br>') + '</p>';
-  return html;
+  return '<div class="item">' +
+    (it.area ? '<div class="item-area">' + esc(it.area) + '</div>' : '') +
+    '<div class="item-desc">' + esc(it.description) + '</div>' +
+    (it.note ? '<div class="item-note">' + esc(it.note) + '</div>' : '') +
+    body +
+    '</div>';
 }
 
+function buildSelections(){
+  var sel = {};
+  (DATA.items || []).forEach(function(it){
+    if (it.variants && it.variants.length > 1) {
+      var checked = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
+      sel[it.id] = checked ? checked.value : it.selected_key;
+    } else {
+      sel[it.id] = (it.variants && it.variants[0]) ? it.variants[0].key : it.selected_key;
+    }
+  });
+  return sel;
+}
+
+function currentTotals(){
+  var subtotal = 0;
+  (DATA.items || []).forEach(function(it){
+    var key;
+    if (it.variants && it.variants.length > 1) {
+      var checked = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
+      key = checked ? checked.value : it.selected_key;
+    } else {
+      key = (it.variants && it.variants[0]) ? it.variants[0].key : it.selected_key;
+    }
+    var v = (it.variants || []).find(function(x){ return x.key === key; }) || (it.variants || [])[0];
+    if (v) subtotal += (+v.price || 0);
+  });
+  subtotal = +subtotal.toFixed(2);
+  return { subtotal: subtotal, deposit: +(subtotal/2).toFixed(2) };
+}
+
+function recalc(){
+  var t = currentTotals();
+  var totalEl = document.getElementById('live-total'); var depEl = document.getElementById('live-deposit');
+  if (totalEl) totalEl.textContent = money(t.subtotal);
+  if (depEl) depEl.textContent = money(t.deposit);
+}
+
+/* ---------- signature pad ---------- */
+var padCtx=null, drawing=false, hasDrawn=false, lastX=0, lastY=0;
+function initPad(){
+  var canvas = document.getElementById('sig-canvas'); if(!canvas) return;
+  var ratio = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * ratio; canvas.height = rect.height * ratio;
+  padCtx = canvas.getContext('2d'); padCtx.scale(ratio, ratio);
+  padCtx.lineWidth = 2; padCtx.lineCap = 'round'; padCtx.strokeStyle = '#1b1f24';
+  function pos(e){
+    var r = canvas.getBoundingClientRect();
+    var cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+    var cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+    return { x: cx, y: cy };
+  }
+  function start(e){ e.preventDefault(); drawing = true; var p = pos(e); lastX = p.x; lastY = p.y; }
+  function move(e){
+    if (!drawing) return; e.preventDefault();
+    var p = pos(e);
+    padCtx.beginPath(); padCtx.moveTo(lastX, lastY); padCtx.lineTo(p.x, p.y); padCtx.stroke();
+    lastX = p.x; lastY = p.y;
+    if (!hasDrawn) { hasDrawn = true; var hint = document.getElementById('pad-hint'); if (hint) hint.classList.add('hidden'); }
+    checkReady();
+  }
+  function end(){ drawing = false; }
+  canvas.addEventListener('mousedown', start); canvas.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
+  canvas.addEventListener('touchstart', start, {passive:false}); canvas.addEventListener('touchmove', move, {passive:false}); canvas.addEventListener('touchend', end);
+}
+function clearPad(){
+  var canvas = document.getElementById('sig-canvas'); if(!canvas || !padCtx) return;
+  var ratio = window.devicePixelRatio || 1;
+  padCtx.clearRect(0, 0, canvas.width/ratio, canvas.height/ratio);
+  hasDrawn = false;
+  var hint = document.getElementById('pad-hint'); if (hint) hint.classList.remove('hidden');
+  checkReady();
+}
+function checkReady(){
+  var name = (document.getElementById('signer-name')||{}).value || '';
+  var agree = document.getElementById('agree-check'); var btn = document.getElementById('submit-btn');
+  if (!btn) return;
+  btn.disabled = !(name.trim().length >= 2 && hasDrawn && agree && agree.checked);
+}
+
+async function submitSign(){
+  var btn = document.getElementById('submit-btn'); var status = document.getElementById('sign-status');
+  var canvas = document.getElementById('sig-canvas');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  status.className = 'msg'; status.textContent = '';
+  try {
+    var payload = {
+      t: TOKEN,
+      signer_name: document.getElementById('signer-name').value.trim(),
+      signature_png: canvas.toDataURL('image/png'),
+      selections: buildSelections(),
+    };
+    var r = await fetch(WORKER + '/scope-proposal/sign', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    var d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.message || d.error || 'Could not submit — please try again.');
+    // Re-fetch the authoritative view so the locked state matches exactly what the server recorded.
+    await load();
+  } catch (e) {
+    status.className = 'msg error'; status.textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Sign & submit';
+  }
+}
+
+/* ---------- render ---------- */
 function render(d){
+  DATA = d;
   document.getElementById('loading').classList.add('hidden');
   document.getElementById('print-btn').classList.remove('hidden');
   var el = document.getElementById('content');
   el.classList.remove('hidden');
 
-  var parts = String(d.proposal_text || '').split('\n\n');
-  // First paragraph is the address, already shown in the header card below — skip re-showing it.
-  if (parts.length && parts[0].trim() === String(d.address || '').trim()) parts.shift();
+  var locked = !!d.signed;
+  var items = d.items || [];
+  var itemsHtml = items.map(function(it){ return itemHtml(it, locked, locked ? d.signed.selections : null); }).join('');
+  var subtotal = locked ? d.signed.subtotal : d.subtotal;
+  var deposit = locked ? d.signed.deposit : d.deposit;
 
-  var body = parts.map(renderParagraph).join('');
-
-  el.innerHTML = '<div class="card">'
+  var html = '<div class="card">'
     + '<div class="addr">' + esc(d.address || '') + '</div>'
     + (d.title ? '<div class="addr-sub">' + esc(d.title) + '</div>' : '')
-    + '</div>'
-    + '<div class="card body-text">' + body + '</div>'
-    + '<div class="footer-note">Questions about this proposal? Reply to the message this link came from, or contact Ridge Co directly.</div>';
+    + '</div>';
+
+  if (locked) {
+    html += '<div class="signed-banner"><b>&#10003; Signed &amp; approved</b>Signed by ' + esc(d.signed.signer_name) + ' on ' + esc(d.signed.signed_date) + '.</div>';
+  }
+
+  html += '<div class="card">'
+    + '<div class="section-hd">Scope of work</div>'
+    + itemsHtml
+    + '<div class="totals">'
+    + '<div class="total-line grand"><span>Total</span><span id="live-total">' + money(subtotal) + '</span></div>'
+    + '<div class="total-line deposit"><span>Required 50% deposit</span><span id="live-deposit">' + money(deposit) + '</span></div>'
+    + '</div></div>';
+
+  html += '<div class="card terms">'
+    + '<div class="section-hd">Payment &amp; project terms</div>'
+    + '<ul>'
+    + '<li>A 50% electronic deposit is required to approve this proposal and schedule the work.</li>'
+    + '<li>All deposits and final invoices must be paid electronically. Physical checks are not accepted.</li>'
+    + '<li>Where an item offers more than one option, the price shown reflects the option selected' + (locked ? ' at signing' : '') + '; the invoice matches that selection.</li>'
+    + '</ul></div>';
+
+  if (locked) {
+    html += '<div class="footer-note">Signed electronically on ' + esc(d.signed.signed_date) + '. Questions about this proposal? Reply to the message this link came from, or contact Ridge Co directly.</div>';
+    el.innerHTML = html;
+  } else {
+    html += '<div class="card sign-card">'
+      + '<div class="section-hd">Approve &amp; sign</div>'
+      + '<div class="sign-row"><label>Your full name</label><input type="text" id="signer-name" placeholder="Type your full legal name" oninput="checkReady()"></div>'
+      + '<div class="sign-row"><label>Signature — draw below with your finger or mouse</label>'
+      + '<div class="pad-wrap"><span class="pad-hint" id="pad-hint">Sign here</span><canvas id="sig-canvas"></canvas></div>'
+      + '<div class="pad-actions"><button type="button" class="link-btn" onclick="clearPad()">Clear</button></div>'
+      + '</div>'
+      + '<label class="agree-row"><input type="checkbox" id="agree-check" onchange="checkReady()"><span>I have reviewed the scope, selected options, and total above, and I authorize Ridge Co to charge the 50% deposit and begin work.</span></label>'
+      + '<div id="sign-status" class="msg hidden"></div>'
+      + '<button type="button" class="submit-btn" id="submit-btn" disabled onclick="submitSign()">Sign &amp; submit</button>'
+      + '</div>';
+    html += '<div class="footer-note">Questions about this proposal? Reply to the message this link came from, or contact Ridge Co directly.</div>';
+    el.innerHTML = html;
+    initPad();
+    checkReady();
+  }
 }
 
-if (!TOKEN){
+function showError(msg){
   document.getElementById('loading').classList.add('hidden');
   document.getElementById('content').classList.remove('hidden');
-  document.getElementById('content').innerHTML = '<div class="card"><div class="msg error">This link is missing its access code. Please use the link Ridge Co sent you.</div></div>';
+  document.getElementById('content').innerHTML = '<div class="card"><div class="msg error">' + esc(msg) + '</div></div>';
+}
+
+async function load(){
+  try {
+    var r = await fetch(WORKER + '/scope-proposal/view?t=' + encodeURIComponent(TOKEN));
+    var d = await r.json();
+    if (d.error) { showError(d.message || 'This link is invalid or has expired.'); return; }
+    render(d);
+  } catch (e) {
+    showError('Could not load this proposal right now. Please try again shortly.');
+  }
+}
+
+if (!TOKEN) {
+  showError('This link is missing its access code. Please use the link Ridge Co sent you.');
 } else {
-  fetch(WORKER + '/scope-proposal/view?t=' + encodeURIComponent(TOKEN))
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if (d.error){
-        document.getElementById('loading').classList.add('hidden');
-        document.getElementById('content').classList.remove('hidden');
-        document.getElementById('content').innerHTML = '<div class="card"><div class="msg error">' + esc(d.message || 'This link is invalid or has expired.') + '</div></div>';
-        return;
-      }
-      render(d);
-    })
-    .catch(function(){
-      document.getElementById('loading').classList.add('hidden');
-      document.getElementById('content').classList.remove('hidden');
-      document.getElementById('content').innerHTML = '<div class="card"><div class="msg error">Could not load this proposal right now. Please try again shortly.</div></div>';
-    });
+  load();
 }
 </script>
 </body>

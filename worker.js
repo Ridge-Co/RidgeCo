@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-21.2';
+const BUILD_VERSION = '2026-08-21.3';
 
 export default {
   async fetch(request, env) {
@@ -54,7 +54,8 @@ export default {
       '/ar-report/view','/ar-report/pay-link',
       // Scope-creator customer proposal link (Aug 18 session, rule 113): same pattern — public
       // at the gate, but scopeProposalView self-verifies a signed scope-proposal share token.
-      '/scope-proposal/view'];
+      // /scope-proposal/sign (Aug 19, e-sign): same token, self-verified inside scopeProposalSign.
+      '/scope-proposal/view','/scope-proposal/sign'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -195,6 +196,7 @@ export default {
         if (path === '/scope')                  return await scopeGet(env, url);
         if (path === '/scope/drive-list')       return await scopeDriveList(env, url);
         if (path === '/scope-proposal/view')    return await scopeProposalView(env, url);
+        if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
@@ -205,6 +207,10 @@ export default {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
         const body = await request.json();
+        // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
+        // captured once here, harmlessly unused by every other POST route.
+        const _clientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+        const _clientUA = request.headers.get('User-Agent') || '';
         if (path === '/contact/augment')          return await augmentContact(env, body);
         if (path === '/wo/shared/unlock')         return await woSharedUnlock(env, body);
         if (path === '/wo/shared/upload-session') return await woSharedUploadSession(env, body);
@@ -241,7 +247,7 @@ export default {
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
         if (path === '/property/add')             return await addRow(env, 'Properties', body);
-        if (path === '/property/update')          return await updateRow(env, 'Properties', body.id, body.fields);
+        if (path === '/property/update')          return await propertyUpdate(env, body);
         if (path === '/unit/add')                 return await addRow(env, 'Units', body);
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
@@ -375,6 +381,7 @@ export default {
         if (path === '/scope/proposal')           return await scopeProposal(env, body);
         if (path === '/scope/proposal/link')        return await scopeProposalLink(env, body);
         if (path === '/scope/proposal/link-revoke') return await scopeProposalLinkRevoke(env, body);
+        if (path === '/scope-proposal/sign')      return await scopeProposalSign(env, body, _clientIP, _clientUA);
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
@@ -1247,11 +1254,34 @@ const SCOPE_SCAN_FOLDER_DEFAULT = '1iXjjwsnPKF_GtlR8gesxS9uJppO4xntZ';
 
 async function scopesTab(env) { await ensureTab(env, 'Scopes', SCOPES_HEADERS); }
 function scopeParseItems(s) { try { const a = JSON.parse((s && s.Line_Items) || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
+// Normalizes an item's pricing into a `variants` array — 1 entry = single fixed vendor cost,
+// 2+ entries = a customer CHOICE (e.g. "Repair Roof" vs "Replace Roof"; Brett, Aug 19 2026:
+// "options within scope such as repair or replace roof... may be options where other items
+// only have 1 option"). Backward compatible with pre-variant items that only ever carried a
+// bare description (no price yet) — those normalize to one blank-label variant at $0, priced
+// later on the item editor.
+function scopeCleanVariants(it) {
+  const raw = Array.isArray(it && it.variants) ? it.variants : null;
+  let variants = (raw && raw.length)
+    ? raw.map((v, i) => ({
+        key: (v && v.key) || ('v' + (i + 1)), label: (v && v.label) || '',
+        vendor_cost: Math.max(0, parseFloat(v && v.vendor_cost) || 0),
+      }))
+    : [{ key: 'v1', label: '', vendor_cost: Math.max(0, parseFloat(it && (it.cost != null ? it.cost : it.vendor_cost)) || 0) }];
+  if (!variants.length) variants = [{ key: 'v1', label: '', vendor_cost: 0 }];
+  let selected = (it && it.selected_key) || variants[0].key;
+  if (!variants.some(v => v.key === selected)) selected = variants[0].key;
+  return { variants, selected_key: selected };
+}
 function scopeCleanItems(arr) {
-  return (Array.isArray(arr) ? arr : []).map((it, i) => ({
-    id: (it && it.id) || ('li' + (i + 1)), area: (it && it.area) || '', trade: (it && it.trade) || '',
-    description: (it && it.description) || '', qty: (it && it.qty) || '', note: (it && it.note) || '',
-  })).filter(it => it.description);
+  return (Array.isArray(arr) ? arr : []).map((it, i) => {
+    const { variants, selected_key } = scopeCleanVariants(it);
+    return {
+      id: (it && it.id) || ('li' + (i + 1)), area: (it && it.area) || '', trade: (it && it.trade) || '',
+      description: (it && it.description) || '', qty: (it && it.qty) || '', note: (it && it.note) || '',
+      variants, selected_key,
+    };
+  }).filter(it => it.description);
 }
 async function scopeFind(env, id) { const rows = await fetchTab(env, 'Scopes'); return rows.find(r => r.ID === String(id)) || null; }
 
@@ -1477,32 +1507,67 @@ async function scopeEstimate(env, body) {
   return json({ success: true });
 }
 
-// POST /scope/proposal — build the CUSTOMER proposal from scope + estimate. calcTieredEstimate
-// applies the markup SERVER-SIDE; ONLY the final customer price + deposit are returned/stored.
-// No cost, markupPct, or derivation is ever emitted here (Brett's #1 non-negotiable).
+// Marks up every item's variant(s) SERVER-SIDE (calcTieredEstimate, per item — each option is
+// priced on its own merits, e.g. a small item doesn't inherit a big job's tier) and picks the
+// default-selected variant per item to compute a subtotal/deposit. Returns vendor_cost alongside
+// price for the ADMIN-only caller (scopeProposal) — the customer-facing boundary functions
+// (scopeProposalView, scopeProposalSign) are what strip it before anything leaves the server.
+function scopeItemsPricing(items, pc) {
+  let subtotal = 0, vendorCostTotal = 0;
+  const priced = items.map(it => {
+    const rawVariants = (it.variants && it.variants.length) ? it.variants : [{ key: 'v1', label: '', vendor_cost: 0 }];
+    const variants = rawVariants.map(v => {
+      const calc = calcTieredEstimate(v.vendor_cost, pc);
+      return { key: v.key, label: v.label, price: calc ? calc.finalPrice : 0, vendor_cost: +(v.vendor_cost || 0).toFixed(2) };
+    });
+    let selKey = it.selected_key || variants[0].key;
+    if (!variants.some(v => v.key === selKey)) selKey = variants[0].key;
+    const sel = variants.find(v => v.key === selKey) || variants[0];
+    subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
+    return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey };
+  });
+  subtotal = +subtotal.toFixed(2);
+  return { items: priced, subtotal, deposit: +(subtotal / 2).toFixed(2), vendorCostTotal: +vendorCostTotal.toFixed(2) };
+}
+
+// POST /scope/proposal — build the CUSTOMER proposal from scope + per-item vendor pricing.
+// calcTieredEstimate applies the markup SERVER-SIDE, per item; ONLY the final customer prices +
+// subtotal + deposit are ever returned to a customer-facing caller — never cost, markupPct, or
+// the derivation (Brett's #1 non-negotiable). Items with 2+ variants are a customer CHOICE
+// (e.g. "Repair Roof" vs "Replace Roof"); items with exactly 1 variant are fixed/included.
 async function scopeProposal(env, body) {
   const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
-  const estAmt = parseFloat(s.Estimate_Amount || '') || 0;
-  if (!estAmt || estAmt <= 0) return json({ error: 'Add the vendor estimate amount first — it is the basis for the customer price' }, 400);
+  const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0));
+  if (unpriced.length) return json({ error: `Add vendor cost to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
   let addr = ''; try { const props = await fetchTab(env, 'Properties'); const p = props.find(x => x.ID === s.Property_ID); if (p) addr = (p.Address || '') + (s.Unit_ID ? (' Unit ' + s.Unit_ID) : ''); } catch (_) {}
   addr = addr || ('Property ' + s.Property_ID);
-  // Bug fix (Aug 18 2026): this call was missing its 2nd arg (the pricing config), so
-  // calcTieredEstimate's own `if (!pc...) return null` guard fired EVERY time, and the
-  // .finalPrice access below threw "Cannot read properties of null" on every single
-  // proposal generation — never worked. Same fetch-and-guard pattern generateEstimateText
-  // already uses correctly a few hundred lines down.
   const _pc = await getPricingConfig(env);
   if (!_pc) return json({ error: 'Pricing not configured — set PRICING_CONFIG (Cloudflare secret) or the Config sheet `pricing_config` row.' }, 400);
-  const pricing = calcTieredEstimate(estAmt, _pc); // markup applied here, server-side, never leaves this scope
-  const bulletsPrompt = `You are a property maintenance estimate writer. Rewrite the following scope-of-work line items into a polished, professional, scannable bulleted list for a CUSTOMER proposal. Correct typos/slang/grammar and group related items under bold category headers where sensible. Do NOT include ANY dollar amounts, costs, or pricing of any kind. Items:\n${items.map(it => `- ${(it.area ? it.area + ': ' : '') + (it.description || '')}${it.note ? (' (' + it.note + ')') : ''}`).join('\n')}\n\nReturn ONLY the rewritten scope as clean Markdown bullets — no preamble, no pricing, no other sections.`;
-  let scopeText = '';
-  try { scopeText = await scopeClaude(env, bulletsPrompt, null, 1200); } catch (_) { scopeText = items.map(it => '- ' + (it.description || '')).join('\n'); }
-  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this estimate and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.\n- This estimate is priced as a single, unified project. If individual line items are selectively removed after approval, remaining items are subject to a 15% price adjustment plus a $150 mobilization fee.`;
-  await updateRow(env, 'Scopes', id, { Proposal_Text: doc, Status: 'proposed', Updated_Date: new Date().toISOString() });
-  return json({ success: true, proposal_text: doc, final_price: pricing.finalPrice, deposit: pricing.deposit });
+  const priced = scopeItemsPricing(items, _pc); // markup applied here, server-side, per item
+
+  const bulletsPrompt = `You are a property maintenance estimate writer. Rewrite each of the following scope-of-work item descriptions into a short, polished, customer-facing sentence. Correct typos/slang/grammar, imperative and specific. Do NOT include ANY dollar amounts, costs, or pricing of any kind. Items (JSON array):\n${JSON.stringify(items.map(it => ({ id: it.id, area: it.area, description: it.description, note: it.note })))}\n\nReturn ONLY strict minified JSON: an array of {"id":"<same id>","text":"<rewritten sentence>"}, same order, no preamble.`;
+  const rewritten = {};
+  try {
+    const txt = await scopeClaude(env, bulletsPrompt, null, 1500);
+    const arr = scopeParseJSON(txt);
+    if (Array.isArray(arr)) for (const r of arr) if (r && r.id) rewritten[r.id] = r.text;
+  } catch (_) {}
+  for (const it of priced.items) if (rewritten[it.id]) it.description = rewritten[it.id];
+
+  // Flat-text fallback doc (clipboard "Copy proposal" + legacy clients) — grand total + deposit
+  // only, same no-leak shape as before; the interactive per-item/variant view is Proposal_Items_JSON.
+  const scopeText = priced.items.map(it => '- ' + (it.area ? it.area + ': ' : '') + it.description).join('\n');
+  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${priced.subtotal.toFixed(2)}\nRequired 50% Deposit: $${priced.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this proposal and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.`;
+
+  await ensureColumns(env, 'Scopes', ['Proposal_Items_JSON']);
+  await updateRow(env, 'Scopes', id, {
+    Proposal_Text: doc, Proposal_Items_JSON: JSON.stringify(priced.items),
+    Estimate_Amount: String(priced.vendorCostTotal), Status: 'proposed', Updated_Date: new Date().toISOString(),
+  });
+  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, items: priced.items });
 }
 
 // ── Scope proposal customer link (Aug 18 2026, rule 113) ───────────────────
@@ -1547,16 +1612,127 @@ async function scopeProposalLinkRevoke(env, body) {
   await updateRow(env, 'Scopes', id, { Link_Rev: next });
   return json({ success: true, rev: next });
 }
-// PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Just
-// serves back the already-generated Proposal_Text verbatim — that text was built server-side
-// by scopeProposal() with ONLY the final customer price/deposit baked in (never cost, markup%,
-// or the vendor estimate), so there's nothing further to filter here.
+// PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
+// structured per-item/variant view built by scopeProposal() (Proposal_Items_JSON) — HARD RULE:
+// strips `vendor_cost` from every variant right here, at the public boundary, so it can never
+// reach a customer even though it is stored (privately, Sheets-only) alongside price for later
+// use by scopeProposalSign. Also reports the LOCKED signed state (if any) so a revisited link
+// shows what was actually signed, never a re-editable form.
 async function scopeProposalView(env, url) {
   const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
   if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
   const s = auth.s;
   let addr = ''; try { const props = await fetchTab(env, 'Properties'); const p = props.find(x => x.ID === s.Property_ID); if (p) addr = (p.Address || '') + (s.Unit_ID ? (' Unit ' + s.Unit_ID) : ''); } catch (_) {}
-  return json({ ok: true, address: addr || ('Property ' + s.Property_ID), title: s.Title || '', proposal_text: s.Proposal_Text || '', status: s.Status || '' });
+  let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
+  const items = rawItems.map(it => ({
+    id: it.id, area: it.area, trade: it.trade, description: it.description, note: it.note,
+    variants: (it.variants || []).map(v => ({ key: v.key, label: v.label, price: v.price })), // no vendor_cost
+    selected_key: it.selected_key,
+  }));
+  const subtotal = +(items.reduce((sum, it) => { const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
+  const deposit = +(subtotal / 2).toFixed(2);
+  let signed = null;
+  try {
+    await scopeSigTab(env);
+    const sigs = await fetchTab(env, 'Scope_Signatures');
+    const row = sigs.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
+    if (row) {
+      let sel = {}; try { sel = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
+      signed = { signer_name: row.Signer_Name, signed_date: row.Signed_Date, subtotal: +row.Subtotal || subtotal, deposit: +row.Deposit_Amount || deposit, selections: sel };
+    }
+  } catch (_) {}
+  return json({ ok: true, address: addr || ('Property ' + s.Property_ID), title: s.Title || '', status: s.Status || '', items, subtotal, deposit, proposal_text: s.Proposal_Text || '', signed });
+}
+
+// ── Scope proposal e-sign (Aug 19 2026) ─────────────────────────────────────
+// Click-to-sign inside the existing Worker+Sheets stack (Brett's explicit choice — no
+// Documenso/external e-sign service): typed name + a drawn signature (canvas PNG) + timestamp +
+// IP + device, logged to a dedicated Scope_Signatures tab. A valid ESIGN-Act e-signature for a
+// contractor proposal, not a notarized legal document. Auth reuses the SAME scope-proposal link
+// token as scopeProposalView — no separate PROPOSAL_SIGN_TOKEN needed, since the token already
+// scopes access to exactly one scope's proposal.
+const SCOPE_SIG_HEADERS = ['ID','Scope_ID','Signer_Name','Signature_PNG','Selections_JSON','Subtotal','Deposit_Amount','Vendor_Cost_Total','Signed_Date','Signed_TS','IP','User_Agent','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Created_Date','Active'];
+async function scopeSigTab(env) { await ensureTab(env, 'Scope_Signatures', SCOPE_SIG_HEADERS); }
+
+// POST /scope-proposal/sign — PUBLIC (link-token gated, body.t). {t, signer_name, signature_png,
+// selections:{itemId:variantKey}}. MONEY IS SERVER-AUTHORITATIVE: the client sends WHICH variant
+// per item, never a dollar amount — price comes from the already-computed Proposal_Items_JSON,
+// vendor cost (for the later prorated vendor bill, Phase 3) comes from the private Line_Items,
+// and neither is ever echoed back to the client. Idempotent — re-submitting an already-signed
+// scope returns the existing signature rather than creating a second one.
+async function scopeProposalSign(env, body, ip, ua) {
+  const auth = await scopeProposalLinkAuth(env, body && body.t);
+  if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
+  const s = auth.s;
+  const signer = String((body && body.signer_name) || '').trim().slice(0, 120);
+  if (signer.length < 2) return json({ error: 'signer_name required' }, 400);
+  const sigPng = String((body && body.signature_png) || '');
+  if (!sigPng || sigPng.length < 100) return json({ error: 'A drawn signature is required' }, 400);
+
+  await scopeSigTab(env);
+  const existing = await fetchTab(env, 'Scope_Signatures');
+  const dup = existing.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (dup) return json({ ok: true, id: dup.ID, duplicate: true, subtotal: +dup.Subtotal || 0, deposit: +dup.Deposit_Amount || 0 });
+
+  let items = []; try { items = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
+  if (!items.length) return json({ error: 'Proposal not ready to sign yet.' }, 400);
+  const selections = (body && body.selections && typeof body.selections === 'object') ? body.selections : {};
+  let subtotal = 0;
+  const finalSelections = {};
+  for (const it of items) {
+    const variants = it.variants || [];
+    let key = selections[it.id];
+    if (!variants.some(v => v.key === key)) key = it.selected_key || (variants[0] && variants[0].key);
+    const sel = variants.find(v => v.key === key) || variants[0];
+    if (!sel) continue;
+    subtotal += (+sel.price || 0);
+    finalSelections[it.id] = key;
+  }
+  // Vendor cost is looked up from Line_Items (the private source of truth), never from the
+  // customer-facing Proposal_Items_JSON/selections payload, and never returned to the client.
+  let vendorCostTotal = 0;
+  for (const it of scopeParseItems(s)) {
+    const key = finalSelections[it.id];
+    const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
+    if (v) vendorCostTotal += (+v.vendor_cost || 0);
+  }
+  subtotal = +subtotal.toFixed(2); vendorCostTotal = +vendorCostTotal.toFixed(2);
+  const deposit = +(subtotal / 2).toFixed(2);
+  const now = new Date();
+  await addRow(env, 'Scope_Signatures', {
+    Scope_ID: String(s.ID), Signer_Name: signer,
+    Signature_PNG: sigPng.length <= 45000 ? sigPng : '', // Sheets cell cap ~50k chars; skip if oversized
+    Selections_JSON: JSON.stringify(finalSelections),
+    Subtotal: String(subtotal), Deposit_Amount: String(deposit), Vendor_Cost_Total: String(vendorCostTotal),
+    Signed_Date: now.toISOString().slice(0, 10), Signed_TS: now.toISOString(),
+    IP: String(ip || '').slice(0, 60), User_Agent: String(ua || '').slice(0, 300),
+    Status: 'Signed', Created_Date: now.toISOString(), Active: 'TRUE',
+  });
+  await updateRow(env, 'Scopes', s.ID, { Status: 'signed', Updated_Date: now.toISOString() });
+  return json({ ok: true, subtotal, deposit });
+}
+
+// GET /scope-proposal/signed (admin) — signed scope proposals, for the Hub to review. Booking
+// them into QuickBooks (deposit invoice + prorated vendor bill) is the next build phase; today
+// this just makes a signature durably visible/inspectable the moment it lands.
+async function scopeProposalSignedList(env, url) {
+  await scopeSigTab(env);
+  const rows = await fetchTab(env, 'Scope_Signatures');
+  const scopes = await fetchTab(env, 'Scopes').catch(() => []);
+  const props = await fetchTab(env, 'Properties').catch(() => []);
+  const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
+    const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
+    const p = props.find(x => x.ID === sc.Property_ID) || {};
+    let sel = {}; try { sel = JSON.parse(r.Selections_JSON || '{}'); } catch (_) {}
+    return {
+      id: r.ID, scope_id: r.Scope_ID, wo_id: sc.WO_ID || '', property: p.Address || ('Property ' + sc.Property_ID),
+      title: sc.Title || '', signer: r.Signer_Name, signed_date: r.Signed_Date, signed_ts: r.Signed_TS,
+      subtotal: +r.Subtotal || 0, deposit: +r.Deposit_Amount || 0, selections: sel,
+      status: r.Status || 'Signed', qb_invoice_id: r.QB_Invoice_ID || '', qb_bill_id: r.QB_Bill_ID || '',
+    };
+  });
+  out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
+  return json(out);
 }
 
 // Brett's default hourly rate for his own (hub) time when a customer has no specific rate on
@@ -5733,6 +5909,21 @@ async function addRow(env, tab, body) {
   const newRow=headers.map(h=>{if(h==='ID')return String(nextId);if(h==='Active'&&body[h]===undefined)return 'TRUE';return body[h]!==undefined?String(body[h]):'';});
   await sheetsRequest(env,'POST',`/values/${tab}:append?valueInputOption=RAW`,{values:[newRow]});
   return json({success:true,id:String(nextId),pin:body.PIN||null});
+}
+
+// POST /property/update wrapper — the plain `updateRow` call it replaces only ever wrote to
+// EXISTING header columns (silently drops anything else), so the new "referred by" fields
+// (Aug 19, realtor-sourced-job billing gate: the realtor is not the payor, tracked separately
+// as a non-billed reference contact) would vanish on the very first save until the columns
+// exist. `ensureColumns` is called ONLY when one of those fields is actually present, so an
+// ordinary property edit costs nothing extra.
+const PROPERTY_SOURCE_FIELDS = ['Source_Name', 'Source_Type', 'Source_Phone', 'Source_Email'];
+async function propertyUpdate(env, body) {
+  const fields = (body && body.fields) || {};
+  if (PROPERTY_SOURCE_FIELDS.some(f => fields[f] !== undefined)) {
+    try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {}
+  }
+  return await updateRow(env, 'Properties', body.id, fields);
 }
 
 async function updateRow(env, tab, id, fields) {

@@ -32,6 +32,7 @@
   .pill.wocreated{background:#eef2ff;color:var(--accent);}
   .pill.estimated{background:#fdf2e2;color:#9a6b00;}
   .pill.proposed{background:#eaf0ff;color:var(--accent);}
+  .pill.signed{background:#eaf6ee;color:var(--accent2);}
   .scard{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;}
   .scard:hover{border-color:var(--accent);}
   .scard .t{font-size:13px;font-weight:bold;line-height:1.3;}
@@ -42,6 +43,14 @@
   .li .fields input{width:100%;}
   .li .fields label{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
   .li .del{grid-column:2;justify-self:end;}
+  .variants{background:#fff;border:1px dashed var(--border);border-radius:var(--radius);padding:8px;margin-top:4px;}
+  .variants>label{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
+  .vrow{display:flex;gap:6px;margin-bottom:5px;align-items:center;}
+  .vrow input.v-label{flex:1.3;}
+  .vrow input.v-cost{flex:1;}
+  .owner-note{font-size:11px;line-height:1.5;padding:8px 10px;border-radius:var(--radius);margin-bottom:10px;}
+  .owner-note.ok{background:#eaf6ee;color:var(--accent2);}
+  .owner-note.warn{background:#fdf2e2;color:#9a6b00;}
   .toolbtns{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
   .status{font-size:11px;min-height:14px;margin-top:6px;}
   pre.doc{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;line-height:1.5;font-family:var(--font);}
@@ -210,19 +219,24 @@
 
   <!-- 5. ESTIMATE -->
   <div class="section" id="sec-estimate">
-    <div class="section-title">5 · Capture the vendor's estimate</div>
+    <div class="section-title">5 · Vendor &amp; estimate reference</div>
     <div class="row"><label>Vendor</label><select id="est-vendor" style="flex:1"><option value="">—</option></select></div>
     <div class="row"><label>Estimate #</label><input id="est-number" placeholder="vendor's estimate/quote number" style="flex:1"></div>
-    <div class="row"><label>Amount $</label><input id="est-amount" type="number" step="0.01" placeholder="vendor's estimate total" style="flex:1"></div>
     <div class="row"><label>Notes</label><input id="est-notes" placeholder="e.g. vendor swapped fixture X for Y; item Z not possible" style="flex:1"></div>
-    <div class="row"><button class="btn" onclick="saveEstimate()">💾 Save estimate</button><span id="est-status" class="status"></span></div>
-    <p class="sub" style="margin:6px 0 0;">You can update the estimate/scope any time — if the vendor proposes a different solution, edit the items above or run a command, then re-save.</p>
+    <div class="row"><button class="btn" onclick="saveEstimate()">💾 Save</button><span id="est-status" class="status"></span></div>
+    <p class="sub" style="margin:6px 0 0;">Vendor cost is priced per item directly on step 2 above — add a second "alternate option" there when the customer needs to choose between two ways to do the job (e.g. Repair vs Replace). This step is just the vendor reference/notes.</p>
   </div>
 
-  <!-- 6. PROPOSAL -->
+  <!-- 6. OWNER / BILLING GATE -->
+  <div class="section" id="sec-owner">
+    <div class="section-title">6 · Confirm the payor <span class="step-badge">Realtor ≠ payor — required before sending</span></div>
+    <div id="owner-gate-body"></div>
+  </div>
+
+  <!-- 7. PROPOSAL -->
   <div class="section" id="sec-proposal">
-    <div class="section-title">6 · Generate the customer proposal</div>
-    <button class="btn" onclick="genProposal()">📄 Generate proposal from scope + estimate</button>
+    <div class="section-title">7 · Generate the customer proposal</div>
+    <button class="btn" onclick="genProposal()">📄 Generate proposal from scope + pricing</button>
     <div id="prop-status" class="status"></div>
     <div id="proposal-out" class="hide" style="margin-top:10px;">
       <pre class="doc" id="proposal-text"></pre>
@@ -232,12 +246,14 @@
         <input id="link-text" readonly style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;" onclick="this.select()">
         <button class="btn small secondary" onclick="copyLink()" style="margin-top:6px;">📋 Copy link</button>
       </div>
+      <div id="sig-status"></div>
     </div>
   </div>
 </div>
 
 <script>
 var state = { properties:[], units:[], owners:[], vendors:[], scopes:[], current:null };
+var ownerGateEditMode=false;
 
 function worker(){ return document.getElementById('worker-url').value.trim(); }
 function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
@@ -277,7 +293,7 @@ async function boot(){
 }
 
 /* ---------- scope list ---------- */
-function statusPill(s){ var map={draft:'draft',approved:'approved','wo-created':'wocreated',estimated:'estimated',proposed:'proposed'}; var cls=map[s]||'draft'; return '<span class="pill '+cls+'">'+esc(s||'draft')+'</span>'; }
+function statusPill(s){ var map={draft:'draft',approved:'approved','wo-created':'wocreated',estimated:'estimated',proposed:'proposed',signed:'signed'}; var cls=map[s]||'draft'; return '<span class="pill '+cls+'">'+esc(s||'draft')+'</span>'; }
 async function loadScopes(){
   try{ state.scopes = await get('/scopes'); }catch(e){ document.getElementById('scope-list').innerHTML='<div class="empty err">'+esc(e.message)+'</div>'; return; }
   var el = document.getElementById('scope-list');
@@ -367,13 +383,114 @@ function renderEditor(){
   // estimate fields
   document.getElementById('est-vendor').value=s.Vendor_ID||'';
   document.getElementById('est-number').value=s.Estimate_Number||'';
-  document.getElementById('est-amount').value=s.Estimate_Amount||'';
   document.getElementById('est-notes').value=s.Estimate_Notes||'';
   // proposal
   if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').textContent=s.Proposal_Text; }
   else { document.getElementById('proposal-out').classList.add('hide'); }
+  ownerGateEditMode=false;
   gateSections();
   loadScopePhotos();
+  loadSignatureIfSigned();
+}
+
+/* ---------- owner / billing gate ---------- */
+// A Realtor or property manager sends the job in, but they're not always who gets billed.
+// This gate makes sure a real, contactable owner is confirmed on the property BEFORE the
+// proposal can be sent — separate from an optional "who referred this" field.
+function itemsFullyPriced(items){
+  return !!(items && items.length) && items.every(function(it){
+    return (it.variants||[]).some(function(v){ return (parseFloat(v.vendor_cost)||0)>0; });
+  });
+}
+function ownerBillingStatus(){
+  var s=state.current; if(!s) return { property:null, owner:null, complete:false };
+  var p=state.properties.find(function(x){ return x.ID===String(s.Property_ID); });
+  var owner=(p&&p.Owner_ID) ? state.owners.find(function(x){ return x.ID===String(p.Owner_ID); }) : null;
+  var hasContact = !!(owner && ((owner.Email||'').trim() || (owner.Phone||'').trim()));
+  return { property:p, owner:owner, complete: !!(owner && hasContact) };
+}
+function qbName(o){ if(!o) return ''; return ((o.First_Name||'')+' '+(o.Last_Name||'')).trim()||o.Company||('Owner '+o.ID); }
+function ownerFormHtml(){
+  return '<div class="sub" style="margin:6px 0 4px;">…or add a new owner:</div>'+
+    '<div class="row"><input id="og-first" placeholder="First name" style="flex:1"><input id="og-last" placeholder="Last name" style="flex:1"></div>'+
+    '<div class="row"><input id="og-company" placeholder="Company (optional)" style="flex:1"></div>'+
+    '<div class="row"><input id="og-phone" placeholder="Phone" style="flex:1"><input id="og-email" placeholder="Email" style="flex:1"></div>';
+}
+function renderOwnerGate(){
+  var body=document.getElementById('owner-gate-body'); if(!body) return;
+  var s=state.current; var st=ownerBillingStatus(); var refP=st.property||{};
+  var html='';
+  if(st.complete){
+    html+='<div class="owner-note ok">✅ Billing to <b>'+esc(qbName(st.owner))+'</b>'+(st.owner.Company?(' ('+esc(st.owner.Company)+')'):'')+' — '+esc(st.owner.Email||st.owner.Phone||'')+'. This is who the invoice will go to.</div>';
+    if(!ownerGateEditMode) html+='<button type="button" class="btn small secondary" onclick="ownerGateEditMode=true;renderOwnerGate();">Change payor</button>';
+  } else {
+    html+='<div class="owner-note warn">⚠ No billing-ready owner on file for this property yet. Confirm who actually gets billed before sending the proposal — it may not be the Realtor or tenant who requested the work.</div>';
+  }
+  if(!st.complete || ownerGateEditMode){
+    html+='<div class="owner-form" style="margin-top:8px;">';
+    html+='<div class="row"><label>Existing owner</label><select id="og-existing" style="flex:1"><option value="">— pick, or add new below —</option>'+
+      state.owners.map(function(o){ return '<option value="'+esc(o.ID)+'"'+(st.owner&&st.owner.ID===o.ID?' selected':'')+'>'+esc(qbName(o))+(o.Email?(' · '+esc(o.Email)):'')+'</option>'; }).join('')+'</select></div>';
+    html+='<div id="og-new-fields">'+ownerFormHtml()+'</div>';
+    html+='<div class="row"><button type="button" class="btn small" onclick="saveOwnerGate()">💾 Confirm payor</button>'+(ownerGateEditMode?'<button type="button" class="btn small secondary" onclick="ownerGateEditMode=false;renderOwnerGate();">Cancel</button>':'')+'<span id="og-status" class="status"></span></div>';
+    html+='</div>';
+  }
+  html+='<div class="owner-form" style="margin-top:14px;border-top:1px dashed var(--border);padding-top:10px;">';
+  html+='<label style="display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Referral source (Realtor/PM who sent the job — not necessarily the payor)</label>';
+  html+='<div class="row"><input id="rf-name" placeholder="Name" style="flex:1" value="'+esc(refP.Source_Name||'')+'"><select id="rf-type" style="flex:1"><option value="">Type —</option>'+
+    ['Realtor','Property Manager','Tenant','Other'].map(function(t){ return '<option value="'+t+'"'+(refP.Source_Type===t?' selected':'')+'>'+t+'</option>'; }).join('')+'</select></div>';
+  html+='<div class="row"><input id="rf-phone" placeholder="Phone" style="flex:1" value="'+esc(refP.Source_Phone||'')+'"><input id="rf-email" placeholder="Email" style="flex:1" value="'+esc(refP.Source_Email||'')+'"></div>';
+  html+='<div class="row"><button type="button" class="btn small secondary" onclick="saveReferral()">💾 Save referral info</button><span id="rf-status" class="status"></span></div>';
+  html+='</div>';
+  body.innerHTML=html;
+}
+async function saveOwnerGate(){
+  var s=state.current;
+  var existingId=document.getElementById('og-existing').value;
+  setStatus('og-status','Saving…');
+  try{
+    var ownerId=existingId;
+    if(!ownerId){
+      var first=document.getElementById('og-first').value.trim();
+      var last=document.getElementById('og-last').value.trim();
+      var company=document.getElementById('og-company').value.trim();
+      var phone=document.getElementById('og-phone').value.trim();
+      var email=document.getElementById('og-email').value.trim();
+      if(!first && !company){ setStatus('og-status','Pick an existing owner, or enter a name/company for a new one','err'); return; }
+      if(!phone && !email){ setStatus('og-status','A phone or email is required to bill this owner','err'); return; }
+      var r=await post('/owner/add',{ First_Name:first, Last_Name:last, Company:company, Phone:phone, Email:email, Active:'TRUE' });
+      ownerId=r.id;
+      state.owners.push({ ID:String(ownerId), First_Name:first, Last_Name:last, Company:company, Phone:phone, Email:email, Active:'TRUE' });
+      populateOwners();
+    }
+    await post('/property/update',{ id:s.Property_ID, fields:{ Owner_ID:ownerId } });
+    var p=state.properties.find(function(x){ return x.ID===String(s.Property_ID); }); if(p) p.Owner_ID=String(ownerId);
+    ownerGateEditMode=false;
+    setStatus('og-status','✅ payor confirmed','ok');
+    renderOwnerGate(); gateSections();
+  }catch(e){ setStatus('og-status','⚠ '+e.message,'err'); }
+}
+async function saveReferral(){
+  var s=state.current;
+  var fields={ Source_Name:document.getElementById('rf-name').value.trim(), Source_Type:document.getElementById('rf-type').value, Source_Phone:document.getElementById('rf-phone').value.trim(), Source_Email:document.getElementById('rf-email').value.trim() };
+  setStatus('rf-status','Saving…');
+  try{
+    await post('/property/update',{ id:s.Property_ID, fields:fields });
+    var p=state.properties.find(function(x){ return x.ID===String(s.Property_ID); }); if(p){ p.Source_Name=fields.Source_Name; p.Source_Type=fields.Source_Type; p.Source_Phone=fields.Source_Phone; p.Source_Email=fields.Source_Email; }
+    setStatus('rf-status','✅ saved','ok');
+  }catch(e){ setStatus('rf-status','⚠ '+e.message,'err'); }
+}
+async function loadSignatureIfSigned(){
+  var el=document.getElementById('sig-status'); if(!el) return;
+  var s=state.current;
+  if(!s || String(s.Status)!=='signed'){ el.innerHTML=''; return; }
+  el.innerHTML='<span class="status">Loading signature…</span>';
+  try{
+    var rows=await get('/scope-proposal/signed');
+    var row=(rows||[]).find(function(r){ return String(r.scope_id)===String(s.ID); });
+    if(!row){ el.innerHTML=''; return; }
+    var nOpts=Object.keys(row.selections||{}).length;
+    el.innerHTML='<div class="owner-note ok" style="margin-top:8px;">✅ Signed by <b>'+esc(row.signer)+'</b> on '+esc(row.signed_date)+' — total $'+Number(row.subtotal).toFixed(2)+', deposit $'+Number(row.deposit).toFixed(2)+(nOpts?(' · '+nOpts+' option(s) selected'):'')+'.</div>';
+  }catch(e){ el.innerHTML='<div class="status err">⚠ '+esc(e.message)+'</div>'; }
 }
 function gateSections(){
   var s=state.current; var items=(s.line_items||[]);
@@ -381,7 +498,11 @@ function gateSections(){
   document.getElementById('sec-approve').classList.toggle('disabled', items.length===0);
   var hasWO=!!s.WO_ID;
   document.getElementById('sec-estimate').classList.toggle('disabled', !hasWO);
-  document.getElementById('sec-proposal').classList.toggle('disabled', !(parseFloat(s.Estimate_Amount)>0));
+  var priced=itemsFullyPriced(items);
+  document.getElementById('sec-owner').classList.toggle('disabled', !priced);
+  renderOwnerGate();
+  var st=ownerBillingStatus();
+  document.getElementById('sec-proposal').classList.toggle('disabled', !(priced && st.complete));
   document.getElementById('wo-status').innerHTML = hasWO ? ('✅ Work order <b>'+esc(s.WO_ID)+'</b> created (Estimate Requested).') : '';
 }
 
@@ -438,7 +559,23 @@ async function generate(){
   catch(e){ setStatus('ingest-status','⚠ '+e.message,'err'); }
 }
 
-/* line items */
+/* line items — each item has 1+ priced "variants". 1 variant = fixed price. 2+ variants = a
+   customer CHOICE (e.g. "Repair Roof" vs "Replace Roof") — same job-scope item, mutually
+   exclusive options, customer picks one when they sign. */
+function variantsBlock(it){
+  var vs=(it.variants&&it.variants.length)?it.variants:[{key:'v1',label:'',vendor_cost:0}];
+  var multi=vs.length>1;
+  var rows=vs.map(function(v){
+    return '<div class="vrow" data-key="'+esc(v.key)+'">'+
+      (multi?'<input class="v-label" placeholder="Option label (e.g. Repair Roof)" value="'+esc(v.label||'')+'">':'')+
+      '<input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $" value="'+(v.vendor_cost?esc(v.vendor_cost):'')+'">'+
+      (multi?'<button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>':'')+
+    '</div>';
+  }).join('');
+  return '<div class="variants"><label>Pricing — vendor cost per option (private; never shown to the customer)</label>'+
+    '<div class="variant-rows">'+rows+'</div>'+
+    '<button type="button" class="btn small secondary" onclick="addVariant(this)">+ Add alternate option (e.g. Repair vs Replace)</button></div>';
+}
 function renderItems(){
   var items=state.current.line_items||[];
   var wrap=document.getElementById('items-wrap');
@@ -452,18 +589,49 @@ function renderItems(){
         '<div><label>Qty</label><input class="f-qty" value="'+esc(it.qty)+'"></div>'+
         '<div class="full"><label>Description</label><input class="f-desc" value="'+esc(it.description)+'"></div>'+
         '<div class="full"><label>Note</label><input class="f-note" value="'+esc(it.note)+'"></div>'+
-        '<button class="btn small danger del" onclick="removeItem(this)">Remove</button>'+
+        '<div class="full">'+variantsBlock(it)+'</div>'+
+        '<button class="btn small danger del" onclick="removeItem(this)">Remove item</button>'+
       '</div></div>';
   }).join('');
+}
+function addVariant(btn){
+  var wrap=btn.closest('.variants'); var rows=wrap.querySelector('.variant-rows');
+  var existing=rows.querySelectorAll('.vrow');
+  if(existing.length===1){
+    // becoming multi-option — the one existing row needs a label + remove button too
+    var first=existing[0];
+    if(!first.querySelector('.v-label')){ var lbl=document.createElement('input'); lbl.className='v-label'; lbl.placeholder='Option label (e.g. Repair Roof)'; first.insertBefore(lbl, first.firstChild); }
+    if(!first.querySelector('.danger')){ var rm=document.createElement('button'); rm.type='button'; rm.className='btn small danger'; rm.textContent='✕'; rm.onclick=function(){removeVariant(rm);}; first.appendChild(rm); }
+  }
+  var n=rows.querySelectorAll('.vrow').length;
+  var div=document.createElement('div'); div.className='vrow'; div.dataset.key='v'+(n+1);
+  div.innerHTML='<input class="v-label" placeholder="Option label (e.g. Replace Roof)"><input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $"><button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>';
+  rows.appendChild(div);
+}
+function removeVariant(btn){
+  var wrap=btn.closest('.variants'); var rows=wrap.querySelector('.variant-rows');
+  btn.closest('.vrow').remove();
+  var remaining=rows.querySelectorAll('.vrow');
+  if(remaining.length===1){
+    // back down to a single fixed price — drop its label input + remove button
+    var only=remaining[0]; var lbl=only.querySelector('.v-label'); if(lbl) lbl.remove();
+    var rm=only.querySelector('.danger'); if(rm) rm.remove();
+  }
 }
 function collectItems(){
   var out=[];
   document.querySelectorAll('#items-wrap .li').forEach(function(el){
-    out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value });
+    var variants=[];
+    el.querySelectorAll('.vrow').forEach(function(vr,i){
+      var lblEl=vr.querySelector('.v-label'), costEl=vr.querySelector('.v-cost');
+      variants.push({ key:vr.dataset.key||('v'+(i+1)), label:lblEl?lblEl.value.trim():'', vendor_cost:parseFloat(costEl&&costEl.value)||0 });
+    });
+    if(!variants.length) variants=[{key:'v1',label:'',vendor_cost:0}];
+    out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value, variants:variants, selected_key:variants[0].key });
   });
   return out;
 }
-function addItem(){ var items=collectItems(); var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0); items.push({ id:'li'+(maxn+1), area:'', trade:'', qty:'', description:'', note:'' }); state.current.line_items=items; renderItems(); }
+function addItem(){ var items=collectItems(); var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0); items.push({ id:'li'+(maxn+1), area:'', trade:'', qty:'', description:'', note:'', variants:[{key:'v1',label:'',vendor_cost:0}], selected_key:'v1' }); state.current.line_items=items; renderItems(); }
 function removeItem(btn){ var el=btn.closest('.li'); var id=el.dataset.id; state.current.line_items=collectItems().filter(function(it){ return it.id!==id; }); renderItems(); }
 async function saveItems(){
   var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
@@ -588,8 +756,8 @@ async function toWO(){
 async function saveEstimate(){
   setStatus('est-status','Saving…');
   try{
-    await post('/scope/estimate',{ scope_id:state.current.ID, vendor_id:document.getElementById('est-vendor').value, estimate_number:document.getElementById('est-number').value.trim(), estimate_amount:document.getElementById('est-amount').value, estimate_notes:document.getElementById('est-notes').value.trim() });
-    state.current.Estimate_Amount=document.getElementById('est-amount').value; state.current.Vendor_ID=document.getElementById('est-vendor').value;
+    await post('/scope/estimate',{ scope_id:state.current.ID, vendor_id:document.getElementById('est-vendor').value, estimate_number:document.getElementById('est-number').value.trim(), estimate_notes:document.getElementById('est-notes').value.trim() });
+    state.current.Vendor_ID=document.getElementById('est-vendor').value;
     if(['draft','approved','wo-created'].indexOf(state.current.Status)>=0){ state.current.Status='estimated'; document.getElementById('ed-status-pill').innerHTML=statusPill('estimated'); }
     setStatus('est-status','✅ estimate saved','ok'); gateSections();
   }catch(e){ setStatus('est-status','⚠ '+e.message,'err'); }

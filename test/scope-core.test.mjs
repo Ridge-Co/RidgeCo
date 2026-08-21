@@ -12,7 +12,9 @@ function grab(name){
   for (; j < src.length; j++){ if (src[j] === '{') d++; else if (src[j] === '}'){ d--; if (!d) break; } }
   return src.slice(i, j + 1);
 }
-const scopeCleanItems = new Function(grab('scopeCleanItems') + '\nreturn scopeCleanItems;')();
+// scopeCleanItems (Aug 19 2026) delegates per-item variant normalization to a sibling helper —
+// grab both and eval together so the standalone extraction still resolves scopeCleanVariants.
+const scopeCleanItems = new Function(grab('scopeCleanVariants') + '\n' + grab('scopeCleanItems') + '\nreturn scopeCleanItems;')();
 const calcTieredEstimate = new Function(grab('calcTieredEstimate') + '\nreturn calcTieredEstimate;')();
 
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
@@ -29,6 +31,26 @@ ok(cleaned[0].id === 'li1', 'a missing id is auto-assigned li1');
 ok(cleaned[1].id === 'liX', 'an existing id is preserved');
 ok(cleaned[0].qty === '' && cleaned[0].note === '', 'missing optional fields default to empty string');
 ok(cleaned[0].trade === 'Plumbing' && cleaned[0].area === 'Kitchen', 'provided fields are preserved');
+
+// ---- scopeCleanItems: per-item variants (Aug 19 2026 — Repair/Replace-style options) ----
+ok(Array.isArray(cleaned[0].variants) && cleaned[0].variants.length === 1, 'an item with no variants given gets one default variant');
+ok(cleaned[0].variants[0].vendor_cost === 0, 'a never-priced item defaults its variant to $0, not NaN/undefined');
+ok(cleaned[0].selected_key === cleaned[0].variants[0].key, 'a single-variant item is auto-selected');
+
+const withOptions = scopeCleanItems([
+  { description: 'Roof work', area: 'Exterior', variants: [
+    { key: 'repair', label: 'Repair Roof', vendor_cost: 800 },
+    { key: 'replace', label: 'Replace Roof', vendor_cost: 2400 },
+  ] },
+  { description: 'Fixed item with a legacy bare cost field', cost: 150 }, // old shape: cost, no variants
+  { description: 'Bad selected_key falls back', selected_key: 'nope', variants: [{ key: 'v1', label: '', vendor_cost: 50 }] },
+]);
+ok(withOptions[0].variants.length === 2, 'a multi-option item keeps both variants');
+ok(withOptions[0].variants[0].label === 'Repair Roof' && withOptions[0].variants[1].label === 'Replace Roof', 'variant labels are preserved');
+ok(withOptions[0].variants[1].vendor_cost === 2400, 'variant vendor cost is preserved');
+ok(withOptions[0].selected_key === 'repair', 'default selection is the first variant when none was chosen');
+ok(withOptions[1].variants.length === 1 && withOptions[1].variants[0].vendor_cost === 150, 'legacy bare `cost` field is wrapped into a single variant');
+ok(withOptions[2].selected_key === 'v1', 'an invalid selected_key falls back to the first real variant key');
 
 // ---- calcTieredEstimate: markup applied, only final numbers exposed ----
 const p = calcTieredEstimate(1000);

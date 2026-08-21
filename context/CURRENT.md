@@ -1,5 +1,18 @@
 # WHERE THINGS STAND — Aug 21, 2026
 
+## ✅ RESOLVED — `ac1470a` recovered after all. Brett found the patch. FEATURE_LOG rule 123.
+The "unrecoverable" call right below was correct as far as this checkout went — but Brett had the
+patch on his end (this session's `git cat-file`/`git log --all` checks only ever prove a commit
+isn't in a checkout that was reclaimed, never that no export of it exists anywhere). Uploaded
+`0001ScopeproposalsperitemRepairReplacestyleoption.patch`, applied clean against current `main` with
+**zero conflicts** (untouched by everything else that landed today), `node --check` clean, full
+suite re-run clean (same 2 pre-existing failures, nothing new — including the new
+`test/scope-variants.test.mjs`'s 13 no-leak assertions). Pushed. See FEATURE_LOG rule 123 for the
+full feature writeup, the one cross-patch interaction worth knowing about (hand-edited proposals via
+today's other `scope/update` change won't populate the new item-picker view), and the live-test
+checklist — this one involves a real signature, so it's worth Brett's own careful first pass before
+relying on it for an actual customer.
+
 ## 🔴 "resume ridgeco" hit an unrecoverable commit — Phase 1 e-sign/repair-replace/owner-gate work is lost, not pushed (Aug 21, later Cowork/mobile session).
 Brett resumed with "Phase 1 (per-item Repair/Replace pricing, owner gate, e-sign) is committed locally
 as `ac1470a` but never got pushed because this session couldn't reach `Ridge-Co/RidgeCo`. Push it,
