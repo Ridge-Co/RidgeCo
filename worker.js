@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-20.4';
+const BUILD_VERSION = '2026-08-21.1';
 
 export default {
   async fetch(request, env) {
@@ -1382,6 +1382,16 @@ async function scopeUpdate(env, body) {
   if (body.room !== undefined) fields.Room = body.room;
   if (body.raw_input !== undefined) fields.Raw_Input = body.raw_input;
   if (body.status !== undefined) fields.Status = body.status;
+  // Aug 21 2026: allow a hand-edited Proposal_Text to be saved directly (e.g. a Cowork-drafted
+  // customer proposal), bypassing the AI regeneration in scopeProposal(). Admin-gated same as every
+  // other field on this endpoint (POST /scope/update is not in PUBLIC_PATHS). Setting this also
+  // flips Status to 'proposed' when it isn't already, matching what scopeProposal() itself does,
+  // so the existing shareable link (scope-proposal.html) immediately serves the new text verbatim —
+  // no new link/token needed unless Link_Rev is bumped separately via /scope/proposal/revoke.
+  if (body.proposal_text !== undefined) {
+    fields.Proposal_Text = body.proposal_text;
+    if (body.status === undefined) fields.Status = 'proposed';
+  }
   await updateRow(env, 'Scopes', id, fields);
   return json({ success: true });
 }
