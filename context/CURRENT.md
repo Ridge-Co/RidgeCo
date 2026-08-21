@@ -1,5 +1,23 @@
 # WHERE THINGS STAND — Aug 21, 2026
 
+## ✅ SHIPPED — Scope proposal → QuickBooks booking, Phase 2. FEATURE_LOG rule 124.
+Brett, same session as the `ac1470a` recovery right below: "give me the instructions to start the
+quickbooks invoice from signature workflow/code. I want that for my current proposal at gladden."
+Built and pushed `POST /scope-proposal/book` (`scopeProposalBook`, worker.js) — preview-first,
+admin-gated, idempotent, same safety pattern as the old B-076 `proposalBook()` (untouched): creates
+a QuickBooks customer invoice for the signed row's DEPOSIT, persists its id before touching the bill,
+then creates a vendor bill prorated to the SAME share of the vendor's cost as the deposit is of the
+subtotal (not the vendor's full cost — new pure helper `scopeSigVendorBillAmount`). Trade for the QB
+item/account routing picked by majority vote across the signed items (`scopeSigTrade`, new). UI:
+extended `signed-proposals.html` (already the Hub's "Signed proposals → QB" tool) to load and book
+BOTH the old and new signature systems from one screen instead of building a second page. New
+`test/scope-book.test.mjs` (11 assertions on the two new pure helpers). `node --check` clean, full
+suite re-run: same 2 pre-existing unrelated failures (`pricing-model`, `scope-core`), nothing new.
+Worker `2026-08-21.4`. **Brett: this is real money — see FEATURE_LOG rule 124 for the exact live-test
+checklist before trusting Confirm on the actual Gladden proposal.** Note what this phase does NOT do:
+no second step yet to invoice/bill the remaining balance once a job is actually complete — only the
+deposit side books today.
+
 ## ✅ RESOLVED — `ac1470a` recovered after all. Brett found the patch. FEATURE_LOG rule 123.
 The "unrecoverable" call right below was correct as far as this checkout went — but Brett had the
 patch on his end (this session's `git cat-file`/`git log --all` checks only ever prove a commit

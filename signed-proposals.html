@@ -137,28 +137,46 @@ function doLogin(){
 }
 function enterApp(){document.getElementById('login').classList.add('hide');document.getElementById('app').classList.remove('hide');load();}
 
+// Two separate signed-proposal systems feed this one screen: the older per-property B-076
+// registry (/proposal/signatures + /proposal/book) and the newer generic scope e-sign system
+// (/scope-proposal/signed + /scope-proposal/book, Aug 19/21 2026). Same review/preview/confirm
+// UX either way — each row just remembers which API pair (`kind`) it books through.
 function load(){
-  api('GET','/proposal/signatures').then(function(rows){
-    if(!Array.isArray(rows)){document.getElementById('list').innerHTML='<div class="warn">'+esc((rows&&rows.error)||'Could not load')+'</div>';return;}
+  Promise.all([
+    api('GET','/proposal/signatures').catch(function(e){return {error:e.message};}),
+    api('GET','/scope-proposal/signed').catch(function(e){return {error:e.message};})
+  ]).then(function(res){
+    var legacy=Array.isArray(res[0])?res[0]:[];
+    var scoped=Array.isArray(res[1])?res[1]:[];
+    if(!Array.isArray(res[0])&&!Array.isArray(res[1])){
+      document.getElementById('list').innerHTML='<div class="warn">'+esc((res[0]&&res[0].error)||(res[1]&&res[1].error)||'Could not load')+'</div>';return;
+    }
+    var rows=legacy.map(function(r){r.kind='legacy';return r;}).concat(scoped.map(function(r){r.kind='scope';return r;}));
+    rows.sort(function(a,b){return String(b.signed_ts||'').localeCompare(String(a.signed_ts||''));});
     document.getElementById('count').textContent=rows.length+' total';
     if(!rows.length){document.getElementById('list').innerHTML='<p class="muted" style="padding:20px 0">No signed proposals yet. When a customer signs a proposal, it appears here.</p>';return;}
     var html='';
     rows.forEach(function(r){
       var booked=(r.status==='Booked')||r.qb_invoice_id;
+      var subLine=r.kind==='scope' ? (r.title||('Scope #'+r.scope_id)) : (r.option_label||('Option '+r.option));
+      var invLabel=r.kind==='scope' ? 'Invoice owner (deposit)' : 'Invoice owner (1st pmt)';
+      var invAmt=r.kind==='scope' ? r.deposit : r.first_payment;
+      var billLabel=r.kind==='scope' ? 'Bill vendor (deposit share)' : 'Bill vendor (base)';
+      var billAmt=r.kind==='scope' ? r.vendor_cost_total : r.vendor_cost;
       html+='<div class="card"><div class="row">'
         +'<div><div class="name">'+esc(r.signer||'—')+'</div>'
-        +'<div class="sub">'+esc(r.property||r.proposal_id)+' · '+esc(r.option_label||('Option '+r.option))+'</div>'
+        +'<div class="sub">'+esc(r.property||r.proposal_id)+' · '+esc(subLine)+'</div>'
         +'<div class="sub">Signed '+esc(r.signed_date||'')+'</div></div>'
         +'<span class="chip '+(booked?'booked':'signed')+'">'+(booked?'✓ Booked':'Signed — needs billing')+'</span>'
         +'</div>'
         +'<div class="row" style="margin-top:10px">'
-        +'<div class="amt"><div class="lbl">Invoice owner (1st pmt)</div><div class="big">'+money(r.first_payment)+'</div></div>'
-        +'<div class="amt"><div class="lbl">Bill vendor (base)</div><div class="big">'+money(r.vendor_cost)+'</div></div>'
+        +'<div class="amt"><div class="lbl">'+invLabel+'</div><div class="big">'+money(invAmt)+'</div></div>'
+        +'<div class="amt"><div class="lbl">'+billLabel+'</div><div class="big">'+money(billAmt)+'</div></div>'
         +'</div>';
       if(booked){
         html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created.</div>';
       } else {
-        html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\')">Preview &amp; create invoice + bill</button></div>';
+        html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\')">Preview &amp; create invoice + bill</button></div>';
       }
       html+='</div>';
     });
@@ -166,16 +184,19 @@ function load(){
   }).catch(function(e){document.getElementById('list').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
 }
 
-function preview(id){
-  cur={id:id};
+function bookPath(kind){return kind==='scope' ? '/scope-proposal/book' : '/proposal/book';}
+
+function preview(id,kind){
+  cur={id:id,kind:kind};
   document.getElementById('m-title').textContent='Preview — create in QuickBooks';
   document.getElementById('m-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
   document.getElementById('m-confirm').classList.add('hide');
   document.getElementById('modal').classList.add('open');
-  api('POST','/proposal/book',{id:id,preview_only:true}).then(function(r){
+  api('POST',bookPath(kind),{id:id,preview_only:true}).then(function(r){
     if(!r||!r.ok||!r.preview){document.getElementById('m-body').innerHTML='<div class="warn">'+esc((r&&r.error)||'Could not build preview')+'</div>';return;}
     var p=r.preview,h='';
-    h+='<div class="sub" style="margin-bottom:8px">'+esc(p.property)+' · '+esc(p.signer)+' · Option '+esc(p.option)+'</div>';
+    var subhead=esc(p.property)+' · '+esc(p.signer)+(p.option?(' · Option '+esc(p.option)):'');
+    h+='<div class="sub" style="margin-bottom:8px">'+subhead+'</div>';
     h+='<div class="line"><span>Invoice → '+esc(p.invoice.customer)+' <span class="muted">('+esc(p.invoice.level)+')</span><br><span class="muted" style="font-size:12px">'+esc(p.invoice.desc)+'</span></span><span>'+money(p.invoice.amount)+'</span></div>';
     if(p.bill){h+='<div class="line"><span>Vendor bill → '+esc(p.bill.vendor)+' <span class="muted">('+esc(p.bill.trade)+')</span></span><span>'+money(p.bill.amount)+'</span></div>';}
     else {h+='<div class="line muted"><span>No vendor bill</span><span>—</span></div>';}
@@ -189,7 +210,7 @@ function preview(id){
 function confirmBook(btn){
   if(!cur)return;
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Creating…';
-  api('POST','/proposal/book',{id:cur.id}).then(function(r){
+  api('POST',bookPath(cur.kind),{id:cur.id}).then(function(r){
     if(r&&r.ok){
       var msg='Created'+(r.invoice_number?(' invoice #'+r.invoice_number):' invoice')+(r.bill_number?(' + bill #'+r.bill_number):(r.bill_id?' + bill':''));
       document.getElementById('m-body').innerHTML='<p style="font-weight:700;color:var(--green)">✓ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-21.3';
+const BUILD_VERSION = '2026-08-21.4';
 
 export default {
   async fetch(request, env) {
@@ -382,6 +382,7 @@ export default {
         if (path === '/scope/proposal/link')        return await scopeProposalLink(env, body);
         if (path === '/scope/proposal/link-revoke') return await scopeProposalLinkRevoke(env, body);
         if (path === '/scope-proposal/sign')      return await scopeProposalSign(env, body, _clientIP, _clientUA);
+        if (path === '/scope-proposal/book')      return await scopeProposalBook(env, body);
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
@@ -1712,9 +1713,8 @@ async function scopeProposalSign(env, body, ip, ua) {
   return json({ ok: true, subtotal, deposit });
 }
 
-// GET /scope-proposal/signed (admin) — signed scope proposals, for the Hub to review. Booking
-// them into QuickBooks (deposit invoice + prorated vendor bill) is the next build phase; today
-// this just makes a signature durably visible/inspectable the moment it lands.
+// GET /scope-proposal/signed (admin) — signed scope proposals, for the Hub to review before
+// booking them into QuickBooks via POST /scope-proposal/book (below).
 async function scopeProposalSignedList(env, url) {
   await scopeSigTab(env);
   const rows = await fetchTab(env, 'Scope_Signatures');
@@ -1727,12 +1727,167 @@ async function scopeProposalSignedList(env, url) {
     return {
       id: r.ID, scope_id: r.Scope_ID, wo_id: sc.WO_ID || '', property: p.Address || ('Property ' + sc.Property_ID),
       title: sc.Title || '', signer: r.Signer_Name, signed_date: r.Signed_Date, signed_ts: r.Signed_TS,
-      subtotal: +r.Subtotal || 0, deposit: +r.Deposit_Amount || 0, selections: sel,
-      status: r.Status || 'Signed', qb_invoice_id: r.QB_Invoice_ID || '', qb_bill_id: r.QB_Bill_ID || '',
+      subtotal: +r.Subtotal || 0, deposit: +r.Deposit_Amount || 0, vendor_cost_total: +r.Vendor_Cost_Total || 0, selections: sel,
+      status: r.Status || 'Signed', qb_invoice_id: r.QB_Invoice_ID || '', qb_invoice_number: r.QB_Invoice_Number || '',
+      qb_bill_id: r.QB_Bill_ID || '', qb_bill_number: r.QB_Bill_Number || '',
     };
   });
   out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
   return json(out);
+}
+
+// Which trade to book the deposit/bill lines under. A Scope has no single Trade field of its
+// own (it can mix trades across items), so this takes a majority vote across the SIGNED items
+// (by item count — simple and predictable) and falls back to General on a tie or a miss. Good
+// enough for the invoice/bill line + account routing; it is never shown to the customer.
+function scopeSigTrade(items, selections) {
+  const counts = {};
+  for (const it of items) {
+    if (!selections || selections[it.id] === undefined) continue; // only items actually selected/signed
+    const t = (it.trade || 'General').trim() || 'General';
+    counts[t] = (counts[t] || 0) + 1;
+  }
+  let best = 'General', bestN = 0;
+  for (const t in counts) if (counts[t] > bestN) { best = t; bestN = counts[t]; }
+  return QB_TRADE_MAP[best] ? best : 'General';
+}
+
+// The vendor bill is prorated to the SAME share of vendor cost as the deposit is of the
+// signed subtotal (deposit/subtotal ratio — normally 0.5 since deposit = subtotal/2, but
+// computed rather than hardcoded so a future non-50% deposit policy prorates correctly too).
+// Falls back to a straight 50% only if subtotal is somehow 0 (never divide by zero).
+function scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal) {
+  const ratio = subtotal > 0 ? (deposit / subtotal) : 0.5;
+  return { ratio, amount: +((vendorCostTotal || 0) * ratio).toFixed(2) };
+}
+
+// POST /scope-proposal/book (admin) { id, preview_only }
+// Books the QuickBooks side of a signed scope proposal (the NEW generic Scope_Signatures
+// e-sign system — Phase 2, following the per-item e-sign work of Aug 19/rule 123): a customer
+// invoice for the DEPOSIT (row.Deposit_Amount — half of the signed subtotal) + a vendor bill
+// for the SAME proportion of the vendor's cost (Vendor_Cost_Total × deposit/subtotal), so what
+// Ridge Co pays the vendor up front tracks what actually came in from the customer rather than
+// fronting the vendor's full cost before the customer pays the balance. This is a separate,
+// parallel system from the older proposalBook() (B-076, PROPOSAL_CONFIG-registry-based, full
+// vendor cost billed immediately) — proposalBook is untouched; this mirrors its preview-first /
+// admin-gated / idempotent safety pattern for the new Scopes/Scope_Signatures data model:
+//   • preview_only returns the computed invoice/bill lines + warnings, commits nothing.
+//   • the invoice id is persisted immediately after creation, before the bill is attempted, so
+//     a later failure (bill error, dropped connection) can never cause a duplicate invoice.
+//   • the bill is wrapped in try/catch so its failure can never hide or roll back the invoice.
+//   • re-calling after either half already exists skips that half rather than double-booking.
+async function scopeProposalBook(env, body) {
+  if (!body || !body.id) return json({ error: 'id required' }, 400);
+  await scopeSigTab(env);
+  const rows = await fetchTab(env, 'Scope_Signatures');
+  const row = rows.find(r => r.ID === String(body.id) && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (!row) return json({ error: 'signature not found' }, 404);
+
+  await scopesTab(env);
+  const scopes = await fetchTab(env, 'Scopes');
+  const s = scopes.find(x => x.ID === row.Scope_ID);
+  if (!s) return json({ error: 'Scope not found for this signature (Scope_ID ' + row.Scope_ID + ')' }, 404);
+
+  const subtotal = +row.Subtotal || 0;
+  const deposit = +row.Deposit_Amount || 0;
+  const vendorCostTotal = +row.Vendor_Cost_Total || 0;
+  const { ratio, amount: vendorBillAmount } = scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal);
+
+  let selections = {}; try { selections = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
+  const items = scopeParseItems(s);
+  const tradeName = scopeSigTrade(items, selections);
+  const trade = QB_TRADE_MAP[tradeName] || QB_TRADE_MAP.General;
+
+  const [props, units, owners, vendors] = await fetchTabs(env, ['Properties', 'Units', 'Owners', 'Vendors']);
+  const prop  = props.find(p => p.ID === s.Property_ID) || null;
+  const unit  = (s.Unit_ID && units.find(u => u.ID === s.Unit_ID)) || null;
+  const owner = prop ? (owners.find(o => o.ID === prop.Owner_ID) || null) : null;
+  const vendor = (s.Vendor_ID && vendors.find(v => v.ID === String(s.Vendor_ID))) || null;
+  const billTo = qbResolveBillTo(owner, prop, unit);
+  const custDisplay = billTo.display || (owner && qbOwnerDisplayName(owner)) || 'Customer';
+  const vendDisplay = vendor ? (vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + s.Vendor_ID)).trim() : '';
+  const vendorInHouse = !!vendor && String(vendor.In_House || '').toUpperCase() === 'TRUE';
+  const unitLabel = unit ? qbUnitLabel(unit) : '';
+  const addr = qbPropertyDisplayName(prop) ? (qbPropertyDisplayName(prop) + (unitLabel ? (' ' + unitLabel) : '')) : ('Property ' + s.Property_ID);
+
+  const warnings = [];
+  if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
+  if (!vendor) warnings.push(s.Vendor_ID ? ('Vendor ' + s.Vendor_ID + ' not found — no vendor bill will be created.') : 'No vendor set on this scope — no vendor bill will be created.');
+  else if (vendorInHouse) warnings.push('Vendor is marked in-house — no vendor bill will be created.');
+  if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
+  if (ratio !== 0.5) warnings.push('Deposit is ' + Math.round(ratio * 100) + '% of the signed subtotal (not the usual 50%) — the vendor bill is prorated to match.');
+  warnings.push('Invoice is the DEPOSIT only ($' + deposit.toFixed(2) + ' of $' + subtotal.toFixed(2) + '); the vendor bill is the same ' + Math.round(ratio * 100) + '% of the vendor cost ($' + vendorBillAmount.toFixed(2) + ' of $' + vendorCostTotal.toFixed(2) + ').');
+
+  const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — deposit (' + addr + ')').slice(0, 4000);
+  const preview = {
+    signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
+    invoice: { customer: custDisplay, level: billTo.level, amount: deposit, item: tradeName, desc: invoiceDesc, of_total: subtotal },
+    bill: (vendor && !vendorInHouse && vendorBillAmount > 0) ? { vendor: vendDisplay, amount: vendorBillAmount, trade: tradeName, of_total: vendorCostTotal } : null,
+    already: { invoice: row.QB_Invoice_ID || '', bill: row.QB_Bill_ID || '' }, warnings,
+  };
+  if (body.preview_only) return json({ ok: true, preview });
+
+  // ---- COMMIT ----
+  if (!owner && !(billTo.qb_id || '')) return json({ ok: false, error: 'Owner not resolved for ' + addr + ' — refusing to create a QuickBooks invoice on a fallback customer. Fix the property/owner link first.', warnings });
+  const token = await qbAccessToken(env);
+  const txnDate = new Date().toISOString().slice(0, 10);
+  let invoiceId = row.QB_Invoice_ID || '', invoiceNumber = row.QB_Invoice_Number || '';
+  let billId = row.QB_Bill_ID || '', billNumber = row.QB_Bill_Number || '';
+
+  // 1) Customer invoice (deposit) — idempotent.
+  if (!invoiceId && deposit > 0) {
+    let customerId = (billTo.level !== 'owner' && billTo.qb_id) ? billTo.qb_id : '';
+    if (!customerId) {
+      try { customerId = await qbFindOrCreateCustomer(env, owner || {}, custDisplay, token); }
+      catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
+    }
+    const invoicePayload = {
+      Line: [{ DetailType: 'SalesItemLineDetail', Amount: +deposit.toFixed(2), Description: invoiceDesc,
+        SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: +deposit.toFixed(2) } }],
+      CustomerRef: { value: customerId }, TxnDate: txnDate,
+      CustomerMemo: { value: ('Scope proposal ' + row.Scope_ID + ' — accepted ' + (row.Signed_Date || '') + ' by ' + row.Signer_Name).slice(0, 1000) },
+    };
+    const billEmail = (owner && (owner.Billing_Email || owner.Email) || '').trim();
+    if (billEmail && billEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail)) invoicePayload.BillEmail = { Address: billEmail };
+    let r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+    invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    if (!invoiceId && invoicePayload.BillEmail) { delete invoicePayload.BillEmail; r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token); invoiceId = (r && r.Invoice && r.Invoice.Id) || ''; }
+    if (!invoiceId) return json({ ok: false, error: 'QB invoice failed: ' + (qbFault(r) || 'unknown error'), warnings });
+    invoiceNumber = (r.Invoice && r.Invoice.DocNumber) || '';
+    // Persist the invoice id NOW, before touching the bill, so a later failure (bill error or a
+    // dropped connection) can never cause a duplicate invoice on retry.
+    try { await updateRow(env, 'Scope_Signatures', row.ID, { Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber }); } catch (e) {}
+  }
+
+  // 2) Vendor bill (prorated cost) — idempotent; skipped if vendor missing/in-house/zero.
+  // Wrapped so a bill failure can never roll back or hide the already-created (and persisted) invoice.
+  if (!billId && vendor && !vendorInHouse && vendorBillAmount > 0) {
+    try {
+      const vendorQbId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token);
+      if (vendorQbId) {
+        const billPayload = {
+          Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +vendorBillAmount.toFixed(2),
+            Description: (vendDisplay + ' — ' + tradeName + ' — ' + (s.Title || '') + ' — deposit share — ' + addr).slice(0, 4000),
+            AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+          VendorRef: { value: vendorQbId }, TxnDate: txnDate,
+          PrivateNote: ('Scope proposal ' + row.Scope_ID + ' — ' + vendDisplay).slice(0, 1000),
+        };
+        const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+        billId = (rb && rb.Bill && rb.Bill.Id) || '';
+        billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
+        if (!billId) warnings.push('QB bill failed: ' + (qbFault(rb) || 'unknown error'));
+      } else { warnings.push('Vendor QB id could not be resolved — no bill created.'); }
+    } catch (e) { warnings.push('Vendor bill error: ' + e.message); }
+  }
+
+  // 3) Persist QB ids + tie back to the scope/work order.
+  await updateRow(env, 'Scope_Signatures', row.ID, {
+    Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber, QB_Bill_ID: billId, QB_Bill_Number: billNumber,
+  });
+  try { await updateRow(env, 'Scopes', s.ID, { Status: 'invoiced', Updated_Date: new Date().toISOString() }); } catch (e) {}
+  try { if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Invoiced' }); } catch (e) {}
+
+  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
 }
 
 // Brett's default hourly rate for his own (hub) time when a customer has no specific rate on
