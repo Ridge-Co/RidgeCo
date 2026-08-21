@@ -1,0 +1,7 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "description": "Follow-up to ops_20260812_194704.json. That fix correctly set Tenant 27 (James, 20 E Eager St Apt 1) Phone=2257217547 (confirmed still correct live) and 'retired' the duplicate Tenant 98 by setting Active=FALSE and renaming First_Name to 'James (duplicate of #27 — retired)'. That renamed-but-still-populated row is what's still triggering Brett's contacts app to flag James as a possible duplicate/past tenant on 2026-08-20 — the old Apps Script contact sync reads the Tenants tab and syncs Active=FALSE rows too (as 'Former Tenant' contacts), and since row 98 still carries James's exact phone number, Google Contacts sees two contacts sharing that number and suggests merging them. Fix: blank out row 98's identifying fields (First_Name, Phone) so it carries no data that can match/sync as a contact, while leaving Active=FALSE and the row itself intact (per house rule: never hard-delete rows).",
+  "ops": [
+    { "type": "update_cell_by_id", "tab": "Tenants", "id": "98", "fields": { "First_Name": "", "Phone": "" } }
+  ]
+}
