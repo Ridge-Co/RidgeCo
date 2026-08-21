@@ -7,7 +7,8 @@
 <style>
   :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--radius:8px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;}
+  html{max-width:100%;overflow-x:hidden;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;max-width:100%;overflow-x:hidden;overflow-wrap:break-word;}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:480px;padding:28px;}
   .logo{color:var(--accent);font-size:1.1rem;letter-spacing:0.15em;font-weight:bold;margin-bottom:4px;}
   .subtitle{color:var(--muted);font-size:11px;letter-spacing:0.1em;margin-bottom:24px;}
@@ -104,6 +105,13 @@
     <p>Your coordinator has been notified.<br>Reference: <span id="wo-ref" style="color:var(--accent)"></span><br><br>You will hear from us soon.</p>
     <button class="btn" onclick="submitAnother()" style="margin-top:20px;width:auto;padding:10px 24px">Submit Another Issue</button>
   </div>
+
+  <div class="success-screen" id="disabled-screen">
+    <div style="font-size:3rem;margin-bottom:12px">📞</div>
+    <h2 style="color:var(--text)">Online Requests Are Off Right Now</h2>
+    <p>Online maintenance requests aren't currently accepted for your unit.<br>Please contact your property manager directly to report an issue.</p>
+    <button class="btn secondary" onclick="resetToPin()" style="margin-top:20px;width:auto;padding:10px 24px">Back</button>
+  </div>
 </div>
 
 <div class="loading-overlay" id="loading">
@@ -147,12 +155,19 @@ function lookupPin() {
     }
     tenantData = res;
     if (res.token) TOKEN = res.token;   // scoped tenant token drives the submit + upload
+    document.getElementById('pin-screen').style.display = 'none';
+    // Tenant-work-order-submission toggle (Aug 20, 2026): server resolves the owner/property
+    // hierarchy and hands back a plain can_submit_wo boolean — this is UX only (hide the
+    // form); POST /workorder re-checks the same thing server-side so this can't be bypassed.
+    if (res.can_submit_wo === false) {
+      document.getElementById('disabled-screen').style.display = 'block';
+      return;
+    }
     document.getElementById('tc-name').textContent = res.tenant_name;
     document.getElementById('tc-addr').textContent =
       res.property_address +
       (res.unit_label ? ' · ' + res.unit_label : '') +
       (res.property_city ? ', ' + res.property_city : '');
-    document.getElementById('pin-screen').style.display = 'none';
     document.getElementById('form-screen').style.display = 'block';
   })
   .catch(function(e) {
@@ -251,6 +266,7 @@ function resetToPin() {
   document.getElementById('pin-input').value = '';
   document.getElementById('pin-error').style.display = 'none';
   document.getElementById('form-screen').style.display = 'none';
+  document.getElementById('disabled-screen').style.display = 'none';
   document.getElementById('pin-screen').style.display = 'block';
 }
 

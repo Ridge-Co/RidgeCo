@@ -56,6 +56,22 @@ confirmed, same as `venture-web` wasn't marked done until its second delivery ac
 Also: Brett pasted `BRETT_GH_PAT` into this chat to load context (his documented workflow) — per the
 standing CREDENTIALS_MAP rule, rotate it (revoke + reissue) after this session closes.
 
+# WHERE THINGS STAND — Aug 20, 2026
+
+## 🔴 SECURITY — rotate your GitHub token. It was pasted into this chat in plain text.
+Not a code issue — a housekeeping one. A classic GitHub personal access token was pasted directly into this session's chat to authenticate the git push. It was used only in-session (never written to any file in the repo) but it now exists in this conversation's history, which is enough reason to treat it as burned: go to GitHub → Settings → Developer settings → Personal access tokens and revoke/regenerate it next time you're at a computer. This isn't urgent-tonight urgent, but don't leave the old one live indefinitely.
+
+## 🔓 Tenant work-order submit toggle (owner overrides property) SHIPPED (Aug 20, Worker `2026-08-20.3`, new `tenant-wo-access.html`, live). FEATURE_LOG rule 118. 🔴 Needs Brett's first live pass.
+One page, two levels, owner always wins when it applies. Off everywhere by default — no tenant anywhere can submit a work order until you turn it on at the owner or property level. **Verify (Brett):** open Tenant Work Order Access from the Hub's 🧰 TOOLS, confirm everything shows OFF to start, turn one property ON and confirm a tenant there can now submit from the online request page, then set an owner-level Block scoped to that property and confirm it overrides the property back to blocked.
+
+## ✏️ Owners are now editable from the Hub SHIPPED (Aug 20, live). FEATURE_LOG rule 119.
+Owners was the one contact type in the Hub you couldn't actually edit — its Edit button was a placeholder. Real edit modal now, same as Vendors/Tenants/Properties. **Verify (Brett):** Owners list → Edit on any owner → change something → Save → reload and confirm it stuck.
+
+## 📱 Mobile fix for owner/property pages + every day-to-day page, plus a "back to Hub" nav on every tool SHIPPED (Aug 20, live). FEATURE_LOG rule 120. 🔴 Needs Brett's phone check.
+Found the real cause of "can't see the whole screen": the Hub's data tables (Owners/Vendors/Tenants/etc.) were being clipped off-screen instead of letting you scroll sideways to see every column, and the owner/vendor page headers didn't wrap on a narrow screen. Both fixed, plus the same overflow guard applied across tenant/owner-submit/submit pages defensively. Separately, every one of your 23 standalone tool pages (Trash, Command Center, Receipt Reconciler, Inspection Scheduler, etc.) now has a thin bar at the top with a link back to the Hub and a dropdown to jump straight to any other tool — so you don't have to back out through the browser when you're bouncing between tools. **Verify (Brett):** on your phone, check the Owners/Vendors/Tenants tables in the Hub scroll properly now, open owner.html and vendor.html and confirm the header looks right, and open any tool from Dev Log → 🧰 TOOLS and confirm the new nav bar at the top works.
+
+---
+
 # WHERE THINGS STAND — Aug 18, 2026 (end of day)
 
 ## 📋 Open Item Report — admin test-send override added SHIPPED (Aug 18, not yet usable). FEATURE_LOG rule 117. 🔴 Still needs Brett's Gmail OAuth setup before any send works.

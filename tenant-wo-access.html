@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Tenant Work Order Access — Ridge Co</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --surface:#fff; --border:#dfe3e8; --text:#1c2430; --muted:#6b7684;
+    --accent:#1d4ed8; --accent2:#1a7f4b; --danger:#c0392b; --warn:#b8860b; --chip:#eef2f7;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:15px;max-width:100%;overflow-x:hidden;overflow-wrap:break-word}
+  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;z-index:10;gap:8px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0}
+  header .ver{font-size:11px;color:var(--muted)}
+  main{padding:14px 14px 60px;max-width:900px;margin:0 auto}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px}
+  .sec-title{font-size:13px;font-weight:700;letter-spacing:.02em;color:var(--text);margin:0 0 8px}
+  .muted{color:var(--muted);font-size:12.5px;line-height:1.5}
+  .banner{background:#eaf1fd;border:1px solid #cadcff;color:#274b8f;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.55}
+  .banner b{color:#1d3a7a}
+  .btn{padding:10px 14px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--text);font-size:14px;font-weight:600;cursor:pointer}
+  .btn.small{padding:6px 11px;font-size:12.5px}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+  .btn.ghost{background:transparent}
+  .btn:active{opacity:.85}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  select,input{width:100%;padding:10px;border:1px solid var(--border);border-radius:9px;font-size:15px;background:var(--surface);color:var(--text)}
+  label.fld{display:block;margin:10px 0 4px;font-size:12.5px;color:var(--muted);font-weight:600}
+  .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11.5px;font-weight:700;letter-spacing:.02em}
+  .pill.on{background:#e7f6ec;color:var(--accent2)}
+  .pill.off{background:#fbeaea;color:var(--danger)}
+  .pill.inherit{background:var(--chip);color:var(--muted)}
+  .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:520px}
+  th{text-align:left;padding:7px 10px;font-size:10.5px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap}
+  td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .why{color:var(--muted);font-size:11.5px}
+  .unit-chip-list{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+  .unit-chip{background:var(--chip);border-radius:6px;padding:2px 7px;font-size:11px;color:var(--muted)}
+  .radio-row{display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 2px}
+  .radio-row label{display:flex;align-items:center;gap:5px;font-size:13px;font-weight:normal;color:var(--text);text-transform:none;letter-spacing:0}
+  .radio-row input{width:auto;padding:0}
+  .scope-box{margin-top:10px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:none}
+  .scope-box.show{display:block}
+  .check-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;max-height:260px;overflow-y:auto;margin-top:8px;padding:2px}
+  .check-grid label{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:normal;color:var(--text);text-transform:none;letter-spacing:0;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:6px 8px}
+  .check-grid input{width:auto;padding:0}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s;max-width:90vw;text-align:center}
+  .toast.show{opacity:1}
+  .hide{display:none}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  @media (max-width:520px){ header h1{font-size:15px} .check-grid{grid-template-columns:1fr 1fr} }
+</style>
+</head>
+<body>
+
+<!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->
+<div id="rc-navbar" style="position:static;z-index:9999;background:#1d4ed8;color:#fff;display:flex;align-items:center;gap:8px;padding:6px 10px;font:600 12px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;overflow-x:auto;white-space:nowrap">
+  <a href="index.html" style="color:#fff;text-decoration:none;display:flex;align-items:center;gap:4px;flex:none">← Hub</a>
+  <select id="rc-nav-jump" onchange="if(this.value)location.href=this.value" style="margin-left:auto;flex:none;background:#fff;color:#1b1f24;border:none;border-radius:4px;padding:4px 6px;font:600 11px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:46vw">
+    <option value="">Jump to…</option>
+    <optgroup label="Dashboards">
+      <option value="command-center.html">Command Center</option>
+      <option value="action-center.html">Action Center</option>
+    </optgroup>
+    <optgroup label="Money">
+      <option value="vendor-reconcile.html">Vendor reconciliation</option>
+      <option value="receipt-reconciler.html">Receipt Reconciler</option>
+      <option value="ar-report-admin.html">Open Item Report</option>
+      <option value="qb-email-backfill.html">Fix QB emails</option>
+      <option value="trash.html">Trash Service billing</option>
+    </optgroup>
+    <optgroup label="Tools">
+      <option value="scope-creator.html">Scope Creator</option>
+      <option value="inspect.html">Inspection Scheduler</option>
+      <option value="deliveries.html">Deliveries</option>
+      <option value="proposals.html">Proposals</option>
+      <option value="building-info.html">Building Info</option>
+      <option value="keys.html">Keys</option>
+    </optgroup>
+    <optgroup label="Portals">
+      <option value="owner.html">Owner Portal</option>
+      <option value="vendor.html">Vendor Portal</option>
+      <option value="tenant.html">Tenant Portal</option>
+    </optgroup>
+  </select>
+</div>
+
+<div id="login">
+  <h1>Tenant Work Order Access</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized — try again.</p>
+  <button class="btn primary" style="width:100%;margin-top:12px" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <header>
+    <h1>🔓 Tenant Work Order Access</h1>
+    <span class="ver" id="ver"></span>
+  </header>
+  <main>
+    <div class="banner">
+      <b>How this works:</b> tenants <b>cannot</b> submit their own work orders (via the online request link)
+      unless you turn it on somewhere. You can turn it on/off two ways — an <b>owner-level</b> setting
+      (which can apply to all of that owner's properties, or just ones you pick) and a <b>property-level</b>
+      setting (which can apply to the whole property, or just units you pick). <b>Owner-level always wins</b>
+      when it covers the property — set it there and it overrides whatever the property says. Nothing set
+      anywhere = tenants can't submit (off by default).
+    </div>
+
+    <div class="card">
+      <div class="sec-title">Current effective status, by property</div>
+      <div class="muted" style="margin-bottom:8px">What tenants actually see right now, and why.</div>
+      <div class="table-wrap">
+        <table id="summary-table"><thead><tr><th>Property</th><th>Owner</th><th>Status</th><th>Why</th></tr></thead>
+          <tbody><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sec-title">Owner-level override</div>
+      <div class="muted" style="margin-bottom:6px">Setting this for an owner overrides whatever is set at the property level, for every property it applies to.</div>
+      <label class="fld">Owner</label>
+      <select id="ow-select" onchange="onOwnerPick()"><option value="">— pick owner —</option></select>
+      <div class="radio-row" id="ow-radio">
+        <label><input type="radio" name="ow-mode" value="" checked onchange="onOwnerModeChange()"> No override (inherit property setting)</label>
+        <label><input type="radio" name="ow-mode" value="ON" onchange="onOwnerModeChange()"> Allow tenants to submit</label>
+        <label><input type="radio" name="ow-mode" value="OFF" onchange="onOwnerModeChange()"> Block tenants from submitting</label>
+      </div>
+      <div class="scope-box" id="ow-scope">
+        <label class="fld" style="margin-top:0"><input type="checkbox" id="ow-scope-all" style="width:auto" checked onchange="toggleOwnerScopeAll()"> Apply to ALL of this owner's properties</label>
+        <div class="check-grid hide" id="ow-prop-list"></div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" id="ow-save" onclick="saveOwnerToggle()" disabled>Save owner setting</button>
+        <span class="muted" id="ow-current"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="sec-title">Property-level default</div>
+      <div class="muted" style="margin-bottom:6px">Only takes effect where no owner-level override applies to this property.</div>
+      <label class="fld">Property</label>
+      <select id="pr-select" onchange="onPropPick()"><option value="">— pick property —</option></select>
+      <div class="radio-row" id="pr-radio">
+        <label><input type="radio" name="pr-mode" value="" checked onchange="onPropModeChange()"> No setting (blocked by default)</label>
+        <label><input type="radio" name="pr-mode" value="ON" onchange="onPropModeChange()"> Allow tenants to submit</label>
+        <label><input type="radio" name="pr-mode" value="OFF" onchange="onPropModeChange()"> Block tenants from submitting</label>
+      </div>
+      <div class="scope-box" id="pr-scope">
+        <label class="fld" style="margin-top:0"><input type="checkbox" id="pr-scope-all" style="width:auto" checked onchange="togglePropScopeAll()"> Apply to ALL units in this property</label>
+        <div class="check-grid hide" id="pr-unit-list"></div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn primary" id="pr-save" onclick="savePropToggle()" disabled>Save property setting</button>
+        <span class="muted" id="pr-current"></span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';
+var AUTH_TOKEN = '';
+var SETTINGS = { owners: [], properties: [] };
+
+function api(method, path, body){
+  var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.json().then(function(data){
+      if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
+      return data;
+    });
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';},2600); }
+
+// ── Login (same mh_auth token as the Hub — same origin, so this opens already logged in
+// when launched from the Hub's TOOLS menu) ─────────────────────────────────────────────
+function doLogin(){
+  var v=document.getElementById('login-input').value.trim(); AUTH_TOKEN=v;
+  api('GET','/tenant-wo-settings').then(function(){ localStorage.setItem(SECRET_KEY,v); enterApp(); })
+    .catch(function(){ AUTH_TOKEN=''; document.getElementById('login-error').classList.remove('hide'); });
+}
+document.getElementById('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored=localStorage.getItem(SECRET_KEY);
+  if(stored){ AUTH_TOKEN=stored; api('GET','/tenant-wo-settings').then(enterApp).catch(function(){ AUTH_TOKEN=''; }); }
+})();
+
+function enterApp(){
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').classList.remove('hide');
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  load();
+}
+
+// ── Load + render summary ───────────────────────────────────────────────────
+function load(){
+  return api('GET','/tenant-wo-settings').then(function(d){
+    SETTINGS = { owners: (d && d.owners) || [], properties: (d && d.properties) || [] };
+    renderSummary();
+    fillOwnerSelect();
+    fillPropSelect();
+  }).catch(function(e){
+    document.getElementById('summary-table').querySelector('tbody').innerHTML =
+      '<tr><td colspan="4" class="muted">Could not load ('+esc(e.message)+').</td></tr>';
+  });
+}
+
+function ownerName(ownerId){
+  var o = SETTINGS.owners.filter(function(x){ return x.owner_id===ownerId; })[0];
+  return o ? o.name : (ownerId ? 'Owner '+ownerId : '—');
+}
+
+function whySummary(p, unitEnabled, unitId){
+  // Mirrors the server's resolveTenantWOAccess precedence, purely for display text.
+  var owner = SETTINGS.owners.filter(function(x){ return x.owner_id===p.owner_id; })[0];
+  if (owner && (owner.toggle==='ON' || owner.toggle==='OFF')) {
+    var oScoped = (owner.property_ids||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+    if (!oScoped.length || oScoped.indexOf(p.property_id)>=0) return 'Owner override ('+owner.name+')';
+  }
+  if (p.property_toggle==='ON' || p.property_toggle==='OFF') {
+    var pScoped = (p.property_unit_ids||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+    if (!pScoped.length || (unitId && pScoped.indexOf(unitId)>=0)) return 'Property setting';
+  }
+  return 'Default (off)';
+}
+
+function renderSummary(){
+  var rows = [];
+  SETTINGS.properties.forEach(function(p){
+    if (!p.units.length) {
+      rows.push('<tr><td>'+esc(p.address)+'</td><td>'+esc(ownerName(p.owner_id))+'</td><td>'+
+        '<span class="pill '+(p.whole_property_enabled?'on':'off')+'">'+(p.whole_property_enabled?'Can submit':'Blocked')+'</span></td>'+
+        '<td class="why">'+esc(whySummary(p, p.whole_property_enabled, ''))+'</td></tr>');
+    } else {
+      p.units.forEach(function(u){
+        rows.push('<tr><td>'+esc(p.address)+(u.unit_label?' <span class="muted">· '+esc(u.unit_label)+'</span>':'')+'</td><td>'+esc(ownerName(p.owner_id))+'</td><td>'+
+          '<span class="pill '+(u.enabled?'on':'off')+'">'+(u.enabled?'Can submit':'Blocked')+'</span></td>'+
+          '<td class="why">'+esc(whySummary(p, u.enabled, u.unit_id))+'</td></tr>');
+      });
+    }
+  });
+  document.getElementById('summary-table').querySelector('tbody').innerHTML =
+    rows.length ? rows.join('') : '<tr><td colspan="4" class="muted">No active properties on file.</td></tr>';
+}
+
+// ── Owner-level control ─────────────────────────────────────────────────────
+function fillOwnerSelect(){
+  var sel = document.getElementById('ow-select');
+  var owners = SETTINGS.owners.slice().sort(function(a,b){ return a.name.localeCompare(b.name); });
+  sel.innerHTML = '<option value="">— pick owner —</option>' + owners.map(function(o){
+    return '<option value="'+esc(o.owner_id)+'">'+esc(o.name)+' ('+o.property_count+' propert'+(o.property_count===1?'y':'ies')+')'+(o.toggle?' — currently '+o.toggle:'')+'</option>';
+  }).join('');
+}
+function onOwnerPick(){
+  var id = document.getElementById('ow-select').value;
+  document.getElementById('ow-save').disabled = !id;
+  document.getElementById('ow-current').textContent = '';
+  if (!id) { document.getElementById('ow-scope').classList.remove('show'); return; }
+  var o = SETTINGS.owners.filter(function(x){ return x.owner_id===id; })[0] || {};
+  var mode = o.toggle || '';
+  document.querySelectorAll('input[name="ow-mode"]').forEach(function(r){ r.checked = (r.value===mode); });
+  var scopedIds = (o.property_ids||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+  var props = SETTINGS.properties.filter(function(p){ return p.owner_id===id; });
+  document.getElementById('ow-prop-list').innerHTML = props.map(function(p){
+    return '<label><input type="checkbox" class="ow-prop-check" value="'+esc(p.property_id)+'" '+(scopedIds.indexOf(p.property_id)>=0?'checked':'')+'> '+esc(p.address)+'</label>';
+  }).join('');
+  document.getElementById('ow-scope-all').checked = !scopedIds.length;
+  toggleOwnerScopeAll();
+  document.getElementById('ow-current').textContent = o.toggle ? ('Currently: '+o.toggle+(scopedIds.length?' ('+scopedIds.length+' propert'+(scopedIds.length===1?'y':'ies')+')':' (all properties)')) : 'Currently: no override';
+  onOwnerModeChange();
+}
+function onOwnerModeChange(){
+  var mode = (document.querySelector('input[name="ow-mode"]:checked')||{}).value;
+  document.getElementById('ow-scope').classList.toggle('show', !!mode);
+}
+function toggleOwnerScopeAll(){
+  var all = document.getElementById('ow-scope-all').checked;
+  document.getElementById('ow-prop-list').classList.toggle('hide', all);
+}
+function saveOwnerToggle(){
+  var id = document.getElementById('ow-select').value; if (!id) return;
+  var mode = (document.querySelector('input[name="ow-mode"]:checked')||{}).value;
+  var propIds = [];
+  if (mode && !document.getElementById('ow-scope-all').checked) {
+    document.querySelectorAll('.ow-prop-check:checked').forEach(function(c){ propIds.push(c.value); });
+  }
+  var btn = document.getElementById('ow-save'); btn.disabled = true; btn.textContent = 'Saving…';
+  api('POST','/owner/tenant-wo-toggle', { owner_id:id, toggle:mode, property_ids:propIds }).then(function(res){
+    btn.disabled = false; btn.textContent = 'Save owner setting';
+    if (res && res.error) { toast('Error: '+res.error); return; }
+    toast('Owner setting saved'); load();
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save owner setting'; toast('Error: '+e.message); });
+}
+
+// ── Property-level control ──────────────────────────────────────────────────
+function fillPropSelect(){
+  var sel = document.getElementById('pr-select');
+  var props = SETTINGS.properties.slice().sort(function(a,b){ return a.address.localeCompare(b.address); });
+  sel.innerHTML = '<option value="">— pick property —</option>' + props.map(function(p){
+    return '<option value="'+esc(p.property_id)+'">'+esc(p.address)+(p.property_toggle?' — currently '+p.property_toggle:'')+'</option>';
+  }).join('');
+}
+function onPropPick(){
+  var id = document.getElementById('pr-select').value;
+  document.getElementById('pr-save').disabled = !id;
+  document.getElementById('pr-current').textContent = '';
+  if (!id) { document.getElementById('pr-scope').classList.remove('show'); return; }
+  var p = SETTINGS.properties.filter(function(x){ return x.property_id===id; })[0] || {};
+  var mode = p.property_toggle || '';
+  document.querySelectorAll('input[name="pr-mode"]').forEach(function(r){ r.checked = (r.value===mode); });
+  var scopedIds = (p.property_unit_ids||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+  document.getElementById('pr-unit-list').innerHTML = (p.units||[]).map(function(u){
+    return '<label><input type="checkbox" class="pr-unit-check" value="'+esc(u.unit_id)+'" '+(scopedIds.indexOf(u.unit_id)>=0?'checked':'')+'> '+esc(u.unit_label||('Unit '+u.unit_id))+'</label>';
+  }).join('') || '<span class="muted">No units on file for this property.</span>';
+  document.getElementById('pr-scope-all').checked = !scopedIds.length;
+  togglePropScopeAll();
+  document.getElementById('pr-current').textContent = p.property_toggle ? ('Currently: '+p.property_toggle+(scopedIds.length?' ('+scopedIds.length+' unit'+(scopedIds.length===1?'':'s')+')':' (all units)')) : 'Currently: no setting (blocked by default)';
+  onPropModeChange();
+}
+function onPropModeChange(){
+  var mode = (document.querySelector('input[name="pr-mode"]:checked')||{}).value;
+  document.getElementById('pr-scope').classList.toggle('show', !!mode);
+}
+function togglePropScopeAll(){
+  var all = document.getElementById('pr-scope-all').checked;
+  document.getElementById('pr-unit-list').classList.toggle('hide', all);
+}
+function savePropToggle(){
+  var id = document.getElementById('pr-select').value; if (!id) return;
+  var mode = (document.querySelector('input[name="pr-mode"]:checked')||{}).value;
+  var unitIds = [];
+  if (mode && !document.getElementById('pr-scope-all').checked) {
+    document.querySelectorAll('.pr-unit-check:checked').forEach(function(c){ unitIds.push(c.value); });
+  }
+  var btn = document.getElementById('pr-save'); btn.disabled = true; btn.textContent = 'Saving…';
+  api('POST','/property/tenant-wo-toggle', { property_id:id, toggle:mode, unit_ids:unitIds }).then(function(res){
+    btn.disabled = false; btn.textContent = 'Save property setting';
+    if (res && res.error) { toast('Error: '+res.error); return; }
+    toast('Property setting saved'); load();
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save property setting'; toast('Error: '+e.message); });
+}
+</script>
+<!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner) -->
+<script>
+(function(){
+  var VER_URL = WORKER + '/version', booted = null;
+  function dirty(){
+    var el = document.activeElement;
+    if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
+    return false;
+  }
+  function banner(){
+    if (document.getElementById('mh-upd-banner')) return;
+    var b = document.createElement('div');
+    b.id = 'mh-upd-banner';
+    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#1d4ed8;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
+    b.textContent = 'Update ready — tap to refresh';
+    b.onclick = function(){ location.reload(true); };
+    document.body.appendChild(b);
+  }
+  function check(){
+    fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      if (!d || !d.version) return;
+      if (booted === null){ booted = d.version; return; }
+      if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
+    }).catch(function(){});
+  }
+  check();
+  setInterval(check, 60000);
+})();
+</script>
+</body>
+</html>

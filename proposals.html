@@ -53,6 +53,51 @@
 </style>
 </head>
 <body>
+<!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->
+<div id="rc-navbar" style="position:static;z-index:9999;background:#1d4ed8;color:#fff;display:flex;align-items:center;gap:8px;padding:6px 10px;font:600 12px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;overflow-x:auto;white-space:nowrap">
+  <a href="index.html" style="color:#fff;text-decoration:none;display:flex;align-items:center;gap:4px;flex:none">← Hub</a>
+  <select id="rc-nav-jump" onchange="if(this.value)location.href=this.value" style="margin-left:auto;flex:none;background:#fff;color:#1b1f24;border:none;border-radius:4px;padding:4px 6px;font:600 11px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:46vw">
+    <option value="">Jump to…</option>
+    <optgroup label="Dashboards">
+      <option value="command-center.html">Command Center</option>
+      <option value="action-center.html">Action Center</option>
+    </optgroup>
+    <optgroup label="Money">
+      <option value="vendor-reconcile.html">Vendor reconciliation</option>
+      <option value="receipt-reconciler.html">Receipt Reconciler</option>
+      <option value="ar-report-admin.html">Open Item Report</option>
+      <option value="qb-email-backfill.html">Fix QB emails</option>
+      <option value="qb-invoice-email-backfill.html">Fix unsent invoice emails</option>
+      <option value="trash.html">Trash Service billing</option>
+      <option value="signed-proposals.html">Signed proposals → QB</option>
+    </optgroup>
+    <optgroup label="Tools">
+      <option value="scope-creator.html">Scope Creator</option>
+      <option value="inspect.html">Inspection Scheduler</option>
+      <option value="deliveries.html">Deliveries</option>
+      <option value="proposals.html">Proposals</option>
+      <option value="tenant-wo-access.html">Tenant WO Access</option>
+      <option value="building-info.html">Building Info</option>
+      <option value="keys.html">Keys</option>
+      <option value="cluster-tool.html">Location Cluster Tagger</option>
+    </optgroup>
+    <optgroup label="Data import">
+      <option value="importer.html">Tenant Importer</option>
+      <option value="clickup-importer.html">ClickUp Importer</option>
+      <option value="data-importer.html">Data Importer</option>
+      <option value="key-importer.html">Key Registry Importer</option>
+      <option value="patch-importer.html">Patch Importer</option>
+      <option value="wo-bulk-fix.html">WO Bulk Fix</option>
+      <option value="owner-setup.html">Owner Setup (legacy)</option>
+    </optgroup>
+    <optgroup label="Portals">
+      <option value="owner.html">Owner Portal</option>
+      <option value="vendor.html">Vendor Portal</option>
+      <option value="tenant.html">Tenant Portal</option>
+    </optgroup>
+  </select>
+</div>
+
 <div class="wrap">
   <header><div class="title">🧭 Optimizer Proposals <small id="asof"></small></div>
     <a class="back" href="command-center.html">← Command Center</a></header>

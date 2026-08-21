@@ -130,6 +130,12 @@ window.addEventListener('pageshow', function(e){
   .pf-label { font-size: 10px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
   .pf-val { font-size: 13px; margin-top: 2px; }
   .pf-val.sensitive { color: var(--accent); font-weight: bold; letter-spacing: 0.05em; }
+  /* Mobile fix (Aug 20, 2026): body has overflow-x:hidden globally (line ~38/42) to stop
+     stray-element horizontal drift, but that silently CLIPS anything wider than the
+     viewport instead of letting it scroll — including these tables' right-hand columns
+     (Edit/PIN buttons etc.) on a phone. Every .data-table render now wraps its markup in
+     a .table-wrap div so the table itself gets a normal horizontal scrollbar instead. */
+  .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .data-table { width: 100%; border-collapse: collapse; }
   .data-table th { text-align: left; padding: 8px 12px; font-size: 10px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; border-bottom: 1px solid var(--border); }
   .data-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: top; }
@@ -562,6 +568,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="window.open('command-center.html','_blank')">📊 Command Center</button>
       <button class="btn small" onclick="window.open('proposals.html','_blank')">💡 Proposals / greenlit queue</button>
       <button class="btn small" onclick="window.open('deliveries.html','_blank')">🚚 Deliveries</button>
+      <button class="btn small" onclick="window.open('tenant-wo-access.html','_blank')">🔓 Tenant Work Order Access</button>
     </div>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">💵 MONEY &amp; QUICKBOOKS</div>
@@ -2656,7 +2663,7 @@ function renderVendorsPage() {
   var el = document.getElementById('vendors-list');
   var vendors = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
   if (!vendors.length) { el.innerHTML='<div class="loading">No vendors yet</div>'; return; }
-  el.innerHTML = '<table class="data-table"><thead><tr>' +
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
     '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
@@ -2678,7 +2685,7 @@ function renderVendorsPage() {
         '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
         '<button class="btn small secondary" style="font-size:10px" onclick="regenerateAndShowPIN(\'vendor\',\''+v.ID+'\',\''+nm+'\')" title="Regenerate PIN">🔄</button>' +
         '</td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table></div>';
 }
 
 // ── Tenants ──────────────────────────────────────────────────
@@ -2700,7 +2707,7 @@ function renderTenantsPage() {
 
   if (!tenants.length) { el.innerHTML='<div class="loading">No tenants match "'+esc(search)+'" — try name, address, phone, or unit</div>'; return; }
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
-    '<table class="data-table"><thead><tr>' +
+    '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'tenants-action-bar\')"></th>' +
     '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th></th></tr></thead><tbody>' +
     tenants.map(function(t){
@@ -2726,7 +2733,7 @@ function renderTenantsPage() {
         '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+esc(t.Phone||'')+'\')" title="Set PIN">PIN</button>' +
         (canSend?'<button class="btn small" style="background:var(--info);color:#fff" onclick="previewSendPin(\'tenant\',\''+t.ID+'\',\''+esc(t.First_Name)+'\',\''+esc(t.Phone||'')+'\')">📱</button>':'') +
         '</td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table></div>';
 }
 
 function setTenantPin(tenantId, phone) {
@@ -2766,7 +2773,7 @@ function renderInvoicesPage() {
   if (!pending.length) { el.innerHTML='<div class="loading">No outstanding invoices</div>'; return; }
   var total = pending.reduce(function(s,i){return s+parseFloat(i.Amount||0);},0);
   el.innerHTML = '<div style="margin-bottom:16px;color:var(--accent);font-size:1.2rem;font-weight:bold">Outstanding: $'+total.toFixed(2)+'</div>' +
-    '<table class="data-table"><thead><tr><th>WO</th><th>Vendor</th><th>Amount</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>' +
+    '<div class="table-wrap"><table class="data-table"><thead><tr><th>WO</th><th>Vendor</th><th>Amount</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>' +
     pending.map(function(inv){
       var v = state.vendors.find(function(x){return x.ID===inv.Vendor_ID;});
       var wo = state.workorders.find(function(w){return w.ID===inv.WO_ID;});
@@ -2775,7 +2782,7 @@ function renderInvoicesPage() {
         '<td>'+(v?v.Name:'—')+'</td><td style="color:var(--accent);font-weight:bold">$'+parseFloat(inv.Amount||0).toFixed(2)+'</td>' +
         '<td>'+(inv.Date_Submitted||'—')+'</td><td><span class="badge badge-invoiced">'+inv.Status+'</span></td>' +
         '<td><button class="btn small" onclick="markInvoicePaid(\''+inv.WO_ID+'\')">Mark Paid</button></td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table></div>';
 }
 function markInvoicePaid(woId){
   api('POST','/status',{wo_id:woId,status:'Paid'}).then(function(){toast('Marked paid','success');loadAll();}).catch(function(e){toast('Error: '+e.message,'error');});
@@ -3453,7 +3460,7 @@ function renderOwnersPage() {
   var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
     'Several people at one company belong on <b>one</b> owner record — use <b>+ Contact</b> to give each their own login. ' +
     'A second owner row splits the properties and only one of them can hold the QuickBooks link.</div>';
-  html += '<table class="data-table"><thead><tr>' +
+  html += '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'owners-action-bar\')"></th>' +
     '<th>Name / Company</th><th>Phone</th><th>Properties</th><th title="Your hourly rate for this customer\'s jobs — blank follows the $85 default">Rate $/hr</th><th>PIN</th><th></th></tr></thead><tbody>';
 
@@ -3470,13 +3477,13 @@ function renderOwnersPage() {
       '<td><input type="number" step="5" min="0" '+(parseFloat(o.Hourly_Rate)>0?'value="'+parseFloat(o.Hourly_Rate)+'"':'')+' placeholder="85" onchange="setOwnerRate(\''+o.ID+'\',this.value)" title="Your hourly rate for this customer (blank = $85 default)" style="width:52px;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:12px"></td>' +
       '<td style="color:'+(o.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(o.PIN||'—')+'</td>' +
       '<td style="display:flex;gap:4px">' +
-      '<button class="btn small secondary" onclick="toast(\'Edit owners via Sheet for now\',\'info\')">Edit</button>' +
+      '<button class="btn small secondary" onclick="openEditOwnerModal(\''+o.ID+'\')">Edit</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
       '</td></tr>';
   }).join('');
 
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
   el.innerHTML = html;
 }
 
@@ -4316,7 +4323,7 @@ function renderMasterKeys(owners) {
   var active = _masterKeys.filter(function(k){ return k.Active!=='FALSE'; });
   if (!active.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No master keys defined yet. Click + Add Master Key to create one.</div>'; return; }
 
-  el.innerHTML = '<table class="data-table"><thead><tr><th>Name</th><th>Owner</th><th>Notes</th><th>Properties</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Owner</th><th>Notes</th><th>Properties</th><th></th></tr></thead><tbody>' +
     active.map(function(k) {
       var owner = owners.find(function(o){ return o.ID===k.Owner_ID; });
       var propCount = safeArray(state.properties).filter(function(p){ return p.Master_Key_ID===k.ID; }).length;
@@ -4329,7 +4336,7 @@ function renderMasterKeys(owners) {
           '<button class="btn small secondary" onclick="openBulkAssignModal(\''+k.ID+'\',\''+esc(k.Name)+'\')" title="Bulk assign to owner properties">Assign to Owner</button>' +
           '<button class="btn small danger" onclick="if(confirm(\'Delete this master key?\')) api(\'POST\',\'/master-key/update\',{id:\''+k.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshMasterKeys)">Del</button>' +
         '</td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table></div>';
 }
 
 var _bulkAssignKeyId = null;
@@ -4385,7 +4392,7 @@ function renderTemplates() {
   var el = document.getElementById('templates-list');
   if (!el) return;
   if (!_woTemplates.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No templates yet. Built-in templates (HVAC filter, pest control, etc.) are available when creating a WO. Add here for custom templates with links.</div>'; return; }
-  el.innerHTML = '<table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Link</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Link</th><th></th></tr></thead><tbody>' +
     _woTemplates.map(function(t) {
       var owner = safeArray(state.owners).find(function(o){ return o.ID===t.Owner_ID; });
       return '<tr>' +
@@ -4397,7 +4404,7 @@ function renderTemplates() {
           '<button class="btn small secondary" onclick="applySheetTemplate(\''+t.ID+'\')">Use</button>' +
           '<button class="btn small danger" onclick="if(confirm(\'Delete?\')) api(\'POST\',\'/wo-template/update\',{id:\''+t.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshTemplates)">Del</button>' +
         '</td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table></div>';
 }
 
 function openAddTemplateModal() {
@@ -8711,6 +8718,31 @@ function qbBatchSend() {
   </div>
 </div>
 
+<!-- EDIT OWNER MODAL (Aug 20, 2026 — replaces the old "edit via the Sheet" toast; real edit like Vendor/Tenant/Property) -->
+<div class="modal-overlay" id="modal-edit-owner">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header"><div class="modal-title">EDIT OWNER</div><button class="modal-close" onclick="closeModal('modal-edit-owner')">✕</button></div>
+    <input type="hidden" id="eo-id">
+    <div class="form-grid">
+      <div class="form-group full"><label>Company / Entity Name</label><input type="text" id="eo-company"></div>
+      <div class="form-group"><label>First Name</label><input type="text" id="eo-first"></div>
+      <div class="form-group"><label>Last Name</label><input type="text" id="eo-last"></div>
+      <div class="form-group"><label>Phone</label><input type="tel" id="eo-phone"></div>
+      <div class="form-group"><label>Email</label><input type="email" id="eo-email"></div>
+      <div class="form-group"><label>Your Rate $/hr <span style="font-weight:normal;color:var(--muted)">(blank = $85)</span></label><input type="number" step="5" min="0" id="eo-rate" placeholder="85"></div>
+      <div class="form-group"><label>PIN</label><input type="text" id="eo-pin" maxlength="8" style="text-transform:uppercase"></div>
+      <div class="form-group"><label>Active</label>
+        <select id="eo-active"><option value="TRUE">Active</option><option value="FALSE">Inactive</option></select>
+      </div>
+    </div>
+    <div id="eo-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-edit-owner')">Cancel</button>
+      <button class="btn" onclick="submitEditOwner()">SAVE</button>
+    </div>
+  </div>
+</div>
+
 <!-- UNIT DETAIL MODAL -->
 <div class="modal-overlay" id="modal-unit-detail">
   <div class="modal" style="max-width:560px">
@@ -8790,6 +8822,41 @@ function qbBatchSend() {
   </div>
 </div>
 <script>
+// ── Edit Owner ───────────────────────────────────────────────
+function openEditOwnerModal(id) {
+  var o = safeArray(state.owners).find(function(x){return x.ID===id;}); if(!o) return;
+  document.getElementById('eo-id').value = o.ID;
+  document.getElementById('eo-company').value = o.Company||'';
+  document.getElementById('eo-first').value = o.First_Name||'';
+  document.getElementById('eo-last').value = o.Last_Name||'';
+  document.getElementById('eo-phone').value = o.Phone||'';
+  document.getElementById('eo-email').value = o.Email||'';
+  document.getElementById('eo-rate').value = parseFloat(o.Hourly_Rate)>0 ? parseFloat(o.Hourly_Rate) : '';
+  document.getElementById('eo-pin').value = o.PIN||'';
+  document.getElementById('eo-active').value = o.Active==='FALSE' ? 'FALSE' : 'TRUE';
+  document.getElementById('eo-msg').innerHTML = '';
+  openModal('modal-edit-owner');
+}
+function submitEditOwner() {
+  var id = document.getElementById('eo-id').value;
+  var first = document.getElementById('eo-first').value.trim();
+  var comp = document.getElementById('eo-company').value.trim();
+  if (!first && !comp) { document.getElementById('eo-msg').innerHTML='<div style="color:var(--danger);font-size:12px">Enter a name or company.</div>'; return; }
+  var eoRate = parseFloat(document.getElementById('eo-rate').value);
+  var fields = {
+    First_Name: first, Last_Name: document.getElementById('eo-last').value.trim(),
+    Company: comp, Phone: document.getElementById('eo-phone').value.trim(),
+    Email: document.getElementById('eo-email').value.trim(),
+    Hourly_Rate: (eoRate > 0 ? String(eoRate) : ''),
+    PIN: document.getElementById('eo-pin').value.trim().toUpperCase(),
+    Active: document.getElementById('eo-active').value,
+  };
+  api('POST','/owner/update',{id:id,fields:fields}).then(function(res){
+    if (res && res.error) { document.getElementById('eo-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(res.error)+'</div>'; return; }
+    toast('Owner updated','success'); closeModal('modal-edit-owner'); loadAll(); renderOwnersPage();
+  }).catch(function(e){ document.getElementById('eo-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(e.message)+'</div>'; });
+}
+
 function openAddOwnerModal() {
   ['ao-company','ao-first','ao-last','ao-phone','ao-email','ao-pin','ao-rate'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   document.getElementById('ao-msg').innerHTML = '';

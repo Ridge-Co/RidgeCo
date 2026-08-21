@@ -31,13 +31,19 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-20.2';
+const BUILD_VERSION = '2026-08-20.3';
 
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
+    // Role of the caller for this request — null for the admin secret (full access) or a
+    // narrow service token; 'tenant'/'vendor'/'owner' when a PIN-issued session token was
+    // used. Set inside the auth gate below. Used by the tenant-work-order-submission toggle
+    // (Aug 20, 2026) to tell "Brett/admin creating a WO from the Hub" (always allowed) apart
+    // from "a tenant creating their own WO via submit.html" (gated).
+    let callerRole = null;
     const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
@@ -101,6 +107,7 @@ export default {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
+          callerRole = _session.role;
         }
       }
     }
@@ -192,6 +199,7 @@ export default {
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
+        if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
@@ -207,7 +215,16 @@ export default {
         if (path === '/wo/shared/note')           return await woSharedNote(env, body);
         if (path === '/wo/share-link')            return await woShareLink(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
-        if (path === '/workorder')                return await createWorkOrder(env, body);
+        if (path === '/workorder') {
+          // Tenant-work-order-submission toggle (Aug 20, 2026): only gates a TENANT's own
+          // session creating their own WO (submit.html). Admin (WORKER_SECRET) and owner
+          // sessions are never gated here — this feature is tenant-only, per Brett's ask.
+          if (callerRole === 'tenant') {
+            const _allowed = await resolveTenantSubmitAccess(env, body.property_id, body.unit_id);
+            if (!_allowed) return json({ error: 'Work order submission is currently turned off for your unit. Please contact your property manager.', tenant_wo_disabled: true }, 403);
+          }
+          return await createWorkOrder(env, body);
+        }
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
@@ -231,6 +248,8 @@ export default {
         if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
         if (path === '/owner/add')                return await addRow(env, 'Owners', body);
         if (path === '/owner/update')             return await updateRow(env, 'Owners', body.id, body.fields);
+        if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
+        if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
         if (path === '/owner/billing')            return await updateOwnerBilling(env, body);
         if (path === '/owner/get-billing')        return await getOwnerBilling(env, url);
         // B-227 Phase 1: Vendor_Type (labor/materials_store/materials_hybrid) + Payment_Address
@@ -563,9 +582,10 @@ async function tenantByPin(env, url) {
     }
     const tFirst = (tenant.First_Name||'').toLowerCase();
     if (tFirst !== name && !tFirst.startsWith(name)) return null;
-    const [props, units] = await fetchTabs(env, ['Properties','Units']);
+    const [props, units, owners] = await fetchTabs(env, ['Properties','Units','Owners']);
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
     const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
+    const owner = prop.Owner_ID ? owners.find(o => o.ID === prop.Owner_ID) : null;
     return json({
       tenant_id:        tenant.ID,
       tenant_name:      `${tenant.First_Name} ${tenant.Last_Name||''}`.trim(),
@@ -573,7 +593,12 @@ async function tenantByPin(env, url) {
       property_address: prop.Address||'',
       unit_id:          tenant.Unit_ID||'',
       unit_label:       unit.Unit_Label||'',
-      owner_id:         prop.Owner_ID||'',  // FIX: added for Tenant_Submit_WOs check
+      owner_id:         prop.Owner_ID||'',
+      // Tenant-work-order-submission toggle (Aug 20, 2026) — resolved server-side via the
+      // owner-overrides-property hierarchy, default OFF. submit.html reads this to show/hide
+      // the request form; POST /workorder re-checks this same resolver server-side so the
+      // gate can't be bypassed by skipping the UI.
+      can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
       token:            await makeSessionToken({ role: 'tenant', id: tenant.ID }, env.WORKER_SECRET),
     });
   });
@@ -1644,6 +1669,95 @@ async function processMoveOut(env, body) {
                 // still reachable, which is the whole thing this is meant to prevent.
                 units_incomplete: unitsFailed,
                 warning: unitsFailed ? 'Some unit links could not be cleared — run "Check units naming moved-out tenants" in Dev tools.' : '' });
+}
+
+// ── Tenant work-order-submission toggle (Aug 20, 2026) ──────────────────────
+// Brett's ask: turn tenants' ability to submit their own work orders on/off, settable at the
+// OWNER level (which can scope itself to specific properties) and the PROPERTY level (which
+// can scope itself to specific units). Owner-level, when it applies to this property, ALWAYS
+// wins over whatever the property has set — "if I set it at the owner level, that's what
+// takes place." Nothing set anywhere → OFF (Brett's explicit call — safer than silently
+// defaulting every tenant to "can submit" until someone remembers to flip a switch).
+//
+// Data model (self-provisioning via ensureColumns, so this is a no-op deploy until first use):
+//   Owners.Tenant_WO_Toggle        ''|'ON'|'OFF'  — the owner-level override, if any
+//   Owners.Tenant_WO_Property_IDs  comma-separated Property IDs the override applies to;
+//                                  blank = ALL of this owner's properties
+//   Properties.Tenant_WO_Toggle       ''|'ON'|'OFF'  — the property-level default, if any
+//   Properties.Tenant_WO_Unit_IDs     comma-separated Unit IDs it applies to; blank = ALL units
+//
+// resolveTenantWOAccess is a pure function (no I/O) so it's cheap to unit-test and reused by
+// both the single-lookup gate (resolveTenantSubmitAccess) and the settings-page summary
+// (tenantWOSettingsSummary) without re-fetching Sheets data for every row.
+function resolveTenantWOAccess(property, owner, unitId) {
+  if (!property) return false;
+  if (owner && (owner.Tenant_WO_Toggle === 'ON' || owner.Tenant_WO_Toggle === 'OFF')) {
+    const scoped = String(owner.Tenant_WO_Property_IDs || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!scoped.length || scoped.includes(property.ID)) return owner.Tenant_WO_Toggle === 'ON';
+  }
+  if (property.Tenant_WO_Toggle === 'ON' || property.Tenant_WO_Toggle === 'OFF') {
+    const scoped = String(property.Tenant_WO_Unit_IDs || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!scoped.length || (unitId && scoped.includes(unitId))) return property.Tenant_WO_Toggle === 'ON';
+  }
+  return false;
+}
+
+async function resolveTenantSubmitAccess(env, propertyId, unitId) {
+  if (!propertyId) return false;
+  const [properties, owners] = await fetchTabs(env, ['Properties', 'Owners']);
+  const property = properties.find(p => p.ID === propertyId);
+  if (!property) return false;
+  const owner = property.Owner_ID ? owners.find(o => o.ID === property.Owner_ID) : null;
+  return resolveTenantWOAccess(property, owner, unitId || '');
+}
+
+async function setOwnerTenantWOToggle(env, body) {
+  if (!body.owner_id) return json({ error: 'Missing owner_id' }, 400);
+  await ensureColumns(env, 'Owners', ['Tenant_WO_Toggle', 'Tenant_WO_Property_IDs']);
+  const toggle = body.toggle === 'ON' ? 'ON' : body.toggle === 'OFF' ? 'OFF' : '';
+  const ids = Array.isArray(body.property_ids) ? body.property_ids.filter(Boolean).join(',') : String(body.property_ids || '');
+  return await updateRow(env, 'Owners', body.owner_id, { Tenant_WO_Toggle: toggle, Tenant_WO_Property_IDs: ids });
+}
+
+async function setPropertyTenantWOToggle(env, body) {
+  if (!body.property_id) return json({ error: 'Missing property_id' }, 400);
+  await ensureColumns(env, 'Properties', ['Tenant_WO_Toggle', 'Tenant_WO_Unit_IDs']);
+  const toggle = body.toggle === 'ON' ? 'ON' : body.toggle === 'OFF' ? 'OFF' : '';
+  const ids = Array.isArray(body.unit_ids) ? body.unit_ids.filter(Boolean).join(',') : String(body.unit_ids || '');
+  return await updateRow(env, 'Properties', body.property_id, { Tenant_WO_Toggle: toggle, Tenant_WO_Unit_IDs: ids });
+}
+
+// One-shot read for the settings page: every active owner (with its toggle + scoped
+// properties) and every active property (with its own toggle + a per-unit resolved
+// "enabled" so the page can render the live effective state without re-implementing the
+// hierarchy logic client-side).
+async function tenantWOSettingsSummary(env) {
+  const [properties, owners, units] = await fetchTabs(env, ['Properties', 'Owners', 'Units']);
+  const ownerById = {}; owners.forEach(o => { ownerById[o.ID] = o; });
+  const activeProps = properties.filter(p => p.Active !== 'FALSE');
+  const propRows = activeProps.map(p => {
+    const owner = p.Owner_ID ? ownerById[p.Owner_ID] : null;
+    const propUnits = units.filter(u => u.Property_ID === p.ID && u.Active !== 'FALSE');
+    return {
+      property_id: p.ID,
+      address: p.Address || '',
+      owner_id: p.Owner_ID || '',
+      owner_toggle: owner ? (owner.Tenant_WO_Toggle || '') : '',
+      owner_property_ids: owner ? (owner.Tenant_WO_Property_IDs || '') : '',
+      property_toggle: p.Tenant_WO_Toggle || '',
+      property_unit_ids: p.Tenant_WO_Unit_IDs || '',
+      whole_property_enabled: resolveTenantWOAccess(p, owner, ''),
+      units: propUnits.map(u => ({ unit_id: u.ID, unit_label: u.Unit_Label || '', enabled: resolveTenantWOAccess(p, owner, u.ID) })),
+    };
+  });
+  const ownerRows = owners.filter(o => o.Active !== 'FALSE').map(o => ({
+    owner_id: o.ID,
+    name: (`${o.First_Name || ''} ${o.Last_Name || ''}`.trim()) || o.Company || `Owner ${o.ID}`,
+    toggle: o.Tenant_WO_Toggle || '',
+    property_ids: o.Tenant_WO_Property_IDs || '',
+    property_count: activeProps.filter(p => p.Owner_ID === o.ID).length,
+  }));
+  return json({ owners: ownerRows, properties: propRows });
 }
 
 async function createWorkOrder(env, body) {
