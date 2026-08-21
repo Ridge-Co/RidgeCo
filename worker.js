@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-21.6';
+const BUILD_VERSION = '2026-08-21.7';
 
 export default {
   async fetch(request, env) {
@@ -1561,7 +1561,12 @@ async function scopeProposal(env, body) {
   // Flat-text fallback doc (clipboard "Copy proposal" + legacy clients) — grand total + deposit
   // only, same no-leak shape as before; the interactive per-item/variant view is Proposal_Items_JSON.
   const scopeText = priced.items.map(it => '- ' + (it.area ? it.area + ': ' : '') + it.description).join('\n');
-  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${priced.subtotal.toFixed(2)}\nRequired 50% Deposit: $${priced.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this proposal and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.`;
+  // Standing policy (Aug 21 2026, Brett): if only PART of a scope is approved/completed instead of
+  // the full project, itemized pricing for those pieces is a best-efforts estimate, not a fixed
+  // quote — the combined price is built to absorb small unknowns across a mixed batch of larger and
+  // smaller tasks, and a piece done alone loses that cushion. Applies universally (not just when a
+  // standalone-vs-combined comparison is shown), so it's standard boilerplate on every proposal.
+  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${priced.subtotal.toFixed(2)}\nRequired 50% Deposit: $${priced.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this proposal and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn't get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.`;
 
   await ensureColumns(env, 'Scopes', ['Proposal_Items_JSON']);
   await updateRow(env, 'Scopes', id, {
@@ -3144,11 +3149,16 @@ async function generateEstimateText(env, body) {
   if (wo_id) { try { const all=await fetchTab(env,'Estimates'); const versions=all.filter(e=>e.WO_ID===wo_id).sort((a,b)=>parseInt(a.Version||'1')-parseInt(b.Version||'1')); if(versions.length){const firstItems=JSON.parse(versions[0].Line_Items||'[]'); if(firstItems.length>1&&line_items.length<firstItems.length) includeIntegrityClause=true;} } catch(e){} }
   const itemsList=line_items.map(li=>`- ${li.desc}`).join('\n');
   const integrityClauseText=includeIntegrityClause?'\n- Estimate Integrity Clause: This estimate is priced as a single, unified project based on current mobilization efficiencies. If individual line items are selectively removed or declined by the client, any remaining approved items are subject to a 15% price adjustment plus a $150 travel/mobilization fee.':'';
+  // Standing policy (Aug 21 2026, Brett) — same boilerplate as scopeProposal()'s doc: standalone/
+  // partial-scope pricing is best-efforts, not fixed, since the combined price absorbs unknowns a
+  // lone item doesn't share. Distinct from the punitive Integrity Clause above (which only fires
+  // when items are dropped from an already-multi-versioned estimate) — this applies universally.
+  const partialScopeClauseText='\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn\'t get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.';
   const prompt=`You are a property maintenance estimate writer. Rewrite the following raw, messy scope-of-work items into a polished, professional, scannable bulleted list. Correct all typos, slang, and grammar. Group related items under bold category headers where it makes sense.\n\nProperty: ${property_address}\nRaw issue description: ${issues}\nRaw line items:\n${itemsList}\n\nReturn ONLY the rewritten "Scope of Work:" bulleted section — clean Markdown, no emojis, no preamble, no other sections. Do not include any dollar amounts or pricing.`;
   try {
     const resp=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:800, messages:[{role:'user',content:prompt}] }) });
     const data=await resp.json(); const scopeText=data.content?.[0]?.text?.trim()||''; if (!scopeText) return json({ error:'Claude returned empty response',detail:data }, 500);
-    const doc=`${property_address}\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this estimate and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.`+integrityClauseText;
+    const doc=`${property_address}\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this estimate and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.`+partialScopeClauseText+integrityClauseText;
     return json({ success:true, text:doc, pricing:{ finalPrice:pricing.finalPrice, deposit:pricing.deposit } });
   } catch(e) { return json({ error:e.message }, 500); }
 }

@@ -1,5 +1,17 @@
 # WHERE THINGS STAND — Aug 21, 2026
 
+## 📜 New standing disclaimer on standalone/cherry-picked pricing — now on every proposal. FEATURE_LOG rule 128.
+Brett wants it permanently clear: cherry-picked items already cost more than their combined-job share
+(the tapering-trip-charge model built earlier this session), AND even that higher standalone number
+is only a best-efforts estimate — the combined price is what actually absorbs the small unknowns of
+mixing larger and smaller tasks, a lone item doesn't get that cushion. Added the confirmed disclaimer
+to Gladden's live proposal, to `scopeProposal()`'s doc template (every future Scope proposal), and to
+`generateEstimateText()`'s doc template (the older WO-based estimate path, still live) — three places
+so "every proposal we make" is actually covered regardless of which generator built it. Kept separate
+from the older 15%+$150 Estimate Integrity Clause (different scenario — dropping items from an
+already-versioned WO estimate). Documented as **LOCKED policy** in `billing-model.md` (private repo)
+so it's the standing reference. Worker `2026-08-21.7`.
+
 ## 🔓 Gladden un-gated + proposal text is now editable in the tool. FEATURE_LOG rule 127.
 Brett: "add the prices to the items on the page itself so we can fix it going forward and i can
 have full access to the link... i should be able to paste the text into the bottom proposal
