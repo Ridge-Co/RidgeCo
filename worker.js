@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-21.1';
+const BUILD_VERSION = '2026-08-21.2';
 
 export default {
   async fetch(request, env) {
@@ -386,6 +386,7 @@ export default {
         if (path === '/insp/blackout/add')         return await inspBlackoutAdd(env, body);
         if (path === '/insp/blackout/update')      return await updateRow(env, 'Insp_Blackouts', body.id, body.fields);
         if (path === '/insp/bulk-import')          return await inspBulkImport(env, body);
+        if (path === '/bulk-import')               return await hubBulkImport(env, body);
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
@@ -10128,6 +10129,187 @@ async function inspBulkImport(env, body) {
   if (newUnitRows.length) await sheetsRequest(env, 'POST', '/values/Insp_Units:append?valueInputOption=RAW', { values: newUnitRows });
 
   return json({ success: true, properties_created: propertiesCreated, properties_matched: propertiesMatched, units_created: unitsCreated, units_skipped_duplicate: unitsSkipped });
+}
+
+// ── HUB BULK IMPORT (Aug 20 session) — Brett: "bulk tenant/property/unit import,
+// I normally get a CSV/order spreadsheet." Same shape as inspBulkImport just above
+// (read once, match/create in memory, batch-write at the end — never one Sheets
+// call per row), but targets the CORE Properties/Units/Tenants/Owners tabs used
+// by work orders + billing, not the separate Insp_* tables. One row per unit,
+// grouped by Address into properties, exactly like inspBulkImport's grouping.
+//
+// Matching rules (per Brett's decisions this session):
+//   • Property matched by normalized Address (case/whitespace-insensitive).
+//   • Unit matched by Property + normalized Unit_Label.
+//   • Tenant matched by normalized Phone, searched across the WHOLE Tenants tab
+//     (not scoped to one property) — a phone already on file for a DIFFERENT
+//     unit is flagged for Brett's review, never silently re-linked (moving a
+//     tenant is a real event — /tenant/move-out exists for that reason).
+//   • Owner: "match existing only, flag new ones" — matched by Owner_Email
+//     (exact) then Owner_Phone (exact) then Owner_Name (normalized exact). No
+//     owner is ever auto-created here. A property whose row names an owner with
+//     no confident match gets flagged, never silently left ambiguous.
+//
+// preview:true runs the exact same matching/grouping logic and returns the plan
+// (created/matched/flagged) WITHOUT writing anything — the bulk-importer.html
+// screen always previews before letting Brett confirm.
+async function hubBulkImport(env, body) {
+  if (!body || !Array.isArray(body.rows) || !body.rows.length)
+    return json({ error: 'rows[] required' }, 400);
+  if (body.rows.length > 2000) return json({ error: 'Max 2000 rows per import call — split into batches (the Import screen does this automatically)' }, 400);
+  const preview = body.preview !== false;
+
+  const normAddr = s => String(s || '').trim().toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
+  const normName = s => String(s || '').trim().toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
+  const normEmail = s => String(s || '').trim().toLowerCase();
+
+  // One batched raw read of all 4 core tabs (mirrors fetchTabs' single values:batchGet,
+  // but keeps the raw header+rows shape so row positions are known for link-fix updates).
+  const batch = await sheetsRequest(env, 'GET', '/values:batchGet?ranges=Properties&ranges=Units&ranges=Tenants&ranges=Owners');
+  const ranges = batch.valueRanges || [];
+  const tabState = {};
+  ['Properties', 'Units', 'Tenants', 'Owners'].forEach((tab, i) => {
+    const values = (ranges[i] && ranges[i].values) || [];
+    const headers = values[0] || (tab === 'Properties' ? ['ID','Address','City','Market','Type','Unit_Count','Owner_ID','Active']
+      : tab === 'Units' ? ['ID','Property_ID','Unit_Label','Tenant_ID','Notes','Active']
+      : tab === 'Tenants' ? ['ID','First_Name','Last_Name','Phone','Email','Property_ID','Unit_ID','Move_In_Date','Active']
+      : ['ID','First_Name','Last_Name','Company','Phone','Email','PIN','Hourly_Rate','Active']);
+    const rows = values.slice(1).map(r => { const o = {}; headers.forEach((h, i2) => o[h] = r[i2] || ''); return o; });
+    tabState[tab] = { headers, rows };
+  });
+
+  const props = tabState.Properties.rows, units = tabState.Units.rows, tenants = tabState.Tenants.rows, owners = tabState.Owners.rows;
+  const propByAddr = {}; props.forEach(p => { if (p.Active !== 'FALSE') propByAddr[normAddr(p.Address)] = p; });
+  const unitByPropLabel = {}; units.forEach(u => { unitByPropLabel[u.Property_ID + '|' + normAddr(u.Unit_Label)] = u; });
+  const tenantByPhone = {}; tenants.forEach(t => { if (t.Phone) tenantByPhone[normalizePhone(t.Phone)] = t; });
+  const ownerByEmail = {}, ownerByPhone = {}, ownerByName = {};
+  owners.forEach(o => {
+    if (o.Active === 'FALSE') return;
+    if (o.Email) ownerByEmail[normEmail(o.Email)] = o;
+    if (o.Phone) ownerByPhone[normalizePhone(o.Phone)] = o;
+    const nm = normName(`${o.First_Name || ''} ${o.Last_Name || ''}`); if (nm) ownerByName[nm] = o;
+    if (o.Company) ownerByName[normName(o.Company)] = o;
+  });
+
+  let nextPropId = props.reduce((m, p) => { const n = parseInt(p.ID || '0'); return Number.isFinite(n) && n > m ? n : m; }, 0) + 1;
+  let nextUnitId = units.reduce((m, u) => { const n = parseInt(u.ID || '0'); return Number.isFinite(n) && n > m ? n : m; }, 0) + 1;
+  let nextTenantId = tenants.reduce((m, t) => { const n = parseInt(t.ID || '0'); return Number.isFinite(n) && n > m ? n : m; }, 0) + 1;
+
+  const groups = {}, order = [];
+  for (const r of body.rows) {
+    const addr = String((r && (r.Address || r.Property)) || '').trim();
+    if (!addr) continue;
+    const key = normAddr(addr);
+    if (!groups[key]) { groups[key] = { address: addr, rows: [] }; order.push(key); }
+    groups[key].rows.push(r);
+  }
+
+  const newPropRows = [], newUnitRows = [], newTenantRows = [], linkUpdates = [];
+  let propertiesCreated = 0, propertiesMatched = 0, unitsCreated = 0, unitsMatched = 0;
+  let tenantsCreated = 0, tenantsSkippedExisting = 0;
+  const flaggedTenantsElsewhere = [], flaggedOwners = [];
+  const createdDate = new Date().toISOString().slice(0, 10);
+
+  for (const key of order) {
+    const g = groups[key];
+    let prop = propByAddr[key];
+    let propIsNew = false;
+    // Owner match, computed once per property group from whichever row carries it.
+    const ownerRow = g.rows.find(r => r && (r.Owner_Email || r.Owner_Phone || r.Owner_Name));
+    let matchedOwnerId = '';
+    if (ownerRow) {
+      const oEmail = ownerRow.Owner_Email ? normEmail(ownerRow.Owner_Email) : '';
+      const oPhone = ownerRow.Owner_Phone ? normalizePhone(ownerRow.Owner_Phone) : '';
+      const oName = ownerRow.Owner_Name ? normName(ownerRow.Owner_Name) : '';
+      const match = (oEmail && ownerByEmail[oEmail]) || (oPhone && ownerByPhone[oPhone]) || (oName && ownerByName[oName]);
+      if (match) matchedOwnerId = match.ID;
+      else flaggedOwners.push({ address: g.address, owner_name: ownerRow.Owner_Name || '', owner_email: ownerRow.Owner_Email || '', owner_phone: ownerRow.Owner_Phone || '', reason: 'No existing owner matched by email/phone/name — attach manually.' });
+    }
+    if (!prop) {
+      propIsNew = true;
+      const id = String(nextPropId++);
+      prop = { ID: id, Address: g.address, City: '', Market: '', Type: g.rows.length > 1 ? 'multifamily' : 'single_family', Unit_Count: String(g.rows.length), Owner_ID: matchedOwnerId, Active: 'TRUE' };
+      newPropRows.push(tabState.Properties.headers.map(h => prop[h] !== undefined ? prop[h] : ''));
+      propByAddr[key] = prop;
+      propertiesCreated++;
+    } else {
+      propertiesMatched++;
+      // Only fill Owner_ID if the existing property doesn't already have one — never overwrite.
+      if (matchedOwnerId && !prop.Owner_ID) linkUpdates.push({ tab: 'Properties', id: prop.ID, field: 'Owner_ID', value: matchedOwnerId });
+    }
+
+    for (const r of g.rows) {
+      const label = String((r && (r.Unit_Label || r.Unit || r.Units)) || (g.rows.length === 1 ? 'Unit' : '')).trim();
+      const ulKey = prop.ID + '|' + normAddr(label);
+      let unit = unitByPropLabel[ulKey];
+      let unitIsNew = false;
+      if (!unit) {
+        unitIsNew = true;
+        const uid = String(nextUnitId++);
+        unit = { ID: uid, Property_ID: prop.ID, Unit_Label: label || 'Unit', Tenant_ID: '', Notes: '', Active: 'TRUE' };
+        unitByPropLabel[ulKey] = unit;
+        unitsCreated++;
+      } else {
+        unitsMatched++;
+      }
+
+      const rawPhone = (r && (r.Tenant_Phone || r.Phone)) || '';
+      const phone = rawPhone ? normalizePhone(rawPhone) : '';
+      const fullName = String((r && (r.Tenant_Name || r['Renter Name'] || r.Renter_Name || r.Name)) || '').trim();
+      const email = (r && (r.Tenant_Email || r.Email || r['Email Address'])) || '';
+      if (!fullName && !phone) continue; // a vacant-unit row (no renter) — the unit itself is still created/matched above
+
+      const existingTenant = phone ? tenantByPhone[phone] : null;
+      if (existingTenant) {
+        if (existingTenant.Unit_ID === unit.ID) {
+          tenantsSkippedExisting++; // already imported — re-pasting the same list is a no-op
+        } else {
+          flaggedTenantsElsewhere.push({ name: fullName, phone: rawPhone, address: g.address, unit_label: label, existing_tenant_id: existingTenant.ID, existing_property_id: existingTenant.Property_ID, existing_unit_id: existingTenant.Unit_ID, reason: 'A tenant with this phone already exists on a different unit — not auto-moved. Use Move-Out/reassign in the Hub if this is a real move.' });
+        }
+        if (unitIsNew) unit.Tenant_ID = existingTenant.ID; // link the new unit to the tenant we already know about
+      } else {
+        const spaceIdx = fullName.indexOf(' ');
+        const firstName = spaceIdx === -1 ? fullName : fullName.slice(0, spaceIdx);
+        const lastName = spaceIdx === -1 ? '' : fullName.slice(spaceIdx + 1);
+        const tid = String(nextTenantId++);
+        const tenantRow = { ID: tid, First_Name: firstName, Last_Name: lastName, Phone: phone, Email: email, Property_ID: prop.ID, Unit_ID: unit.ID, Move_In_Date: '', Active: 'TRUE' };
+        newTenantRows.push(tabState.Tenants.headers.map(h => tenantRow[h] !== undefined ? tenantRow[h] : ''));
+        if (phone) tenantByPhone[phone] = tenantRow;
+        tenantsCreated++;
+        unit.Tenant_ID = tid;
+        if (!unitIsNew) linkUpdates.push({ tab: 'Units', id: unit.ID, field: 'Tenant_ID', value: tid });
+      }
+      if (unitIsNew) newUnitRows.push(tabState.Units.headers.map(h => unit[h] !== undefined ? unit[h] : ''));
+    }
+  }
+
+  const summary = {
+    success: true, preview,
+    properties_created: propertiesCreated, properties_matched: propertiesMatched,
+    units_created: unitsCreated, units_matched: unitsMatched,
+    tenants_created: tenantsCreated, tenants_skipped_existing: tenantsSkippedExisting,
+    tenants_flagged_elsewhere: flaggedTenantsElsewhere,
+    owners_flagged_no_match: flaggedOwners,
+  };
+  if (preview) return json(summary);
+
+  if (newPropRows.length) await sheetsRequest(env, 'POST', '/values/Properties:append?valueInputOption=RAW', { values: newPropRows });
+  if (newUnitRows.length) await sheetsRequest(env, 'POST', '/values/Units:append?valueInputOption=RAW', { values: newUnitRows });
+  if (newTenantRows.length) await sheetsRequest(env, 'POST', '/values/Tenants:append?valueInputOption=RAW', { values: newTenantRows });
+  if (linkUpdates.length) {
+    // One batchUpdate for every existing-row fix (new owner on a matched property,
+    // new tenant linked onto a matched-but-previously-empty unit) — never a
+    // per-row round trip, same discipline as inspBulkImport / FEATURE_LOG rule 99.
+    const data = linkUpdates.map(u => {
+      const st = tabState[u.tab];
+      const rowIdx = st.rows.findIndex(r => r.ID === String(u.id));
+      const colIdx = st.headers.indexOf(u.field);
+      if (rowIdx === -1 || colIdx === -1) return null;
+      return { range: `${u.tab}!${col(colIdx)}${rowIdx + 2}`, values: [[u.value]] };
+    }).filter(Boolean);
+    if (data.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data });
+  }
+  return json(summary);
 }
 
 // ── UTILITY ──────────────────────────────────────────────────

@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Bulk Property/Tenant Importer — Ridge Co</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --surface:#fff; --border:#dfe3e8; --text:#1c2430; --muted:#6b7684;
+    --accent:#1d4ed8; --accent2:#1a7f4b; --danger:#c0392b; --warn:#b8860b; --chip:#eef2f7;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px}
+  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;z-index:10}
+  header h1{font-size:17px;margin:0}
+  header .ver{font-size:11px;color:var(--muted)}
+  main{padding:14px 14px 60px;max-width:640px;margin:0 auto}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  .card-title{font-size:13px;font-weight:700;margin-bottom:8px}
+  .muted{color:var(--muted);font-size:13px}
+  .btn{padding:11px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:15px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.go{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+  .btn.ghost{background:transparent}
+  .btn:disabled{opacity:.5}
+  .btn:active{opacity:.85}
+  input,select,textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text);font-family:inherit;margin-top:6px}
+  textarea{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+  label.fld{display:block;margin:10px 0 2px;font-size:13px;color:var(--muted);font-weight:600}
+  .seg{display:flex;gap:6px;margin:6px 0 4px}
+  .seg button{flex:1;padding:10px 4px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:13px;font-weight:600;cursor:pointer}
+  .seg button.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .banner{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+  .banner.ok{background:#e7f6ec;border-color:#bfe6cc;color:#1a5c33}
+  .banner.err{background:#fdeceb;border-color:#f3c3bd;color:#8a271b}
+  .stats-row{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+  .stat-box{background:var(--chip);border:1px solid var(--border);border-radius:10px;padding:10px 12px;flex:1;min-width:88px;text-align:center}
+  .stat-num{font-size:20px;font-weight:800;color:var(--accent)}
+  .stat-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
+  th{text-align:left;padding:6px 6px;background:var(--chip);color:var(--muted);border-bottom:1px solid var(--border);font-weight:600}
+  td{padding:6px 6px;border-bottom:1px solid var(--border);vertical-align:top}
+  .hide{display:none}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s;max-width:90vw;text-align:center}
+  .toast.show{opacity:1}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+  code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>Bulk Importer</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized — try again.</p>
+  <button class="btn primary" style="width:100%;margin-top:12px" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <header>
+    <h1>📥 Bulk Importer</h1>
+    <span class="ver" id="ver"></span>
+  </header>
+  <main>
+
+    <div class="card">
+      <div class="card-title">Step 1 — Where does this go?</div>
+      <div class="seg" id="target-seg">
+        <button class="sel" data-t="hub" onclick="setTarget('hub')">Main Hub<br><span style="font-weight:400;font-size:11px">Properties · Units · Tenants</span></button>
+        <button data-t="insp" onclick="setTarget('insp')">Inspection Scheduler<br><span style="font-weight:400;font-size:11px">annual inspections</span></button>
+      </div>
+      <div id="insp-customer-wrap" class="hide">
+        <label class="fld">Customer</label>
+        <select id="insp-customer"></select>
+        <p class="muted" style="margin-top:4px">Inspection Scheduler tracks its own customers, separate from the Main Hub's Owners. Pick which one these properties belong to.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Step 2 — Paste your spreadsheet</div>
+      <p class="muted">Paste rows copied from a CSV or spreadsheet (first row = column headers). One row per unit/tenant — multiple rows with the same address become one multi-unit property automatically.</p>
+      <p class="muted" style="margin-top:6px">Recognized columns (any order, case-insensitive): <code>Property</code>/<code>Address</code>, <code>Unit</code>/<code>Units</code>, <code>Renter Name</code>/<code>Tenant Name</code>, <code>Phone</code>, <code>Email</code>/<code>Email Address</code><span id="owner-cols-hint">, and optionally <code>Owner Name</code>, <code>Owner Email</code>, <code>Owner Phone</code> (matched to an existing owner only — never auto-created)</span>.</p>
+      <textarea id="paste-area" rows="8" placeholder="Property&#9;Units&#9;Phone&#9;Renter Name&#9;Email Address
+1305 N Calvert St.&#9;1st&#9;240-877-6276&#9;Albert Hargis&#9;
+931 St. Paul St.&#9;BF&#9;443-630-7144&#9;Mr Shane Caswell&#9;shanecaswell3@gmail.com"></textarea>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn primary" style="flex:1" onclick="runPreview()">Preview</button>
+        <button class="btn ghost" onclick="document.getElementById('paste-area').value='';document.getElementById('preview-card').classList.add('hide')">Clear</button>
+      </div>
+      <div id="preview-msg"></div>
+    </div>
+
+    <div class="card hide" id="preview-card">
+      <div class="card-title">Step 3 — Review before importing</div>
+      <div class="stats-row" id="stats-boxes"></div>
+      <div id="flags-area"></div>
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+        <button class="btn go" style="flex:1" onclick="runImport()" id="import-btn">✓ Confirm import</button>
+      </div>
+      <p class="muted" style="margin-top:8px">Existing properties/units/tenants are matched, not duplicated — re-pasting an overlapping list is safe.</p>
+    </div>
+
+    <div class="card hide" id="result-card">
+      <div class="card-title">Import result</div>
+      <div id="result-body"></div>
+    </div>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';
+var AUTH_TOKEN = '';
+var TARGET = 'hub';
+var PARSED_ROWS = [];
+var INSP_CUSTOMERS = [];
+
+function api(method, path, body){
+  var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.json().then(function(data){
+      if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
+      return data;
+    });
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';},2600); }
+
+// ── Login (shared mh_auth — same access code as the Hub) ───────────────────
+function doLogin(){
+  var v=document.getElementById('login-input').value.trim(); AUTH_TOKEN=v;
+  api('GET','/properties').then(function(r){
+    if (r && r.error) throw new Error(r.error);
+    localStorage.setItem(SECRET_KEY,v); enterApp();
+  }).catch(function(){ AUTH_TOKEN=''; document.getElementById('login-error').classList.remove('hide'); });
+}
+document.getElementById('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored=localStorage.getItem(SECRET_KEY);
+  if(stored){ AUTH_TOKEN=stored; api('GET','/properties').then(function(r){ if(r&&r.error) throw new Error(); enterApp(); }).catch(function(){ AUTH_TOKEN=''; }); }
+})();
+function enterApp(){
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').classList.remove('hide');
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  loadInspCustomers();
+}
+
+// ── Target (Main Hub vs Inspection Scheduler) ───────────────────────────────
+function setTarget(t){
+  TARGET = t;
+  Array.prototype.forEach.call(document.querySelectorAll('#target-seg button'), function(b){
+    b.classList.toggle('sel', b.getAttribute('data-t')===t);
+  });
+  document.getElementById('insp-customer-wrap').classList.toggle('hide', t!=='insp');
+  document.getElementById('owner-cols-hint').style.display = t==='hub' ? 'inline' : 'none';
+  document.getElementById('preview-card').classList.add('hide');
+  document.getElementById('result-card').classList.add('hide');
+}
+function loadInspCustomers(){
+  api('GET','/insp/customers').then(function(list){
+    INSP_CUSTOMERS = Array.isArray(list) ? list : [];
+    var sel = document.getElementById('insp-customer');
+    sel.innerHTML = '<option value="">— pick a customer —</option>' + INSP_CUSTOMERS.map(function(c){
+      return '<option value="'+esc(c.ID)+'">'+esc(c.Name)+'</option>';
+    }).join('');
+  }).catch(function(){ /* insp tabs may not exist yet — fine, hub target still works */ });
+}
+
+// ── Paste parsing (tab or comma delimited, quote-aware) ─────────────────────
+function parseDelimited(raw){
+  var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim().length; });
+  if(!lines.length) return [];
+  var delim = lines[0].indexOf('\t')!==-1 ? '\t' : ',';
+  function splitLine(l){
+    var out=[], cur='', inQ=false;
+    for(var i=0;i<l.length;i++){
+      var ch=l[i];
+      if(ch==='"'){ inQ=!inQ; continue; }
+      if(ch===delim && !inQ){ out.push(cur); cur=''; continue; }
+      cur+=ch;
+    }
+    out.push(cur);
+    return out.map(function(s){ return s.trim(); });
+  }
+  var header = splitLine(lines[0]).map(function(h){ return h.toLowerCase().replace(/\s+/g,'_'); });
+  var rows=[];
+  for(var i=1;i<lines.length;i++){
+    var cells = splitLine(lines[i]);
+    if(!cells.some(function(c){ return c; })) continue;
+    var o={};
+    header.forEach(function(h,idx){ o[h]=cells[idx]!==undefined?cells[idx]:''; });
+    rows.push(o);
+  }
+  return rows;
+}
+function pick(o, keys){ for (var i=0;i<keys.length;i++) if (o[keys[i]]) return o[keys[i]]; return ''; }
+function mapRow(p){
+  return {
+    Address: pick(p, ['address','property','property_address']),
+    Zip: pick(p, ['zip']),
+    Unit_Label: pick(p, ['unit_label','unit','units','label']),
+    Tenant_Name: pick(p, ['tenant_name','renter_name','name','tenant']),
+    Tenant_Phone: pick(p, ['tenant_phone','phone']),
+    Tenant_Email: pick(p, ['tenant_email','email','email_address']),
+    Owner_Name: pick(p, ['owner_name','owner']),
+    Owner_Email: pick(p, ['owner_email']),
+    Owner_Phone: pick(p, ['owner_phone'])
+  };
+}
+
+// ── Preview (single unchunked call — read-only, no Sheets write) ───────────
+function runPreview(){
+  var msgEl = document.getElementById('preview-msg');
+  document.getElementById('preview-card').classList.add('hide');
+  document.getElementById('result-card').classList.add('hide');
+  if (TARGET==='insp' && !document.getElementById('insp-customer').value) {
+    msgEl.innerHTML = '<div class="banner err">Pick a customer first.</div>'; return;
+  }
+  var raw = document.getElementById('paste-area').value;
+  var parsed = parseDelimited(raw).map(mapRow).filter(function(r){ return r.Address; });
+  if (!parsed.length) { msgEl.innerHTML = '<div class="banner err">No rows had an Address/Property column — check your header row.</div>'; return; }
+  if (parsed.length > 2000) { msgEl.innerHTML = '<div class="banner err">'+parsed.length+' rows — max 2000 per import. Split into smaller pastes.</div>'; return; }
+  PARSED_ROWS = parsed;
+  msgEl.innerHTML = '<div class="banner">Checking '+parsed.length+' row(s) against what\'s already in the sheet…</div>';
+
+  var path = TARGET==='hub' ? '/bulk-import' : '/insp/bulk-import';
+  var body = TARGET==='hub' ? { rows: parsed, preview: true } : { Customer_ID: document.getElementById('insp-customer').value, rows: parsed, preview: true };
+  api('POST', path, body).then(function(r){
+    if (r.error) { msgEl.innerHTML = '<div class="banner err">'+esc(r.error)+'</div>'; return; }
+    msgEl.innerHTML='';
+    renderPreview(r);
+  }).catch(function(e){ msgEl.innerHTML = '<div class="banner err">'+esc(e.message)+'</div>'; });
+}
+function statBox(n, label){ return '<div class="stat-box"><div class="stat-num">'+n+'</div><div class="stat-label">'+esc(label)+'</div></div>'; }
+function renderPreview(r){
+  document.getElementById('preview-card').classList.remove('hide');
+  var boxes = '';
+  if (TARGET==='hub') {
+    boxes += statBox(r.properties_created, 'New properties') + statBox(r.properties_matched, 'Matched properties');
+    boxes += statBox(r.units_created, 'New units') + statBox(r.units_matched, 'Matched units');
+    boxes += statBox(r.tenants_created, 'New tenants') + statBox(r.tenants_skipped_existing, 'Already on file');
+  } else {
+    boxes += statBox(r.properties_created, 'New properties') + statBox(r.properties_matched, 'Matched properties');
+    boxes += statBox(r.units_created, 'New units') + statBox(r.units_skipped_duplicate, 'Already on file');
+  }
+  document.getElementById('stats-boxes').innerHTML = boxes;
+
+  var flags = '';
+  if (r.tenants_flagged_elsewhere && r.tenants_flagged_elsewhere.length) {
+    flags += '<div class="banner">⚠ '+r.tenants_flagged_elsewhere.length+' tenant(s) matched an existing phone number on a DIFFERENT unit — not auto-moved. Review after import (use Move-Out/reassign in the Hub if it\'s a real move):</div>';
+    flags += '<table><thead><tr><th>Name</th><th>Phone</th><th>New addr/unit</th><th>Existing tenant</th></tr></thead><tbody>';
+    r.tenants_flagged_elsewhere.forEach(function(f){
+      flags += '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.phone)+'</td><td>'+esc(f.address)+' / '+esc(f.unit_label)+'</td><td>ID '+esc(f.existing_tenant_id)+'</td></tr>';
+    });
+    flags += '</tbody></table>';
+  }
+  if (r.owners_flagged_no_match && r.owners_flagged_no_match.length) {
+    flags += '<div class="banner">⚠ '+r.owners_flagged_no_match.length+' propert(y/ies) named an owner with no confident match in Owners — not attached. Add the owner in the Hub and attach manually:</div>';
+    flags += '<table><thead><tr><th>Address</th><th>Owner name given</th><th>Email / phone given</th></tr></thead><tbody>';
+    r.owners_flagged_no_match.forEach(function(f){
+      flags += '<tr><td>'+esc(f.address)+'</td><td>'+esc(f.owner_name)+'</td><td>'+esc(f.owner_email)+' '+esc(f.owner_phone)+'</td></tr>';
+    });
+    flags += '</tbody></table>';
+  }
+  document.getElementById('flags-area').innerHTML = flags;
+  document.getElementById('preview-card').scrollIntoView({ behavior:'smooth' });
+}
+
+// ── Confirm (chunked writes, 150 rows/call — same discipline as the existing
+// Inspection Scheduler importer, avoids the Sheets per-minute quota) ────────
+function runImport(){
+  if (!confirm('Import these rows into '+(TARGET==='hub'?'the Main Hub':'the Inspection Scheduler')+'?\n\nThis writes new rows — it never deletes or overwrites existing data.')) return;
+  var btn = document.getElementById('import-btn');
+  btn.disabled = true;
+  var CHUNK = 150;
+  var chunks = [];
+  for (var i=0;i<PARSED_ROWS.length;i+=CHUNK) chunks.push(PARSED_ROWS.slice(i,i+CHUNK));
+  var path = TARGET==='hub' ? '/bulk-import' : '/insp/bulk-import';
+  var custId = TARGET==='insp' ? document.getElementById('insp-customer').value : null;
+  var totals = TARGET==='hub'
+    ? { properties_created:0, properties_matched:0, units_created:0, units_matched:0, tenants_created:0, tenants_skipped_existing:0, tenants_flagged_elsewhere:[], owners_flagged_no_match:[] }
+    : { properties_created:0, properties_matched:0, units_created:0, units_skipped_duplicate:0 };
+  var idx = 0;
+  function next(){
+    if (idx >= chunks.length){
+      btn.disabled = false;
+      var card = document.getElementById('result-card'), body = document.getElementById('result-body');
+      card.classList.remove('hide'); card.scrollIntoView({ behavior:'smooth' });
+      var html = '<div class="banner ok">✓ Import complete.</div>';
+      if (TARGET==='hub') {
+        html += '<div class="stats-row">'+statBox(totals.properties_created,'New properties')+statBox(totals.properties_matched,'Matched')+statBox(totals.units_created,'New units')+statBox(totals.tenants_created,'New tenants')+'</div>';
+        if (totals.tenants_flagged_elsewhere.length) html += '<div class="banner">⚠ '+totals.tenants_flagged_elsewhere.length+' tenant(s) need manual review — matched an existing phone on a different unit.</div>';
+        if (totals.owners_flagged_no_match.length) html += '<div class="banner">⚠ '+totals.owners_flagged_no_match.length+' propert(y/ies) still need an owner attached manually.</div>';
+      } else {
+        html += '<div class="stats-row">'+statBox(totals.properties_created,'New properties')+statBox(totals.properties_matched,'Matched')+statBox(totals.units_created,'New units')+statBox(totals.units_skipped_duplicate,'Already on file')+'</div>';
+      }
+      body.innerHTML = html;
+      document.getElementById('paste-area').value=''; PARSED_ROWS=[];
+      document.getElementById('preview-card').classList.add('hide');
+      return;
+    }
+    btn.textContent = 'Importing… ('+(idx+1)+'/'+chunks.length+')';
+    var body = TARGET==='hub' ? { rows: chunks[idx], preview: false } : { Customer_ID: custId, rows: chunks[idx], preview: false };
+    api('POST', path, body).then(function(r){
+      if (!r || r.error) { btn.disabled=false; btn.textContent='✓ Confirm import'; toast((r&&r.error)||('Import failed on batch '+(idx+1))); return; }
+      if (TARGET==='hub') {
+        totals.properties_created += r.properties_created||0; totals.properties_matched += r.properties_matched||0;
+        totals.units_created += r.units_created||0; totals.units_matched += r.units_matched||0;
+        totals.tenants_created += r.tenants_created||0; totals.tenants_skipped_existing += r.tenants_skipped_existing||0;
+        totals.tenants_flagged_elsewhere = totals.tenants_flagged_elsewhere.concat(r.tenants_flagged_elsewhere||[]);
+        totals.owners_flagged_no_match = totals.owners_flagged_no_match.concat(r.owners_flagged_no_match||[]);
+      } else {
+        totals.properties_created += r.properties_created||0; totals.properties_matched += r.properties_matched||0;
+        totals.units_created += r.units_created||0; totals.units_skipped_duplicate += r.units_skipped_duplicate||0;
+      }
+      idx++; next();
+    }).catch(function(e){ btn.disabled=false; btn.textContent='✓ Confirm import'; toast('Error: '+e.message); });
+  }
+  next();
+}
+</script>
+</body>
+</html>

@@ -184,6 +184,7 @@
           <div class="row" onclick="toggleSection('bulk-import')" style="cursor:pointer"><b>+ Bulk import properties/units</b><span class="muted" id="bulk-import-caret">show</span></div>
           <div id="bulk-import" class="hide" style="margin-top:10px">
             <p class="muted">Paste rows from a spreadsheet (tab- or comma-separated), first row = headers: <code>Address, Zip, Unit_Label, Tenant_Name, Tenant_Phone, Visit_Duration_Min</code>. Leave Unit_Label/Tenant blank for single-family. Multiple rows with the same Address become one property with multiple units.</p>
+            <p class="muted">Importing for the Main Hub (work orders/billing) instead of inspections? Use the <a href="bulk-importer.html" target="_blank">shared Bulk Importer</a> — same paste flow, writes to Properties/Units/Tenants and can also target this customer.</p>
             <textarea id="bi-paste" rows="6" placeholder="Address, Zip, Unit_Label, Tenant_Name, Tenant_Phone&#10;123 Main St, 21201, , John Smith, 4105551234&#10;456 Oak Ave, 21202, Apt 1, Jane Doe, 4105555678&#10;456 Oak Ave, 21202, Apt 2, , "></textarea>
             <button class="btn" style="width:100%;margin-top:8px" onclick="previewBulkImport()">Preview</button>
             <div id="bi-preview" style="margin-top:10px"></div>

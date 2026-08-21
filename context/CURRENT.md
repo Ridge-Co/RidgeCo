@@ -21,6 +21,25 @@ prior session the same way as the Aug 20 recovery, or wants it rebuilt from spec
 Phase 2 (QuickBooks deposit invoice + prorated vendor bill) since it would build on Phase 1 code that
 doesn't exist in this checkout.
 
+## 📥 Second uploaded Aug 20 patch: shared Bulk Importer, recovered + pushed. FEATURE_LOG rule 122.
+Same story as the tenant-WO-toggle patch below — Brett asked to review everything that didn't get
+pushed in the last 72h, which surfaced a **second** orphaned patch from the same Aug 20 session
+(`011yNE8vGUgdQ2DLUa8jQ1tS`): a shared Bulk Importer for Properties/Units/Tenants (`bulk-importer.html`
++ `POST /bulk-import`), reusing the Inspection Scheduler's importer engine so one tool covers both.
+Went through two rounds of `BUILD_VERSION` conflicts — the patch's own `.1` vs. main's `.3` from the
+earlier tenant-WO-toggle merge, then a rebase onto a concurrent session's B-227 Phase 3 push (which
+had already claimed FEATURE_LOG rule 121) reconflicted the same line — landed at `2026-08-21.2`, this
+entry logged as rule 122 to avoid the collision. `node --check` clean, full suite re-run clean (same 2
+pre-existing failures). **🔴 Needs Brett's first live pass** — see FEATURE_LOG rule 122 for the exact check.
+
+Also applied a small **live data fix** from the same session: a follow-up sheet-op
+(`context/sheet-ops/pending.json`, auto-runs via GitHub Action on push) blanking the stray duplicate
+Tenant row 98's First_Name/Phone (James / 20 E Eager St) — row 98 was retired (Active=FALSE) back on
+Aug 12 but still carried James's phone number, so the old Contacts sync kept resyncing it as a
+"Former Tenant" duplicate. Never hard-deletes, per house rule; row stays, just blanked. **This one
+actually writes to the live Google Sheet on push** — flagging clearly since it's not app code Brett
+can review in a diff first the way the two code patches were.
+
 ## 🔀 Uploaded Aug 20 patch applied + pushed live (Aug 21, Cowork/mobile session, commit `edc5f21`).
 Brett uploaded `ridgecoaug20changesresolved.patch` — the tenant WO submit toggle, owner edit modal,
 and mobile/nav sweep (rules 118–120 below) from session `011yNE8vGUgdQ2DLUa8jQ1tS`, which had never
