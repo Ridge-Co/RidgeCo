@@ -1,5 +1,26 @@
 # WHERE THINGS STAND — Aug 21, 2026
 
+## 🔴 "resume ridgeco" hit an unrecoverable commit — Phase 1 e-sign/repair-replace/owner-gate work is lost, not pushed (Aug 21, later Cowork/mobile session).
+Brett resumed with "Phase 1 (per-item Repair/Replace pricing, owner gate, e-sign) is committed locally
+as `ac1470a` but never got pushed because this session couldn't reach `Ridge-Co/RidgeCo`. Push it,
+then continue to Phase 2." **Verified `ac1470a` does not exist anywhere reachable**: not an object in
+a fresh clone of `Ridge-Co/RidgeCo` (`git cat-file -t ac1470a` → not found), not in `git log --all`,
+no active/resumable Claude session holds it (`ListAgents` → none reachable), and no patch file was
+uploaded with this message (the `ridgecoaug20changesresolved.patch` recovery pattern used earlier
+today for the tenant-WO-toggle work — see the entry right below — does not apply here; nothing was
+attached this time). The container that held that local commit was reclaimed when its session ended,
+same root cause as the patch-recovery case, but this time there's no export to replay. **Nothing in
+FEATURE_LOG/BACKLOG/SESSION_STATE documents this Phase 1 as ever built or checkpointed** — the closest
+tracked threads are B-126 (owner marked-up-estimate approval gate), B-194 (repair-vs-replace asset
+register, referenced from B-223), and FEATURE_LOG rule 116 (Aug 18, "NEXT SESSION — real e-sign +
+Fairfax-template proposal," still open, still waiting on Brett to supply the Fairfax template file) —
+none show a "built" entry, so this looks like a session that built real work, committed it locally,
+and ended (ran out of turns / was closed) before push or session-close logging happened. **Asked Brett
+in plain text (no AskUserQuestion widget — mobile) whether he can export/upload a patch from that
+prior session the same way as the Aug 20 recovery, or wants it rebuilt from spec.** Did not proceed to
+Phase 2 (QuickBooks deposit invoice + prorated vendor bill) since it would build on Phase 1 code that
+doesn't exist in this checkout.
+
 ## 🔀 Uploaded Aug 20 patch applied + pushed live (Aug 21, Cowork/mobile session, commit `edc5f21`).
 Brett uploaded `ridgecoaug20changesresolved.patch` — the tenant WO submit toggle, owner edit modal,
 and mobile/nav sweep (rules 118–120 below) from session `011yNE8vGUgdQ2DLUa8jQ1tS`, which had never
