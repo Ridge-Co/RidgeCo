@@ -1,5 +1,22 @@
 # WHERE THINGS STAND — Aug 21, 2026
 
+## 🔀 Uploaded Aug 20 patch applied + pushed live (Aug 21, Cowork/mobile session, commit `edc5f21`).
+Brett uploaded `ridgecoaug20changesresolved.patch` — the tenant WO submit toggle, owner edit modal,
+and mobile/nav sweep (rules 118–120 below) from session `011yNE8vGUgdQ2DLUa8jQ1tS`, which had never
+actually been pushed to `main`. Verified the patch's base matched current `main` exactly for every
+app file (worker.js's BUILD_VERSION hunk went cleanly from `.2`→`.3`, confirming nothing else had
+touched those files since); only `context/CURRENT.md` conflicted, because this file itself had moved
+on (today's earlier venture-web entry). Resolved by keeping both dated sections in order (this Aug 21
+section, then the patch's own Aug 20 section right below). Applied clean via `git apply --3way`,
+`node --check` clean on worker.js + the new test file, full suite re-run: `tenant-wo-toggle` 15/15,
+same 2 pre-existing unrelated failures (`pricing-model`, `scope-core`) as before — nothing newly
+broken. Pushed to `origin/main` (`c320948..edc5f21`). **The three shipped items below (rules 118–120)
+still need Brett's first live pass** — see their own verify notes.
+
+**🔴 Also: two fresh classic PATs were pasted into this chat to load context** (Ridge Co org token +
+brett332 token) — per the standing CREDENTIALS_MAP rule, rotate both (revoke + reissue) once this
+session closes, same as the prior BRETT_GH_PAT paste flagged just below.
+
 ## 🕸️ Venture Web + skills review + two BACKLOG skills delivered (Aug 21, Cowork/mobile session).
 Brett brought a transcript of a Matt Wolfe video reviewing 9 external Claude Code/Codex skills
 (GStack, Stop Slop, Graphify, Understand Anything, Last 30 Days, Anthropic's Front-End Design, the
