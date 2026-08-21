@@ -1,5 +1,19 @@
 # WHERE THINGS STAND — Aug 21, 2026
 
+## ✅ SHIPPED — Owner ↔ Property linking gap fixed. FEATURE_LOG rule 126.
+Brett: "can't add owner to property or property to owner for new owner jeannie... not sure if this
+is a bug." Checked first whether this was a regression from today's other sessions — it wasn't:
+`git log --all` on index.html shows an Owner field on the Edit Property modal never existed at any
+point in history. The Add Owner modal's own help text has always promised "go to Properties → Edit
+each property to link them to this owner" — a promise the Edit Property modal never actually kept.
+Fixed both directions: Edit Property modal now has an Owner select (saves via the already-generic
+`POST /property/update`), and the Owners list gets a "+ Property" quick-link button. Tenant-to-property
+linking checked separately and already works fine (Add/Edit Tenant), untouched. `node --check` clean
+on worker.js + all 5 inline `<script>` blocks, full suite 32/34 (same 2 pre-existing unrelated
+failures, nothing new). Worker `2026-08-21.5`, pushed (rebased clean onto rule 125's concurrent push).
+**🔴 Needs Brett's first live pass** — see FEATURE_LOG rule 126 for the exact check (try linking
+jeannie's property from either side).
+
 ## 🔧 FIXED — Gladden's live customer link was actively broken ($0.00, blank, signable). FEATURE_LOG rule 125.
 Brett: "I may have had an old one running on that, and there's also the esign... check to make sure
 the esign is done." Checking that surfaced something worse than the greyed-out button he'd reported:
