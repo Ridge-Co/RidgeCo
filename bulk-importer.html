@@ -81,12 +81,18 @@
       <div class="card-title">Step 2 — Paste your spreadsheet</div>
       <p class="muted">Paste rows copied from a CSV or spreadsheet (first row = column headers). One row per unit/tenant — multiple rows with the same address become one multi-unit property automatically.</p>
       <p class="muted" style="margin-top:6px">Recognized columns (any order, case-insensitive): <code>Property</code>/<code>Address</code>, <code>Unit</code>/<code>Units</code>, <code>Renter Name</code>/<code>Tenant Name</code>, <code>Phone</code>, <code>Email</code>/<code>Email Address</code><span id="owner-cols-hint">, and optionally <code>Owner Name</code>, <code>Owner Email</code>, <code>Owner Phone</code> (matched to an existing owner only — never auto-created)</span>.</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+        <button class="btn ghost" style="flex:1" onclick="document.getElementById('csv-file-input').click()">📄 Choose CSV file…</button>
+        <input type="file" id="csv-file-input" accept=".csv,.tsv,text/csv,text/tab-separated-values,text/plain" style="display:none" onchange="loadCsvFile(this.files[0])">
+      </div>
+      <p class="muted" id="csv-file-name" style="margin-top:4px"></p>
+      <p class="muted" style="margin:8px 0 2px;text-align:center">— or paste below —</p>
       <textarea id="paste-area" rows="8" placeholder="Property&#9;Units&#9;Phone&#9;Renter Name&#9;Email Address
 1305 N Calvert St.&#9;1st&#9;240-877-6276&#9;Albert Hargis&#9;
 931 St. Paul St.&#9;BF&#9;443-630-7144&#9;Mr Shane Caswell&#9;shanecaswell3@gmail.com"></textarea>
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="btn primary" style="flex:1" onclick="runPreview()">Preview</button>
-        <button class="btn ghost" onclick="document.getElementById('paste-area').value='';document.getElementById('preview-card').classList.add('hide')">Clear</button>
+        <button class="btn ghost" onclick="document.getElementById('paste-area').value='';document.getElementById('csv-file-input').value='';document.getElementById('csv-file-name').textContent='';document.getElementById('preview-card').classList.add('hide')">Clear</button>
       </div>
       <div id="preview-msg"></div>
     </div>
@@ -173,32 +179,71 @@ function loadInspCustomers(){
   }).catch(function(){ /* insp tabs may not exist yet — fine, hub target still works */ });
 }
 
-// ── Paste parsing (tab or comma delimited, quote-aware) ─────────────────────
+// ── Paste parsing (tab or comma delimited, quote-aware, RFC4180-ish) ────────
+// Real bug found Aug 21 2026: the old version split the WHOLE raw text on every
+// newline FIRST, then only tracked quote-state within one already-split line.
+// A cell that legitimately spans two lines inside quotes — e.g. two phone
+// numbers pasted from a spreadsheet as "609-608-5080\n443-333-7107" in one
+// cell — got sliced into two garbage rows: the real row lost its tenant name
+// into a phantom brand-new "property" (the tenant's name+email, unable to land
+// in the right columns), and the real unit got a nameless tenant with only the
+// first phone number. Fixed by tokenizing the ENTIRE raw text in one pass,
+// carrying quote-state across newlines — a newline only ends a row when it's
+// NOT inside an open quote. See FEATURE_LOG rule 130.
 function parseDelimited(raw){
-  var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim().length; });
-  if(!lines.length) return [];
-  var delim = lines[0].indexOf('\t')!==-1 ? '\t' : ',';
-  function splitLine(l){
-    var out=[], cur='', inQ=false;
-    for(var i=0;i<l.length;i++){
-      var ch=l[i];
-      if(ch==='"'){ inQ=!inQ; continue; }
-      if(ch===delim && !inQ){ out.push(cur); cur=''; continue; }
-      cur+=ch;
+  if (!raw || !raw.trim()) return [];
+  var headerEnd = raw.search(/\r\n|\r|\n/);
+  var headerLine = headerEnd === -1 ? raw : raw.slice(0, headerEnd);
+  var delim = headerLine.indexOf('\t') !== -1 ? '\t' : ',';
+  var rawRows = [], row = [], cur = '', inQ = false;
+  for (var i = 0; i < raw.length; i++) {
+    var ch = raw[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (raw[i+1] === '"') { cur += '"'; i++; } // "" inside a quoted field = one literal "
+        else inQ = false;
+      } else { cur += ch; }
+      continue;
     }
-    out.push(cur);
-    return out.map(function(s){ return s.trim(); });
+    if (ch === '"') { inQ = true; continue; }
+    if (ch === delim) { row.push(cur); cur=''; continue; }
+    if (ch === '\r') { continue; }
+    if (ch === '\n') { row.push(cur); cur=''; rawRows.push(row); row=[]; continue; }
+    cur += ch;
   }
-  var header = splitLine(lines[0]).map(function(h){ return h.toLowerCase().replace(/\s+/g,'_'); });
+  if (cur !== '' || row.length) { row.push(cur); rawRows.push(row); }
+  rawRows = rawRows.map(function(r){ return r.map(function(s){ return s.trim(); }); })
+                    .filter(function(r){ return r.some(function(c){ return c; }); });
+  if (!rawRows.length) return [];
+  var header = rawRows[0].map(function(h){ return h.toLowerCase().replace(/\s+/g,'_'); });
   var rows=[];
-  for(var i=1;i<lines.length;i++){
-    var cells = splitLine(lines[i]);
-    if(!cells.some(function(c){ return c; })) continue;
+  for(var i=1;i<rawRows.length;i++){
+    var cells = rawRows[i];
     var o={};
     header.forEach(function(h,idx){ o[h]=cells[idx]!==undefined?cells[idx]:''; });
     rows.push(o);
   }
   return rows;
+}
+
+// ── CSV file upload (alternate to pasting) ──────────────────────────────────
+// Reads the file's raw text into the SAME paste-area textarea and the SAME
+// parseDelimited() above — one parsing path either way, never two to keep in
+// sync. A real file also sidesteps paste-specific quirks (mobile clipboard
+// truncation, a browser silently swapping smart quotes) that copy/paste alone
+// is exposed to — feel free to still paste if that's easier for a quick edit.
+function loadCsvFile(file){
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    document.getElementById('paste-area').value = String(e.target.result || '');
+    document.getElementById('csv-file-name').textContent = '✓ Loaded ' + file.name + ' (' + file.size + ' bytes) — tap Preview.';
+    document.getElementById('preview-card').classList.add('hide');
+  };
+  reader.onerror = function(){
+    document.getElementById('csv-file-name').textContent = '⚠ Could not read ' + file.name + ' — try pasting instead.';
+  };
+  reader.readAsText(file);
 }
 function pick(o, keys){ for (var i=0;i<keys.length;i++) if (o[keys[i]]) return o[keys[i]]; return ''; }
 function mapRow(p){

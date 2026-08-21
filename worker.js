@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-21.8';
+const BUILD_VERSION = '2026-08-21.9';
 
 export default {
   async fetch(request, env) {
@@ -10445,6 +10445,18 @@ const normAddr = qbNormAddress;
 function normAddrStrict(s) {
   return String(s || '').trim().toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
 }
+// A pasted/CSV phone cell can legitimately carry more than one number for the
+// same tenant (two lines inside one quoted spreadsheet cell, or semicolon-
+// separated, the same convention Brett already uses for a second email
+// address). Only ONE phone fits Tenant_Phone/Owner_Phone, and normalizePhone
+// strips everything down to digits-only — feed it "609-608-5080\n443-333-
+// 7107" unguarded and the two numbers concatenate into one 20-digit garbage
+// value. Take just the first number; the rest is still visible to Brett in
+// the original paste/file if a second contact number matters.
+function firstPhone(s) {
+  const first = String(s || '').split(/[\n;]+/)[0];
+  return first ? first.trim() : '';
+}
 async function inspBulkImport(env, body) {
   if (!body || !body.Customer_ID || !Array.isArray(body.rows) || !body.rows.length)
     return json({ error: 'Customer_ID and rows[] required' }, 400);
@@ -10506,7 +10518,7 @@ async function inspBulkImport(env, body) {
     for (const r of g.rows) {
       const label = (r && r.Unit_Label) || (isMulti ? '' : 'Unit');
       const tenantName = (r && r.Tenant_Name) || '';
-      const tenantPhone = (r && r.Tenant_Phone) ? normalizePhone(r.Tenant_Phone) : '';
+      const tenantPhone = (r && r.Tenant_Phone) ? normalizePhone(firstPhone(r.Tenant_Phone)) : '';
       const sig = prop.ID + '|' + normAddr(label) + '|' + normAddr(tenantPhone || tenantName);
       if (unitSig.has(sig)) { unitsSkipped++; continue; }
       const uid = String(nextUnitId++);
@@ -10611,7 +10623,7 @@ async function hubBulkImport(env, body) {
     let matchedOwnerId = '';
     if (ownerRow) {
       const oEmail = ownerRow.Owner_Email ? normEmail(ownerRow.Owner_Email) : '';
-      const oPhone = ownerRow.Owner_Phone ? normalizePhone(ownerRow.Owner_Phone) : '';
+      const oPhone = ownerRow.Owner_Phone ? normalizePhone(firstPhone(ownerRow.Owner_Phone)) : '';
       const oName = ownerRow.Owner_Name ? normName(ownerRow.Owner_Name) : '';
       const match = (oEmail && ownerByEmail[oEmail]) || (oPhone && ownerByPhone[oPhone]) || (oName && ownerByName[oName]);
       if (match) matchedOwnerId = match.ID;
@@ -10654,7 +10666,7 @@ async function hubBulkImport(env, body) {
       }
 
       const rawPhone = (r && (r.Tenant_Phone || r.Phone)) || '';
-      const phone = rawPhone ? normalizePhone(rawPhone) : '';
+      const phone = rawPhone ? normalizePhone(firstPhone(rawPhone)) : '';
       const fullName = String((r && (r.Tenant_Name || r['Renter Name'] || r.Renter_Name || r.Name)) || '').trim();
       const email = (r && (r.Tenant_Email || r.Email || r['Email Address'])) || '';
       if (!fullName && !phone) continue; // a vacant-unit row (no renter) — the unit itself is still created/matched above
