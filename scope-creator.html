@@ -237,11 +237,16 @@
   <div class="section" id="sec-proposal">
     <div class="section-title">7 · Generate the customer proposal</div>
     <button class="btn" onclick="genProposal()">📄 Generate proposal from scope + pricing</button>
+    <div class="sub" style="margin-top:4px;">⚠ Generating recomputes pricing from the items above and overwrites the text below — if you've hand-edited it (e.g. a custom combined/standalone breakdown), edit the text box directly instead of regenerating.</div>
     <div id="prop-status" class="status"></div>
     <div id="proposal-out" class="hide" style="margin-top:10px;">
-      <pre class="doc" id="proposal-text"></pre>
-      <button class="btn small secondary" onclick="copyProposal()" style="margin-top:8px;">📋 Copy proposal</button>
-      <button class="btn small" onclick="getProposalLink()" style="margin-top:8px;">🔗 Get shareable link</button>
+      <textarea class="doc" id="proposal-text" style="width:100%;min-height:260px;font-family:inherit;font-size:12.5px;line-height:1.5;padding:12px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box;"></textarea>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn small" onclick="saveProposalText()">💾 Save proposal text</button>
+        <button class="btn small secondary" onclick="copyProposal()">📋 Copy proposal</button>
+        <button class="btn small" onclick="getProposalLink()">🔗 Get shareable link</button>
+      </div>
+      <div id="proptext-status" class="status"></div>
       <div id="link-out" class="hide" style="margin-top:8px;">
         <input id="link-text" readonly style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;" onclick="this.select()">
         <button class="btn small secondary" onclick="copyLink()" style="margin-top:6px;">📋 Copy link</button>
@@ -385,8 +390,8 @@ function renderEditor(){
   document.getElementById('est-number').value=s.Estimate_Number||'';
   document.getElementById('est-notes').value=s.Estimate_Notes||'';
   // proposal
-  if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').textContent=s.Proposal_Text; }
-  else { document.getElementById('proposal-out').classList.add('hide'); }
+  if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').value=s.Proposal_Text; }
+  else { document.getElementById('proposal-out').classList.add('hide'); document.getElementById('proposal-text').value=''; }
   ownerGateEditMode=false;
   gateSections();
   loadScopePhotos();
@@ -769,12 +774,25 @@ async function genProposal(){
   try{
     var r=await post('/scope/proposal',{ scope_id:state.current.ID });
     document.getElementById('proposal-out').classList.remove('hide');
-    document.getElementById('proposal-text').textContent=r.proposal_text;
+    document.getElementById('proposal-text').value=r.proposal_text;
     state.current.Proposal_Text=r.proposal_text; state.current.Status='proposed'; document.getElementById('ed-status-pill').innerHTML=statusPill('proposed');
     setStatus('prop-status','✅ proposal ready — total $'+Number(r.final_price).toFixed(2)+', deposit $'+Number(r.deposit).toFixed(2),'ok');
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
 }
-function copyProposal(){ var t=document.getElementById('proposal-text').textContent; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 copied','ok'); }); }
+function copyProposal(){ var t=document.getElementById('proposal-text').value; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 copied','ok'); }); }
+// Edit the proposal text directly and save it — bypasses AI regeneration (genProposal), for a
+// hand-tuned proposal (e.g. a custom combined/standalone comparison) that shouldn't get
+// silently overwritten by the auto-generator. Same /scope/update path the Aug 21 hand-edit used.
+async function saveProposalText(){
+  setStatus('proptext-status','Saving…');
+  try{
+    var text=document.getElementById('proposal-text').value;
+    await post('/scope/update',{ scope_id:state.current.ID, proposal_text:text });
+    state.current.Proposal_Text=text; state.current.Status='proposed';
+    var pill=document.getElementById('ed-status-pill'); if(pill) pill.innerHTML=statusPill('proposed');
+    setStatus('proptext-status','✅ saved — the shareable link will serve this text immediately','ok');
+  }catch(e){ setStatus('proptext-status','⚠ '+e.message,'err'); }
+}
 
 // Customer-facing link (Aug 18 2026): mints a signed, revocable link to a read-only page
 // showing this exact proposal — no e-sign yet, just a real shareable page instead of only
