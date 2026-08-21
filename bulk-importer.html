@@ -253,6 +253,14 @@ function renderPreview(r){
   document.getElementById('stats-boxes').innerHTML = boxes;
 
   var flags = '';
+  if (r.properties_matched_via_address_normalization && r.properties_matched_via_address_normalization.length) {
+    flags += '<div class="banner ok">✓ '+r.properties_matched_via_address_normalization.length+' propert(y/ies) matched an existing property whose address was typed differently (St/Saint/Street). Quick check before confirming:</div>';
+    flags += '<table><thead><tr><th>You pasted</th><th>Matched to (on file)</th></tr></thead><tbody>';
+    r.properties_matched_via_address_normalization.forEach(function(f){
+      flags += '<tr><td>'+esc(f.pasted_address)+'</td><td>'+esc(f.matched_existing_address)+'</td></tr>';
+    });
+    flags += '</tbody></table>';
+  }
   if (r.tenants_flagged_elsewhere && r.tenants_flagged_elsewhere.length) {
     flags += '<div class="banner">⚠ '+r.tenants_flagged_elsewhere.length+' tenant(s) matched an existing phone number on a DIFFERENT unit — not auto-moved. Review after import (use Move-Out/reassign in the Hub if it\'s a real move):</div>';
     flags += '<table><thead><tr><th>Name</th><th>Phone</th><th>New addr/unit</th><th>Existing tenant</th></tr></thead><tbody>';

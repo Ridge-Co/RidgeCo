@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-21.7';
+const BUILD_VERSION = '2026-08-21.8';
 
 export default {
   async fetch(request, env) {
@@ -6987,6 +6987,14 @@ const QB_ADDR_WORDS = {
   north: 'n', south: 's', east: 'e', west: 'w',
   northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw',
   apartment: 'apt', unit: 'apt', suite: 'ste', number: '', building: 'bldg', floor: 'fl',
+  // 'saint' → 'st': "St" alone is genuinely ambiguous — abbreviation for BOTH "Street" (a
+  // type suffix, already folded to 'st' above) AND "Saint" (a name prefix — St. Paul, St.
+  // James, common Baltimore street/neighborhood names). Folding "saint" to the same 'st'
+  // token means "St Paul St", "Saint Paul Street", and "ST PAUL ST" all normalize
+  // identically, wherever this dictionary is used (bulk import + QuickBooks matching).
+  // Found via the bulk importer treating 931 Saint Paul St as a brand-new property because
+  // it was pasted as "931 St. Paul St." — see normAddr in hubBulkImport/inspBulkImport below.
+  saint: 'st',
 };
 
 function qbNormAddress(s) {
@@ -10409,13 +10417,41 @@ async function inspBlackoutAdd(env, body) {
 // property by normalized Address, and skips a unit whose Property+Label+(Phone|Name)
 // signature already exists, so re-pasting the same import (or overlapping batches)
 // doesn't create duplicates.
+//
+// ── Shared address normalization (hubBulkImport + inspBulkImport) ──────────
+// Reuses qbNormAddress/QB_ADDR_WORDS (defined above, originally built for
+// QuickBooks customer matching) instead of a second hand-rolled normalizer —
+// single source of truth (PAT-001), and it already folds Street/Ave/Rd/Blvd/
+// N-S-E-W abbreviations, which a bulk-import address normalizer wants too.
+// It was ONE entry short of covering this bug: "St" is genuinely ambiguous
+// around here — abbreviation for BOTH "Street" (type suffix) and "Saint"
+// (name prefix: St. Paul, St. James — common Baltimore street/neighborhood
+// names). "931 St. Paul St." (typed abbreviated) and "931 Saint Paul St"
+// (typed spelled-out, the form actually on file) normalized to two DIFFERENT
+// strings, so the bulk importer treated an existing property as brand new —
+// exactly what happened with 931 St Paul St, Brett's first live check of
+// FEATURE_LOG rule 122 (Aug 21 2026): property already on file, 6 of 8 units
+// already on file, importer said everything was new. Fixed at the root by
+// adding 'saint' to QB_ADDR_WORDS below, so "St Paul St", "Saint Paul
+// Street", "ST PAUL ST" etc. all normalize identically — everywhere that
+// dictionary is used, not just here. This will come up again: Saint Paul is
+// a common street name in this market, and any other "St ___" address is
+// exposed to the same abbreviation ambiguity.
+const normAddr = qbNormAddress;
+// Strict version — punctuation/whitespace normalization ONLY, no abbreviation
+// folding. Used solely to detect when the folding above is WHY a property
+// matched, so the bulk-importer preview can surface it as a call-it-out note
+// instead of a silent fuzzy match. Never used for the actual matching decision.
+function normAddrStrict(s) {
+  return String(s || '').trim().toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
+}
 async function inspBulkImport(env, body) {
   if (!body || !body.Customer_ID || !Array.isArray(body.rows) || !body.rows.length)
     return json({ error: 'Customer_ID and rows[] required' }, 400);
   if (body.rows.length > 2000) return json({ error: 'Max 2000 rows per import call — split into batches (the Import screen does this automatically)' }, 400);
   await ensureInspTabs(env);
 
-  const normAddr = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  // normAddr is the shared top-level function above (St/Saint/Street-aware) — no local copy.
   const custId = String(body.Customer_ID);
 
   const propData = await sheetsRequest(env, 'GET', '/values/Insp_Properties');
@@ -10515,7 +10551,7 @@ async function hubBulkImport(env, body) {
   if (body.rows.length > 2000) return json({ error: 'Max 2000 rows per import call — split into batches (the Import screen does this automatically)' }, 400);
   const preview = body.preview !== false;
 
-  const normAddr = s => String(s || '').trim().toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
+  // normAddr/normAddrStrict are the shared top-level functions above (St/Saint/Street-aware) — no local copy.
   const normName = s => String(s || '').trim().toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
   const normEmail = s => String(s || '').trim().toLowerCase();
 
@@ -10563,7 +10599,7 @@ async function hubBulkImport(env, body) {
   const newPropRows = [], newUnitRows = [], newTenantRows = [], linkUpdates = [];
   let propertiesCreated = 0, propertiesMatched = 0, unitsCreated = 0, unitsMatched = 0;
   let tenantsCreated = 0, tenantsSkippedExisting = 0;
-  const flaggedTenantsElsewhere = [], flaggedOwners = [];
+  const flaggedTenantsElsewhere = [], flaggedOwners = [], addrFoldedMatches = [];
   const createdDate = new Date().toISOString().slice(0, 10);
 
   for (const key of order) {
@@ -10592,6 +10628,14 @@ async function hubBulkImport(env, body) {
       propertiesMatched++;
       // Only fill Owner_ID if the existing property doesn't already have one — never overwrite.
       if (matchedOwnerId && !prop.Owner_ID) linkUpdates.push({ tab: 'Properties', id: prop.ID, field: 'Owner_ID', value: matchedOwnerId });
+      // Flag (never hide) when this match only worked BECAUSE of the St/Saint/Street
+      // folding in normAddr — e.g. pasted "931 St. Paul St." matched the on-file
+      // "931 Saint Paul St". The match is almost certainly correct (that's the whole
+      // point of the folding) but it's a fuzzy match on user-typed text, so it's worth
+      // one glance before confirming, same spirit as the tenant/owner flags below.
+      if (normAddrStrict(g.address) !== normAddrStrict(prop.Address)) {
+        addrFoldedMatches.push({ pasted_address: g.address, matched_existing_address: prop.Address, note: 'Matched via St/Saint/Street normalization.' });
+      }
     }
 
     for (const r of g.rows) {
@@ -10646,6 +10690,7 @@ async function hubBulkImport(env, body) {
     tenants_created: tenantsCreated, tenants_skipped_existing: tenantsSkippedExisting,
     tenants_flagged_elsewhere: flaggedTenantsElsewhere,
     owners_flagged_no_match: flaggedOwners,
+    properties_matched_via_address_normalization: addrFoldedMatches,
   };
   if (preview) return json(summary);
 
