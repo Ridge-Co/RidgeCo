@@ -806,6 +806,7 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>HVAC Filter Size</label><input type="text" id="ep-hvac"></div>
       <div class="form-group"><label>Breaker Location</label><input type="text" id="ep-breaker"></div>
       <div class="form-group full"><label>Access Notes <span style="font-weight:normal;color:var(--muted)">— shown to vendors on every WO for this property</span></label><textarea id="ep-access" placeholder="e.g. Contact tenant for access · No lockbox — call owner for key · Gate code 1234# · Spare key under mat" style="min-height:80px;resize:vertical"></textarea></div>
+      <div class="form-group full"><label>Owner</label><select id="ep-owner"><option value="">No owner assigned</option></select></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-property')">Cancel</button><button class="btn" onclick="submitEditProperty()">Save Changes</button></div>
   </div>
@@ -2981,11 +2982,14 @@ function openEditPropertyModal(id){
   document.getElementById('ep-lockcode').value=p.Lock_Code||''; document.getElementById('ep-shutoff').value=p.Water_Shutoff||'';
   document.getElementById('ep-hvac').value=p.HVAC_Filter_Size||''; document.getElementById('ep-breaker').value=p.Breaker_Location||'';
   document.getElementById('ep-access').value=p.Access_Notes||'';
+  var epOwnerId = String(p.Owner_ID||'');
+  document.getElementById('ep-owner').innerHTML = '<option value="">No owner assigned</option>' +
+    safeArray(state.owners).map(function(o){return '<option value="'+o.ID+'"'+(String(o.ID)===epOwnerId?' selected':'')+'>'+(o.First_Name+' '+(o.Last_Name||'')).trim()+(o.Company?' — '+o.Company:'')+'</option>';}).join('');
   openModal('modal-edit-property');
 }
 function submitEditProperty(){
   var id=document.getElementById('ep-id').value;
-  var fields={Address:document.getElementById('ep-address').value,City:document.getElementById('ep-city').value,Market:document.getElementById('ep-market').value,Type:document.getElementById('ep-type').value,Lockbox_Code:document.getElementById('ep-lockbox').value,Lock_Code:document.getElementById('ep-lockcode').value,Water_Shutoff:document.getElementById('ep-shutoff').value,HVAC_Filter_Size:document.getElementById('ep-hvac').value,Breaker_Location:document.getElementById('ep-breaker').value,Access_Notes:document.getElementById('ep-access').value};
+  var fields={Address:document.getElementById('ep-address').value,City:document.getElementById('ep-city').value,Market:document.getElementById('ep-market').value,Type:document.getElementById('ep-type').value,Lockbox_Code:document.getElementById('ep-lockbox').value,Lock_Code:document.getElementById('ep-lockcode').value,Water_Shutoff:document.getElementById('ep-shutoff').value,HVAC_Filter_Size:document.getElementById('ep-hvac').value,Breaker_Location:document.getElementById('ep-breaker').value,Access_Notes:document.getElementById('ep-access').value,Owner_ID:document.getElementById('ep-owner').value};
   api('POST','/property/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit property',res.error);toast('Error: '+res.error,'error');return;}
     toast('Property updated','success');closeModal('modal-edit-property');loadAll();
@@ -3479,6 +3483,7 @@ function renderOwnersPage() {
       '<td style="color:'+(o.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(o.PIN||'—')+'</td>' +
       '<td style="display:flex;gap:4px">' +
       '<button class="btn small secondary" onclick="openEditOwnerModal(\''+o.ID+'\')">Edit</button>' +
+      '<button class="btn small secondary" onclick="openLinkPropertyModal(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Assign an existing property to this owner">+ Property</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
       '</td></tr>';
@@ -8788,6 +8793,21 @@ function qbBatchSend() {
   </div>
 </div>
 
+<!-- LINK PROPERTY TO OWNER MODAL (Aug 21, 2026 — quick-link from the Owners side; Edit Property's Owner field does the same write) -->
+<div class="modal-overlay" id="modal-link-property">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header"><div class="modal-title">ADD PROPERTY TO OWNER</div><button class="modal-close" onclick="closeModal('modal-link-property')">✕</button></div>
+    <input type="hidden" id="lp-owner-id">
+    <p style="color:var(--muted);font-size:12px;margin:0 0 8px">Linking to <b id="lp-owner-label"></b>. Properties already assigned to another owner show who — picking one here moves it.</p>
+    <div class="form-group full"><label>Property</label><select id="lp-property"><option value="">Select a property…</option></select></div>
+    <div id="lp-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-link-property')">Cancel</button>
+      <button class="btn" onclick="submitLinkProperty()">Add to Owner</button>
+    </div>
+  </div>
+</div>
+
 <!-- UNIT DETAIL MODAL -->
 <div class="modal-overlay" id="modal-unit-detail">
   <div class="modal" style="max-width:560px">
@@ -8924,6 +8944,32 @@ function submitAddOwner() {
     if (res.id) { toast('Owner added — ID: '+res.id,'success'); closeModal('modal-add-owner'); loadAll(); renderOwnersPage(); }
     else document.getElementById('ao-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+(res.error||'Error')+'</div>';
   });
+}
+
+// ── Link Property to Owner (owner-side quick action; same write as Edit Property's Owner field) ──
+function openLinkPropertyModal(ownerId, ownerLabel) {
+  document.getElementById('lp-owner-id').value = ownerId;
+  document.getElementById('lp-owner-label').textContent = ownerLabel;
+  document.getElementById('lp-msg').innerHTML = '';
+  var sel = document.getElementById('lp-property');
+  sel.innerHTML = '<option value="">Select a property…</option>' +
+    sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';})).map(function(p){
+      var curOwner = p.Owner_ID ? safeArray(state.owners).find(function(o){return String(o.ID)===String(p.Owner_ID);}) : null;
+      var curLabel = curOwner ? ((curOwner.First_Name+' '+(curOwner.Last_Name||'')).trim() || curOwner.Company) : '';
+      var already = String(p.Owner_ID||'')===String(ownerId);
+      return '<option value="'+p.ID+'"'+(already?' disabled':'')+'>'+p.Address+(p.City?', '+p.City:'')+
+        (already ? ' — already linked' : (curLabel ? ' — currently: '+curLabel : ' — no owner'))+'</option>';
+    }).join('');
+  openModal('modal-link-property');
+}
+function submitLinkProperty() {
+  var ownerId = document.getElementById('lp-owner-id').value;
+  var propId = document.getElementById('lp-property').value;
+  if (!propId) { document.getElementById('lp-msg').innerHTML='<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
+  api('POST','/property/update',{id:propId,fields:{Owner_ID:ownerId}}).then(function(res){
+    if (res && res.error) { document.getElementById('lp-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(res.error)+'</div>'; return; }
+    toast('Property added to owner','success'); closeModal('modal-link-property'); loadAll(); renderOwnersPage();
+  }).catch(function(e){ document.getElementById('lp-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(e.message)+'</div>'; });
 }
 
 function openAddKeyModal(presetPropId) {
