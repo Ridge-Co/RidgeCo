@@ -41,9 +41,18 @@ was untouched). Also surfaced two never-built BACKLOG ideas (B-031, B-017) and b
   B-017 originally pointed toward and remains separate/open — this skill covers the literal
   "reusable Cowork skill for building skills" ask, not Flows.
 
-**🔴 Needs Brett:** tap **Save skill** on `ridgeco-scope.skill` and `brett-skillsmith.skill` (both
-delivered this session, neither confirmed saved yet — do not mark BACKLOG/this row "saved" until
-confirmed, same as `venture-web` wasn't marked done until the second delivery actually worked).
+**Update (same session):** `ridgeco-scope.skill` failed "Save skill" on first delivery — a second,
+different bug from venture-web's: `<address>`/`<item>`/`<question>`-style angle-bracket placeholders
+in the template/output-format sections read as XML tags to the save validator and reject the whole
+file. Fixed by switching every placeholder to square brackets (`[address]`, `[item]`, etc.) — this
+applies to any text in the file, including prose that merely *mentions* the angle-bracket shape as an
+example. Both `.skill` files rebuilt clean (verified: `grep -noE '<[^<>]{1,60}>'` returns nothing in
+either) and redelivered. `brett-skillsmith` now checks for this alongside the description-length
+check, so a future skill build catches both before Brett ever sees a save error.
+
+**🔴 Needs Brett:** tap **Save skill** on the redelivered `ridgeco-scope.skill` and
+`brett-skillsmith.skill` (neither confirmed saved yet — do not mark BACKLOG/this row "saved" until
+confirmed, same as `venture-web` wasn't marked done until its second delivery actually worked).
 Also: Brett pasted `BRETT_GH_PAT` into this chat to load context (his documented workflow) — per the
 standing CREDENTIALS_MAP rule, rotate it (revoke + reissue) after this session closes.
 
