@@ -1329,6 +1329,33 @@ async function scopeList(env, url) {
   return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: r.Status, wo_id: r.WO_ID, parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
 }
 
+// Builds a customer-facing "<Address> Unit <Label>" string for a scope — looks up the real
+// Unit_Label (e.g. "2F") from the Units tab instead of printing the internal Unit_ID (e.g. "45").
+// Aug 22 2026: fixes a bug caught live on the 931 St. Paul proposal, where the public link header
+// read "931 Saint Paul St Unit 45" instead of "...Unit 2F" — s.Unit_ID is the Units-tab row ID,
+// never the label a customer should see. Falls back to the raw Unit_ID only if no matching unit
+// row is found, so an address never silently goes blank.
+async function scopeAddr(env, s) {
+  let addr = '';
+  try {
+    const props = await fetchTab(env, 'Properties');
+    const p = props.find(x => x.ID === s.Property_ID);
+    if (p) {
+      addr = p.Address || '';
+      if (s.Unit_ID) {
+        let label = s.Unit_ID;
+        try {
+          const units = await fetchTab(env, 'Units');
+          const u = units.find(x => x.ID === s.Unit_ID);
+          if (u && u.Unit_Label) label = u.Unit_Label;
+        } catch (_) {}
+        addr += ' Unit ' + label;
+      }
+    }
+  } catch (_) {}
+  return addr;
+}
+
 async function scopeGet(env, url) {
   const id = url.searchParams.get('id'); if (!id) return json({ error: 'id required' }, 400);
   await scopesTab(env);
@@ -1543,7 +1570,7 @@ async function scopeProposal(env, body) {
   const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
   const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0));
   if (unpriced.length) return json({ error: `Add vendor cost to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
-  let addr = ''; try { const props = await fetchTab(env, 'Properties'); const p = props.find(x => x.ID === s.Property_ID); if (p) addr = (p.Address || '') + (s.Unit_ID ? (' Unit ' + s.Unit_ID) : ''); } catch (_) {}
+  let addr = await scopeAddr(env, s);
   addr = addr || ('Property ' + s.Property_ID);
   const _pc = await getPricingConfig(env);
   if (!_pc) return json({ error: 'Pricing not configured — set PRICING_CONFIG (Cloudflare secret) or the Config sheet `pricing_config` row.' }, 400);
@@ -1628,7 +1655,7 @@ async function scopeProposalView(env, url) {
   const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
   if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
   const s = auth.s;
-  let addr = ''; try { const props = await fetchTab(env, 'Properties'); const p = props.find(x => x.ID === s.Property_ID); if (p) addr = (p.Address || '') + (s.Unit_ID ? (' Unit ' + s.Unit_ID) : ''); } catch (_) {}
+  let addr = await scopeAddr(env, s);
   let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
   const items = rawItems.map(it => ({
     id: it.id, area: it.area, trade: it.trade, description: it.description, note: it.note,
