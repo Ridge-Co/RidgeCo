@@ -10512,26 +10512,40 @@ function submitScheduleMoveOut() {
     btn.title = 'Voice to text';
     btn.textContent = '🎤';
     btn.style.cssText = 'position:absolute;right:6px;bottom:6px;z-index:5;width:24px;height:24px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:12px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.15)';
-    var rec = null, listening = false, base = '';
+    var rec = null, listening = false, base = '', userStopped = false;
     function stopUI(){
       listening = false; btn.textContent = '🎤';
       btn.style.background = 'var(--surface)'; btn.style.color = 'var(--muted)';
     }
-    btn.onclick = function(ev){
-      ev.preventDefault(); ev.stopPropagation();
-      if (listening) { rec && rec.stop(); return; }
+    function armRec(){
       rec = new SR();
       rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = true;
-      base = ta.value;
       rec.onresult = function(e){
         var txt = '';
         for (var i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript;
         ta.value = (base && !/\s$/.test(base) ? base + ' ' : base) + txt;
         ta.dispatchEvent(new Event('input', {bubbles:true}));
       };
-      rec.onend = function(){ stopUI(); base = ta.value; };
-      rec.onerror = function(){ stopUI(); };
-      try { rec.start(); listening = true; btn.textContent = '⏺'; btn.style.background = 'var(--danger)'; btn.style.color = '#fff'; }
+      // Chrome/Android ends a recognition session after a few seconds of
+      // silence and there's no cross-browser API to extend that window — so
+      // instead of stopping dictation on every pause, silently restart the
+      // recognizer underneath the user. Only an explicit tap (or a fatal
+      // permission error) actually ends it now.
+      rec.onend = function(){
+        base = ta.value;
+        if (!userStopped) { try { rec.start(); return; } catch (e) {} }
+        stopUI();
+      };
+      rec.onerror = function(e){
+        if (e && (e.error === 'not-allowed' || e.error === 'service-not-allowed')) userStopped = true;
+      };
+      rec.start();
+    }
+    btn.onclick = function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      if (listening) { userStopped = true; rec && rec.stop(); return; }
+      base = ta.value; userStopped = false;
+      try { armRec(); listening = true; btn.textContent = '⏺'; btn.style.background = 'var(--danger)'; btn.style.color = '#fff'; }
       catch (e) { stopUI(); }
     };
     wrap.appendChild(btn);

@@ -24,7 +24,11 @@
   .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
   .btn.go{background:var(--accent2);color:#fff;border-color:var(--accent2)}
   .btn.ghost{background:transparent}
+  .btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
   .btn:active{opacity:.85}
+  .wk-row{display:flex;align-items:center;gap:10px;margin-top:12px;border-top:1px solid var(--border);padding-top:12px}
+  .wk-row input[type=checkbox]{width:20px;height:20px;flex:none;margin:0}
+  .batch-bar{position:sticky;bottom:0;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 14px;margin:0 0 12px;box-shadow:0 -2px 8px rgba(0,0,0,.08)}
   .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--chip);color:var(--muted)}
   .pill.ok{background:#e7f6ec;color:var(--accent2)} .pill.due{background:#fdf3e0;color:var(--warn)} .pill.new{background:#eaf1fd;color:var(--accent)}
   input,select{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text)}
@@ -116,7 +120,12 @@
   </header>
   <main>
     <div id="nudge"></div>
+    <div class="row" style="gap:8px;margin-bottom:2px">
+      <button class="btn" id="wk-tab-0" style="flex:1" onclick="switchWeekTab(0)">This week</button>
+      <button class="btn" id="wk-tab--1" style="flex:1" onclick="switchWeekTab(-1)">Last week</button>
+    </div>
     <div id="week"></div>
+    <div id="week-batch-bar" class="hide"></div>
 
     <div class="card">
       <div class="row"><b>Log a visit</b><span class="muted">tap a property</span></div>
@@ -188,11 +197,17 @@
   <div class="sheet">
     <h2 id="vm-title">Log visit</h2>
     <input type="hidden" id="vm-prop-id">
+    <label class="fld">Service date</label>
+    <input id="vm-visit-date" type="date">
     <div class="photo-group">
       <label class="fld">Photos</label>
-      <label class="cam-btn">📷 Add photos
-        <input type="file" accept="image/*,video/*" capture="environment" multiple class="hide" onchange="pickPhotos(this)">
-      </label>
+      <!-- A real <button> that triggers a hidden, NOT-nested file input via .click() —
+           was a <label> wrapping the hidden input, which on Brett's phone only registered
+           a tap on the exact text, not the full visual button. A button's whole box is
+           always a valid tap target; a label's is not guaranteed once its labelable
+           control is display:none. See CURRENT.md / FEATURE_LOG for the writeup. -->
+      <button type="button" class="cam-btn" onclick="document.getElementById('vm-photo-input').click()">📷 Add photos</button>
+      <input type="file" id="vm-photo-input" accept="image/*,video/*" capture="environment" multiple class="hide" onchange="pickPhotos(this)">
       <div class="thumbs" id="thumbs-photos"></div>
     </div>
 
@@ -252,6 +267,12 @@ function api(method, path, body){
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';},2200); }
 function money(n){ return '$'+(Number(n||0)).toFixed(2); }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function mondayOf(dateStr){ // Monday-anchored week key, same math as the Worker's trashWeekKey
+  var d=new Date(dateStr+'T12:00:00Z'); var day=d.getUTCDay(); var back=day===0?6:day-1;
+  d.setUTCDate(d.getUTCDate()-back); return d.toISOString().slice(0,10);
+}
+function addDaysStr(dateStr,n){ var d=new Date(dateStr+'T12:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
 
 // ── Login (shares the Hub's stored code) ─────────────────────
 function doLogin(){
@@ -268,7 +289,8 @@ function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').classList.remove('hide');
   api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
-  loadProperties(); loadWeek(); loadNudge();
+  document.getElementById('wk-tab-0').classList.add('active');
+  loadProperties(); refreshWeek(); loadNudge();
 }
 
 // ── Load + render ────────────────────────────────────────────
@@ -301,23 +323,130 @@ function toggleManage(){
   document.getElementById('manage-caret').textContent=open?'hide':'show';
   if(open){ ensureQbLists(); }  // warm the dropdowns so Edit opens instantly
 }
-function loadWeek(){
-  return api('GET','/trash/week').then(function(d){
+// ── Week view: This week / Last week tabs, multi-select batch send, mark-skipped ──
+var curWeekOffset = 0;              // 0 = this week, -1 = last week
+var curWeekKey = { 0:null, '-1':null };   // Monday date string per tab, filled from the server
+var weekListCache = { 0:[], '-1':[] };    // last-loaded property list per tab (for batch send)
+var selectedForBatch = {};          // property_id -> true, scoped to the visible tab
+
+function switchWeekTab(offset){
+  curWeekOffset = offset;
+  selectedForBatch = {};
+  document.getElementById('wk-tab-0').classList.toggle('active', offset===0);
+  document.getElementById('wk-tab--1').classList.toggle('active', offset===-1);
+  refreshWeek();
+}
+function refreshWeek(){ return loadWeek(curWeekOffset); }
+
+function loadWeek(offset){
+  offset = offset||0;
+  var qs = '';
+  if(offset===-1) qs = '?week='+addDaysStr(mondayOf(todayStr()),-7);
+  return api('GET','/trash/week'+qs).then(function(d){
     var el=document.getElementById('week');
     var wk=(d&&d.week)||''; var list=(d&&d.properties)||[];
-    if(!list.length){ el.innerHTML=''; return; }
-    el.innerHTML = '<div class="card"><div class="row"><b>This week</b><span class="muted">'+esc(wk)+'</span></div>'
+    curWeekKey[offset]=wk; weekListCache[offset]=list;
+    var label = offset===0 ? 'This week' : 'Last week';
+    if(!list.length){ el.innerHTML='<div class="card muted">Nothing on file for '+label.toLowerCase()+' yet.</div>'; renderBatchBar(offset); return; }
+    el.innerHTML = '<div class="card"><div class="row"><b>'+label+'</b><span class="muted">'+esc(wk)+'</span></div>'
       + list.map(function(p){
-          var status;
+          var status, checkbox='';
           if(p.invoiced) status='<span class="pill ok">✓ Invoiced'+(p.qb_invoice_number?(' #'+esc(p.qb_invoice_number)):'')+'</span>';
-          else if(p.ready_to_invoice) status='<button class="btn primary" style="padding:7px 12px" onclick="previewInvoice(\''+p.property_id+'\',\''+esc(wk)+'\')">Preview &amp; send '+money(p.total)+'</button>';
-          else status='<span class="pill new">'+p.logged+' / '+p.expected+' visits</span>';
+          else if(p.ready_to_invoice){
+            status='<button class="btn primary" style="padding:7px 12px" onclick="previewInvoice(\''+p.property_id+'\',\''+esc(wk)+'\')">Preview &amp; send '+money(p.total)+'</button>';
+            checkbox='<input type="checkbox" onchange="toggleBatchSelect(\''+p.property_id+'\',this.checked)" '+(selectedForBatch[p.property_id]?'checked':'')+'>';
+          } else if(offset===-1 && p.logged===0){
+            status = p.skipped
+              ? '<span class="pill">⏭ Marked: nothing done</span> <button class="btn" style="padding:6px 10px;margin-left:6px" onclick="unmarkSkipped(\''+p.property_id+'\',\''+esc(wk)+'\')">Undo</button>'
+              : '<button class="btn" style="padding:7px 12px" onclick="markSkipped(\''+p.property_id+'\',\''+esc(wk)+'\')">Nothing done</button>';
+          } else status='<span class="pill new">'+p.logged+' / '+p.expected+' visits</span>';
           var extra=p.extra_total>0?(' · +'+money(p.extra_total)+' extra'):'';
-          return '<div class="row" style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">'
-               + '<div><div><b>'+esc(p.label)+'</b></div><div class="muted">'+p.logged+' logged'+extra+'</div></div>'
+          return '<div class="wk-row">'+checkbox
+               + '<div style="flex:1"><div><b>'+esc(p.label)+'</b></div><div class="muted">'+p.logged+' logged'+extra+'</div></div>'
                + '<div>'+status+'</div></div>';
         }).join('')
       + '</div>';
+    renderBatchBar(offset);
+  });
+}
+
+function toggleBatchSelect(pid, checked){
+  if(checked) selectedForBatch[pid]=true; else delete selectedForBatch[pid];
+  renderBatchBar(curWeekOffset);
+}
+function renderBatchBar(offset){
+  var bar=document.getElementById('week-batch-bar');
+  var ids=Object.keys(selectedForBatch);
+  if(offset!==curWeekOffset || !ids.length){ bar.className='hide'; bar.innerHTML=''; return; }
+  var list=weekListCache[offset]||[];
+  var total=0; ids.forEach(function(id){ var p=list.find(function(x){return x.property_id===id;}); if(p) total+=Number(p.total||0); });
+  bar.className='batch-bar row';
+  bar.innerHTML='<b>'+ids.length+' selected · '+money(total)+'</b><button class="btn go" onclick="previewBatch()">Preview &amp; send all</button>';
+}
+
+// Batch send = the same preview-first single-property flow (rule 51), just looped and
+// shown together. Nothing new on the money path — no combined-invoice engine, no new
+// QuickBooks call shape, just fewer taps to get through several properties at once.
+var curBatch = null; // { week, ids }
+function previewBatch(){
+  var ids=Object.keys(selectedForBatch); if(!ids.length) return;
+  var wk=curWeekKey[curWeekOffset];
+  curBatch={ week:wk, ids:ids };
+  document.getElementById('im-title').textContent='Send '+ids.length+' invoices';
+  document.getElementById('im-body').innerHTML='<p class="muted"><span class="spin"></span> Building previews…</p>';
+  document.getElementById('im-send').classList.add('hide');
+  document.getElementById('inv-modal').classList.add('open');
+  Promise.all(ids.map(function(pid){
+    return api('POST','/trash/invoice',{ property_id:pid, week:wk, preview_only:true }).then(function(r){ return {pid:pid, r:r}; });
+  })).then(function(results){
+    var html='', grandTotal=0, anyWarn=false;
+    results.forEach(function(x){
+      var r=x.r;
+      if(!r||!r.preview){ html+='<div class="line"><span>'+esc((r&&r.error)||'property '+x.pid)+'</span><span class="warn">⚠</span></div>'; return; }
+      grandTotal+=Number(r.preview.total||0);
+      if(r.preview.warnings&&r.preview.warnings.length) anyWarn=true;
+      html+='<div class="line"><span>'+esc(r.preview.property)+'</span><span>'+money(r.preview.total)+'</span></div>';
+    });
+    html+='<div class="total">Total '+money(grandTotal)+'</div>';
+    if(anyWarn) html+='<div class="warn">⚠ one or more has a warning — open individually to review before sending if unsure.</div>';
+    document.getElementById('im-body').innerHTML=html;
+    var sendBtn=document.getElementById('im-send');
+    sendBtn.classList.remove('hide'); sendBtn.textContent='Send all '+money(grandTotal);
+  }).catch(function(e){ document.getElementById('im-body').innerHTML='<p class="warn">'+esc(e.message)+'</p>'; });
+}
+function sendBatch(btn){
+  if(!curBatch) return;
+  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Sending…';
+  var wk=curBatch.week;
+  var results=[];
+  curBatch.ids.reduce(function(chain,pid){
+    return chain.then(function(){
+      return api('POST','/trash/invoice',{ property_id:pid, week:wk }).then(function(r){ results.push({pid:pid,r:r}); });
+    });
+  }, Promise.resolve()).then(function(){
+    btn.disabled=false;
+    var ok=results.filter(function(x){return x.r&&x.r.ok;}).length;
+    var fail=results.filter(function(x){return !(x.r&&x.r.ok);});
+    var html='<p>✅ '+ok+' of '+results.length+' invoices sent.</p>';
+    if(fail.length) html+='<div class="warn">⚠ '+fail.length+' failed: '+fail.map(function(x){return esc((x.r&&x.r.error)||x.pid);}).join('; ')+'</div>';
+    document.getElementById('im-body').innerHTML=html;
+    document.getElementById('im-send').classList.add('hide');
+    toast(ok+' of '+results.length+' invoices sent');
+    selectedForBatch={}; curBatch=null; refreshWeek(); loadNudge();
+  });
+}
+
+// ── Mark previous week "nothing done" — a conscious skip, not a silent forget ──
+function markSkipped(pid, week){
+  api('POST','/trash/mark-skipped',{ property_id:pid, week:week }).then(function(r){
+    if(r&&r.success){ toast('Marked — nothing done'); refreshWeek(); loadNudge(); }
+    else toast((r&&r.error)||'Could not mark');
+  });
+}
+function unmarkSkipped(pid, week){
+  api('POST','/trash/unmark-skipped',{ property_id:pid, week:week }).then(function(r){
+    if(r&&r.success){ toast('Undone'); refreshWeek(); loadNudge(); }
+    else toast((r&&r.error)||'Could not undo');
   });
 }
 function loadNudge(){
@@ -334,6 +463,7 @@ function openVisit(pid){
   var p=props.find(function(x){return x.id===pid;}); if(!p) return;
   document.getElementById('vm-prop-id').value=pid;
   document.getElementById('vm-title').textContent='Log visit — '+p.label;
+  document.getElementById('vm-visit-date').value=todayStr();
   pendingPhotos=[]; pendingFolder=null; extraAmt=0;
   document.getElementById('thumbs-photos').innerHTML='';
   document.getElementById('vm-extra-custom').classList.add('hide');
@@ -391,20 +521,21 @@ function saveVisit(btn){
   if(!ci.classList.contains('hide')) extraAmt=Number(ci.value||0);
   var reason=document.getElementById('vm-extra-reason').value.trim();
   var allPhotos=pendingPhotos.slice();
+  var visitDate=document.getElementById('vm-visit-date').value||todayStr();
   btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
-  var body={ property_id:pid, photo_file_ids:allPhotos, extra_amount:extraAmt>0?extraAmt:0 };
+  var body={ property_id:pid, visit_date:visitDate, photo_file_ids:allPhotos, extra_amount:extraAmt>0?extraAmt:0 };
   if(pendingFolder){ body.photo_folder_id=pendingFolder.id; body.photo_folder_url=pendingFolder.url; }
   if(extraAmt>0 && reason) body.extra_reason=reason;
   api('POST','/trash/log-visit',body).then(function(r){
     btn.disabled=false; btn.textContent='Save visit';
-    if(r&&r.success){ closeVisit(); toast('Visit logged'+(r.merged?' (added to today)':'')); loadWeek(); loadNudge(); }
+    if(r&&r.success){ closeVisit(); toast('Visit logged'+(r.merged?' (added to today)':'')); refreshWeek(); loadNudge(); }
     else toast((r&&r.error)||'Could not save');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Save visit'; toast('Error: '+e.message); });
 }
 
 // ── Invoice preview + send ───────────────────────────────────
 function previewInvoice(pid, week){
-  curInvoice={ property_id:pid, week:week };
+  curInvoice={ property_id:pid, week:week }; curBatch=null;
   document.getElementById('im-title').textContent='Invoice preview';
   document.getElementById('im-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
   document.getElementById('im-send').classList.add('hide');
@@ -425,6 +556,7 @@ function previewInvoice(pid, week){
   }).catch(function(e){ document.getElementById('im-body').innerHTML='<p class="warn">'+esc(e.message)+'</p>'; });
 }
 function sendInvoice(btn){
+  if(curBatch) return sendBatch(btn);   // "Preview & send all" reuses this same button/handler
   if(!curInvoice) return;
   btn.disabled=true; btn.innerHTML='<span class="spin"></span> Sending…';
   api('POST','/trash/invoice',{ property_id:curInvoice.property_id, week:curInvoice.week }).then(function(r){
@@ -432,14 +564,14 @@ function sendInvoice(btn){
     if(r&&r.ok){
       var msg='Invoice sent'+(r.invoice_number?(' #'+r.invoice_number):'')+' — '+money(r.total);
       document.getElementById('im-body').innerHTML='<p>✅ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');
-      btn.classList.add('hide'); toast(msg); loadWeek(); loadNudge();
+      btn.classList.add('hide'); toast(msg); refreshWeek(); loadNudge();
     } else {
       btn.textContent='Send invoice';
       document.getElementById('im-body').innerHTML+='<div class="warn">⚠ '+esc((r&&r.error)||'Send failed')+'</div>';
     }
   }).catch(function(e){ btn.disabled=false; btn.textContent='Send invoice'; toast('Error: '+e.message); });
 }
-function closeInv(){ document.getElementById('inv-modal').classList.remove('open'); curInvoice=null; }
+function closeInv(){ document.getElementById('inv-modal').classList.remove('open'); curInvoice=null; curBatch=null; }
 
 // ── Add property ─────────────────────────────────────────────
 function toggleAdd(){
@@ -501,7 +633,7 @@ function saveEdit(btn){
   btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
   api('POST','/trash/property/update',{ id:id, fields:fields }).then(function(r){
     btn.disabled=false; btn.textContent='Save changes';
-    if(r&&r.success){ toast('Saved'); closeEdit(); loadProperties(); loadWeek(); }
+    if(r&&r.success){ toast('Saved'); closeEdit(); loadProperties(); refreshWeek(); }
     else toast((r&&r.error)||'Could not save');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Save changes'; toast('Error: '+e.message); });
 }
@@ -509,7 +641,7 @@ function removeProperty(){
   var id=document.getElementById('ef-id').value;
   if(!confirm('Remove this property from the buttons? Logged visits and invoices stay intact.')) return;
   api('POST','/trash/property/update',{ id:id, fields:{ Active:'FALSE' } }).then(function(r){
-    if(r&&r.success){ toast('Removed'); closeEdit(); loadProperties(); loadWeek(); }
+    if(r&&r.success){ toast('Removed'); closeEdit(); loadProperties(); refreshWeek(); }
     else toast((r&&r.error)||'Could not remove');
   }).catch(function(e){ toast('Error: '+e.message); });
 }
@@ -530,7 +662,7 @@ function addProperty(btn){
   btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
   api('POST','/trash/property/add',body).then(function(r){
     btn.disabled=false; btn.textContent='Save property';
-    if(r&&r.success){ toast('Property added'); document.getElementById('af-label').value=''; toggleAdd(); loadProperties(); loadWeek(); }
+    if(r&&r.success){ toast('Property added'); document.getElementById('af-label').value=''; toggleAdd(); loadProperties(); refreshWeek(); }
     else toast((r&&r.error)||'Could not add');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Save property'; toast('Error: '+e.message); });
 }

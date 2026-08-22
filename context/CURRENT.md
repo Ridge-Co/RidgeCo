@@ -1,3 +1,13 @@
+# WHERE THINGS STAND — Aug 22, 2026
+
+## 📋 Wishlist/devlog reconciliation + Brett's 5 fresh items — 3 shipped, 2 already done, 2 open questions.
+Brett asked to surface the Ridge Co Hub wishlist/improvement backlog, strip anything already shipped, add 5 fresh items he'd just hit, and start on the priority ones. Reconciled against BACKLOG.md + FEATURE_LOG + this file rather than re-describing from memory (truth-mode). Full writeup + the reconciled list went to Brett directly; short version:
+- **Already done, not rebuilt:** (1) select-multiple on Review Bills — live since rule 98 (Aug 10). (2) Turnover trigger (repairs+cleaning+paint as 3 connected WOs, B-100) — shipped rule 104 (Aug 18), still flagged `🔴 Needs Brett's confirm` there and never confirmed since. Told Brett rather than silently re-building these — asked him to do the rule 104 live-verify instead.
+- **Shipped this session:** voice-to-text auto-restart-through-pauses (FEATURE_LOG rule 131, all 4 mic-enabled files); Trash Service "Add photos" precise-tap-only bug (rule 132); Trash Service service-date picker + This week/Last week tabs + batch send + mark-skipped (rule 133). See FEATURE_LOG for full detail and Brett's live-verify checklist — none of the four have had a first live pass yet.
+- **Added to BACKLOG.md as open items (not built this session):** B-227 (repo-wide sweep of the same label-wraps-hidden-file-input tap-target bug — found in `wo.html`×3, `scope-creator.html`×2, and the shared `inputAttrs` helper used by index/tenant/owner/vendor — rule 132 only fixed Trash Service, the one Brett named), B-228 (Brett's "add it to a checklist project" ask — **open question**, see below).
+- **🔴 Open question for Brett — asked in plain text, not the question widget (per his standing instruction, doesn't work on mobile):** "checklist project" — did you mean a ClickUp list (this session has ClickUp tools connected), or the Hub's own Wishlist/Dev Log checklist mechanism (rule 37, already in BACKLOG.md's reconciliation ritual)? Logged as B-228 either way so it's not lost; will file it into whichever you mean once you say.
+- **B-100's BACKLOG.md Quick-Index row was stale** (still showed 🟠 open despite rule 104 shipping it Aug 18) — corrected to reflect shipped-pending-verify, per the reconciliation ritual's own rule ("never mark Done what FEATURE_LOG can't confirm" — this one FEATURE_LOG DOES confirm as shipped, just not yet Brett-verified, so it's marked accordingly, not silently closed).
+
 # WHERE THINGS STAND — Aug 21, 2026
 
 ## ✅ SHIPPED — Bulk Importer: fixed a multi-line CSV cell shredding a real tenant into a phantom property + added CSV file upload. FEATURE_LOG rule 130.

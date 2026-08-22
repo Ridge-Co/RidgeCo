@@ -21,6 +21,7 @@ const TRASH_DOW_SRC = "const TRASH_DOW = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sa
 const trashWeekKey        = new Function(grab('trashWeekKey') + '\nreturn trashWeekKey;')();
 const buildTrashInvoiceLines = new Function(grab('buildTrashInvoiceLines') + '\nreturn buildTrashInvoiceLines;')();
 const trashPastDeadline   = new Function(TRASH_DOW_SRC + grab('trashPastDeadline') + '\nreturn trashPastDeadline;')();
+const trashIsSkipped      = new Function(grab('trashIsSkipped') + '\nreturn trashIsSkipped;')();
 
 let pass = 0, fail = 0;
 const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? ('got ' + JSON.stringify(got)) : ''); } };
@@ -88,6 +89,21 @@ const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n,
   const p = { Nudge_Day: 'Wed', Grace_Days: 0 };
   t('zero grace: Tue not yet', trashPastDeadline(p, '2026-08-03', new Date('2026-08-04T23:00:00Z')) === false);
   t('zero grace: Wed noon yes', trashPastDeadline(p, '2026-08-03', new Date('2026-08-05T12:00:00Z')) === true);
+}
+
+// ── 4. Mark-skipped suppression predicate (B-??? — "nothing done" vs. silently forgot) ──
+{
+  const skips = [
+    { Property_ID: '5', Week_Key: '2026-08-10', Active: 'TRUE' },
+    { Property_ID: '6', Week_Key: '2026-08-10', Active: 'FALSE' }, // undone — must not count
+    { Property_ID: '5', Week_Key: '2026-08-17', Active: 'TRUE' },
+  ];
+  t('marked property/week is skipped', trashIsSkipped(skips, '5', '2026-08-10') === true);
+  t('un-marked (Active FALSE) is not skipped', trashIsSkipped(skips, '6', '2026-08-10') === false);
+  t('same property, different week is not skipped', trashIsSkipped(skips, '5', '2026-08-24') === false);
+  t('unrelated property is not skipped', trashIsSkipped(skips, '99', '2026-08-10') === false);
+  t('numeric property id matches string-typed ID', trashIsSkipped(skips, 5, '2026-08-10') === true);
+  t('empty skip list never matches', trashIsSkipped([], '5', '2026-08-10') === false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
