@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.28 | **Last Updated:** July 23, 2026
+**Version:** v1.29 | **Last Updated:** Aug 22, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -38,6 +38,7 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - CAP-028 — Pre-overhaul brain-dump, note 2 (Scanned_202607211341): WO-as-site/PDF sharing, Second Brain, vendor-text mining, property DB, inspector app, STR dashboard app, background agents, vendor equipment + schedule prefs (multi-venture — NEW) → B-113..B-123
 - CAP-029 — Reviewed Ray Fu "software factory / 7 Fable agents" video → autonomy roadmap decision: build the safety substrate (isolation + smoke tests + validator) BEFORE any autonomous builds; autonomy earned per-section by blast-radius rails → B-140..B-143 + ridgeco-validate skill. Follow-ups: quality layer (B-144..150), Control Panel keystone → Command Center (B-151), money-path sandbox verdict (B-152)
 - CAP-030 — BarrelCo → Community Forklift fulfillment blocked ~2 weeks by truck tow-readiness (now fixed, drop-off Fri); real opportunity cost. Drove the "Stalled & costing you" priority surface + the priority-engine ranking (who's-waiting + deadline + $) → B-153. ($ figure in private barrelco.md)
+- CAP-031 — Cabin logistics/moving checklist, pulled from ClickUp before disconnect (Cabin — reference list) → B-230
 <!-- QUICK-INDEX:END -->
 
 
@@ -475,6 +476,17 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - **The feature it drove (B-153 — priority engine):** (1) **Venture switch/filter** on the panel — pick a venture, see its own ranked list; the "next step" distills per venture. (2) **Per-venture #1 next step** always shown so nothing hides under Ridge Co's volume. (3) **Ranking = who's-waiting-on-Brett (primary) + deadline proximity + dollars/opportunity-cost at stake.** Ridge Co floats up (someone always waiting) but a hard deadline + real money (BarrelCo Fri) jumps the line. (4) **"Stalled & costing you" surface** — items blocked on a dependency, with days-blocked + running $ estimate. This is the surface that would have screamed 2 weeks ago. Ties B-151 (command center), B-016 (multi-venture dashboard), B-051 (daily digest), B-072 (opportunistic-task engine), CAP-007 (cash-flow north star).
 - Sub-items → B-153 (priority engine + stalled-cost tracker); panel v3 mockup delivered this session with venture chips + per-venture next step + stalled-&-costing card.
 - ❓ Open: does Brett want the "stalled & costing you" $ estimate auto-computed (needs a $/day or $/week rate per blocked item), or just flagged with days-blocked? (recommend: start with days-blocked + a manual $ tag; auto-cost later.)
+
+### CAP-031 — Cabin logistics/moving checklist, pulled from ClickUp before disconnect (Cabin — reference list) → B-230
+- Raw: During a Cowork session-efficiency review (Aug 22), Brett had a ClickUp connector he no longer needs but wanted its data saved first — specifically 3 lists tracking what needs to physically move between the cabin, home, and the WV storage unit, so nothing gets left behind on a trip.
+- **Cabin → Home:** folding chairs (from shed), mosquito dunks, Jeep cover, grills
+- **Home → Cabin:** planters, barrels
+- **WV Storage Unit → Home:** log splitter (or replace with the cabin's), black cage end table, couch, antique dresser, chests, chair with ottoman, antique banker's chair, cooler(s), shade tarps
+- Also found misfiled under the cabin's general "New/Open" maintenance list (logistics content, not a repair): Hart tool box + any extra-large milk crate(s), cabin → home
+- Type: task (recurring reference list — not a one-time to-do; items roll off when moved and get re-added as new needs come up)
+- Status: new
+- Links: B-230 (the small-item task system this is the first real content for), B-091/CAP-024/CAP-025 (BrettOS Tasks sheet — the eventual canonical home for this list once B-230's capture surface exists)
+- ❓ Left in ClickUp untouched (not pulled): the Cabin maintenance punch list (firewood, hot tub, door repairs, signage — ~19 items) and the separate "Work Orders" space (~25 FIX-#### items, some tagged "billing" — may already be superseded by the live Hub's own Work_Orders tab). Say the word if you want either pulled before the connector goes off.
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
