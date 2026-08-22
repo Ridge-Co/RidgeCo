@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-21.9';
+const BUILD_VERSION = '2026-08-22.2';
 
 export default {
   async fetch(request, env) {
@@ -365,6 +365,8 @@ export default {
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
         if (path === '/trash/log-visit')          return await trashLogVisit(env, body);
         if (path === '/trash/invoice')            return await trashInvoice(env, body);
+        if (path === '/trash/mark-skipped')       return await trashMarkSkipped(env, body);
+        if (path === '/trash/unmark-skipped')     return await trashUnmarkSkipped(env, body);
         if (path === '/delivery/add')             return await deliveryAdd(env, body);
         if (path === '/delivery/update')          return await updateRow(env, 'Deliveries', body.id, body.fields);
         if (path === '/proposal/sign')            return await proposalSign(env, body);
@@ -9784,6 +9786,11 @@ async function qbSendCombinedInvoice(env, ctx) {
 
 const TRASH_PROP_HEADERS  = ['ID','Label','QBO_Customer_ID','Customer_Name','QBO_Item_ID','Item_Name','Flat_Rate','Visits_Per_Week','Nudge_Day','Grace_Days','Active','Created_Date'];
 const TRASH_VISIT_HEADERS = ['ID','Property_ID','Label','Visit_Date','Week_Key','Photo_Folder_ID','Photo_Folder_URL','Photo_File_IDs','Base_Rate','Extra_Amount','Extra_Reason','QB_Invoice_ID','QB_Invoice_Number','Invoice_Status','Created_Date','Active'];
+// Trash_Skips: Brett affirmatively confirming "nothing done" for a property/week — distinct
+// from just never having logged a visit. Never touches Trash_Visits (no fake $0 visit, so
+// billing math / invoice lines are untouched); trashUnbilled/trashWeek read this to stop
+// nagging "missed" for a week Brett already reviewed and consciously skipped.
+const TRASH_SKIP_HEADERS  = ['ID','Property_ID','Week_Key','Reason','Marked_Date','Active'];
 const TRASH_DOW = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sat:5, Sun:6 };
 
 // ── Appliance & Materials Delivery System — Phase 0 (B-218) ──────────────────
@@ -9961,11 +9968,44 @@ async function ensureTrashTabs(env) {
   const need = [];
   if (!titles.includes('Trash_Properties')) need.push('Trash_Properties');
   if (!titles.includes('Trash_Visits'))     need.push('Trash_Visits');
+  if (!titles.includes('Trash_Skips'))      need.push('Trash_Skips');
   if (need.length) {
     await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
   }
   await ensureColumns(env, 'Trash_Properties', TRASH_PROP_HEADERS);
   await ensureColumns(env, 'Trash_Visits', TRASH_VISIT_HEADERS);
+  await ensureColumns(env, 'Trash_Skips', TRASH_SKIP_HEADERS);
+}
+
+// PURE — was inlined twice (trashWeek + trashUnbilled); one predicate, one place to get it
+// right. Unit-tested directly in test/trash.test.mjs.
+function trashIsSkipped(skips, propertyId, week) {
+  return (skips || []).some(s => s.Active !== 'FALSE' && s.Property_ID === String(propertyId) && s.Week_Key === week);
+}
+
+// POST /trash/mark-skipped { property_id, week, reason? } — idempotent per property+week.
+// `week` can be any date string; snapped to that week's Monday same as everywhere else.
+async function trashMarkSkipped(env, body) {
+  if (!body || !body.property_id || !body.week) return json({ error: 'property_id and week required' }, 400);
+  await ensureTrashTabs(env);
+  const week = trashWeekKey(body.week);
+  const skips = await fetchTab(env, 'Trash_Skips');
+  const existing = skips.find(s => s.Active !== 'FALSE' && s.Property_ID === String(body.property_id) && s.Week_Key === week);
+  if (existing) return json({ success: true, id: existing.ID, already: true });
+  return await addRow(env, 'Trash_Skips', {
+    Property_ID: String(body.property_id), Week_Key: week,
+    Reason: body.reason || 'Nothing done', Marked_Date: new Date().toISOString(), Active: 'TRUE',
+  });
+}
+
+// POST /trash/unmark-skipped { property_id, week } — undo a mis-tap.
+async function trashUnmarkSkipped(env, body) {
+  if (!body || !body.property_id || !body.week) return json({ error: 'property_id and week required' }, 400);
+  const week = trashWeekKey(body.week);
+  const skips = await fetchTab(env, 'Trash_Skips');
+  const existing = skips.find(s => s.Active !== 'FALSE' && s.Property_ID === String(body.property_id) && s.Week_Key === week);
+  if (!existing) return json({ success: true, already: true });
+  return await updateRow(env, 'Trash_Skips', existing.ID, { Active: 'FALSE' });
 }
 
 async function trashListProperties(env) {
@@ -10064,11 +10104,12 @@ async function trashLogVisit(env, body) {
 
 // GET /trash/week?week=YYYY-MM-DD&property_id= — per-property status for one week.
 async function trashWeek(env, url) {
-  const week = (url && url.searchParams.get('week')) || trashWeekKey(null);
+  const week = trashWeekKey((url && url.searchParams.get('week')) || null);
   const pid  = (url && url.searchParams.get('property_id')) || '';
-  let props = [], visits = [];
+  let props = [], visits = [], skips = [];
   try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
   try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
+  try { skips  = await fetchTab(env, 'Trash_Skips'); } catch (e) {}
   props = props.filter(p => p.Active !== 'FALSE' && (!pid || p.ID === pid));
   const out = props.map(p => {
     const vs = visits.filter(v => v.Active !== 'FALSE' && v.Property_ID === p.ID && v.Week_Key === week);
@@ -10076,6 +10117,7 @@ async function trashWeek(env, url) {
     const billed = vs.filter(v => v.QB_Invoice_ID);
     const base  = vs.reduce((s, v) => s + (Number(v.Base_Rate || p.Flat_Rate || 40) || 0), 0);
     const extra = vs.reduce((s, v) => s + (Number(v.Extra_Amount || 0) || 0), 0);
+    const skip = skips.find(s => s.Active !== 'FALSE' && s.Property_ID === p.ID && s.Week_Key === week);
     return {
       property_id: p.ID, label: p.Label, week, expected, logged: vs.length,
       visits: vs.map(v => ({ id: v.ID, date: v.Visit_Date, extra: Number(v.Extra_Amount || 0) || 0, reason: v.Extra_Reason || '', billed: !!v.QB_Invoice_ID })),
@@ -10084,6 +10126,7 @@ async function trashWeek(env, url) {
       qb_invoice_id: (billed[0] && billed[0].QB_Invoice_ID) || '',
       qb_invoice_number: (billed[0] && billed[0].QB_Invoice_Number) || '',
       ready_to_invoice: vs.length > 0 && billed.length < vs.length,
+      skipped: !!skip, skip_reason: (skip && skip.Reason) || '',
     };
   });
   return json({ week, properties: out });
@@ -10098,9 +10141,10 @@ async function trashUnbilled(env, url) {
   const thisWeek = trashWeekKey(today.toISOString().slice(0,10));
   const prevD = new Date(thisWeek + 'T12:00:00Z'); prevD.setUTCDate(prevD.getUTCDate() - 7);
   const prevWeek = prevD.toISOString().slice(0,10);
-  let props = [], visits = [];
+  let props = [], visits = [], skips = [];
   try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
   try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
+  try { skips  = await fetchTab(env, 'Trash_Skips'); } catch (e) {}
   props = props.filter(p => p.Active !== 'FALSE');
   const items = [];
   for (const week of [prevWeek, thisWeek]) {
@@ -10109,10 +10153,13 @@ async function trashUnbilled(env, url) {
       const expected = Number(p.Visits_Per_Week || 2) || 2;
       const missed = Math.max(0, expected - vs.length);
       const unbilled = vs.filter(v => !v.QB_Invoice_ID);
+      // Brett already reviewed this property/week and confirmed nothing happened —
+      // stop nagging "missed" (that word implies an oversight, this wasn't one).
+      const skipped = trashIsSkipped(skips, p.ID, week);
       if (week === prevWeek) {
-        if (missed > 0)        items.push({ property_id: p.ID, label: p.Label, week, type: 'missed',   missing: missed,        message: `${p.Label}: ${missed} of ${expected} visits not logged for last week.` });
-        if (unbilled.length)   items.push({ property_id: p.ID, label: p.Label, week, type: 'unbilled', count: unbilled.length, message: `${p.Label}: ${unbilled.length} logged visit(s) from last week not invoiced yet.` });
-      } else if (missed > 0 && trashPastDeadline(p, week, today)) {
+        if (missed > 0 && !skipped) items.push({ property_id: p.ID, label: p.Label, week, type: 'missed',   missing: missed,        message: `${p.Label}: ${missed} of ${expected} visits not logged for last week.` });
+        if (unbilled.length)        items.push({ property_id: p.ID, label: p.Label, week, type: 'unbilled', count: unbilled.length, message: `${p.Label}: ${unbilled.length} logged visit(s) from last week not invoiced yet.` });
+      } else if (missed > 0 && !skipped && trashPastDeadline(p, week, today)) {
         items.push({ property_id: p.ID, label: p.Label, week, type: 'missed', missing: missed, message: `${p.Label}: ${missed} of ${expected} visits still not logged this week.` });
       }
     }

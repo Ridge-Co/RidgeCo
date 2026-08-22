@@ -189,9 +189,12 @@
   <div class="sub" data-i18n="Add before/after photos, videos, or flag a problem.">Add before/after photos, videos, or flag a problem.</div>
   <div id="ph-uploads"></div>
   <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
-    <label class="btn sec" style="cursor:pointer">📷 <span data-i18n="Before">Before</span><input type="file" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'before')"></label>
-    <label class="btn sec" style="cursor:pointer">✅ <span data-i18n="After">After</span><input type="file" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'after')"></label>
-    <label class="btn sec" style="cursor:pointer">⚠️ <span data-i18n="Problem">Problem</span><input type="file" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'report')"></label>
+    <button type="button" class="btn sec" onclick="document.getElementById('ph-input-before').click()">📷 <span data-i18n="Before">Before</span></button>
+    <input type="file" id="ph-input-before" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'before')">
+    <button type="button" class="btn sec" onclick="document.getElementById('ph-input-after').click()">✅ <span data-i18n="After">After</span></button>
+    <input type="file" id="ph-input-after" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'after')">
+    <button type="button" class="btn sec" onclick="document.getElementById('ph-input-report').click()">⚠️ <span data-i18n="Problem">Problem</span></button>
+    <input type="file" id="ph-input-report" multiple accept="image/*,video/*" style="display:none" onchange="pickPhotos(this,'report')">
   </div>
   <div class="sheet-msg" id="ph-msg"></div>
   <div class="sheet-actions"><button class="btn" onclick="close_('ov-photos');reload()" data-i18n="Done">Done</button></div>
@@ -555,7 +558,8 @@ function addRcpt(){ _rc++; var n=_rc; _rpay[n]='reimburse';
     '<input class="ff" id="rc-desc-'+n+'" placeholder="'+t('What was purchased')+'" style="flex:1">'+
     '<button onclick="rmRcpt('+n+')" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">×</button></div>'+
     '<div style="display:flex;align-items:center;gap:8px;margin-top:8px">'+
-      '<label class="btn sec" style="cursor:pointer;padding:6px 10px;font-size:12px">📷<input type="file" accept="image/*,application/pdf" style="display:none" onchange="rcptPhoto('+n+',this)"></label>'+
+      '<button type="button" class="btn sec" onclick="document.getElementById(\'rc-ph-input-'+n+'\').click()" style="padding:8px 10px;min-height:36px;font-size:12px">📷</button>'+
+      '<input type="file" id="rc-ph-input-'+n+'" accept="image/*,application/pdf" style="display:none" onchange="rcptPhoto('+n+',this)">'+
       '<span id="rc-ph-'+n+'" style="font-size:11px;color:var(--muted)"></span></div>'+
     '<div class="seg" style="margin-top:8px">'+
       '<button type="button" id="rp-re-'+n+'" class="on" onclick="setPay('+n+",'reimburse')\" style=\"font-size:12px;padding:7px\">"+t('Reimburse me')+'</button>'+

@@ -1,4 +1,4 @@
-# Session Efficiency Protocol v1.0 — LOCKED Aug 13, 2026
+# Session Efficiency Protocol v1.0 — LOCKED Aug 13, 2026 (Aug 22 addendum: Rule 2 tie-in + new Rule 7)
 
 **✅ ALWAYS-LOAD.** The standing rules that keep Brett's Cowork **session burn** (daily / 5-hour /
 weekly limits) low **without losing quality**. This is the "how to spend tokens" layer; `brett-flow`
@@ -41,6 +41,16 @@ lines. Use the cheapest agent/model that fits the job:
   `general-purpose` / `engineering:code-review` subagent.
 - **This is seamless by design:** Brett does not pick the model. Claude routes by task weight. Brett
   trades ~30–60s of latency for a large drop in main-thread burn — his stated preference.
+- **Skip the subagent for Rule 4's "Quick answer" mode (added Aug 22).** A subagent only nets savings
+  because it keeps a big raw read out of the main thread across *many future turns* — it pays its own
+  fixed overhead (its own system prompt + tools + memory copies) up front. For a one-shot lookup where
+  the answer ends the ask, there are no future turns to recoup that overhead on, so grep/read inline
+  instead (Rule 4 already says this — "Quick answer → nothing beyond always-set, grep the one fact").
+  Every other mode (Build/Debug/Research/Capture/Draft) correctly assumes real turns remain, so keep
+  delegating there. Don't try to predict "is this session ending soon" as a general judgment call —
+  guessing wrong that direction (skip delegating, then the session runs long anyway) is far more
+  expensive than guessing wrong the other way (delegate, session ends, small fixed overhead wasted).
+  Rule 4's mode classification already draws this line; this just makes the connection explicit.
 
 ## Rule 3 — CHECKPOINT-AND-RESUME (the "prompt me to start a new chat" mechanism)
 
@@ -96,6 +106,34 @@ The B-128 telemetry spine can log Cowork sessions (`POST /telemetry/log`, dual-s
 `brett-flow` session-close posts a row per session, track average tokens/session before vs. after this
 protocol. Target: **materially lower tokens/session with no drop in "done-and-correct" rate.** If a
 mode is still heavy, tighten its row in Rule 4.
+
+## Rule 7 — SCHEDULED TASKS: COST = TOKENS-PER-FIRE × FIRES-PER-DAY, NOT CACHE TTL (added Aug 22)
+
+Every `create_trigger` scheduled task starts a **fresh session on each fire** — it is never a resumed
+conversation. That changes the math from a normal chat: there is no warm cache to hit *or* miss between
+fires (a fresh session has nothing to hit yet), so the lever isn't "does this fire often enough to stay
+inside the cache window" — it's simply **how much context each fresh fire loads, times how many times a
+day it fires.** Two things follow:
+
+- **Keep fresh-fire prompts lean on purpose.** Most of Brett's scheduled tasks already do this right —
+  the Inspection Watchers and invoice-intake watchers inline everything they need in the prompt itself
+  and explicitly skip the `brett-context` skill (a scheduled session has no PAT anyway). Anything that
+  DOES invoke `brett-context` on every fire should only do so if it truly needs the full picture; this
+  protocol's own light-load rules (1 and 4) apply to a scheduled fire exactly as they do to Brett typing
+  in chat.
+- **Audit cadence against actual need, not habit.** A task firing every 30 minutes around the clock costs
+  2x what an hourly one does with zero code changes — pure fire-count. Aug 22 pass found two worth
+  trimming: **"Inspection Watcher (:30)"** duplicated **"Inspection Watcher (:00)"** at a 30-min offset
+  (24 fresh sessions/day combined for a task where hourly latency is plainly fine) — disabled the `:30`
+  one, halving it to 12/day with no coverage loss. **"BrettOS Context Update Reminder"** fired every 4
+  hours (6x/day) invoking `brett-context` each time — cut to 3x/day (mid-morning / afternoon / evening
+  ET) since same-day work doesn't need overnight checking. Re-run this check whenever a new scheduled
+  task is added or one's prompt changes.
+
+**Aug 22 addendum, for the record:** this session also confirmed the connectors used to check for
+"deferred" tool-loading (a `/context`-equivalent doesn't exist for Brett in Cowork — the closest visible
+signal is the tool list itself showing `deferred` entries) and found an unused ClickUp connector, whose
+Cabin-relevant content was captured to CAPTURE_INBOX.md (CAP-031) before disconnect rather than lost.
 
 ---
 

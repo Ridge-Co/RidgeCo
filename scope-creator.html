@@ -14,12 +14,15 @@
   .section.disabled{opacity:0.45;pointer-events:none;}
   .section-title{color:var(--muted);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;}
   .step-badge{background:var(--surface2);color:var(--muted);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:9px;font-weight:bold;}
-  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;min-height:40px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;touch-action:manipulation;}
   .btn:disabled{opacity:0.4;cursor:not-allowed;}
   .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
   .btn.approve{background:var(--accent2);color:#fff;}
   .btn.danger{background:var(--danger);color:#fff;}
-  .btn.small{padding:5px 10px;font-size:11px;}
+  /* Small buttons still get a real touch target (min-height) even though the visible
+     box stays compact — a tap anywhere in the taller invisible box still registers.
+     Part of the Aug 22 button-precision fix; see context/UI_QA_CHECKLIST.md. */
+  .btn.small{padding:5px 10px;font-size:11px;min-height:34px;}
   input,select,textarea{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
   textarea{width:100%;resize:vertical;}
   .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
@@ -51,7 +54,7 @@
   .owner-note{font-size:11px;line-height:1.5;padding:8px 10px;border-radius:var(--radius);margin-bottom:10px;}
   .owner-note.ok{background:#eaf6ee;color:var(--accent2);}
   .owner-note.warn{background:#fdf2e2;color:#9a6b00;}
-  .toolbtns{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+  .toolbtns{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
   .status{font-size:11px;min-height:14px;margin-top:6px;}
   pre.doc{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;line-height:1.5;font-family:var(--font);}
   .raw{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px;font-size:11px;line-height:1.5;max-height:180px;overflow:auto;color:var(--muted);}
@@ -171,7 +174,8 @@
     <div class="toolbtns" style="margin-top:8px;">
       <button class="btn small" onclick="ingestText()">+ Add typed note</button>
       <button class="btn small secondary" id="mic-btn" onclick="toggleDictate()">🎤 Dictate</button>
-      <label class="btn small secondary" style="cursor:pointer;">📷 Upload handwriting<input type="file" accept="image/*,application/pdf" class="hide" onchange="uploadHandwriting(this)"></label>
+      <button type="button" class="btn small secondary" onclick="document.getElementById('handwriting-file-input').click()">📷 Upload handwriting</button>
+      <input type="file" id="handwriting-file-input" accept="image/*,application/pdf" class="hide" onchange="uploadHandwriting(this)">
       <button class="btn small secondary" onclick="loadDriveFolder()">📁 Pick from scan folder</button>
     </div>
     <div id="drive-list" class="hide" style="margin-top:8px;"></div>
@@ -202,7 +206,8 @@
   <!-- 3. PHOTOS -->
   <div class="section" id="sec-photos">
     <div class="section-title">3 · Before photos <span class="step-badge">attach to the work order</span></div>
-    <label class="btn small secondary" style="cursor:pointer;">📷 Add before photos<input type="file" accept="image/*,video/*" multiple class="hide" onchange="uploadScopePhotos(this)"></label>
+    <button type="button" class="btn small secondary" onclick="document.getElementById('scope-photos-input').click()">📷 Add before photos</button>
+    <input type="file" id="scope-photos-input" accept="image/*,video/*" multiple class="hide" onchange="uploadScopePhotos(this)">
     <div id="photo-cards" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;"></div>
     <div id="photo-status" class="status"></div>
   </div>
