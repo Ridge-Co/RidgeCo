@@ -642,11 +642,17 @@ function buildPhotoSection(woId, propAddr, opts) {
   Object.keys(TYPE_CONFIG).forEach(function(type) {
     if (!opts['can' + type.charAt(0).toUpperCase() + type.slice(1)]) return;
     var cfg = TYPE_CONFIG[type];
+    // Real <button> + a hidden <input> that is a SIBLING, not a wrapped child — a
+    // <label> wrapping a display:none file input only reliably registers a tap on
+    // its own text in some mobile browsers, not the button's full visible box. See
+    // context/UI_QA_CHECKLIST.md — this exact pattern must never come back.
+    var inputId = 'wo-upload-' + type + '-' + woId;
     var inputAttrs = 'type="file" multiple accept="' + cfg.accept + '"' +
       (cfg.cap ? ' capture="' + cfg.cap + '"' : '') +
+      ' id="' + inputId + '"' +
       ' onchange="portalUploadFiles(this,\'' + woId + '\',\'' + esc(propAddr) + '\',\'' + type + '\',\'uploads-' + type + '-' + woId + '\')" style="display:none"';
-    uploadBtns += '<label style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:5px 9px;font-size:11px;cursor:pointer;color:var(--text)">' +
-      cfg.icon + ' ' + cfg.label + '<input ' + inputAttrs + '></label>';
+    uploadBtns += '<button type="button" onclick="document.getElementById(\'' + inputId + '\').click()" style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:9px 12px;min-height:38px;font-size:11px;font-family:inherit;cursor:pointer;color:var(--text)">' +
+      cfg.icon + ' ' + cfg.label + '</button><input ' + inputAttrs + '>';
   });
 
   var sections = '';
@@ -666,7 +672,7 @@ function buildPhotoSection(woId, propAddr, opts) {
   return '<div style="margin-top:12px;background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:12px">' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
     '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">📷 PHOTOS & FILES</span>' +
-    '<div style="display:flex;gap:5px;flex-wrap:wrap">' + uploadBtns + '</div></div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' + uploadBtns + '</div></div>' +
     sections + '</div>';
 }
 
