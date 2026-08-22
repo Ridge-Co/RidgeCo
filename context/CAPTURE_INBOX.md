@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.29 | **Last Updated:** Aug 22, 2026
+**Version:** v1.30 | **Last Updated:** Aug 22, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -39,6 +39,7 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - CAP-029 — Reviewed Ray Fu "software factory / 7 Fable agents" video → autonomy roadmap decision: build the safety substrate (isolation + smoke tests + validator) BEFORE any autonomous builds; autonomy earned per-section by blast-radius rails → B-140..B-143 + ridgeco-validate skill. Follow-ups: quality layer (B-144..150), Control Panel keystone → Command Center (B-151), money-path sandbox verdict (B-152)
 - CAP-030 — BarrelCo → Community Forklift fulfillment blocked ~2 weeks by truck tow-readiness (now fixed, drop-off Fri); real opportunity cost. Drove the "Stalled & costing you" priority surface + the priority-engine ranking (who's-waiting + deadline + $) → B-153. ($ figure in private barrelco.md)
 - CAP-031 — Cabin logistics/moving checklist, pulled from ClickUp before disconnect (Cabin — reference list) → B-230
+- CAP-032 — Cabin maintenance punch list, pulled from ClickUp before disconnect (Cabin — reference list, 21 items) → B-230
 <!-- QUICK-INDEX:END -->
 
 
@@ -486,7 +487,18 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - Type: task (recurring reference list — not a one-time to-do; items roll off when moved and get re-added as new needs come up)
 - Status: new
 - Links: B-230 (the small-item task system this is the first real content for), B-091/CAP-024/CAP-025 (BrettOS Tasks sheet — the eventual canonical home for this list once B-230's capture surface exists)
-- ❓ Left in ClickUp untouched (not pulled): the Cabin maintenance punch list (firewood, hot tub, door repairs, signage — ~19 items) and the separate "Work Orders" space (~25 FIX-#### items, some tagged "billing" — may already be superseded by the live Hub's own Work_Orders tab). Say the word if you want either pulled before the connector goes off.
+- ❓ Left in ClickUp untouched (not pulled): the separate "Work Orders" space (~25 FIX-#### items) — Brett confirmed (Aug 22) those are either too late to invoice, already reconciled, or already billed, so no need to preserve. Not carrying that data anywhere.
+
+### CAP-032 — Cabin maintenance punch list, pulled from ClickUp before disconnect (Cabin — reference list)
+- Raw: The other half of the ClickUp export (see CAP-031) — the cabin's own maintenance/repair punch list, 21 open items, none of them urgent-only-if-fixed-now (no due dates, no assignees), grouped by theme below.
+- **Hot tub / outdoor shower area:** adjust slider door rollers; install saltwater chlorine system; paint rusty bolts silver around the deck.
+- **Firewood / grill:** refill firewood + kindling; better sign for firewood (use kindling sparingly, make more as you go); better sign for grill (shut off tank when done, clean + empty grease).
+- **Cleaning cabinet / storage:** move non-essential refills outside if they won't freeze; install an inside locking storage box for cleaning supplies; build a closed closet, block the area above the cleaning cabinet door so shelves can hold supplies; check for boxes/bins for spa + regular towels at storage.
+- **Organize (bigger, break into parts):** organize the storage shed; organize the storage unit.
+- **General repairs:** fix the door catching on the frame (exterior + bedroom); fix the laminate floor; fix the outdoor deco wire; condensate tablet for the mini-cabin HVAC; polyurethane the exterior dining chairs + rocking chair; covered box for the induction cooktop outside; change out string-light bulbs; a powered anode rod install; an emergency-contact instructions placard outside the cabin.
+- Type: task (maintenance backlog — one-time fixes, not recurring)
+- Status: new
+- Links: B-230 (task-system build this + CAP-031 are the first real content for), B-091/CAP-024/CAP-025 (BrettOS Tasks sheet, eventual canonical home)
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
