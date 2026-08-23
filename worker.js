@@ -324,6 +324,7 @@ export default {
         if (path === '/wishlist/status')          return await setWishlistStatus(env, body);
         if (path === '/config/set')               return await setConfigKey(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
+        if (path === '/judge')                    return await judgeRun(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
         if (path === '/ar/report/send')           return await arReportSend(env, body);
         if (path === '/ar/report/opt-in')         return await arReportSetOptIn(env, body);
@@ -4740,6 +4741,128 @@ async function callClaude(env, model, job) {
 function modelRegistryInfo() {
   const reg = {}; for (const t in MODEL_REGISTRY) { const r = MODEL_REGISTRY[t]; reg[t] = { provider: r.provider, model: r.model }; }
   return { tiers: reg, job_routes: JOB_ROUTES };
+}
+
+// ── INDEPENDENT VERIFIER WRITE-GATE — judge() (B-211) ──────────────────────
+// The mechanism that lets autonomy graduate Rung-1 → Rung-2 (AUTONOMY_GUARDRAILS_
+// v1.0). Before any consequential autonomous write, a call to judge() gets a
+// SEPARATE, fresh model verdict on whether the proposed change actually satisfies
+// its own stated intent + acceptance criteria — never the builder grading its own
+// work (same "verifier, not self-agreement" rule as Success in logTelemetry / rule
+// 51). Reuses B-127's routeAI at CHEAP tier per the backlog spec (cheap-model-as-
+// judge); if the cheap tier can't produce a clean verdict routeAI's own escalation
+// already bumps to REASON before judge() ever sees the failure.
+//
+// FAILS CLOSED, always. Any of: missing input, a GATED riskClass, a routeAI throw,
+// a non-JSON/unparseable response, or a confidence below the floor → 'reject'.
+// There is no code path in this function that can silently produce 'approve' — a
+// caller only ever ships on an explicit, above-floor, correctly-shaped approval.
+//
+// call = { action, intent, proposedChange, acceptanceCriteria, riskClass, source }
+//   action              short name of the write being proposed (for the audit log)
+//   intent              plain-English statement of what it's supposed to accomplish
+//   proposedChange      the actual diff / payload / description being judged
+//   acceptanceCriteria  array of the specific checks it claims to satisfy
+//   riskClass           MUST be 'SAFE' — GATED actions never reach an LLM verdict
+//                        at all (per AUTONOMY_GUARDRAILS, GATED = always Brett's
+//                        hand directly); this is a structural backstop, not the
+//                        primary enforcement (the primary enforcement is that no
+//                        autonomous code path may construct a GATED write in the
+//                        first place).
+//   source              caller tag for telemetry (defaults 'judge')
+//
+// Returns { verdict: 'approve'|'reject', confidence: 0-1, reason, model_used,
+//           tier_used, escalated }.
+const JUDGE_CONFIDENCE_FLOOR = 0.7; // below this, an 'approve' verdict is treated as reject — an unsure approval is not an approval in a fail-closed gate.
+
+async function judge(env, call) {
+  call = call || {};
+  const failClosed = (reason) => ({ verdict: 'reject', confidence: 0, reason });
+
+  // Structural backstop: judge() only ever gates the SAFE class. A GATED action
+  // showing up here at all means a caller built something it should not have —
+  // refuse outright rather than let an LLM opinion stand in for Brett's hand.
+  if (call.riskClass && call.riskClass !== 'SAFE') {
+    return { verdict: 'reject', confidence: 1, reason: `riskClass '${call.riskClass}' is not SAFE — judge() only gates the SAFE class per AUTONOMY_GUARDRAILS; GATED actions require Brett directly, never an LLM verdict.` };
+  }
+  if (!call.action || !call.proposedChange) {
+    return failClosed('missing action/proposedChange — cannot judge an unspecified write');
+  }
+
+  const proposedText = typeof call.proposedChange === 'string' ? call.proposedChange : JSON.stringify(call.proposedChange, null, 2);
+  const prompt = [
+    'You are an independent verifier reviewing a proposed automated change. You did NOT propose',
+    'this change and have no stake in it being approved — judge it fresh, on its own merits, against',
+    'its stated intent and acceptance criteria. Be skeptical by default; scope creep or an unstated',
+    'side effect is grounds to reject even if the core change looks fine.',
+    '',
+    `ACTION: ${call.action}`,
+    `STATED INTENT: ${call.intent || '(none given)'}`,
+    `ACCEPTANCE CRITERIA: ${JSON.stringify(call.acceptanceCriteria || [])}`,
+    `PROPOSED CHANGE:\n${proposedText}`,
+    '',
+    'Does the proposed change fully satisfy the stated intent and EVERY acceptance criterion, with',
+    'no unstated side effects and no scope creep? Respond with ONLY this JSON, nothing else, no',
+    'markdown fence:',
+    '{"verdict":"approve"|"reject","confidence":<0.0-1.0>,"reason":"<one sentence>"}',
+  ].join('\n');
+
+  let attempt;
+  try {
+    attempt = await routeAI(env, { type: 'write_gate_judge', tier: 'CHEAP', prompt, schema: true, source: call.source || 'judge' });
+  } catch (e) {
+    // routeAI already escalates CHEAP→REASON once internally on a failed attempt;
+    // a throw here means the model path is genuinely down at both tiers.
+    return failClosed(`judge model call failed: ${String((e && e.message) || e)}`);
+  }
+
+  let parsed;
+  try {
+    const cleaned = String(attempt.result || '').replace(/^```json?/i, '').replace(/```$/, '').trim();
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    return failClosed('judge response was not valid JSON');
+  }
+
+  let confidence = Number(parsed.confidence);
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) confidence = 0;
+  const reason = String(parsed.reason || '(no reason given)').slice(0, 500);
+  const modelSaidApprove = parsed.verdict === 'approve';
+  const verdict = (modelSaidApprove && confidence >= JUDGE_CONFIDENCE_FLOOR) ? 'approve' : 'reject';
+
+  const result = { verdict, confidence, reason, model_used: attempt.model_used, tier_used: attempt.tier_used, escalated: attempt.escalated };
+
+  // Audit trail — a SEPARATE row from routeAI's own call-level telemetry, this
+  // one records the GATE DECISION itself (per AUTONOMY_GUARDRAILS: "log every
+  // autonomous action to Ops_Telemetry so the Reviewer can see what the loop
+  // did"). Best-effort, same discipline as every other logTelemetry site — a
+  // logging miss must never flip a real verdict.
+  try {
+    await logTelemetry(env, {
+      Source: call.source || 'judge', Job_Type: 'write_gate_verdict', Skill_Or_Endpoint: call.action,
+      Tier_Requested: 'CHEAP', Model_Used: attempt.model_used, Escalated: attempt.escalated ? 'TRUE' : 'FALSE',
+      Success: 'TRUE', Confidence: confidence, Notes: `verdict=${verdict}; ${reason}`.slice(0, 200),
+    });
+  } catch (_) { /* best-effort — never let a logging miss affect the verdict already returned */ }
+
+  return result;
+}
+
+// POST /judge — on-demand test-drive endpoint (not in PUBLIC_PATHS, so it
+// inherits the top-gate WORKER_SECRET check same as /ops-review, /telemetry/log).
+// Lets Brett exercise judge() against a hypothetical action before anything
+// autonomous actually calls it — mirrors how /model-registry and /ops-review
+// let B-127/B-129 be tested standalone before being wired into a live path.
+async function judgeRun(env, body) {
+  body = body || {};
+  try {
+    const result = await judge(env, body);
+    return json(result);
+  } catch (e) {
+    // judge() itself should never throw (every path returns a fail-closed
+    // object) — if it somehow does, surface it rather than mask it as a verdict.
+    return json({ error: 'judge() threw unexpectedly', detail: String((e && e.message) || e) }, 500);
+  }
 }
 
 // ── OPTIMIZER: WEEKLY REVIEWER (B-129) ───────────────────────────────────────

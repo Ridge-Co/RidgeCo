@@ -1,8 +1,20 @@
 # WHERE THINGS STAND — Aug 22, 2026
 
-## 🚧 B-127 built + tested, NOT deployed. B-140 confirmed live. B-141 done. B-211 next — Brett wants to build it WITH Claude in a fresh session.
-Brett asked to build B-127/B-140/B-141/B-211 in one session. Sequenced per his choice: B-127 first,
-Cloudflare fix for B-141 after.
+## 🚧 B-127 built + tested, NOT deployed. B-140 confirmed live. B-141 done. B-211 built + tested, NOT deployed.
+Brett asked to build B-127/B-140/B-141/B-211 across sessions. Sequenced per his choice: B-127 first,
+Cloudflare fix for B-141 after, B-211 in its own fresh session once B-127/B-140/B-141 were all confirmed
+live on `main` (checked fresh via a new clone at the start of the B-211 session — B-127's `routeAI` etc.
+were present in worker.js, not just claimed in notes).
+
+**B-211 (independent verifier write-gate, `judge()`) — 🟠 BUILT + TESTED, sitting un-deployed on purpose,
+same status as B-127.** `judge(env, call)` added right after the B-127 block, reuses `routeAI`(CHEAP)
++ `logTelemetry`. Fails closed on every path (missing input, non-SAFE `riskClass`, model throw,
+unparseable JSON, confidence below the LOCKED 0.7 floor) — no path silently produces `approve`. New
+`POST /judge` test-drive endpoint (secret-gated same as `/ops-review`). `test/judge-write-gate.test.mjs`
+— 25/25 passing, routeAI/logTelemetry mocked so the test suite does no network I/O (same convention as
+B-127's tests). **Not wired into a live write path** — nothing autonomous exists yet for it to gate
+(Rung 2 is off; BUILD_ORDER_v1.0's locked rule blocks hand-edited worker.js from shipping until Phase-1
+substrate + B-144 Quality Bar land). Next real step is a call site, not more of this build.
 
 **B-140 (staging/preview Worker lane) — ✅ CONFIRMED, no rebuild needed.** Was already marked built July
 23; this session verified it live: `curl https://maintenance-hub-staging.brett-2f8.workers.dev/health`
