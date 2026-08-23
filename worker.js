@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-22.2';
+const BUILD_VERSION = '2026-08-23.1';
 
 export default {
   async fetch(request, env) {
@@ -5640,16 +5640,21 @@ function bytesToB64(buf) {
 }
 
 // Read a receipt image/PDF with Claude vision → strict JSON. Money-facing ⇒ Claude (PAT-031).
+// Routed through routeAI (B-127) as of Aug 23 — moneyFacing:true pins this to REASON/Claude,
+// the same model this call has always used, so cost/behavior are unchanged. The only real
+// change: this is B-127's first live call site, so it now logs to Ops_Telemetry via routeAI's
+// chokepoint instead of calling Anthropic directly and logging nothing (real receipt_parse
+// data starts flowing from here). routeAI throws on a hard failure (missing key, fetch error)
+// exactly like the old direct call did — only the final JSON.parse of the model's own text is
+// caught, unchanged from before.
 async function receiptExtract(env, bytes, mime) {
-  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
   const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
   const media = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
   const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased — e.g. "3x Smoke & Carbon combo hardwired"; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 700, messages: [{ role: 'user', content: [media, { type: 'text', text: prompt }] }] }) });
-  const data = await resp.json();
-  const txt = (data.content?.[0]?.text || '').trim();
+  const r = await routeAI(env, { type: 'receipt_parse', moneyFacing: true, media, prompt, maxTokens: 700, source: 'receiptExtract' });
+  const txt = (r.result || '').trim();
   try { return JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim()); }
   catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], card_last4: '', suggested_category: '', confidence: 0 }; }
 }

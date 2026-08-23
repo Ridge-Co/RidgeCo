@@ -620,6 +620,39 @@ New `test/combined-invoice.test.mjs` (22 assertions, all real execution for `qbG
 
 **Standing rule so this doesn't come back a fourth time:** new `context/UI_QA_CHECKLIST.md` — the 4 checks above (full-tap-box, min touch-target size, adjacent-button spacing, double-submit guard), referenced as a new ⚡ standing rule at the top of `CURRENT.md` (Aug 22 section) so it's part of every session's minimal always-load set, not something that has to be remembered. `node --check` clean on all 6 touched files' inline scripts; full suite re-run: same 2 pre-existing unrelated failures (`pricing-model`, `scope-core`), nothing newly broken (this pass is pure frontend HTML/CSS/onclick wiring — no worker.js logic changed). `BUILD_VERSION` → `2026-08-22.2`. **🔴 Needs Brett's first live pass:** on his phone, tap the very edges/corners of each fixed button (Before/After/Problem on a WO, the Hub's WO photo-upload row, Scope Creator's handwriting/before-photos buttons, vendor.html's invoice/receipt uploaders) and confirm the file picker opens from anywhere in the visible box, not just the text.
 
+**135. B-127's first live call site: `receiptExtract` now routes through `routeAI` instead of calling Anthropic directly.** Found this specific swap already sitting half-done, uncommitted, in the working tree at session start (no FEATURE_LOG/CURRENT/BACKLOG entry existed for it — treated it as unverified, not as done, per PAT-024). Verified before trusting it: `callClaude` (the REASON/HARD adapter) already supports `job.media` for vision, but `callGemini` (CHEAP) does **not** build any media parts at all — so if this call weren't pinned off CHEAP, an image OCR job would silently run on text-only Gemini with no image attached and hallucinate a result. Confirmed the pin holds: `receiptExtract` passes `moneyFacing: true` (receipt totals feed billing decisions downstream, even though nothing bills automatically — Brett still taps Confirm), which forces the REASON tier (Claude Sonnet) regardless of `receipt_parse`'s CHEAP default in `JOB_ROUTES` — same model, same behavior as the original direct call, cost/accuracy unchanged. The only real change: this call now logs to `Ops_Telemetry` via `routeAI`'s chokepoint (`Job_Type: receipt_parse`, `Source: receiptExtract`) instead of calling Anthropic directly and logging nothing — real per-scan cost/latency data starts flowing from here, the first real telemetry B-127 has ever produced. `BUILD_VERSION` → `2026-08-23.1`. Ran the (now-actually-wired, see B-142 above) `ridgeco-validate` gate before push:
+
+```
+VALIDATION — B-127 first call site (receiptExtract → routeAI)  ·  verdict: PASS-WITH-NOTES
+Brief source: MODEL_ROUTING_BUILD_BRIEF_v1.0 + this session's plan (wire receipt_parse first, per prior session's recommendation)
+Blast radius: live-data write (Ops_Telemetry only) — no invoice/payment/customer-comms path touched
+
+Acceptance criteria:
+  [✓] Routes through routeAI(), not a direct fetch — worker.js:5656
+  [✓] Same model/behavior as before (moneyFacing pin → REASON/Claude) — worker.js:4651-4653
+  [✓] Vision/media payload still reaches the model — callClaude:4726 builds job.media correctly; verified callGemini would NOT have (would've silently dropped the image had the pin been missing)
+  [✓] Telemetry now logs real receipt_parse rows — routeAI's logTelemetry call, unconditional
+  [✓] Hard-failure throw behavior preserved (missing key, fetch error) — worker.js:4682, same as pre-change
+
+🟡 Minor: error message text changes on hard failure ("routeAI failed at tier REASON: ..." vs the old
+    "ANTHROPIC_API_KEY not configured") — both callers (receiptReconScan, receiptIntake) already handle
+    it generically (try/catch or a bare await with no message-string matching anywhere downstream), so
+    this is cosmetic, not a functional regression. Not blocking.
+
+Regression check: none at risk — receiptReconScan/receiptIntake's JSON-parse-with-fallback logic
+  untouched; test/model-routing.test.mjs 17/17, test/receipt-suggest-core.test.mjs 11/11,
+  test/receipt-suggest.test.mjs 13/13; full suite re-run same 2 pre-existing unrelated failures
+  (pricing-model, scope-core), nothing new; node --check clean.
+Human-gate required: NO (no money/customer/auth path changed — the existing Confirm-tap gate on
+  receiptReconConfirm is untouched and still the only path that writes a real Receipt).
+Next action: clear to push.
+```
+
+**Two trigger paths, both call the now-routed `receiptExtract`, nothing new to build:**
+1. **Automated (the one to use going forward):** drop a receipt photo/PDF into the **"Receipts and Invoices"** Drive folder (under **PAYABLES Inbox**) — the same folder Brett's already been using since the Phase-2 build (rule 85/Aug 13). The daily digest cron sweeps it automatically; every new file gets OCR'd through `routeAI` now and lands in the Receipt Reconciler queue as a `pending` row, same as always.
+2. **Manual/immediate:** open **`receipt-reconciler.html`** (linked from 🧰 TOOLS) and tap **"Scan now"** — calls `POST /receipt-recon/scan` synchronously, same function, same folder, doesn't wait for the next cron tick.
+Either way, review the result the same way as always: `receipt-reconciler.html`'s queue shows the extracted vendor/total/suggested WO, tap **Confirm** to actually post it as a real Receipt (still the only write path — this build didn't touch that gate) or **Skip** to dismiss. **🔴 Needs Brett's first live pass with this specific change live:** drop or scan one real receipt, confirm it extracts correctly same as always, then check `GET /ops-telemetry` (or the Command Center's Optimizer card) for a fresh `receipt_parse` row — that row existing is the actual proof B-127 is doing something in production for the first time.
+
 ## HOW TO UPDATE THIS LOG
 
 When a feature is added, fixed, or verified: add/update its row immediately.

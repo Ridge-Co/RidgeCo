@@ -1,3 +1,19 @@
+# WHERE THINGS STAND — Aug 23, 2026 (later still)
+
+## 🟢 B-127's first live call site — `receiptExtract` now routes through `routeAI`. Real telemetry starts flowing.
+Found this exact swap sitting half-built, uncommitted, in the working tree with no doc trail — treated
+it as unverified rather than trusting the code comments' own claims (same discipline as the B-142 catch
+earlier today). Verified it properly before trusting it: confirmed `callGemini` (CHEAP tier) has no
+media/vision support at all, so this only works because `moneyFacing: true` pins it to REASON/Claude —
+if that pin were ever missing, OCR would silently run on an image-blind model. Ran the full test suite
+(model-routing 17/17, receipt-suggest-core 11/11, receipt-suggest 13/13, same 2 pre-existing unrelated
+failures elsewhere, nothing new), `node --check` clean, and ran the actual `ridgeco-validate` gate
+(now genuinely wired as of the B-142 fix) — PASS-WITH-NOTES, one 🟡 cosmetic error-message-text change,
+nothing blocking. See FEATURE_LOG rule 135 for the full validation report and both trigger paths
+(drop a file in the "Receipts and Invoices" Drive folder for the daily cron, or tap "Scan now" on
+`receipt-reconciler.html` for an immediate manual scan). **B-211 is unchanged by this — still needs the
+design session, still has nothing to gate.**
+
 # WHERE THINGS STAND — Aug 23, 2026 (later same day)
 
 ## 🔧 B-142 actually closed — ridgeco-validate wired into brett-flow's build flow as a real step. Corrects an earlier stale claim.
