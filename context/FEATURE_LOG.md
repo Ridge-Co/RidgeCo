@@ -651,9 +651,59 @@ Next action: clear to push.
 **Two trigger paths, both call the now-routed `receiptExtract`, nothing new to build:**
 1. **Automated (the one to use going forward):** drop a receipt photo/PDF into the **"Receipts and Invoices"** Drive folder (under **PAYABLES Inbox**) — the same folder Brett's already been using since the Phase-2 build (rule 85/Aug 13). The daily digest cron sweeps it automatically; every new file gets OCR'd through `routeAI` now and lands in the Receipt Reconciler queue as a `pending` row, same as always.
 2. **Manual/immediate:** open **`receipt-reconciler.html`** (linked from 🧰 TOOLS) and tap **"Scan now"** — calls `POST /receipt-recon/scan` synchronously, same function, same folder, doesn't wait for the next cron tick.
-Either way, review the result the same way as always: `receipt-reconciler.html`'s queue shows the extracted vendor/total/suggested WO, tap **Confirm** to actually post it as a real Receipt (still the only write path — this build didn't touch that gate) or **Skip** to dismiss. **🔴 Needs Brett's first live pass with this specific change live:** drop or scan one real receipt, confirm it extracts correctly same as always, then check `GET /ops-telemetry` (or the Command Center's Optimizer card) for a fresh `receipt_parse` row — that row existing is the actual proof B-127 is doing something in production for the first time.
+Either way, review the result the same way as always: `receipt-reconciler.html`'s queue shows the extracted vendor/total/suggested WO, tap **Confirm** to actually post it as a real Receipt (still the only write path to the actual `Receipts` tab — this build didn't touch that gate) or **Skip** to dismiss. **🔴 Needs Brett's first live pass with this specific change live:** drop or scan one real receipt, confirm it extracts correctly same as always, then check `GET /ops-telemetry` (or the Command Center's Optimizer card) for a fresh `receipt_parse` row — that row existing is the actual proof B-127 is doing something in production for the first time.
 
-## HOW TO UPDATE THIS LOG
+**136. Receipt Reconciler UI overhaul — Brett's live-test feedback, 4 distinct fixes in one pass.** Brett ran a real receipt through the reconciler (the first live use of rule 135's routing) and immediately hit real UI gaps that only surfaced with a live property that had just one open WO — a genuinely useful adversarial test the sandbox never would have caught. His report, verified against the actual code before building (not taken at face value — same discipline as rule 135's B-142 catch): the WO picker only ever showed the top-3 keyword-ranked open WOs at ONE server-guessed property, with no way to correct the property, browse the rest, or search closed/past work; the manual "type a WO number" override had zero validation, so a typo (1054 vs 1045) would silently post a real Receipts row to the wrong or a nonexistent job; and duplicate receipts had no distinct resolution from a generic Skip, so there was no way to actually clear them out over time. Fixed all four, Brett's call on retention = **180 days**:
+
+- **(A) Property override.** New property `<select>` per row (all properties, sorted by address), defaulting to the auto-matched one but freely changeable — changing it re-filters everything downstream from the newly chosen property instead of the system's one guess.
+- **(B) Full open-WO list + closed/past search.** The WO `<select>` now shows **every** open WO at the selected property (ranked suggestions pinned to the top with a ★, not capped at 3), plus an opt-in "Also show closed/past work orders at this property" checkbox that reveals a second optgroup — this is the piece that would have told Brett a WO for 1111 E 43rd St didn't exist yet, instead of him finding that out by creating one.
+- **(C) WO-number validation, both ends.** The manual-override field now shows a live ✓/✗ under itself as you type, checked against the already-loaded real WO list (client-side, fast-fail UX) — but the actual guard is server-side: `receiptReconConfirm` now fetches `Work_Orders` and rejects with a clear 400 error if the typed ID doesn't exist, **before** calling `addReceipt`. A typo can no longer silently post to a nonexistent or wrong job.
+- **(D) "Confirm duplicate" — a real, distinct resolution.** New `POST /receipt-recon/confirm-duplicate` writes NOTHING to Receipts, only stamps `Status: duplicate_confirmed` + `Duplicate_Confirmed_Date` on the queue row. New nightly sweep `purgeConfirmedDuplicateReceipts` (piggybacks the existing daily digest cron, same `try{}catch{/*non-fatal*/}` pattern as every other sweep there) soft-deletes (`Active:'FALSE'` — **never a hard delete**, matches the house rule) any confirmed-duplicate row past **180 days**. The actual date-math decision is a pure extracted function, `receiptDuplicatePurgeDue(row, nowMs, retentionDays)`, unit-tested (10 assertions: wrong status, already-purged, too-recent, missing/unparseable date, exact-boundary, well-past, a null row, and a non-default retention window) — new `test/receipt-reconciler-ui.test.mjs`. New column `Duplicate_Confirmed_Date` added to `RECEIPT_RECON_QUEUE_HEADERS`; since the tab already had live rows, used `ensureColumns` (not `ensureTab`, which only writes headers on a brand-new/empty tab) to widen it safely — the exact rule 37/78 class of bug this codebase has been bitten by before, caught before shipping this time instead of after. New `duplicate_confirmed` tab added to the reconciler's status filter so Brett can review what's been marked.
+- **UI_QA_CHECKLIST applied** (standing rule since Aug 22): every new/edited button checked against all 4 rules before calling this done — caught and fixed two real misses myself before shipping: `.btn.small`'s min-height was 32px (below the established 34px precedent from rule 134), and the new action-button row's gap was 6px (below the checklist's 8px minimum for adjacent buttons) — both bumped. Also retrofitted checklist rule 4 (synchronous disable-on-click, restore on both success/error) into Confirm/Skip/Confirm-duplicate, which the file never had even before this pass.
+
+`BUILD_VERSION` → `2026-08-23.2`. Ran `ridgeco-validate` before push (full report below). Tests: new `receipt-reconciler-ui.test.mjs` 10/10, `receipt-suggest-core` 11/11, `receipt-suggest` 13/13, `model-routing` 17/17, full suite re-run same 2 pre-existing unrelated failures (`pricing-model`, `scope-core`), nothing new. `node --check` clean on worker.js; the extracted inline `<script>` block syntax-checked clean via `node --check` on the extracted JS.
+
+```
+VALIDATION — Receipt Reconciler 4-issue UI fix (property override, full WO browsing,
+             WO-number validation, Confirm-duplicate + 180d retention)  ·  verdict: PASS
+Brief source: Brett's live-test report (this conversation) — property override, full open-WO
+  list + closed/past search, WO-number validation both ends, distinct duplicate-confirm with
+  180-day retention (Brett's explicit number)
+Blast radius: live-data write (Receipt_Recon_Queue only) — the actual Receipts-tab write path
+  (receiptReconConfirm → addReceipt) is UNCHANGED except for the new existence guard in front of it
+
+Acceptance criteria:
+  [✓] Property can be overridden, re-filtering the WO list — receipt-reconciler.html: propertyOptions()/refreshWoSelect()
+  [✓] All open WOs at the resolved property shown, not just top-3 — woSelectHTML(): openOrdered, uncapped
+  [✓] Closed/past WOs at that property searchable — woSelectHTML(): showClosed optgroup, opt-in checkbox
+  [✓] Manual WO-number entry validated before it can post — client: checkManualWo()/confirmRow() fast-fail;
+      server: receiptReconConfirm fetches Work_Orders, 400s on a non-existent ID before addReceipt runs
+  [✓] Duplicate has a distinct resolution from Skip, writes nothing to Receipts — receiptReconConfirmDuplicate():
+      only updateRow on Receipt_Recon_Queue, no addReceipt call anywhere in the function (grepped to confirm)
+  [✓] 180-day retention, soft-delete only — purgeConfirmedDuplicateReceipts() + receiptDuplicatePurgeDue(),
+      Active:'FALSE' not a real delete, wired into the existing daily cron
+  [✓] New column added without a rule-37-class silent no-op — ensureColumns() used, not just ensureTab()
+  [✓] UI_QA_CHECKLIST's 4 rules — checked explicitly; 2 real misses (min-height, gap) caught and fixed pre-push
+
+🟡 Minor: the "★ suggested" ranking inside the WO select only applies when the row's ORIGINAL
+    auto-matched property is the one currently selected — switching to a different property shows
+    that property's open WOs unranked (ID-descending) since there's no keyword-ranking signal for
+    a property the system never scored. Correct behavior, just worth knowing: it's a plain list once
+    you've overridden the property, not a re-ranked one. Not blocking — Brett's whole point was to
+    be ABLE to browse a different property's WOs when the auto-guess was wrong; an unranked full list
+    there is strictly better than what existed before (nothing).
+
+Regression check: receiptReconScan's core scan/OCR/queue-append logic untouched; receiptReconSkip
+  untouched; receiptReconConfirm's existing duplicate-guard (via addReceipt's findRecentDuplicate)
+  and Status/Confirmed_* write-back untouched, only the new existence check runs before it now.
+  Full suite re-run, same 2 pre-existing unrelated failures, nothing new.
+Human-gate required: NO (blast radius is the queue tab, not Receipts/QuickBooks/customer-comms;
+  the one path that CAN write a real Receipt — receiptReconConfirm — is strictly more guarded
+  than before, not less).
+Next action: clear to push.
+```
+
+**🔴 Needs Brett's first live pass on all four:** open the reconciler, on a pending row try changing the property select and confirm the WO list updates to that property's open jobs; check "Also show closed/past" and confirm a second group of past WOs appears; type a WO number that doesn't exist into the manual override and confirm it shows a red ✗ and Confirm refuses to post (then try a real one and confirm it goes through); on a row flagged as a duplicate, tap **Confirm duplicate** instead of Skip and confirm it moves to the new **Duplicates** tab with a "purges [date]" label roughly 180 days out.
 
 When a feature is added, fixed, or verified: add/update its row immediately.
 When something breaks and is fixed: add a regression rule at the bottom so it never breaks the same way again.

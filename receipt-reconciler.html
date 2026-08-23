@@ -12,18 +12,19 @@
   p.sub{color:var(--muted);font-size:11px;margin-bottom:16px;line-height:1.5;}
   .section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;}
   .section-title{color:var(--muted);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;border-bottom:1px solid var(--border);padding-bottom:6px;margin-bottom:12px;}
-  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;}
+  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:var(--radius);font-family:var(--font);font-size:12px;font-weight:bold;cursor:pointer;min-height:36px;}
   .btn:disabled{opacity:0.4;cursor:not-allowed;}
   .btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
   .btn.danger{background:var(--danger);color:#fff;}
-  .btn.small{padding:5px 10px;font-size:11px;}
+  .btn.warnbtn{background:#9a6b00;color:#fff;}
+  .btn.small{padding:6px 10px;font-size:11px;min-height:34px;}
   input,select,textarea{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;}
   textarea{width:100%;resize:vertical;min-height:34px;}
   .row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
   .row label{color:var(--muted);font-size:11px;min-width:100px;}
   .ok{color:var(--accent2);}.err{color:var(--danger);}.info{color:var(--muted);}.warn{color:#9a6b00;}
   .empty{padding:20px;text-align:center;color:var(--muted);}
-  .tabs{display:flex;gap:6px;margin-bottom:12px;}
+  .tabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;}
   .tab{padding:6px 12px;border-radius:12px;font-size:11px;font-weight:bold;cursor:pointer;background:var(--surface2);border:1px solid var(--border);color:var(--muted);}
   .tab.active{background:var(--accent);color:#fff;border-color:var(--accent);}
   .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;white-space:nowrap;font-weight:bold;}
@@ -41,13 +42,17 @@
   .rc-meta .lbl{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:1px;}
   .rc-items{font-size:11px;color:var(--muted);margin-bottom:8px;line-height:1.5;}
   .rc-flags{margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;}
-  .rc-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;}
+  .rc-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;}
   .rc-fields .full{grid-column:1/-1;}
   .rc-fields label{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px;}
-  .rc-fields input,.rc-fields select,.rc-fields textarea{width:100%;}
+  .rc-fields input,.rc-fields select,.rc-fields textarea{width:100%;min-height:34px;}
+  .rc-wo-check{font-size:10px;margin-top:2px;min-height:13px;}
+  .rc-closed-toggle{font-size:10px;color:var(--accent);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin:2px 0 8px;user-select:none;}
+  .rc-closed-toggle input{width:auto;padding:0;min-height:auto;}
   .rc-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:8px;}
   .rc-foot a{color:var(--info);text-decoration:none;font-weight:bold;font-size:11px;}
-  .rc-status{font-size:11px;min-height:14px;}
+  .rc-foot .actions{display:flex;gap:8px;flex-wrap:wrap;}
+  .rc-status{font-size:11px;min-height:14px;margin-top:4px;}
 </style>
 </head>
 <body>
@@ -101,8 +106,10 @@
   Every receipt dropped in the <b>Receipts and Invoices</b> Drive folder gets OCR'd once, matched
   against your <b>open</b> work orders by description, and checked for duplicates — all with zero-AI
   pure code (CAP-002). Nothing bills itself. Confirm posts the receipt to the work order exactly
-  like a manual entry; Skip dismisses it. The daily sweep runs on its own; use "Scan now" to pull
-  in anything dropped since the last run.
+  like a manual entry; Skip dismisses it. If a receipt is flagged as an already-billed duplicate,
+  use <b>Confirm duplicate</b> instead of Skip — that's a distinct, tracked resolution that
+  auto-clears itself after 180 days instead of sitting in Skipped forever. The daily sweep runs on
+  its own; use "Scan now" to pull in anything dropped since the last run.
 </p>
 
 <div class="section">
@@ -121,10 +128,16 @@
   <div id="list"><div class="empty">Loading…</div></div>
 </div>
 
+<datalist id="wo-datalist"></datalist>
+
 <script>
-const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['skipped','Skipped'], ['all','All'] ];
+const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'] ];
+// Mirrors worker.js's OPEN_WO_STATUSES/RECEIPT_OPEN_STATUSES exactly — keep in sync if that
+// list ever changes server-side. Used only to split the WO picker into open vs closed/past.
+const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
 let curStatus = 'pending';
 let allWOs = [];
+let allProperties = [];
 
 function worker(){ return document.getElementById('worker-url').value.trim(); }
 function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
@@ -167,16 +180,24 @@ async function scanNow(){
   } catch(e){ status.textContent = '❌ '+e.message; }
 }
 
+function rebuildWoDatalist(){
+  const dl = document.getElementById('wo-datalist');
+  dl.innerHTML = allWOs.map(w => '<option value="'+esc(w.ID)+'">'+esc(w.ID+' — '+(w.Description||'').slice(0,60))+'</option>').join('');
+}
+
 async function loadQueue(){
   const status = document.getElementById('conn-status');
   const list = document.getElementById('list');
   list.innerHTML = '<div class="empty">Loading…</div>';
   try {
-    const [rows, wos] = await Promise.all([
+    const [rows, wos, props] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
       allWOs.length ? Promise.resolve(allWOs) : get('/workorders').catch(()=>[]),
+      allProperties.length ? Promise.resolve(allProperties) : get('/properties').catch(()=>[]),
     ]);
     allWOs = wos || [];
+    allProperties = props || [];
+    rebuildWoDatalist();
     render(rows || []);
     status.textContent = '✅ '+(rows||[]).length+' '+curStatus;
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
@@ -201,30 +222,99 @@ function categoryPill(cat, action){
   return '<span class="pill suggest">Suggested match</span>';
 }
 
-function woOptions(sug, selectedId){
-  const cur = allWOs.find(w => String(w.ID) === String(selectedId));
-  let opts = '';
-  const seen = new Set();
-  const add = (id, label) => { if (seen.has(id)) return; seen.add(id); opts += '<option value="'+esc(id)+'"'+(String(id)===String(selectedId)?' selected':'')+'>'+esc(label)+'</option>'; };
-  if (sug && sug.suggested_wo) add(sug.suggested_wo.id, sug.suggested_wo.id+' — '+sug.suggested_wo.desc+' ('+sug.suggested_wo.status+')');
-  if (sug && sug.alternates) sug.alternates.forEach(a => add(a.id, a.id+' — '+a.desc+' ('+a.status+')'));
-  if (cur && !seen.has(String(cur.ID))) add(cur.ID, cur.ID+' — '+(cur.Description||'').slice(0,60));
-  if (!opts) opts = '<option value="">— pick a WO —</option>';
-  else opts = '<option value="">— pick a WO —</option>' + opts;
+// Every property, sorted by address, for the property-override select (issue A: the resolved
+// property was previously fixed at scan time with no way to correct it or search elsewhere).
+function propertyOptions(selectedId){
+  const sorted = allProperties.slice().sort((a,b) => String(a.Address||'').localeCompare(String(b.Address||'')));
+  let opts = '<option value="">— pick a property —</option>';
+  for (const p of sorted) opts += '<option value="'+esc(p.ID)+'"'+(String(p.ID)===String(selectedId)?' selected':'')+'>'+esc(p.Address||('Property '+p.ID))+'</option>';
   return opts;
+}
+
+// Builds the WO select's inner HTML for one property: suggested/ranked matches first (if this
+// row has a suggestion for THIS property), then every other OPEN work order at that property —
+// not just the top 3 — then, only if showClosed is true, a second optgroup of every CLOSED/past
+// work order there too (issue B: previously only the top-3 keyword-ranked open WOs at the
+// system's one auto-guessed property were ever visible; nothing else was browsable).
+function woSelectHTML(propId, selectedWoId, showClosed, sug){
+  if (!propId) return '<option value="">— pick a property first —</option>';
+  const atProp = allWOs.filter(w => String(w.Property_ID) === String(propId));
+  const open = atProp.filter(w => OPEN_WO_STATUSES.includes(w.Status));
+  const closed = atProp.filter(w => !OPEN_WO_STATUSES.includes(w.Status));
+
+  const rankedIds = [];
+  if (sug && sug.property && String(sug.property.id) === String(propId)) {
+    if (sug.suggested_wo) rankedIds.push(sug.suggested_wo.id);
+    (sug.alternates||[]).forEach(a => rankedIds.push(a.id));
+  }
+  const byId = new Map(open.map(w => [String(w.ID), w]));
+  const rankedFirst = rankedIds.map(id => byId.get(String(id))).filter(Boolean);
+  const rest = open.filter(w => !rankedIds.includes(String(w.ID))).sort((a,b) => Number(b.ID)-Number(a.ID));
+  const openOrdered = rankedFirst.concat(rest);
+
+  const seen = new Set();
+  const opt = (w, tag) => { if (seen.has(String(w.ID))) return ''; seen.add(String(w.ID));
+    return '<option value="'+esc(w.ID)+'"'+(String(w.ID)===String(selectedWoId)?' selected':'')+'>'+esc(w.ID)+' — '+esc((w.Description||'').slice(0,55))+' ('+esc(w.Status)+')'+tag+'</option>'; };
+
+  let html = '<option value="">— pick a work order —</option>';
+  if (openOrdered.length) {
+    html += '<optgroup label="Open at this property">' + openOrdered.map((w,i) => opt(w, rankedIds.includes(String(w.ID)) ? ' ★ suggested' : '')).join('') + '</optgroup>';
+  } else {
+    html += '<optgroup label="Open at this property"><option value="" disabled>— none open —</option></optgroup>';
+  }
+  if (showClosed) {
+    const closedSorted = closed.slice().sort((a,b) => Number(b.ID)-Number(a.ID));
+    html += '<optgroup label="Closed / past at this property">' + (closedSorted.length ? closedSorted.map(w => opt(w, '')).join('') : '<option value="" disabled>— none —</option>') + '</optgroup>';
+  }
+  return html;
+}
+
+// Re-renders one row's WO select after its property select or "show closed" checkbox changes.
+// Reads the current selection from the DOM rather than needing the full suggestion object passed
+// around everywhere — the suggestion is still consulted (via rowSuggestions cache) so the ★
+// suggested tag and ranking survive a property change back to the original guess.
+const rowSuggestions = {};
+function refreshWoSelect(id){
+  const idAttr = 'rc'+id;
+  const propSel = document.getElementById(idAttr+'-prop');
+  const woSel = document.getElementById(idAttr+'-wo');
+  const showClosed = document.getElementById(idAttr+'-showclosed');
+  if (!propSel || !woSel) return;
+  const propId = propSel.value;
+  woSel.innerHTML = woSelectHTML(propId, '', showClosed && showClosed.checked, rowSuggestions[id]);
+  checkManualWo(id);
+}
+
+// Live validation for the manual "type a WO number" override (issue C): checks the typed value
+// against the already-loaded real WO list and shows a clear ✓/✗ right under the field, so a typo
+// (1054 vs 1045) is caught the moment it's typed instead of silently posting to the wrong job.
+// This is UX only — the real guard is the server-side check in receiptReconConfirm.
+function checkManualWo(id){
+  const idAttr = 'rc'+id;
+  const manual = document.getElementById(idAttr+'-wo-manual');
+  const checkEl = document.getElementById(idAttr+'-wo-check');
+  if (!manual || !checkEl) return;
+  const v = manual.value.trim();
+  if (!v){ checkEl.innerHTML = ''; return; }
+  const hit = allWOs.find(w => String(w.ID) === v);
+  checkEl.innerHTML = hit
+    ? '<span class="ok">✓ '+esc(v)+' — '+esc((hit.Description||'').slice(0,60))+' ('+esc(hit.Status)+')</span>'
+    : '<span class="err">✗ No work order with that ID exists.</span>';
 }
 
 function render(rows){
   const list = document.getElementById('list');
   if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; return; }
   list.innerHTML = rows.map(r => rowCard(r)).join('');
+  rows.forEach(r => { rowSuggestions[r.ID] = r.suggestion || {}; if ((r.Status||'pending')==='pending') refreshWoSelect(r.ID); });
 }
 
 function rowCard(r){
   const sug = r.suggestion || {};
   const excluded = ['refund','company','customer_paid'].includes(sug.category);
   const isPendingLike = (r.Status||'pending') === 'pending';
-  const woId = (sug.suggested_wo && sug.suggested_wo.id) || '';
+  const isDuplicateFlagged = (sug.flags||[]).includes('duplicate_on_wo');
+  const propId = (sug.property && sug.property.id) || '';
   const idAttr = 'rc'+r.ID;
   let html = '<div class="rcard'+(excluded?' excl':'')+'" id="'+idAttr+'">';
   html += '<div class="rc-top"><div><div class="rc-title">'+esc(r.Vendor||'(vendor unknown)')+' — $'+money(r.Total)+'</div>'
@@ -236,12 +326,12 @@ function rowCard(r){
   const flags = sug.flags || [];
   if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
 
-  if (sug.property) html += '<div class="rc-meta"><div><span class="lbl">Property</span>'+esc(sug.property.address)+'</div></div>';
-
   if (!excluded && isPendingLike) {
     html += '<div class="rc-fields">'
-      + '<div><label>Work order</label><select id="'+idAttr+'-wo" onchange="document.getElementById(\''+idAttr+'-wo-manual\').value=\'\'">'+woOptions(sug, woId)+'</select></div>'
-      + '<div><label>...or type WO-#### to override</label><input id="'+idAttr+'-wo-manual" placeholder="WO-1234"></div>'
+      + '<div><label>Property</label><select id="'+idAttr+'-prop" onchange="refreshWoSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
+      + '<div><label>Work order</label><select id="'+idAttr+'-wo" onchange="document.getElementById(\''+idAttr+'-wo-manual\').value=\'\';checkManualWo(\''+r.ID+'\')"></select></div>'
+      + '<div class="full"><label class="rc-closed-toggle" style="display:inline-flex"><input type="checkbox" id="'+idAttr+'-showclosed" onchange="refreshWoSelect(\''+r.ID+'\')"> Also show closed/past work orders at this property</label></div>'
+      + '<div class="full"><label>...or type a WO number directly to override</label><input id="'+idAttr+'-wo-manual" list="wo-datalist" placeholder="e.g. 1234" oninput="document.getElementById(\''+idAttr+'-wo\').value=\'\';checkManualWo(\''+r.ID+'\')"><div class="rc-wo-check" id="'+idAttr+'-wo-check"></div></div>'
       + '<div><label>Amount</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
       + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
       + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
@@ -250,12 +340,13 @@ function rowCard(r){
   }
 
   const fileLink = r.Source_File_URL ? '<a href="'+esc(r.Source_File_URL)+'" target="_blank">View receipt →</a>' : '<span class="info">no file link</span>';
-  html += '<div class="rc-foot">' + fileLink + '<div>';
+  html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
-    if (!excluded) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\')">✓ Confirm</button> ';
-    html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\')">Skip</button>';
+    if (!excluded) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🗐 Confirm duplicate</button>';
+    html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
-    html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+'</span>';
+    html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+(r.Duplicate_Confirmed_Date?(' · purges '+esc(purgeDateLabel(r.Duplicate_Confirmed_Date))):'')+'</span>';
   }
   html += '</div></div>';
   html += '<div class="rc-status" id="'+idAttr+'-status"></div>';
@@ -263,13 +354,27 @@ function rowCard(r){
   return html;
 }
 
-async function confirmRow(id){
+function purgeDateLabel(dupDateIso){
+  const t = Date.parse(dupDateIso); if (!t || isNaN(t)) return '';
+  const d = new Date(t + 180*24*60*60*1000);
+  return d.toISOString().slice(0,10);
+}
+
+async function confirmRow(id, btn){
+  if (btn) btn.disabled = true;
   const idAttr = 'rc'+id;
   const statusEl = document.getElementById(idAttr+'-status');
   const woSel = document.getElementById(idAttr+'-wo');
   const woManual = document.getElementById(idAttr+'-wo-manual');
   const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
-  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) first.</span>'; return; }
+  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) first.</span>'; if (btn) btn.disabled = false; return; }
+  // Fast-fail client-side check against the already-loaded WO list (issue C) — the real guard is
+  // server-side in receiptReconConfirm, this just avoids a round-trip for the common typo case.
+  if (!allWOs.some(w => String(w.ID) === wo_id)){
+    statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
   const amount = document.getElementById(idAttr+'-amt').value.trim();
   const store = document.getElementById(idAttr+'-store').value.trim();
   const date = document.getElementById(idAttr+'-date').value.trim();
@@ -282,10 +387,11 @@ async function confirmRow(id){
       ? '<span class="warn">Already on that WO — skipped, not double-posted.</span>'
       : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.</span>';
     setTimeout(loadQueue, 900);
-  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; }
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
-async function skipRow(id){
+async function skipRow(id, btn){
+  if (btn) btn.disabled = true;
   const idAttr = 'rc'+id;
   const statusEl = document.getElementById(idAttr+'-status');
   statusEl.innerHTML = '<span class="info">Skipping…</span>';
@@ -294,7 +400,23 @@ async function skipRow(id){
     if (res.error) throw new Error(res.error);
     statusEl.innerHTML = '<span class="ok">Skipped.</span>';
     setTimeout(loadQueue, 500);
-  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; }
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Issue D: a real "yes this IS a duplicate" resolution, distinct from generic Skip. Writes
+// NOTHING to Receipts — only marks the judgment as made and starts the 180-day retention clock
+// (purgeConfirmedDuplicateReceipts on the server soft-deletes it after that, nightly).
+async function confirmDuplicate(id, btn){
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  statusEl.innerHTML = '<span class="info">Marking as duplicate…</span>';
+  try {
+    const res = await post('/receipt-recon/confirm-duplicate', { id });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Confirmed duplicate — clears itself in 180 days.</span>';
+    setTimeout(loadQueue, 900);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
 renderTabs();

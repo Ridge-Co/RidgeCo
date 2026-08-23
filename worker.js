@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-23.1';
+const BUILD_VERSION = '2026-08-23.2';
 
 export default {
   async fetch(request, env) {
@@ -362,7 +362,9 @@ export default {
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
         if (path === '/receipt-recon/scan')       return await receiptReconScan(env);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
+        if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
         if (path === '/receipt-recon/skip')       return await receiptReconSkip(env, body);
+        if (path === '/receipt-recon/purge-duplicates')  return await purgeConfirmedDuplicateReceipts(env);
         if (path === '/trash/property/add')       return await trashAddProperty(env, body);
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
         if (path === '/trash/log-visit')          return await trashLogVisit(env, body);
@@ -450,6 +452,10 @@ export default {
     // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
     // read + queue only — nothing bills until Brett taps Confirm in the Hub.
     try { await receiptReconScan(env); } catch (e) { /* non-fatal */ }
+    // Confirmed-duplicate retention sweep (Aug 23) — soft-deletes Receipt_Recon_Queue rows
+    // Brett explicitly confirmed as duplicates more than 180 days ago. Runs daily alongside the
+    // scan above; a normal day with nothing past the window does one harmless read.
+    try { await purgeConfirmedDuplicateReceipts(env); } catch (e) { /* non-fatal */ }
     // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
     // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
     // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
@@ -1145,7 +1151,7 @@ async function receiptSuggest(env, body) {
 // Confirm (POST /receipt-recon/confirm, which calls the same addReceipt() the vendor portal and
 // every manual entry this session used) or Skip. A pending row costs one OCR call and zero other
 // AI tokens; the daily sweep of an empty folder costs nothing at all.
-const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active'];
+const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date'];
 // "Receipts and Invoices" under PAYABLES Inbox (Drive) — the folder Brett has been dropping
 // scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
 const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
@@ -1156,13 +1162,17 @@ async function receiptReconScan(env) {
   const cfg = await fetchConfig(env).catch(() => ({}));
   const folder = cfg.receipt_recon_folder_id || env.RECEIPT_RECON_FOLDER_ID || RECEIPT_RECON_FOLDER_ID_DEFAULT;
   const tok = await getAccessToken(env);
+  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  // The tab already existed with live rows before Duplicate_Confirmed_Date was added (Aug 23) —
+  // ensureTab only writes headers on a brand-new/empty tab, so an existing tab needs the
+  // explicit widen-and-append-header path or the new column silently never appears (rule 37/78).
+  await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
   const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType,webViewLink)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '100' });
   const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${tok}` } });
   const data = await res.json();
   if (data.error) return json({ ok: false, error: 'Drive list failed: ' + (data.error.message || JSON.stringify(data.error)) }, 500);
   const files = (data.files || []).filter(f => /image|pdf/i.test(f.mimeType || ''));
 
-  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
   let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
   const newFiles = files.filter(f => !seen.has(f.id));
@@ -1215,6 +1225,15 @@ async function receiptReconConfirm(env, body) {
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (row.Status === 'confirmed') return json({ error: 'already confirmed', id }, 409);
   const wo_id = body.wo_id || ''; if (!wo_id) return json({ error: 'wo_id required' }, 400);
+  // Validate the WO actually exists BEFORE writing anything. The manual "type a WO number to
+  // override" field on the reconciler UI has no way to know if what was typed is real — a typo
+  // (1054 vs 1045) would otherwise post a real Receipts row against a nonexistent or wrong job
+  // with no error and no way to notice at the time. This is the actual defense; the frontend's
+  // own live validation against the already-loaded WO list is just fast-fail UX on top of it.
+  const workorders = await fetchTab(env, 'Work_Orders');
+  if (!workorders.some(w => String(w.ID) === String(wo_id))) {
+    return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
+  }
   const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : row.Total;
   const description = body.description || row.PO_Reference || row.Vendor || '';
   const store = body.store || row.Vendor || '';
@@ -1236,6 +1255,57 @@ async function receiptReconSkip(env, body) {
   const id = body.id; if (!id) return json({ error: 'id required' }, 400);
   await updateRow(env, 'Receipt_Recon_Queue', id, { Status: 'skipped', Notes: body.reason || '' });
   return json({ ok: true, id });
+}
+
+// POST /receipt-recon/confirm-duplicate { id } — a DISTINCT resolution from generic Skip
+// (Brett, Aug 23): confirming "yes, this really is a duplicate" is a different judgment than
+// "skip for some other reason" (no match, bad data, needs research), and lumping both into one
+// undifferentiated 'skipped' status meant a real duplicate could never be told apart from
+// something that still needed a human decision. Writes NOTHING to Receipts — this only marks the
+// judgment as made. Stamps Duplicate_Confirmed_Date so the 180-day retention sweep
+// (purgeConfirmedDuplicateReceipts, below) knows when the clock started.
+async function receiptReconConfirmDuplicate(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (row.Status === 'duplicate_confirmed') return json({ ok: true, id, already: true });
+  await updateRow(env, 'Receipt_Recon_Queue', id, {
+    Status: 'duplicate_confirmed', Duplicate_Confirmed_Date: new Date().toISOString(),
+    Notes: 'Confirmed duplicate by Brett — not billed. Auto-purges from the queue after 180 days.',
+  });
+  return json({ ok: true, id, status: 'duplicate_confirmed' });
+}
+
+const DUPLICATE_RETENTION_DAYS = 180;
+
+// PURE — is this queue row due for the 180-day retention purge right now? Factored out of
+// purgeConfirmedDuplicateReceipts so the date-math edge cases (missing/invalid stamp, exactly-at-
+// cutoff, already-purged) are unit-testable without mocking Sheets I/O.
+function receiptDuplicatePurgeDue(row, nowMs, retentionDays) {
+  if (!row || row.Status !== 'duplicate_confirmed') return false;
+  if (String(row.Active || '').toUpperCase() === 'FALSE') return false;
+  const stamped = Date.parse(row.Duplicate_Confirmed_Date || '');
+  if (!stamped || isNaN(stamped)) return false;
+  const cutoff = nowMs - retentionDays * 24 * 60 * 60 * 1000;
+  return stamped <= cutoff;
+}
+
+// POST /receipt-recon/purge-duplicates (also called by the daily cron) — soft-deletes any
+// confirmed-duplicate row older than DUPLICATE_RETENTION_DAYS. Soft-delete only (Active:'FALSE'),
+// never a hard delete — matches the house rule (CAP-020's Contacts-sync blanking is the same
+// pattern): the row stays for audit trail, it just drops out of every 'pending'/'all' view that
+// filters on Active. Read-then-write, best-effort per row so one bad date doesn't kill the sweep.
+async function purgeConfirmedDuplicateReceipts(env) {
+  let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
+  const now = Date.now();
+  let purged = 0; const errs = [];
+  for (const r of rows) {
+    if (!receiptDuplicatePurgeDue(r, now, DUPLICATE_RETENTION_DAYS)) continue;
+    try { await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Active: 'FALSE' }); purged++; }
+    catch (e) { errs.push(String(r.ID) + ': ' + (e.message || 'err')); }
+  }
+  return json({ ok: true, purged, checked: rows.length, errors: errs });
 }
 
 // ══════════════════════════════════════════════════════════════════════════

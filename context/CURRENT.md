@@ -1,3 +1,20 @@
+# WHERE THINGS STAND — Aug 23, 2026 (later still, again)
+
+## 🟢 Receipt Reconciler UI overhaul — Brett's live-test caught 4 real gaps, all fixed in one pass.
+His first real test (right after B-127's routing went live) immediately surfaced: no way to
+correct the auto-guessed property, only top-3 open WOs ever shown, a free-text WO-number field
+with zero validation (real typo-to-wrong-job risk), and duplicates dead-ending into generic Skip
+with no retention plan. Built all four: property override, full open-WO list + an opt-in
+closed/past search, WO-number validation on both client (fast-fail UX) and server (the actual
+guard — `receiptReconConfirm` now rejects a nonexistent WO ID with a 400 before ever calling
+`addReceipt`), and a distinct **Confirm duplicate** action with **180-day** soft-delete retention
+(Brett's number) via a new nightly sweep. Checked the new column addition against the exact rule
+37/78 silent-no-op class (used `ensureColumns`, not just `ensureTab`, since the tab already had
+live rows) and checked every new/edited button against `UI_QA_CHECKLIST.md` — caught and fixed
+two real misses (touch-target height, adjacent-button gap) before shipping. Ran `ridgeco-validate`
+— PASS, one 🟡 non-blocking note. New `test/receipt-reconciler-ui.test.mjs`, 10/10. Full detail +
+the complete validation report in FEATURE_LOG rule 136. `BUILD_VERSION` → `2026-08-23.2`.
+
 # WHERE THINGS STAND — Aug 23, 2026 (later still)
 
 ## 🟢 B-127's first live call site — `receiptExtract` now routes through `routeAI`. Real telemetry starts flowing.
