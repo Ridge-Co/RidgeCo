@@ -1,5 +1,26 @@
 # WHERE THINGS STAND — Aug 22, 2026
 
+## 🛠️ Reviewed a "4 Claude upgrades" video → built 2 real gaps, confirmed 2 already covered. CAP-033.
+Same discipline as the Aug 21 nine-skills review and CAP-029: check each idea against what Brett
+already runs before building anything new. Of the video's 4 upgrades, 2 were genuine gaps and got
+built, 2 were already covered (one more thoroughly than the video's version). **Built
+`brett-council.skill`** — a 5-persona adversarial idea pre-mortem (skeptic/upside/first-principles/
+real-web-search researcher/customer proxy → judge gives kill/reshape/build + the cheapest test to
+run first), sits upstream of `brett-amplify` (kills weak ideas before amplify would develop them).
+**Extended `test-verified-builds.skill`** with a new Step 3 — Playwright screenshots + click-through
++ form-stress-testing at both viewports for any build touching a live-facing page, the automated way
+to run the new `UI_QA_CHECKLIST.md` instead of eyeballing it; `test-verified-builds`'s backend HTTP
+checks (Step 1-2) untouched, description bumped to mention the addition, both under the 1024-char
+limit and angle-bracket-clean per `brett-skillsmith`. **Not built:** the video's context-management
+upgrade (session-handoff-before-clear) is already `SESSION_EFFICIENCY_PROTOCOL_v1.0`'s
+checkpoint-and-resume, phase-boundary-triggered rather than token-count-triggered — no gap. The
+parallel-subagents + separate-evaluator-model upgrade — subagent fan-out is already Rule 2 of that
+same protocol; the "separate evaluator grades done, not the builder" piece is a live working proof of
+the mechanism the existing **B-211** (`judge()` verifier, unbuilt) is designed around — logged as
+reinforcement for B-211's priority, not a new item. Both `.skill` files delivered same session.
+**🔴 Needs Brett's Save** — neither confirmed saved yet; do not mark done here until he confirms,
+same discipline as every prior skill delivery in this file.
+
 ## 📋 Wishlist/devlog reconciliation + Brett's 5 fresh items — 3 shipped, 2 already done, 2 open questions.
 Brett asked to surface the Ridge Co Hub wishlist/improvement backlog, strip anything already shipped, add 5 fresh items he'd just hit, and start on the priority ones. Reconciled against BACKLOG.md + FEATURE_LOG + this file rather than re-describing from memory (truth-mode). Full writeup + the reconciled list went to Brett directly; short version:
 - **Already done, not rebuilt:** (1) select-multiple on Review Bills — live since rule 98 (Aug 10). (2) Turnover trigger (repairs+cleaning+paint as 3 connected WOs, B-100) — shipped rule 104 (Aug 18), still flagged `🔴 Needs Brett's confirm` there and never confirmed since. Told Brett rather than silently re-building these — asked him to do the rule 104 live-verify instead.
