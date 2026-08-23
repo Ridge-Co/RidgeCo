@@ -1,3 +1,23 @@
+# WHERE THINGS STAND — Aug 23, 2026 (later same day)
+
+## 🔧 B-142 actually closed — ridgeco-validate wired into brett-flow's build flow as a real step. Corrects an earlier stale claim.
+Brett asked what it'd take to deploy B-127/B-211; that surfaced that BUILD_ORDER_v1.0's Phase-1
+substrate wasn't actually fully closed the way this file's earlier Aug 23 entry (below) implied.
+Checked directly: `ridgeco-validate`'s own SKILL.md claims it runs "as the brett-flow verify gate
+(step 5.5)," but `brett-flow`'s SKILL.md + `references/` had **zero mentions of "validate"** —
+BACKLOG's Quick Index line calling B-142 "confirmed shipped" was wrong; the skill was delivered
+July 23 but never actually invoked by brett-flow's numbered flow. Fixed: `brett-flow` SKILL.md now
+has a real step 6 (renumbering old 6→7, 7→8, 8→9) that names `ridgeco-validate` explicitly, states
+it's mandatory for auth/PII/QB/payment/money/customer changes, and gives the same PASS/FAIL +
+human-gate-required logic the validator's own doc already promised. BACKLOG.md's B-142 row
+corrected from 🟠 to ✅ with the real completion note (not just re-marked without explanation).
+**This means Phase-1 substrate (B-140 ✅ + B-141 ✅ + B-142 ✅ now + B-144 ✅) is genuinely complete
+as of this entry — not as of the earlier one below.** B-127's code is already live on `main`
+(dormant, no call site yet — still needs receipt-parsing wired in as its first job type, a
+separate scoped build). B-211's `judge()` still has nothing to gate — substrate completion doesn't
+change that; it still needs the "build with Brett" design session on the Rung-1→Rung-2 write path
+per `AUTONOMY_GUARDRAILS_v1.0`, unchanged from the note below.
+
 # WHERE THINGS STAND — Aug 23, 2026
 
 ## ✅ B-144 (Quality Bar / Definition-of-Done rubric) BUILT + PUSHED + VERIFIED live on `main`.
