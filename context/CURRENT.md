@@ -1,4 +1,17 @@
-# WHERE THINGS STAND — Aug 22, 2026
+# WHERE THINGS STAND — Aug 23, 2026
+
+## ✅ B-144 (Quality Bar / Definition-of-Done rubric) BUILT.
+`context/QUALITY_BAR_v1.0.md` — the last Phase-1 item BUILD_ORDER_v1.0 named before B-127/B-211
+are eligible to deploy. Doc-only, zero blast radius, no worker.js/index.html touched. Three
+change-class tables (Worker Endpoint / Hub Screen / Money Change), every criterion grounded in
+a real FEATURE_LOG bug or an existing enforced pattern (rule 6, rule 18, rule 37, UI_QA_CHECKLIST
+132/134, the reconcile-never-auto-corrects and in-house-exclusion invariants) rather than invented
+style preference — kept it a scorable pass/fail rubric, not a wishlist.
+**What this does NOT do:** it doesn't deploy B-127 or B-211 itself, and it doesn't build B-149's
+automated lint pass (the greppable subset of this rubric) or B-146's reviewer agent — those are
+still separate, unbuilt backlog items that now have something concrete to build against. The
+Phase-1 substrate gate also still needs the golden-path tests (B-145) before Phase 3 (buttons that
+DO things) per BUILD_ORDER_v1.0.
 
 ## 🚧 B-127 built + tested, NOT deployed. B-140 confirmed live. B-141 done. B-211 built + tested, NOT deployed.
 Brett asked to build B-127/B-140/B-141/B-211 across sessions. Sequenced per his choice: B-127 first,
@@ -719,7 +732,8 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 | SERVICE_DELIVERY_WAVE0_BUILD_BRIEF_v1.0.md | v1.0 | ⏳ ON-DEMAND (Wave-0 comms build) | **Execution contract for B-156** — tenant WO-lifecycle notifications (Received→Assigned→Scheduled→On Hold→Complete, EN/ES), the first build off the Service-Delivery research. Grounded in live handlers (`createWorkOrder`/`assignVendor`/`scheduleWO`/`updateStatus`), reuses the `sendSMS` chokepoint + `Notification_Queue` + Status-SSOT renter mask. In-Hub timeline ships now; SMS queued dormant until Twilio (B-136). Seeds the Flows engine (B-177). Sequences B-157..B-162. |
 | SERVICE_DELIVERY_ROADMAP_v1.0.md | v1.0 | ⏳ ON-DEMAND (service-delivery work) | **Prioritized master list of all 224 service-delivery ideas** (8-stream research + 12-product competitor teardown), scored impact-vs-effort into 6 waves — **Wave 0 = Communication, leads everything**. Each SD-### maps to a B-item (B-156..B-202 graduated July 24). Companion deliverables: `RidgeCo_Service_Delivery_Playbook` (report) + `RidgeCo_Service_Delivery_Idea_Matrix.xlsx` (matrix + teardown + ranked tabs). |
 | AUTONOMY_GUARDRAILS_v1.0.md | v1.0 LOCKED | ✅ ALWAYS (any background/overnight agent) | **The lane that makes overnight self-improvement safe.** The autonomy ladder (Rung 0 Propose → 1 Prepare → 2 Auto-ship earned/narrow → 3 Gated/never), the SAFE-vs-GATED risk classification (money/QB/PII/auth/deploy = never autonomous), the overnight loop (Scout proposes → Brett greenlights → Rung-1 Prepare agent drafts+validates but NEVER deploys → morning one-tap gate → PAT session ships), the kill switch (`Config.autonomy_enabled`), and why headless agents can't deploy (no PAT/secret = the hand-off IS the guardrail). Governs per BUILD_ORDER B-140s. Locked Aug 7. |
-| BUILD_ORDER_v1.0.md | v1.0 LOCKED | ⏳ ON-DEMAND (Command Center / autonomy work) | **LOCKED build order (July 23)** for the Command Center (B-151) + quality layer (B-144..150) + autonomy substrate (B-140..143, B-152) + priority engine (B-153). Governing rule: nothing that writes / touches money-customer-auth / deploys hand-edited worker.js goes live until the Phase-1 preview lane + validator exist; read-only display ships first. Phase 0 (read-only `command-center.html`) shipped. Next = Phase 1 preview lane (B-140). |
+| BUILD_ORDER_v1.0.md | v1.0 LOCKED | ⏳ ON-DEMAND (Command Center / autonomy work) | **LOCKED build order (July 23)** for the Command Center (B-151) + quality layer (B-144..150) + autonomy substrate (B-140..143, B-152) + priority engine (B-153). Governing rule: nothing that writes / touches money-customer-auth / deploys hand-edited worker.js goes live until the Phase-1 preview lane + validator exist; read-only display ships first. Phase 0 (read-only `command-center.html`) shipped. Phase 1 step 4 (B-144 Quality Bar) done Aug 23. Next = Phase 1 preview lane (B-140, already confirmed live) wiring + step 3 (ridgeco-validate already delivered, wire into brett-flow). |
+| QUALITY_BAR_v1.0.md | v1.0 | ⏳ ON-DEMAND (any Worker/Hub/money build, and always for ridgeco-validate) | **B-144.** Three change-class Definition-of-Done tables — Worker Endpoint (auth-tagged, header-name resolution, ensureColumns-before-write, standard error shape, telemetry-logged, no N+1, idempotent, node --check clean), Hub Screen (Status SSOT, one button system, real touch targets, EN/ES parity, loading/empty/error states, no h-scroll at 390px), Money Change (penny-correct, no double-post, reconciles-never-auto-corrects, correct-entity resolution, in-house exclusion invariant, preview-first, money-math has its own pure-function test). Every criterion traces to a real documented bug, not a style opinion. What ridgeco-validate + future B-146 reviewer score against; B-149's checks are the greppable subset. Built Aug 23. |
 
 ## PRIVATE / SENSITIVE CONTEXT (NOT in this public repo)
 
