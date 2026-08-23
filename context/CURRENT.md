@@ -1,5 +1,54 @@
 # WHERE THINGS STAND — Aug 22, 2026
 
+## 🚧 B-127 built + tested, NOT deployed. B-140 confirmed live. B-141 done. B-211 next — Brett wants to build it WITH Claude in a fresh session.
+Brett asked to build B-127/B-140/B-141/B-211 in one session. Sequenced per his choice: B-127 first,
+Cloudflare fix for B-141 after.
+
+**B-140 (staging/preview Worker lane) — ✅ CONFIRMED, no rebuild needed.** Was already marked built July
+23; this session verified it live: `curl https://maintenance-hub-staging.brett-2f8.workers.dev/health`
+→ 200, `sheet_tail: 0H6dFY` (the staging sheet, not prod's), real tab row counts. Nothing to do here.
+
+**B-141 (smoke-test harness) — ✅ DONE.** The July-23 SNAG (Cloudflare production-branch setting)
+turned out to already be fixed — Brett checked the dashboard, branch control was already `staging`
+with non-prod builds on, and `/health` confirmed live (see above). Built the actual harness:
+`scripts/smoke-staging.mjs` — curl-asserts `/health` + `/version` against the real staging Worker (10
+assertions: 200s, `ok:true`, correct sheet_tail, all 4 expected tabs present as numbers, version
+string present). Run: `node scripts/smoke-staging.mjs`. **Scope note or it'll look bigger than it is:**
+only `/health` and `/version` are curlable with zero setup (no auth token, no real PIN/share-token
+record needed) — broader endpoint coverage needs seeded fixture data on staging, which is B-145
+(golden-path tests), not this item. All 10 assertions passing as of this session.
+
+**B-127 (model routing) — 🟠 BUILT + TESTED, sitting un-deployed on purpose.** `routeAI(env, job)` +
+`MODEL_REGISTRY` (CHEAP/REASON/HARD) + `callGemini`/`callClaude` adapters + `GET /model-registry`,
+right before the Optimizer section in worker.js (reuses the existing `logTelemetry` chokepoint —
+`Tier_Requested`/`Model_Used`/`Escalated`/tokens/cost columns already existed in `Ops_Telemetry` from
+B-128, built for exactly this). `test/model-routing.test.mjs` — 17 assertions, passing. Deliberately
+did NOT rewire the ~6 existing direct-`ANTHROPIC_API_KEY` call sites (scopeClaude, translations, weekly
+review) onto the router — migrating a live money/customer-adjacent flow onto new plumbing is its own
+per-flow blast-radius call, not a batch edit.
+**🔴 CAUGHT MID-SESSION: `gemini-2.0-flash` (what the brief/first draft used) was shut down by Google
+June 1, 2026.** Fixed to `gemini-2.5-flash-lite` ($0.10/$0.40 per 1M tokens) before Brett spent
+anything on it — caught via web search when he asked about cost, NOT before. **Google has 2.5
+Flash-Lite scheduled for retirement Oct 16, 2026 — bump to `gemini-3.1-flash-lite` ($0.25/$1.50/1M)
+before then, comment left in worker.js at the MODEL_REGISTRY.CHEAP line as a reminder.**
+**Why not deployed:** `BUILD_ORDER_v1.0`'s own locked rule — no hand-edited worker.js goes live until
+Phase-1 substrate exists — and per this session B-141 just barely closed, B-144 (Quality Bar) still
+isn't built. Also **nothing in the live app calls `routeAI()` yet** — this is plumbing only, current
+real-world cost is $0 until a job type is actually wired to route through it (receipt_parse flagged as
+the safest first candidate — no customer/money exposure — but Brett declined to wire it this session).
+**Brett added `GEMINI_API_KEY` as a Cloudflare secret on BOTH `maintenance-hub` and
+`maintenance-hub-staging`** (had to set up Prepay billing — $10 min top-up, new as of March 2026 —
+that's expected, not a bug). Key is live but literally unused until something calls `routeAI`.
+**🔴 NOT PUSHED TO GITHUB — only exists in this session's local clone.** Brett ended the session before
+authorizing a push (needs his classic PAT, which isn't in this session's env). **The next session
+MUST either receive `BRETT_GH_PAT` and push this diff, or rebuild it from this description — do NOT
+assume it's already on `main` without checking `grep -n "routeAI" worker.js` first.**
+
+**Next: B-211 (`judge()` write-gate).** Backlog explicitly flags this "GATED-adjacent — build with
+Brett," not a solo/background build — Brett is opening a fresh session specifically to sit down on
+this one together. Read `AUTONOMY_GUARDRAILS_v1.0.md` first (governs what `judge()` is FOR — the
+Rung-1→Rung-2 gate) before proposing a design.
+
 ## 🛠️ Reviewed a "4 Claude upgrades" video → built 2 real gaps, confirmed 2 already covered. CAP-033.
 Same discipline as the Aug 21 nine-skills review and CAP-029: check each idea against what Brett
 already runs before building anything new. Of the video's 4 upgrades, 2 were genuine gaps and got

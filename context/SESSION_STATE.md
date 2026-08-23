@@ -2,7 +2,28 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Last checkpoint: Aug 20, 2026 (part 2) — B-227 Phase 3 built, validated, PUSHED. Live testing is the only remaining step — DO NOT REBUILD.
+## Last checkpoint: Aug 22, 2026 — B-140 confirmed, B-141 done, B-127 built but NOT pushed. Next: B-211, WITH Brett.
+
+**Next step:** Brett is opening this fresh session specifically to build **B-211** (`judge()` write-gate)
+**with** him — the backlog explicitly flags it "GATED-adjacent — build with Brett," not a solo build.
+Read `AUTONOMY_GUARDRAILS_v1.0.md` first (defines what `judge()` gates — the Rung-1→Rung-2 autonomy
+ladder step) before proposing a design. Don't just start writing code — this one's meant to be a
+conversation about the design first.
+
+**🔴 Before touching B-127 again, check `grep -n "routeAI" worker.js`.** It was built and tested last
+session (`test/model-routing.test.mjs`, 17/17) but the session ended before a push happened — no
+`BRETT_GH_PAT` in that session's env. If `routeAI` is missing from `worker.js` on `main`, it needs
+either (a) Brett's PAT pasted so a push can happen, or (b) a rebuild from the description in
+`CURRENT.md`'s Aug 22 "B-127 built + tested" entry + `BACKLOG.md`'s B-127 row. **Do not re-build blind
+without checking first** — if it's already on `main`, redoing it wastes a session.
+
+**Also confirmed this session (no action needed, just don't re-verify from scratch):** B-140 (staging
+Worker) is live and reading its own sheet. B-141 (smoke harness) is done — `scripts/smoke-staging.mjs`,
+10/10 passing.
+
+---
+
+## Prior checkpoint: Aug 20, 2026 (part 2) — B-227 Phase 3 built, validated, PUSHED. Live testing is the only remaining step — DO NOT REBUILD.
 
 **If you are reading this at the start of a new session: this work is DONE and PUSHED (commit visible in
 `git log` on `main` as the "B-227 Phase 3" commit, `worker.js` has `qbSendCombinedInvoice` and

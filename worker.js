@@ -116,6 +116,7 @@ export default {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
+        if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
         if (path === '/hub-bootstrap')          return await hubBootstrap(env);
         if (path === '/properties')             return await getSheet(env, 'Properties');
         if (path === '/public/entities-feed')   return await getEntitiesFeed(env);
@@ -4594,6 +4595,151 @@ async function telemetryLog(env, body) {
   } catch (e) {
     return json({ error: 'telemetry write failed', detail: String((e && e.message) || e) }, 500);
   }
+}
+
+// ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
+// Secure, self-owned multi-model router. Calls each provider directly from THIS
+// Worker (no third-party gateway — Brett's QB/CHEP/tenant data never passes
+// through a proxy). Policy is a table Brett controls, not magic. Spec:
+// context/MODEL_ROUTING_BUILD_BRIEF_v1.0.md (decisions locked July 22, 2026).
+//
+// Providers v1 (LOCKED): Google Gemini (CHEAP tier) + Anthropic Claude (REASON/
+// HARD tiers). Policy (LOCKED): cheapest-that-passes by default; escalate ONE
+// bump on validation failure; anything tagged customer_facing/money_facing is
+// PINNED to REASON up front regardless of how simple the job looks.
+//
+// NOTE: this is additive. The half-dozen existing direct ANTHROPIC_API_KEY call
+// sites (scopeClaude, translateToEnglish, translateText, weekly-review, etc.)
+// are NOT rewired to routeAI in this pass — each is a live, working money/
+// customer-adjacent flow, and blast-radius discipline says migrate those
+// individually behind their own smoke check rather than as one unreviewed
+// batch edit. New AI-job call sites should call routeAI(); migrating an
+// existing one is a follow-up per-flow, not part of this build.
+
+const MODEL_REGISTRY = {
+  // tier: { provider, model, keyEnv, costPer1kIn, costPer1kOut }
+  // gemini-2.0-flash was shut down by Google June 1, 2026 — DO NOT use it (verified Aug 22, 2026
+  // via web search). Gemini 2.5 Flash-Lite is the current cheapest live model ($0.10/$0.40 per 1M
+  // tokens) but Google has it scheduled for retirement Oct 16, 2026 — when that lands, bump to
+  // Gemini 3.1 Flash-Lite ($0.25/$1.50/1M) and update the costPer1k figures below to match.
+  CHEAP:  { provider: 'gemini',    model: 'gemini-2.5-flash-lite', keyEnv: 'GEMINI_API_KEY',  costPer1kIn: 0.0001,  costPer1kOut: 0.0004 },
+  REASON: { provider: 'anthropic', model: 'claude-sonnet-4-6',  keyEnv: 'ANTHROPIC_API_KEY',  costPer1kIn: 0.003,   costPer1kOut: 0.015 },
+  HARD:   { provider: 'anthropic', model: 'claude-opus-4-8',    keyEnv: 'ANTHROPIC_API_KEY',  costPer1kIn: 0.015,   costPer1kOut: 0.075 },
+};
+
+// job.type → default tier. Starting policy per the brief; tune from Ops_Telemetry
+// (Human_Corrected column is the strongest "this job is mis-tiered" signal).
+const JOB_ROUTES = {
+  receipt_parse:      'CHEAP',
+  note_transcribe:    'CHEAP',
+  task_tag:            'CHEAP',
+  email_summarize:    'CHEAP',
+  estimate_markup:    'REASON',
+  qb_reconcile:        'REASON',
+  tenant_message:      'REASON',
+  final_classification:'REASON',
+};
+
+// job = { type, tier?, prompt, input?, schema?, maxTokens?, customerFacing?, moneyFacing?, media?, source? }
+async function routeAI(env, job) {
+  job = job || {};
+  const t0 = Date.now();
+  // 1. Resolve tier. customer_facing/money_facing PINS to REASON regardless of
+  //    explicit tier or job.type lookup — cost is never the deciding factor
+  //    when a customer sees it or money moves (LOCKED, Brett July 22).
+  let tier = job.tier || JOB_ROUTES[job.type] || 'CHEAP';
+  const pinned = !!(job.customerFacing || job.moneyFacing);
+  if (pinned && tier === 'CHEAP') tier = 'REASON';
+
+  let escalated = false;
+  let attempt = await routeAICall(env, tier, job);
+
+  // 2. Validate. Failure = escalate ONE bump, never past REASON→HARD, and never
+  //    downward (a pinned REASON call that fails does NOT fall back to CHEAP).
+  if (!routeAIValid(attempt, job) && tier === 'CHEAP') {
+    escalated = true;
+    tier = 'REASON';
+    attempt = await routeAICall(env, tier, job);
+  }
+
+  const ms = Date.now() - t0;
+  const reg = MODEL_REGISTRY[tier];
+  const estCost = ((attempt.tokens_in || 0) / 1000 * (reg.costPer1kIn || 0)) + ((attempt.tokens_out || 0) / 1000 * (reg.costPer1kOut || 0));
+
+  // 3. Telemetry — best-effort, never breaks the caller's job (same discipline
+  //    as every other logTelemetry call site in this file).
+  try {
+    await logTelemetry(env, {
+      Source: job.source || 'routeAI', Job_Type: job.type || '', Skill_Or_Endpoint: 'routeAI',
+      Tier_Requested: tier, Model_Used: reg.model, Escalated: escalated ? 'TRUE' : 'FALSE',
+      Tokens_In: attempt.tokens_in || 0, Tokens_Out: attempt.tokens_out || 0,
+      Est_Cost: estCost.toFixed(6), Latency_ms: ms, Success: attempt.error ? 'FALSE' : 'TRUE',
+      Notes: attempt.error ? String(attempt.error).slice(0, 200) : (pinned ? 'pinned' : ''),
+    });
+  } catch (_) { /* telemetry best-effort — never fail the caller's job over a logging miss */ }
+
+  if (attempt.error) throw new Error(`routeAI failed at tier ${tier}: ${attempt.error}`);
+  return { result: attempt.text, model_used: reg.model, tier_used: tier, escalated, tokens_in: attempt.tokens_in, tokens_out: attempt.tokens_out, ms };
+}
+
+async function routeAICall(env, tier, job) {
+  const reg = MODEL_REGISTRY[tier];
+  try {
+    if (reg.provider === 'gemini') return await callGemini(env, reg.model, job);
+    return await callClaude(env, reg.model, job);
+  } catch (e) {
+    return { text: '', tokens_in: 0, tokens_out: 0, error: String((e && e.message) || e) };
+  }
+}
+
+// Minimal validation: non-empty text, and — if a schema was requested — valid JSON.
+// This is intentionally simple for v1; tighten per job.type as telemetry shows
+// which routes actually need stricter checks (don't over-build ahead of data).
+function routeAIValid(attempt, job) {
+  if (!attempt || attempt.error || !attempt.text || !String(attempt.text).trim()) return false;
+  if (job.schema) { try { JSON.parse(String(attempt.text).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return false; } }
+  return true;
+}
+
+// Provider adapter — Gemini (CHEAP tier). Normalizes to { text, tokens_in, tokens_out }.
+async function callGemini(env, model, job) {
+  if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
+  const parts = [{ text: job.prompt || '' }];
+  const body = { contents: [{ parts }] };
+  if (job.schema) body.generationConfig = { responseMimeType: 'application/json' };
+  const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data && data.error && data.error.message || `Gemini ${resp.status}`);
+  const text = (data.candidates && data.candidates[0] && data.candidates[0].content &&
+                data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text || '').trim();
+  const usage = data.usageMetadata || {};
+  return { text, tokens_in: usage.promptTokenCount || 0, tokens_out: usage.candidatesTokenCount || 0 };
+}
+
+// Provider adapter — Claude (REASON/HARD tiers). Mirrors the existing scopeClaude/
+// generateEstimateText call pattern already live elsewhere in this file (reused,
+// not reinvented, per the brief). Normalizes to { text, tokens_in, tokens_out }.
+async function callClaude(env, model, job) {
+  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  const content = job.media ? [job.media, { type: 'text', text: job.prompt || '' }] : (job.prompt || '');
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model, max_tokens: job.maxTokens || 1200, messages: [{ role: 'user', content }] }),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data && data.error && data.error.message || `Claude ${resp.status}`);
+  const text = (data.content && data.content[0] && data.content[0].text || '').trim();
+  const usage = data.usage || {};
+  return { text, tokens_in: usage.input_tokens || 0, tokens_out: usage.output_tokens || 0 };
+}
+
+// GET /model-registry — read-only, no PII/money, safe to expose for the Command
+// Center / debugging. Never exposes key values, only the routing table shape.
+function modelRegistryInfo() {
+  const reg = {}; for (const t in MODEL_REGISTRY) { const r = MODEL_REGISTRY[t]; reg[t] = { provider: r.provider, model: r.model }; }
+  return { tiers: reg, job_routes: JOB_ROUTES };
 }
 
 // ── OPTIMIZER: WEEKLY REVIEWER (B-129) ───────────────────────────────────────
