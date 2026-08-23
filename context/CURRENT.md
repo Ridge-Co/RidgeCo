@@ -1,12 +1,15 @@
 # WHERE THINGS STAND — Aug 23, 2026
 
-## ✅ B-144 (Quality Bar / Definition-of-Done rubric) BUILT.
+## ✅ B-144 (Quality Bar / Definition-of-Done rubric) BUILT + PUSHED + VERIFIED live on `main`.
 `context/QUALITY_BAR_v1.0.md` — the last Phase-1 item BUILD_ORDER_v1.0 named before B-127/B-211
 are eligible to deploy. Doc-only, zero blast radius, no worker.js/index.html touched. Three
 change-class tables (Worker Endpoint / Hub Screen / Money Change), every criterion grounded in
 a real FEATURE_LOG bug or an existing enforced pattern (rule 6, rule 18, rule 37, UI_QA_CHECKLIST
 132/134, the reconcile-never-auto-corrects and in-house-exclusion invariants) rather than invented
-style preference — kept it a scorable pass/fail rubric, not a wishlist.
+style preference — kept it a scorable pass/fail rubric, not a wishlist. **Push status: committed
+locally, then pushed to `main` (`ad02fb4b`) using a fresh classic PAT Brett supplied this session
+(env's `BRETT_GH_PAT` was empty — same gap that stalled B-127's push) — confirmed present on
+GitHub via a fresh anonymous clone, not just a local commit.** See FEATURE_LOG rule 118.
 **What this does NOT do:** it doesn't deploy B-127 or B-211 itself, and it doesn't build B-149's
 automated lint pass (the greppable subset of this rubric) or B-146's reviewer agent — those are
 still separate, unbuilt backlog items that now have something concrete to build against. The
