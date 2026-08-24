@@ -353,6 +353,18 @@ window.addEventListener('pageshow', function(e){
       </div>
       <div style="color:var(--muted);font-size:12px;margin-bottom:12px" id="keys-view-hint">All properties and their active keys/lockboxes. Search above to find a specific code or identify an unknown key.</div>
       <div id="keys-view-content"><div class="loading">Loading keys…</div></div>
+
+      <!-- MASTER KEYS — moved here Aug 24, 2026 (was buried in the Shopping menu; this is an
+           access/keys concern, so it lives with the rest of Keys/Lockboxes). -->
+      <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:16px">
+        <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center;flex-wrap:wrap">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text)">🗝 MASTER KEYS (BUILDINGS)</div>
+          <button class="btn small" onclick="openAddMasterKeyModal()">+ Add Master Key</button>
+          <button class="btn secondary small" onclick="refreshMasterKeys()">↻ Refresh</button>
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin-bottom:12px">A master key works every door at a property — additive to any lockbox/unit keys, never a replacement. Use "🔑 Who Has It" on a key below to see or set which vendors currently hold a copy; that's the only thing a work order ever shares, and only with the vendor actually assigned to it.</div>
+        <div id="masterkeys-list"><div class="loading">Loading…</div></div>
+      </div>
     </div>
   </div>
 
@@ -453,9 +465,13 @@ window.addEventListener('pageshow', function(e){
     <div style="display:flex;gap:2px;background:var(--surface2);border-radius:var(--radius);padding:3px;margin-bottom:16px;max-width:600px">
       <div class="tab active" id="stab-materials" onclick="switchShoppingTab('materials')" style="flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted)">📋 SHOPPING LIST</div>
       <div class="tab" id="stab-returns" onclick="switchShoppingTab('returns')" style="flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted)">↩ RETURNS</div>
-      <div class="tab" id="stab-masterkeys" onclick="switchShoppingTab('masterkeys')" style="flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted)">🔑 MASTER KEYS</div>
-      <div class="tab" id="stab-templates" onclick="switchShoppingTab('templates')" style="flex:1;text-align:center;padding:8px 4px;border-radius:4px;cursor:pointer;font-size:11px;letter-spacing:.08em;color:var(--muted)">📄 TEMPLATES</div>
     </div>
+    <!-- Master Keys moved to Properties → 🔑 Keys/Lockboxes (Aug 24, 2026 — it's an access/keys
+         concern, not shopping; Brett couldn't find it here). WO Templates management moved to
+         Dev Log → 🧰 Tools; applying a template when creating a WO now happens through the
+         "📋 From Template" picker on the New Work Order modal itself, which now shows Brett's
+         custom templates alongside the built-in ones (previously two disconnected systems). -->
+
 
     <!-- SHOPPING LIST panel -->
     <div id="spanel-materials">
@@ -484,25 +500,6 @@ window.addEventListener('pageshow', function(e){
       <div id="returns-list"><div class="loading">Loading…</div></div>
     </div>
 
-    <!-- MASTER KEYS panel -->
-    <div id="spanel-masterkeys" style="display:none">
-      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
-        <button class="btn" onclick="openAddMasterKeyModal()">+ Add Master Key</button>
-        <button class="btn secondary small" onclick="refreshMasterKeys()">↻ Refresh</button>
-      </div>
-      <div style="color:var(--muted);font-size:12px;margin-bottom:12px">Master keys are assigned to properties. Vendors see the key name on every work order for that property.</div>
-      <div id="masterkeys-list"><div class="loading">Loading…</div></div>
-    </div>
-
-    <!-- TEMPLATES panel -->
-    <div id="spanel-templates" style="display:none">
-      <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
-        <button class="btn" onclick="openAddTemplateModal()">+ Add Template</button>
-        <button class="btn secondary small" onclick="refreshTemplates()">↻ Refresh</button>
-      </div>
-      <div style="color:var(--muted);font-size:12px;margin-bottom:12px">Templates pre-fill new WO forms. Include a link to a Google Sheet, document, or checklist that gets inserted into the WO description automatically.</div>
-      <div id="templates-list"><div class="loading">Loading…</div></div>
-    </div>
   </div>
 
   <div class="page" id="page-portals">
@@ -570,6 +567,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="window.open('proposals.html','_blank')">💡 Proposals / greenlit queue</button>
       <button class="btn small" onclick="window.open('deliveries.html','_blank')">🚚 Deliveries</button>
       <button class="btn small" onclick="window.open('tenant-wo-access.html','_blank')">🔓 Tenant Work Order Access</button>
+      <button class="btn small" onclick="openManageTemplatesModal()">📄 WO Templates — manage custom templates</button>
     </div>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">💵 MONEY &amp; QUICKBOOKS</div>
@@ -3875,19 +3873,42 @@ var WO_TEMPLATES = [
     description: 'Appliance service call. [Specify appliance and issue below.]' },
 ];
 
+// Opens the "From Template" picker on the New/Edit WO modal. Shows Brett's own custom
+// templates (built via Dev Log → 🧰 Tools → 📄 WO Templates, stored on the WO_Templates
+// sheet) ALONGSIDE the 12 built-in ones — these used to be two disconnected systems: the
+// custom ones lived only in a Shopping-tab admin table with no path into this picker at
+// all, so anything added there could never actually be applied when creating a WO. Renders
+// immediately with whatever's cached, then refreshes from the sheet in case a template
+// was added/edited since the last load.
 function openTemplateModal() {
+  renderTemplatePicker();
+  openModal('modal-templates');
+  refreshTemplates();
+}
+
+function renderTemplatePicker() {
   var listEl = document.getElementById('template-list');
-  if (listEl) {
-    listEl.innerHTML = WO_TEMPLATES.map(function(t, i) {
-      return '<div class="template-item" onclick="applyTemplate(' + i + ')" style="' +
-        'padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);' +
-        'display:flex;justify-content:space-between;align-items:center">' +
-        '<div><div style="font-size:13px;color:var(--text)">' + esc(t.name) + '</div>' +
-        '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + esc(t.trade) + ' · ' + t.priority + '</div></div>' +
+  if (!listEl) return;
+  var itemStyle = 'padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center';
+  var sectionStyle = 'padding:6px 12px;font-size:10px;letter-spacing:.08em;color:var(--muted);background:var(--surface2)';
+  var custom = safeArray(_woTemplates).filter(function(t){ return t.Active!=='FALSE'; });
+  var html = '';
+  if (custom.length) {
+    html += '<div style="' + sectionStyle + '">YOUR TEMPLATES</div>' + custom.map(function(t) {
+      return '<div class="template-item" onclick="applySheetTemplate(\'' + t.ID + '\');closeModal(\'modal-templates\')" style="' + itemStyle + '">' +
+        '<div><div style="font-size:13px;color:var(--text)">' + esc(t.Name||'—') + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + esc(t.Trade||'General') + (t.Link_URL?' · has link':'') + '</div></div>' +
         '<span style="color:var(--accent);font-size:12px">Use →</span></div>';
     }).join('');
   }
-  openModal('modal-templates');
+  html += '<div style="' + sectionStyle + '">BUILT-IN TEMPLATES</div>' + WO_TEMPLATES.map(function(t, i) {
+    return '<div class="template-item" onclick="applyTemplate(' + i + ')" style="' + itemStyle + '">' +
+      '<div><div style="font-size:13px;color:var(--text)">' + esc(t.name) + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:2px">' + esc(t.trade) + ' · ' + t.priority + '</div></div>' +
+      '<span style="color:var(--accent);font-size:12px">Use →</span></div>';
+  }).join('');
+  html += '<div style="padding:10px 12px"><button class="btn small secondary" style="width:100%" onclick="closeModal(\'modal-templates\');openAddTemplateModal()">+ Add a custom template</button></div>';
+  listEl.innerHTML = html;
 }
 
 function applyTemplate(idx) {
@@ -3914,6 +3935,7 @@ function showKeysView() {
   document.getElementById('keys-view-hint').style.display = '';
   document.getElementById('keys-view-content').style.display = '';
   renderKeysView();
+  refreshMasterKeys();
 }
 
 function hideKeysView() {
@@ -4158,7 +4180,7 @@ var _masterKeys = [];
 var _woTemplates = [];
 
 function switchShoppingTab(tab) {
-  ['materials','returns','masterkeys','templates'].forEach(function(t) {
+  ['materials','returns'].forEach(function(t) {
     var p = document.getElementById('spanel-'+t);
     var b = document.getElementById('stab-'+t);
     if (p) p.style.display = t===tab ? '' : 'none';
@@ -4167,8 +4189,6 @@ function switchShoppingTab(tab) {
   });
   if (tab==='materials')  refreshMaterials();
   if (tab==='returns')    refreshReturns();
-  if (tab==='masterkeys') refreshMasterKeys();
-  if (tab==='templates')  refreshTemplates();
 }
 
 // ── Shopping List ────────────────────────────────────────────
@@ -4520,27 +4540,35 @@ function submitAddMasterKey() {
 
 // ── WO Templates ────────────────────────────────────────────
 
+// Management launcher — Dev Log → 🧰 Tools → 📄 WO Templates (moved out of the Shopping
+// menu Aug 24, 2026; applying a template when creating a WO happens through the
+// "📋 From Template" picker instead — see openTemplateModal/renderTemplatePicker).
+function openManageTemplatesModal() {
+  openModal('modal-manage-templates');
+  refreshTemplates();
+}
+
 function refreshTemplates() {
-  api('GET','/wo-templates').then(function(items) {
+  return api('GET','/wo-templates').then(function(items) {
     _woTemplates = Array.isArray(items) ? items : [];
     renderTemplates();
+    renderTemplatePicker(); // keep the New-WO "From Template" picker in sync if it's open
   });
 }
 
 function renderTemplates() {
   var el = document.getElementById('templates-list');
   if (!el) return;
-  if (!_woTemplates.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No templates yet. Built-in templates (HVAC filter, pest control, etc.) are available when creating a WO. Add here for custom templates with links.</div>'; return; }
+  if (!_woTemplates.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No custom templates yet. Built-in templates (HVAC filter, pest control, etc.) are always available from "📋 From Template" when creating a WO. Add one here to make it show up there too.</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Link</th><th></th></tr></thead><tbody>' +
-    _woTemplates.map(function(t) {
+    _woTemplates.filter(function(t){ return t.Active!=='FALSE'; }).map(function(t) {
       var owner = safeArray(state.owners).find(function(o){ return o.ID===t.Owner_ID; });
       return '<tr>' +
         '<td style="font-weight:bold">' + esc(t.Name||'—') + '</td>' +
         '<td>' + esc(t.Trade||'—') + '</td>' +
         '<td style="color:var(--muted);font-size:11px">' + (owner?esc(owner.First_Name+(owner.Company?' / '+owner.Company:'')):'Global') + '</td>' +
         '<td>' + (t.Link_URL?'<a href="'+esc(t.Link_URL)+'" target="_blank" style="color:var(--info)">'+esc(t.Link_Label||'View')+'</a>':'—') + '</td>' +
-        '<td style="display:flex;gap:4px">' +
-          '<button class="btn small secondary" onclick="applySheetTemplate(\''+t.ID+'\')">Use</button>' +
+        '<td>' +
           '<button class="btn small danger" onclick="if(confirm(\'Delete?\')) api(\'POST\',\'/wo-template/update\',{id:\''+t.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshTemplates)">Del</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
@@ -9045,6 +9073,22 @@ function qbBatchSend() {
     </div>
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-master-key-holders')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- MANAGE WO TEMPLATES MODAL (Dev Log → Tools; moved out of the Shopping menu Aug 24, 2026) -->
+<div class="modal-overlay" id="modal-manage-templates">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-header"><div class="modal-title">WO TEMPLATES — MANAGE</div><button class="modal-close" onclick="closeModal('modal-manage-templates')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Custom templates pre-fill new WO forms — including a link to a Google Sheet, document, or checklist. These show up under "Your Templates" in the "📋 From Template" picker when creating a work order, alongside the built-in ones.</p>
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <button class="btn small" onclick="openAddTemplateModal()">+ Add Template</button>
+      <button class="btn secondary small" onclick="refreshTemplates()">↻ Refresh</button>
+    </div>
+    <div id="templates-list"><div class="loading">Loading…</div></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-manage-templates')">Close</button>
     </div>
   </div>
 </div>
