@@ -152,10 +152,14 @@ function itemHtml(it, locked, signedSelections){
     var only = it.variants && it.variants[0];
     body = '<div class="item-price-row"><span></span><span>' + money(only ? only.price : 0) + '</span></div>';
   }
+  // No `it.note` rendering here on purpose (Aug 24 2026 security fix): the server
+  // (scopeProposalView in worker.js) never sends `note` to this page anymore, since that
+  // free-text field has no internal/customer split and once carried a vendor's raw quote
+  // straight to a customer. Defense-in-depth — even if a future change reintroduced `note`
+  // in the payload, this page still won't render it.
   return '<div class="item">' +
     (it.area ? '<div class="item-area">' + esc(it.area) + '</div>' : '') +
     '<div class="item-desc">' + esc(it.description) + '</div>' +
-    (it.note ? '<div class="item-note">' + esc(it.note) + '</div>' : '') +
     body +
     '</div>';
 }

@@ -255,6 +255,7 @@
       <div id="link-out" class="hide" style="margin-top:8px;">
         <input id="link-text" readonly style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;" onclick="this.select()">
         <button class="btn small secondary" onclick="copyLink()" style="margin-top:6px;">📋 Copy link</button>
+        <button class="btn small" onclick="revokeAndRelink()" style="margin-top:6px;">🔁 Kill old link &amp; get a new one</button>
       </div>
       <div id="sig-status"></div>
     </div>
@@ -598,7 +599,7 @@ function renderItems(){
         '<div><label>Trade</label><input class="f-trade" value="'+esc(it.trade)+'"></div>'+
         '<div><label>Qty</label><input class="f-qty" value="'+esc(it.qty)+'"></div>'+
         '<div class="full"><label>Description</label><input class="f-desc" value="'+esc(it.description)+'"></div>'+
-        '<div class="full"><label>Note</label><input class="f-note" value="'+esc(it.note)+'"></div>'+
+        '<div class="full"><label>Note — private; never shown to the customer (like vendor cost above)</label><input class="f-note" value="'+esc(it.note)+'"></div>'+
         '<div class="full">'+variantsBlock(it)+'</div>'+
         '<button class="btn small danger del" onclick="removeItem(this)">Remove item</button>'+
       '</div></div>';
@@ -813,6 +814,22 @@ async function getProposalLink(){
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
 }
 function copyLink(){ var t=document.getElementById('link-text').value; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 link copied','ok'); }); }
+
+// Kill the OLD link and mint a fresh one (Aug 24 2026, incident response). Bumps the scope's
+// Link_Rev server-side (POST /scope/proposal/link-revoke) — every token minted against the old
+// rev, including any link already sent out, stops working immediately — then mints a brand-new
+// token (POST /scope/proposal/link) under the new rev. Use this any time a link may have gone to
+// the wrong place, or you just want certainty that whoever has the old one can't open it anymore.
+async function revokeAndRelink(){
+  setStatus('prop-status','Killing old link…');
+  try{
+    await post('/scope/proposal/link-revoke',{ scope_id:state.current.ID });
+    var r=await post('/scope/proposal/link',{ scope_id:state.current.ID });
+    document.getElementById('link-out').classList.remove('hide');
+    document.getElementById('link-text').value=r.url;
+    setStatus('prop-status','✅ old link is dead — this is a brand-new one, copy and send it','ok');
+  }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
+}
 
 boot();
 </script>

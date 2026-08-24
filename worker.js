@@ -1761,6 +1761,14 @@ async function scopeProposalLinkRevoke(env, body) {
 // reach a customer even though it is stored (privately, Sheets-only) alongside price for later
 // use by scopeProposalSign. Also reports the LOCKED signed state (if any) so a revisited link
 // shows what was actually signed, never a re-editable form.
+// SECURITY FIX (Aug 24 2026): `note` is ALSO stripped here now. It's a free-text field Brett
+// types into scope-creator.html's item editor with no internal/customer split — same class of
+// field as `vendor_cost`, just never added to this boundary's strip list until a live proposal
+// shipped a vendor's raw quote ("Vendor quote $650 for this full punch list...") straight to a
+// customer via this exact field. Per Brett's hard rule: nothing about vendor pricing, how a
+// price was derived, or any vendor-facing commentary may ever reach a customer-facing surface —
+// only the job description and the final price. If a genuinely customer-safe note is ever
+// needed, it must be a SEPARATE, explicitly-labeled field — never this one.
 async function scopeProposalView(env, url) {
   const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
   if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
@@ -1768,10 +1776,10 @@ async function scopeProposalView(env, url) {
   let addr = await scopeAddr(env, s);
   let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
   const items = rawItems.map(it => ({
-    id: it.id, area: it.area, trade: it.trade, description: it.description, note: it.note,
+    id: it.id, area: it.area, trade: it.trade, description: it.description,
     variants: (it.variants || []).map(v => ({ key: v.key, label: v.label, price: v.price })), // no vendor_cost
     selected_key: it.selected_key,
-  }));
+  })); // no `note` — free-text field with no internal/customer split; never safe to echo back
   const subtotal = +(items.reduce((sum, it) => { const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2);
   let signed = null;
