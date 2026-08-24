@@ -340,6 +340,7 @@ window.addEventListener('pageshow', function(e){
     <div id="keys-view" style="display:none">
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         <button class="btn" onclick="openAddKeyModal()">+ Add Key / Lockbox</button>
+        <button class="btn secondary" onclick="openBulkAccessModal()">📋 Bulk Set Building Access</button>
         <div style="flex:1;min-width:200px;max-width:340px;position:relative">
           <input type="text" id="key-search" placeholder="🔍 Search by code or number (e.g. A243, 1904)…" oninput="keySearch()" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-family:var(--font);font-size:12px">
         </div>
@@ -1908,9 +1909,14 @@ function openWODetail(woId) {
             var loc = lb.Lockbox_Location || lb.Location || '';
             var vis = (lb.Visibility||'').trim() || 'Auto';
             var visColor = vis==='Brett Only' ? 'var(--danger)' : 'var(--muted)';
+            // Contents (Aug 24, 2026): show what a lockbox actually holds right on the WO
+            // detail widget — this is the exact surface someone dispatches off of, so an
+            // unspecified lockbox on a multi-unit property is flagged, not silently blank.
+            var isLB = /Lockbox/i.test(lb.Key_Type||'');
+            var contentsBadge = isLB ? (lb.Contents ? '<span style="color:var(--info);font-size:10px"> · 🔑 '+esc(lb.Contents)+'</span>' : '<span style="color:var(--danger);font-size:10px"> · ⚠ contents not specified</span>') : '';
             return '<div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">' +
               '<div>' +
-              '<div style="color:'+sc+';font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px">'+esc(lbl)+'</div>' +
+              '<div style="color:'+sc+';font-size:10px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px">'+esc(lbl)+contentsBadge+'</div>' +
               '<span style="color:var(--accent);font-weight:bold;letter-spacing:.08em;font-size:14px">'+esc(code)+'</span>' +
               (loc?'<span style="color:var(--muted);font-size:11px"> · '+esc(loc)+'</span>':'') +
               '</div>' +
@@ -4070,12 +4076,24 @@ function renderKeyRow(k, TYPE_LABEL, POSS_BADGE, DEFAULT_BADGE) {
   var poss = k.Possession_Status || 'Unknown';
   var badge = POSS_BADGE[poss] || DEFAULT_BADGE;
   var unitLabel = k.Unit_ID ? (' <span style="color:var(--muted);font-size:10px">Unit '+(k.Unit_Label||k.Unit_ID)+'</span>') : '';
+  // Contents (Aug 24, 2026): a lockbox "applying to" a multi-unit building may not carry
+  // every key — most only hold a front door key, or are a temp setup for one job. Flagged
+  // in red when a lockbox has NO Contents set yet, since that's the exact ambiguity that
+  // caused a vendor to assume access they didn't have.
+  var isLockboxType = /Lockbox/i.test(k.Key_Type||'');
+  var contentsHtml = '';
+  if (isLockboxType) {
+    contentsHtml = k.Contents
+      ? '<div style="font-size:10px;color:var(--info)">🔑 Contains: '+esc(k.Contents)+'</div>'
+      : '<div style="font-size:10px;color:var(--danger)">⚠ Contents not specified</div>';
+  }
 
   return '<div style="display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)">' +
     '<div style="flex:1;min-width:0">' +
       '<div style="font-size:12px;font-weight:bold">'+esc(label)+unitLabel+'</div>' +
       (code ? '<div style="font-size:11px;color:var(--accent);font-weight:bold;letter-spacing:.05em;margin-top:2px">'+esc(code)+'</div>' : '') +
       (location ? '<div style="font-size:10px;color:var(--muted)">📍 '+esc(location)+'</div>' : '') +
+      contentsHtml +
       (notes ? '<div style="font-size:10px;color:var(--muted)">📝 '+esc(notes)+'</div>' : '') +
     '</div>' +
     '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">' +
@@ -4329,20 +4347,34 @@ function renderMasterKeys(owners) {
   var active = _masterKeys.filter(function(k){ return k.Active!=='FALSE'; });
   if (!active.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No master keys defined yet. Click + Add Master Key to create one.</div>'; return; }
 
-  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Owner</th><th>Notes</th><th>Properties</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Code</th><th>Owner</th><th>Notes</th><th>Properties</th><th></th></tr></thead><tbody>' +
     active.map(function(k) {
       var owner = owners.find(function(o){ return o.ID===k.Owner_ID; });
       var propCount = safeArray(state.properties).filter(function(p){ return p.Master_Key_ID===k.ID; }).length;
       return '<tr>' +
         '<td style="color:var(--accent);font-weight:bold">' + esc(k.Name||'—') + '</td>' +
+        '<td style="font-weight:bold;letter-spacing:.05em">' + (k.Code?esc(k.Code):'<span style="color:var(--danger)">⚠ no code</span>') + '</td>' +
         '<td>' + (owner?esc(owner.First_Name+' '+(owner.Last_Name||'')+' / '+(owner.Company||'')):'<span style="color:var(--muted)">—</span>') + '</td>' +
         '<td style="color:var(--muted);font-size:11px">' + esc(k.Notes||'—') + '</td>' +
         '<td style="color:var(--muted)">' + propCount + ' propert' + (propCount===1?'y':'ies') + '</td>' +
         '<td style="display:flex;gap:4px">' +
           '<button class="btn small secondary" onclick="openBulkAssignModal(\''+k.ID+'\',\''+esc(k.Name)+'\')" title="Bulk assign to owner properties">Assign to Owner</button>' +
+          '<button class="btn small secondary" onclick="editMasterKey(\''+k.ID+'\')" title="Edit code/notes">Edit</button>' +
           '<button class="btn small danger" onclick="if(confirm(\'Delete this master key?\')) api(\'POST\',\'/master-key/update\',{id:\''+k.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshMasterKeys)">Del</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
+}
+
+function editMasterKey(keyId) {
+  var k = _masterKeys.find(function(x){ return x.ID === keyId; });
+  if (!k) { toast('Master key not found', 'error'); return; }
+  var newCode = prompt('Key code (current: ' + (k.Code||'none') + '):', k.Code||'');
+  if (newCode === null) return;
+  var newNotes = prompt('Notes (current: ' + (k.Notes||'none') + '):', k.Notes||'');
+  if (newNotes === null) return;
+  api('POST','/master-key/update',{ id: keyId, fields: { Code: newCode.trim(), Notes: newNotes.trim() } })
+    .then(function(){ toast('Master key updated','success'); refreshMasterKeys(); })
+    .catch(function(e){ toast('Error: '+e.message,'error'); });
 }
 
 var _bulkAssignKeyId = null;
@@ -4369,7 +4401,7 @@ function submitBulkAssign() {
 }
 
 function openAddMasterKeyModal() {
-  ['mk-name','mk-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['mk-name','mk-code','mk-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('mk-owner');
   if (sel) sel.innerHTML = '<option value="">No owner (global)</option>' +
     safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
@@ -4381,6 +4413,7 @@ function submitAddMasterKey() {
   if (!name) { toast('Name required','error'); return; }
   api('POST','/master-key/add',{
     Name: name, Owner_ID: document.getElementById('mk-owner').value,
+    Code: document.getElementById('mk-code').value.trim(),
     Notes: document.getElementById('mk-notes').value.trim(), Active: 'TRUE',
   }).then(function(res){ if(res.id){ toast('Master key added','success'); closeModal('modal-add-masterkey'); refreshMasterKeys(); } });
 }
@@ -8734,6 +8767,7 @@ function qbBatchSend() {
     <div class="modal-header"><div class="modal-title">ADD MASTER KEY</div><button class="modal-close" onclick="closeModal('modal-add-masterkey')">✕</button></div>
     <div class="form-grid">
       <div class="form-group full"><label>Name *</label><input type="text" id="mk-name" placeholder="e.g. Goldszmidt Master, Phoenix Master Key A"></div>
+      <div class="form-group full"><label>Code <span style="font-weight:normal;color:var(--muted)">(the actual key-cut code / number a locksmith or vendor would use)</span></label><input type="text" id="mk-code" placeholder="e.g. KW-1176 or code stamped on the key"></div>
       <div class="form-group full"><label>Owner <span style="font-weight:normal;color:var(--muted)">(which owner's properties use this key)</span></label><select id="mk-owner"><option value="">Global</option></select></div>
       <div class="form-group full"><label>Notes</label><input type="text" id="mk-notes" placeholder="Key tag color, where it's kept, shape…"></div>
     </div>
@@ -8911,6 +8945,15 @@ function qbBatchSend() {
         <input type="text" id="ak-location" placeholder="e.g. On fence near dumpster, right side of entrance">
       </div>
       <div class="form-group full">
+        <label>Lockbox Contains <span style="color:var(--muted);font-weight:normal">(if this is a lockbox — most only hold a front door key, or are a temp setup for one job)</span></label>
+        <select id="ak-contents" style="width:100%">
+          <option value="">— N/A / not a lockbox —</option>
+          <option value="Front Door Only">Front Door Key Only</option>
+          <option value="Front Door + Unit Key">Front Door Key + Unit Key</option>
+          <option value="Unit Key Only">Unit Key Only</option>
+        </select>
+      </div>
+      <div class="form-group full">
         <label>Notes</label>
         <textarea id="ak-notes" placeholder="e.g. Tenant has copy · Locksmith Eastside Hardware made it · Lock changed 2024-06" style="min-height:60px;resize:vertical"></textarea>
       </div>
@@ -8919,6 +8962,28 @@ function qbBatchSend() {
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-add-key')">Cancel</button>
       <button class="btn" onclick="submitAddKey()">ADD ITEM</button>
+    </div>
+  </div>
+</div>
+
+<!-- BULK SET BUILDING ACCESS MODAL (Aug 24, 2026) — set/update Front Door + Service Door
+     access for every property under one owner in a single pass. Pre-fills from whatever
+     building-level Front Door / Service Door items already exist so re-running this later
+     to correct a code UPDATES that item instead of creating a duplicate row. -->
+<div class="modal-overlay" id="modal-bulk-access">
+  <div class="modal" style="max-width:920px">
+    <div class="modal-header"><div class="modal-title">BULK SET BUILDING ACCESS</div><button class="modal-close" onclick="closeModal('modal-bulk-access')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Set the Front Door and (optional) Service Door access for every one of an owner's properties in one pass — for portfolios where no per-unit lockboxes are used and every unit is instead reached through building-level doors. Leave a row blank to skip that property.</p>
+    <div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:12px;flex-wrap:wrap">
+      <div class="form-group" style="margin:0"><label>Owner *</label><select id="ba-owner" onchange="loadBulkAccessRows()" style="width:220px"><option value="">— select owner —</option></select></div>
+      <button class="btn small secondary" onclick="bulkAccessApplyTypeToAll('front')">Copy first Front Door type to all rows</button>
+      <button class="btn small secondary" onclick="bulkAccessApplyTypeToAll('service')">Copy first Service Door type to all rows</button>
+    </div>
+    <div id="ba-rows" style="max-height:50vh;overflow-y:auto"><div style="color:var(--muted);font-size:12px">Select an owner to load their properties.</div></div>
+    <div id="ba-msg" style="margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-bulk-access')">Cancel</button>
+      <button class="btn" onclick="submitBulkAccess()" id="ba-submit-btn" disabled>SAVE ALL</button>
     </div>
   </div>
 </div>
@@ -9017,6 +9082,7 @@ function openAddKeyModal(presetPropId) {
       }).join('');
   }
   ['ak-code','ak-location','ak-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  var akContents = document.getElementById('ak-contents'); if (akContents) akContents.value = '';
   if (presetPropId) {
     document.getElementById('ak-unit').innerHTML = '<option value="">Whole building</option>';
     onAddKeyPropertyChange();
@@ -9049,7 +9115,15 @@ function openEditKeyModal(keyId) {
     var poss = possMap[newPoss.trim()] || k.Possession_Status || 'Unknown';
     var newNotes = prompt('Notes (optional):', k.Notes||'');
     if (newNotes === null) return;
-    api('POST', '/key/update', { id: keyId, fields: { Key_Code: newCode, Lockbox_Code: newCode, Possession_Status: poss, Notes: newNotes } })
+    var fields = { Key_Code: newCode, Lockbox_Code: newCode, Possession_Status: poss, Notes: newNotes };
+    // Contents only makes sense for lockbox-type items — don't nag for a plain key/code.
+    if (/Lockbox/i.test(k.Key_Type||'')) {
+      var newContents = prompt('Lockbox contains:\n1 = Front Door Key Only\n2 = Front Door Key + Unit Key\n3 = Unit Key Only\n4 = N/A / clear\n\nCurrent: ' + (k.Contents||'not set'), '1');
+      if (newContents === null) return;
+      var contentsMap = {'1':'Front Door Only','2':'Front Door + Unit Key','3':'Unit Key Only','4':''};
+      if (contentsMap.hasOwnProperty(newContents.trim())) fields.Contents = contentsMap[newContents.trim()];
+    }
+    api('POST', '/key/update', { id: keyId, fields: fields })
       .then(function(){ toast('Access item updated', 'success'); renderKeysView(); })
       .catch(function(e){ toast('Error: '+e.message,'error'); });
   });
@@ -9067,11 +9141,176 @@ function submitAddKey() {
     Location: document.getElementById('ak-location').value.trim(),
     Possession_Status: poss,
     Notes: document.getElementById('ak-notes').value.trim(),
+    Contents: document.getElementById('ak-contents').value,
     Active: 'TRUE',
   }).then(function(res){
     if (res.id||res.success) { toast('Access item added','success'); closeModal('modal-add-key'); renderKeysView(); }
     else document.getElementById('ak-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+(res.error||'Error')+'</div>';
   });
+}
+
+// ══════════════════════════════════════════════════════════════
+// BULK SET BUILDING ACCESS (Aug 24, 2026) — data point #2 from Brett: "no lockboxes are
+// set for any particular unit, instead they all work the front door and/or a service door
+// as indicated per building." One owner's whole portfolio, one pass, Front Door + optional
+// Service Door per property. Pre-fills from whatever building-level items already exist so
+// running this again to fix a code UPDATES that row instead of creating a duplicate.
+// Front Door types map straight onto the existing Key_Type vocabulary (Building-FrontDoorKey
+// / Building-FrontDoorCode / Building-Lockbox). Service Door has no dedicated Key_Type in the
+// schema, so it reuses the Building-Custom* types with Location fixed to "Service Door" —
+// that string is also how an existing Service Door item is *found* again on reload, so don't
+// change it without updating the lookup below to match.
+// ══════════════════════════════════════════════════════════════
+var _bulkAccessRows = [];
+var SERVICE_DOOR_LOCATION = 'Service Door';
+var BA_TYPE_TO_KEYTYPE = {
+  front:   { Key: 'Building-FrontDoorKey', Code: 'Building-FrontDoorCode', Lockbox: 'Building-Lockbox' },
+  service: { Key: 'Building-CustomKey',    Code: 'Building-CustomCode',    Lockbox: 'Building-CustomLockbox' },
+};
+var BA_FRONT_KEYTYPES = ['Building-FrontDoorKey','Building-FrontDoorCode','Building-Lockbox'];
+var BA_CUSTOM_KEYTYPES = ['Building-CustomKey','Building-CustomCode','Building-CustomLockbox'];
+function baKeyTypeToSimple(kt) {
+  if (kt === 'Building-FrontDoorKey' || kt === 'Building-CustomKey') return 'Key';
+  if (kt === 'Building-FrontDoorCode' || kt === 'Building-CustomCode') return 'Code';
+  return 'Lockbox';
+}
+
+function openBulkAccessModal() {
+  var sel = document.getElementById('ba-owner');
+  sel.innerHTML = '<option value="">— select owner —</option>' +
+    safeArray(state.owners).filter(function(o){return o.Active!=='FALSE';}).map(function(o){
+      return '<option value="'+o.ID+'">'+esc((o.First_Name||'')+(o.Last_Name?' '+o.Last_Name:'')+(o.Company?' / '+o.Company:''))+'</option>';
+    }).join('');
+  document.getElementById('ba-rows').innerHTML = '<div style="color:var(--muted);font-size:12px">Select an owner to load their properties.</div>';
+  document.getElementById('ba-msg').innerHTML = '';
+  document.getElementById('ba-submit-btn').disabled = true;
+  _bulkAccessRows = [];
+  openModal('modal-bulk-access');
+}
+
+function loadBulkAccessRows() {
+  var ownerId = document.getElementById('ba-owner').value;
+  var rowsEl = document.getElementById('ba-rows');
+  if (!ownerId) { rowsEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Select an owner to load their properties.</div>'; document.getElementById('ba-submit-btn').disabled = true; return; }
+  rowsEl.innerHTML = '<div class="loading"><span class="spinner"></span>Loading properties…</div>';
+  var ownerProps = sortPropsNumeric(safeArray(state.properties).filter(function(p){ return p.Owner_ID === ownerId && p.Active !== 'FALSE'; }));
+  if (!ownerProps.length) { rowsEl.innerHTML = '<div style="color:var(--danger);font-size:12px">This owner has no active properties.</div>'; document.getElementById('ba-submit-btn').disabled = true; return; }
+  api('GET','/keys').then(function(allKeys) {
+    allKeys = Array.isArray(allKeys) ? allKeys : [];
+    _bulkAccessRows = ownerProps.map(function(p) {
+      var buildingKeys = allKeys.filter(function(k){ return String(k.Property_ID)===String(p.ID) && !k.Unit_ID && k.Active!=='FALSE'; });
+      var existingFront = buildingKeys.find(function(k){ return BA_FRONT_KEYTYPES.indexOf(k.Key_Type)!==-1; });
+      var existingService = buildingKeys.find(function(k){ return BA_CUSTOM_KEYTYPES.indexOf(k.Key_Type)!==-1 && (k.Location||'').toLowerCase().indexOf('service')!==-1; });
+      return {
+        propertyId: p.ID, address: p.Address + (p.City ? ', '+p.City : ''),
+        front:   { existingId: existingFront ? existingFront.ID : '', type: existingFront ? baKeyTypeToSimple(existingFront.Key_Type) : 'Lockbox', code: existingFront ? (existingFront.Key_Code||existingFront.Lockbox_Code||existingFront.Code||'') : '', contents: existingFront ? (existingFront.Contents||'') : '' },
+        service: { existingId: existingService ? existingService.ID : '', enabled: !!existingService, type: existingService ? baKeyTypeToSimple(existingService.Key_Type) : 'Lockbox', code: existingService ? (existingService.Key_Code||existingService.Lockbox_Code||existingService.Code||'') : '', contents: existingService ? (existingService.Contents||'') : '' },
+      };
+    });
+    renderBulkAccessRows();
+    document.getElementById('ba-submit-btn').disabled = false;
+  }).catch(function(e){ rowsEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Error loading keys: '+esc(e.message||'unknown')+'</div>'; });
+}
+
+function baContentsOptions(selected) {
+  return ['', 'Front Door Only', 'Front Door + Unit Key', 'Unit Key Only'].map(function(o){
+    var lbl = o || '— contents n/a —';
+    return '<option value="'+esc(o)+'"'+(o===selected?' selected':'')+'>'+esc(lbl)+'</option>';
+  }).join('');
+}
+function baTypeOptions(selected) {
+  return ['Key','Code','Lockbox'].map(function(o){ return '<option value="'+o+'"'+(o===selected?' selected':'')+'>'+(o==='Key'?'🗝 Key':o==='Code'?'📱 Electronic Code':'🔒 Lockbox')+'</option>'; }).join('');
+}
+
+function renderBulkAccessRows() {
+  var rowsEl = document.getElementById('ba-rows');
+  rowsEl.innerHTML = '<table class="data-table" style="width:100%"><thead><tr>' +
+    '<th>Property</th><th>Front Door Type</th><th>Front Door Code</th><th>Front Door Lockbox Contains</th>' +
+    '<th>Service Door?</th><th>Type</th><th>Code</th><th>Lockbox Contains</th>' +
+    '</tr></thead><tbody>' +
+    _bulkAccessRows.map(function(r, i) {
+      return '<tr>' +
+        '<td style="font-size:11px">'+esc(r.address)+'</td>' +
+        '<td><select id="ba-front-type-'+i+'" onchange="baOnTypeChange('+i+',\'front\')" style="font-size:11px">'+baTypeOptions(r.front.type)+'</select></td>' +
+        '<td><input type="text" id="ba-front-code-'+i+'" value="'+esc(r.front.code)+'" style="width:110px;font-size:11px" placeholder="code"></td>' +
+        '<td id="ba-front-contents-wrap-'+i+'" style="display:'+(r.front.type==='Lockbox'?'':'none')+'"><select id="ba-front-contents-'+i+'" style="font-size:11px">'+baContentsOptions(r.front.contents)+'</select></td>' +
+        '<td style="text-align:center"><input type="checkbox" id="ba-service-enable-'+i+'" '+(r.service.enabled?'checked':'')+' onchange="baToggleService('+i+')"></td>' +
+        '<td id="ba-service-type-wrap-'+i+'" style="display:'+(r.service.enabled?'':'none')+'"><select id="ba-service-type-'+i+'" onchange="baOnTypeChange('+i+',\'service\')" style="font-size:11px">'+baTypeOptions(r.service.type)+'</select></td>' +
+        '<td id="ba-service-code-wrap-'+i+'" style="display:'+(r.service.enabled?'':'none')+'"><input type="text" id="ba-service-code-'+i+'" value="'+esc(r.service.code)+'" style="width:110px;font-size:11px" placeholder="code"></td>' +
+        '<td id="ba-service-contents-wrap-'+i+'" style="display:'+(r.service.enabled && r.service.type==='Lockbox'?'':'none')+'"><select id="ba-service-contents-'+i+'" style="font-size:11px">'+baContentsOptions(r.service.contents)+'</select></td>' +
+        '</tr>';
+    }).join('') + '</tbody></table>';
+}
+
+function baOnTypeChange(i, slot) {
+  var typeSel = document.getElementById('ba-'+slot+'-type-'+i);
+  var wrap = document.getElementById('ba-'+slot+'-contents-wrap-'+i);
+  if (wrap) wrap.style.display = (typeSel.value === 'Lockbox') ? '' : 'none';
+}
+function baToggleService(i) {
+  var on = document.getElementById('ba-service-enable-'+i).checked;
+  ['ba-service-type-wrap-'+i, 'ba-service-code-wrap-'+i].forEach(function(id){ var e=document.getElementById(id); if(e) e.style.display = on ? '' : 'none'; });
+  var contentsWrap = document.getElementById('ba-service-contents-wrap-'+i);
+  if (contentsWrap) contentsWrap.style.display = (on && document.getElementById('ba-service-type-'+i).value==='Lockbox') ? '' : 'none';
+}
+function bulkAccessApplyTypeToAll(slot) {
+  if (!_bulkAccessRows.length) return;
+  var first = document.getElementById('ba-'+slot+'-type-0');
+  if (!first) return;
+  var val = first.value;
+  _bulkAccessRows.forEach(function(r, i) {
+    var sel = document.getElementById('ba-'+slot+'-type-'+i);
+    if (sel && (slot==='front' || document.getElementById('ba-service-enable-'+i).checked)) { sel.value = val; baOnTypeChange(i, slot); }
+  });
+}
+
+function submitBulkAccess() {
+  var ownerId = document.getElementById('ba-owner').value;
+  if (!ownerId || !_bulkAccessRows.length) { toast('Select an owner first','error'); return; }
+  var msgEl = document.getElementById('ba-msg');
+  msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Saving…</div>';
+  var ops = [];
+  _bulkAccessRows.forEach(function(r, i) {
+    var frontCode = document.getElementById('ba-front-code-'+i).value.trim();
+    var frontType = document.getElementById('ba-front-type-'+i).value;
+    var frontContentsEl = document.getElementById('ba-front-contents-'+i);
+    var frontContents = frontContentsEl ? frontContentsEl.value : '';
+    // Skip a row with no code and no existing item to update — don't create blank rows.
+    if (frontCode || r.front.existingId) {
+      var frontFields = { Key_Type: BA_TYPE_TO_KEYTYPE.front[frontType], Key_Code: frontCode, Lockbox_Code: frontCode, Contents: frontType==='Lockbox' ? frontContents : '', Possession_Status: 'Have It', Active: 'TRUE' };
+      if (r.front.existingId) ops.push({ url:'/key/update', body:{ id: r.front.existingId, fields: frontFields } });
+      else ops.push({ url:'/key/add', body: Object.assign({ Property_ID: r.propertyId, Unit_ID: '', Notes: '' }, frontFields) });
+    }
+    var serviceOn = document.getElementById('ba-service-enable-'+i).checked;
+    var serviceCode = serviceOn ? document.getElementById('ba-service-code-'+i).value.trim() : '';
+    if (serviceOn && (serviceCode || r.service.existingId)) {
+      var serviceType = document.getElementById('ba-service-type-'+i).value;
+      var serviceContentsEl = document.getElementById('ba-service-contents-'+i);
+      var serviceContents = serviceContentsEl ? serviceContentsEl.value : '';
+      var serviceFields = { Key_Type: BA_TYPE_TO_KEYTYPE.service[serviceType], Key_Code: serviceCode, Lockbox_Code: serviceCode, Location: SERVICE_DOOR_LOCATION, Contents: serviceType==='Lockbox' ? serviceContents : '', Possession_Status: 'Have It', Active: 'TRUE' };
+      if (r.service.existingId) ops.push({ url:'/key/update', body:{ id: r.service.existingId, fields: serviceFields } });
+      else ops.push({ url:'/key/add', body: Object.assign({ Property_ID: r.propertyId, Unit_ID: '', Notes: '' }, serviceFields) });
+    } else if (!serviceOn && r.service.existingId) {
+      // Was on file, unchecked in this pass — deactivate rather than silently leaving a
+      // stale service-door code active that nobody's tracking anymore.
+      ops.push({ url:'/key/update', body:{ id: r.service.existingId, fields: { Active: 'FALSE' } } });
+    }
+  });
+  if (!ops.length) { msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Nothing to save — no codes entered.</div>'; return; }
+  var done = 0, failed = 0;
+  function next(idx) {
+    if (idx >= ops.length) {
+      msgEl.innerHTML = '<div style="color:'+(failed?'var(--danger)':'var(--accent2)')+';font-size:12px">✓ Saved '+done+' item(s)'+(failed?', '+failed+' failed':'')+'.</div>';
+      renderKeysView();
+      if (!failed) setTimeout(function(){ closeModal('modal-bulk-access'); }, 1200);
+      return;
+    }
+    api('POST', ops[idx].url, ops[idx].body).then(function(res){
+      if (res && (res.success || res.id)) done++; else failed++;
+      next(idx+1);
+    }).catch(function(){ failed++; next(idx+1); });
+  }
+  next(0);
 }
 
 // Per-code sharing control (WO-detail "ACCESS CODES (live)" widget). 'Brett Only' withholds

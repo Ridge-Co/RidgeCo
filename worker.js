@@ -268,7 +268,13 @@ export default {
         if (path === '/set-pin')                  return await updateRow(env, 'Tenants', body.tenant_id, { PIN: body.pin });
         if (path === '/vendor/set-pin')           return await updateRow(env, 'Vendors', body.vendor_id, { PIN: body.pin });
         if (path === '/owner/set-pin')            return await updateRow(env, 'Owners', body.owner_id, { PIN: body.pin });
-        if (path === '/key/add')                  return await addRow(env, 'Keys', body);
+        // Contents (Aug 24, 2026): what a Lockbox key ACTUALLY holds — 'Front Door Only' |
+        // 'Front Door + Unit Key' | 'Unit Key Only'. A Building-level lockbox entry is shown
+        // to every unit's work order at that property (see getWOLockboxes below), which used
+        // to silently imply full access — most only hold the front door key, or are a one-off
+        // box set up for a single job. ensureColumns first so a brand-new column on the FIRST
+        // key ever written to carry it doesn't get silently dropped by addRow's header-only map.
+        if (path === '/key/add')                  { await ensureColumns(env, 'Keys', ['Contents']); return await addRow(env, 'Keys', body); }
         if (path === '/key/update')               return await updateKeyWithHistory(env, body);
         if (path === '/key/delete')               return await updateRow(env, 'Keys', body.id, { Active: 'FALSE' });
         if (path === '/building-info/save')       return await saveBuildingInfo(env, body);
@@ -307,8 +313,13 @@ export default {
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
-        if (path === '/master-key/add')           return await addRow(env, 'Master_Keys', body);
-        if (path === '/master-key/update')        return await updateRow(env, 'Master_Keys', body.id, body.fields);
+        // Code (Aug 24, 2026): Master_Keys previously had only Name/Owner/Notes — no actual
+        // key-code field, so a vendor standing at the door had nothing usable even once
+        // told "this property is on the Goldszmidt master key." ensureColumns first so the
+        // new column isn't silently dropped by addRow/updateRow's header-only field map
+        // (rule 37 — see FEATURE_LOG).
+        if (path === '/master-key/add')           { await ensureColumns(env, 'Master_Keys', ['Code']); return await addRow(env, 'Master_Keys', body); }
+        if (path === '/master-key/update')        { await ensureColumns(env, 'Master_Keys', ['Code']); return await updateRow(env, 'Master_Keys', body.id, body.fields); }
         if (path === '/master-key/bulk-assign')   return await bulkAssignMasterKey(env, body);
         if (path === '/wo-template/add')          return await addRow(env, 'WO_Templates', body);
         if (path === '/wo-template/update')       return await updateRow(env, 'WO_Templates', body.id, body.fields);
@@ -702,8 +713,8 @@ async function keysByUnit(env, url) {
   }));
 }
 
-function getWOLockboxes(keys, woPropertyId, woUnitId, woUnitLabel) {
-  return keys
+function getWOLockboxes(keys, woPropertyId, woUnitId, woUnitLabel, masterKeyRow) {
+  const result = keys
     .filter(k => {
       if (k.Active === 'FALSE') return false;
       if (!k.Property_ID || String(k.Property_ID) !== String(woPropertyId)) return false;
@@ -745,7 +756,12 @@ function getWOLockboxes(keys, woPropertyId, woUnitId, woUnitLabel) {
       };
       const typeLabel = TYPE_MAP[k.Key_Type] || (k.Key_Type || 'Key');
       const unitDisplay = kUnit || woUnitLabel || '';
-      const label = isBuilding ? `Building — ${typeLabel}` : `${unitDisplay ? 'Unit '+unitDisplay+' — ' : ''}${typeLabel}`;
+      // Contents (Aug 24, 2026): what a Lockbox key ACTUALLY holds — a lockbox that "applies
+      // to" a multi-unit building may only carry a front-door key, or be a one-off setup for
+      // a single job, not every key someone might assume. Appended onto the label itself
+      // (not just a side field) so it can't be missed by whoever's reading the dispatch text.
+      const contents = (k.Contents || '').trim();
+      const label = (isBuilding ? `Building — ${typeLabel}` : `${unitDisplay ? 'Unit '+unitDisplay+' — ' : ''}${typeLabel}`) + (contents ? ` [${contents}]` : '');
       const code = k.Key_Code || k.Lockbox_Code || k.Code || k.code || '';
       const location = k.Lockbox_Location || k.Location || k.Notes || '';
       // Visibility (Keys.Visibility): '' / 'Auto' = this code follows the normal trade/WO
@@ -756,10 +772,30 @@ function getWOLockboxes(keys, woPropertyId, woUnitId, woUnitLabel) {
       // sharing controllable per CODE, independent of its type (lock code, lockbox code,
       // electronic door code, gate code, ...) instead of one all-or-nothing WO-level switch.
       const visibility = (k.Visibility || '').trim();
-      return { id: k.ID||'', label, code, location, notes: k.Notes||'', type: k.Key_Type||'', scope: isBuilding ? 'building' : 'unit', visibility };
+      return { id: k.ID||'', label, code, location, notes: k.Notes||'', type: k.Key_Type||'', scope: isBuilding ? 'building' : 'unit', visibility, contents };
     })
     .filter(k => k.code || k.location)
     .sort((a, b) => a.scope === 'building' && b.scope !== 'building' ? -1 : 1);
+  // Master Key (Aug 24, 2026): Properties.Master_Key_ID has been writable since the
+  // bulk-assign-to-owner feature shipped, but nothing downstream ever read it — a vendor
+  // dispatched to a master-keyed property saw no access info at all unless a Keys row also
+  // happened to exist. Synthesized here as a building-level entry so it flows through both
+  // the dispatch SMS (assignVendor) and every enrichWO-based portal view automatically.
+  // Placed first (unshift) so it's the first thing a vendor reads, same as a real lockbox.
+  if (masterKeyRow && masterKeyRow.ID) {
+    result.unshift({
+      id: 'mk-' + masterKeyRow.ID,
+      label: 'Master Key — ' + (masterKeyRow.Name || 'Unnamed'),
+      code: masterKeyRow.Code || '(no code on file — ask Brett)',
+      location: masterKeyRow.Notes || '',
+      notes: masterKeyRow.Notes || '',
+      type: 'Master Key',
+      scope: 'building',
+      visibility: '',
+      contents: '',
+    });
+  }
+  return result;
 }
 
 async function updateKeyWithHistory(env, body) {
@@ -781,7 +817,7 @@ async function updateKeyWithHistory(env, body) {
   // existing header name, so writing Visibility (new, per-code sharing control) or
   // Last_Changed on a sheet that's never had them silently drops the write with no error.
   // Grow the header row first; no-ops instantly once the columns exist.
-  await ensureColumns(env, 'Keys', ['Visibility', 'Last_Changed']);
+  await ensureColumns(env, 'Keys', ['Visibility', 'Last_Changed', 'Contents']);
   return await updateRow(env, 'Keys', body.id, { ...body.fields, Last_Changed: now });
 }
 
@@ -2252,8 +2288,8 @@ async function appendWONotes(env, body) {
   return json({ success: true });
 }
 async function assignVendor(env, body) {
-  const [workorders, vendors, tenants, units, properties, keys] = await fetchTabs(env, [
-    'Work_Orders','Vendors','Tenants','Units','Properties','Keys',
+  const [workorders, vendors, tenants, units, properties, keys, masterKeys] = await fetchTabs(env, [
+    'Work_Orders','Vendors','Tenants','Units','Properties','Keys','Master_Keys',
   ]);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const vendor = vendors.find(v => v.ID === body.vendor_id); if (!vendor) return json({ error: 'Vendor not found' }, 404);
@@ -2263,7 +2299,8 @@ async function assignVendor(env, body) {
   const room     = (wo.Room||'').trim();
   const address  = property ? `${property.Address}${unit ? ' Unit '+unit.Unit_Label : ''}${room ? ' ('+room+')' : ''}` : 'the property';
   let accessInfo = '';
-  const lockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID);
+  const masterKeyRow = (property && property.Master_Key_ID) ? masterKeys.find(mk => mk.ID === property.Master_Key_ID && mk.Active !== 'FALSE') : null;
+  const lockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit ? unit.Unit_Label : '', masterKeyRow);
   if (lockboxes.length) {
     accessInfo = ' ' + lockboxes.map(lb => `${lb.label || 'Lockbox'}${lb.location ? ' ('+lb.location+')' : ''}: ${lb.code}`).join('. ') + '.';
   } else {
@@ -2397,8 +2434,8 @@ async function vendorWorkorders(env, url) {
   const vendorId = url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [[workorders, properties, units, tenants, keys, vendors], config] = await Promise.all([
-    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']),
+  const [[workorders, properties, units, tenants, keys, vendors, masterKeys], config] = await Promise.all([
+    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys']),
     fetchConfig(env),
   ]);
   let tradeAccessDefaults = {};
@@ -2407,7 +2444,7 @@ async function vendorWorkorders(env, url) {
   // vendors passed through so enrichWO can tell whether THIS vendor is Brett's own
   // in-house record — that's what lets a "Brett Only" code still surface on a WO
   // that's actually assigned to him (see enrichWO's visibleLockboxes).
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true, vendors }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true, vendors }, masterKeys));
   enriched.sort((a, b) => { const pa = PRIORITY_ORDER[a.Priority?.toLowerCase()] ?? 2, pb = PRIORITY_ORDER[b.Priority?.toLowerCase()] ?? 2; return pa !== pb ? pa - pb : (a.property_address||'').localeCompare(b.property_address||''); });
   return json(enriched);
 }
@@ -2416,7 +2453,7 @@ async function tenantWorkorders(env, url) {
   const tenantId = url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
+  const [workorders, properties, units, tenants, keys, vendors, masterKeys] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys']);
   const tenant = tenants.find(t => t.ID === tenantId); if (!tenant) return json([]);
   // isBackgroundWO: don't show a WO opened before this tenant moved in — matches the rule
   // isTenantNotifiable already applies to SMS, so "won't text them about it" and "won't show
@@ -2425,7 +2462,7 @@ async function tenantWorkorders(env, url) {
   // tenants get the assigned vendor's name/phone/trade so they can coordinate access —
   // enrichWO never resolved Vendor_ID -> a name/phone at all before this (tenant.html and
   // owner.html both had a "Technician: —" row wired up with nothing to fill it).
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true, vendors }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true, vendors }, masterKeys));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
 }
@@ -2434,12 +2471,12 @@ async function ownerWorkorders(env, url) {
   const ownerId = url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
+  const [workorders, properties, units, tenants, keys, vendors, masterKeys] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys']);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
   const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
   // vendor relationship mediated through Brett rather than owners going around him.
-  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors }));
+  const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors }, masterKeys));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
 }
@@ -2507,7 +2544,8 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[]) 
       vendorInHouse = String(v.In_House||'').toUpperCase() === 'TRUE';
     }
   }
-  const rawLockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit.Unit_Label||'');
+  const masterKeyRow = (property && property.Master_Key_ID) ? masterKeys.find(mk => mk.ID === property.Master_Key_ID && mk.Active !== 'FALSE') : null;
+  const rawLockboxes = getWOLockboxes(keys, wo.Property_ID, wo.Unit_ID, unit.Unit_Label||'', masterKeyRow);
   // Per-code visibility, independent of the per-WO/per-trade share toggle above: a code
   // marked "Brett Only" (see getWOLockboxes) is stripped out of every external render —
   // enrichWO is ONLY ever used to build vendor/tenant/owner/shared-link views, never the
@@ -5947,8 +5985,8 @@ async function woSharedRead(env, url){
   const woId = url.searchParams.get('wo')||'';
   const auth = await woShareAuth(env, url.searchParams.get('st'), woId);
   if(!auth) return json({ error:'Unauthorized', message:'Please re-enter the last 4 digits of your phone.' }, 401);
-  const [[workorders, properties, units, tenants, keys, vendors], config] = await Promise.all([
-    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']),
+  const [[workorders, properties, units, tenants, keys, vendors, masterKeys], config] = await Promise.all([
+    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys']),
     fetchConfig(env),
   ]);
   const wo = findWO(workorders, woId);
@@ -5961,7 +5999,7 @@ async function woSharedRead(env, url){
   // ask for. vendors IS passed so the new per-code "Brett Only" filter (which applies
   // unconditionally in enrichWO, independent of vendorView) can still make the one
   // exception for a link whose own vendor record is Brett's in-house one.
-  const e = enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendors });
+  const e = enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendors }, masterKeys);
   // Explicit vendor-safe whitelist — never spread the raw WO (that would leak owner ids,
   // QB refs, internal flags). Owner data is omitted entirely.
   const safe = {
