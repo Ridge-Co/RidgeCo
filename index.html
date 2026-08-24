@@ -1940,6 +1940,43 @@ function openWODetail(woId) {
     }).catch(function(){});
   }
 
+  // Master Key status (Aug 24, 2026, admin-only) — this Hub view always sees the full
+  // picture regardless of vendor gating: whether the property is on a master key, and (if a
+  // vendor is assigned) whether THAT vendor currently holds a copy. This is what lets Brett
+  // see at a glance "Eddy doesn't have his copy yet" without hunting through the Master Keys
+  // panel. The vendor/tenant/owner-facing gate (enrichWO's opts.viewingVendorId) is separate
+  // and unaffected by this — this block is admin-Hub-only.
+  if (wo.Property_ID) {
+    var mkProp = safeArray(state.properties).find(function(p){ return String(p.ID)===String(wo.Property_ID); });
+    if (mkProp && mkProp.Master_Key_ID) {
+      Promise.all([api('GET','/master-keys'), api('GET','/master-key/holders')]).then(function(res){
+        var openWO2 = (document.getElementById('detail-wo-id') || {}).textContent;
+        if (openWO2 !== woId) return;
+        var mk = safeArray(res[0]).find(function(k){ return k.ID === mkProp.Master_Key_ID; });
+        if (!mk) return;
+        var holders = safeArray(res[1]).filter(function(h){ return h.Master_Key_ID === mk.ID && h.Active !== 'FALSE'; });
+        var assignedHolder = wo.Vendor_ID ? holders.find(function(h){ return h.Vendor_ID === wo.Vendor_ID; }) : null;
+        var vendorName = '';
+        if (wo.Vendor_ID) { var v = safeArray(state.vendors).find(function(vv){ return vv.ID===wo.Vendor_ID; }); if (v) vendorName = v.Name || (v.First_Name||''); }
+        var statusLine = wo.Vendor_ID
+          ? (vendorName + ': ' + (assignedHolder && assignedHolder.Status==='Have It'
+              ? '<span style="color:var(--accent2)">✓ has a copy</span>'
+              : '<span style="color:var(--danger)">✗ does not have a copy yet</span>'))
+          : '<span style="color:var(--muted)">No vendor assigned yet</span>';
+        var priorMk = document.getElementById('wo-masterkey-' + woId);
+        if (priorMk) priorMk.remove();
+        var mkDiv = document.createElement('div');
+        mkDiv.id = 'wo-masterkey-' + woId;
+        mkDiv.style.cssText = 'padding:10px 14px;background:var(--surface2);border-top:1px solid var(--border);font-size:12px';
+        mkDiv.innerHTML = '<span style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">🔑 Master Key — ' + esc(mk.Name||'') + '</span>' +
+          '<div style="margin-top:4px">' + statusLine + '</div>' +
+          '<div style="font-size:10px;color:var(--muted);margin-top:4px">Never shown to the tenant. Only the vendor actually assigned to this WO ever sees this, and only their own status.</div>';
+        var db2 = document.getElementById('detail-body');
+        if (db2) db2.insertAdjacentElement('afterbegin', mkDiv);
+      }).catch(function(){});
+    }
+  }
+
   api('GET','/wo-audit?wo_id='+woId).then(function(entries){
     var el = document.getElementById('auditTrailBody');
     if (!el) return;
@@ -3907,7 +3944,11 @@ function keySearch() {
   var matches = allKeys.filter(function(k) {
     var code = (k.Key_Code || k.Lockbox_Code || k.Code || k.code || '').toLowerCase();
     var notes = (k.Notes || '').toLowerCase();
-    return code.includes(q) || notes.includes(q);
+    // Key_Identifier (Aug 24, 2026): the number stamped on the physical key/lock itself —
+    // this is what makes "found key #123, whose is that" actually searchable, separate from
+    // the access code search above.
+    var identifier = (k.Key_Identifier || '').toLowerCase();
+    return code.includes(q) || notes.includes(q) || identifier.includes(q);
   });
 
   resultsDiv.style.display = '';
@@ -3958,7 +3999,7 @@ function keySearch() {
   var TH = '<th style="padding:8px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em">';
   var html = '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
     '<thead><tr style="background:var(--surface2)">' +
-    TH+'Code</th>'+TH+'Type</th>'+TH+'Property</th>'+TH+'Unit</th>' +
+    TH+'Code</th>'+TH+'Key/Lock ID</th>'+TH+'Type</th>'+TH+'Property</th>'+TH+'Unit</th>' +
     TH+'Location / Notes</th>'+TH+'Possession</th>'+TH+'Status</th>' +
     '</tr></thead><tbody>';
 
@@ -3973,6 +4014,7 @@ function keySearch() {
 
     html += '<tr style="border-bottom:1px solid var(--border);'+(isActive?'':'opacity:.5')+'">' +
       '<td style="padding:8px 10px;font-weight:bold;color:'+(isActive?'var(--accent)':'var(--muted)')+';font-size:13px;letter-spacing:.05em">' + esc(code) + '</td>' +
+      '<td style="padding:8px;color:var(--muted);font-size:11px">' + (k.Key_Identifier ? esc(k.Key_Identifier) : '—') + '</td>' +
       '<td style="padding:8px;color:var(--muted);font-size:11px">' + esc(label) + '</td>' +
       '<td style="padding:8px">' +
         (prop
@@ -4094,6 +4136,7 @@ function renderKeyRow(k, TYPE_LABEL, POSS_BADGE, DEFAULT_BADGE) {
       (code ? '<div style="font-size:11px;color:var(--accent);font-weight:bold;letter-spacing:.05em;margin-top:2px">'+esc(code)+'</div>' : '') +
       (location ? '<div style="font-size:10px;color:var(--muted)">📍 '+esc(location)+'</div>' : '') +
       contentsHtml +
+      (k.Key_Identifier ? '<div style="font-size:10px;color:var(--muted)">🏷 Key/Lock ID: '+esc(k.Key_Identifier)+'</div>' : '') +
       (notes ? '<div style="font-size:10px;color:var(--muted)">📝 '+esc(notes)+'</div>' : '') +
     '</div>' +
     '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">' +
@@ -4357,12 +4400,69 @@ function renderMasterKeys(owners) {
         '<td>' + (owner?esc(owner.First_Name+' '+(owner.Last_Name||'')+' / '+(owner.Company||'')):'<span style="color:var(--muted)">—</span>') + '</td>' +
         '<td style="color:var(--muted);font-size:11px">' + esc(k.Notes||'—') + '</td>' +
         '<td style="color:var(--muted)">' + propCount + ' propert' + (propCount===1?'y':'ies') + '</td>' +
-        '<td style="display:flex;gap:4px">' +
+        '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
           '<button class="btn small secondary" onclick="openBulkAssignModal(\''+k.ID+'\',\''+esc(k.Name)+'\')" title="Bulk assign to owner properties">Assign to Owner</button>' +
+          '<button class="btn small secondary" onclick="openMasterKeyHoldersModal(\''+k.ID+'\',\''+esc(k.Name)+'\')" title="Which vendors currently hold a physical copy">🔑 Who Has It</button>' +
           '<button class="btn small secondary" onclick="editMasterKey(\''+k.ID+'\')" title="Edit code/notes">Edit</button>' +
           '<button class="btn small danger" onclick="if(confirm(\'Delete this master key?\')) api(\'POST\',\'/master-key/update\',{id:\''+k.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshMasterKeys)">Del</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
+}
+
+// ── Master Key Holders (Aug 24, 2026) ───────────────────────────
+// Who currently possesses a physical copy of a master key — a fact about the VENDOR, not
+// the property, and one that changes over time (checked out, returned, promised-not-yet-
+// given). This is what lets a WO tell a vendor "you have a copy" vs. "you don't have one
+// yet — check with Brett" accurately, per-vendor, and is the ONLY thing that gates whether
+// enrichWO ever mentions a master key to that vendor at all (see worker.js).
+var _mkHoldersKeyId = null, _mkHoldersKeyName = '';
+function openMasterKeyHoldersModal(keyId, keyName) {
+  _mkHoldersKeyId = keyId; _mkHoldersKeyName = keyName;
+  document.getElementById('mkh-title').textContent = 'WHO HAS "' + keyName.toUpperCase() + '"';
+  var sel = document.getElementById('mkh-vendor');
+  sel.innerHTML = '<option value="">— select vendor —</option>' +
+    safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){
+      return '<option value="'+v.ID+'">'+esc(v.Name||((v.First_Name||'')+' '+(v.Last_Name||'')).trim())+'</option>';
+    }).join('');
+  document.getElementById('mkh-status').value = 'Have It';
+  document.getElementById('mkh-notes').value = '';
+  document.getElementById('mkh-list').innerHTML = '<div class="loading"><span class="spinner"></span>Loading…</div>';
+  openModal('modal-master-key-holders');
+  refreshMasterKeyHolders();
+}
+function refreshMasterKeyHolders() {
+  api('GET','/master-key/holders').then(function(rows){
+    var holders = safeArray(rows).filter(function(h){ return h.Master_Key_ID === _mkHoldersKeyId && h.Active !== 'FALSE'; });
+    var listEl = document.getElementById('mkh-list');
+    if (!holders.length) { listEl.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:10px 0">No vendor holds a copy on file yet.</div>'; return; }
+    var STATUS_COLOR = { 'Have It':'var(--accent2)', 'Need Copy':'#fdba74', "Don't Have It":'var(--danger)' };
+    listEl.innerHTML = holders.map(function(h){
+      var v = safeArray(state.vendors).find(function(vv){ return vv.ID === h.Vendor_ID; });
+      var name = v ? (v.Name || ((v.First_Name||'')+' '+(v.Last_Name||'')).trim()) : ('Vendor #'+h.Vendor_ID);
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">' +
+        '<div><span style="font-weight:bold;font-size:12px">'+esc(name)+'</span>' +
+        ' <span style="color:'+(STATUS_COLOR[h.Status]||'var(--muted)')+';font-size:11px;margin-left:6px">'+esc(h.Status||'Unknown')+'</span>' +
+        (h.Notes ? '<div style="color:var(--muted);font-size:10px">'+esc(h.Notes)+'</div>' : '') + '</div>' +
+        '<button class="btn small danger" style="font-size:10px;padding:2px 8px" onclick="removeMasterKeyHolder(\''+h.Vendor_ID+'\')">Remove</button>' +
+      '</div>';
+    }).join('');
+  });
+}
+function submitMasterKeyHolder() {
+  var vendorId = document.getElementById('mkh-vendor').value;
+  if (!vendorId) { toast('Select a vendor','error'); return; }
+  api('POST','/master-key/set-holder', {
+    master_key_id: _mkHoldersKeyId, vendor_id: vendorId,
+    status: document.getElementById('mkh-status').value,
+    notes: document.getElementById('mkh-notes').value.trim(),
+  }).then(function(res){
+    if (res && (res.success)) { toast('Saved','success'); refreshMasterKeyHolders(); }
+    else toast('Error: '+((res&&res.error)||'unknown'),'error');
+  });
+}
+function removeMasterKeyHolder(vendorId) {
+  api('POST','/master-key/set-holder', { master_key_id: _mkHoldersKeyId, vendor_id: vendorId, status: "Don't Have It", notes: '' })
+    .then(function(){ toast('Updated','success'); refreshMasterKeyHolders(); });
 }
 
 function editMasterKey(keyId) {
@@ -8923,6 +9023,32 @@ function qbBatchSend() {
   </div>
 </div>
 
+<!-- MASTER KEY HOLDERS MODAL (Aug 24, 2026) -->
+<div class="modal-overlay" id="modal-master-key-holders">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header"><div class="modal-title" id="mkh-title">WHO HAS IT</div><button class="modal-close" onclick="closeModal('modal-master-key-holders')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Which vendors currently hold a physical copy of this master key. This is the ONLY thing that decides whether a work order tells that vendor "you have a copy" — never shown to a tenant, never shown to a vendor who isn't listed here.</p>
+    <div id="mkh-list" style="margin-bottom:14px"></div>
+    <div style="border-top:1px solid var(--border);padding-top:10px">
+      <div class="form-grid">
+        <div class="form-group full"><label>Vendor</label><select id="mkh-vendor" style="width:100%"><option value="">— select vendor —</option></select></div>
+        <div class="form-group"><label>Status</label>
+          <select id="mkh-status" style="width:100%">
+            <option value="Have It">✓ Have It</option>
+            <option value="Need Copy">⚠ Need Copy (promised)</option>
+            <option value="Don't Have It">✗ Don't Have It</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Notes</label><input type="text" id="mkh-notes" placeholder="optional"></div>
+      </div>
+      <button class="btn small" style="margin-top:6px" onclick="submitMasterKeyHolder()">Save</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-master-key-holders')">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ADD TEMPLATE MODAL -->
 <div class="modal-overlay" id="modal-add-template">
   <div class="modal" style="max-width:500px">
@@ -9068,12 +9194,16 @@ function qbBatchSend() {
         </select>
       </div>
       <div class="form-group">
-        <label>Code / Number / Combination</label>
+        <label>Access Code <span style="font-weight:normal;color:var(--muted)">(what someone dials/types to get in)</span></label>
         <input type="text" id="ak-code" placeholder="e.g. 4421 or #A-7 or key code 2834">
       </div>
       <div class="form-group">
         <label>Location / Where to find it</label>
         <input type="text" id="ak-location" placeholder="e.g. On fence near dumpster, right side of entrance">
+      </div>
+      <div class="form-group full">
+        <label>Key/Lock ID <span style="color:var(--muted);font-weight:normal">(the number stamped on the physical key or lock — for ordering a duplicate, or looking up a found key. NOT the access code above.)</span></label>
+        <input type="text" id="ak-identifier" placeholder="e.g. KW-1176, stamped '204B'">
       </div>
       <div class="form-group full">
         <label>Lockbox Contains <span style="color:var(--muted);font-weight:normal">(if this is a lockbox — most only hold a front door key, or are a temp setup for one job)</span></label>
@@ -9212,7 +9342,7 @@ function openAddKeyModal(presetPropId) {
         return '<option value="'+p.ID+'"'+(String(p.ID)===String(presetPropId)?'selected':'')+'>'+p.Address+(p.City?', '+p.City:'')+'</option>';
       }).join('');
   }
-  ['ak-code','ak-location','ak-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['ak-code','ak-location','ak-notes','ak-identifier'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var akContents = document.getElementById('ak-contents'); if (akContents) akContents.value = '';
   if (presetPropId) {
     document.getElementById('ak-unit').innerHTML = '<option value="">Whole building</option>';
@@ -9246,7 +9376,9 @@ function openEditKeyModal(keyId) {
     var poss = possMap[newPoss.trim()] || k.Possession_Status || 'Unknown';
     var newNotes = prompt('Notes (optional):', k.Notes||'');
     if (newNotes === null) return;
-    var fields = { Key_Code: newCode, Lockbox_Code: newCode, Possession_Status: poss, Notes: newNotes };
+    var newIdentifier = prompt('Key/Lock ID (the number stamped on the physical key or lock — for ordering a duplicate or looking up a found key, NOT the access code above). Current: ' + (k.Key_Identifier||'none'), k.Key_Identifier||'');
+    if (newIdentifier === null) return;
+    var fields = { Key_Code: newCode, Lockbox_Code: newCode, Possession_Status: poss, Notes: newNotes, Key_Identifier: newIdentifier.trim() };
     // Contents only makes sense for lockbox-type items — don't nag for a plain key/code.
     if (/Lockbox/i.test(k.Key_Type||'')) {
       var newContents = prompt('Lockbox contains:\n1 = Front Door Key Only\n2 = Front Door Key + Unit Key\n3 = Unit Key Only\n4 = N/A / clear\n\nCurrent: ' + (k.Contents||'not set'), '1');
@@ -9273,6 +9405,7 @@ function submitAddKey() {
     Possession_Status: poss,
     Notes: document.getElementById('ak-notes').value.trim(),
     Contents: document.getElementById('ak-contents').value,
+    Key_Identifier: document.getElementById('ak-identifier').value.trim(),
     Active: 'TRUE',
   }).then(function(res){
     if (res.id||res.success) { toast('Access item added','success'); closeModal('modal-add-key'); renderKeysView(); }
@@ -9281,16 +9414,26 @@ function submitAddKey() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// BULK SET BUILDING ACCESS (Aug 24, 2026) — data point #2 from Brett: "no lockboxes are
-// set for any particular unit, instead they all work the front door and/or a service door
-// as indicated per building." One owner's whole portfolio, one pass, Front Door + optional
-// Service Door per property. Pre-fills from whatever building-level items already exist so
-// running this again to fix a code UPDATES that row instead of creating a duplicate.
-// Front Door types map straight onto the existing Key_Type vocabulary (Building-FrontDoorKey
-// / Building-FrontDoorCode / Building-Lockbox). Service Door has no dedicated Key_Type in the
-// schema, so it reuses the Building-Custom* types with Location fixed to "Service Door" —
-// that string is also how an existing Service Door item is *found* again on reload, so don't
-// change it without updating the lookup below to match.
+// BULK SET BUILDING ACCESS (Aug 24, 2026, reworked same day per Brett's correction) — data
+// point #2: "no lockboxes are set for any particular unit, instead they all work the front
+// door and/or a service door as indicated per building." One owner's whole portfolio, one
+// pass, Front Door + optional Service Door per property, PLUS the property's Master Key
+// assignment in the same pass (closes the loop with data point #1 instead of sending Brett
+// to a separate panel). Two real bugs Brett caught in the first version, both fixed here:
+// (1) the "existing item" search only looked at building-level rows (no Unit_ID) — a lockbox
+// that BELONGS to the building but got mistakenly saved under a specific unit (exactly the
+// "a lockbox that goes with the building should not be recorded for a particular unit"
+// problem Brett flagged) was invisible to it, so re-running the tool would create a second,
+// conflicting entry instead of finding and fixing the first. Now searches the WHOLE property
+// regardless of Unit_ID and flags a misscoped find so the row shows a warning and the save
+// reassigns it (clears Unit_ID) instead of leaving it stranded. (2) Possession_Status used to
+// be hardcoded to 'Have It' on every save, silently overwriting whatever was actually true.
+// Now it's a per-row selector, pre-filled from the existing value, never assumed.
+// Front Door types map onto the existing Key_Type vocabulary (Building-FrontDoorKey /
+// Building-FrontDoorCode / Building-Lockbox). Service Door has no dedicated Key_Type, so it
+// reuses Building-Custom* with Location fixed to "Service Door" — that literal string is also
+// how an existing Service Door item is *found* again, so don't change it without updating the
+// lookup below to match.
 // ══════════════════════════════════════════════════════════════
 var _bulkAccessRows = [];
 var SERVICE_DOOR_LOCATION = 'Service Door';
@@ -9300,6 +9443,7 @@ var BA_TYPE_TO_KEYTYPE = {
 };
 var BA_FRONT_KEYTYPES = ['Building-FrontDoorKey','Building-FrontDoorCode','Building-Lockbox'];
 var BA_CUSTOM_KEYTYPES = ['Building-CustomKey','Building-CustomCode','Building-CustomLockbox'];
+var BA_POSS_OPTIONS = ['Have It','Need Copy',"Don't Have It",'Not Applicable','Unknown'];
 function baKeyTypeToSimple(kt) {
   if (kt === 'Building-FrontDoorKey' || kt === 'Building-CustomKey') return 'Key';
   if (kt === 'Building-FrontDoorCode' || kt === 'Building-CustomCode') return 'Code';
@@ -9326,19 +9470,24 @@ function loadBulkAccessRows() {
   rowsEl.innerHTML = '<div class="loading"><span class="spinner"></span>Loading properties…</div>';
   var ownerProps = sortPropsNumeric(safeArray(state.properties).filter(function(p){ return p.Owner_ID === ownerId && p.Active !== 'FALSE'; }));
   if (!ownerProps.length) { rowsEl.innerHTML = '<div style="color:var(--danger);font-size:12px">This owner has no active properties.</div>'; document.getElementById('ba-submit-btn').disabled = true; return; }
-  api('GET','/keys').then(function(allKeys) {
-    allKeys = Array.isArray(allKeys) ? allKeys : [];
+  Promise.all([api('GET','/keys'), api('GET','/master-keys')]).then(function(res) {
+    var allKeys = Array.isArray(res[0]) ? res[0] : [];
+    var allMasterKeys = Array.isArray(res[1]) ? res[1].filter(function(k){ return k.Active!=='FALSE'; }) : [];
     _bulkAccessRows = ownerProps.map(function(p) {
-      var buildingKeys = allKeys.filter(function(k){ return String(k.Property_ID)===String(p.ID) && !k.Unit_ID && k.Active!=='FALSE'; });
-      var existingFront = buildingKeys.find(function(k){ return BA_FRONT_KEYTYPES.indexOf(k.Key_Type)!==-1; });
-      var existingService = buildingKeys.find(function(k){ return BA_CUSTOM_KEYTYPES.indexOf(k.Key_Type)!==-1 && (k.Location||'').toLowerCase().indexOf('service')!==-1; });
+      // Search the WHOLE property, not just building-level (!Unit_ID) rows — a front-door
+      // or service-door item that got mistakenly saved under one unit is still THIS
+      // property's front/service door and needs to be found, not duplicated.
+      var propKeys = allKeys.filter(function(k){ return String(k.Property_ID)===String(p.ID) && k.Active!=='FALSE'; });
+      var existingFront = propKeys.find(function(k){ return BA_FRONT_KEYTYPES.indexOf(k.Key_Type)!==-1; });
+      var existingService = propKeys.find(function(k){ return BA_CUSTOM_KEYTYPES.indexOf(k.Key_Type)!==-1 && (k.Location||'').toLowerCase().indexOf('service')!==-1; });
       return {
         propertyId: p.ID, address: p.Address + (p.City ? ', '+p.City : ''),
-        front:   { existingId: existingFront ? existingFront.ID : '', type: existingFront ? baKeyTypeToSimple(existingFront.Key_Type) : 'Lockbox', code: existingFront ? (existingFront.Key_Code||existingFront.Lockbox_Code||existingFront.Code||'') : '', contents: existingFront ? (existingFront.Contents||'') : '' },
-        service: { existingId: existingService ? existingService.ID : '', enabled: !!existingService, type: existingService ? baKeyTypeToSimple(existingService.Key_Type) : 'Lockbox', code: existingService ? (existingService.Key_Code||existingService.Lockbox_Code||existingService.Code||'') : '', contents: existingService ? (existingService.Contents||'') : '' },
+        masterKeyId: p.Master_Key_ID || '',
+        front:   { existingId: existingFront ? existingFront.ID : '', misscoped: !!(existingFront && existingFront.Unit_ID), unitLabel: existingFront && existingFront.Unit_ID ? (safeArray(state.units).find(function(u){return u.ID===existingFront.Unit_ID;})||{}).Unit_Label : '', type: existingFront ? baKeyTypeToSimple(existingFront.Key_Type) : 'Lockbox', code: existingFront ? (existingFront.Key_Code||existingFront.Lockbox_Code||existingFront.Code||'') : '', contents: existingFront ? (existingFront.Contents||'') : '', possession: existingFront ? (existingFront.Possession_Status||'Have It') : 'Have It' },
+        service: { existingId: existingService ? existingService.ID : '', misscoped: !!(existingService && existingService.Unit_ID), unitLabel: existingService && existingService.Unit_ID ? (safeArray(state.units).find(function(u){return u.ID===existingService.Unit_ID;})||{}).Unit_Label : '', enabled: !!existingService, type: existingService ? baKeyTypeToSimple(existingService.Key_Type) : 'Lockbox', code: existingService ? (existingService.Key_Code||existingService.Lockbox_Code||existingService.Code||'') : '', contents: existingService ? (existingService.Contents||'') : '', possession: existingService ? (existingService.Possession_Status||'Have It') : 'Have It' },
       };
     });
-    renderBulkAccessRows();
+    renderBulkAccessRows(allMasterKeys);
     document.getElementById('ba-submit-btn').disabled = false;
   }).catch(function(e){ rowsEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Error loading keys: '+esc(e.message||'unknown')+'</div>'; });
 }
@@ -9352,23 +9501,37 @@ function baContentsOptions(selected) {
 function baTypeOptions(selected) {
   return ['Key','Code','Lockbox'].map(function(o){ return '<option value="'+o+'"'+(o===selected?' selected':'')+'>'+(o==='Key'?'🗝 Key':o==='Code'?'📱 Electronic Code':'🔒 Lockbox')+'</option>'; }).join('');
 }
+function baPossOptions(selected) {
+  return BA_POSS_OPTIONS.map(function(o){ return '<option value="'+o+'"'+(o===selected?' selected':'')+'>'+esc(o)+'</option>'; }).join('');
+}
+function baMasterKeyOptions(masterKeys, selected) {
+  return '<option value="">— none —</option>' + masterKeys.map(function(k){
+    return '<option value="'+k.ID+'"'+(k.ID===selected?' selected':'')+'>'+esc(k.Name||'Unnamed')+'</option>';
+  }).join('');
+}
 
-function renderBulkAccessRows() {
+function renderBulkAccessRows(allMasterKeys) {
   var rowsEl = document.getElementById('ba-rows');
   rowsEl.innerHTML = '<table class="data-table" style="width:100%"><thead><tr>' +
-    '<th>Property</th><th>Front Door Type</th><th>Front Door Code</th><th>Front Door Lockbox Contains</th>' +
-    '<th>Service Door?</th><th>Type</th><th>Code</th><th>Lockbox Contains</th>' +
+    '<th>Property</th><th>Master Key</th>' +
+    '<th>Front Door Type</th><th>Front Door Code</th><th>Contains</th><th>Possession</th>' +
+    '<th>Service Door?</th><th>Type</th><th>Code</th><th>Contains</th><th>Possession</th>' +
     '</tr></thead><tbody>' +
     _bulkAccessRows.map(function(r, i) {
+      var frontWarn = r.front.misscoped ? '<div style="color:var(--danger);font-size:9px">⚠ found under Unit '+esc(r.front.unitLabel||r.front.existingId)+' — will move to building-level</div>' : '';
+      var serviceWarn = r.service.misscoped ? '<div style="color:var(--danger);font-size:9px">⚠ found under Unit '+esc(r.service.unitLabel||r.service.existingId)+' — will move to building-level</div>' : '';
       return '<tr>' +
         '<td style="font-size:11px">'+esc(r.address)+'</td>' +
-        '<td><select id="ba-front-type-'+i+'" onchange="baOnTypeChange('+i+',\'front\')" style="font-size:11px">'+baTypeOptions(r.front.type)+'</select></td>' +
-        '<td><input type="text" id="ba-front-code-'+i+'" value="'+esc(r.front.code)+'" style="width:110px;font-size:11px" placeholder="code"></td>' +
+        '<td><select id="ba-masterkey-'+i+'" style="font-size:11px">'+baMasterKeyOptions(allMasterKeys, r.masterKeyId)+'</select></td>' +
+        '<td><select id="ba-front-type-'+i+'" onchange="baOnTypeChange('+i+',\'front\')" style="font-size:11px">'+baTypeOptions(r.front.type)+'</select>'+frontWarn+'</td>' +
+        '<td><input type="text" id="ba-front-code-'+i+'" value="'+esc(r.front.code)+'" style="width:100px;font-size:11px" placeholder="code"></td>' +
         '<td id="ba-front-contents-wrap-'+i+'" style="display:'+(r.front.type==='Lockbox'?'':'none')+'"><select id="ba-front-contents-'+i+'" style="font-size:11px">'+baContentsOptions(r.front.contents)+'</select></td>' +
+        '<td><select id="ba-front-poss-'+i+'" style="font-size:11px">'+baPossOptions(r.front.possession)+'</select></td>' +
         '<td style="text-align:center"><input type="checkbox" id="ba-service-enable-'+i+'" '+(r.service.enabled?'checked':'')+' onchange="baToggleService('+i+')"></td>' +
-        '<td id="ba-service-type-wrap-'+i+'" style="display:'+(r.service.enabled?'':'none')+'"><select id="ba-service-type-'+i+'" onchange="baOnTypeChange('+i+',\'service\')" style="font-size:11px">'+baTypeOptions(r.service.type)+'</select></td>' +
-        '<td id="ba-service-code-wrap-'+i+'" style="display:'+(r.service.enabled?'':'none')+'"><input type="text" id="ba-service-code-'+i+'" value="'+esc(r.service.code)+'" style="width:110px;font-size:11px" placeholder="code"></td>' +
+        '<td id="ba-service-type-wrap-'+i+'" style="display:'+(r.service.enabled?'':'none')+'"><select id="ba-service-type-'+i+'" onchange="baOnTypeChange('+i+',\'service\')" style="font-size:11px">'+baTypeOptions(r.service.type)+'</select>'+serviceWarn+'</td>' +
+        '<td id="ba-service-code-wrap-'+i+'" style="display:'+(r.service.enabled?'':'none')+'"><input type="text" id="ba-service-code-'+i+'" value="'+esc(r.service.code)+'" style="width:100px;font-size:11px" placeholder="code"></td>' +
         '<td id="ba-service-contents-wrap-'+i+'" style="display:'+(r.service.enabled && r.service.type==='Lockbox'?'':'none')+'"><select id="ba-service-contents-'+i+'" style="font-size:11px">'+baContentsOptions(r.service.contents)+'</select></td>' +
+        '<td id="ba-service-poss-wrap-'+i+'" style="display:'+(r.service.enabled?'':'none')+'"><select id="ba-service-poss-'+i+'" style="font-size:11px">'+baPossOptions(r.service.possession)+'</select></td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
 }
@@ -9380,7 +9543,7 @@ function baOnTypeChange(i, slot) {
 }
 function baToggleService(i) {
   var on = document.getElementById('ba-service-enable-'+i).checked;
-  ['ba-service-type-wrap-'+i, 'ba-service-code-wrap-'+i].forEach(function(id){ var e=document.getElementById(id); if(e) e.style.display = on ? '' : 'none'; });
+  ['ba-service-type-wrap-'+i, 'ba-service-code-wrap-'+i, 'ba-service-poss-wrap-'+i].forEach(function(id){ var e=document.getElementById(id); if(e) e.style.display = on ? '' : 'none'; });
   var contentsWrap = document.getElementById('ba-service-contents-wrap-'+i);
   if (contentsWrap) contentsWrap.style.display = (on && document.getElementById('ba-service-type-'+i).value==='Lockbox') ? '' : 'none';
 }
@@ -9402,13 +9565,23 @@ function submitBulkAccess() {
   msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Saving…</div>';
   var ops = [];
   _bulkAccessRows.forEach(function(r, i) {
+    // Master Key — only write if it actually changed, so a property already correctly set
+    // (or deliberately left blank) isn't touched every single pass.
+    var mkVal = document.getElementById('ba-masterkey-'+i).value;
+    if (mkVal !== (r.masterKeyId||'')) {
+      ops.push({ url:'/property/update', body:{ id: r.propertyId, fields:{ Master_Key_ID: mkVal } } });
+    }
     var frontCode = document.getElementById('ba-front-code-'+i).value.trim();
     var frontType = document.getElementById('ba-front-type-'+i).value;
     var frontContentsEl = document.getElementById('ba-front-contents-'+i);
     var frontContents = frontContentsEl ? frontContentsEl.value : '';
+    var frontPoss = document.getElementById('ba-front-poss-'+i).value;
     // Skip a row with no code and no existing item to update — don't create blank rows.
     if (frontCode || r.front.existingId) {
-      var frontFields = { Key_Type: BA_TYPE_TO_KEYTYPE.front[frontType], Key_Code: frontCode, Lockbox_Code: frontCode, Contents: frontType==='Lockbox' ? frontContents : '', Possession_Status: 'Have It', Active: 'TRUE' };
+      var frontFields = { Key_Type: BA_TYPE_TO_KEYTYPE.front[frontType], Key_Code: frontCode, Lockbox_Code: frontCode, Contents: frontType==='Lockbox' ? frontContents : '', Possession_Status: frontPoss, Active: 'TRUE' };
+      // Misscoped find (was saved under a specific unit) — reassign to building-level on save
+      // instead of leaving the stray unit-scoped copy floating alongside a new building one.
+      if (r.front.misscoped) frontFields.Unit_ID = '';
       if (r.front.existingId) ops.push({ url:'/key/update', body:{ id: r.front.existingId, fields: frontFields } });
       else ops.push({ url:'/key/add', body: Object.assign({ Property_ID: r.propertyId, Unit_ID: '', Notes: '' }, frontFields) });
     }
@@ -9418,7 +9591,9 @@ function submitBulkAccess() {
       var serviceType = document.getElementById('ba-service-type-'+i).value;
       var serviceContentsEl = document.getElementById('ba-service-contents-'+i);
       var serviceContents = serviceContentsEl ? serviceContentsEl.value : '';
-      var serviceFields = { Key_Type: BA_TYPE_TO_KEYTYPE.service[serviceType], Key_Code: serviceCode, Lockbox_Code: serviceCode, Location: SERVICE_DOOR_LOCATION, Contents: serviceType==='Lockbox' ? serviceContents : '', Possession_Status: 'Have It', Active: 'TRUE' };
+      var servicePoss = document.getElementById('ba-service-poss-'+i).value;
+      var serviceFields = { Key_Type: BA_TYPE_TO_KEYTYPE.service[serviceType], Key_Code: serviceCode, Lockbox_Code: serviceCode, Location: SERVICE_DOOR_LOCATION, Contents: serviceType==='Lockbox' ? serviceContents : '', Possession_Status: servicePoss, Active: 'TRUE' };
+      if (r.service.misscoped) serviceFields.Unit_ID = '';
       if (r.service.existingId) ops.push({ url:'/key/update', body:{ id: r.service.existingId, fields: serviceFields } });
       else ops.push({ url:'/key/add', body: Object.assign({ Property_ID: r.propertyId, Unit_ID: '', Notes: '' }, serviceFields) });
     } else if (!serviceOn && r.service.existingId) {
@@ -9427,7 +9602,7 @@ function submitBulkAccess() {
       ops.push({ url:'/key/update', body:{ id: r.service.existingId, fields: { Active: 'FALSE' } } });
     }
   });
-  if (!ops.length) { msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Nothing to save — no codes entered.</div>'; return; }
+  if (!ops.length) { msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Nothing to save — no changes made.</div>'; return; }
   var done = 0, failed = 0;
   function next(idx) {
     if (idx >= ops.length) {
