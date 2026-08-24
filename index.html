@@ -7866,6 +7866,16 @@ function qbSubRow(kind, row, qbList) {
   } else if (row.suggest && row.suggest.confidence === 'ambiguous') {
     state = '<span style="color:var(--warn);font-size:10.5px">⚠ ' + safeArray(row.suggest.candidates).length +
       ' possible matches — pick one: ' + safeArray(row.suggest.candidates).map(function(c) { return esc(c.name); }).join(', ') + '</span>';
+  } else if (row.suggest && qbClaimedElsewhere(kind, row.suggest.id, row.id)) {
+    // Same duplicate-record guard as the owner/vendor rows above — a second property or unit
+    // pointing at a QuickBooks id another active row already holds is almost always a
+    // duplicate Hub record (e.g. two "3014 N Calvert St" rows), not a real second link.
+    var claimerSub = qbClaimedElsewhere(kind, row.suggest.id, row.id);
+    state = '<div style="background:#fbe9e7;border:1px solid var(--danger);border-radius:5px;padding:6px 8px;font-size:10.5px;color:var(--danger);line-height:1.4">' +
+      '⛔ REFUSED — QuickBooks #' + esc(String(row.suggest.id)) + ' is already linked to <b>' + esc(claimerSub.display || ('#' + claimerSub.id)) + '</b>.' +
+      ' This looks like a duplicate ' + (kind === 'property' ? 'property' : 'unit') + ' record.' +
+      ' Do not link it here — go to <b>Dev tools → Find duplicate properties</b> and merge them instead.' +
+    '</div>';
   } else if (row.suggest) {
     var colour = row.suggest.confidence === 'weak' ? 'var(--warn)' : 'var(--accent2)';
     state = '<span style="color:' + colour + ';font-size:10.5px">' +
@@ -8011,6 +8021,21 @@ function qbToggleInHouse(kind, id, on) {
   }).catch(function(e) { toast(e.message, 'error'); });
 }
 
+// Is a suggested QuickBooks id already claimed by a DIFFERENT active row of the same kind?
+// Checked client-side, before the Link button is even drawn, so a duplicate-owner/duplicate-
+// property collision is visible up front — not something you find out only after clicking
+// Link and reading (or missing) a confirm() dialog. Mirrors the server's qbMappingClash.
+function qbClaimedElsewhere(kind, qbId, excludeId) {
+  if (!qbId) return null;
+  var slice = qbMapSlices(kind);
+  var rows = safeArray(slice.rows);
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (String(r.id) !== String(excludeId) && r.qb_id && String(r.qb_id) === String(qbId)) return r;
+  }
+  return null;
+}
+
 function qbMapRow(kind, row, qbList) {
   var opts = ['<option value="">— not linked —</option>'].concat(safeArray(qbList).map(function(c) {
     return '<option value="' + esc(String(c.id)) + '"' + (row.qb_id && String(c.id) === String(row.qb_id) ? ' selected' : '') + '>' +
@@ -8029,6 +8054,17 @@ function qbMapRow(kind, row, qbList) {
       safeArray(row.suggest.candidates).length + ' possible matches — pick the right one: ' +
       safeArray(row.suggest.candidates).map(function(c) { return esc(c.name) + ' (#' + esc(String(c.id)) + ')'; }).join(', ') +
       '</span>';
+  } else if (row.suggest && qbClaimedElsewhere(kind, row.suggest.id, row.id)) {
+    // Someone ELSE (of the same kind) already holds this QuickBooks id — almost always a
+    // duplicate Hub record, not a real second link. Refuse before Brett can even click Link;
+    // the confirm()-to-force-anyway path (below, qbSetMap) has proven too easy to click
+    // through without registering what it means. Point straight at the merge tool instead.
+    var claimer = qbClaimedElsewhere(kind, row.suggest.id, row.id);
+    state = '<div style="background:#fbe9e7;border:1px solid var(--danger);border-radius:5px;padding:6px 8px;font-size:10.5px;color:var(--danger);line-height:1.4">' +
+      '⛔ REFUSED — QuickBooks #' + esc(String(row.suggest.id)) + ' (' + esc(row.suggest.name) + ') is already linked to <b>' + esc(claimer.display || ('#' + claimer.id)) + '</b>.' +
+      ' This looks like a duplicate ' + (kind === 'owner' ? 'owner' : 'vendor') + ' record, not a second real link.' +
+      ' Do not link it here — go to <b>Dev tools → Find duplicate ' + (kind === 'owner' ? 'owners' : 'vendors') + '</b> and merge them instead.' +
+    '</div>';
   } else if (row.suggest) {
     var conf = row.suggest.confidence;
     var colour = conf === 'exact' ? 'var(--accent2)' : (conf === 'strong' ? 'var(--info)' : 'var(--warn)');
@@ -8129,22 +8165,22 @@ function qbMapSlices(kind) {
   return { rows: [], qb: [] };
 }
 
+// Aug 24, 2026: this used to offer a confirm()-to-force-anyway path for the rare "two real
+// contacts at one company" case. Dropped it — Brett hit this exact conflict (duplicate
+// Phoenix Estates / Goldszmidt Properties owner rows) and the confirm() dialog either went
+// unnoticed or got clicked through without registering what it meant. A shared-QuickBooks-id
+// conflict is now a hard refusal from every path (Link button, manual dropdown, bulk-accept)
+// with a persistent on-screen warning — never a one-line native dialog that's easy to miss.
+// The rare legitimate "second contact, same company" case still exists — do it directly via
+// POST /qb/map with allow_shared:true (API only, not exposed in this UI) so it can't be hit
+// by accident.
 function qbSetMap(kind, id, qbId, allowShared) {
   api('POST', '/qb/map', { kind: kind, id: id, qb_id: qbId || '', allow_shared: !!allowShared }).then(function(r) {
-    // Two records on one QuickBooks customer is usually a mistake and occasionally the
-    // point — two contacts at one company, each with their own login. Ask rather than
-    // refuse, but make what happens explicit.
     if (r && r.shared_conflict) {
-      if (confirm(r.error + '\n\n' +
-          'Link it anyway? Do this only if they are the same company — for example a second ' +
-          'contact who needs their own portal login. Invoices for both will land on one ' +
-          'QuickBooks ledger.\n\n' +
-          'If these are actually duplicate owner records, cancel and use ' +
-          '"Find duplicate owners" in Dev tools instead — that merges them properly.')) {
-        qbSetMap(kind, id, qbId, true);
-      } else {
-        loadQBMapping(false);
-      }
+      toast('⛔ Refused — ' + r.error + ' Nothing was linked. If these are duplicate records, use "Find duplicate ' +
+        (kind === 'owner' ? 'owners' : kind === 'vendor' ? 'vendors' : kind === 'property' ? 'properties' : 'owners') +
+        '" in Dev tools instead.', 'error');
+      loadQBMapping(false);
       return;
     }
     if (r && r.error) { toast(r.error, 'error'); loadQBMapping(false); return; }
