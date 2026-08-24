@@ -1540,6 +1540,41 @@ async function scopeCommand(env, body) {
   return json({ success: true, line_items: clean, summary: parsed.summary || 'Updated.' });
 }
 
+// Guard for anything a human types directly into a field that can end up on a customer-facing
+// surface with no AI rewrite / server-side markup step in between (Aug 24 2026, same incident
+// as the scopeProposalView `note` leak — that one was a structured field with no internal/
+// customer split; this is the same failure MODE applied to raw hand-typed text). Deliberately
+// narrow and high-precision: matches vendor-pricing-specific language that has ~zero legitimate
+// reason to appear in a customer proposal, WITHOUT matching the customer's own already-standard
+// boilerplate (e.g. "Total Estimated Cost: $925.00" / "Required 50% Deposit" — those are the
+// customer's final price, which Brett's rule explicitly allows). Bare "cost" or a dollar amount
+// alone is NOT enough to trip this — it has to look like vendor-side pricing/derivation language.
+// Returns the matched phrase (for a useful error message) or null if clean.
+// NOTE: this is a keyword/phrase NET, not a semantic filter — it catches the incident phrasing
+// and realistic close variants, not every possible paraphrase of "here's what the vendor
+// charged." A note with two dollar amounts and no trigger word at all (e.g. "our cost is $400,
+// customer price is $650") can still slip through. Treat this as a backstop on top of the
+// admin-only gate on this endpoint, not a guarantee — see FEATURE_LOG for the incident writeup.
+function findVendorPricingLeak(text) {
+  const t = String(text || '');
+  const patterns = [
+    /\b(?:vendor|contractor|sub(?:contractor)?)'?s?[\s_-]*(?:cost|quote|quoted|price|priced|charg\w*)/i,
+    /\bsub\s+charg\w*/i,
+    /\b(?:we|i)\s+were\s+quoted\b/i,
+    /\bquoted\s+(?:us|me)\b/i,
+    /mark[\s-]?up/i,
+    /\bmarked[\s-]?up\b/i,
+    // "margin" alone is too common in trade language (door/cabinet fit) to gate on bare-word —
+    // only trip on the money-margin sense: "profit margin", "our/my margin", or "margin is/of ~N".
+    /\bprofit\s*margin\b/i,
+    /\b(?:my|our)\s*margin\b/i,
+    /\bmargin\s*(?:is|of|on|at)\s*(?:about\s*)?\$?\d/i,
+    /\b(my|our|ridge\s*co'?s?)\s+(cut|profit|fee\s+on\s+(this|top))\b/i,
+    /\bwe(?:'re| are)\s+(?:making|clearing)\b/i,
+  ];
+  for (const re of patterns) { const m = t.match(re); if (m) return m[0]; }
+  return null;
+}
 // POST /scope/update — direct manual edits.
 async function scopeUpdate(env, body) {
   const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
@@ -1557,7 +1592,14 @@ async function scopeUpdate(env, body) {
   // flips Status to 'proposed' when it isn't already, matching what scopeProposal() itself does,
   // so the existing shareable link (scope-proposal.html) immediately serves the new text verbatim —
   // no new link/token needed unless Link_Rev is bumped separately via /scope/proposal/revoke.
+  // SECURITY FIX (Aug 24 2026): this hand-edited text is never AI-rewritten and never passes
+  // through scopeProposalView's field-level stripping (there's nothing to strip — it's a single
+  // opaque blob), so it's the same "unfiltered free text reaching a customer" risk class as the
+  // note-field leak fixed the same day, just via a different admin action. Gate it here, at the
+  // one place it's ever written, instead of trying to sanitize it wherever it's later served.
   if (body.proposal_text !== undefined) {
+    const leak = findVendorPricingLeak(body.proposal_text);
+    if (leak) return json({ error: `Proposal text contains vendor-pricing language ("${leak}") that can never reach the customer — remove it and save again. Only the job description and the final price/deposit belong here.` }, 400);
     fields.Proposal_Text = body.proposal_text;
     if (body.status === undefined) fields.Status = 'proposed';
   }
