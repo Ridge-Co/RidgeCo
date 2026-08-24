@@ -30,6 +30,10 @@
   .booked{font-size:12.5px;color:var(--green);font-weight:700;margin-top:8px}
   .muted{color:var(--muted)}
   .warn{background:var(--amberbg);color:#5c3d00;border:1px solid #ecd6a6;border-radius:8px;padding:8px 10px;font-size:12px;margin:8px 0}
+  /* Hard stop: the customer was invoiced and the vendor never got billed. Deliberately red and
+     deliberately louder than .warn — this one costs real money if it's scrolled past. */
+  .warn.hard{background:var(--redbg);color:#7a1418;border-color:#eec0c0}
+  .chip.gap{background:var(--redbg);color:var(--red)}
   .spin{display:inline-block;width:13px;height:13px;border:2px solid #ccd;border-top-color:var(--blue);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
   @keyframes s{to{transform:rotate(360deg)}}
   #login{max-width:340px;margin:60px auto;text-align:center}
@@ -162,12 +166,25 @@ function load(){
       var invLabel=r.kind==='scope' ? 'Invoice owner (deposit)' : 'Invoice owner (1st pmt)';
       var invAmt=r.kind==='scope' ? r.deposit : r.first_payment;
       var billLabel=r.kind==='scope' ? 'Bill vendor (deposit share)' : 'Bill vendor (base)';
-      var billAmt=r.kind==='scope' ? r.vendor_cost_total : r.vendor_cost;
+      // A scope books a PRORATED share of vendor cost (Vendor_Cost_Total x deposit/subtotal),
+      // never the vendor's full job cost. This line said "deposit share" while showing the full
+      // cost — a $650 job read as a $650 deposit bill when the real one was $325.
+      // vendor_bill_amount is the Worker's own figure (exactly what /scope-proposal/book creates);
+      // the ratio is only recomputed here if an older Worker hasn't sent it yet, so this can
+      // never fall back to showing the full cost again.
+      var billAmt;
+      if(r.kind!=='scope'){billAmt=r.vendor_cost;}
+      else if(r.vendor_bill_amount!=null){billAmt=r.vendor_bill_amount;}
+      else{var _r=(Number(r.subtotal)>0)?(Number(r.deposit)/Number(r.subtotal)):0.5;billAmt=(Number(r.vendor_cost_total)||0)*_r;}
+      // 'missing' = invoiced but no vendor bill, and there should be one. 'in_house' = no bill by
+      // policy (Ridge Co never bills itself for its own hours) and must stay calm, or the real
+      // alarm gets trained away.
+      var gap=(r.kind==='scope')?(r.bill_gap||''):'';
       html+='<div class="card"><div class="row">'
         +'<div><div class="name">'+esc(r.signer||'—')+'</div>'
         +'<div class="sub">'+esc(r.property||r.proposal_id)+' · '+esc(subLine)+'</div>'
         +'<div class="sub">Signed '+esc(r.signed_date||'')+'</div></div>'
-        +'<span class="chip '+(booked?'booked':'signed')+'">'+(booked?'✓ Booked':'Signed — needs billing')+'</span>'
+        +'<span class="chip '+(booked?(gap==='missing'?'gap':'booked'):'signed')+'">'+(booked?(gap==='missing'?'⚠ Invoiced — no bill':'✓ Booked'):'Signed — needs billing')+'</span>'
         +'</div>'
         +'<div class="row" style="margin-top:10px">'
         +'<div class="amt"><div class="lbl">'+invLabel+'</div><div class="big">'+money(invAmt)+'</div></div>'
@@ -175,6 +192,16 @@ function load(){
         +'</div>';
       if(booked){
         html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created.</div>';
+        if(gap==='missing'){
+          // Persistent, not a one-time toast: the reason is stored on the row, so this banner
+          // survives a reload and stays until a bill actually exists. Retry re-runs the same
+          // idempotent book call, which skips the existing invoice and only creates the bill.
+          html+='<div class="warn hard"><strong>⚠ Invoiced — no bill.</strong> The customer was invoiced but the vendor was never billed.'
+            +(r.bill_skip_reason?('<br>'+esc(r.bill_skip_reason)):'')+'</div>'
+            +'<div style="margin-top:10px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\')">Retry vendor bill</button></div>';
+        } else if(gap==='in_house'){
+          html+='<div class="sub" style="margin-top:6px">No vendor bill — in-house work. Expected: Ridge Co doesn\'t create a payable for its own hours.</div>';
+        }
       } else {
         html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\')">Preview &amp; create invoice + bill</button></div>';
       }

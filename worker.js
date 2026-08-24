@@ -1867,7 +1867,7 @@ async function scopeProposalView(env, url) {
 // contractor proposal, not a notarized legal document. Auth reuses the SAME scope-proposal link
 // token as scopeProposalView — no separate PROPOSAL_SIGN_TOKEN needed, since the token already
 // scopes access to exactly one scope's proposal.
-const SCOPE_SIG_HEADERS = ['ID','Scope_ID','Signer_Name','Signature_PNG','Selections_JSON','Subtotal','Deposit_Amount','Vendor_Cost_Total','Signed_Date','Signed_TS','IP','User_Agent','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Created_Date','Active'];
+const SCOPE_SIG_HEADERS = ['ID','Scope_ID','Signer_Name','Signature_PNG','Selections_JSON','Subtotal','Deposit_Amount','Vendor_Cost_Total','Signed_Date','Signed_TS','IP','User_Agent','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Bill_Skip_Reason','Created_Date','Active'];
 async function scopeSigTab(env) { await ensureTab(env, 'Scope_Signatures', SCOPE_SIG_HEADERS); }
 
 // POST /scope-proposal/sign — PUBLIC (link-token gated, body.t). {t, signer_name, signature_png,
@@ -1928,6 +1928,39 @@ async function scopeProposalSign(env, body, ip, ua) {
   return json({ ok: true, subtotal, deposit });
 }
 
+// ── Vendor-bill gap tracking (Aug 24 2026) ──────────────────────────────────
+// A signed proposal books TWO things: the customer's deposit invoice and the vendor's prorated
+// bill. The invoice half is persisted immediately (so a bill failure can't duplicate it), which
+// means a booking whose bill silently failed still flips to Status: Booked and, before this,
+// rendered as a plain green "✓ Booked" forever — Ridge Co invoiced the customer and never
+// created the payable, with nothing left behind to notice it by. Bill_Skip_Reason records WHY a
+// bill didn't happen, persistently, and is cleared the moment a bill exists.
+//
+// Exactly one skip is legitimate: in-house work. Ridge Co never creates a payable to itself for
+// Brett's own hours, so that case must read as a calm note, not an alarm — otherwise the alarm
+// gets ignored and the real gaps ride along with it.
+const SCOPE_BILL_SKIP_INHOUSE = 'In-house vendor — no vendor bill is created for Ridge Co\'s own work.';
+function scopeSigSkipIsInHouse(reason) { return /in-house/i.test(String(reason || '')); }
+
+// Classify a signed proposal's vendor-bill state for the Hub. `inHouseFallback` re-derives the
+// in-house case for rows booked BEFORE Bill_Skip_Reason existed (from the scope's vendor on the
+// Vendors tab) — without it every legitimate old in-house booking would false-flag as a missing
+// bill, which is the fastest way to teach Brett to ignore the banner.
+//   'not_booked' — nothing booked yet, the normal pre-billing state.
+//   'billed'     — a QB bill exists. Nothing to say.
+//   'in_house'   — no bill, and that is expected. Calm note.
+//   'missing'    — no bill and there should be one. Hard-stop banner + retry.
+function scopeSigBillGap(row, inHouseFallback) {
+  row = row || {};
+  const booked = String(row.Status || '') === 'Booked' || !!row.QB_Invoice_ID;
+  if (!booked) return { kind: 'not_booked', reason: '' };
+  if (row.QB_Bill_ID) return { kind: 'billed', reason: '' };
+  const reason = String(row.Bill_Skip_Reason || '').trim();
+  if (reason) return { kind: scopeSigSkipIsInHouse(reason) ? 'in_house' : 'missing', reason };
+  if (inHouseFallback) return { kind: 'in_house', reason: SCOPE_BILL_SKIP_INHOUSE };
+  return { kind: 'missing', reason: 'The customer was invoiced but no vendor bill was created, and no reason was recorded (booked before skip-reason tracking).' };
+}
+
 // GET /scope-proposal/signed (admin) — signed scope proposals, for the Hub to review before
 // booking them into QuickBooks via POST /scope-proposal/book (below).
 async function scopeProposalSignedList(env, url) {
@@ -1935,16 +1968,27 @@ async function scopeProposalSignedList(env, url) {
   const rows = await fetchTab(env, 'Scope_Signatures');
   const scopes = await fetchTab(env, 'Scopes').catch(() => []);
   const props = await fetchTab(env, 'Properties').catch(() => []);
+  // Vendors is read only to re-derive the in-house case for legacy rows (see scopeSigBillGap).
+  const vendors = await fetchTab(env, 'Vendors').catch(() => []);
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
     let sel = {}; try { sel = JSON.parse(r.Selections_JSON || '{}'); } catch (_) {}
+    const subtotal = +r.Subtotal || 0, deposit = +r.Deposit_Amount || 0, vendorCostTotal = +r.Vendor_Cost_Total || 0;
+    // The Hub's "Bill vendor (deposit share)" figure must be the amount book() will ACTUALLY
+    // bill — Vendor_Cost_Total × deposit/subtotal — not the vendor's full job cost. Showing the
+    // full cost under a "deposit share" label is how a $650 job read as a $650 deposit bill when
+    // the real one was $325.
+    const { amount: vendorBillAmount } = scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal);
+    const vend = (sc.Vendor_ID && vendors.find(v => v.ID === String(sc.Vendor_ID))) || null;
+    const gap = scopeSigBillGap(r, !!vend && String(vend.In_House || '').toUpperCase() === 'TRUE');
     return {
       id: r.ID, scope_id: r.Scope_ID, wo_id: sc.WO_ID || '', property: p.Address || ('Property ' + sc.Property_ID),
       title: sc.Title || '', signer: r.Signer_Name, signed_date: r.Signed_Date, signed_ts: r.Signed_TS,
-      subtotal: +r.Subtotal || 0, deposit: +r.Deposit_Amount || 0, vendor_cost_total: +r.Vendor_Cost_Total || 0, selections: sel,
+      subtotal: subtotal, deposit: deposit, vendor_cost_total: vendorCostTotal, vendor_bill_amount: vendorBillAmount, selections: sel,
       status: r.Status || 'Signed', qb_invoice_id: r.QB_Invoice_ID || '', qb_invoice_number: r.QB_Invoice_Number || '',
       qb_bill_id: r.QB_Bill_ID || '', qb_bill_number: r.QB_Bill_Number || '',
+      bill_gap: gap.kind, bill_skip_reason: gap.reason,
     };
   });
   out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
@@ -2025,10 +2069,23 @@ async function scopeProposalBook(env, body) {
   const unitLabel = unit ? qbUnitLabel(unit) : '';
   const addr = qbPropertyDisplayName(prop) ? (qbPropertyDisplayName(prop) + (unitLabel ? (' ' + unitLabel) : '')) : ('Property ' + s.Property_ID);
 
+  // Why this booking would create no vendor bill — decided ONCE, here, and used by both the
+  // preview warnings and the persisted Bill_Skip_Reason, so what the Hub shows and what the
+  // sheet remembers can never drift apart.
+  let billSkipReason = '';
+  if (!vendor) {
+    billSkipReason = s.Vendor_ID
+      ? ('Vendor ' + s.Vendor_ID + ' was not found on the Vendors tab — no vendor bill will be created.')
+      : 'No vendor is set on this scope — no vendor bill will be created.';
+  } else if (vendorInHouse) {
+    billSkipReason = SCOPE_BILL_SKIP_INHOUSE;
+  } else if (!(vendorBillAmount > 0)) {
+    billSkipReason = 'The signed selections carry $0 of vendor cost — there is nothing to bill. Check the scope\'s vendor pricing.';
+  }
+
   const warnings = [];
   if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
-  if (!vendor) warnings.push(s.Vendor_ID ? ('Vendor ' + s.Vendor_ID + ' not found — no vendor bill will be created.') : 'No vendor set on this scope — no vendor bill will be created.');
-  else if (vendorInHouse) warnings.push('Vendor is marked in-house — no vendor bill will be created.');
+  if (billSkipReason) warnings.push(billSkipReason);
   if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
   if (ratio !== 0.5) warnings.push('Deposit is ' + Math.round(ratio * 100) + '% of the signed subtotal (not the usual 50%) — the vendor bill is prorated to match.');
   warnings.push('Invoice is the DEPOSIT only ($' + deposit.toFixed(2) + ' of $' + subtotal.toFixed(2) + '); the vendor bill is the same ' + Math.round(ratio * 100) + '% of the vendor cost ($' + vendorBillAmount.toFixed(2) + ' of $' + vendorCostTotal.toFixed(2) + ').');
@@ -2044,6 +2101,12 @@ async function scopeProposalBook(env, body) {
 
   // ---- COMMIT ----
   if (!owner && !(billTo.qb_id || '')) return json({ ok: false, error: 'Owner not resolved for ' + addr + ' — refusing to create a QuickBooks invoice on a fallback customer. Fix the property/owner link first.', warnings });
+  // Backfill Bill_Skip_Reason before anything is written. ensureTab only writes a header to an
+  // EMPTY tab (FEATURE_LOG rule 37) and updateRow silently DROPS any field whose header is
+  // missing — so without this, the live Scope_Signatures sheet would swallow every skip reason
+  // and the gap would stay exactly as invisible as it was. Runs on the commit path only, never
+  // on preview or on the customer's signing path.
+  await ensureColumns(env, 'Scope_Signatures', SCOPE_SIG_HEADERS);
   const token = await qbAccessToken(env);
   const txnDate = new Date().toISOString().slice(0, 10);
   let invoiceId = row.QB_Invoice_ID || '', invoiceNumber = row.QB_Invoice_Number || '';
@@ -2076,7 +2139,11 @@ async function scopeProposalBook(env, body) {
 
   // 2) Vendor bill (prorated cost) — idempotent; skipped if vendor missing/in-house/zero.
   // Wrapped so a bill failure can never roll back or hide the already-created (and persisted) invoice.
-  if (!billId && vendor && !vendorInHouse && vendorBillAmount > 0) {
+  // Every path that ends WITHOUT a bill records why in billSkipReason, which is persisted in step 3.
+  // Before this, a skipped or failed bill left only an ephemeral warning in this one response: the
+  // row flipped to Booked, the Hub showed a plain green checkmark, and the missing payable was
+  // invisible from then on. The reason string is the durable trace.
+  if (!billId && !billSkipReason) {
     try {
       const vendorQbId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token);
       if (vendorQbId) {
@@ -2090,14 +2157,19 @@ async function scopeProposalBook(env, body) {
         const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
-        if (!billId) warnings.push('QB bill failed: ' + (qbFault(rb) || 'unknown error'));
-      } else { warnings.push('Vendor QB id could not be resolved — no bill created.'); }
-    } catch (e) { warnings.push('Vendor bill error: ' + e.message); }
+        if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+      } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
+    } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
+    // Only the failures discovered HERE are new information; the preflight reasons above are
+    // already in warnings.
+    if (billSkipReason) warnings.push(billSkipReason);
   }
 
-  // 3) Persist QB ids + tie back to the scope/work order.
+  // 3) Persist QB ids + the bill-gap reason + tie back to the scope/work order. The reason is
+  // written on EVERY commit, so a retry that succeeds clears a previously recorded gap.
   await updateRow(env, 'Scope_Signatures', row.ID, {
     Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber, QB_Bill_ID: billId, QB_Bill_Number: billNumber,
+    Bill_Skip_Reason: billId ? '' : billSkipReason,
   });
   try { await updateRow(env, 'Scopes', s.ID, { Status: 'invoiced', Updated_Date: new Date().toISOString() }); } catch (e) {}
   try { if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Invoiced' }); } catch (e) {}
