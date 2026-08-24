@@ -1,0 +1,17 @@
+{
+  "sheet_id": "1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4",
+  "ops": [
+    {
+      "type": "set_cell",
+      "range": "Owners!A3",
+      "value": "18",
+      "note": "Mark Passerelli (Phoenix Estates, PIN PHX64174) was sharing ID 1 with Amanda Ireland (PIN PHX58842, QB #329, keeper). Giving Mark a real unique ID so the Hub's duplicate-owner tools can tell the two rows apart. Verified row 3 = Mark's row via a direct read of the live Owners tab (header row 1, Amanda row 2, Mark row 3) before writing."
+    },
+    {
+      "type": "set_cell",
+      "range": "Owners!A5",
+      "value": "19",
+      "note": "Adrian Goldszmidt (Goldszmidt Properties, PIN ADR95237) was sharing ID 3 with Jennifer Goldszmidt (PIN JEN45614, QB #297, keeper). Same fix. Verified row 5 = Adrian's row via a direct read of the live Owners tab (Jennifer row 4, Adrian row 5) before writing."
+    }
+  ]
+}
