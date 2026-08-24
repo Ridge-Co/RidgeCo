@@ -406,9 +406,22 @@ window.addEventListener('pageshow', function(e){
     <!-- ── Send & Track: invoices in QuickBooks, by send/pay status ── -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div class="section-title" style="margin:0">📤 INVOICES — SEND &amp; TRACK</div>
-      <button class="btn secondary" onclick="loadSendTrack()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
+      <div style="display:flex;gap:8px">
+        <button id="st-bulk-toggle-btn" class="btn secondary" onclick="stToggleBulkMode()" style="font-size:11px;padding:6px 12px">☑ Select multiple</button>
+        <button class="btn secondary" onclick="loadSendTrack()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
+      </div>
     </div>
     <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Invoices already in QuickBooks. <b>Not sent</b> = created but never emailed (the pile QuickBooks can't filter) — send them here. <b>Overdue</b> shows days late so you can time reminders.</p>
+    <div id="st-bulk-bar" style="display:none;position:sticky;top:0;z-index:5;background:var(--surface);border:1px solid var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+          <input type="checkbox" onchange="stSelectAllVisible(this.checked)"> Select all visible
+        </label>
+        <span id="st-bulk-count" style="font-size:12px;color:var(--muted);flex:1">0 selected</span>
+        <button id="st-bulk-send-btn" class="btn" onclick="stBulkSend()" disabled style="font-size:12px;padding:8px 14px;font-weight:bold">📤 Send selected</button>
+      </div>
+      <div id="st-bulk-status"></div>
+    </div>
     <div id="st-board"><div class="loading"><span class="spinner"></span>Loading invoices…</div></div>
 
     <div style="border-top:1px solid var(--border);margin:22px 0 14px"></div>
@@ -441,9 +454,22 @@ window.addEventListener('pageshow', function(e){
   <div class="page" id="page-qb-send">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <div class="section-title" style="margin:0">💵 SEND TO QUICKBOOKS</div>
-      <button class="btn secondary" onclick="loadQBQueue()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
+      <div style="display:flex;gap:8px">
+        <button id="qb-bulk-toggle-btn" class="btn secondary" onclick="qbToggleBulkMode()" style="font-size:11px;padding:6px 12px">☑ Select multiple</button>
+        <button class="btn secondary" onclick="loadQBQueue()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
+      </div>
     </div>
     <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Approved bills waiting to go to QuickBooks. Preview creates nothing — it only shows the invoice + bill. Confirm creates them in QB.</p>
+    <div id="qb-bulk-bar" style="display:none;position:sticky;top:0;z-index:5;background:var(--surface);border:1px solid var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+          <input type="checkbox" onchange="qbSelectAllVisible(this.checked)"> Select all visible
+        </label>
+        <span id="qb-bulk-count" style="font-size:12px;color:var(--muted);flex:1">0 selected</span>
+        <button id="qb-bulk-send-btn" class="btn" onclick="qbBulkSendSelected()" disabled style="font-size:12px;padding:8px 14px;font-weight:bold">⚡ Send selected</button>
+      </div>
+      <div id="qb-bulk-status"></div>
+    </div>
     <div id="qb-list"><div class="loading"><span class="spinner"></span>Loading queue…</div></div>
   </div>
 
@@ -6982,9 +7008,17 @@ function renderBundlingOpportunities() {
 // Reads /ar/invoices (live QuickBooks). Sending reuses /ar/remind, which is preview-first,
 // re-checks the balance, skips already-paid, requires an email on file, and confirms
 // EmailStatus=EmailSent before reporting a send. Customer-facing ⇒ always confirm before sending.
+var _stSendable = [];   // flat, indexed list of {inv,kind} for every not_sent/overdue row — bulk-select target
+var _stBulkMode = false;
+
 function loadSendTrack() {
   var el = document.getElementById('st-board');
   if (!el) return;
+  _stBulkMode = false;
+  var toggleBtn = document.getElementById('st-bulk-toggle-btn');
+  if (toggleBtn) toggleBtn.textContent = '☑ Select multiple';
+  var bar = document.getElementById('st-bulk-bar');
+  if (bar) bar.style.display = 'none';
   el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading invoices…</div>';
   api('GET','/ar/invoices').then(function(res){
     if (!res || !res.ok) { el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:16px 0">Could not load invoices from QuickBooks'+(res&&res.error?': '+esc(res.error):'')+'. Try Refresh.</div>'; return; }
@@ -6999,8 +7033,9 @@ function stChip(label, n, color) {
   return '<span style="display:inline-block;background:'+color+';color:#fff;border-radius:12px;padding:3px 10px;font-size:11px;font-weight:600;margin-right:8px">'+esc(label)+': '+n+'</span>';
 }
 
-function stRow(inv, kind) {
-  // kind: 'not_sent' | 'overdue' | 'sent'
+function stRow(inv, kind, i) {
+  // kind: 'not_sent' | 'overdue' | 'sent'. i = index into _stSendable (omitted for 'sent' rows,
+  // which are never selectable — nothing left to send on an invoice already sent).
   var money = '$'+(Number(inv.total)||0).toFixed(2);
   var right;
   if (kind === 'sent') {
@@ -7025,8 +7060,18 @@ function stRow(inv, kind) {
   if (kind === 'overdue') meta.push('<b style="color:var(--danger,#b42318)">'+inv.days_overdue+'d overdue</b>');
   else if (kind === 'not_sent' && inv.txn_date) meta.push('created '+esc(inv.txn_date));
   if (!inv.has_email && kind !== 'sent') meta.push('<span style="color:var(--danger,#b42318)">no email</span>');
-  return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">'+
-    '<div style="min-width:0"><div style="font-weight:600;font-size:13px">'+esc(inv.customer)+'</div>'+
+  // Bulk-select checkbox — same gate as the single Send button: no email on file means it
+  // can't go out solo or in a batch, so the checkbox is disabled rather than silently dropped.
+  var checkHtml = '';
+  if (kind !== 'sent' && typeof i === 'number') {
+    var canCheck = !!inv.has_email;
+    checkHtml = '<label class="st-bulk-check-wrap" style="display:'+(_stBulkMode?'flex':'none')+';align-items:center;margin-right:8px;flex-shrink:0"'+(canCheck?'':' title="No email on file — cannot batch-send"')+'>' +
+      '<input type="checkbox" class="st-bulk-check" data-i="'+i+'" '+(canCheck?'':'disabled')+' onchange="stUpdateBulkBar()">' +
+    '</label>';
+  }
+  return '<div id="st-row-'+(typeof i==='number'?i:'x')+'" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">'+
+    checkHtml +
+    '<div style="min-width:0;flex:1"><div style="font-weight:600;font-size:13px">'+esc(inv.customer)+'</div>'+
     '<div style="color:var(--muted);font-size:11px">'+meta.join(' · ')+' · <a href="'+qbInvoiceLink(inv.id)+'" target="_blank" rel="noopener" style="color:var(--info)">open in QB</a></div></div>'+
     '<div style="flex-shrink:0">'+right+'</div>'+
   '</div>';
@@ -7061,16 +7106,17 @@ function renderSendTrack(res) {
               stChip('Paid', c.paid||0, '#166534');
   var html = '<div style="margin-bottom:12px">'+chips+'</div>';
 
+  _stSendable = [];
   var notSent = res.not_sent || [];
   html += '<div style="font-size:11px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;margin:6px 0 4px">Not sent — '+notSent.length+'</div>';
   html += notSent.length
-    ? notSent.map(function(i){ return stRow(i,'not_sent'); }).join('')
+    ? notSent.map(function(inv){ var i=_stSendable.length; _stSendable.push({inv:inv,kind:'not_sent'}); return stRow(inv,'not_sent',i); }).join('')
     : '<div style="color:var(--muted);font-size:12px;padding:6px 0">Nothing sitting — every invoice has been sent. ✓</div>';
 
   var od = res.overdue || [];
   if (od.length) {
     html += '<div style="font-size:11px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;margin:16px 0 4px">Overdue — '+od.length+' (send a reminder)</div>';
-    html += od.map(function(i){ return stRow(i,'overdue'); }).join('');
+    html += od.map(function(inv){ var i=_stSendable.length; _stSendable.push({inv:inv,kind:'overdue'}); return stRow(inv,'overdue',i); }).join('');
   }
 
   var st = res.sent || [];
@@ -7080,6 +7126,95 @@ function renderSendTrack(res) {
     html += '</div></details>';
   }
   el.innerHTML = html;
+}
+
+// ── Send & Track bulk-select ─────────────────────────────────────────────
+// Same "Select multiple" toggle/bar UX as Review Bills (irToggleBulkMode et al) — Brett already
+// knows the pattern. The Worker's /ar/remind ALREADY accepts an array of invoice_ids and loops
+// server-side (rule 81) — this was only ever exposed one id at a time from the UI. No worker.js
+// change needed. Still preview-first: one combined confirm names every customer + the total
+// before anything is actually emailed, same discipline as the single-send path.
+function stToggleBulkMode() {
+  _stBulkMode = !_stBulkMode;
+  document.querySelectorAll('.st-bulk-check-wrap').forEach(function(el) { el.style.display = _stBulkMode ? 'flex' : 'none'; });
+  if (!_stBulkMode) document.querySelectorAll('.st-bulk-check').forEach(function(cb) { cb.checked = false; });
+  var toggleBtn = document.getElementById('st-bulk-toggle-btn');
+  if (toggleBtn) toggleBtn.textContent = _stBulkMode ? '✕ Cancel select' : '☑ Select multiple';
+  var bar = document.getElementById('st-bulk-bar');
+  if (bar) bar.style.display = _stBulkMode ? '' : 'none';
+  stUpdateBulkBar();
+}
+
+function stSelectAllVisible(checked) {
+  document.querySelectorAll('.st-bulk-check:not(:disabled)').forEach(function(cb) {
+    var row = document.getElementById('st-row-' + cb.getAttribute('data-i'));
+    if (row && row.style.display !== 'none') cb.checked = checked;
+  });
+  stUpdateBulkBar();
+}
+
+function stUpdateBulkBar() {
+  var bar = document.getElementById('st-bulk-bar');
+  if (!bar) return;
+  var checks = Array.prototype.slice.call(document.querySelectorAll('.st-bulk-check:checked'));
+  var total = 0;
+  checks.forEach(function(cb) {
+    var rec = _stSendable[+cb.getAttribute('data-i')];
+    if (rec) total += Number(rec.inv.total) || 0;
+  });
+  var countEl = document.getElementById('st-bulk-count');
+  if (countEl) countEl.textContent = checks.length + ' selected' + (checks.length ? ' — $' + total.toFixed(2) + ' total' : '');
+  var btn = document.getElementById('st-bulk-send-btn');
+  if (btn) btn.disabled = !checks.length;
+}
+
+function stBulkSend() {
+  var checks = Array.prototype.slice.call(document.querySelectorAll('.st-bulk-check:checked'));
+  if (!checks.length) return;
+  var recs = checks.map(function(cb) { return _stSendable[+cb.getAttribute('data-i')]; }).filter(Boolean);
+  var ids = recs.map(function(r) { return r.inv.id; });
+  var btn = document.getElementById('st-bulk-send-btn');
+  var statusEl = document.getElementById('st-bulk-status');
+
+  if (btn) { btn.disabled = true; btn.textContent = 'Previewing…'; }
+  if (statusEl) statusEl.innerHTML = '';
+
+  api('POST','/ar/remind',{ invoice_ids: ids, preview: true }).then(function(p){
+    if (btn) { btn.disabled = false; btn.textContent = '📤 Send selected'; }
+    var items = (p && p.items) || [];
+    var willSend = items.filter(function(it){ return it.willSend; });
+    var skipped = items.filter(function(it){ return !it.willSend; });
+    if (!willSend.length) {
+      if (statusEl) statusEl.innerHTML = '<div style="color:var(--warn);font-size:12px;margin-top:8px">None of the selected invoices can be sent right now'+(skipped[0]&&skipped[0].reason?' ('+esc(skipped[0].reason)+')':'')+'.</div>';
+      return;
+    }
+    var total = willSend.reduce(function(s,it){ return s + (Number(it.balance)||0); }, 0);
+    var names = willSend.slice(0,5).map(function(it){ return esc(it.customer||'?'); }).join(', ') + (willSend.length>5 ? ', +'+(willSend.length-5)+' more' : '');
+    var msg = 'Email ' + willSend.length + ' invoice' + (willSend.length===1?'':'s') + ' — $' + total.toFixed(2) + ' total?\n\nTo: ' + names +
+      (skipped.length ? '\n\n(' + skipped.length + ' selected invoice(s) will be skipped — ' + skipped.map(function(s){ return s.reason||'?'; }).join('; ') + ')' : '') +
+      '\n\nQuickBooks will email each one (with the pay link) now.';
+    if (!confirm(msg)) return;
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    if (statusEl) statusEl.innerHTML = '<div style="color:var(--muted);font-size:12px;margin-top:8px">Sending ' + willSend.length + ' invoice(s)…</div>';
+    var sendIds = willSend.map(function(it){ return it.id; });
+    api('POST','/ar/remind',{ invoice_ids: sendIds, by: 'send-track-bulk' }).then(function(r){
+      if (btn) { btn.disabled = false; btn.textContent = '📤 Send selected'; }
+      var results = (r && r.items) || [];
+      var okCount = results.filter(function(it){ return it.sent; }).length;
+      var failCount = results.length - okCount;
+      var summary = '✓ Sent ' + okCount + ' of ' + results.length + '.' + (failCount ? ' ' + failCount + ' failed — check them individually.' : '');
+      if (statusEl) statusEl.innerHTML = '<div style="color:'+(failCount?'var(--danger)':'var(--accent2)')+';font-size:12px;margin-top:8px">' + esc(summary) + '</div>';
+      toast(okCount + ' invoice(s) sent', okCount ? 'success' : 'error');
+      loadSendTrack();
+    }).catch(function(e){
+      if (btn) { btn.disabled = false; btn.textContent = '📤 Send selected'; }
+      if (statusEl) statusEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:8px">Bulk send failed: ' + esc(e.message||'?') + '</div>';
+    });
+  }).catch(function(e){
+    if (btn) { btn.disabled = false; btn.textContent = '📤 Send selected'; }
+    if (statusEl) statusEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:8px">Preview failed: ' + esc(e.message||'?') + '</div>';
+  });
 }
 
 // Preview-first send of one invoice: /ar/remind with preview:true shows exactly who WOULD be
@@ -8524,6 +8659,11 @@ function qbApplyAllSuggestions() {
 function loadQBQueue() {
   var el = document.getElementById('qb-list');
   if (!el) return;
+  _qbBulkMode = false;
+  var toggleBtn = document.getElementById('qb-bulk-toggle-btn');
+  if (toggleBtn) toggleBtn.textContent = '☑ Select multiple';
+  var bar = document.getElementById('qb-bulk-bar');
+  if (bar) bar.style.display = 'none';
   el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading approved bills…</div>';
   api('GET', '/qb/ready').then(function(rows) {
     // Never render a failure as a green all-clear. /qb/ready used to swallow every error
@@ -8620,7 +8760,18 @@ function renderQBCard(r, i) {
         '🔗 +' + r.combines_with + ' more bill(s) on this job — Send combines them into ONE customer invoice (still separate vendor bills).' +
       '</div>' : '';
 
+  // Bulk-select checkbox — only for rows the existing batch path already treats as batchable
+  // (qbBatchSend's own `needs_individual_send` filter). A row with no QuickBooks status on
+  // record has no invoice id to protect it from a duplicate, so it stays Preview & Send only,
+  // same as it's always been — the checkbox is disabled and says why instead of being silently
+  // absent, so it doesn't read as "select all" quietly skipping a row.
+  var checkHtml = '<label class="qb-bulk-check-wrap" style="display:'+(_qbBulkMode?'flex':'none')+';align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--muted)"'+(r.needs_individual_send?' title="No QuickBooks status on record — needs Preview & Send individually"':'')+'>' +
+    '<input type="checkbox" class="qb-bulk-check" data-i="'+i+'" '+(r.needs_individual_send?'disabled':'')+' onchange="qbUpdateBulkBar()"> ' +
+    (r.needs_individual_send ? 'Needs individual send' : 'Select for batch') +
+  '</label>';
+
   return '<div id="qb-card-'+i+'" data-irid="'+esc(r.id)+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">' +
+    checkHtml +
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">' +
       '<div>' +
         '<div style="color:var(--accent);font-weight:bold;font-size:.95rem">' + esc(r.vendor_name||'—') + '</div>' +
@@ -8814,13 +8965,81 @@ function qbBatchSend() {
     toast('Nothing can be batch-sent — send these individually with Preview & Send', 'error');
     return;
   }
-  if (!confirm('Send ' + batchable.length + ' approved bill' + (batchable.length===1?'':'s') + ' to QuickBooks now? Each creates a customer invoice + vendor bill.' +
+  qbSendRows(batchable, null, null, heldBack);
+}
+
+// ── Send to QB bulk-select ───────────────────────────────────────────────
+// "Send all" (above) always meant every batchable row in the queue. This adds an actual
+// checkbox picker — same "Select multiple" toggle/bar pattern as Review Bills and Send &
+// Track — so a subset can be sent instead of all-or-nothing. Both paths share qbSendRows
+// below, the exact sequential /qb/send-invoice loop that was already shipped and live.
+var _qbBulkMode = false;
+
+function qbToggleBulkMode() {
+  _qbBulkMode = !_qbBulkMode;
+  document.querySelectorAll('.qb-bulk-check-wrap').forEach(function(el) { el.style.display = _qbBulkMode ? 'flex' : 'none'; });
+  if (!_qbBulkMode) document.querySelectorAll('.qb-bulk-check').forEach(function(cb) { cb.checked = false; });
+  var toggleBtn = document.getElementById('qb-bulk-toggle-btn');
+  if (toggleBtn) toggleBtn.textContent = _qbBulkMode ? '✕ Cancel select' : '☑ Select multiple';
+  var bar = document.getElementById('qb-bulk-bar');
+  if (bar) bar.style.display = _qbBulkMode ? '' : 'none';
+  qbUpdateBulkBar();
+}
+
+function qbSelectAllVisible(checked) {
+  document.querySelectorAll('.qb-bulk-check:not(:disabled)').forEach(function(cb) {
+    var card = document.getElementById('qb-card-' + cb.getAttribute('data-i'));
+    if (card && card.style.display !== 'none') cb.checked = checked;
+  });
+  qbUpdateBulkBar();
+}
+
+function qbUpdateBulkBar() {
+  var bar = document.getElementById('qb-bulk-bar');
+  if (!bar) return;
+  var checks = Array.prototype.slice.call(document.querySelectorAll('.qb-bulk-check:checked'));
+  var total = 0;
+  checks.forEach(function(cb) {
+    var r = _qbQueue[+cb.getAttribute('data-i')];
+    if (r) total += parseFloat(r.customer_total) || 0;
+  });
+  var countEl = document.getElementById('qb-bulk-count');
+  if (countEl) countEl.textContent = checks.length + ' selected' + (checks.length ? ' — $' + total.toFixed(2) + ' total' : '');
+  var btn = document.getElementById('qb-bulk-send-btn');
+  if (btn) btn.disabled = !checks.length;
+}
+
+function qbBulkSendSelected() {
+  var checks = Array.prototype.slice.call(document.querySelectorAll('.qb-bulk-check:checked'));
+  if (!checks.length) return;
+  // Code-level filter, not just the UI's disabled checkbox — same guard qbBatchSend applies
+  // to the full queue. A row with no QuickBooks status on record could otherwise create a
+  // duplicate customer invoice for a job already billed by hand outside the system.
+  var rows = checks.map(function(cb) { return _qbQueue[+cb.getAttribute('data-i')]; })
+    .filter(function(r) { return r && !r.needs_individual_send; });
+  if (!rows.length) { toast('Nothing selected can be batch-sent', 'error'); return; }
+  qbSendRows(rows, document.getElementById('qb-bulk-send-btn'), document.getElementById('qb-bulk-status'), 0);
+}
+
+// Shared sender for both "Send all" and "Send selected" — same sequential /qb/send-invoice
+// loop, same per-item warning surfacing, unchanged from the original qbBatchSend body. btn/
+// statusEl are optional: "Send all" tracks nothing of its own (its button re-renders via
+// loadQBQueue like it always has); "Send selected" tracks its own bulk-bar button + status line.
+function qbSendRows(rows, btn, statusEl, heldBack) {
+  var doneLabel = btn ? btn.textContent : null;
+  if (!confirm('Send ' + rows.length + ' approved bill' + (rows.length===1?'':'s') + ' to QuickBooks now? Each creates a customer invoice + vendor bill.' +
                (heldBack ? '\n\n' + heldBack + ' row' + (heldBack===1?' is':'s are') + ' held back — no QuickBooks status on record, so ' + (heldBack===1?'it needs':'they need') + ' Preview & Send individually.' : ''))) return;
-  var ids = batchable.map(function(r){ return r.id; });
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  if (statusEl) statusEl.innerHTML = '<div style="color:var(--muted);font-size:12px;margin-top:8px">Sending ' + rows.length + ' bill(s)…</div>';
+  var ids = rows.map(function(r){ return r.id; });
   var idx = 0, ok = 0, fail = 0, warned = 0;
   (function next(){
     if (idx >= ids.length) {
-      toast('QB batch done — ' + ok + ' sent, ' + fail + ' failed' + (warned ? ', ' + warned + ' with warnings' : ''), (fail||warned)?'error':'success');
+      var summary = 'QB batch done — ' + ok + ' sent, ' + fail + ' failed' + (warned ? ', ' + warned + ' with warnings' : '');
+      toast(summary, (fail||warned)?'error':'success');
+      if (btn) { btn.disabled = false; btn.textContent = doneLabel || '⚡ Send selected'; }
+      if (statusEl) statusEl.innerHTML = '<div style="color:'+(fail?'var(--danger)':'var(--accent2)')+';font-size:12px;margin-top:8px">' + esc(summary) + '</div>';
+      qbUpdateBulkBar();
       return;
     }
     var id = ids[idx++];

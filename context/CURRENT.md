@@ -1,3 +1,24 @@
+# WHERE THINGS STAND — Aug 24, 2026 (later still)
+
+## 🟢 Real multi-select for sending bills/invoices to QuickBooks — Send & Track (AR) + Send to QB (AP). FEATURE_LOG rule 139.
+Brett asked where his "select multiple bills to send to QB" fix went, believing he'd built it this
+weekend. Checked every commit from Aug 22-23 — none touched bill selection; this was a mix-up with
+the Review Bills "Select multiple" toggle (rule 98), which only bulk-approves bills into the QB
+queue and never sends to QuickBooks. Two real gaps, confirmed by reading the actual code, not
+memory: Send & Track had only a one-at-a-time "Send →" per invoice (never had a bulk path); Send to
+QB had only all-or-nothing "Send all N" (no way to pick a subset). Both fixed, frontend-only — the
+Worker's `/ar/remind` already took an array of invoice_ids and looped server-side (rule 81), the UI
+just never exposed more than one at a time. Same "☑ Select multiple" sticky-bar pattern as Review
+Bills on both screens now; Send to QB's existing send loop was extracted into a shared `qbSendRows`
+so "Send all" and "Send selected" are the same code, not two paths that can drift. **Independent
+review subagent caught a real gap before push**: the new "Send selected" on Send to QB relied only
+on the checkbox's disabled attribute to keep bills needing individual send out of a batch — no
+code-level filter like the existing "Send all" has. Fixed before shipping. `node --check` clean on
+all 5 `index.html` script blocks. **🔴 Needs Brett's live pass** — on Send & Track, toggle Select
+multiple, check 2-3 not-sent invoices, Send selected, confirm the right ones go out; on Send to QB,
+toggle Select multiple, confirm a bill needing individual send shows a disabled checkbox with why,
+check a couple of batchable ones, Send selected, confirm only those post to QuickBooks.
+
 # WHERE THINGS STAND — Aug 24, 2026
 
 ## 🟡 B-235: Move a vendor bill + its photos to a new WO — built, validated, pushed. Not yet run live.
