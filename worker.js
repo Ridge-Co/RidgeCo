@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-23.2';
+const BUILD_VERSION = '2026-08-24.1';
 
 export default {
   async fetch(request, env) {
@@ -312,6 +312,7 @@ export default {
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
+        if (path === '/vendor-bill/move-to-new-wo') return await moveVendorBillToNewWO(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
         // Code (Aug 24, 2026): Master_Keys previously had only Name/Owner/Notes — no actual
         // key-code field, so a vendor standing at the door had nothing usable even once
@@ -2831,6 +2832,141 @@ async function listVendorBills(env, url) {
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
     return json(results);
   } catch(e) { return json([]); }
+}
+
+// POST /vendor-bill/move-to-new-wo { bill_id, cutoff_date?, reason?, moved_by?, apply? }
+// Splits a bill — and a date-filtered slice of its work order's photos — off onto a
+// BRAND-NEW work order. Built for the recurring case where a vendor revisits a property
+// he's already done a (billed, closed-out) job at, and the new bill lands on that same old
+// WO instead of getting its own: the old WO's history gets contaminated with an unrelated
+// bill, and there's no clean per-visit record. This creates a fresh WO instead of trying to
+// untangle the old one.
+//
+// Preview-first, same shape as adminMergeOwner/adminMergeProperty: apply:false (default)
+// reports exactly what WOULD move without writing anything; apply:true actually creates the
+// WO and moves the rows. Everything on the old WO dated BEFORE the cutoff — its own bill
+// history, notes, earlier photos — is untouched; only the bill and the on/after-cutoff
+// photos move.
+async function moveVendorBillToNewWO(env, body) {
+  const billId = String(body.bill_id || '').trim();
+  if (!billId) return json({ error: 'bill_id required' }, 400);
+  const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+  const movedBy = body.moved_by || 'Brett';
+  const reason = body.reason || '';
+
+  const bills = await fetchTab(env, 'Vendor_Bills');
+  const bill = bills.find(b => String(b.ID) === billId);
+  if (!bill) return json({ error: `No vendor bill ${billId}` }, 404);
+  if (bill.Active === 'FALSE') return json({ error: `Bill ${billId} is inactive/voided — nothing to move.` }, 409);
+
+  const oldWoId = bill.WO_ID;
+  if (!oldWoId) return json({ error: `Bill ${billId} has no WO_ID to split from.` }, 400);
+
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const oldWo = findWO(workorders, oldWoId);
+  if (!oldWo) return json({ error: `Old work order ${oldWoId} not found.` }, 404);
+
+  // Default cutoff = the bill's own submitted date — the day the vendor actually did this
+  // job, which is exactly the day whose photos this bill is paying for.
+  const cutoff = String(body.cutoff_date || bill.Created_Date || '').slice(0, 10);
+  if (!cutoff) return json({ error: 'No cutoff_date given and the bill has no Created_Date to default to.' }, 400);
+
+  // Attachments only carry a WO_ID, not a bill_id — there is no per-bill link in the
+  // schema. On a WO with only one active bill (the normal case) a date cutoff is a safe
+  // proxy for "this visit's photos." But if the OLD WO carries another still-open bill
+  // (a second vendor, or a second unreviewed bill from this same vendor), a date-based
+  // cutoff can't tell that bill's photos apart from this one's — moving by date alone
+  // risks sweeping evidence for a job that isn't the one being split off. Surface it
+  // rather than silently grabbing it; ridgeco-validate flagged this as the real gap.
+  const otherActiveBills = bills.filter(b => b.WO_ID === oldWoId && b.Active !== 'FALSE' && String(b.ID) !== billId);
+
+  const attachments = await fetchTab(env, 'Attachments');
+  const woAttachments = attachments.filter(a => a.WO_ID === oldWoId && a.Active !== 'FALSE');
+  const moving = woAttachments.filter(a => String(a.Created_Date || '').slice(0, 10) >= cutoff);
+  const staying = woAttachments.filter(a => String(a.Created_Date || '').slice(0, 10) < cutoff);
+
+  const preview = {
+    success: true, applied: false,
+    old_wo: { id: oldWoId, property_id: oldWo.Property_ID, trade: oldWo.Trade, status: oldWo.Status, description: oldWo.Description },
+    bill: { id: billId, vendor_id: bill.Vendor_ID, vendor_name: bill.Vendor_Name, total: bill.Total, created_date: bill.Created_Date },
+    cutoff_date: cutoff,
+    attachments_to_move: moving.map(a => ({ id: a.ID, file_name: a.File_Name, file_type: a.File_Type, created_date: a.Created_Date })),
+    attachments_staying: staying.map(a => ({ id: a.ID, file_name: a.File_Name, file_type: a.File_Type, created_date: a.Created_Date })),
+    new_wo_preview: { property_id: oldWo.Property_ID, unit_id: oldWo.Unit_ID, tenant_id: oldWo.Tenant_ID, trade: oldWo.Trade, type: oldWo.Type, vendor_id: oldWo.Vendor_ID },
+    // Non-empty means: pause and look before applying. The old WO has other money still
+    // open on it, and a date cutoff can't distinguish whose photos are whose.
+    other_active_bills: otherActiveBills.map(b => ({ id: b.ID, vendor_name: b.Vendor_Name, total: b.Total, status: b.Status })),
+  };
+  if (!apply) return json(preview);
+
+  // ── APPLY ────────────────────────────────────────────────────
+  // 1. Create the new WO — reuse createWorkOrder rather than re-deriving its ID-numbering
+  //    and auto-tenant-linking logic. Description is deliberately left blank (Brett's call —
+  //    a revisit gets its own fresh notes, not the old job's carried over).
+  const createRes = await createWorkOrder(env, {
+    property_id: oldWo.Property_ID, unit_id: oldWo.Unit_ID, tenant_id: oldWo.Tenant_ID,
+    type: oldWo.Type || 'manual', trade: oldWo.Trade || '', description: '',
+    priority: oldWo.Priority || 'normal', room: oldWo.Room || '',
+    created_by: movedBy, notes: reason ? `Split from ${oldWoId}: ${reason}` : `Split from ${oldWoId}`,
+  });
+  const created = await createRes.clone().json();
+  if (!created || !created.id) return json({ error: 'Failed to create the new work order', detail: created }, 500);
+  const newWoId = created.id;
+
+  // 2+3. Set the vendor/status on the new WO and move the bill onto it. These two are the
+  // core of the split — a new WO with no vendor/bill on it is useless — so they're wrapped
+  // together: if either throws, the new WO already exists (step 1 committed) but is
+  // incomplete, and the caller needs to know that WO's id rather than getting a bare 500
+  // and no way to find it. This never auto-retries (a retry after a partial failure would
+  // create a SECOND stray WO, not resume this one) — it hands the id back for a human to
+  // check the sheet and finish or clean up by hand.
+  try {
+    // The vendor already did this job — set them + Complete directly rather than going
+    // through assignVendor (which SMS's the vendor to accept a dispatch). Mirrors exactly
+    // what addVendorBill already does automatically for any WO a bill lands on.
+    await updateWOFields(env, newWoId, {
+      Vendor_ID: oldWo.Vendor_ID || '', Status: 'Complete',
+      Completed_Date: new Date().toISOString().split('T')[0],
+    });
+    await updateRow(env, 'Vendor_Bills', billId, { WO_ID: newWoId });
+  } catch (e) {
+    return json({
+      success: false, applied: true, partial: true, new_wo_id: newWoId, bill_id: billId,
+      error: `Work order ${newWoId} was created, but moving the vendor/status/bill onto it failed (${e.message || e}). ` +
+        `The bill is still on ${oldWoId}. Check ${newWoId} in the Hub before retrying — retrying this action now creates ANOTHER new WO, it does not resume this one.`,
+    }, 500);
+  }
+
+  // 4. Move only the photos at/after the cutoff. Anything older stays on the old WO — it's
+  //    that job's own history, not this visit's. Best-effort per row: the bill has already
+  //    moved successfully by this point, so one photo failing to move is reported, not
+  //    treated as fatal to the whole action.
+  const movedAttachmentIds = [];
+  for (const a of moving) {
+    try { await updateRow(env, 'Attachments', a.ID, { WO_ID: newWoId }); movedAttachmentIds.push(a.ID); }
+    catch (e) { /* best-effort — report what didn't move below rather than losing the whole apply over one row */ }
+  }
+  const failedAttachmentIds = moving.map(a => a.ID).filter(id => !movedAttachmentIds.includes(id));
+
+  // 5. Audit trail on BOTH work orders — this is the whole reason a bill and its photos
+  //    disappeared from the old WO and a new one appeared with no dispatch/assign step
+  //    behind it.
+  await logWOAuditMany(env, [
+    { woId: oldWoId, changedBy: movedBy, changedByRole: 'admin', field: 'Bill_Moved_Out', oldValue: billId, newValue: newWoId,
+      notes: `Bill ${billId} ($${bill.Total || '0'}) + ${movedAttachmentIds.length} photo(s) moved to new WO ${newWoId}.${reason ? ' Reason: ' + reason : ''}` },
+    { woId: newWoId, changedBy: movedBy, changedByRole: 'admin', field: 'Split_From', oldValue: '', newValue: oldWoId,
+      notes: `Created by splitting bill ${billId} + ${movedAttachmentIds.length} photo(s) off ${oldWoId}.${reason ? ' Reason: ' + reason : ''}` },
+  ]);
+
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'bill_split', Skill_Or_Endpoint: '/vendor-bill/move-to-new-wo', Success: 'TRUE', Notes: `old_wo=${oldWoId} new_wo=${newWoId} bill=${billId} attachments=${movedAttachmentIds.length}` }); } catch (_) {}
+
+  return json({
+    success: true, applied: true,
+    new_wo_id: newWoId, old_wo_id: oldWoId, bill_id: billId,
+    attachments_moved: movedAttachmentIds.length,
+    attachments_failed: failedAttachmentIds,
+    attachments_left_on_old_wo: staying.length,
+  });
 }
 
 // POST /invoice-review/unapprove { id }

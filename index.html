@@ -4956,7 +4956,10 @@ function hubBillSubmit(k, woId) {
 function invBuilderHtml(k, woId, wo) {
   wo = wo || {};
   return '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px" id="invoice-builder-'+k+'">' +
-    '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:12px">🧾 INVOICE BUILDER</div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap">' +
+      '<div style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase">🧾 INVOICE BUILDER</div>' +
+      '<button onclick="openMoveBillModal(\''+k+'\')" title="Split this bill (and its photos) off onto a brand-new work order" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:5px;font-family:var(--font);font-size:10.5px;padding:5px 9px;cursor:pointer;white-space:nowrap">↪ Move bill to new WO</button>' +
+    '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:12px">' +
     '<div style="background:var(--surface);border-radius:6px;padding:10px;min-width:0">' +
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.06em;margin-bottom:6px">VENDOR COST (what you owe)</div>' +
@@ -5025,6 +5028,116 @@ function loadInvoiceBuilder(k, woId) {
   loadVendorBillForInvoice(k);
   loadInvoiceTime(k);
   loadInvoiceMaterials(k);
+}
+
+// ── MOVE BILL TO NEW WO ───────────────────────────────────────
+// A vendor revisits a property he's already done a billed job at, and the new bill lands
+// on that old (already-billed) WO instead of getting its own. This splits the bill — and
+// whichever of that WO's photos are dated on/after a cutoff — off onto a brand-new work
+// order, so the old WO's history stays clean and this visit gets its own record. Reachable
+// from wherever invBuilderHtml is mounted: the Review Bills queue AND the WO detail modal,
+// since it's the same shared panel (see invBuilderHtml's own comment).
+var _mbmBillId = null, _mbmWoId = null, _mbmPreviewData = null;
+
+function openMoveBillModal(k) {
+  var bill = _invBill[k];
+  if (!bill || !bill.ID) { toast('No vendor bill loaded on this job yet.', 'error'); return; }
+  _mbmBillId = bill.ID;
+  _mbmWoId = _invWO[k] || k;
+  _mbmPreviewData = null;
+  document.getElementById('mbm-cutoff').value = String(bill.Created_Date || '').slice(0, 10);
+  document.getElementById('mbm-reason').value = '';
+  document.getElementById('mbm-summary').innerHTML =
+    'This creates a brand-new work order at the same property, moves ' + esc(bill.Vendor_Name || 'this vendor') +
+    '\'s $' + (parseFloat(bill.Total) || 0).toFixed(2) + ' bill onto it, and takes the photos below with it. ' +
+    'Work order ' + esc(_mbmWoId) + ' keeps everything dated before the cutoff — nothing else on it changes.';
+  document.getElementById('mbm-preview').innerHTML = '';
+  document.getElementById('mbm-msg').innerHTML = '';
+  var btn = document.getElementById('mbm-confirm-btn');
+  btn.disabled = true; btn.textContent = 'Create new WO & move';
+  openModal('modal-move-bill');
+  mbmPreview();
+}
+
+function mbmPreview() {
+  if (!_mbmBillId) return;
+  var cutoff = document.getElementById('mbm-cutoff').value;
+  var box = document.getElementById('mbm-preview');
+  if (!cutoff) { box.innerHTML = '<div style="color:var(--warn);font-size:11.5px">Pick a cutoff date.</div>'; return; }
+  box.innerHTML = '<div style="color:var(--muted);font-size:11.5px"><span class="spinner"></span> Checking photos…</div>';
+  document.getElementById('mbm-confirm-btn').disabled = true;
+  api('POST', '/vendor-bill/move-to-new-wo', { bill_id: _mbmBillId, cutoff_date: cutoff, apply: false })
+    .then(function(res) {
+      if (!res || res.error) {
+        box.innerHTML = '<div style="color:var(--danger);font-size:11.5px">' + esc((res && res.error) || 'Preview failed') + '</div>';
+        return;
+      }
+      _mbmPreviewData = res;
+      var moving = res.attachments_to_move || [], staying = res.attachments_staying || [];
+      var otherBills = res.other_active_bills || [];
+      // Attachments only know their WO, not which bill they belong to — if another bill on
+      // this same old WO is still active, a date cutoff can't tell its photos apart from
+      // this one's. Surfaced so Brett can pick a tighter cutoff or check by hand rather than
+      // this silently sweeping someone else's job photos onto the new WO.
+      var warnHtml = otherBills.length
+        ? '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:11.5px;color:var(--warn);line-height:1.6">' +
+            '⚠ ' + esc(_mbmWoId) + ' has ' + otherBills.length + ' other active bill' + (otherBills.length > 1 ? 's' : '') + ' on it (' +
+            otherBills.map(function(b){ return esc(b.vendor_name || 'vendor') + ' $' + (parseFloat(b.total)||0).toFixed(2); }).join(', ') +
+            ') — photos are matched by date only, so double-check the list below doesn\'t include anything that belongs to that other bill.' +
+          '</div>'
+        : '';
+      box.innerHTML = warnHtml +
+        '<div style="background:var(--surface);border-radius:6px;padding:10px;font-size:11.5px;line-height:1.7">' +
+          '<div><b>' + moving.length + '</b> photo(s)/file(s) move to the new WO' + (moving.length ? ':' : '.') + '</div>' +
+          (moving.length ? '<div style="color:var(--muted);margin:4px 0 8px;word-break:break-word">' + moving.map(function(a){ return esc(a.file_name || a.file_type || 'file'); }).join(', ') + '</div>' : '') +
+          '<div style="margin-top:' + (moving.length ? '0' : '4px') + '"><b>' + staying.length + '</b> stay on ' + esc(_mbmWoId) + ' (dated before the cutoff)</div>' +
+        '</div>';
+      document.getElementById('mbm-confirm-btn').disabled = false;
+    })
+    .catch(function(e) {
+      box.innerHTML = '<div style="color:var(--danger);font-size:11.5px">' + esc(e.message || 'Preview failed') + '</div>';
+    });
+}
+
+function mbmConfirm() {
+  if (!_mbmBillId || !_mbmPreviewData) return;
+  var cutoff = document.getElementById('mbm-cutoff').value;
+  var reason = document.getElementById('mbm-reason').value;
+  var btn = document.getElementById('mbm-confirm-btn');
+  btn.disabled = true; btn.textContent = 'Moving…';
+  document.getElementById('mbm-msg').innerHTML = '';
+  api('POST', '/vendor-bill/move-to-new-wo', { bill_id: _mbmBillId, cutoff_date: cutoff, reason: reason, moved_by: 'Brett', apply: true })
+    .then(function(res) {
+      if (!res || res.error || !res.success) {
+        // A partial failure still created the new WO — say so explicitly rather than just
+        // "failed," since retrying this action now would create a SECOND stray WO instead
+        // of fixing this one.
+        var partialNote = (res && res.partial && res.new_wo_id) ? ' Work order ' + esc(res.new_wo_id) + ' was created — check it in the Hub before trying again.' : '';
+        document.getElementById('mbm-msg').innerHTML = '<div style="color:var(--danger)">' + esc((res && res.error) || 'Move failed') + partialNote + '</div>';
+        btn.disabled = false; btn.textContent = 'Create new WO & move';
+        return;
+      }
+      var failNote = (res.attachments_failed && res.attachments_failed.length)
+        ? ' (' + res.attachments_failed.length + ' photo(s) failed to move — check ' + esc(res.new_wo_id) + ' and ' + esc(_mbmWoId) + '.)'
+        : '';
+      document.getElementById('mbm-msg').innerHTML =
+        '<div style="color:var(--accent2)">✓ Moved to ' + esc(res.new_wo_id) + ' — ' + res.attachments_moved + ' photo(s) moved.' + failNote + '</div>';
+      btn.textContent = '✓ Done';
+      toast('Bill moved to ' + res.new_wo_id, 'success');
+      var reopenWoId = _mbmWoId;
+      setTimeout(function() {
+        closeModal('modal-move-bill');
+        loadAll().then(function() {
+          if (document.getElementById('ir-list')) loadInvoiceReview();
+          var woModal = document.getElementById('modal-wo-detail');
+          if (woModal && woModal.classList.contains('open')) openWODetail(reopenWoId);
+        });
+      }, 1800);
+    })
+    .catch(function(e) {
+      document.getElementById('mbm-msg').innerHTML = '<div style="color:var(--danger)">' + esc(e.message || 'Move failed') + '</div>';
+      btn.disabled = false; btn.textContent = 'Create new WO & move';
+    });
 }
 
 
@@ -8757,6 +8870,24 @@ function qbBatchSend() {
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-add-return')">Cancel</button>
       <button class="btn" onclick="submitAddReturn()">LOG RETURN</button>
+    </div>
+  </div>
+</div>
+
+<!-- MOVE BILL TO NEW WO MODAL -->
+<div class="modal-overlay" id="modal-move-bill">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header"><div class="modal-title">MOVE BILL TO NEW WORK ORDER</div><button class="modal-close" onclick="closeModal('modal-move-bill')">✕</button></div>
+    <div id="mbm-summary" style="font-size:12.5px;color:var(--muted);margin-bottom:14px;line-height:1.6"></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Move photos dated on/after</label><input type="date" id="mbm-cutoff" oninput="mbmPreview()"></div>
+      <div class="form-group full"><label>Reason (optional, saved to the audit trail)</label><input type="text" id="mbm-reason" placeholder="e.g. vendor revisited this property — bill landed on the old WO"></div>
+    </div>
+    <div id="mbm-preview" style="margin-top:10px"></div>
+    <div id="mbm-msg" style="font-size:11.5px;padding:8px 0"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-move-bill')">Cancel</button>
+      <button class="btn" id="mbm-confirm-btn" onclick="mbmConfirm()" disabled>Create new WO &amp; move</button>
     </div>
   </div>
 </div>

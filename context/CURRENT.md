@@ -1,3 +1,28 @@
+# WHERE THINGS STAND — Aug 24, 2026
+
+## 🟡 B-235: Move a vendor bill + its photos to a new WO — built, validated, pushed. Not yet run live.
+Brett: Allen George revisited 1214 N Calvert St (a property he'd already done a billed job at), and
+the new $60 landscaping bill landed on the old, already-billed WO-1134 instead of getting its own —
+no recurring-WO system exists yet, and he named a 2nd job needing the same fix, so this had to be a
+reusable Hub tool. New `POST /vendor-bill/move-to-new-wo` (preview-first, mirrors the existing
+`adminMergeOwner`/`adminMergeProperty` shape) creates a fresh WO (property/unit/tenant/trade/type
+copied, description blank), sets it Complete + the vendor directly (no `assignVendor` — no SMS for
+work that's already done), moves the bill's `WO_ID`, and moves only the `Attachments` dated on/after
+a cutoff (default = the bill's `Created_Date`, editable) — earlier photos stay on the old WO. New
+"↪ Move bill to new WO" button lives in the shared `invBuilderHtml` panel, so it's reachable from
+both the Review Bills queue and the WO-detail modal. **ridgeco-validate (independent subagent) caught
+2 real 🔴s before push and both were fixed same session, then re-validated PASS:** (1) attachments
+have no per-bill link in the schema, so a WO with a 2nd still-active bill needed an explicit warning
+before a date cutoff could silently grab that bill's photos too — now surfaced as a named banner in
+the preview; (2) the apply sequence wasn't atomic between WO-creation and the vendor/bill-move steps
+— a partial failure now returns the stray WO's id explicitly instead of a bare 500, and warns against
+blind-retrying (which would create a second stray WO). `node --check` clean on worker.js + all 5
+index.html script blocks. `BUILD_VERSION` → `2026-08-24.1`. Full detail: FEATURE_LOG rule 138.
+**🔴 Not yet run against production — this session had no `WORKER_SECRET`, so the actual WO-1134 move
+needs Brett to tap the new button himself (Review Bills → Allen George's bill → "↪ Move bill to new
+WO"), or Claude can run it via curl if `WORKER_SECRET` is pasted in a future turn.** A 2nd job is
+queued to repeat the pattern once this one's confirmed working.
+
 # WHERE THINGS STAND — Aug 23, 2026 (later still, again)
 
 ## 🟢 Receipt Reconciler UI overhaul — Brett's live-test caught 4 real gaps, all fixed in one pass.
