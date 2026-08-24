@@ -1867,7 +1867,7 @@ async function scopeProposalView(env, url) {
 // contractor proposal, not a notarized legal document. Auth reuses the SAME scope-proposal link
 // token as scopeProposalView — no separate PROPOSAL_SIGN_TOKEN needed, since the token already
 // scopes access to exactly one scope's proposal.
-const SCOPE_SIG_HEADERS = ['ID','Scope_ID','Signer_Name','Signature_PNG','Selections_JSON','Subtotal','Deposit_Amount','Vendor_Cost_Total','Signed_Date','Signed_TS','IP','User_Agent','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Created_Date','Active'];
+const SCOPE_SIG_HEADERS = ['ID','Scope_ID','Signer_Name','Signature_PNG','Selections_JSON','Subtotal','Deposit_Amount','Vendor_Cost_Total','Signed_Date','Signed_TS','IP','User_Agent','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Bill_Skip_Reason','Created_Date','Active'];
 async function scopeSigTab(env) { await ensureTab(env, 'Scope_Signatures', SCOPE_SIG_HEADERS); }
 
 // POST /scope-proposal/sign — PUBLIC (link-token gated, body.t). {t, signer_name, signature_png,
@@ -1935,16 +1935,30 @@ async function scopeProposalSignedList(env, url) {
   const rows = await fetchTab(env, 'Scope_Signatures');
   const scopes = await fetchTab(env, 'Scopes').catch(() => []);
   const props = await fetchTab(env, 'Properties').catch(() => []);
+  const vendors = await fetchTab(env, 'Vendors').catch(() => []);
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
     let sel = {}; try { sel = JSON.parse(r.Selections_JSON || '{}'); } catch (_) {}
+    const subtotal = +r.Subtotal || 0, deposit = +r.Deposit_Amount || 0, vendorCostFull = +r.Vendor_Cost_Total || 0;
+    // Show the SAME prorated deposit-share amount /scope-proposal/book will actually bill under
+    // this exact "Bill vendor (deposit share)" label — not the vendor's raw full-job cost. Those
+    // used to disagree (this list showed the un-prorated Vendor_Cost_Total under a "deposit share"
+    // label, which could read far higher than what's actually about to be billed) — the mismatch
+    // Brett flagged as "calculates it incorrectly" on Jamuna Yalamanchili/Cesar Gomez's proposal.
+    const { amount: vendorBillShare } = scopeSigVendorBillAmount(vendorCostFull, deposit, subtotal);
+    const booked = (r.Status === 'Booked') || !!r.QB_Invoice_ID;
+    const v = sc.Vendor_ID ? vendors.find(x => x.ID === String(sc.Vendor_ID)) : null;
+    const vInHouse = !!v && String(v.In_House || '').toUpperCase() === 'TRUE';
+    const skipReason = scopeEffectiveBillSkipReason(r.Bill_Skip_Reason || '', vInHouse);
+    const billMissing = scopeBillMissing(booked, !!r.QB_Bill_ID, vendorCostFull, skipReason);
     return {
       id: r.ID, scope_id: r.Scope_ID, wo_id: sc.WO_ID || '', property: p.Address || ('Property ' + sc.Property_ID),
       title: sc.Title || '', signer: r.Signer_Name, signed_date: r.Signed_Date, signed_ts: r.Signed_TS,
-      subtotal: +r.Subtotal || 0, deposit: +r.Deposit_Amount || 0, vendor_cost_total: +r.Vendor_Cost_Total || 0, selections: sel,
+      subtotal, deposit, vendor_cost_total: vendorBillShare, vendor_cost_full: vendorCostFull, selections: sel,
       status: r.Status || 'Signed', qb_invoice_id: r.QB_Invoice_ID || '', qb_invoice_number: r.QB_Invoice_Number || '',
       qb_bill_id: r.QB_Bill_ID || '', qb_bill_number: r.QB_Bill_Number || '',
+      bill_skip_reason: skipReason, bill_missing: billMissing,
     };
   });
   out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
@@ -1965,6 +1979,37 @@ function scopeSigTrade(items, selections) {
   let best = 'General', bestN = 0;
   for (const t in counts) if (counts[t] > bestN) { best = t; bestN = counts[t]; }
   return QB_TRADE_MAP[best] ? best : 'General';
+}
+
+// Pure decision logic for the vendor-bill-skip visibility fix (Aug 24 2026 — Cesar Gomez /
+// Jamuna Yalamanchili report). Split out from scopeProposalBook/scopeProposalSignedList so it's
+// unit-testable without mocking Sheets/QuickBooks — see test/scope-book.test.mjs.
+
+// Why scopeProposalBook is ABOUT to skip creating the vendor bill, before it even tries the
+// QuickBooks calls. '' means a bill should be attempted. vendorId is the raw Scope.Vendor_ID
+// (used only to tell "nothing picked" from "picked something that doesn't resolve").
+function scopeInitialBillSkipReason(vendorId, vendor, vendorInHouse, vendorBillAmount) {
+  if (!vendor) return vendorId ? 'vendor_not_found' : 'no_vendor';
+  if (vendorInHouse) return 'in_house';
+  if (vendorBillAmount <= 0) return 'zero_cost';
+  return '';
+}
+
+// Bill_Skip_Reason didn't exist on rows booked before this fix shipped, so they all read blank
+// regardless of why their bill is missing — including the legitimate in-house case. Re-derive
+// just that one case from the vendor record directly so old in-house rows read as the calm
+// "no bill needed" note instead of a false "bill missing" alarm. Any other blank reason on an
+// already-booked row is left blank — genuinely unknown, not assumed innocent.
+function scopeEffectiveBillSkipReason(storedReason, vendorInHouse) {
+  if (storedReason) return storedReason;
+  return vendorInHouse ? 'in_house' : '';
+}
+
+// Should the Signed Proposals list flag this row with the persistent "no vendor bill" warning?
+// Only when a bill was genuinely expected (real vendor cost on file) and didn't happen for a
+// reason other than the intentional in-house skip.
+function scopeBillMissing(booked, hasBillId, vendorCostFull, effectiveSkipReason) {
+  return !!(booked && !hasBillId && vendorCostFull > 0 && effectiveSkipReason !== 'in_house');
 }
 
 // The vendor bill is prorated to the SAME share of vendor cost as the deposit is of the
@@ -1994,6 +2039,7 @@ function scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal) {
 async function scopeProposalBook(env, body) {
   if (!body || !body.id) return json({ error: 'id required' }, 400);
   await scopeSigTab(env);
+  await ensureColumns(env, 'Scope_Signatures', ['Bill_Skip_Reason']);
   const rows = await fetchTab(env, 'Scope_Signatures');
   const row = rows.find(r => r.ID === String(body.id) && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (!row) return json({ error: 'signature not found' }, 404);
@@ -2024,6 +2070,11 @@ async function scopeProposalBook(env, body) {
   const vendorInHouse = !!vendor && String(vendor.In_House || '').toUpperCase() === 'TRUE';
   const unitLabel = unit ? qbUnitLabel(unit) : '';
   const addr = qbPropertyDisplayName(prop) ? (qbPropertyDisplayName(prop) + (unitLabel ? (' ' + unitLabel) : '')) : ('Property ' + s.Property_ID);
+
+  // Persisted alongside the invoice/bill ids so a skipped bill is never just a warning that
+  // flashed once in a modal — /scope-proposal/signed reads this back to keep the row visibly
+  // flagged (or, for the in-house case, visibly explained-not-a-bug) until it's resolved.
+  let billSkipReason = scopeInitialBillSkipReason(s.Vendor_ID, vendor, vendorInHouse, vendorBillAmount);
 
   const warnings = [];
   if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
@@ -2090,14 +2141,16 @@ async function scopeProposalBook(env, body) {
         const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
-        if (!billId) warnings.push('QB bill failed: ' + (qbFault(rb) || 'unknown error'));
-      } else { warnings.push('Vendor QB id could not be resolved — no bill created.'); }
-    } catch (e) { warnings.push('Vendor bill error: ' + e.message); }
+        if (!billId) { warnings.push('QB bill failed: ' + (qbFault(rb) || 'unknown error')); billSkipReason = 'qb_bill_api_error'; }
+      } else { warnings.push('Vendor QB id could not be resolved — no bill created.'); billSkipReason = 'qb_vendor_unresolved'; }
+    } catch (e) { warnings.push('Vendor bill error: ' + e.message); billSkipReason = 'bill_exception'; }
   }
+  if (billId) billSkipReason = ''; // bill exists (this call or a prior one) — clear any stale reason
 
   // 3) Persist QB ids + tie back to the scope/work order.
   await updateRow(env, 'Scope_Signatures', row.ID, {
     Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber, QB_Bill_ID: billId, QB_Bill_Number: billNumber,
+    Bill_Skip_Reason: billSkipReason,
   });
   try { await updateRow(env, 'Scopes', s.ID, { Status: 'invoiced', Updated_Date: new Date().toISOString() }); } catch (e) {}
   try { if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Invoiced' }); } catch (e) {}

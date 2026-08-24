@@ -21,6 +21,7 @@
   .chip{font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:20px;white-space:nowrap}
   .chip.signed{background:var(--amberbg);color:var(--amber)}
   .chip.booked{background:var(--greenbg);color:var(--green)}
+  .chip.billmiss{background:var(--redbg);color:var(--red)}
   .amt{margin-left:auto;text-align:right}
   .amt .big{font-size:17px;font-weight:800}
   .amt .lbl{font-size:10.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
@@ -127,6 +128,18 @@ function api(method,path,body){
   return fetch(WORKER+path,opts).then(function(res){return res.json().then(function(d){if(d.error==='Unauthorized')throw new Error('Unauthorized');return d;});});
 }
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+// Human text for Scope_Signatures.Bill_Skip_Reason (worker.js scopeProposalBook) — every reason
+// the vendor-bill half of a booking can come up empty, so "no bill" is never just unexplained.
+function skipReasonText(code){
+  return {
+    no_vendor:'no vendor is set on this scope',
+    vendor_not_found:'the vendor set on this scope could not be found',
+    zero_cost:'the vendor cost on this scope is $0',
+    qb_vendor_unresolved:'QuickBooks could not resolve/create this vendor',
+    qb_bill_api_error:'the QuickBooks bill API call failed',
+    bill_exception:'an error occurred while creating the bill',
+  }[code] || 'reason unknown — check this scope’s vendor and cost fields';
+}
 function money(n){return '$'+(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});}
 function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(function(){t.classList.remove('show');},2600);}
 
@@ -158,23 +171,33 @@ function load(){
     var html='';
     rows.forEach(function(r){
       var booked=(r.status==='Booked')||r.qb_invoice_id;
+      var billMissing=!!r.bill_missing; // scope kind only — worker.js flags: invoiced, no bill, one was expected
       var subLine=r.kind==='scope' ? (r.title||('Scope #'+r.scope_id)) : (r.option_label||('Option '+r.option));
       var invLabel=r.kind==='scope' ? 'Invoice owner (deposit)' : 'Invoice owner (1st pmt)';
       var invAmt=r.kind==='scope' ? r.deposit : r.first_payment;
       var billLabel=r.kind==='scope' ? 'Bill vendor (deposit share)' : 'Bill vendor (base)';
       var billAmt=r.kind==='scope' ? r.vendor_cost_total : r.vendor_cost;
+      var chipClass = billMissing ? 'billmiss' : (booked ? 'booked' : 'signed');
+      var chipText = billMissing ? '⚠ Invoiced — no bill' : (booked ? '✓ Booked' : 'Signed — needs billing');
       html+='<div class="card"><div class="row">'
         +'<div><div class="name">'+esc(r.signer||'—')+'</div>'
         +'<div class="sub">'+esc(r.property||r.proposal_id)+' · '+esc(subLine)+'</div>'
         +'<div class="sub">Signed '+esc(r.signed_date||'')+'</div></div>'
-        +'<span class="chip '+(booked?'booked':'signed')+'">'+(booked?'✓ Booked':'Signed — needs billing')+'</span>'
+        +'<span class="chip '+chipClass+'">'+chipText+'</span>'
         +'</div>'
         +'<div class="row" style="margin-top:10px">'
         +'<div class="amt"><div class="lbl">'+invLabel+'</div><div class="big">'+money(invAmt)+'</div></div>'
-        +'<div class="amt"><div class="lbl">'+billLabel+'</div><div class="big">'+money(billAmt)+'</div></div>'
+        +'<div class="amt"><div class="lbl">'+billLabel+'</div><div class="big">'+money(billAmt)+'</div>'
+        +(r.kind==='scope'&&r.vendor_cost_full>billAmt?'<div class="sub">of '+money(r.vendor_cost_full)+' job cost</div>':'')
+        +'</div>'
         +'</div>';
-      if(booked){
-        html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created.</div>';
+      if(billMissing){
+        html+='<div class="warn">⚠ Invoice was created, but no vendor bill exists — '+esc(skipReasonText(r.bill_skip_reason))+'. Fix the vendor/cost on this scope, then retry.</div>'
+          +'<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\')">Retry — create vendor bill</button></div>';
+      } else if(booked){
+        html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created.'
+          +((r.kind==='scope'&&!r.qb_bill_number&&r.bill_skip_reason==='in_house')?' <span class="muted">(no vendor bill — vendor is in-house)</span>':'')
+          +'</div>';
       } else {
         html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\')">Preview &amp; create invoice + bill</button></div>';
       }
