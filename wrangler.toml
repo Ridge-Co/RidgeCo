@@ -4,7 +4,7 @@
 # secrets set in the Cloudflare dashboard (GOOGLE_SA_KEY, QB_*, TWILIO_*,
 # WORKER_SECRET, SHEET_ID, etc.) so a deploy never wipes them.
 
-name = "maintenance-hub"
+name = "maintenance-hub-staging"
 main = "worker.js"
 compatibility_date = "2026-06-08"
 keep_vars = true
