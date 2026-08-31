@@ -48,7 +48,7 @@ export default {
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
       // last-4-of-phone gate + per-WO lockout live INSIDE these handlers, not here.
-      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/receipt','/wo/shared/note',
+      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/bill-extract','/wo/shared/receipt','/wo/shared/note',
       // Weekly Open Item Report link (Aug 18 session): same pattern — public at the gate, but
       // every handler self-verifies a signed ar-report share token before doing anything.
       '/ar-report/view','/ar-report/pay-link',
@@ -226,6 +226,7 @@ export default {
         if (path === '/wo/shared/log-attachment') return await woSharedLogAttachment(env, body);
         if (path === '/wo/shared/status')         return await woSharedStatus(env, body);
         if (path === '/wo/shared/bill')           return await woSharedBill(env, body);
+        if (path === '/wo/shared/bill-extract')   return await woSharedBillExtract(env, body);
         if (path === '/wo/shared/receipt')        return await woSharedReceipt(env, body);
         if (path === '/wo/shared/note')           return await woSharedNote(env, body);
         if (path === '/wo/share-link')            return await woShareLink(env, body);
@@ -319,6 +320,7 @@ export default {
         if (path === '/create-upload-session')    return await createUploadSession(env, body);
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
+        if (path === '/vendor-bill/extract')      return await vendorBillExtract(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
         if (path === '/vendor-bill/move-to-new-wo') return await moveVendorBillToNewWO(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
@@ -2815,6 +2817,12 @@ async function addVendorBill(env, body) {
   // Vendor_Bills has no column for the vendor's own invoice number until something needs
   // one, and addRow maps by header — a write to a missing column stores nothing silently.
   if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) {} }
+  // Same lazy pattern for the vendor's own invoice DATE (Aug 31 2026, invoice-OCR pre-fill —
+  // Created_Date already means "the day this bill row was submitted," not the date printed on
+  // the vendor's invoice, so this is a genuinely new fact, not a rename/reuse of an existing
+  // column). Only touches the sheet when a caller actually sends one — neither the plain hourly/
+  // flat bill flow nor the older vendor.html build ever did, so this is a no-op for them.
+  if (body.Vendor_Invoice_Date) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_Date']); } catch (e) {} }
   // B-227 Phase 1/2: Payment_Method (reimburse_via_labor_bill default / separate_vendor_billpay /
   // credit_card_no_bill) — same lazy-ensureColumns pattern, only touches the sheet when a caller
   // actually sends one (the vendor portal doesn't send this field, so it stays untouched there).
@@ -6014,6 +6022,67 @@ async function receiptExtract(env, bytes, mime) {
   catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], card_last4: '', suggested_category: '', confidence: 0 }; }
 }
 
+// Read a VENDOR INVOICE (photo or PDF) with Claude vision → strict JSON suggestion. This is the
+// read half of the "vendor picks a file → it's read automatically → confirm & Submit" flow
+// (Brett's ask, Aug 31 2026): no separate "read" button, the file is OCR'd the instant it's
+// picked, and the result is always a SUGGESTION the vendor can edit before their own explicit
+// Submit tap — never an auto-write. Deliberately copies receiptExtract's shape (media block +
+// routeAI call) rather than reusing it directly, because the prompt and returned keys are
+// invoice-flavored (vendor_name/invoice_number/invoice_date/amount/line_items/notes) instead of
+// receipt-flavored (vendor/date/total/category/handwritten_note/po_reference). Money-facing ⇒
+// Claude, never a cheaper model (PAT-031) via routeAI's moneyFacing:true, exactly like
+// receiptExtract. Unlike receiptExtract, this wraps the whole thing in try/catch — a bad/unreadable
+// file (or a routeAI hard failure: missing key, fetch error) must never throw uncaught, since both
+// call sites are read-only "suggest" endpoints that should fail open, not 500, so a vendor can
+// always fall back to filling the form by hand.
+async function invoiceExtract(env, bytes, mime) {
+  try {
+    const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+    const media = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+    const prompt = `You are an invoice data extractor for a property-maintenance vendor portal. Read this VENDOR INVOICE (a photo or PDF a vendor submitted for their own work, not a store receipt) carefully, including any handwritten totals or corrections. Return ONLY strict minified JSON with keys: vendor_name (the business/person who issued the invoice, string, else ""), invoice_number (the vendor's OWN invoice/bill number exactly as printed — often labelled Invoice #, Inv No, Bill #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), invoice_date ("YYYY-MM-DD" if you can determine it, else ""), amount (the total amount due/charged, as a plain number, or null if unreadable), line_items (array of short strings, one per distinct line item or service billed — e.g. "2 hrs labor", "Replace kitchen faucet"; empty array if unreadable or not itemized), notes (a short string flagging anything ambiguous or low-confidence, e.g. "handwritten total, low confidence" or "date illegible" — else ""). JSON only, no prose.`;
+    const r = await routeAI(env, { type: 'invoice_parse', moneyFacing: true, media, prompt, maxTokens: 700, source: 'invoiceExtract' });
+    const txt = (r.result || '').trim();
+    try {
+      const parsed = JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim());
+      const amt = parsed.amount;
+      return {
+        vendor_name: parsed.vendor_name || '',
+        invoice_number: parsed.invoice_number || '',
+        invoice_date: parsed.invoice_date || '',
+        amount: (typeof amt === 'number' && isFinite(amt)) ? amt : ((amt !== null && amt !== undefined && amt !== '' && isFinite(Number(amt))) ? Number(amt) : null),
+        line_items: Array.isArray(parsed.line_items) ? parsed.line_items.map(String).slice(0, 30) : [],
+        notes: parsed.notes || '',
+      };
+    } catch (e) {
+      return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _raw: txt.slice(0, 300), _parse_error: true };
+    }
+  } catch (e) {
+    // routeAI threw (missing key, network) or bytesToB64/media-build failed — fail open with a
+    // clearly-empty suggestion rather than surfacing a 500 to a vendor mid-submit.
+    return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
+  }
+}
+
+// POST /vendor-bill/extract — vendor.html PIN-portal "Submit Bill" modal. Vendor-role-gated
+// (see ROLE_SCOPES) exactly like the other vendor-portal endpoints — no new auth scheme. Same
+// {image_b64, mime} input shape as /receipt-intake (no separate Drive upload-session round trip
+// needed just to OCR a file). READ-ONLY: no Sheet writes of any kind — returns a suggestion the
+// vendor confirms/edits before their own /vendor-bill/add Submit tap, which is unchanged by this.
+async function vendorBillExtract(env, body) {
+  if (!body || !body.image_b64) return json({ error: 'image_b64 required' }, 400);
+  let bytes, mime;
+  try {
+    const bin = atob(body.image_b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    bytes = arr.buffer; mime = body.mime || 'image/jpeg';
+  } catch (e) { return json({ error: 'bad image_b64' }, 400); }
+  const ex = await invoiceExtract(env, bytes, mime);
+  return json({ success: true, extract: ex });
+}
+
 // Best-effort auto-link to a WO (by "WO-1234" in the note) or a property (address token).
 async function autoLinkReceipt(env, ex) {
   const out = { wo_id: '', property_id: '' };
@@ -6341,6 +6410,27 @@ async function woSharedStatus(env, body){
   });
 }
 
+// PUBLIC (view-token gated, self-verified): read-only invoice OCR suggestion for the wo.html
+// share-link bill form's "pick file → auto-read → confirm → Submit" flow (same UX as
+// /vendor-bill/extract on the PIN-portal side). Self-verifies the signed WO-share token exactly
+// like every other /wo/shared/* handler — public at the router gate, but woShareAuth is the real
+// gate here. Same {image_b64, mime} input shape as /receipt-intake. READ-ONLY: no Sheet writes —
+// the vendor's own Submit tap still goes through the unchanged /wo/shared/bill → addVendorBill path.
+async function woSharedBillExtract(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  if (!body || !body.image_b64) return json({ error: 'image_b64 required' }, 400);
+  let bytes, mime;
+  try {
+    const bin = atob(body.image_b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    bytes = arr.buffer; mime = body.mime || 'image/jpeg';
+  } catch (e) { return json({ error: 'bad image_b64' }, 400); }
+  const ex = await invoiceExtract(env, bytes, mime);
+  return json({ success: true, extract: ex });
+}
+
 // PUBLIC (view-token gated): submit a bill for THIS WO as the token's vendor. WO + vendor
 // are forced from the token; everything downstream (Review Bills, QB preview) is unchanged.
 async function woSharedBill(env, body){
@@ -6398,7 +6488,7 @@ async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 const ROLE_SCOPES = {
-  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos'],
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos'],
   tenant: ['/tenant-by-pin','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
   owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo'],
 };

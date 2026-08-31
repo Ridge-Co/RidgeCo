@@ -1771,8 +1771,8 @@ function submitVendorSched(modalId) {
 
     <!-- Billing type toggle -->
     <div style="display:flex;gap:4px;background:var(--surface2);border-radius:6px;padding:3px;margin-bottom:16px">
-      <div id="bill-tab-hourly" onclick="setBillType('hourly')" style="flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;background:var(--accent);color:#fff;font-family:var(--font)">⏱ By the Hour</div>
-      <div id="bill-tab-flat" onclick="setBillType('flat')" style="flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--muted);font-family:var(--font)">📋 Flat Price</div>
+      <div id="bill-tab-hourly" onclick="setBillType('hourly', true)" style="flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;background:var(--accent);color:#fff;font-family:var(--font)">⏱ By the Hour</div>
+      <div id="bill-tab-flat" onclick="setBillType('flat', true)" style="flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--muted);font-family:var(--font)">📋 Flat Price</div>
     </div>
 
     <!-- HOURLY section -->
@@ -1836,7 +1836,26 @@ function submitVendorSched(modalId) {
       <div id="bill-receipts-list" style="display:flex;flex-direction:column;gap:8px"></div>
     </div>
 
-    <!-- VENDOR'S OWN INVOICE NUMBER -->
+    <!-- VENDOR'S OWN INVOICE FILE — the actual document/photo. Picking a file here now ALSO
+         auto-reads it (Claude vision via /vendor-bill/extract) and pre-fills the Amount/Invoice
+         Number/Date fields below — no separate "read" button, per Brett's two-tap ask (Aug 31
+         2026). The upload-and-attach behavior (Invoice_File_URL/ID) is unchanged; the read is
+         purely additive and fails open (fields just stay blank/editable if it can't read it). -->
+    <div style="margin-bottom:14px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">YOUR INVOICE FILE (optional)</label>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button type="button" id="bill-invoice-file-lbl" onclick="document.getElementById('bill-invoice-file-input').click()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;min-height:38px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--text);display:flex;align-items:center;gap:6px">
+          📄 Upload Invoice
+        </button>
+        <input type="file" id="bill-invoice-file-input" accept="image/*,application/pdf" onchange="handleBillInvoiceFile(this)" style="display:none">
+        <span id="bill-invoice-file-status" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <div id="bill-invoice-read-status" style="font-size:11px;margin-top:4px;min-height:14px"></div>
+      <div style="color:var(--muted);font-size:11px;margin-top:4px">A photo or PDF of your invoice, if you have one — we'll try to read the amount, invoice #, and date for you.</div>
+    </div>
+
+    <!-- VENDOR'S OWN INVOICE NUMBER — pre-filled from the file above when readable, always
+         editable, never overwritten once the vendor has typed into it themselves. -->
     <div style="margin-bottom:14px">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">YOUR INVOICE NUMBER (optional)</label>
       <input type="text" id="bill-invoice-no" placeholder="If you have one — otherwise we use the job number"
@@ -1844,19 +1863,11 @@ function submitVendorSched(modalId) {
       <div style="color:var(--muted);font-size:11px;margin-top:4px">This is what we'll reference when we pay you.</div>
     </div>
 
-    <!-- VENDOR'S OWN INVOICE FILE — the actual document/photo, not just the number.
-         Only the invoice NUMBER had a field before; there was no way to attach the file
-         itself. Mirrors the receipt upload pattern but stores a single file. -->
+    <!-- VENDOR'S OWN INVOICE DATE (optional) — same pre-fill treatment as the invoice number. -->
     <div style="margin-bottom:14px">
-      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">YOUR INVOICE FILE (optional)</label>
-      <div style="display:flex;align-items:center;gap:8px">
-        <button type="button" id="bill-invoice-file-lbl" onclick="document.getElementById('bill-invoice-file-input').click()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:9px 12px;min-height:38px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--text);display:flex;align-items:center;gap:6px">
-          📄 Upload Invoice
-        </button>
-        <input type="file" id="bill-invoice-file-input" accept="image/*,application/pdf" onchange="uploadBillInvoiceFile(this)" style="display:none">
-        <span id="bill-invoice-file-status" style="font-size:11px;color:var(--muted)"></span>
-      </div>
-      <div style="color:var(--muted);font-size:11px;margin-top:4px">A photo or PDF of your invoice, if you have one.</div>
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">YOUR INVOICE DATE (optional)</label>
+      <input type="date" id="bill-invoice-date"
+        style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px">
     </div>
 
     <!-- NOTES -->
@@ -1891,10 +1902,12 @@ var _receiptCount = 0;
 var _uploadedPhotos = {};
 var _invoiceFileURL = '';
 var _invoiceFileId = '';
+var _billTypeUserPicked = false; // flips true the moment the vendor taps a By-the-Hour/Flat tab themselves
 
 function openBillModal(woId, vendorName) {
   _billWOId = woId;
   _billType = 'hourly';
+  _billTypeUserPicked = false;
   _billSubmitting = false; // reset on every open
   _receiptCount = 0;
   _uploadedPhotos = {};
@@ -1908,6 +1921,8 @@ function openBillModal(woId, vendorName) {
   document.getElementById('bill-truck-amt').value = '';
   document.getElementById('bill-notes').value = '';
   document.getElementById('bill-invoice-no').value = ''; // was never reset — a prior job's invoice # could carry over
+  document.getElementById('bill-invoice-date').value = '';
+  document.getElementById('bill-invoice-read-status').textContent = '';
   document.getElementById('bill-invoice-file-status').textContent = '';
   document.getElementById('bill-invoice-file-status').style.color = 'var(--muted)';
   document.getElementById('bill-invoice-file-lbl').style.borderColor = 'var(--border)';
@@ -1944,8 +1959,9 @@ function closeBillModal() {
   if (btn) { btn.disabled = false; btn.textContent = 'SUBMIT BILL'; }
 }
 
-function setBillType(type) {
+function setBillType(type, userPicked) {
   _billType = type;
+  if (userPicked) _billTypeUserPicked = true; // once the vendor picks a tab, auto-read stops switching it for them
   document.getElementById('bill-tab-hourly').style.cssText = type === 'hourly'
     ? 'flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;background:var(--accent);color:#fff;font-family:var(--font)'
     : 'flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--muted);font-family:var(--font)';
@@ -2069,6 +2085,80 @@ function uploadBillInvoiceFile(input) {
     }).catch(function(){ statusEl.textContent = '⚠ Error — tap to retry'; statusEl.style.color = 'var(--danger)'; });
 }
 
+// Picking the invoice file does two independent things: the existing upload-and-attach
+// (unchanged), and a new auto-read that pre-fills the form. Each reads input.files[0]
+// separately and neither depends on the other, so a failure in one never blocks the other.
+function handleBillInvoiceFile(input) {
+  uploadBillInvoiceFile(input);
+  autoReadBillInvoiceFile(input);
+}
+
+// Auto-OCR the picked invoice file (Claude vision via /vendor-bill/extract) and pre-fill
+// Amount/Invoice Number/Date — no separate "read" button, per Brett's two-tap ask (pick file,
+// tap Submit). Always a SUGGESTION: every filled field uses the same dataset.auto guard as
+// hubBillVendorChanged's rate auto-fill in index.html, so a vendor's own edit is never silently
+// clobbered, and re-picking a file after editing doesn't stomp an intentional correction.
+// Fails open on any error/timeout — fields simply stay blank/manual, exactly like today.
+function autoReadBillInvoiceFile(input) {
+  var file = input.files[0];
+  var statusEl = document.getElementById('bill-invoice-read-status');
+  if (!file) return;
+  if (statusEl) { statusEl.textContent = 'Reading invoice…'; statusEl.style.color = 'var(--muted)'; }
+  var reader = new FileReader();
+  reader.onload = function() {
+    var b64 = String(reader.result || '').split(',')[1] || '';
+    if (!b64) { if (statusEl) statusEl.textContent = ''; return; }
+    api('POST', '/vendor-bill/extract', { image_b64: b64, mime: file.type || 'image/jpeg' })
+      .then(function(res) { applyBillExtract(res && res.extract, statusEl); })
+      .catch(function() { if (statusEl) statusEl.textContent = ''; }); // fail open — never blocks manual submit
+  };
+  reader.onerror = function() { if (statusEl) statusEl.textContent = ''; };
+  reader.readAsDataURL(file);
+}
+
+function applyBillExtract(ex, statusEl) {
+  if (!ex || ex._error || ex._parse_error) { if (statusEl) statusEl.textContent = ''; return; }
+  var filled = [];
+
+  // Amount → this form has no single raw "amount" field; Flat Price is the closest match for
+  // a lump invoice total. Only fills/switches while the vendor hasn't already started an
+  // hourly entry or picked a tab themselves.
+  if (typeof ex.amount === 'number' && ex.amount > 0) {
+    var flatEl = document.getElementById('bill-flat');
+    if (flatEl && (!flatEl.value || flatEl.dataset.auto === '1')) {
+      flatEl.value = ex.amount.toFixed(2);
+      flatEl.dataset.auto = '1';
+      flatEl.addEventListener('input', function() { flatEl.dataset.auto = '0'; }, { once: true });
+      filled.push('$' + ex.amount.toFixed(2));
+      var hoursEl = document.getElementById('bill-hours');
+      if (!_billTypeUserPicked && (!hoursEl || !hoursEl.value)) setBillType('flat');
+    }
+  }
+  if (ex.invoice_number) {
+    var noEl = document.getElementById('bill-invoice-no');
+    if (noEl && (!noEl.value || noEl.dataset.auto === '1')) {
+      noEl.value = ex.invoice_number;
+      noEl.dataset.auto = '1';
+      noEl.addEventListener('input', function() { noEl.dataset.auto = '0'; }, { once: true });
+      filled.push(ex.invoice_number);
+    }
+  }
+  if (ex.invoice_date) {
+    var dtEl = document.getElementById('bill-invoice-date');
+    if (dtEl && (!dtEl.value || dtEl.dataset.auto === '1')) {
+      dtEl.value = ex.invoice_date;
+      dtEl.dataset.auto = '1';
+      dtEl.addEventListener('input', function() { dtEl.dataset.auto = '0'; }, { once: true });
+      filled.push(ex.invoice_date);
+    }
+  }
+  calcBillTotal();
+  if (statusEl) {
+    statusEl.textContent = filled.length ? ('✓ Read from invoice — check the amount, #, and date below') : 'Couldn’t read that file — fill in below.';
+    statusEl.style.color = filled.length ? 'var(--accent2)' : 'var(--muted)';
+  }
+}
+
 function calcBillTotal() {
   var labor = 0, flat = 0, truck = 0, receipts = 0;
   var breakdown = [];
@@ -2154,6 +2244,7 @@ async function submitVendorBill() {
     Status: 'submitted',
     Created_Date: new Date().toISOString().split('T')[0],
     Vendor_Invoice_No: (document.getElementById('bill-invoice-no') || {}).value || '',
+    Vendor_Invoice_Date: (document.getElementById('bill-invoice-date') || {}).value || '',
     Invoice_File_URL: _invoiceFileURL,
     Invoice_File_ID: _invoiceFileId,
     Notes: document.getElementById('bill-notes').value,

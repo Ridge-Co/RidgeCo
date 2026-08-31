@@ -217,8 +217,8 @@
   <h3 data-i18n="Submit Bill">Submit Bill</h3>
   <div class="sub"><span data-i18n="Work Order">Work Order</span> <span id="bill-wono"></span></div>
   <div class="seg" style="margin-bottom:4px">
-    <button id="bt-hourly" class="on" onclick="setBillType('hourly')" data-i18n="By the Hour">By the Hour</button>
-    <button id="bt-flat" onclick="setBillType('flat')" data-i18n="Flat Price">Flat Price</button>
+    <button id="bt-hourly" class="on" onclick="setBillType('hourly', true)" data-i18n="By the Hour">By the Hour</button>
+    <button id="bt-flat" onclick="setBillType('flat', true)" data-i18n="Flat Price">Flat Price</button>
   </div>
 
   <div id="sec-hourly">
@@ -245,8 +245,21 @@
 
   <label class="fl" data-i18n="Notes (optional)">Notes (optional)</label>
   <textarea class="ff" id="b-notes" placeholder="…"></textarea>
+
+  <!-- Invoice file — picking it auto-reads it (Claude vision) and pre-fills the amount,
+       invoice #, and date below. No separate "read" button: pick file, tap Submit. -->
+  <label class="fl" data-i18n="Your invoice file (optional)">Your invoice file (optional)</label>
+  <div style="display:flex;align-items:center;gap:8px">
+    <button type="button" class="btn sec" onclick="document.getElementById('b-invfile-input').click()" style="padding:9px 12px;font-size:13px" id="b-invfile-lbl">📄 <span data-i18n="Upload">Upload</span></button>
+    <input type="file" id="b-invfile-input" accept="image/*,application/pdf" style="display:none" onchange="handleBillInvoiceFile(this)">
+    <span id="b-invfile-status" style="font-size:11px;color:var(--muted)"></span>
+  </div>
+  <div id="b-invread-status" style="font-size:11px;margin:4px 0 8px;min-height:14px"></div>
+
   <label class="fl" data-i18n="Your invoice # (optional)">Your invoice # (optional)</label>
   <input class="ff" id="b-invno" placeholder="">
+  <label class="fl" data-i18n="Your invoice date (optional)">Your invoice date (optional)</label>
+  <input class="ff" id="b-invdate" type="date">
 
   <div class="total"><span data-i18n="TOTAL">TOTAL</span><span class="amt" id="b-total">$0.00</span></div>
   <div class="brk" id="b-brk"></div>
@@ -289,6 +302,10 @@ var ES = {
   'Flat price ($)':'Precio fijo ($)','Used truck stock / my own materials':'Usé materiales del camión / míos',
   'Receipts & purchases':'Recibos y compras','Add':'Agregar','Notes (optional)':'Notas (opcional)',
   'Your invoice # (optional)':'Su # de factura (opcional)','TOTAL':'TOTAL',
+  'Your invoice file (optional)':'Su archivo de factura (opcional)','Upload':'Subir',
+  'Your invoice date (optional)':'Fecha de su factura (opcional)',
+  'Reading invoice…':'Leyendo factura…','Read from invoice — check below':'Leído de la factura — revise abajo',
+  'Couldn’t read that file — fill in below.':'No se pudo leer ese archivo — complete abajo.',
   'Reimburse me':'Reembólsenme','On company account':'Cuenta de la empresa','What was purchased':'Qué se compró',
   'Enter hours or an item above.':'Ingrese horas o un artículo arriba.',
   'New':'Nuevo','Assigned':'Asignado','Accepted':'Aceptado','In Progress':'En Progreso',
@@ -531,23 +548,89 @@ function shareUpload(file,fileType){
 }
 
 // ── BILL ──────────────────────────────────────────────────────
-var _btype='hourly', _rc=0, _rpay={}, _rurl={};
+var _btype='hourly', _rc=0, _rpay={}, _rurl={}, _btypeUserPicked=false;
 function openBill(){
-  _btype='hourly'; _rc=0; _rpay={}; _rurl={};
+  _btype='hourly'; _rc=0; _rpay={}; _rurl={}; _btypeUserPicked=false;
   document.getElementById('b-hours').value=''; document.getElementById('b-flat').value='';
   document.getElementById('b-truck-desc').value=''; document.getElementById('b-truck-amt').value='';
   document.getElementById('b-truck-on').checked=false; document.getElementById('sec-truck').style.display='none';
   document.getElementById('b-notes').value=''; document.getElementById('b-invno').value='';
+  document.getElementById('b-invdate').value='';
+  document.getElementById('b-invfile-status').textContent=''; document.getElementById('b-invread-status').textContent='';
   document.getElementById('b-rcpts').innerHTML=''; document.getElementById('b-msg').textContent='';
   document.getElementById('b-rate').textContent = VRATE>0 ? ('$'+VRATE) : '⚠ $0';
   setBillType('hourly'); calcBill(); open_('ov-bill');
 }
-function setBillType(tp){ _btype=tp;
+function setBillType(tp,userPicked){ _btype=tp;
+  if(userPicked) _btypeUserPicked=true; // once the vendor picks a tab, auto-read stops switching it for them
   document.getElementById('bt-hourly').className = tp==='hourly'?'on':'';
   document.getElementById('bt-flat').className = tp==='flat'?'on':'';
   document.getElementById('sec-hourly').style.display = tp==='hourly'?'':'none';
   document.getElementById('sec-flat').style.display = tp==='flat'?'':'none';
   calcBill();
+}
+
+// ── INVOICE AUTO-READ ────────────────────────────────────────
+// Net-new for the share-link flow (Aug 31 2026): pick a file → it's read automatically
+// (Claude vision via /wo/shared/bill-extract, self-verified with the same VIEW token as every
+// other /wo/shared/* call) → Amount/Invoice #/Date pre-fill, still editable → Submit. Two taps
+// total. The file itself is used only to read it here — it is not uploaded/attached (unlike
+// vendor.html's separate "Upload Invoice" button on the PIN portal); use "Before/After/Problem"
+// photos above for anything that needs to be attached to the job.
+function handleBillInvoiceFile(input){
+  var file=input.files[0]; if(!file) return;
+  document.getElementById('b-invfile-status').textContent = '✓ ' + file.name.substring(0,22);
+  var statusEl=document.getElementById('b-invread-status');
+  statusEl.textContent = t('Reading invoice…'); statusEl.style.color='var(--muted)';
+  var reader=new FileReader();
+  reader.onload=function(){
+    var b64=String(reader.result||'').split(',')[1]||'';
+    if(!b64){ statusEl.textContent=''; return; }
+    post('/wo/shared/bill-extract',{st:VIEW,wo:WO,image_b64:b64,mime:file.type||'image/jpeg'})
+      .then(function(res){ applyBillExtract(res && res.extract, statusEl); })
+      .catch(function(){ statusEl.textContent=''; }); // fail open — never blocks manual submit
+  };
+  reader.onerror=function(){ statusEl.textContent=''; };
+  reader.readAsDataURL(file);
+}
+
+// Same dataset.auto guard as vendor.html's applyBillExtract / index.html's hubBillVendorChanged:
+// a field only auto-fills while empty or still flagged auto — a vendor's own edit is never
+// silently clobbered, and re-picking a file after editing doesn't stomp an intentional correction.
+function applyBillExtract(ex, statusEl){
+  if(!ex || ex._error || ex._parse_error){ if(statusEl) statusEl.textContent=''; return; }
+  var filled=false;
+  if(typeof ex.amount==='number' && ex.amount>0){
+    var flatEl=document.getElementById('b-flat');
+    if(flatEl && (!flatEl.value || flatEl.dataset.auto==='1')){
+      flatEl.value=ex.amount.toFixed(2); flatEl.dataset.auto='1';
+      flatEl.addEventListener('input',function(){ flatEl.dataset.auto='0'; },{once:true});
+      filled=true;
+      var hoursEl=document.getElementById('b-hours');
+      if(!_btypeUserPicked && (!hoursEl || !hoursEl.value)) setBillType('flat');
+    }
+  }
+  if(ex.invoice_number){
+    var noEl=document.getElementById('b-invno');
+    if(noEl && (!noEl.value || noEl.dataset.auto==='1')){
+      noEl.value=ex.invoice_number; noEl.dataset.auto='1';
+      noEl.addEventListener('input',function(){ noEl.dataset.auto='0'; },{once:true});
+      filled=true;
+    }
+  }
+  if(ex.invoice_date){
+    var dtEl=document.getElementById('b-invdate');
+    if(dtEl && (!dtEl.value || dtEl.dataset.auto==='1')){
+      dtEl.value=ex.invoice_date; dtEl.dataset.auto='1';
+      dtEl.addEventListener('input',function(){ dtEl.dataset.auto='0'; },{once:true});
+      filled=true;
+    }
+  }
+  calcBill();
+  if(statusEl){
+    statusEl.textContent = filled ? t('Read from invoice — check below') : t('Couldn’t read that file — fill in below.');
+    statusEl.style.color = filled ? 'var(--accent-dk)' : 'var(--muted)';
+  }
 }
 function toggleTruck(){ var on=document.getElementById('b-truck-on').checked; document.getElementById('sec-truck').style.display=on?'':'none'; if(!on) document.getElementById('b-truck-amt').value=''; calcBill(); }
 function addRcpt(){ _rc++; var n=_rc; _rpay[n]='reimburse';
@@ -604,7 +687,8 @@ function submitBill(){
     Truck_Desc:truckDesc, Truck_Stock:String(truckAmt.toFixed(2)),
     Receipts_JSON:JSON.stringify(items), Receipts_Total:String(c.rtotal.toFixed(2)), Receipts_Reimburse_Total:String(c.reimb.toFixed(2)),
     Flat_Rate:String(flat.toFixed(2)), Total:String(c.total.toFixed(2)),
-    Vendor_Invoice_No:document.getElementById('b-invno').value||'', Notes:document.getElementById('b-notes').value||'',
+    Vendor_Invoice_No:document.getElementById('b-invno').value||'', Vendor_Invoice_Date:document.getElementById('b-invdate').value||'',
+    Notes:document.getElementById('b-notes').value||'',
   };
   post('/wo/shared/bill',{st:VIEW,wo:WO,bill:bill}).then(function(res){
     if(res && (res.success||res.id)){ msg('b-msg',t('Bill submitted ✓'),'ok'); btn.textContent='✓'; setTimeout(function(){ close_('ov-bill'); reload(); },1400); }
