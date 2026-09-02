@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ridge Co — Add Vendor</title>
+<style>
+  :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--warn:#fbbf24;--radius:8px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html{max-width:100%;overflow-x:hidden;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;max-width:100%;overflow-x:hidden;overflow-wrap:break-word;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:560px;padding:28px;}
+  .logo{color:var(--accent);font-size:1.1rem;letter-spacing:0.15em;font-weight:bold;margin-bottom:4px;}
+  .subtitle{color:var(--muted);font-size:11px;letter-spacing:0.08em;margin-bottom:20px;}
+  .admin-badge{display:inline-block;background:#eaf6ee;color:var(--accent2);font-size:10px;font-weight:bold;letter-spacing:0.08em;padding:3px 8px;border-radius:10px;margin-bottom:16px;}
+  .field{margin-bottom:16px;}
+  label{display:block;color:var(--muted);font-size:11px;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:6px;}
+  input,select,textarea{width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 12px;border-radius:var(--radius);font-family:var(--font);font-size:13px;}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);}
+  textarea{resize:vertical;min-height:70px;}
+  .card-upload{background:var(--surface2);border:1px dashed var(--border);border-radius:var(--radius);padding:14px;margin-bottom:20px;}
+  .card-upload label{margin-bottom:8px;}
+  .card-status{color:var(--muted);font-size:11px;margin-top:6px;min-height:14px;}
+  .trades-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;margin-top:4px;}
+  .trades-grid label{display:flex;align-items:center;gap:6px;text-transform:none;font-size:12px;color:var(--text);}
+  .trades-grid input{width:auto;}
+  .btn{width:100%;background:var(--accent);color:#fff;border:none;padding:12px;border-radius:var(--radius);font-family:var(--font);font-size:14px;font-weight:bold;cursor:pointer;margin-top:4px;}
+  .btn:hover{opacity:0.85;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .msg{font-size:12px;margin-top:10px;min-height:16px;}
+  .msg.err{color:var(--danger);}
+  .msg.ok{color:var(--accent2);}
+  .done{text-align:center;padding:20px 0;}
+  .done p{color:var(--muted);font-size:13px;line-height:1.6;margin-top:10px;}
+  .back{display:inline-block;margin-bottom:14px;color:var(--accent);text-decoration:none;font-size:12px;}
+</style>
+</head>
+<body>
+<div class="card">
+  <a href="index.html" class="back" id="back-link" style="display:none">← Back to Hub</a>
+  <div class="logo">RIDGE CO</div>
+  <div class="subtitle" id="subtitle">ADD VENDOR</div>
+  <div id="admin-badge-wrap"></div>
+
+  <div id="form-view">
+    <div class="card-upload">
+      <label>Contact Card</label>
+      <div style="color:var(--muted);font-size:12px;margin-bottom:8px">Upload a .vcf contact file, or a photo/PDF of a business card — we'll fill in what we can read.</div>
+      <input type="file" id="card-file" accept=".vcf,text/vcard,image/*,application/pdf" onchange="onCardUpload(this)">
+      <div class="card-status" id="card-status"></div>
+    </div>
+
+    <div class="field"><label>Name *</label><input type="text" id="f-name" placeholder="Mike Smith or Ace Plumbing LLC"></div>
+    <div class="field"><label>Login Name <span style="text-transform:none;color:var(--muted)">(what you'll type at sign-in)</span></label><input type="text" id="f-first" placeholder="Mike (or 'Ace' for companies)"></div>
+    <div class="field"><label>Company (optional)</label><input type="text" id="f-company" placeholder="Smith Plumbing LLC"></div>
+    <div class="field"><label>Phone *</label><input type="tel" id="f-phone" placeholder="(443) 555-1234"></div>
+    <div class="field"><label>Email (optional)</label><input type="email" id="f-email" placeholder="mike@example.com"></div>
+    <div class="field"><label>Vendor Type</label>
+      <select id="f-type">
+        <option value="labor">Labor</option>
+        <option value="materials_hybrid">Materials + Service (e.g. locksmith)</option>
+        <option value="materials_store">Materials — Store (e.g. Home Depot)</option>
+      </select>
+    </div>
+    <div class="field"><label>Markets / Areas served</label><input type="text" id="f-markets" placeholder="Baltimore, Waynesboro"></div>
+    <div class="field"><label>Rate / Notes</label><textarea id="f-rates" placeholder="Hourly rate, trip charge, trades you handle, etc."></textarea></div>
+
+    <button class="btn" id="submit-btn" onclick="submitVendor()">Submit</button>
+    <div class="msg" id="form-msg"></div>
+  </div>
+
+  <div id="done-view" class="done" style="display:none">
+    <div style="font-size:2rem">✓</div>
+    <div id="done-title" style="font-weight:bold;margin-top:8px"></div>
+    <p id="done-text"></p>
+    <button class="btn" style="margin-top:16px" onclick="resetForm()">Add another vendor</button>
+  </div>
+</div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var ADMIN_TOKEN = (function(){ try { return localStorage.getItem('mh_auth') || ''; } catch(e){ return ''; } })();
+var IS_ADMIN = !!ADMIN_TOKEN;
+
+(function initMode(){
+  if (IS_ADMIN) {
+    document.getElementById('subtitle').textContent = 'ADD VENDOR — QUICK ADD';
+    document.getElementById('admin-badge-wrap').innerHTML = '<div class="admin-badge">✓ Admin — adds live immediately</div>';
+    document.getElementById('back-link').style.display = 'inline-block';
+  } else {
+    document.getElementById('subtitle').textContent = 'NEW VENDOR REQUEST';
+  }
+})();
+
+function api(path, body){
+  var headers = {'Content-Type':'application/json'};
+  if (IS_ADMIN) headers['X-Auth-Token'] = ADMIN_TOKEN;
+  return fetch(WORKER + path, {method:'POST', headers:headers, body:JSON.stringify(body||{})}).then(function(r){ return r.json(); });
+}
+
+// ── Contact-card upload (same logic as index.html's shared handler — this page has no access
+// to index.html's JS since it can be opened standalone, so it's duplicated here intentionally) ──
+function fileToBase64(file){
+  return new Promise(function(resolve,reject){
+    var reader = new FileReader();
+    reader.onload = function(){ resolve(String(reader.result).split(',')[1]||''); };
+    reader.onerror = function(){ reject(new Error('file read failed')); };
+    reader.readAsDataURL(file);
+  });
+}
+function parseVCardText(text){
+  var out = {first_name:'',last_name:'',company:'',phone:'',email:'',notes:''};
+  try {
+    var lines = String(text).split(/\r\n|\n|\r/);
+    var unfolded = [];
+    lines.forEach(function(line){
+      if (/^[ \t]/.test(line) && unfolded.length) unfolded[unfolded.length-1] += line.slice(1);
+      else unfolded.push(line);
+    });
+    unfolded.forEach(function(line){
+      var m = line.match(/^([^:;]+)(;[^:]*)?:(.*)$/);
+      if (!m) return;
+      var key = m[1].toUpperCase(), val = m[3].trim();
+      if (key === 'N') {
+        var parts = val.split(';');
+        out.last_name = out.last_name || (parts[0]||'').trim();
+        out.first_name = out.first_name || (parts[1]||'').trim();
+      } else if (key === 'FN' && !out.first_name && !out.last_name) {
+        var sp = val.trim().split(/\s+/); out.first_name = sp.shift()||''; out.last_name = sp.join(' ');
+      } else if (key === 'ORG') { out.company = val.split(';')[0].trim(); }
+      else if (key.indexOf('TEL') === 0 && !out.phone) { out.phone = val.trim(); }
+      else if (key.indexOf('EMAIL') === 0 && !out.email) { out.email = val.trim(); }
+    });
+  } catch(e) {}
+  return out;
+}
+function setIfEmpty(id, val){ if(!val) return; var el=document.getElementById(id); if(!el||(el.value&&el.value.trim())) return; el.value=val; }
+function onCardUpload(fileInput){
+  var file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  var statusEl = document.getElementById('card-status');
+  statusEl.textContent = 'Reading contact card…';
+  var isVcf = /\.vcf$/i.test(file.name) || /text\/(x-)?vcard/i.test(file.type||'');
+  var p = isVcf ? file.text().then(parseVCardText)
+    : fileToBase64(file).then(function(b64){
+        var extractPath = IS_ADMIN ? '/contact-card/extract' : '/vendor-setup/contact-extract';
+        return api(extractPath, {base64:b64, mime:file.type||'image/jpeg'});
+      });
+  p.then(function(data){
+    data = data || {};
+    if (data.error) throw new Error(data.error);
+    var full = [data.first_name, data.last_name].filter(Boolean).join(' ').trim();
+    setIfEmpty('f-name', full || data.company || '');
+    setIfEmpty('f-company', data.company);
+    setIfEmpty('f-phone', data.phone);
+    setIfEmpty('f-email', data.email);
+    statusEl.textContent = (data._error||data._parse_error) ? 'Could not read the card — enter details manually' : 'Filled from contact card — double-check before submitting';
+  }).catch(function(){
+    statusEl.textContent = 'Could not read the card — enter details manually';
+  }).finally(function(){ fileInput.value=''; });
+}
+
+function submitVendor(){
+  var name = document.getElementById('f-name').value.trim();
+  var phone = document.getElementById('f-phone').value.trim();
+  var msgEl = document.getElementById('form-msg');
+  msgEl.className = 'msg'; msgEl.textContent = '';
+  if (!name) { msgEl.className='msg err'; msgEl.textContent='Name is required.'; return; }
+  if (!phone) { msgEl.className='msg err'; msgEl.textContent='Phone is required.'; return; }
+  var body = {
+    Name: name, First_Name: document.getElementById('f-first').value.trim(),
+    Company: document.getElementById('f-company').value.trim(), Phone: phone,
+    Email: document.getElementById('f-email').value.trim(),
+    Vendor_Type: document.getElementById('f-type').value || 'labor',
+    Markets: document.getElementById('f-markets').value.trim(),
+    Rate_Notes: document.getElementById('f-rates').value.trim(),
+  };
+  var btn = document.getElementById('submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  var path = IS_ADMIN ? '/vendor/add' : '/vendor-setup/submit';
+  if (IS_ADMIN) body.Active = 'TRUE';
+  api(path, body).then(function(res){
+    btn.disabled = false; btn.textContent = 'Submit';
+    if (res.error) { msgEl.className='msg err'; msgEl.textContent='Error: '+res.error; return; }
+    document.getElementById('form-view').style.display = 'none';
+    document.getElementById('done-view').style.display = 'block';
+    if (IS_ADMIN) {
+      document.getElementById('done-title').textContent = 'Vendor added';
+      document.getElementById('done-text').textContent = res.pin ? ('PIN: ' + res.pin + '. They can sign in on the vendor portal right away.') : 'They can sign in on the vendor portal right away.';
+    } else {
+      document.getElementById('done-title').textContent = 'Thanks — request received';
+      document.getElementById('done-text').textContent = 'Ridge Co will review your info and reach out once you\'re set up.';
+    }
+  }).catch(function(e){
+    btn.disabled = false; btn.textContent = 'Submit';
+    msgEl.className='msg err'; msgEl.textContent = 'Error: ' + e.message;
+  });
+}
+function resetForm(){
+  ['f-name','f-first','f-company','f-phone','f-email','f-markets','f-rates'].forEach(function(id){ document.getElementById(id).value=''; });
+  document.getElementById('f-type').value = 'labor';
+  document.getElementById('form-msg').textContent = '';
+  document.getElementById('card-status').textContent = '';
+  document.getElementById('done-view').style.display = 'none';
+  document.getElementById('form-view').style.display = 'block';
+}
+</script>
+</body>
+</html>

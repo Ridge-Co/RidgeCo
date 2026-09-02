@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-24.1';
+const BUILD_VERSION = '2026-09-02.2';
 
 export default {
   async fetch(request, env) {
@@ -59,7 +59,15 @@ export default {
       // Scope-creator customer proposal link (Aug 18 session, rule 113): same pattern — public
       // at the gate, but scopeProposalView self-verifies a signed scope-proposal share token.
       // /scope-proposal/sign (Aug 19, e-sign): same token, self-verified inside scopeProposalSign.
-      '/scope-proposal/view','/scope-proposal/sign'];
+      '/scope-proposal/view','/scope-proposal/sign',
+      // vendor-setup.html self-service link (Sept 2 2026): a NEW vendor with no PIN/login yet
+      // fills their own contact info from a shared link. Both handlers are read-only-or-review:
+      // /vendor-setup/contact-extract never writes; /vendor-setup/submit only ever creates a
+      // Vendors row with Status='pending_review' (never active) — Brett approves from the Hub via
+      // the existing, already-gated /vendor/update. The SAME page, opened while already logged
+      // into the Hub (mh_auth present), instead calls the normal gated /vendor/add + this same
+      // /contact-card/extract admin endpoint — see vendor-setup.html.
+      '/vendor-setup/contact-extract','/vendor-setup/submit'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -279,6 +287,13 @@ export default {
         // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
         if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await addRow(env, 'Vendors', body); }
         if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        // Contact-card upload (Sept 2 2026) — business-card/contact-photo OCR shared by the
+        // Add Tenant / Add Owner / Add Vendor contact-card buttons in index.html. Admin-gated
+        // (not in PUBLIC_PATHS) since it's called from already-authenticated Hub forms. The
+        // public equivalent for a brand-new vendor with no login yet is /vendor-setup/contact-extract.
+        if (path === '/contact-card/extract')     return await contactCardExtractFromBody(env, body);
+        if (path === '/vendor-setup/contact-extract') return await contactCardExtractFromBody(env, body);
+        if (path === '/vendor-setup/submit')      return await vendorSetupSubmit(env, body);
         if (path === '/set-pin')                  return await updateRow(env, 'Tenants', body.tenant_id, { PIN: body.pin });
         if (path === '/vendor/set-pin')           return await updateRow(env, 'Vendors', body.vendor_id, { PIN: body.pin });
         if (path === '/owner/set-pin')            return await updateRow(env, 'Owners', body.owner_id, { PIN: body.pin });
@@ -6068,6 +6083,71 @@ async function invoiceExtract(env, bytes, mime) {
     // clearly-empty suggestion rather than surfacing a 500 to a vendor mid-submit.
     return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
   }
+}
+
+// Contact-card upload (Sept 2 2026, FEATURE_LOG rule 143) — business-card / contact-photo OCR
+// shared by the "Add Tenant" / "Add Owner" / "Add Vendor" contact-card-upload buttons in
+// index.html, plus the new vendor-setup.html self-service link. Same routeAI/moneyFacing:true
+// shape as invoiceExtract/receiptExtract (CHEAP tier has no media support — moneyFacing pins this
+// to a vision-capable model) and the same fail-open contract: a bad photo never blocks manual
+// entry, it just comes back empty with _error/_parse_error set. READ-ONLY — no Sheet writes.
+async function contactExtract(env, bytes, mime) {
+  try {
+    const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+    const media = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+    const prompt = `You are a contact-card data extractor for a property-maintenance company onboarding a new tenant, property owner, or vendor. Read this photo or PDF of a business card, printed contact sheet, or handwritten contact note carefully. Return ONLY strict minified JSON with keys: first_name (string, else ""), last_name (string, else ""), company (business/entity name if present, else ""), phone (digits and formatting as printed, else ""), email (string, else ""), notes (a short string flagging anything ambiguous or low-confidence, e.g. "phone partially illegible" — else ""). JSON only, no prose.`;
+    const r = await routeAI(env, { type: 'contact_card_parse', moneyFacing: true, media, prompt, maxTokens: 400, source: 'contactExtract' });
+    const txt = (r.result || '').trim();
+    try {
+      const parsed = JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim());
+      return {
+        first_name: parsed.first_name || '', last_name: parsed.last_name || '',
+        company: parsed.company || '', phone: parsed.phone || '', email: parsed.email || '',
+        notes: parsed.notes || '',
+      };
+    } catch (e) {
+      return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _raw: txt.slice(0, 300), _parse_error: true };
+    }
+  } catch (e) {
+    return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
+  }
+}
+
+// Shared base64-body → contactExtract call, used by both /contact-card/extract (admin) and
+// /vendor-setup/contact-extract (public) — same decode pattern as vendorBillExtract.
+async function contactCardExtractFromBody(env, body) {
+  if (!body || !body.base64) return json({ error: 'base64 required' }, 400);
+  let bytes, mime;
+  try {
+    const bin = atob(body.base64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    bytes = arr.buffer; mime = body.mime || 'image/jpeg';
+  } catch (e) { return json({ error: 'bad base64' }, 400); }
+  const ex = await contactExtract(env, bytes, mime);
+  return json(ex);
+}
+
+// POST /vendor-setup/submit — public, brand-new-vendor self-service path (vendor-setup.html
+// opened via a shared link, no Hub login). Creates a Vendors row with Status='pending_review' —
+// NEVER directly active, mirroring the Receipts.Status / Returns.Refund_Status "queued for
+// Brett's review before it's live" convention already used elsewhere in this codebase. Brett
+// approves (Status→'active') or rejects (Active→'FALSE') from the Hub's existing, already-gated
+// /vendor/update — no new approval endpoint needed. The Hub's own admin quick-add path (same
+// vendor-setup.html page, opened while already logged in) goes through the normal /vendor/add
+// instead, which leaves Status unset/'active' — see vendor-setup.html for the branch.
+async function vendorSetupSubmit(env, body) {
+  if (!body || !String(body.Name || '').trim()) return json({ error: 'Name required' }, 400);
+  await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Status']);
+  const fields = {
+    Name: body.Name || '', First_Name: body.First_Name || '', Company: body.Company || '',
+    Phone: body.Phone || '', Email: body.Email || '', Vendor_Type: body.Vendor_Type || 'labor',
+    Markets: body.Markets || '', Rate_Notes: body.Rate_Notes || '',
+    Status: 'pending_review', Active: 'TRUE',
+  };
+  return await addRow(env, 'Vendors', fields);
 }
 
 // POST /vendor-bill/extract — vendor.html PIN-portal "Submit Bill" modal. Vendor-role-gated

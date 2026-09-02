@@ -369,9 +369,11 @@ window.addEventListener('pageshow', function(e){
   </div>
 
   <div class="page" id="page-vendors">
-    <div style="display:flex;gap:8px;margin-bottom:16px">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
       <button class="btn" onclick="openAddVendorModal()">+ Add Vendor</button>
+      <button class="btn secondary" onclick="window.open('vendor-setup.html','_blank')" title="Opens a full page with a contact-card upload — same link you can send to a new vendor">+ Add Vendor (full page / shareable link)</button>
     </div>
+    <div id="vendors-pending-section"></div>
     <div id="vendors-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
       <button class="btn small" onclick="bulkSendPinFromTab()">📱 Send PIN to Selected</button>
@@ -799,6 +801,7 @@ window.addEventListener('pageshow', function(e){
   <div class="modal">
     <div class="modal-header"><div class="modal-title">ADD VENDOR</div><button class="modal-close" onclick="closeModal('modal-add-vendor')">✕</button></div>
     <div class="form-grid">
+      <div class="form-group full"><label>Contact Card <span style="font-weight:normal;color:var(--muted)">— upload a .vcf or a photo of a business card to auto-fill</span></label><input type="file" accept=".vcf,text/vcard,image/*,application/pdf" onchange="onVendorCardUpload(this)"><div id="v-card-status" style="color:var(--muted);font-size:11px;margin-top:4px"></div></div>
       <div class="form-group"><label>Name</label><input type="text" id="v-name" placeholder="Mike Smith or Ace Plumbing LLC"></div>
       <div class="form-group"><label>Login Name <span style="color:var(--muted);font-weight:normal;font-size:10px">What they type at sign-in</span></label><input type="text" id="v-first-name" placeholder="Mike (or 'Ace' for companies)"></div>
       <div class="form-group"><label>Company (optional)</label><input type="text" id="v-company" placeholder="Smith Plumbing LLC"></div>
@@ -2728,9 +2731,39 @@ function openUnitDetail(propId, unitId) {
 
 
 // ── Vendors ──────────────────────────────────────────────────
+function renderVendorsPendingSection() {
+  var el = document.getElementById('vendors-pending-section');
+  if (!el) return;
+  var pending = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE' && String(v.Status||'').toLowerCase()==='pending_review';});
+  if (!pending.length) { el.innerHTML=''; return; }
+  el.innerHTML = '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px">' +
+    '<div style="font-weight:bold;color:var(--warn);font-size:12px;margin-bottom:8px">⏳ '+pending.length+' vendor request'+(pending.length!==1?'s':'')+' awaiting review — submitted via the shareable Add Vendor link</div>' +
+    pending.map(function(v){
+      return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--border)">' +
+        '<div><b>'+esc(v.Name||'')+'</b>'+(v.Company?' — '+esc(v.Company):'')+'<br><span style="color:var(--muted);font-size:11px">'+esc(v.Phone||'no phone')+(v.Email?' · '+esc(v.Email):'')+(v.Vendor_Type?' · '+esc(v.Vendor_Type):'')+'</span></div>' +
+        '<div style="display:flex;gap:6px">' +
+        '<button class="btn small" onclick="approveVendorRequest(\''+v.ID+'\')">✓ Approve</button>' +
+        '<button class="btn small secondary" onclick="rejectVendorRequest(\''+v.ID+'\')">✕ Reject</button>' +
+        '</div></div>';
+    }).join('') + '</div>';
+}
+function approveVendorRequest(id){
+  api('POST','/vendor/update',{id:id,fields:{Status:'active'}}).then(function(res){
+    if(res.error){toast('Error: '+res.error,'error');return;}
+    toast('Vendor approved','success'); loadAll();
+  }).catch(function(e){toast('Error: '+e.message,'error');});
+}
+function rejectVendorRequest(id){
+  if(!confirm('Reject this vendor request? It will no longer show up anywhere.')) return;
+  api('POST','/vendor/update',{id:id,fields:{Active:'FALSE',Status:'rejected'}}).then(function(res){
+    if(res.error){toast('Error: '+res.error,'error');return;}
+    toast('Vendor request rejected','success'); loadAll();
+  }).catch(function(e){toast('Error: '+e.message,'error');});
+}
 function renderVendorsPage() {
+  renderVendorsPendingSection();
   var el = document.getElementById('vendors-list');
-  var vendors = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
+  var vendors = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE' && String(v.Status||'').toLowerCase()!=='pending_review';});
   if (!vendors.length) { el.innerHTML='<div class="loading">No vendors yet</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
@@ -2871,6 +2904,80 @@ function submitAddProperty() {
     toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');loadAll();
   }).catch(function(e){logError('Add property',e.message);toast('Error: '+e.message,'error');});
 }
+
+// ── Contact-card upload (shared by Add Tenant / Add Owner / Add Vendor) ─────
+// Accepts a .vcf file (parsed client-side, no network call) or a photo/PDF of a business card
+// (sent to /contact-card/extract for Claude-vision OCR). Fields are only ever filled if currently
+// EMPTY — a person's own typing is never overwritten, same convention as hubBillVendorChanged's
+// dataset.auto guard elsewhere in this file.
+function fileToBase64(file){
+  return new Promise(function(resolve,reject){
+    var reader = new FileReader();
+    reader.onload = function(){ resolve(String(reader.result).split(',')[1]||''); };
+    reader.onerror = function(){ reject(new Error('file read failed')); };
+    reader.readAsDataURL(file);
+  });
+}
+function parseVCardText(text){
+  var out = {first_name:'',last_name:'',company:'',phone:'',email:'',notes:''};
+  try {
+    var lines = String(text).split(/\r\n|\n|\r/);
+    var unfolded = [];
+    lines.forEach(function(line){
+      if (/^[ \t]/.test(line) && unfolded.length) unfolded[unfolded.length-1] += line.slice(1);
+      else unfolded.push(line);
+    });
+    unfolded.forEach(function(line){
+      var m = line.match(/^([^:;]+)(;[^:]*)?:(.*)$/);
+      if (!m) return;
+      var key = m[1].toUpperCase(), val = m[3].trim();
+      if (key === 'N') {
+        var parts = val.split(';');
+        out.last_name = out.last_name || (parts[0]||'').trim();
+        out.first_name = out.first_name || (parts[1]||'').trim();
+      } else if (key === 'FN' && !out.first_name && !out.last_name) {
+        var sp = val.trim().split(/\s+/); out.first_name = sp.shift()||''; out.last_name = sp.join(' ');
+      } else if (key === 'ORG') { out.company = val.split(';')[0].trim(); }
+      else if (key.indexOf('TEL') === 0 && !out.phone) { out.phone = val.trim(); }
+      else if (key.indexOf('EMAIL') === 0 && !out.email) { out.email = val.trim(); }
+    });
+  } catch(e) {}
+  return out;
+}
+function applyContactCardFields(fields, data){
+  function setIfEmpty(id, val){ if(!id||!val) return; var el=document.getElementById(id); if(!el||(el.value&&el.value.trim())) return; el.value=val; }
+  var full = [data.first_name, data.last_name].filter(Boolean).join(' ').trim();
+  if (fields.name) setIfEmpty(fields.name, full || data.company || '');
+  setIfEmpty(fields.first, data.first_name);
+  setIfEmpty(fields.last, data.last_name);
+  setIfEmpty(fields.company, data.company);
+  setIfEmpty(fields.phone, data.phone);
+  setIfEmpty(fields.email, data.email);
+}
+function bindContactCardFields(fields){
+  return function(fileInput){
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    var statusEl = fields.status ? document.getElementById(fields.status) : null;
+    if (statusEl) statusEl.textContent = 'Reading contact card…';
+    var isVcf = /\.vcf$/i.test(file.name) || /text\/(x-)?vcard/i.test(file.type||'');
+    var p = isVcf ? file.text().then(parseVCardText)
+      : fileToBase64(file).then(function(b64){
+          return api('POST','/contact-card/extract',{base64:b64, mime:file.type||'image/jpeg'});
+        });
+    p.then(function(data){
+      data = data || {};
+      if (data.error) throw new Error(data.error);
+      applyContactCardFields(fields, data);
+      if (statusEl) statusEl.textContent = (data._error||data._parse_error) ? 'Could not read the card — enter details manually' : 'Filled from contact card — double-check before saving';
+    }).catch(function(e){
+      if (statusEl) statusEl.textContent = 'Could not read the card — enter details manually';
+    }).finally(function(){ fileInput.value=''; });
+  };
+}
+var onVendorCardUpload = bindContactCardFields({name:'v-name', company:'v-company', phone:'v-phone', email:'v-email', status:'v-card-status'});
+var onOwnerCardUpload = bindContactCardFields({first:'ao-first', last:'ao-last', company:'ao-company', phone:'ao-phone', email:'ao-email', status:'ao-card-status'});
+var onTenantCardUpload = bindContactCardFields({first:'mi-first', last:'mi-last', phone:'mi-phone', email:'mi-email', status:'mi-card-status'});
 
 // ── Add Vendor ───────────────────────────────────────────────
 function openAddVendorModal(){openModal('modal-add-vendor');}
@@ -9160,6 +9267,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div id="mi-current-tenant-banner" style="display:none;grid-column:1/-1;background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;font-size:12px;color:var(--warn)">
         <!-- populated dynamically by onMoveInUnitChange -->
       </div>
+      <div class="form-group full"><label>Contact Card <span style="font-weight:normal;color:var(--muted)">— upload a .vcf or a photo of a business card to auto-fill</span></label><input type="file" accept=".vcf,text/vcard,image/*,application/pdf" onchange="onTenantCardUpload(this)"><div id="mi-card-status" style="color:var(--muted);font-size:11px;margin-top:4px"></div></div>
       <div class="form-group"><label>First Name *</label><input type="text" id="mi-first" placeholder="e.g. Janice"></div>
       <div class="form-group"><label>Last Name</label><input type="text" id="mi-last" placeholder="e.g. Johnson"></div>
       <div class="form-group"><label>Phone</label><input type="tel" id="mi-phone" placeholder="(443) 555-1234"></div>
@@ -9346,6 +9454,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   <div class="modal" style="max-width:480px">
     <div class="modal-header"><div class="modal-title">ADD OWNER</div><button class="modal-close" onclick="closeModal('modal-add-owner')">✕</button></div>
     <div class="form-grid">
+      <div class="form-group full"><label>Contact Card <span style="font-weight:normal;color:var(--muted)">— upload a .vcf or a photo of a business card to auto-fill</span></label><input type="file" accept=".vcf,text/vcard,image/*,application/pdf" onchange="onOwnerCardUpload(this)"><div id="ao-card-status" style="color:var(--muted);font-size:11px;margin-top:4px"></div></div>
       <div class="form-group full"><label>Company / Entity Name</label><input type="text" id="ao-company" placeholder="Phoenix Estates LLC"></div>
       <div class="form-group"><label>First Name</label><input type="text" id="ao-first" placeholder="Amanda"></div>
       <div class="form-group"><label>Last Name</label><input type="text" id="ao-last" placeholder=""></div>
