@@ -38,7 +38,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'   # 20 is deprecated on GH runners; the runner already forces 24
 
       # Give Workers Builds a moment to finish deploying on a push to main, so the canary
       # tests the code that was just pushed rather than the previous version.
