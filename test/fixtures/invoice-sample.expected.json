@@ -1,0 +1,7 @@
+{
+  "_comment": "Ground truth for test/fixtures/invoice-sample.jpg — a synthetic invoice used by .github/workflows/selftest-invoice.yml to prove live Claude-vision extraction still works end to end. Add more fixtures (blurry photo, handwritten total, PDF) by dropping <name>.jpg + <name>.expected.json in here; the workflow picks them up automatically.",
+  "amount": 1284.50,
+  "invoice_number": "RT-2049",
+  "invoice_date": "2026-08-14",
+  "vendor_name_contains": "Ridgeline"
+}

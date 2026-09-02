@@ -1,0 +1,52 @@
+name: Invoice OCR Canary
+
+# The one check that makes a REAL Claude-vision call against the live Worker.
+#
+# Every other test of the vendor invoice auto-read stubs the model — test/vendor-invoice-extract.test.mjs
+# (parsing, fail-open, auth boundary, PAT-031 routing) and the Playwright pass (form pre-fill) would
+# both stay green while the model quietly stopped reading invoices. This runs a known fixture invoice
+# through the live endpoint and asserts the values that come back, so a regression shows up here
+# instead of in a vendor's hands.
+#
+# Secrets: SELFTEST_TOKEN only — a dedicated read-only token, deliberately NOT WORKER_SECRET (see the
+# security note in CLAUDE.md: don't widen that shared key). ANTHROPIC_API_KEY stays in Cloudflare and
+# is never handed to CI.
+#
+# Costs one Claude call per fixture per run.
+
+on:
+  schedule:
+    - cron: '0 12 * * *'      # daily ~8am ET. GitHub may delay scheduled runs; that's fine.
+  workflow_dispatch:           # manual / API-triggered, so a session can run it on demand
+    inputs:
+      base_url:
+        description: 'Worker base URL to test (blank = production)'
+        required: false
+        default: ''
+  push:
+    paths:                     # re-verify whenever the extractor or its fixtures change
+      - 'worker.js'
+      - 'test/fixtures/**'
+      - 'scripts/selftest-invoice.mjs'
+      - '.github/workflows/selftest-invoice.yml'
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Give Workers Builds a moment to finish deploying on a push to main, so the canary
+      # tests the code that was just pushed rather than the previous version.
+      - name: Wait for deploy to settle
+        if: github.event_name == 'push'
+        run: sleep 90
+
+      - name: Run the live OCR canary
+        env:
+          SELFTEST_TOKEN: ${{ secrets.SELFTEST_TOKEN }}
+        run: node scripts/selftest-invoice.mjs "${{ github.event.inputs.base_url }}"

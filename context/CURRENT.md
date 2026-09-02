@@ -145,6 +145,27 @@ only `/health` and `/version` are curlable with zero setup (no auth token, no re
 record needed) — broader endpoint coverage needs seeded fixture data on staging, which is B-145
 (golden-path tests), not this item. All 10 assertions passing as of this session.
 
+**Invoice OCR canary — ✅ DONE (Sept 1 2026).** Sibling to `scripts/smoke-staging.mjs`, and the
+answer to "how does Claude check the invoice auto-read every session without me rotating keys."
+`POST /selftest/invoice-extract` on the Worker runs a caller-supplied fixture through the real
+`invoiceExtract` — a genuine Claude-vision call — and returns the parse plus an honest `read_ok`
+flag. Gated by its own **`SELFTEST_TOKEN`**, deliberately NOT `WORKER_SECRET` (don't widen that
+shared key). `ANTHROPIC_API_KEY` never leaves Cloudflare. `scripts/selftest-invoice.mjs` holds the
+fixture + expected values and asserts them; `.github/workflows/selftest-invoice.yml` runs it daily
+at 12:00 UTC, on any push touching `worker.js`/fixtures, and on `workflow_dispatch` — so a session
+with no credentials can trigger it via the GitHub API and read the result.
+**Why it exists:** every other test of the auto-read stubs the model
+(`test/vendor-invoice-extract.test.mjs`, the Playwright pass), so all of them would stay green
+while the model silently stopped reading invoices — a deprecated model id, a changed response
+shape, a drifting prompt. This is the only check that would go red. `invoiceExtract` fails OPEN by
+design, so the canary asserts `read_ok`, not just a 200; a blank result is a failure, not a pass.
+**Add fixtures** by dropping `<name>.jpg|png|pdf` + `<name>.expected.json` into `test/fixtures/` —
+no Worker or workflow change. Worth adding: an angled phone photo, a handwritten total, a PDF, and
+one with no invoice number at all. **Setup Brett owes it (one time, never rotates):** add
+`SELFTEST_TOKEN` as a Worker secret in the Cloudflare dashboard AND as a GitHub Actions secret of
+the same name. Until then the endpoint returns 503 `configured:false` and the workflow fails with
+that exact message.
+
 **B-127 (model routing) — 🟠 BUILT + TESTED, sitting un-deployed on purpose.** `routeAI(env, job)` +
 `MODEL_REGISTRY` (CHEAP/REASON/HARD) + `callGemini`/`callClaude` adapters + `GET /model-registry`,
 right before the Optimizer section in worker.js (reuses the existing `logTelemetry` chokepoint —

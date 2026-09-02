@@ -49,6 +49,10 @@ export default {
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
       // last-4-of-phone gate + per-WO lockout live INSIDE these handlers, not here.
       '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/bill-extract','/wo/shared/receipt','/wo/shared/note',
+      // Live OCR canary (Sept 1 2026): public at the router gate, but selfTestInvoiceExtract
+      // self-verifies a dedicated SELFTEST_TOKEN before doing anything — deliberately NOT
+      // WORKER_SECRET, which already gates too much (see the security note in CLAUDE.md).
+      '/selftest/invoice-extract',
       // Weekly Open Item Report link (Aug 18 session): same pattern — public at the gate, but
       // every handler self-verifies a signed ar-report share token before doing anything.
       '/ar-report/view','/ar-report/pay-link',
@@ -227,6 +231,7 @@ export default {
         if (path === '/wo/shared/status')         return await woSharedStatus(env, body);
         if (path === '/wo/shared/bill')           return await woSharedBill(env, body);
         if (path === '/wo/shared/bill-extract')   return await woSharedBillExtract(env, body);
+        if (path === '/selftest/invoice-extract') return await selfTestInvoiceExtract(env, body);
         if (path === '/wo/shared/receipt')        return await woSharedReceipt(env, body);
         if (path === '/wo/shared/note')           return await woSharedNote(env, body);
         if (path === '/wo/share-link')            return await woShareLink(env, body);
@@ -6429,6 +6434,50 @@ async function woSharedBillExtract(env, body){
   } catch (e) { return json({ error: 'bad image_b64' }, 400); }
   const ex = await invoiceExtract(env, bytes, mime);
   return json({ success: true, extract: ex });
+}
+
+// POST /selftest/invoice-extract — the LIVE OCR canary. Everything else that verifies the
+// invoice auto-read (test/vendor-invoice-extract.test.mjs, the Playwright pass) stubs the model,
+// so it proves the plumbing but never that Claude still READS an invoice correctly. This is the
+// one check that makes a real vision call, so a silent regression — a deprecated model, a
+// provider response-shape change, a prompt that drifts — surfaces here instead of in a vendor's
+// hands. Called by .github/workflows/selftest-invoice.yml, which owns the fixture image and the
+// expected values (so new fixtures need no Worker change) and fails the run on a mismatch.
+//
+// Gated by its own SELFTEST_TOKEN, never WORKER_SECRET: this is a new surface and CLAUDE.md's
+// standing note is not to widen that shared key. Read-only — no Sheet writes, no PII in or out,
+// the caller supplies a synthetic fixture. The ANTHROPIC_API_KEY stays in Cloudflare and is
+// never handed to the caller.
+async function selfTestInvoiceExtract(env, body){
+  const want = env.SELFTEST_TOKEN;
+  // Unset is a setup problem, not an auth failure — say so plainly rather than 401ing forever.
+  if(!want) return json({ error:'SELFTEST_TOKEN not configured on this Worker', configured:false }, 503);
+  const got = String((body && body.token) || '');
+  // Constant-time-ish compare, same discipline as verifySessionToken's signature check.
+  let diff = got.length ^ want.length;
+  for(let i=0; i<got.length && i<want.length; i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  if(diff !== 0) return json({ error:'Unauthorized' }, 401);
+  if(!body.image_b64) return json({ error:'image_b64 required' }, 400);
+  let bytes;
+  try {
+    const bin = atob(body.image_b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    bytes = arr.buffer;
+  } catch (e) { return json({ error: 'bad image_b64' }, 400); }
+  const t0 = Date.now();
+  const ex = await invoiceExtract(env, bytes, body.mime || 'image/jpeg');
+  // invoiceExtract fails open by design, so surface its flags explicitly — a canary that
+  // reports success while the model is unreachable is worse than no canary.
+  return json({
+    success: true,
+    extract: ex,
+    read_ok: !ex._error && !ex._parse_error,
+    error_flag: ex._error ? 'model_unreachable' : (ex._parse_error ? 'unparseable_reply' : ''),
+    model_tier: 'REASON',
+    model: MODEL_REGISTRY.REASON.model,
+    ms: Date.now() - t0,
+  });
 }
 
 // PUBLIC (view-token gated): submit a bill for THIS WO as the token's vendor. WO + vendor

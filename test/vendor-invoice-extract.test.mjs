@@ -7,7 +7,10 @@
 //   (4) the picked file actually reaches the model (a blind OCR would "work" and be wrong);
 //   (5) /wo/shared/bill-extract fails closed on a forged/expired/cross-WO token — and spends
 //       no AI call when it does;
-//   (6) neither endpoint writes to Vendor_Bills / Invoice_Review (they are read-only suggesters).
+//   (6) neither endpoint writes to Vendor_Bills / Invoice_Review (they are read-only suggesters);
+//   (7) the /selftest/invoice-extract canary gates on its own SELFTEST_TOKEN (never WORKER_SECRET),
+//       says "not configured" rather than 401ing forever when the secret is missing, and reports
+//       read_ok honestly so a fail-open blank can't be mistaken for a passing canary.
 import fs from 'fs';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
@@ -49,7 +52,8 @@ const M = new Function(`
   ${grab('invoiceExtract')}
   ${grab('vendorBillExtract')}
   ${grab('woSharedBillExtract')}
-  return { invoiceExtract, vendorBillExtract, woSharedBillExtract, makeSessionToken, MODEL_REGISTRY };
+  ${grab('selfTestInvoiceExtract')}
+  return { invoiceExtract, vendorBillExtract, woSharedBillExtract, selfTestInvoiceExtract, makeSessionToken, MODEL_REGISTRY };
 `)();
 
 const SECRET = 'test-worker-secret-abc123';
@@ -167,6 +171,40 @@ const billWrites = () => calls.filter(c => /sheets\.googleapis\.com/.test(c.url)
   body = await res.json();
   t('valid token -> 200 + extract', res.status === 200 && body.success === true && body.extract.amount === 250, res.status);
   t('no write to Vendor_Bills / Invoice_Review', billWrites().length === 0, billWrites().length);
+
+  // ── 7. the live OCR canary's own gate (scripts/selftest-invoice.mjs calls this) ──
+  set(JSON.stringify({ amount: 1284.50, invoice_number: 'RT-2049', invoice_date: '2026-08-14', vendor_name: 'Ridgeline Test Plumbing LLC' }));
+  let sres = await M.selfTestInvoiceExtract({ ANTHROPIC_API_KEY: 'sk-test-stub' }, { token: 'anything', image_b64: b64('x') });
+  t('canary: no SELFTEST_TOKEN configured -> 503, not a confusing 401', sres.status === 503, sres.status);
+  t('canary: unconfigured spends NO AI call', calls.filter(c => c.url.includes('anthropic')).length === 0);
+
+  const senv = { ANTHROPIC_API_KEY: 'sk-test-stub', SELFTEST_TOKEN: 'canary-token-xyz' };
+  set(JSON.stringify({ amount: 1 }));
+  t('canary: wrong token -> 401', (await M.selfTestInvoiceExtract(senv, { token: 'wrong', image_b64: b64('x') })).status === 401);
+  t('canary: wrong token spends NO AI call', calls.filter(c => c.url.includes('anthropic')).length === 0);
+  t('canary: empty token -> 401', (await M.selfTestInvoiceExtract(senv, { token: '', image_b64: b64('x') })).status === 401);
+  t('canary: token as a prefix of the real one -> 401', (await M.selfTestInvoiceExtract(senv, { token: 'canary-token-xy', image_b64: b64('x') })).status === 401);
+  t('canary: WORKER_SECRET is NOT accepted here', (await M.selfTestInvoiceExtract({ ...senv, WORKER_SECRET: SECRET }, { token: SECRET, image_b64: b64('x') })).status === 401);
+  t('canary: right token, missing image -> 400', (await M.selfTestInvoiceExtract(senv, { token: 'canary-token-xyz' })).status === 400);
+
+  set(JSON.stringify({ amount: 1284.50, invoice_number: 'RT-2049', invoice_date: '2026-08-14', vendor_name: 'Ridgeline Test Plumbing LLC' }));
+  sres = await M.selfTestInvoiceExtract(senv, { token: 'canary-token-xyz', image_b64: b64('x'), mime: 'image/jpeg' });
+  let sbody = await sres.json();
+  t('canary: happy path -> 200', sres.status === 200, sres.status);
+  t('canary: read_ok true on a real read', sbody.read_ok === true);
+  t('canary: returns the parsed fixture values', sbody.extract.amount === 1284.50 && sbody.extract.invoice_number === 'RT-2049', JSON.stringify(sbody.extract));
+  t('canary: reports the Claude model it used', /claude/i.test(sbody.model), sbody.model);
+  t('canary: never echoes a secret back', !JSON.stringify(sbody).includes('canary-token-xyz') && !JSON.stringify(sbody).includes('sk-test-stub'));
+
+  // The important one: invoiceExtract fails OPEN, so a blank result must NOT read as a pass.
+  set('', 'throw');
+  sbody = await (await M.selfTestInvoiceExtract(senv, { token: 'canary-token-xyz', image_b64: b64('x') })).json();
+  t('canary: model unreachable -> read_ok FALSE (fail-open blank is not a pass)', sbody.read_ok === false, JSON.stringify(sbody.read_ok));
+  t('canary: names the failure mode', sbody.error_flag === 'model_unreachable', sbody.error_flag);
+  set('total is about twelve hundred dollars');
+  sbody = await (await M.selfTestInvoiceExtract(senv, { token: 'canary-token-xyz', image_b64: b64('x') })).json();
+  t('canary: unparseable reply -> read_ok FALSE', sbody.read_ok === false);
+  t('canary: names it unparseable', sbody.error_flag === 'unparseable_reply', sbody.error_flag);
 
   globalThis.fetch = realFetch;
   console.log(`\nvendor-invoice-extract: ${pass} passed, ${fail} failed`);
