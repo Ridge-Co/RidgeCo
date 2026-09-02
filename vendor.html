@@ -1848,9 +1848,15 @@ function submitVendorSched(modalId) {
           📄 Upload Invoice
         </button>
         <input type="file" id="bill-invoice-file-input" accept="image/*,application/pdf" onchange="handleBillInvoiceFile(this)" style="display:none">
-        <span id="bill-invoice-file-status" style="font-size:11px;color:var(--muted)"></span>
       </div>
-      <div id="bill-invoice-read-status" style="font-size:11px;margin-top:4px;min-height:14px"></div>
+      <!-- ONE status line for BOTH jobs the picked file kicks off (the read that pre-fills the
+           form, and the upload that attaches the file). They used to render as two separate
+           lines, which meant a flaky-signal upload failure put a red "⚠ Upload failed" directly
+           above a green "✓ Read from invoice" — two colours, two verdicts, and no way for a
+           vendor to tell whether they were done. Now: one line, read clause first (it's the one
+           that changed what's in the form), attach clause second, and the only red is a small
+           ⚠ glyph on the clause that actually needs the vendor to do something. -->
+      <div id="bill-invoice-status" style="font-size:11px;margin-top:6px;min-height:14px;line-height:1.45"></div>
       <div style="color:var(--muted);font-size:11px;margin-top:4px">A photo or PDF of your invoice, if you have one — we'll try to read the amount, invoice #, and date for you.</div>
     </div>
 
@@ -1922,9 +1928,8 @@ function openBillModal(woId, vendorName) {
   document.getElementById('bill-notes').value = '';
   document.getElementById('bill-invoice-no').value = ''; // was never reset — a prior job's invoice # could carry over
   document.getElementById('bill-invoice-date').value = '';
-  document.getElementById('bill-invoice-read-status').textContent = '';
-  document.getElementById('bill-invoice-file-status').textContent = '';
-  document.getElementById('bill-invoice-file-status').style.color = 'var(--muted)';
+  _invReadState = 'idle'; _invUploadState = 'idle'; _invFileName = '';
+  renderInvoiceFileStatus();
   document.getElementById('bill-invoice-file-lbl').style.borderColor = 'var(--border)';
   document.getElementById('bill-invoice-file-lbl').style.color = 'var(--text)';
   document.getElementById('bill-truck-toggle').checked = false;
@@ -2060,10 +2065,9 @@ function uploadReceiptPhoto(n, input) {
 function uploadBillInvoiceFile(input) {
   var file = input.files[0];
   if (!file) return;
-  var statusEl = document.getElementById('bill-invoice-file-status');
   var lblEl = document.getElementById('bill-invoice-file-lbl');
-  statusEl.textContent = 'Uploading…';
-  statusEl.style.color = 'var(--muted)';
+  _invFileName = file.name || '';
+  _invUploadState = 'busy'; renderInvoiceFileStatus();
   var fd = new FormData();
   fd.append('file', file);
   fd.append('wo_id', _billWOId);
@@ -2074,15 +2078,42 @@ function uploadBillInvoiceFile(input) {
       if (res.url) {
         _invoiceFileURL = res.url;
         _invoiceFileId = res.fileId || '';
-        statusEl.textContent = '✓ Uploaded';
-        statusEl.style.color = 'var(--accent2)';
+        _invUploadState = 'ok';
         lblEl.style.borderColor = 'var(--accent2)';
         lblEl.style.color = 'var(--accent2)';
       } else {
-        statusEl.textContent = '⚠ Upload failed — ' + (res.error || 'try again');
-        statusEl.style.color = 'var(--danger)';
+        _invUploadState = 'fail';
       }
-    }).catch(function(){ statusEl.textContent = '⚠ Error — tap to retry'; statusEl.style.color = 'var(--danger)'; });
+      renderInvoiceFileStatus();
+    }).catch(function(){ _invUploadState = 'fail'; renderInvoiceFileStatus(); });
+}
+
+// Status of the two independent jobs a picked file starts. Tracked separately (they succeed
+// and fail independently) but ALWAYS rendered as one line — see renderInvoiceFileStatus.
+// 'idle' | 'busy' | 'ok' | 'fail'; _invRead also uses 'none' (read worked, nothing usable in it).
+var _invReadState = 'idle', _invUploadState = 'idle', _invFileName = '';
+
+// The single source of truth for what the vendor sees about their invoice file. Composes the
+// read clause and the attach clause into one muted line; colour is carried by a small ✓ / ⚠
+// glyph per clause rather than by the whole line, so a failed attach can't shout over a
+// successful read (or vice versa).
+function renderInvoiceFileStatus() {
+  var el = document.getElementById('bill-invoice-status');
+  if (!el) return;
+  var ok  = function(txt){ return '<span style="color:var(--accent2)">✓</span> <span style="color:var(--text)">' + txt + '</span>'; };
+  var bad = function(txt){ return '<span style="color:var(--danger)">⚠</span> <span style="color:var(--muted)">' + txt + '</span>'; };
+  var dim = function(txt){ return '<span style="color:var(--muted)">' + txt + '</span>'; };
+  var parts = [];
+  // Read clause first — it is the one that changed what is sitting in the form.
+  if (_invReadState === 'busy')      parts.push(dim('Reading invoice…'));
+  else if (_invReadState === 'ok')   parts.push(ok('Read it — check the amount, #, and date below'));
+  else if (_invReadState === 'none' || _invReadState === 'fail')
+                                     parts.push(dim('Couldn’t read that one — just fill it in below'));
+  // Attach clause second — filing the document, nothing to do with the numbers above.
+  if (_invUploadState === 'busy')    parts.push(dim('attaching file…'));
+  else if (_invUploadState === 'ok') parts.push(dim('file attached' + (_invFileName ? ' (' + esc(_invFileName) + ')' : '')));
+  else if (_invUploadState === 'fail') parts.push(bad('file didn’t attach — tap Upload Invoice to retry'));
+  el.innerHTML = parts.join(dim(' · '));
 }
 
 // Picking the invoice file does two independent things: the existing upload-and-attach
@@ -2101,23 +2132,22 @@ function handleBillInvoiceFile(input) {
 // Fails open on any error/timeout — fields simply stay blank/manual, exactly like today.
 function autoReadBillInvoiceFile(input) {
   var file = input.files[0];
-  var statusEl = document.getElementById('bill-invoice-read-status');
   if (!file) return;
-  if (statusEl) { statusEl.textContent = 'Reading invoice…'; statusEl.style.color = 'var(--muted)'; }
+  _invReadState = 'busy'; renderInvoiceFileStatus();
   var reader = new FileReader();
   reader.onload = function() {
     var b64 = String(reader.result || '').split(',')[1] || '';
-    if (!b64) { if (statusEl) statusEl.textContent = ''; return; }
+    if (!b64) { _invReadState = 'fail'; renderInvoiceFileStatus(); return; }
     api('POST', '/vendor-bill/extract', { image_b64: b64, mime: file.type || 'image/jpeg' })
-      .then(function(res) { applyBillExtract(res && res.extract, statusEl); })
-      .catch(function() { if (statusEl) statusEl.textContent = ''; }); // fail open — never blocks manual submit
+      .then(function(res) { applyBillExtract(res && res.extract); })
+      .catch(function() { _invReadState = 'fail'; renderInvoiceFileStatus(); }); // fail open — never blocks manual submit
   };
-  reader.onerror = function() { if (statusEl) statusEl.textContent = ''; };
+  reader.onerror = function() { _invReadState = 'fail'; renderInvoiceFileStatus(); };
   reader.readAsDataURL(file);
 }
 
-function applyBillExtract(ex, statusEl) {
-  if (!ex || ex._error || ex._parse_error) { if (statusEl) statusEl.textContent = ''; return; }
+function applyBillExtract(ex) {
+  if (!ex || ex._error || ex._parse_error) { _invReadState = 'fail'; renderInvoiceFileStatus(); return; }
   var filled = [];
 
   // Amount → this form has no single raw "amount" field; Flat Price is the closest match for
@@ -2153,10 +2183,8 @@ function applyBillExtract(ex, statusEl) {
     }
   }
   calcBillTotal();
-  if (statusEl) {
-    statusEl.textContent = filled.length ? ('✓ Read from invoice — check the amount, #, and date below') : 'Couldn’t read that file — fill in below.';
-    statusEl.style.color = filled.length ? 'var(--accent2)' : 'var(--muted)';
-  }
+  _invReadState = filled.length ? 'ok' : 'none';
+  renderInvoiceFileStatus();
 }
 
 function calcBillTotal() {
