@@ -1044,7 +1044,30 @@ window.addEventListener('pageshow', function(e){
 <div id="toast-container"></div>
 
 <script>
-var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var WORKER = (function(){
+  // Staging deploy gate (Sept 2026): ?api=staging points this page at the isolated
+  // staging Worker (own Sheet, QB/SMS/Gmail stubbed) instead of production, and
+  // remembers the choice across taps so a full staging smoke-test doesn't need the
+  // query param on every link; ?api=prod clears it. Default (nothing set) is always
+  // production. Wrapped so a blocked localStorage (private mode, some WebViews)
+  // fails safe to production rather than crashing the page.
+  var PROD = 'https://maintenance-hub.brett-2f8.workers.dev';
+  var STAGING = 'https://maintenance-hub-staging.brett-2f8.workers.dev';
+  try {
+    var qs = new URLSearchParams(location.search);
+    if (qs.get('api') === 'staging') localStorage.setItem('mh_api_staging', '1');
+    else if (qs.get('api') === 'prod') localStorage.removeItem('mh_api_staging');
+    return localStorage.getItem('mh_api_staging') === '1' ? STAGING : PROD;
+  } catch (e) { return PROD; }
+})();
+if (WORKER.indexOf('staging') !== -1) {
+  document.addEventListener('DOMContentLoaded', function() {
+    var b = document.createElement('div');
+    b.textContent = '🧪 STAGING — pointed at the test Worker/Sheet, not production. QB/SMS/email are stubbed.';
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#7c2d12;color:#fff;font:12px/1.4 system-ui,sans-serif;text-align:center;padding:4px 8px';
+    document.body.appendChild(b);
+  });
+}
 var SECRET_KEY = 'mh_auth';
 var AUTH_TOKEN = '';
 var state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };

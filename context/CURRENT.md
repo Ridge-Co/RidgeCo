@@ -1,3 +1,37 @@
+# WHERE THINGS STAND — Sept 2, 2026
+
+## 🔧 Staging deploy gate built — QuickBooks/SMS/Gmail stubbed on staging; branch-first + staging-verify now mandatory (PAT-033). FEATURE_LOG rule 142.
+Built from a scoping brief written after the Sept 1 incident (a push straight to `main`, tested
+against production only after the fact). **Corrected the brief's own design before writing code**:
+it specified a hostname/`env.STAGING` swap inside `worker.js` itself (`SHEET_ID`→`STAGING_SHEET_ID`)
+— that's the July-21 B-103 design, verified via `BUILD_ORDER_v1.0` (read directly, not from memory)
+to have been explicitly rejected July 23 for a real reason (Cloudflare preview/branch deploys of
+the SAME Worker share that Worker's secrets globally, so hostname detection on `maintenance-hub`
+itself would still hit the real Sheet). B-140 already replaced it with a genuinely separate Worker
+service, `maintenance-hub-staging` — confirmed live via Cloudflare's own API (`workers_list`), own
+Sheet already isolated (confirmed via `/health`). Building the brief's literal design would have
+broken that working isolation, not improved it — so it wasn't built; instead `isStaging()` now
+gates only the piece that was actually missing: QuickBooks writes (`qbApi`, the one chokepoint
+every `/qb/*` write and internal QB-booking path already shares), Twilio SMS (`sendSMS`), and
+Gmail send (`gmailSendEmail`) are all stubbed whenever staging, regardless of what its own copies
+of those secrets are set to — reads stay live. Frontend `?api=staging` swap (persists via
+localStorage, `?api=prod` resets, visible on-page banner) added to `index.html`/`vendor.html`/
+`wo.html`. New **PAT-033**: branch-first + staging-verify mandatory for any change touching
+`worker.js`/`index.html`/`vendor.html`/`wo.html` — added to `Brett_Context_Document_v1.13.md` and
+`CLAUDE.md`. Corrected two stale docs in the same pass: `CREDENTIALS_MAP.md`'s "Staging sandbox"
+note described the rejected design as if it were live; `AUTONOMY_GUARDRAILS_v1.0`'s Rung-1 "tested"
+definition now names the real staging URL. **Deliberately not built this pass:** Drive-write
+stubbing (folder creation + uploads) — not centralized like the other three (5+ scattered call
+sites), and `DRIVE_PROPERTIES_ROOT`/`DRIVE_VENDORS_ROOT` are NOT Sheet-isolated per service the way
+`SHEET_ID` is, so a staging photo upload today likely still lands in the real Drive structure —
+flagged as a real live gap rather than rushed. `node --check` clean on `worker.js`; all inline
+`<script>` blocks clean on all three edited HTML files (5+7+2). **🔴 Not yet verified live** — the
+`staging` branch Cloudflare's `maintenance-hub-staging` service actually deploys from is 17 commits
+behind `main` as of this session (stale); this work sits on `claude/staging-deploy-gate-8nttsk` and
+needs Brett's go-ahead to land on `staging` (bringing it current first) before the real smoke test
+(curl `.../health` → `staging:true`, confirm a stubbed `/qb/*` write response) can run. See FEATURE_LOG
+rule 142 for full detail.
+
 # WHERE THINGS STAND — Aug 24, 2026 (later still)
 
 ## 🟢 Real multi-select for sending bills/invoices to QuickBooks — Send & Track (AR) + Send to QB (AP). FEATURE_LOG rule 139.
@@ -836,12 +870,12 @@ These are the authoritative context files. As of July 21, 2026 the `brett-contex
 
 | File | Version | Load | Description |
 |---|---|---|---|
-| Brett_Context_Document_v1.12.md | v1.12 | ✅ ALWAYS | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-032 — adds PAT-031 route+instrument, PAT-032 continuous review), Session 5 log |
+| Brett_Context_Document_v1.13.md | v1.13 | ✅ ALWAYS | Brett's ventures, stack, Ridge Co details, full PAT library (PAT-001 through PAT-033 — adds PAT-033 branch-first + staging-verify), Session 6 log. v1.12 stays in /context as history. |
 | Brett_Cowork_Best_Practices_v1.4.md | **v1.4** | ✅ ALWAYS | Session workflow, common mistakes, how to work with Brett. **v1.4 (Aug 8): ⭐ standing rule — NEVER use the `AskUserQuestion` clickable widget on mobile (`<env>` `Client: mobile app`); it hangs. Ask lettered A/B/C options in plain text instead. Widget OK on desktop/laptop.** |
 | SESSION_EFFICIENCY_PROTOCOL_v1.0.md | **v1.0 LOCKED** | ✅ ALWAYS | **How to spend tokens — lowers Brett's session burn (daily/5-hr/weekly limits) with no quality loss.** LIGHT-LOAD default (supersedes brett-context "read every file"); delegate heavy reads to cheap subagents; checkpoint-and-resume (`resume ridgeco`); classify-before-load; Brett's own habit fixes. Governs session LOADING; B-127 governs the app's API bill (separate meter). Locked Aug 13. |
-| CREDENTIALS_MAP.md | v1.3 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality. **v1.3: two-service-accounts correction (Worker runtime = maintenance-hub-498819, NOT brett-os-sheets) + Worker var list + STAGING=1 warning** |
+| CREDENTIALS_MAP.md | v1.4 | ✅ ALWAYS | Every service, auth method, secret location, access status. QB CONNECTED (prod); deploy pipeline reality. **v1.4 (Sept 2): corrected the stale "Staging sandbox" note — the real setup is a separate `maintenance-hub-staging` Worker service (own Sheet, own vars), not a hostname-swap on `maintenance-hub`; `STAGING_SHEET_ID` was dead/unread, `STAGING=1` is now real (staging-service-only).** v1.3: two-service-accounts correction (Worker runtime = maintenance-hub-498819, NOT brett-os-sheets) + Worker var list. |
 | VENTURES.md | v1.0 | ✅ ALWAYS | Every venture — current state, stack, Claude access level, automation gaps |
-| FEATURE_LOG.md | **v1.28** | ✅ ALWAYS | What's working — check before every code change to prevent regressions. **v1.28 (Aug 11): rules 77–78 — WO Room/Area field (room-level vendor routing as a label dimension, no QB layer) + bedroom-level keys; `sheet-ops add_column_header` now auto-widens the grid (a lingering `pending.json` means the run failed mid-way — re-queue only un-applied ops).** **v1.13 (Aug 6–7): rules 44–49 — Cleaning books to Service item 43 not the category (44); query existing QB bills before a vendor-bill batch, the dup-bill lesson (45); new `/qb/record-paid-bill`, `/qb/clear-ir-bill`, `/qb/reprice-invoice` (46–48); Cowork deploys the Worker now, urllib-403 + Sheets-quota gotchas (49).** v1.11 (Aug 4–5): rules 35–39 — one trade list, a former tenant's phone does not travel, `ensureColumns` before writing a new column (rule 37, the silent-no-op that keeps recurring), sending an invoice creates the OWNER not the property (38), logged time is a record not a charge — the invoice is built from a BILL (39).** v1.10 (Aug 3): billing consolidated onto the work order (one pricing surface); duplicate-submission guards; rules 19-23 — silent no-ops from a wrong route AND a wrong column, vendor.html api() serialization (receipts/time entries had never worked), never infer 'sent to QuickBooks' from an absent row, multi-vendor bills per WO, dedupe must fail open.** v1.7: daily digest shipped. v1.6: rule 18 — the July 21 non-prod-branch-build → production deploy incident. Keep Cloudflare non-prod branch builds OFF until reconfigured to `wrangler versions upload`. |
+| FEATURE_LOG.md | **v1.67** | ✅ ALWAYS | What's working — check before every code change to prevent regressions. **v1.67 (Sept 2): rule 142 — staging deploy gate: QuickBooks/SMS/Gmail stubbed on `maintenance-hub-staging` via `isStaging()`, frontend `?api=staging` swap, new PAT-033 (branch-first + staging-verify mandatory).** v1.28 (Aug 11): rules 77–78 — WO Room/Area field (room-level vendor routing as a label dimension, no QB layer) + bedroom-level keys; `sheet-ops add_column_header` now auto-widens the grid (a lingering `pending.json` means the run failed mid-way — re-queue only un-applied ops).** **v1.13 (Aug 6–7): rules 44–49 — Cleaning books to Service item 43 not the category (44); query existing QB bills before a vendor-bill batch, the dup-bill lesson (45); new `/qb/record-paid-bill`, `/qb/clear-ir-bill`, `/qb/reprice-invoice` (46–48); Cowork deploys the Worker now, urllib-403 + Sheets-quota gotchas (49).** v1.11 (Aug 4–5): rules 35–39 — one trade list, a former tenant's phone does not travel, `ensureColumns` before writing a new column (rule 37, the silent-no-op that keeps recurring), sending an invoice creates the OWNER not the property (38), logged time is a record not a charge — the invoice is built from a BILL (39).** v1.10 (Aug 3): billing consolidated onto the work order (one pricing surface); duplicate-submission guards; rules 19-23 — silent no-ops from a wrong route AND a wrong column, vendor.html api() serialization (receipts/time entries had never worked), never infer 'sent to QuickBooks' from an absent row, multi-vendor bills per WO, dedupe must fail open.** v1.7: daily digest shipped. v1.6: rule 18 — the July 21 non-prod-branch-build → production deploy incident. Keep Cloudflare non-prod branch builds OFF until reconfigured to `wrangler versions upload`. |
 | BACKLOG.md | v1.23 | ⏳ index always, detail on-demand | Master backlog across all ventures. Quick Index block at top (always-load); full entries on demand. |
 | CAPTURE_INBOX.md | v1.22 | ⏳ index always, detail on-demand | Brett's brain-dump inbox — CAP items. Quick Index block at top (always-load); full entries on demand. |
 | HANDWRITING_KEY.md | v1.10 | ⏳ ON-DEMAND | Reference for reading Brett's handwritten-note photos (load only for handwriting tasks). Seeded vocab + confirmed live reads from Scan_2019/2020/2030/2032/2104/2105_1/2105_2/2105/1338 + Scanned_202607211020/1341. |

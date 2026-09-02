@@ -37,6 +37,13 @@ crons = ["0 11 * * *", "0 12 * * 1", "0 12 * * 3", "0 13 * * 1"]
 #            GOOGLE_SA_EMAIL, TWILIO_SID, TWILIO_AUTH, ANTHROPIC_API_KEY,
 #            GOOGLE_MAPS_KEY, KEY_REGISTRY_SHEET_ID, MAKE_WEBHOOK_URL, QB_* (QuickBooks)
 #   Vars:    SHEET_ID, DRIVE_PROPERTIES_ROOT
+#
+# Staging deploy gate (Sept 2026): this same worker.js also deploys to a SEPARATE
+# Worker service, `maintenance-hub-staging` (Git-connected to the `staging` branch,
+# its own independent dashboard vars — see CREDENTIALS_MAP.md "Staging sandbox").
+# On that service ONLY, add a Var `STAGING` = `1` to make isStaging() explicit
+# (it also self-detects off the staging-* hostname with zero setup). Never add
+# `STAGING=1` to THIS service's (maintenance-hub / prod) dashboard.
 # Rotation note (2026-07-20): WORKER_SECRET_2 is the new value during the
 # zero-downtime swap. Once clients are confirmed on it, set WORKER_SECRET = new
 # value, delete WORKER_SECRET_2, and remove the dual-accept branch in worker.js.

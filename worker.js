@@ -33,11 +33,38 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
 const BUILD_VERSION = '2026-08-24.1';
 
+// ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
+// `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
+// its own SHEET_ID already points at the isolated staging Sheet, so Sheets
+// calls never need branching here (see BUILD_ORDER_v1.0 Phase 1.1: a hostname
+// swap on ONE shared worker.js was rejected July 23 because preview secrets
+// are global — this repo instead ships the SAME worker.js to two independent
+// Worker services with independent env, which is what makes Sheet isolation
+// already correct with zero code change). What's NOT yet isolated per-service
+// is money/PII side effects: QuickBooks writes, Twilio SMS, and Gmail send all
+// read real secrets that may or may not differ on the staging service. This
+// gate stubs those regardless of what's configured, so staging can never move
+// real money or contact a real customer even if its secrets are copies of prod's.
+// Detection: env.STAGING === '1' (a Var Brett can add to ONLY the staging
+// Worker's dashboard — optional, not required) OR the request hostname
+// containing "staging" (true today with zero setup, since the real staging
+// hostname is maintenance-hub-staging.brett-2f8.workers.dev). Computed once
+// per request/cron tick and stashed on env (fresh per invocation in Workers,
+// so this never leaks across requests) so every downstream function that
+// already receives env — qbApi, sendSMS, gmailSendEmail — can check it without
+// a new parameter threaded through every call site.
+function isStaging(env, url) {
+  if (env && env.STAGING === '1') return true;
+  if (url && typeof url.hostname === 'string' && url.hostname.includes('staging')) return true;
+  return false;
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
+    env.__STAGING__ = isStaging(env, url);
     // Role of the caller for this request — null for the admin secret (full access) or a
     // narrow service token; 'tenant'/'vendor'/'owner' when a PIN-issued session token was
     // used. Set inside the auth gate below. Used by the tenant-work-order-submission toggle
@@ -440,6 +467,10 @@ export default {
   // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
   // with delivery off just builds the digest and returns — no messages, negligible cost.
   async scheduled(event, env, ctx) {
+    // No cron triggers are configured on the staging Worker (wrangler.toml's
+    // `staging` branch override removes [triggers] entirely), so this never
+    // actually fires there today — set defensively in case that ever changes.
+    env.__STAGING__ = isStaging(env);
     const cron = event && event.cron;
     // Optimizer Reviewer (B-129) — Mon + Wed 12:00 UTC (8am ET). Reads the last 7 days
     // of Ops_Telemetry, computes metrics, asks Claude for a ranked proposal, logs it to
@@ -4749,6 +4780,10 @@ async function handleInboundSMS(env, request) {
 async function sendSMS(env, to, message) {
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
+  if (env.__STAGING__ ?? isStaging(env)) {
+    console.log(`🧪 STAGING — SMS stubbed (not sent via Twilio) → ${to}: ${message}`);
+    return { staged: true, would_have: { to, message }, note: '🧪 STAGING MODE — logged only, no real SMS sent.' };
+  }
   const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
     method: 'POST',
     headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_SID}:${env.TWILIO_AUTH}`), 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -5988,6 +6023,10 @@ function _utf8B64url(str) {
 
 async function gmailSendEmail(env, { to, subject, html }) {
   if (!to) throw new Error('gmailSendEmail: to required');
+  if (env.__STAGING__ ?? isStaging(env)) {
+    console.log(`🧪 STAGING — Gmail send stubbed (not sent) → ${to}: ${subject}`);
+    return { staged: true, sent: false, would_have: { to, subject }, note: '🧪 STAGING MODE — logged only, no real email sent.' };
+  }
   const accessToken = await gmailAccessToken(env);
   const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
   const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
@@ -6729,7 +6768,8 @@ async function health(env) {
   // PUBLIC read-only self-check so an automated agent can verify the Worker
   // without a browser or auth. Row counts per key tab + which sheet it points at
   // (last 6 chars of SHEET_ID, so staging vs prod is visible without leaking it).
-  const out = { ok: true, sheet_tail: (env.SHEET_ID || '').slice(-6), tabs: {}, ts: Date.now() };
+  // `staging: true` also means QB writes/SMS/Gmail are stubbed — see isStaging().
+  const out = { ok: true, sheet_tail: (env.SHEET_ID || '').slice(-6), staging: !!env.__STAGING__, tabs: {}, ts: Date.now() };
   for (const t of ['Work_Orders','Vendors','Invoices','Config']) {
     try { const rows = await fetchTab(env, t); out.tabs[t] = rows.length; }
     catch (e) { out.ok = false; out.tabs[t] = 'ERROR: ' + (e && e.message ? e.message : String(e)); }
@@ -7054,6 +7094,15 @@ async function qbAccessToken(env) {
 }
 
 async function qbApi(env, path, method = 'GET', body = null, token = null) {
+  // Reads stay live (safe, and staging needs them to render real-shaped test
+  // data) — only writes are stubbed. Every QB call in this file goes through
+  // this one function, so this single check covers every /qb/* write endpoint
+  // and every internal QB-booking path (scope/proposal signatures, trash
+  // invoicing, etc.) without touching any of their call sites.
+  if (method && method !== 'GET' && (env.__STAGING__ ?? isStaging(env))) {
+    console.log(`🧪 STAGING — QuickBooks ${method} ${path} stubbed (nothing sent to Intuit)`);
+    return { staged: true, would_have: { method, path, body: body || null }, note: '🧪 STAGING MODE — QuickBooks call stubbed, nothing booked.' };
+  }
   if (!token) token = await qbAccessToken(env);
   const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
