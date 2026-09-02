@@ -9204,12 +9204,18 @@ function payAlreadyPaid(logRows, idem) {
   return false;
 }
 
+// Returns true/false — the log write must never BLOCK or FAKE a payment/mark-paid result (the
+// QuickBooks write already happened by the time this runs), but a swallowed failure here is
+// exactly how a "paid in QuickBooks" event can end up with zero durable record anywhere (the
+// Aug 2026 Pay_Auth_Log reconciliation gap). Caller retries once and surfaces a loud warning to
+// Brett on a second failure — the log itself stays best-effort, but silence about it does not.
 async function payAuthLog(env, result, detail, amount, by, idem) {
   try {
     await ensureTab(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
     await ensureColumns(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
     await addRow(env, PAY_AUTH_LOG_TAB, { Timestamp: new Date().toISOString(), Result: result, Detail: String(detail || '').slice(0, 300), Amount: amount != null ? String(amount) : '', By: String(by || 'hub'), Idem: String(idem || '').slice(0, 80) });
-  } catch (_) { /* audit is best-effort; never let logging block or fake a payment result */ }
+    return true;
+  } catch (_) { return false; }
 }
 
 // POST /qb/pay-bills { bill_ids:[qbBillId,...], pay_account_id, passphrase, preview?, by? }
@@ -9318,8 +9324,12 @@ async function qbPayBills(env, body) {
   }
   const paidAmt = +results.filter(r => r.paid).reduce((s, r) => s + r.amount, 0).toFixed(2);
   const allPaid = results.every(r => r.paid);
-  await payAuthLog(env, allPaid ? 'paid' : 'partial', results.map(r => (r.vendor || r.vendor_id) + (r.paid ? ' ✓' : ' ✗')).join('; '), paidAmt, by, idem);
-  return json({ ok: true, paid: allPaid, paid_total: paidAmt, vendors_paid: results.filter(r => r.paid).length, results });
+  const logDetail = results.map(r => (r.vendor || r.vendor_id) + (r.paid ? ' ✓' : ' ✗')).join('; ');
+  let logOk = await payAuthLog(env, allPaid ? 'paid' : 'partial', logDetail, paidAmt, by, idem);
+  if (!logOk) logOk = await payAuthLog(env, allPaid ? 'paid' : 'partial', logDetail, paidAmt, by, idem); // one retry — transient Sheets errors are common
+  return json({ ok: true, paid: allPaid, paid_total: paidAmt, vendors_paid: results.filter(r => r.paid).length, results,
+    log_failed: !logOk,
+    ...(!logOk ? { log_warning: 'This batch went through in QuickBooks, but the audit log did NOT save after 2 tries. WRITE THIS DOWN yourself: ' + logDetail + ' — $' + paidAmt + ' — ' + new Date().toISOString() } : {}) });
 }
 
 // POST /qb/clear-ir-bill  { ir_id }

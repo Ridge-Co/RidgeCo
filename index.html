@@ -8215,6 +8215,9 @@ function previewPayBills() {
     var payBtn = document.getElementById('pay-go'); if (payBtn) payBtn.disabled = true;
     toast('Paying…','info');
     api('POST','/qb/pay-bills',{ bill_ids: payable.map(function(b){return b.id;}), pay_account_id: payAcct, passphrase: code, idempotency_key: idem }).then(function(r){
+      // Audit-log write can fail independently of the QuickBooks write succeeding (Sheets hiccup) —
+      // when it does, this is the ONLY record Brett gets, so it must be impossible to miss.
+      if (r && r.log_failed && r.log_warning) { alert('⚠ AUDIT LOG DID NOT SAVE\n\n' + r.log_warning); }
       if (r && r.ok && r.paid) { toast('Marked $' + (Number(r.paid_total)||0).toFixed(2) + ' PAID IN QUICKBOOKS for ' + r.vendors_paid + ' vendor' + (r.vendors_paid===1?'':'s') + ' ✓ (no money was sent by this — that\'s on you, separately)','success'); loadPayables(false); return; }
       if (r && r.ok && !r.paid) { toast('Partly marked $' + (Number(r.paid_total)||0).toFixed(2) + ' PAID IN QUICKBOOKS — some failed, check QuickBooks (still no money sent by this action)','warn'); loadPayables(false); return; }
       if (r && r.duplicate) { toast('Already paid — nothing was charged again.','info'); loadPayables(false); return; }
