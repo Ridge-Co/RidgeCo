@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-08-24.1';
+const BUILD_VERSION = '2026-09-02.1';
 
 export default {
   async fetch(request, env) {
@@ -66,7 +66,11 @@ export default {
       // (scoped, see ROLE_SCOPES). Per-record authz (vendor_id/Owner_ID/PIN) still
       // enforced inside each handler. PIN-login endpoints are PUBLIC (gated by PIN +
       // lockout) so a portal can log in without ever carrying the admin secret.
-      const _tok = request.headers.get('X-Auth-Token') || '';
+      // /vendor-file/view is loaded as an <img src> / direct navigation (Drive-viewer
+      // replacement) so it can't carry a custom header — accept the same session token as a
+      // ?t= query param for this one path, same convention already used by the WO share link
+      // (wo.html?wo=...&t=...). Every other endpoint still requires the header.
+      const _tok = request.headers.get('X-Auth-Token') || (path === '/vendor-file/view' ? (url.searchParams.get('t') || '') : '');
       if (_tok !== env.WORKER_SECRET) {
         // Dedicated contacts-sync token (Google Contacts sync). Accepted ONLY for:
         //   • GET on the list endpoints the sync reads, and
@@ -147,6 +151,7 @@ export default {
         if (path === '/keys-by-property')       return await keysByProperty(env, url);
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
         if (path === '/attachments')            return await getAttachments(env, url);
+        if (path === '/vendor-file/view')       return await viewInternalFile(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         if (path === '/owner-by-pin')           return await ownerByPin(env, url);
@@ -859,6 +864,39 @@ async function getAttachments(env, url) {
   if (!woId && !invoiceId) return json({ error: 'Missing wo_id or invoice_id' }, 400);
   const attachments = await fetchTab(env, 'Attachments');
   return json(attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; }));
+}
+
+// Stream the bytes of a receipt/bill/invoice file (the INTERNAL_TYPES that are deliberately
+// NEVER made anyone-with-link shareable — FEATURE_LOG rule 13, to keep vendor cost data out of
+// customer-facing links) back through the Worker's own Drive access, so the vendor who uploaded
+// it can actually view it. Root cause of "blank/black page when a vendor taps their receipt":
+// the portal's photo gallery/lightbox (vendor.html rcRenderLightbox / the plain <a> fallback for
+// PDFs) was pointing straight at drive.google.com — which 404s/blanks for a file that is
+// correctly kept private. This does NOT change the sharing policy (the file is still never
+// public); it only lets an already-authenticated vendor session read the bytes of a file that's
+// logged against a WO_ID they have legitimate access to, same trust boundary as GET /attachments.
+async function viewInternalFile(env, url) {
+  const woId = url.searchParams.get('wo_id') || '';
+  const fileId = url.searchParams.get('file_id') || '';
+  if (!woId || !fileId) return json({ error: 'wo_id and file_id required' }, 400);
+  try {
+    const attachments = await fetchTab(env, 'Attachments');
+    const row = attachments.find(a => a.Active !== 'FALSE' && a.WO_ID === woId && a.Drive_File_ID === fileId);
+    if (!row) return json({ error: 'File not found for this work order' }, 404);
+    const token = await getAccessToken(env);
+    const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!driveRes.ok || !driveRes.body) return json({ error: 'Could not load file from Drive' }, 502);
+    const mime = row.Mime_Type || driveRes.headers.get('content-type') || 'application/octet-stream';
+    const safeName = (row.File_Name || 'file').replace(/[^\w.\- ]/g, '_');
+    return new Response(driveRes.body, {
+      status: 200,
+      headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
+    });
+  } catch (e) {
+    return json({ error: e.message }, 500);
+  }
 }
 
 async function listAttachments(env, url) {
@@ -6537,7 +6575,7 @@ async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 const ROLE_SCOPES = {
-  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos'],
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view'],
   tenant: ['/tenant-by-pin','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
   owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo'],
 };

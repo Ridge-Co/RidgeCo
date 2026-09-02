@@ -1354,6 +1354,17 @@ function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
 // of an album."
 var _rcWoItems = {};
 
+// Receipt/bill/invoice files are deliberately never made anyone-with-link shareable on Drive
+// (FEATURE_LOG rule 13 — keeps vendor cost data out of customer-facing links), so a direct
+// drive.google.com URL for one of these always 404s/blanks out, even for the vendor who
+// uploaded it. Route these through the Worker's own authenticated /vendor-file/view proxy
+// instead, which streams the bytes the portal already has legitimate access to. Fixes "tap a
+// receipt, get a blank/black page."
+var INTERNAL_FILE_TYPES = ['receipt', 'bill', 'invoice'];
+function internalFileUrl(woId, fileId) {
+  return WORKER + '/vendor-file/view?wo_id=' + encodeURIComponent(woId) + '&file_id=' + encodeURIComponent(fileId) + '&t=' + encodeURIComponent(SECRET);
+}
+
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
   api('GET', '/attachments?wo_id=' + woId).then(function(items) {
@@ -1375,6 +1386,7 @@ function loadPortalAttachments(woId, opts) {
         combined.push({
           fileId: f.Drive_File_ID || '', driveUrl: f.Drive_URL || '#', name: f.File_Name || 'file',
           typeLabel: TYPE_LABELS[type] || 'File', isVideo: isVideo, isViewable: isVideo || isImage,
+          woId: woId, internal: INTERNAL_FILE_TYPES.indexOf(type) !== -1,
         });
       });
     });
@@ -1411,7 +1423,11 @@ function loadPortalAttachments(woId, opts) {
           thumb.setAttribute('data-att-chip', '1');
           thumb.style.cssText = 'position:relative;width:56px;height:56px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border)';
           thumb.onclick = (function(woIdC, idxC){ return function(){ rcOpenLightbox(_rcWoItems[woIdC], idxC); }; })(woId, itemIdx);
-          var imgTag = '<img src="https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w150" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\'">';
+          // Internal (receipt/bill/invoice) files are never Drive-shared (rule 13), so the
+          // public thumbnail endpoint always fails for them — go straight to the authenticated
+          // proxy instead of wasting a request on a thumbnail that can never load.
+          var thumbSrc = item.internal ? internalFileUrl(woId, item.fileId) : ('https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w150');
+          var imgTag = '<img src="' + thumbSrc + '" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\'">';
           var videoBadge = item.isVideo ? '<span style="position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.65);color:#fff;font-size:9px;border-radius:3px;padding:1px 3px">&#9658;</span>' : '';
           var typeBadge = '<span style="position:absolute;left:2px;top:2px;font-size:10px;text-shadow:0 0 3px rgba(0,0,0,.8)">' + icon + '</span>';
           thumb.innerHTML = imgTag + videoBadge + typeBadge;
@@ -1421,7 +1437,11 @@ function loadPortalAttachments(woId, opts) {
           // keep the plain link-out chip, same as before.
           var a = document.createElement('a');
           a.setAttribute('data-att-chip', '1');
-          a.href = f.Drive_URL || '#'; a.target = '_blank';
+          // Same rule-13 fix as the thumbnail above: an internal PDF receipt/invoice's raw
+          // Drive_URL is never shared, so linking straight to it is the other half of the
+          // "blank page" bug. Route through the authenticated proxy instead.
+          a.href = (INTERNAL_FILE_TYPES.indexOf(type) !== -1 && f.Drive_File_ID) ? internalFileUrl(woId, f.Drive_File_ID) : (f.Drive_URL || '#');
+          a.target = '_blank';
           a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
           a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
           el.appendChild(a);
@@ -1470,6 +1490,14 @@ function rcRenderLightbox() {
   if (it.isVideo) {
     body.innerHTML = '<video id="rc-lb-video" controls autoplay playsinline style="max-width:100%;max-height:78vh" src="https://drive.google.com/uc?export=download&id=' + it.fileId + '"></video>' +
       '<div style="text-align:center;margin-top:8px"><a href="' + esc(it.driveUrl) + '" target="_blank" style="color:#8fb8ff;font-size:12px">Won\'t play? Open in Drive &rarr;</a></div>';
+  } else if (it.internal) {
+    // Receipt/bill/invoice: never Drive-shared (rule 13), so both the public thumbnail AND the
+    // driveUrl fallback below 404/blank for these — that mismatch is the "black page" bug. Go
+    // straight to the authenticated proxy, with an "Open" link as the fallback instead of a
+    // Drive link the vendor has no access to.
+    var viewUrl = internalFileUrl(it.woId, it.fileId);
+    body.innerHTML = '<img src="' + esc(viewUrl) + '" style="max-width:100%;max-height:82vh;object-fit:contain" onerror="this.style.display=\'none\';document.getElementById(\'rc-lb-fallback\').style.display=\'block\'">' +
+      '<div id="rc-lb-fallback" style="display:none;text-align:center;margin-top:8px"><a href="' + esc(viewUrl) + '" target="_blank" style="color:#8fb8ff;font-size:12px">Can\'t preview — open file &rarr;</a></div>';
   } else {
     body.innerHTML = '<img src="https://drive.google.com/thumbnail?id=' + it.fileId + '&sz=w1600" style="max-width:100%;max-height:82vh;object-fit:contain" onerror="this.onerror=null;this.src=\'' + esc(it.driveUrl) + '\'">';
   }

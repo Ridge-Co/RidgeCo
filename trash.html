@@ -54,7 +54,16 @@
   .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
   @keyframes sp{to{transform:rotate(360deg)}}
   #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
-  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s}
+  /* pointer-events:none is the fix for "the Close button only registers a tap in one exact
+     spot": unlike vendor.html's toast (a one-off element that's fully removed from the DOM after
+     it fades), this #toast div is static markup that lives at the bottom of the screen forever —
+     opacity:0 makes it invisible when "hidden," but without pointer-events:none it still sits on
+     top of anything underneath it (e.g. the invoice modal's Close/Send row) and swallows clicks
+     there, visible or not. Reproduced live: right after "Invoice sent" fires the toast, tapping
+     the CENTER of Close hit the toast instead of the button — only the very edges, outside the
+     toast's own centered width, ever reached the button. Confirmed via headless Chromium
+     elementFromPoint() before shipping this fix, not guessed. */
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s;pointer-events:none}
   .toast.show{opacity:1}
 </style>
 </head>
@@ -258,7 +267,19 @@ function api(method, path, body){
   var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
   if (body) opts.body = JSON.stringify(body);
   return fetch(WORKER + path, opts).then(function(res){
-    return res.json().then(function(data){
+    // A slow /trash/invoice (QuickBooks customer/item lookup + invoice create + email) can
+    // outlast Cloudflare's own edge timeout. That comes back as a 524 with an HTML/plain-text
+    // body, not JSON — calling res.json() straight on it threw a raw "Unexpected token '<'...
+    // is not valid JSON" SyntaxError with no useful message. Read as text first and parse
+    // ourselves so a non-JSON response surfaces a clear, actionable error instead of that.
+    return res.text().then(function(raw){
+      var data = null;
+      try { data = raw ? JSON.parse(raw) : {}; }
+      catch (e) {
+        throw new Error(res.ok
+          ? 'Server sent back something unexpected — try again.'
+          : 'Server timed out or errored (HTTP ' + res.status + '). The invoice may or may not have gone through — check before resending.');
+      }
       if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
       return data;
     });
