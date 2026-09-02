@@ -53,6 +53,13 @@ export default {
       // self-verifies a dedicated SELFTEST_TOKEN before doing anything — deliberately NOT
       // WORKER_SECRET, which already gates too much (see the security note in CLAUDE.md).
       '/selftest/invoice-extract',
+      // Live canary for the vendor-file-view proxy (Sept 2 2026, rule 142 follow-up): same
+      // pattern — public at the router gate, but selfTestVendorFileView self-verifies
+      // SELFTEST_TOKEN before doing anything. Exists because /vendor-file/view's real auth
+      // path (a vendor's PIN-issued session token as ?t=) can't be exercised from CI without
+      // live vendor credentials; this lets scripts/selftest-vendor-file-view.mjs prove the
+      // actual Drive byte-stream works end to end against a real logged Attachment row.
+      '/selftest/vendor-file-view',
       // Weekly Open Item Report link (Aug 18 session): same pattern — public at the gate, but
       // every handler self-verifies a signed ar-report share token before doing anything.
       '/ar-report/view','/ar-report/pay-link',
@@ -152,6 +159,7 @@ export default {
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
         if (path === '/attachments')            return await getAttachments(env, url);
         if (path === '/vendor-file/view')       return await viewInternalFile(env, url);
+        if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         if (path === '/owner-by-pin')           return await ownerByPin(env, url);
@@ -897,6 +905,42 @@ async function viewInternalFile(env, url) {
   } catch (e) {
     return json({ error: e.message }, 500);
   }
+}
+
+// GET /selftest/vendor-file-view — live canary for the vendor-file-view proxy (rule 142
+// follow-up, Sept 2 2026). viewInternalFile's real auth path is a vendor's PIN-issued session
+// token as ?t=, which CI/a script can't obtain without live vendor credentials — this calls
+// the exact same function (same Attachments-row lookup, same Drive alt=media fetch, same
+// trust boundary as GET /attachments) so a pass here is proof the actual byte-stream works
+// end to end against a real logged Attachment row, not a guess. Reports JSON instead of
+// streaming bytes so scripts/selftest-vendor-file-view.mjs can assert on it directly.
+// Gated by its own SELFTEST_TOKEN, never WORKER_SECRET — same discipline as
+// selfTestInvoiceExtract; CLAUDE.md's standing note is not to widen that shared key.
+// Read-only, no writes, no PII beyond a file name already visible to whoever holds WO_ID +
+// file_id (same as viewInternalFile itself).
+async function selfTestVendorFileView(env, url) {
+  const want = env.SELFTEST_TOKEN;
+  if (!want) return json({ error: 'SELFTEST_TOKEN not configured on this Worker', configured: false }, 503);
+  const got = url.searchParams.get('token') || '';
+  let diff = got.length ^ want.length;
+  for (let i = 0; i < got.length && i < want.length; i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  if (diff !== 0) return json({ error: 'Unauthorized' }, 401);
+  const t0 = Date.now();
+  const res = await viewInternalFile(env, url);
+  const buf = await res.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  const head = Array.from(bytes.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+  let errMsg = null;
+  if (!res.ok) { try { errMsg = JSON.parse(new TextDecoder().decode(bytes)).error; } catch (e) { errMsg = 'non-JSON error body'; } }
+  return json({
+    success: res.ok && bytes.length > 0,
+    status: res.status,
+    content_type: res.headers.get('Content-Type') || '',
+    byte_length: bytes.length,
+    first_bytes_hex: head,
+    error: errMsg,
+    ms: Date.now() - t0,
+  });
 }
 
 async function listAttachments(env, url) {
