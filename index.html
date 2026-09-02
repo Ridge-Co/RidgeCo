@@ -8131,11 +8131,12 @@ function loadPayables(save) {
           ' vendor' + (toPay.length === 1 ? '' : 's') + ' waiting on $' + (parseFloat(res.owed_total) || 0).toFixed(2) +
           ' you have already collected</div>' +
           '<div style="color:var(--muted);font-size:11px;margin-top:3px">The owner has paid these. Pay these first.</div>' +
+          '<div style="color:var(--danger);font-size:10.5px;margin-top:4px;font-weight:bold">⚠ The button below only marks a bill PAID IN QUICKBOOKS — it does not send money. Pay the vendor yourself (check/transfer/Zelle/QuickBooks Bill Pay) first, separately.</div>' +
           (toPay.some(function(r){return r.bill_id;})
             ? '<div id="pay-bar" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--accent2);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
                 '<span style="font-size:11px;color:var(--muted)">Tick the bills to pay, then:</span>' +
                 '<select id="pay-from-acct" style="font-size:11px;padding:4px 6px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px"><option value="">Pay from… (loading)</option></select>' +
-                '<button class="btn small" id="pay-go" onclick="previewPayBills()" style="background:var(--border);color:var(--muted);cursor:default" disabled>Pay 0 selected</button>' +
+                '<button class="btn small" id="pay-go" onclick="previewPayBills()" style="background:var(--border);color:var(--muted);cursor:default" disabled>Mark 0 paid in QB</button>' +
               '</div>'
             : '') +
           '</div>'
@@ -8178,11 +8179,11 @@ function updatePaySelection() {
   if (chk.length) {
     btn.disabled = false;
     btn.style.background = 'var(--accent2)'; btn.style.color = '#f3f5f8'; btn.style.cursor = 'pointer';
-    btn.textContent = 'Pay ' + chk.length + ' selected — $' + total.toFixed(2);
+    btn.textContent = 'Mark ' + chk.length + ' paid in QB — $' + total.toFixed(2);
   } else {
     btn.disabled = true;
     btn.style.background = 'var(--border)'; btn.style.color = 'var(--muted)'; btn.style.cursor = 'default';
-    btn.textContent = 'Pay 0 selected';
+    btn.textContent = 'Mark 0 paid in QB';
   }
 }
 
@@ -8200,21 +8201,22 @@ function previewPayBills() {
     var skipped = safeArray(p.bills).filter(function(b){ return !b.will_pay; });
     if (!payable.length) { toast('None of those are payable (already paid or missing).','info'); loadPayables(false); return; }
     var lines = payable.map(function(b){ return '  • ' + (b.vendor||'vendor') + (b.doc?' #'+b.doc:'') + ' — $' + (Number(b.balance)||0).toFixed(2); }).join('\n');
-    var msg = 'Pay ' + payable.length + ' bill' + (payable.length===1?'':'s') + ' — $' + (Number(p.total)||0).toFixed(2) + ' total\n' +
-              'FROM: ' + (p.pay_account_name || 'the selected account') + '\n\n' + lines +
+    var msg = 'Mark ' + payable.length + ' bill' + (payable.length===1?'':'s') + ' PAID IN QUICKBOOKS — $' + (Number(p.total)||0).toFixed(2) + ' total\n' +
+              'FROM (bookkeeping only): ' + (p.pay_account_name || 'the selected account') + '\n\n' + lines +
               (skipped.length ? '\n\nSkipped ' + skipped.length + ' (already paid / not found).' : '') +
-              '\n\nThis pays the vendors in QuickBooks. Continue?';
+              '\n\n⚠ THIS DOES NOT SEND ANY MONEY. It only records these bills as paid in QuickBooks.\n' +
+              'If you have not ALREADY paid these vendors yourself (check, bank transfer, Zelle, QuickBooks Bill Pay, etc.), do that FIRST — separately — before continuing.\n\nContinue and mark them paid in QuickBooks?';
     if (!confirm(msg)) return;
     // Second factor — passphrase, entered fresh every batch, never stored.
-    var code = prompt('Final step — enter your pay-authorization passphrase to release $' + (Number(p.total)||0).toFixed(2) + '.\n(This is required for every payment and is never saved.)');
+    var code = prompt('Final step — enter your pay-authorization passphrase to mark $' + (Number(p.total)||0).toFixed(2) + ' PAID IN QUICKBOOKS.\nReminder: this does not send money — only you can do that, separately.\n(This is required for every batch and is never saved.)');
     if (code == null || !code.trim()) { toast('Cancelled — no code entered','info'); return; }
     // One idempotency key per authorized batch — a double-tap/retry with this key can't pay twice.
     var idem = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('idem-' + Date.now() + '-' + Math.random().toString(36).slice(2));
     var payBtn = document.getElementById('pay-go'); if (payBtn) payBtn.disabled = true;
     toast('Paying…','info');
     api('POST','/qb/pay-bills',{ bill_ids: payable.map(function(b){return b.id;}), pay_account_id: payAcct, passphrase: code, idempotency_key: idem }).then(function(r){
-      if (r && r.ok && r.paid) { toast('Paid $' + (Number(r.paid_total)||0).toFixed(2) + ' to ' + r.vendors_paid + ' vendor' + (r.vendors_paid===1?'':'s') + ' ✓','success'); loadPayables(false); return; }
-      if (r && r.ok && !r.paid) { toast('Partly paid $' + (Number(r.paid_total)||0).toFixed(2) + ' — some failed, check QuickBooks','warn'); loadPayables(false); return; }
+      if (r && r.ok && r.paid) { toast('Marked $' + (Number(r.paid_total)||0).toFixed(2) + ' PAID IN QUICKBOOKS for ' + r.vendors_paid + ' vendor' + (r.vendors_paid===1?'':'s') + ' ✓ (no money was sent by this — that\'s on you, separately)','success'); loadPayables(false); return; }
+      if (r && r.ok && !r.paid) { toast('Partly marked $' + (Number(r.paid_total)||0).toFixed(2) + ' PAID IN QUICKBOOKS — some failed, check QuickBooks (still no money sent by this action)','warn'); loadPayables(false); return; }
       if (r && r.duplicate) { toast('Already paid — nothing was charged again.','info'); loadPayables(false); return; }
       if (r && r.locked) { toast('Locked — too many wrong codes. Wait a few minutes.','error'); if(payBtn) payBtn.disabled=false; return; }
       if (r && r.bad_code) { toast('That code did not match. Nothing was paid.','error'); if(payBtn) payBtn.disabled=false; return; }
