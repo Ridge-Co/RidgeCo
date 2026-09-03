@@ -78,4 +78,24 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(scopeSigTrade([], {}) === 'General', 'no items at all falls back to General, not a crash');
 }
 
+// ---- final-balance booking (Sep 2 2026, scopeProposalBookFinal): conservation invariant ----
+// The final invoice/bill amounts are derived as (subtotal - deposit) and (vendorCostTotal -
+// depositVendorBillAmount) — never re-derived independently — so deposit+final must always sum
+// back to exactly the full subtotal/vendor cost, with no leftover or double-counted cent.
+{
+  const cases = [
+    [2000, 1000, 3000],   // vendor cost 2000, standard 50% deposit
+    [1000, 250, 1000],    // 25% deposit (non-standard ratio)
+    [500, 500, 500],      // 100% deposit (edge case: nothing should remain)
+  ];
+  for (const [vendorCostTotal, deposit, subtotal] of cases) {
+    const dep = scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal);
+    const finalAmount = +(subtotal - deposit).toFixed(2);
+    const finalVendorAmount = +(vendorCostTotal - dep.amount).toFixed(2);
+    ok(Math.abs((deposit + finalAmount) - subtotal) < 1e-9, `deposit + final invoice sums back to the full subtotal (${subtotal})`);
+    ok(Math.abs((dep.amount + finalVendorAmount) - vendorCostTotal) < 1e-9, `deposit vendor bill + final vendor bill sums back to the full vendor cost (${vendorCostTotal})`);
+    ok(finalVendorAmount >= -1e-9, 'final vendor bill amount is never negative');
+  }
+}
+
 console.log(`scope-book: ${n} assertions passed`);

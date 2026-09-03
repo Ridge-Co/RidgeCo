@@ -175,6 +175,15 @@ function load(){
         +'</div>';
       if(booked){
         html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created.</div>';
+        // Final-balance booking only exists for the new scope e-sign system (Sep 2 2026) — the
+        // deposit was already booked above; this is the "vendor finished, now invoice the rest" step.
+        if(r.kind==='scope'){
+          if(r.qb_final_invoice_id){
+            html+='<div class="booked">✓ Final balance: invoice'+(r.qb_final_invoice_number?(' #'+esc(r.qb_final_invoice_number)):'')+(r.qb_final_bill_number?(' · bill #'+esc(r.qb_final_bill_number)):'')+' created.</div>';
+          } else {
+            html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\',\'final\')">Job done — invoice final balance</button></div>';
+          }
+        }
       } else {
         html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\')">Preview &amp; create invoice + bill</button></div>';
       }
@@ -184,15 +193,15 @@ function load(){
   }).catch(function(e){document.getElementById('list').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
 }
 
-function bookPath(kind){return kind==='scope' ? '/scope-proposal/book' : '/proposal/book';}
+function bookPath(kind,phase){return kind==='scope' ? (phase==='final' ? '/scope-proposal/book-final' : '/scope-proposal/book') : '/proposal/book';}
 
-function preview(id,kind){
-  cur={id:id,kind:kind};
-  document.getElementById('m-title').textContent='Preview — create in QuickBooks';
+function preview(id,kind,phase){
+  cur={id:id,kind:kind,phase:phase||''};
+  document.getElementById('m-title').textContent=phase==='final' ? 'Preview — final balance in QuickBooks' : 'Preview — create in QuickBooks';
   document.getElementById('m-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
   document.getElementById('m-confirm').classList.add('hide');
   document.getElementById('modal').classList.add('open');
-  api('POST',bookPath(kind),{id:id,preview_only:true}).then(function(r){
+  api('POST',bookPath(kind,phase),{id:id,preview_only:true}).then(function(r){
     if(!r||!r.ok||!r.preview){document.getElementById('m-body').innerHTML='<div class="warn">'+esc((r&&r.error)||'Could not build preview')+'</div>';return;}
     var p=r.preview,h='';
     var subhead=esc(p.property)+' · '+esc(p.signer)+(p.option?(' · Option '+esc(p.option)):'');
@@ -203,14 +212,14 @@ function preview(id,kind){
     if(p.already&&(p.already.invoice||p.already.bill)){h+='<div class="warn">Already partly booked (invoice '+esc(p.already.invoice||'—')+', bill '+esc(p.already.bill||'—')+'). Confirm will only create what is missing.</div>';}
     if(p.warnings&&p.warnings.length){h+='<div class="warn">⚠ '+p.warnings.map(esc).join('<br>⚠ ')+'</div>';}
     document.getElementById('m-body').innerHTML=h;
-    var b=document.getElementById('m-confirm');b.classList.remove('hide');b.textContent='Confirm — create in QuickBooks';b.disabled=false;
+    var b=document.getElementById('m-confirm');b.classList.remove('hide');b.textContent=phase==='final' ? 'Confirm — invoice final balance' : 'Confirm — create in QuickBooks';b.disabled=false;
   }).catch(function(e){document.getElementById('m-body').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
 }
 
 function confirmBook(btn){
   if(!cur)return;
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Creating…';
-  api('POST',bookPath(cur.kind),{id:cur.id}).then(function(r){
+  api('POST',bookPath(cur.kind,cur.phase),{id:cur.id}).then(function(r){
     if(r&&r.ok){
       var msg='Created'+(r.invoice_number?(' invoice #'+r.invoice_number):' invoice')+(r.bill_number?(' + bill #'+r.bill_number):(r.bill_id?' + bill':''));
       document.getElementById('m-body').innerHTML='<p style="font-weight:700;color:var(--green)">✓ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');
