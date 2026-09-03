@@ -1418,12 +1418,22 @@ function scopeParseItems(s) { try { const a = JSON.parse((s && s.Line_Items) || 
 // later on the item editor.
 function scopeCleanVariants(it) {
   const raw = Array.isArray(it && it.variants) ? it.variants : null;
+  // price_override (Sep 2 2026, Brett): lets an admin set the FINAL customer price directly on a
+  // variant, bypassing calcTieredEstimate's cost+markup formula entirely for that variant. Stored
+  // alongside vendor_cost (never replacing it) so vendor-bill proration at signing — which is
+  // always vendor_cost × deposit/subtotal, see scopeSigVendorBillAmount — is completely unaffected
+  // by a manual price override. null/blank/non-positive means "no override, auto-calc as before".
   let variants = (raw && raw.length)
-    ? raw.map((v, i) => ({
-        key: (v && v.key) || ('v' + (i + 1)), label: (v && v.label) || '',
-        vendor_cost: Math.max(0, parseFloat(v && v.vendor_cost) || 0),
-      }))
-    : [{ key: 'v1', label: '', vendor_cost: Math.max(0, parseFloat(it && (it.cost != null ? it.cost : it.vendor_cost)) || 0) }];
+    ? raw.map((v, i) => {
+        const po = v && v.price_override;
+        const poNum = (po === '' || po === null || po === undefined) ? null : parseFloat(po);
+        return {
+          key: (v && v.key) || ('v' + (i + 1)), label: (v && v.label) || '',
+          vendor_cost: Math.max(0, parseFloat(v && v.vendor_cost) || 0),
+          price_override: (poNum != null && isFinite(poNum) && poNum >= 0) ? +poNum.toFixed(2) : null,
+        };
+      })
+    : [{ key: 'v1', label: '', vendor_cost: Math.max(0, parseFloat(it && (it.cost != null ? it.cost : it.vendor_cost)) || 0), price_override: null }];
   if (!variants.length) variants = [{ key: 'v1', label: '', vendor_cost: 0 }];
   let selected = (it && it.selected_key) || variants[0].key;
   if (!variants.some(v => v.key === selected)) selected = variants[0].key;
@@ -1742,8 +1752,13 @@ function scopeItemsPricing(items, pc) {
   const priced = items.map(it => {
     const rawVariants = (it.variants && it.variants.length) ? it.variants : [{ key: 'v1', label: '', vendor_cost: 0 }];
     const variants = rawVariants.map(v => {
-      const calc = calcTieredEstimate(v.vendor_cost, pc);
-      return { key: v.key, label: v.label, price: calc ? calc.finalPrice : 0, vendor_cost: +(v.vendor_cost || 0).toFixed(2) };
+      // Manual price override (Sep 2 2026) wins outright — skips calcTieredEstimate for this
+      // variant entirely. vendor_cost is still carried through unchanged for the later vendor-bill
+      // proration at signing, so overriding the customer price never touches what the vendor is owed.
+      const hasOverride = v.price_override != null && isFinite(v.price_override) && v.price_override >= 0;
+      const calc = hasOverride ? null : calcTieredEstimate(v.vendor_cost, pc);
+      const price = hasOverride ? +(+v.price_override).toFixed(2) : (calc ? calc.finalPrice : 0);
+      return { key: v.key, label: v.label, price, vendor_cost: +(v.vendor_cost || 0).toFixed(2), price_override: hasOverride ? price : null };
     });
     let selKey = it.selected_key || variants[0].key;
     if (!variants.some(v => v.key === selKey)) selKey = variants[0].key;

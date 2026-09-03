@@ -51,6 +51,8 @@
   .vrow{display:flex;gap:6px;margin-bottom:5px;align-items:center;}
   .vrow input.v-label{flex:1.3;}
   .vrow input.v-cost{flex:1;}
+  .vrow input.v-price-override{flex:1;border-color:#c8860d;}
+  .vrow input.v-price-override:not(:placeholder-shown){background:#fff8e8;}
   .owner-note{font-size:11px;line-height:1.5;padding:8px 10px;border-radius:var(--radius);margin-bottom:10px;}
   .owner-note.ok{background:#eaf6ee;color:var(--accent2);}
   .owner-note.warn{background:#fdf2e2;color:#9a6b00;}
@@ -580,11 +582,13 @@ function variantsBlock(it){
     return '<div class="vrow" data-key="'+esc(v.key)+'">'+
       (multi?'<input class="v-label" placeholder="Option label (e.g. Repair Roof)" value="'+esc(v.label||'')+'">':'')+
       '<input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $" value="'+(v.vendor_cost?esc(v.vendor_cost):'')+'">'+
+      '<input class="v-price-override" type="number" step="0.01" placeholder="Override final price $ (optional)" value="'+(v.price_override?esc(v.price_override):'')+'">'+
       (multi?'<button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>':'')+
     '</div>';
   }).join('');
   return '<div class="variants"><label>Pricing — vendor cost per option (private; never shown to the customer)</label>'+
     '<div class="variant-rows">'+rows+'</div>'+
+    '<div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave "Override final price" blank to auto-calculate from vendor cost + standard markup. Set it to lock the exact customer price/invoice amount for that option instead — vendor cost still tracks correctly either way.</div>'+
     '<button type="button" class="btn small secondary" onclick="addVariant(this)">+ Add alternate option (e.g. Repair vs Replace)</button></div>';
 }
 function renderItems(){
@@ -616,7 +620,7 @@ function addVariant(btn){
   }
   var n=rows.querySelectorAll('.vrow').length;
   var div=document.createElement('div'); div.className='vrow'; div.dataset.key='v'+(n+1);
-  div.innerHTML='<input class="v-label" placeholder="Option label (e.g. Replace Roof)"><input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $"><button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>';
+  div.innerHTML='<input class="v-label" placeholder="Option label (e.g. Replace Roof)"><input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $"><input class="v-price-override" type="number" step="0.01" placeholder="Override final price $ (optional)"><button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>';
   rows.appendChild(div);
 }
 function removeVariant(btn){
@@ -634,15 +638,16 @@ function collectItems(){
   document.querySelectorAll('#items-wrap .li').forEach(function(el){
     var variants=[];
     el.querySelectorAll('.vrow').forEach(function(vr,i){
-      var lblEl=vr.querySelector('.v-label'), costEl=vr.querySelector('.v-cost');
-      variants.push({ key:vr.dataset.key||('v'+(i+1)), label:lblEl?lblEl.value.trim():'', vendor_cost:parseFloat(costEl&&costEl.value)||0 });
+      var lblEl=vr.querySelector('.v-label'), costEl=vr.querySelector('.v-cost'), poEl=vr.querySelector('.v-price-override');
+      var poVal=poEl&&poEl.value!==''?parseFloat(poEl.value):null;
+      variants.push({ key:vr.dataset.key||('v'+(i+1)), label:lblEl?lblEl.value.trim():'', vendor_cost:parseFloat(costEl&&costEl.value)||0, price_override:(poVal!=null&&isFinite(poVal)&&poVal>=0)?poVal:null });
     });
-    if(!variants.length) variants=[{key:'v1',label:'',vendor_cost:0}];
+    if(!variants.length) variants=[{key:'v1',label:'',vendor_cost:0,price_override:null}];
     out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value, variants:variants, selected_key:variants[0].key });
   });
   return out;
 }
-function addItem(){ var items=collectItems(); var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0); items.push({ id:'li'+(maxn+1), area:'', trade:'', qty:'', description:'', note:'', variants:[{key:'v1',label:'',vendor_cost:0}], selected_key:'v1' }); state.current.line_items=items; renderItems(); }
+function addItem(){ var items=collectItems(); var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0); items.push({ id:'li'+(maxn+1), area:'', trade:'', qty:'', description:'', note:'', variants:[{key:'v1',label:'',vendor_cost:0,price_override:null}], selected_key:'v1' }); state.current.line_items=items; renderItems(); }
 function removeItem(btn){ var el=btn.closest('.li'); var id=el.dataset.id; state.current.line_items=collectItems().filter(function(it){ return it.id!==id; }); renderItems(); }
 async function saveItems(){
   var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
