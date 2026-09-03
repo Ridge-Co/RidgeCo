@@ -1,5 +1,5 @@
 # BrettOS Capture Inbox
-**Version:** v1.30 | **Last Updated:** Aug 22, 2026
+**Version:** v1.31 | **Last Updated:** Sep 2, 2026
 **Rule:** This is Brett's zero-friction brain-dump inbox. Brett captures thoughts in any form (typed, pasted, voice, photo of handwriting, forwarded email). Claude parses every dump into structured items here, links them to existing plans/backlog, extracts hidden sub-projects, and flags open questions. Items "graduate" to BACKLOG.md or a business plan once they become real work.
 
 ---
@@ -40,6 +40,8 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - CAP-030 — BarrelCo → Community Forklift fulfillment blocked ~2 weeks by truck tow-readiness (now fixed, drop-off Fri); real opportunity cost. Drove the "Stalled & costing you" priority surface + the priority-engine ranking (who's-waiting + deadline + $) → B-153. ($ figure in private barrelco.md)
 - CAP-031 — Cabin logistics/moving checklist, pulled from ClickUp before disconnect (Cabin — reference list) → B-230
 - CAP-032 — Cabin maintenance punch list, pulled from ClickUp before disconnect (Cabin — reference list, 21 items) → B-230
+- CAP-033 — Reviewed a "4 Claude upgrades" video (Aug 22) against what Brett already runs (see full entry below)
+- CAP-034 — Scope→estimate→signature→invoice workflow is split across 2 pages, needs consolidating (Ridge Co Hub — UX debt, NEW)
 <!-- QUICK-INDEX:END -->
 
 
@@ -501,6 +503,18 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - Links: B-230 (task-system build this + CAP-031 are the first real content for), B-091/CAP-024/CAP-025 (BrettOS Tasks sheet, eventual canonical home)
 
 - CAP-033 — Reviewed a "4 Claude upgrades" video (Aug 22) against what Brett already runs — same discipline as the CAP-029 (Ray Fu) and Aug 21 nine-skills reviews. Four ideas in the video: (1) adversarial multi-persona "council" idea pre-mortem before building — **real gap, no equivalent existed** → built `brett-council.skill` (kill/reshape/build verdict + cheapest test, sits upstream of brett-amplify). (2) Verify-before-claiming-done, incl. Playwright screenshot + click-through + form-stress-test on a built page — backend half already covered by `test-verified-builds`/`ridgeco-validate`; the visual/interaction half was a real gap → extended `test-verified-builds.skill` with a new Step 3 (Playwright pass at both viewports, ties directly to the new `UI_QA_CHECKLIST.md`). (3) Context management via a session-handoff skill before clearing — **already covered, arguably more refined**, by `SESSION_EFFICIENCY_PROTOCOL_v1.0`'s checkpoint-and-resume (`SESSION_STATE.md` + `resume ridgeco`, phase-boundary triggered rather than token-count triggered). (4) Parallel subagents + a `/goal`-style loop where a **separate evaluator model** grades "done" rather than the builder grading itself — subagent fan-out already covered by the Protocol's Rule 2; the separate-evaluator piece is a live working proof of the exact mechanism the existing **B-211** (`judge()` independent verifier write-gate, still unbuilt) is designed around — treat as reinforcement for prioritizing B-211 next time autonomy work comes up, not a new backlog item. Both `.skill` files delivered same session — **pending Brett's Save confirmation, not yet confirmed saved.**
+
+### CAP-034 — Scope→estimate→signature→invoice workflow is split across 2 pages, needs consolidating (Ridge Co Hub — UX debt)
+- Raw (Sep 2 2026, after building manual price overrides + final-balance invoice booking on the scope proposal flow): "make a note for the next time we work on ridgeco: we need to organize these better. the scope>estimate>signature>invoice workflow should exist on one page not 2."
+- Current shape, as it stands after this session's builds: a scope's full lifecycle already spans **2 separate pages** — `scope-creator.html` (create scope → gather estimate → set pricing/overrides → generate + link the customer-facing proposal) and `signed-proposals.html` (review signed proposals → book the deposit invoice/bill → book the final-balance invoice/bill). Brett has to navigate away from the scope he's working on to go book money on it, and back again to check/adjust anything upstream — the whole lifecycle has no single home.
+- Type: wishlist (UX consolidation, not a bug — everything on both pages currently works, see rules 142/143)
+- Status: new
+- Sub-items (not scoped/designed yet, just captured):
+  1. Decide the right shape: fold `signed-proposals.html`'s booking actions into `scope-creator.html` as a later-stage panel on the same scope record (probably the more natural fit, since a scope already IS the one record spanning the whole lifecycle) vs. some other single-page redesign.
+  2. `signed-proposals.html` also serves the OLDER B-076 registry-based proposal system (`/proposal/signatures`, `/proposal/book` — see rule 143's note that this system has no final-balance concept and wasn't touched this session) — any consolidation needs to either fold that system in too or explicitly decide it stays separate/legacy.
+  3. Worth doing as its own deliberate design pass, not a quick patch — this is exactly the kind of thing `ridgeco-map`/CODEMAP should ground before touching, and probably deserves a short design session (where do estimate-gathering, pricing, e-sign, and QuickBooks booking each live on one page without becoming cluttered) before code gets written.
+- Links: touches the same surface as rules 142 (manual price override, scope-creator.html) and 143 (final-balance booking, signed-proposals.html) — both still fresh/unverified live as of this capture, so this consolidation should wait until Brett's confirmed those work, not compete with verifying them.
+- ❓ Fold into `scope-creator.html`, or a new single page that replaces both? Brett's framing ("should exist on one page not 2") suggests the former but wasn't explicit.
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
