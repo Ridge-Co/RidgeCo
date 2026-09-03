@@ -275,7 +275,7 @@ export default {
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
         if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
-        if (path === '/owner/add')                return await addRow(env, 'Owners', body);
+        if (path === '/owner/add')                return await addOwnerWithQBSync(env, body);
         if (path === '/owner/update')             return await updateRow(env, 'Owners', body.id, body.fields);
         if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
@@ -9186,6 +9186,41 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
   if (!id) throw new Error(qbFault(r) || 'could not create QB customer');
   if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) {} }
   return id;
+}
+
+// POST /owner/add — Brett (Sep 2 2026): "sometimes there is no customer in qb until we send the
+// first invoice... i want that fixed so that we have customers added upon creation of the
+// customer in the hub." Confirmed from live code: qbFindOrCreateCustomer was ONLY ever called
+// lazily, from inside the various invoice-booking functions (scopeProposalBook,
+// scopeProposalBookFinal, createInvoice, etc.) — never at the point an Owner is actually created
+// in the Hub. This wraps the existing plain `addRow(env, 'Owners', body)` (unchanged, still the
+// single source of truth for what actually lands in the Owners tab) with a best-effort QuickBooks
+// sync right after.
+//   • Reuses qbFindOrCreateCustomer AS-IS — same look-before-create/mapping-clash safety it
+//     already has for the lazy path, just called eagerly now instead of at invoice time.
+//   • Fully non-blocking to the response: a QuickBooks outage, a missing name, or any other sync
+//     failure NEVER fails owner creation itself — it's wrapped in its own try/catch and the
+//     original addRow response is always what's returned. The existing lazy call sites are
+//     UNCHANGED and remain the fallback if eager sync didn't happen for any reason (owner created
+//     with no name yet, QuickBooks down at the moment, etc.) — this is additive, not a replacement.
+//   • Skips entirely if the new owner has no resolvable QB DisplayName yet (qbOwnerDisplayName
+//     returns '') — nothing to create against, same guard qbFindOrCreateCustomer itself already
+//     enforces, checked here first just to avoid a pointless QB call.
+async function addOwnerWithQBSync(env, body) {
+  const r = await addRow(env, 'Owners', body);
+  try {
+    const rd = await r.clone().json();
+    const ownerId = rd && rd.id;
+    const dn = qbOwnerDisplayName(body);
+    if (ownerId && dn) {
+      const token = await qbAccessToken(env);
+      await qbFindOrCreateCustomer(env, { ...body, ID: ownerId }, dn, token);
+    }
+  } catch (e) {
+    // Best-effort only — swallow. The owner record itself is already saved (see `r` above); the
+    // lazy qbFindOrCreateCustomer call at actual invoice time is still there as a safety net.
+  }
+  return r;
 }
 
 // Find (by stored id) or create a QB Vendor from a Vendors row; persists QBO_Vendor_ID back.
