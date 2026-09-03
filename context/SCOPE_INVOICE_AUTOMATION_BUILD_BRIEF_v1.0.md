@@ -7,6 +7,29 @@ where a QuickBooks invoice gets created/edited/voided **without a human clicking
 specific action**. Write-up first, code second, same as `STAGING_DEPLOY_GATE_BUILD_BRIEF_v1.0.md`
 and `EMAIL_INTAKE_BUILD_BRIEF_v1.0.md` did for their own money/infra-adjacent builds.
 
+## Decisions locked (Brett, Sep 2 2026 follow-up)
+1. **Draft invoice DOES get the customer's email attached from creation** — not held back until
+   signing. Doesn't cause an early send (QuickBooks only emails on an explicit send action), just
+   means the invoice looks fully attached to a customer from the moment it exists rather than
+   "still being drafted."
+2. **`scopeProposalBook` (rule 123's deposit-booking button) becomes fully redundant** once this
+   ships — the draft invoice created at estimate time already IS the deposit invoice by the time
+   signing happens. `signed-proposals.html`'s deposit-side UI goes away entirely (not simplified,
+   removed) once this build is live and verified.
+3. **No SyncToken-staleness handling needed** — Brett confirmed there's no workflow where he'd
+   hand-edit the same invoice directly in QuickBooks before signing ("if the system works
+   correctly there would be no need"). Simplifies the implementation: no re-fetch-on-conflict
+   logic required, just persist and reuse the SyncToken normally.
+4. **Final-balance invoicing (rule 143) stays a manual "job done" trigger, NOT automated** — but
+   Brett wants it **better organized**, specifically: a view on the Hub showing jobs where the
+   deposit has been paid (not just invoiced — actually paid), prompting review of which open jobs
+   are ready for their final invoice. Rule 143's current button (buried in `signed-proposals.html`,
+   only visible per-row once you're already looking at that specific signature) doesn't surface
+   this proactively — it requires already knowing to go look. See **new section below**.
+5. **Customer-facing decline button — confirmed, build it.** See **new section below**.
+6. **AUTONOMY_GUARDRAILS_v1.0 addendum wording** — Brett wants to read it before it's added.
+   Drafted below, not yet applied to the actual file.
+
 ## What Brett asked for (verbatim, Sep 2 2026)
 "I want to add generating the invoice and taking the customer directly to the invoice once they
 have signed. this will require generating the invoice and pushing to QB without manual
@@ -120,50 +143,99 @@ scope created → line items priced (incl. rule 142 overrides) → PROPOSAL GENE
   which is Brett learning that outcome and acting on it, not something the system detects on its
   own.
 
-## Open questions — need Brett's answers before this gets built
-1. **Does the draft invoice get a `BillEmail` set from the start**, or only once signed? Setting
-   it early doesn't cause an auto-send (confirmed above), but it does mean the invoice already has
-   a real customer attached from the moment it's created — worth confirming that's fine rather
-   than something to withhold until signing.
-2. **What happens to `scopeProposalBook` (rule 123)?** Once step (1)/(2) exist, has it become
-   fully redundant (the draft invoice already IS the deposit invoice) or does it stay as the
-   explicit "confirm this is really final" click before a proposal counts as booked? Leaning
-   toward: keep it, but change its job from "create" to "verify + mark Booked" — needs Brett's
-   call, not guessed.
-3. **Multi-edit safety**: if Brett regenerates the proposal several times before the customer
-   signs, each regeneration is a sparse update carrying the latest `SyncToken` — fine as long as
-   nothing else touches that invoice in between. Is there any workflow where Brett might also
-   hand-edit the same invoice directly in QuickBooks before signing? If so the Hub needs to
-   re-fetch `SyncToken` on a rejected write rather than assuming its stored copy is current.
-4. **Final-balance invoice (rule 143)** — should IT also get created as a draft automatically (at
-   $0 or unset until the job's actually done), or does it stay the fully manual
-   "Job done → invoice final balance" click that rule 143 just built? Nothing in Brett's message
-   asked for automating the final half — this brief assumes rule 143 stays manual as-is unless
-   told otherwise.
-5. **What exactly triggers "customer refuses"** in Brett's own workflow — does he always know
-   this by some explicit signal (a call, a text, a link that visibly expired without signing), or
-   does this need a customer-facing "decline" action on `scope-proposal.html` itself (a button the
-   customer can click, distinct from Brett noticing and canceling it himself)? The brief above
-   only covers Brett-initiated cancellation; a customer-initiated decline would need its own
-   (PUBLIC, token-gated like `scopeProposalSign`) endpoint.
-6. **AUTONOMY_GUARDRAILS_v1.0.md addendum wording** — this brief proposes the carve-out language
-   above; worth Brett reading and confirming it says exactly what he means (invoice
-   create/update/void only, nothing about payment) before it goes in as a standing rule for every
-   future session.
+## New: "Deposit paid — ready for final invoice" queue (answers decision #4 above)
+Rule 143 built the ABILITY to book a final invoice but not a way to know WHICH jobs are ready for
+one — Brett has to already be looking at a specific signed-proposal row to see the button. What's
+needed instead is a proactive list, most naturally a new section on whatever page ends up owning
+the booked-proposal view (today `signed-proposals.html`; after CAP-034's consolidation, wherever
+that lands):
+- **Filter condition:** deposit invoice's QuickBooks payment status is actually **Paid** (not
+  merely "invoiced, sitting open") — this needs a real QB payment-status check, the same kind of
+  check `qbPayables`/`GET /qb/payables` already does elsewhere in this codebase (see
+  `ridgeco-who-to-pay-unknown-no-vendor.md`'s notes on how that state gets read), not just "does
+  `QB_Invoice_ID` exist." A deposit invoice that's been sent but not yet paid should NOT appear
+  here — the whole point is surfacing jobs Brett can actually invoice the rest of, i.e. the
+  customer has already put money down.
+- **AND no final invoice booked yet** (`QB_Final_Invoice_ID` blank on that `Scope_Signatures` row
+  — this field already exists from rule 143).
+- Renders as its own labeled section/card list — "💰 Deposit paid, ready for final invoice (N)" —
+  each row jumping straight to the existing rule-143 "Job done — invoice final balance"
+  preview/confirm flow, not a new booking mechanism, just a better on-ramp to the one that
+  already works.
+- Open detail for the future build session: does this need a poll/refresh against QuickBooks
+  payment status (cost-metered, same on-demand-not-automatic convention `QUALITY_BAR_v1.0.md`
+  row 9 already established for the receipt-duplicate-checker), or can it piggyback on data the
+  Hub already has cached from elsewhere? Needs a look at what's actually available before this
+  gets scoped further — not answered here.
+
+## New: customer-facing decline button (answers decision #5 above)
+A new button on `scope-proposal.html` itself, alongside the existing sign flow — the customer's
+own explicit "no thanks" instead of relying on Brett noticing and canceling on their behalf.
+- **New endpoint** `POST /scope-proposal/decline` — PUBLIC, token-gated with the SAME link token
+  `scopeProposalView`/`scopeProposalSign` already use (identical auth pattern to
+  `scopeProposalLinkAuth`, no new token type needed).
+- Voids `Scopes.Draft_Invoice_ID` if one exists (the whole reason this needs to exist server-side
+  and not just be a "close the tab" no-op — an unattended-created invoice needs an unattended-safe
+  way to get cleaned up when the answer is no).
+- Sets `Scopes.Status = 'declined'` (distinct from Brett-initiated `'cancelled'` from the
+  `/scope/cancel` endpoint below — same outcome, different origin, worth keeping visible for
+  Brett's own pattern-spotting later: how often do customers actually decline vs. how often does
+  Brett cancel for some other reason).
+- Idempotent — re-declining an already-declined (or already-signed — can't decline after signing)
+  scope returns the existing state rather than erroring or double-voiding.
+- `scope-proposal.html` UI: a plain, low-emphasis "This isn't something I want to move forward
+  with" link/button near the sign flow, not styled to compete with Confirm/Sign — same
+  "confirm you understand this is permanent" pattern this codebase already uses for the
+  `end_conversation`-style irreversible actions elsewhere (a simple "are you sure" before it
+  actually calls the endpoint).
+
+## Draft AUTONOMY_GUARDRAILS_v1.0.md addendum (Brett to read/approve before this is applied)
+Proposed text, to be added as its own clearly-scoped subsection of that file once Brett confirms
+the wording says exactly what he means:
+
+> **Amendment (Sep 2 2026) — scope proposal invoice lifecycle, narrow carve-out.**
+> For scope proposals specifically (`Scopes`/`Scope_Signatures`, the e-sign system from rule 123
+> onward), Brett has authorized the Hub to CREATE, EDIT (sparse-update), and VOID a customer
+> deposit invoice in QuickBooks **without a per-action human confirmation** — this is the one
+> exception to the Rung-3 "every QuickBooks write is gated" rule elsewhere in this document.
+> **This carve-out covers invoice existence only — never payment.** `/qb/pay-bills`, vendor bills,
+> combined-invoice sends, and every other QuickBooks write path in this codebase remain exactly
+> as gated as they were before this amendment. A future session should not read this as license
+> to relax gating anywhere else without Brett saying so explicitly for that specific path, the
+> same way he did here.
+
+## Open questions still unresolved
+1. **Does `scope-proposal.html` need any visible indication, pre-signature, that a real
+   QuickBooks invoice already exists** (even though nothing's been sent)? Or should the
+   customer-facing page look identical to how it looks today until the moment they sign — the
+   invoice existing is purely a backend fact until then? Leaning toward the latter (nothing
+   customer-visible changes until sign), but not explicitly said by Brett either way.
+2. **Exact wording/placement of the decline button's confirmation step** — a real "are you sure"
+   modal, or a lighter single-tap-with-toast-undo pattern? Minor, can be decided at build time
+   rather than blocking the brief.
 
 ## Explicitly out of scope for this build
 - Anything about `/qb/pay-bills`, vendor bills, or combined-invoice sends — all of that stays
   exactly as gated as `AUTONOMY_GUARDRAILS_v1.0` already has it.
-- The final-balance invoice (rule 143) automation — see open question 4.
+- Automating the final-balance invoice itself (rule 143's booking action) — confirmed staying
+  manual (decision #4 above); only the surfacing/discovery of which jobs are ready for it is new
+  scope here.
 - The one-page consolidation (CAP-034) — related surface, separate design pass, shouldn't be
   bundled into this build; do this brief's build first since it changes what signed-proposals.html
-  even needs to do, then revisit CAP-034 once both rule 142/143 AND this are live and verified.
+  even needs to do (its deposit-booking half goes away entirely per decision #2 above), then
+  revisit CAP-034 once both rule 142/143 AND this are live and verified.
 
 ## Next step
-Brett answers the open questions above (can be quick — most are single-choice), then a future
-session implements: the new Scopes columns, `scopeDraftInvoiceUpsert`, the `/scope/proposal` and
-`scopeProposalSign` wiring, the new `/scope/cancel` endpoint, the `scope-proposal.html` redirect +
-fallback screen, and the `AUTONOMY_GUARDRAILS_v1.0.md` addendum — with the same preview-first
-discipline as everything else in this codebase for the pieces that stay manual (cancel), and full
-`test-verified-builds`/`ridgeco-validate` treatment before anything touches `main` given this is
-the first-ever unattended QuickBooks write path in the Hub.
+Two things still block starting the actual build:
+1. Brett confirms decision #1 (BillEmail attached from creation — recommended, awaiting his OK)
+   and reads/approves the `AUTONOMY_GUARDRAILS_v1.0.md` addendum wording above (decision #6).
+2. Once both are confirmed, a future session implements: the new `Scopes` columns,
+   `scopeDraftInvoiceUpsert`, the `/scope/proposal` and `scopeProposalSign` wiring, the new
+   `/scope/cancel` (Brett-initiated) and `/scope-proposal/decline` (customer-initiated) endpoints,
+   the "deposit paid — ready for final invoice" queue, the `scope-proposal.html` redirect +
+   fallback screen + decline button, removal of `scopeProposalBook`'s deposit-creation role from
+   `signed-proposals.html`, and the actual `AUTONOMY_GUARDRAILS_v1.0.md` file edit — with the same
+   preview-first discipline as everything else in this codebase for the pieces that stay manual
+   (cancel, final-invoice booking), and full `test-verified-builds`/`ridgeco-validate` treatment
+   before anything touches `main` given this is the first-ever unattended QuickBooks write path
+   in the Hub.
