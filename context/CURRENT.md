@@ -1,3 +1,64 @@
+# WHERE THINGS STAND — Sep 7, 2026
+
+## ⚡ This file (and BACKLOG.md) went stale for two weeks — Sep 2/3 work never got logged here
+Real sessions on Sep 2 and Sep 3 shipped rules 142/143/144 straight to `main` and wrote them up in
+FEATURE_LOG, but nobody updated this file or BACKLOG's Quick Index to match — so anyone reading
+"where things stand" from the top of this file alone would have missed two weeks of real, deployed
+work. Caught today doing a full review at Brett's request. Going forward: **update this file the
+same session anything ships**, not just FEATURE_LOG — this file is what gets read first.
+
+## 🟢 What Sep 2/3 actually shipped (all confirmed live on `main` as of this writing, none yet Brett-verified)
+- **Rule 142 — manual final-price override per variant** on scope proposals (`scope-creator.html`).
+  You can now set a price directly per variant instead of only ever getting the auto-markup number.
+  🔴 First live pass still needed: set a vendor cost + override on one variant, Generate proposal,
+  confirm the total matches the override.
+- **Rule 143 — final-balance invoicing** for signed scope proposals (`signed-proposals.html`). Once
+  a deposit is booked, a "Job done — invoice final balance" button appears. This is what unblocks
+  931 St Paul St Apt 2F (Jamuna Yalamanchili / Cesar Gomez) specifically. 🔴 Needs Brett's first live
+  run on that exact job.
+- **Rule 144 — QuickBooks customer created eagerly at Owner-add time**, not lazily at first invoice.
+  🔴 Needs a live check: add a new owner, confirm the QB Customer appears immediately.
+- **CAP-034** (scope→estimate→signature→invoice split across 2 pages) — captured as a wishlist item
+  only, not designed or built. No action needed yet.
+- **B-236** (`context/SCOPE_INVOICE_AUTOMATION_BUILD_BRIEF_v1.0.md` — auto-create/edit/void the
+  deposit invoice at estimate time, redirect signer straight to a QuickBooks payment link) — brief
+  only, nothing built. Still blocking the actual build: Brett reading/approving the drafted
+  `AUTONOMY_GUARDRAILS_v1.0` addendum wording in that file (the BillEmail-from-creation question is
+  already answered — the brief's own "Next step" section says otherwise but that's stale text
+  inside the brief itself, not a real open question — Decisions Locked #1 already covers it).
+- B-210 (Gmail OAuth for the RidgeCo send address) noted as broken — blocked on Brett confirming the
+  address + a one-time Google consent step. His action item, not a code fix.
+
+## 🟢 Rule 145 — Signed-proposal vendor-bill-gap fix, MERGED TO MAIN TODAY (Sep 7 2026) after sitting unmerged for 2 weeks
+This is the important finding from today's review: the Aug 24 fix for the Cesar Gomez /
+"deposit share showed the vendor's full cost" bug was built, tested, and `ridgeco-validate`-passed
+back on Aug 24 — and then never actually made it into `main`. It sat on a feature branch
+(`claude/vendor-bill-gap-ridgeco-13k29s`) the whole time, so it was never deployed despite every
+prior session describing it as "done." **A second, independent session built a different fix for
+the exact same two bugs the same day**, also never merged (`claude/ridge-co-vendor-bill-fixes-zrcv9l`,
+commit `bb8442b`) — that one is now superseded, not applied; merging both would have double-patched
+the same bug two incompatible ways. Full detail: FEATURE_LOG rule 145 (renumbered from the fix's
+original "142," which collided with the later, unrelated price-override rule above). 🔴 Still needs
+Brett's live check: open Signed Proposals, confirm a deposit-share bill shows the correct prorated
+number (not the vendor's full job cost), and that a booked-with-no-bill row shows the red banner.
+
+## ⏳ Two more real fixes still sitting unmerged, not yet deployed — Brett's call on when to merge
+Found during today's branch audit, not yet actioned:
+- **Vendor portal 3-bug fix** (`claude/ridgeco-receipt-invoice-fixes-1t4527`) — receipt-view black
+  page, Trash invoice JSON-parse crash, invoice-modal Close-button hit-target. Built, tested
+  (39/41), low risk, no money path touched. Ready to merge whenever Brett says go.
+- **Staging deploy gate** (`claude/staging-deploy-gate-8nttsk` / `staging`) — stubs QB/SMS/Gmail on
+  a staging Worker so future changes can be verified before they ever reach `main`. Built, unmerged.
+  Ironic that the thing meant to protect future merges is itself sitting unmerged — worth
+  prioritizing this one specifically so it can start protecting the next batch of changes.
+
+## ⚠️ Receipt-reconciler duplicate-checker + unit-search fix (Sep 2 session) may be LOST, not just unmerged
+Unlike the branches above, this one doesn't exist anywhere in git history at all — checked
+`git log --all`, nothing. It only ever existed as a delivered paste-ready file
+(`PASTE-THIS-TO-PUSH-receipt-reconciler-duplicate-checker.md`). If Brett never pasted that into
+claude.ai/code, the actual code may need to be rebuilt from scratch — the design is fully documented
+in FEATURE_LOG rule 141/`ridgeco-receipt-reconciler-unit-fix.md` if a rebuild is needed.
+
 # WHERE THINGS STAND — Aug 24, 2026 (later still)
 
 ## 🟢 Real multi-select for sending bills/invoices to QuickBooks — Send & Track (AR) + Send to QB (AP). FEATURE_LOG rule 139.
