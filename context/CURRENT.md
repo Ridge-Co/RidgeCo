@@ -42,6 +42,18 @@ original "142," which collided with the later, unrelated price-override rule abo
 Brett's live check: open Signed Proposals, confirm a deposit-share bill shows the correct prorated
 number (not the vendor's full job cost), and that a booked-with-no-bill row shows the red banner.
 
+## 🟢 Rule 146 — Signed Proposals modal: Cancel→Close + real Undo, MERGED TO MAIN TODAY (Sep 7 2026)
+Brett flagged the exact post-Confirm modal from rule 145/143 (the one shown for the Jamuna/Cesar
+job above) as confusing — it read "Cancel" right next to "✓ Created invoice #1694 + bill," even
+though nothing was left to cancel. Fixed: the button relabels to "Close" once Confirm succeeds, and
+a new "Undo" (button in the modal + a link on already-booked rows in the list) actually deletes the
+QB invoice+bill and reverts the row, gated by a confirm() dialog using Brett's own requested wording.
+Backend: `POST /scope-proposal/unbook`, `/scope-proposal/unbook-final`, `/proposal/unbook`, all
+refusing to delete anything with a payment already applied. Full detail: FEATURE_LOG rule 146.
+🔴 **No live QuickBooks credentials in the build session — first live check for Brett**: book a
+low-stakes test deposit or final balance, confirm Undo appears/reads correctly, tap it, confirm the
+dialog wording, and check in QuickBooks that the invoice+bill are actually gone and the row reverted.
+
 ## ⏳ Two more real fixes still sitting unmerged, not yet deployed — Brett's call on when to merge
 Found during today's branch audit, not yet actioned:
 - **Vendor portal 3-bug fix** (`claude/ridgeco-receipt-invoice-fixes-1t4527`) — receipt-view black

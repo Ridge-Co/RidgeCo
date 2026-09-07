@@ -112,9 +112,13 @@
   <div class="title" id="m-title" style="margin-bottom:6px">Preview</div>
   <div id="m-body"><p class="muted"><span class="spin"></span> Building preview…</p></div>
   <div style="display:flex;gap:8px;margin-top:14px">
-    <button class="btn" style="flex:1" onclick="closeModal()">Cancel</button>
+    <button class="btn" style="flex:1" id="m-cancel" onclick="closeModal()">Cancel</button>
     <button class="btn primary hide" style="flex:1" id="m-confirm" onclick="confirmBook(this)">Confirm</button>
   </div>
+  <!-- Only shown once confirmBook() actually succeeds — see confirmBook(). Deletes the just-created
+       QB invoice/bill and clears their ids off the row; gated by a confirm() dialog, and by
+       qbDeleteInvoiceSafe/qbDeleteBillSafe refusing anything with a payment already on it. -->
+  <button class="btn hide" style="width:100%;margin-top:8px;color:var(--red);border-color:#eec0c0" id="m-undo" onclick="undoBook(null,null,null,this)">Undo — delete this invoice &amp; bill</button>
 </div></div>
 
 <div class="toast" id="toast"></div>
@@ -191,7 +195,8 @@ function load(){
         +'<div class="amt"><div class="lbl">'+billLabel+'</div><div class="big">'+money(billAmt)+'</div></div>'
         +'</div>';
       if(booked){
-        html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created.</div>';
+        html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created. '
+          +'<a href="#" onclick="undoBook(\''+esc(r.id)+'\',\''+r.kind+'\',\'\',this);return false;" style="color:var(--red);font-weight:700;text-decoration:none">Undo</a></div>';
         if(gap==='missing'){
           // Persistent, not a one-time toast: the reason is stored on the row, so this banner
           // survives a reload and stays until a bill actually exists. Retry re-runs the same
@@ -208,7 +213,8 @@ function load(){
         // deposit was already booked above; this is the "vendor finished, now invoice the rest" step.
         if(r.kind==='scope'){
           if(r.qb_final_invoice_id){
-            html+='<div class="booked">✓ Final balance: invoice'+(r.qb_final_invoice_number?(' #'+esc(r.qb_final_invoice_number)):'')+(r.qb_final_bill_number?(' · bill #'+esc(r.qb_final_bill_number)):'')+' created.</div>';
+            html+='<div class="booked">✓ Final balance: invoice'+(r.qb_final_invoice_number?(' #'+esc(r.qb_final_invoice_number)):'')+(r.qb_final_bill_number?(' · bill #'+esc(r.qb_final_bill_number)):'')+' created. '
+              +'<a href="#" onclick="undoBook(\''+esc(r.id)+'\',\''+r.kind+'\',\'final\',this);return false;" style="color:var(--red);font-weight:700;text-decoration:none">Undo</a></div>';
           } else {
             html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\',\'final\')">Job done — invoice final balance</button></div>';
           }
@@ -223,12 +229,36 @@ function load(){
 }
 
 function bookPath(kind,phase){return kind==='scope' ? (phase==='final' ? '/scope-proposal/book-final' : '/scope-proposal/book') : '/proposal/book';}
+function undoPath(kind,phase){return kind==='scope' ? (phase==='final' ? '/scope-proposal/unbook-final' : '/scope-proposal/unbook') : '/proposal/unbook';}
+
+// Undo a booking that already succeeded — deletes the QB invoice + bill and reverts the row.
+// Called two ways: from the modal right after Confirm (id/kind/phase left null, falls back to
+// `cur`), or from a persistent "Undo" link on an already-booked row in the list (id/kind/phase
+// passed explicitly, since the modal may be long closed by then). `el` is whatever was clicked
+// (button or link) so it can show its own "Undoing…" state without assuming which one it is.
+function undoBook(id,kind,phase,el){
+  id = id || (cur && cur.id); kind = kind || (cur && cur.kind); phase = (phase != null ? phase : (cur && cur.phase)) || '';
+  if(!id||!kind)return;
+  var label = phase==='final' ? 'the final-balance invoice and bill' : 'the deposit invoice and bill';
+  if(!confirm('Are you sure you want to undo these bills and invoices?\n\nThis deletes '+label+' in QuickBooks. It only works if nothing has been paid against them yet, and it cannot be undone.'))return;
+  var origText = el ? el.textContent : '';
+  if(el){el.style.pointerEvents='none';el.style.opacity='.55';el.textContent='Undoing…';}
+  api('POST',undoPath(kind,phase),{id:id}).then(function(r){
+    if(r&&r.ok){toast('Undone — invoice and bill deleted in QuickBooks');closeModal();load();}
+    else{toast('Could not undo: '+((r&&r.error)||'unknown error'));if(el){el.style.pointerEvents='';el.style.opacity='';el.textContent=origText;}}
+  }).catch(function(e){toast('Error: '+e.message);if(el){el.style.pointerEvents='';el.style.opacity='';el.textContent=origText;}});
+}
 
 function preview(id,kind,phase){
   cur={id:id,kind:kind,phase:phase||''};
   document.getElementById('m-title').textContent=phase==='final' ? 'Preview — final balance in QuickBooks' : 'Preview — create in QuickBooks';
   document.getElementById('m-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
   document.getElementById('m-confirm').classList.add('hide');
+  // Reset the Cancel/Undo pair back to their pre-confirm state — this modal element is reused
+  // across every open, so a previous booking's "Close" + revealed Undo must not leak into a
+  // fresh preview for a different row.
+  var mc=document.getElementById('m-cancel');mc.textContent='Cancel';mc.classList.remove('hide');
+  var mu=document.getElementById('m-undo');mu.classList.add('hide');mu.style.pointerEvents='';mu.style.opacity='';mu.textContent='Undo — delete this invoice & bill';
   document.getElementById('modal').classList.add('open');
   api('POST',bookPath(kind,phase),{id:id,preview_only:true}).then(function(r){
     if(!r||!r.ok||!r.preview){document.getElementById('m-body').innerHTML='<div class="warn">'+esc((r&&r.error)||'Could not build preview')+'</div>';return;}
@@ -252,7 +282,12 @@ function confirmBook(btn){
     if(r&&r.ok){
       var msg='Created'+(r.invoice_number?(' invoice #'+r.invoice_number):' invoice')+(r.bill_number?(' + bill #'+r.bill_number):(r.bill_id?' + bill':''));
       document.getElementById('m-body').innerHTML='<p style="font-weight:700;color:var(--green)">✓ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');
-      btn.classList.add('hide');toast('Booked in QuickBooks');load();
+      btn.classList.add('hide');
+      // Nothing left to "Cancel" — it already happened. Relabel to Close and reveal Undo instead
+      // of leaving a button that reads "Cancel" next to something that already says "✓ Created".
+      document.getElementById('m-cancel').textContent='Close';
+      document.getElementById('m-undo').classList.remove('hide');
+      toast('Booked in QuickBooks');load();
     } else {
       btn.disabled=false;btn.textContent='Confirm — create in QuickBooks';
       document.getElementById('m-body').innerHTML+='<div class="warn">⚠ '+esc((r&&r.error)||'Failed')+'</div>';

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-02.2';
+const BUILD_VERSION = '2026-09-07.1';
 
 export default {
   async fetch(request, env) {
@@ -418,6 +418,7 @@ export default {
         if (path === '/delivery/update')          return await updateRow(env, 'Deliveries', body.id, body.fields);
         if (path === '/proposal/sign')            return await proposalSign(env, body);
         if (path === '/proposal/book')            return await proposalBook(env, body);
+        if (path === '/proposal/unbook')          return await proposalUnbook(env, body);
         if (path === '/scope/create')             return await scopeCreate(env, body);
         if (path === '/scope/ingest')             return await scopeIngest(env, body);
         if (path === '/scope/generate')           return await scopeGenerate(env, body);
@@ -432,7 +433,9 @@ export default {
         if (path === '/scope/proposal/link-revoke') return await scopeProposalLinkRevoke(env, body);
         if (path === '/scope-proposal/sign')      return await scopeProposalSign(env, body, _clientIP, _clientUA);
         if (path === '/scope-proposal/book')      return await scopeProposalBook(env, body);
+        if (path === '/scope-proposal/unbook')    return await scopeProposalUnbook(env, body);
         if (path === '/scope-proposal/book-final') return await scopeProposalBookFinal(env, body);
+        if (path === '/scope-proposal/unbook-final') return await scopeProposalUnbookFinal(env, body);
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
@@ -2229,6 +2232,50 @@ async function scopeProposalBook(env, body) {
   return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
 }
 
+// POST /scope-proposal/unbook (admin) { id }
+// Reverses a mistaken DEPOSIT booking from scopeProposalBook, above (Brett, Sep 7 2026: the
+// post-confirm modal's only button read "Cancel" even after the invoice+bill had already been
+// created — confusing, since nothing left to cancel — so this pairs a genuine Undo with it).
+// Deletes the QB invoice and bill (via qbDeleteInvoiceSafe/qbDeleteBillSafe — refuses either one
+// that already has a payment applied) and clears their ids back off the row, returning it to
+// exactly the pre-booking state ("Signed — needs billing"). No preview_only path: the person is
+// explicitly asking to reverse something already done, not previewing a new action — the Hub's
+// own confirm() dialog ("are you sure you want to undo these bills and invoices?") is the gate,
+// same as Confirm's preview step is the gate on the way in.
+async function scopeProposalUnbook(env, body) {
+  if (!body || !body.id) return json({ error: 'id required' }, 400);
+  await scopeSigTab(env);
+  const rows = await fetchTab(env, 'Scope_Signatures');
+  const row = rows.find(r => r.ID === String(body.id) && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (!row) return json({ error: 'signature not found' }, 404);
+  if (!row.QB_Invoice_ID && !row.QB_Bill_ID) return json({ ok: false, error: 'Nothing booked yet — there is no deposit invoice or bill to undo.' }, 400);
+  if (row.QB_Final_Invoice_ID || row.QB_Final_Bill_ID)
+    return json({ ok: false, error: 'The final balance has already been invoiced on top of this deposit — undo that first (its own Undo, on the "Final balance" line), then come back to undo the deposit.' }, 409);
+
+  const token = await qbAccessToken(env);
+  const invRes = await qbDeleteInvoiceSafe(env, row.QB_Invoice_ID, token);
+  if (!invRes.ok) return json({ ok: false, error: invRes.error });
+  const billRes = await qbDeleteBillSafe(env, row.QB_Bill_ID, token);
+  if (!billRes.ok) return json({ ok: false, error: 'The invoice was undone, but the bill was NOT (' + billRes.error + ') — QuickBooks and the Hub now disagree on the bill; fix it in QuickBooks directly, or retry.' });
+
+  await updateRow(env, 'Scope_Signatures', row.ID, {
+    Status: 'Signed', QB_Invoice_ID: '', QB_Invoice_Number: '', QB_Bill_ID: '', QB_Bill_Number: '', Bill_Skip_Reason: '',
+  });
+  try {
+    await scopesTab(env);
+    const scopes = await fetchTab(env, 'Scopes');
+    const s = scopes.find(x => x.ID === row.Scope_ID);
+    if (s) {
+      await updateRow(env, 'Scopes', s.ID, { Status: 'signed', Updated_Date: new Date().toISOString() });
+      // 'Pending Invoice' is the standing WO status for "ready to bill, not yet invoiced" (see
+      // OPEN_WO_STATUSES) — the correct inverse of the 'Invoiced' this same booking set.
+      if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Pending Invoice' });
+    }
+  } catch (e) {}
+
+  return json({ ok: true, undone_invoice: row.QB_Invoice_ID || '', undone_bill: row.QB_Bill_ID || '' });
+}
+
 // POST /scope-proposal/book-final (admin) { id, preview_only }
 // Books the REMAINING balance of a signed scope proposal — Brett (Sep 2 2026): "the vendor was
 // paid the deposit, finished the job, and now i need to invoice for the final." Only the deposit
@@ -2352,6 +2399,40 @@ async function scopeProposalBookFinal(env, body) {
   // overwrite whatever more specific state the WO is actually in.
 
   return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
+}
+
+// POST /scope-proposal/unbook-final (admin) { id }
+// Reverses a mistaken FINAL-BALANCE booking from scopeProposalBookFinal, above — same Undo
+// pairing as scopeProposalUnbook, for the second (final-balance) invoicing step instead of the
+// first (deposit) one. Deletes the QB final invoice + final bill and clears their ids, dropping
+// Scopes.Status back to 'invoiced' (its state between the deposit being booked and the final
+// balance being booked) — the deposit invoice/bill themselves are untouched. WO status is left
+// alone here too, mirroring scopeProposalBookFinal's own choice not to guess at it.
+async function scopeProposalUnbookFinal(env, body) {
+  if (!body || !body.id) return json({ error: 'id required' }, 400);
+  await scopeSigTab(env);
+  const rows = await fetchTab(env, 'Scope_Signatures');
+  const row = rows.find(r => r.ID === String(body.id) && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (!row) return json({ error: 'signature not found' }, 404);
+  if (!row.QB_Final_Invoice_ID && !row.QB_Final_Bill_ID) return json({ ok: false, error: 'Nothing booked yet — there is no final-balance invoice or bill to undo.' }, 400);
+
+  const token = await qbAccessToken(env);
+  const invRes = await qbDeleteInvoiceSafe(env, row.QB_Final_Invoice_ID, token);
+  if (!invRes.ok) return json({ ok: false, error: invRes.error });
+  const billRes = await qbDeleteBillSafe(env, row.QB_Final_Bill_ID, token);
+  if (!billRes.ok) return json({ ok: false, error: 'The final invoice was undone, but the final bill was NOT (' + billRes.error + ') — QuickBooks and the Hub now disagree; fix it in QuickBooks directly, or retry.' });
+
+  await updateRow(env, 'Scope_Signatures', row.ID, {
+    QB_Final_Invoice_ID: '', QB_Final_Invoice_Number: '', QB_Final_Bill_ID: '', QB_Final_Bill_Number: '',
+  });
+  try {
+    await scopesTab(env);
+    const scopes = await fetchTab(env, 'Scopes');
+    const s = scopes.find(x => x.ID === row.Scope_ID);
+    if (s) await updateRow(env, 'Scopes', s.ID, { Status: 'invoiced', Updated_Date: new Date().toISOString() });
+  } catch (e) {}
+
+  return json({ ok: true, undone_invoice: row.QB_Final_Invoice_ID || '', undone_bill: row.QB_Final_Bill_ID || '' });
 }
 
 // the Owners tab. Per-customer overrides live in Owners.Hourly_Rate (blank = this default).
@@ -9904,6 +9985,51 @@ async function qbFindBills(env, body) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// Shared "was there ever a payment against this txn" guard, used before ANY delete-based undo —
+// a vendor bill, a customer invoice, doesn't matter. A txn whose remaining Balance differs from
+// its TotalAmt by more than a penny had SOME payment/credit applied against it; deleting it would
+// silently erase what that payment was even for. Pure/testable on purpose (no network call) —
+// callers do the qbApi read and pass in the two numbers.
+function qbTxnSafeToDelete(kind, docLabel, bal, tot) {
+  bal = Number(bal); tot = Number(tot);
+  if (!isNaN(bal) && !isNaN(tot) && Math.abs(bal - tot) > 0.005) {
+    return { ok: false, error: `${kind} ${docLabel} has a payment against it (balance $${bal.toFixed(2)} of $${tot.toFixed(2)}). Not undoing — void or edit it in QuickBooks directly if you're sure.` };
+  }
+  return { ok: true };
+}
+
+// Deletes a QuickBooks vendor bill by id, refusing (via qbTxnSafeToDelete) if a payment is
+// already applied. `{ok:true, skipped:true}` on an empty billId — callers that always pass
+// "whatever's on the row" (which may be blank if a bill was never created) don't need their own
+// blank-check. Shared by POST /qb/delete-bill (below) and the proposal/scope "Undo" endpoints.
+async function qbDeleteBillSafe(env, billId, token) {
+  if (!billId) return { ok: true, skipped: true };
+  const got = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
+  const bill = got && got.Bill;
+  if (!bill) return { ok: false, error: qbFault(got) || `Could not read bill ${billId}.` };
+  const safe = qbTxnSafeToDelete('Bill', billId, bill.Balance, bill.TotalAmt);
+  if (!safe.ok) return safe;
+  const del = await qbApi(env, 'bill?operation=delete&minorversion=73', 'POST', { Id: billId, SyncToken: bill.SyncToken }, token);
+  const done = del && del.Bill && (del.Bill.status === 'Deleted' || del.Bill.Id);
+  if (!done) return { ok: false, error: 'Delete failed: ' + (qbFault(del) || JSON.stringify(del).slice(0, 200)) };
+  return { ok: true, doc: bill.DocNumber || '', total: Number(bill.TotalAmt || 0) };
+}
+
+// Same shape as qbDeleteBillSafe, for a customer invoice. Used by the scope/proposal "Undo"
+// endpoints below — never by anything on the invoice-delivery/payment path.
+async function qbDeleteInvoiceSafe(env, invoiceId, token) {
+  if (!invoiceId) return { ok: true, skipped: true };
+  const got = await qbApi(env, `invoice/${encodeURIComponent(invoiceId)}?minorversion=73`, 'GET', null, token);
+  const inv = got && got.Invoice;
+  if (!inv) return { ok: false, error: qbFault(got) || `Could not read invoice ${invoiceId}.` };
+  const safe = qbTxnSafeToDelete('Invoice', invoiceId, inv.Balance, inv.TotalAmt);
+  if (!safe.ok) return safe;
+  const del = await qbApi(env, 'invoice?operation=delete&minorversion=73', 'POST', { Id: invoiceId, SyncToken: inv.SyncToken }, token);
+  const done = del && del.Invoice && (del.Invoice.status === 'Deleted' || del.Invoice.Id);
+  if (!done) return { ok: false, error: 'Delete failed: ' + (qbFault(del) || JSON.stringify(del).slice(0, 200)) };
+  return { ok: true, doc: inv.DocNumber || '', total: Number(inv.TotalAmt || 0) };
+}
+
 // POST /qb/delete-bill  { qb_bill_id }
 // Deletes a QuickBooks vendor bill. REFUSES a bill that has a payment against it (balance != total)
 // — deleting a paid bill is destructive. For removing an accidental duplicate before it's paid.
@@ -9912,16 +10038,9 @@ async function qbDeleteBill(env, body) {
     const billId = String(body.qb_bill_id || '').trim();
     if (!billId) return json({ ok: false, error: 'qb_bill_id required' }, 400);
     const token = await qbAccessToken(env);
-    const got = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
-    const bill = got && got.Bill;
-    if (!bill) return json({ ok: false, error: qbFault(got) || 'Could not read that bill.' }, 404);
-    const bal = Number(bill.Balance), tot = Number(bill.TotalAmt);
-    if (!isNaN(bal) && !isNaN(tot) && Math.abs(bal - tot) > 0.005)
-      return json({ ok: false, error: `Bill ${billId} has a payment against it (balance $${bal.toFixed(2)} of $${tot.toFixed(2)}). Not deleting.` }, 409);
-    const del = await qbApi(env, 'bill?operation=delete&minorversion=73', 'POST', { Id: billId, SyncToken: bill.SyncToken }, token);
-    const done = del && del.Bill && (del.Bill.status === 'Deleted' || del.Bill.Id);
-    if (!done) return json({ ok: false, error: 'Delete failed: ' + (qbFault(del) || JSON.stringify(del).slice(0, 200)) }, 502);
-    return json({ ok: true, deleted_bill_id: billId, doc: bill.DocNumber || '', total: Number(bill.TotalAmt || 0) });
+    const r = await qbDeleteBillSafe(env, billId, token);
+    if (!r.ok) return json(r, r.error && /has a payment against it/.test(r.error) ? 409 : 404);
+    return json({ ok: true, deleted_bill_id: billId, doc: r.doc || '', total: r.total || 0 });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -12109,6 +12228,31 @@ async function proposalBook(env, body) {
   try { if (reg.wo) await updateWOFields(env, reg.wo, { Status: 'Invoiced' }); } catch (e) {}
 
   return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
+}
+
+// POST /proposal/unbook (admin) { id }
+// Legacy counterpart of scopeProposalUnbook, for the older per-property B-076 registry system
+// (Proposal_Signatures / POST /proposal/book). Same shared modal in signed-proposals.html drives
+// both systems, so the "Cancel-after-it's-already-done" confusion and the Undo fix apply here too.
+async function proposalUnbook(env, body) {
+  if (!body || !body.id) return json({ error: 'id required' }, 400);
+  await ensureProposalTab(env);
+  const rows = await fetchTab(env, 'Proposal_Signatures');
+  const row = rows.find(r => r.ID === String(body.id) && r.Active !== 'FALSE');
+  if (!row) return json({ error: 'signature not found' }, 404);
+  if (!row.QB_Invoice_ID && !row.QB_Bill_ID) return json({ ok: false, error: 'Nothing booked yet — there is no invoice or bill to undo.' }, 400);
+  const reg = proposalRegistry(env)[row.Proposal_ID];
+
+  const token = await qbAccessToken(env);
+  const invRes = await qbDeleteInvoiceSafe(env, row.QB_Invoice_ID, token);
+  if (!invRes.ok) return json({ ok: false, error: invRes.error });
+  const billRes = await qbDeleteBillSafe(env, row.QB_Bill_ID, token);
+  if (!billRes.ok) return json({ ok: false, error: 'The invoice was undone, but the bill was NOT (' + billRes.error + ') — QuickBooks and the Hub now disagree on the bill; fix it in QuickBooks directly, or retry.' });
+
+  await updateRow(env, 'Proposal_Signatures', row.ID, { Status: 'Signed', QB_Invoice_ID: '', QB_Invoice_Number: '', QB_Bill_ID: '', QB_Bill_Number: '' });
+  try { if (reg && reg.wo) await updateWOFields(env, reg.wo, { Status: 'Pending Invoice' }); } catch (e) {}
+
+  return json({ ok: true, undone_invoice: row.QB_Invoice_ID || '', undone_bill: row.QB_Bill_ID || '' });
 }
 
 function json(data, status=200) {
