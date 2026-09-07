@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-07.1';
+const BUILD_VERSION = '2026-09-07.2';
 
 export default {
   async fetch(request, env) {
@@ -184,6 +184,7 @@ export default {
         if (path === '/stale-wos')              return await staleWos(env, url);
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
         if (path === '/qb/test')                return await qbTest(env);
+        if (path === '/gmail/test')             return await gmailTest(env, url);
         if (path === '/qb/accounts')            return await qbListAccounts(env);
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
         if (path === '/qb/ready')               return await qbReadyQueue(env, url);
@@ -7129,6 +7130,16 @@ async function health(env) {
   try { out.pricing.secret_set = !!(env && env.PRICING_CONFIG); } catch (_) {}
   try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (_) {}
   try { const pc = await getPricingConfig(env); out.pricing.parses_ok = !!(pc && Array.isArray(pc.tiers) && pc.tiers.length > 0); } catch (_) {}
+  // Gmail OAuth (B-210) config-presence check — same never-expose-values pattern as pricing
+  // above. Confirms the 4 Cloudflare secrets actually landed and are non-empty, without
+  // proving the refresh token is still valid (that needs a real send — see /gmail/test).
+  out.gmail = { client_id_set: false, client_secret_set: false, refresh_token_set: false, sender_set: false };
+  try {
+    out.gmail.client_id_set = !!(env && env.GMAIL_CLIENT_ID);
+    out.gmail.client_secret_set = !!(env && env.GMAIL_CLIENT_SECRET);
+    out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
+    out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
+  } catch (_) {}
   return json(out);
 }
 
@@ -7454,6 +7465,28 @@ async function qbTest(env) {
     const name = info?.CompanyInfo?.CompanyName || null;
     return json({ ok: !!name, company: name, detail: name ? undefined : info });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ADMIN-GATED (not in PUBLIC_PATHS) — sends one real test email through gmailSendEmail (B-210)
+// to prove the OAuth client/refresh-token setup actually works end-to-end, not just that the
+// secrets are present (that weaker check lives in /health). Defaults `to` to GMAIL_SENDER itself
+// so a bare call is always safe to run (mails the ridgecomaintenance inbox, not a customer).
+// Surfaces gmailSendEmail's real thrown error message on failure — same fails-loud contract as
+// the function itself, so a bad client_id/secret/refresh_token shows its actual Google error
+// instead of a generic 500.
+async function gmailTest(env, url) {
+  const to = ((url && url.searchParams.get('to')) || env.GMAIL_SENDER || '').trim();
+  if (!to) return json({ ok: false, error: 'No recipient — pass ?to=you@example.com or set GMAIL_SENDER' }, 400);
+  try {
+    const r = await gmailSendEmail(env, {
+      to,
+      subject: 'RidgeCo Hub — Gmail test send (' + new Date().toISOString() + ')',
+      html: '<p>This is a test email from the Maintenance Hub, confirming the Gmail OAuth setup for <b>' + (env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com') + '</b> is working.</p>',
+    });
+    return json({ ok: true, sent_to: to, message_id: r.message_id });
+  } catch (e) {
+    return json({ ok: false, error: e.message }, 500);
+  }
 }
 
 // GET /qb/trade-map — every trade the Hub knows, what QuickBooks account it books to, and
