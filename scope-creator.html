@@ -259,6 +259,11 @@
         <button class="btn small secondary" onclick="copyLink()" style="margin-top:6px;">📋 Copy link</button>
         <button class="btn small" onclick="revokeAndRelink()" style="margin-top:6px;">🔁 Kill old link &amp; get a new one</button>
       </div>
+      <div class="row" style="margin-top:10px;border-top:1px dashed var(--border);padding-top:10px;">
+        <button class="btn" onclick="sendEstimateEmail()">📧 Send estimate to owner</button>
+      </div>
+      <div id="send-status" class="status"></div>
+      <div id="send-sent-note"></div>
       <div id="sig-status"></div>
     </div>
   </div>
@@ -404,6 +409,7 @@ function renderEditor(){
   gateSections();
   loadScopePhotos();
   loadSignatureIfSigned();
+  renderSendStatus();
 }
 
 /* ---------- owner / billing gate ---------- */
@@ -834,6 +840,42 @@ async function revokeAndRelink(){
     document.getElementById('link-text').value=r.url;
     setStatus('prop-status','✅ old link is dead — this is a brand-new one, copy and send it','ok');
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
+}
+
+// Real "Send estimate" email (B-210 follow-on, Sep 2026): emails the shareable proposal link
+// straight to the confirmed payor via gmailSendEmail, replacing copy-and-send-yourself as the
+// primary path. copyProposal()/getProposalLink() are left in place untouched — this sits
+// alongside them, not instead of them, for anyone who still wants to hand-deliver a link (text
+// message, etc). Recipient is checked client-side first (same ownerBillingStatus() the step-6
+// gate already uses) purely so the confirm() dialog can show the real address before sending;
+// the server re-checks independently and is the actual authority.
+async function sendEstimateEmail(){
+  var s=state.current;
+  if(!(s.Proposal_Text||'').trim()){ setStatus('send-status','⚠ Generate the proposal first.','err'); return; }
+  var st=ownerBillingStatus();
+  var email=(st.owner&&st.owner.Email||'').trim();
+  if(!st.complete || !email){ setStatus('send-status','⚠ No billing-ready owner email on file — confirm the payor in step 6 first.','err'); return; }
+  var already=(s.Sent_Date||'').trim();
+  var confirmMsg = already
+    ? 'This was already sent to '+email+' on '+new Date(already).toLocaleDateString()+'. Send it again?'
+    : 'Send this estimate to '+email+'?';
+  if(!confirm(confirmMsg)) return;
+  setStatus('send-status','Sending…');
+  try{
+    var r=await post('/scope/proposal/send',{ scope_id:s.ID });
+    s.Sent_Date=r.sent_at; s.Sent_To=r.sent_to; s.Send_Count=String((parseInt(s.Send_Count||'0',10)||0)+1);
+    document.getElementById('link-out').classList.remove('hide');
+    document.getElementById('link-text').value=r.url;
+    setStatus('send-status','✅ sent to '+r.sent_to,'ok');
+    renderSendStatus();
+  }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); }
+}
+function renderSendStatus(){
+  var el=document.getElementById('send-sent-note'); if(!el) return;
+  var s=state.current;
+  if(!s || !(s.Sent_Date||'').trim()){ el.innerHTML=''; return; }
+  var n=parseInt(s.Send_Count||'1',10)||1;
+  el.innerHTML='<div class="owner-note ok" style="margin-top:8px;">✅ Sent to <b>'+esc(s.Sent_To||'')+'</b> on '+esc(new Date(s.Sent_Date).toLocaleString())+(n>1?(' · sent '+n+'x total'):'')+'.</div>';
 }
 
 boot();

@@ -432,6 +432,7 @@ export default {
         if (path === '/scope/proposal')           return await scopeProposal(env, body);
         if (path === '/scope/proposal/link')        return await scopeProposalLink(env, body);
         if (path === '/scope/proposal/link-revoke') return await scopeProposalLinkRevoke(env, body);
+        if (path === '/scope/proposal/send')        return await scopeProposalSend(env, body);
         if (path === '/scope-proposal/sign')      return await scopeProposalSign(env, body, _clientIP, _clientUA);
         if (path === '/scope-proposal/book')      return await scopeProposalBook(env, body);
         if (path === '/scope-proposal/unbook')    return await scopeProposalUnbook(env, body);
@@ -1862,6 +1863,73 @@ async function scopeProposalLinkRevoke(env, body) {
   await updateRow(env, 'Scopes', id, { Link_Rev: next });
   return json({ success: true, rev: next });
 }
+
+const PROPOSAL_SEND_LOG_TAB = 'Proposal_Send_Log';
+const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result'];
+
+// Pure: resolves the CONFIRMED PAYOR for a scope's property — never the Realtor/PM referral
+// source (that's a separate Properties.Source_* field, kept deliberately apart — see
+// renderOwnerGate's "Realtor ≠ payor" label). Mirrors the exact rule scope-creator.html's own
+// client-side ownerBillingStatus() already enforces (property -> Owner_ID -> Owners row -> Email),
+// as its own pure function so it's unit-testable without mocking Sheets/Gmail.
+function scopeProposalResolveRecipient(prop, owners) {
+  const owner = (prop && prop.Owner_ID) ? (owners || []).find(o => o.ID === String(prop.Owner_ID)) : null;
+  const email = (owner && (owner.Email || '').trim()) || '';
+  return { owner: owner || null, email };
+}
+
+// B-210 follow-on: POST /scope/proposal/send {scope_id} — admin-gated, mirrors arReportSend's
+// shape. Emails the shareable proposal link (same idempotent-per-Link_Rev token as
+// /scope/proposal/link — no duplicate link is ever minted) straight to the CONFIRMED PAYOR —
+// the owner resolved via Property.Owner_ID, exactly what Section 6 "Confirm the payor" gate
+// already enforces client-side. Deliberately never the Realtor/PM referral source (Source_Email
+// on Properties) — that field exists specifically to keep the two separate (see renderOwnerGate's
+// own "Realtor ≠ payor" label). Re-checks both server-side gates (proposal text generated, owner
+// email on file) rather than trusting client state, same defensive posture as every other
+// money/customer-facing send in this file.
+async function scopeProposalSend(env, body) {
+  const id = body && body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  if (!(s.Proposal_Text || '').trim()) return json({ error: 'Generate the proposal first (Generate proposal), then send.' }, 400);
+
+  const [props, owners] = await fetchTabs(env, ['Properties', 'Owners']);
+  const prop = props.find(p => p.ID === String(s.Property_ID)) || null;
+  const { owner, email } = scopeProposalResolveRecipient(prop, owners);
+  if (!email) return json({ error: 'No billing-ready owner email on file — confirm the payor (step 6) first.' }, 400);
+
+  const addr = qbPropertyDisplayName(prop) || ('Property ' + s.Property_ID);
+  const ownerName = qbOwnerDisplayName(owner) || 'there';
+
+  const token = await scopeProposalLinkToken(env, id);
+  if (!token) return json({ error: 'Could not create the proposal link.' }, 500);
+  const url = `${PORTAL_BASE}/scope-proposal.html?t=${encodeURIComponent(token)}`;
+  const html = buildScopeProposalEmailHtml({ ownerName, addr, url });
+  const subject = `Ridge Co — your estimate for ${addr}`;
+
+  try {
+    await gmailSendEmail(env, { to: email, subject, html });
+  } catch (e) {
+    try {
+      await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
+      await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'FAILED: ' + String((e && e.message) || e).slice(0, 200) });
+    } catch (_) { /* audit log best-effort */ }
+    return json({ error: 'Send failed: ' + e.message }, 500);
+  }
+
+  try {
+    await ensureColumns(env, 'Scopes', ['Sent_Date', 'Sent_To', 'Send_Count']);
+    const nextCount = String((parseInt(s.Send_Count || '0', 10) || 0) + 1);
+    await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount });
+  } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
+
+  try {
+    await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
+    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent' });
+  } catch (_) { /* audit log best-effort; the send already happened */ }
+
+  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url });
+}
+
 // PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
 // structured per-item/variant view built by scopeProposal() (Proposal_Items_JSON) — HARD RULE:
 // strips `vendor_cost` from every variant right here, at the public boundary, so it can never
@@ -6086,6 +6154,17 @@ function buildArReportEmailHtml(group, link) {
     </table>
     <p style="text-align:center;margin:24px 0;"><a href="${link}" style="background:#1d4ed8;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">View &amp; Pay Online</a></p>
     <p style="color:#66707c;font-size:12px;">Questions about any of these? Just reply to this email. — Ridge Co</p>
+  </div>`;
+}
+
+// House-style mirror of buildArReportEmailHtml, for scopeProposalSend (B-210 follow-on).
+function buildScopeProposalEmailHtml({ ownerName, addr, url }) {
+  return `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1b1f24;">
+    <h2 style="color:#1d4ed8;">Ridge Co — Estimate for ${addr}</h2>
+    <p>Hi ${ownerName || 'there'},</p>
+    <p>Your estimate for the work at <strong>${addr}</strong> is ready to review. Tap below to see the full breakdown and sign off whenever you're ready to move forward.</p>
+    <p style="text-align:center;margin:24px 0;"><a href="${url}" style="background:#1d4ed8;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">View &amp; Sign Estimate</a></p>
+    <p style="color:#66707c;font-size:12px;">Questions about anything in the estimate? Just reply to this email. — Ridge Co</p>
   </div>`;
 }
 
