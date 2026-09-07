@@ -1,5 +1,28 @@
 # WHERE THINGS STAND — Sep 7, 2026
 
+## 🟢 Gmail OAuth fixed live + real "Send estimate" email built (both same day, later sessions)
+Two more things shipped today on top of the review/merge session below:
+- **Gmail OAuth for `ridgecomaintenance@gmail.com` is fully live**, confirmed with a real test
+  send (`message_id: 1a07e381b6a5d2de`). Root causes were: authorizing against Google's own OAuth
+  Playground demo client instead of a real one; the address missing from the OAuth app's Test
+  users list; a refresh token pasted with its surrounding `{ }`/label; and a client_id/secret
+  mismatch, resolved by regenerating the secret + refresh token together in one pass.
+  `GET /gmail/test?to=` (admin-gated) is now a standing diagnostic to re-verify the send path
+  any time without a new build. `/health` also reports Gmail secret-presence (booleans only).
+- **Rule 147 — real "Send estimate" email, B-210's follow-on.** New `POST /scope/proposal/send`
+  + a "📧 Send estimate to owner" button in `scope-creator.html`, emailing the confirmed payor
+  (never the Realtor/PM referral source) the shareable proposal link via `gmailSendEmail`.
+  `copyProposal()`/`getProposalLink()` left untouched — this sits alongside them. Full detail:
+  FEATURE_LOG rule 147. **🔴 Built and tested (44/46, same 2 pre-existing unrelated failures) but
+  NOT YET PUSHED to `main`** — no push credential (`BRETT_GH_PAT`) was available in that session,
+  so the commit is sitting as a patch-file handoff (see `ridgeco-git-push-proxy-bug.md`'s recovery
+  playbook). **Next step is Brett's**: open claude.ai/code → repo picker → `Ridge-Co/RidgeCo` →
+  paste the delivered reconstruction file's contents as the first message → verify → push. Once
+  live, needs Brett's first real pass: generate a proposal, confirm the payor in step 6, tap Send,
+  confirm the email lands looking right and the link opens correctly.
+
+# WHERE THINGS STAND — Sep 7, 2026 (earlier the same day)
+
 ## ⚡ This file (and BACKLOG.md) went stale for two weeks — Sep 2/3 work never got logged here
 Real sessions on Sep 2 and Sep 3 shipped rules 142/143/144 straight to `main` and wrote them up in
 FEATURE_LOG, but nobody updated this file or BACKLOG's Quick Index to match — so anyone reading
