@@ -1,3 +1,35 @@
+# WHERE THINGS STAND — Sep 8, 2026
+
+## 🟢 Test suite is fully green for the first time — 49/49 — rule 152
+The 2 "pre-existing unrelated failures" every session since Aug 12 had been carrying as an accepted
+baseline (`pricing-model.test.mjs`, `scope-core.test.mjs`) were actually root-caused and fixed, not
+just documented further. Both were test-harness bugs, zero production code involved: `pricing-model`
+never declared the `PRICING_CFG` global its extracted `index.html` functions read; `scope-core` never
+passed a `pc` config to `calcTieredEstimate`, which returns `null` (not a default) without one. Full
+detail: FEATURE_LOG rule 152. No live check needed — test-only change.
+
+## 🟢 Proposal photos, editable title, WO-linked status grouping, Who To Pay → QuickBooks bill link — rules 149/150/151
+Same session, four related asks from Brett, all built and tested:
+- **Photos on the shareable proposal link** — pulled from the scope's WO Attachments (or the
+  pre-WO `SCOPE-<id>` staging key), customer-safe types only, shown as a tap-to-open gallery.
+- **Scope title is now editable any time**, not just at creation ("✎" button in the editor).
+- **Status grouping on the scope list**: "in-progress"/"completed" pills now display correctly
+  (were silently falling back to a generic grey pill), collapsed into bundles at the bottom of the
+  list. **Corrected same day per Brett's own catch**: "completed" is now linked to the Work Order's
+  status, not just the money-booking history, with a new always-visible, never-collapsed
+  "ready to bill" state so a physically-done-but-unbilled job can't get buried in the completed pile.
+- **Who To Pay**: every vendor-bill card with a real QuickBooks bill now has a direct "open bill in
+  QB" link (`https://app.qbo.intuit.com/app/bill?txnId=...`, same pattern as the existing invoice
+  link on Send & Track) so Brett can jump straight to scheduling payment.
+
+Full detail: FEATURE_LOG rules 149 (photos/title/first-pass status), 150 (WO-linked ready-to-bill
+correction), 151 (QB bill link). `node --check` clean throughout, full suite 49/49 (see rule 152).
+🔴 **Needs Brett's first live pass on all of it**: open the Riverside Ave / Tyler Frank scope (or
+any scope with WO-attached photos) and confirm photos show on the shareable link; edit a scope
+title from the editor; check the scope list shows the new "ready to bill" banner correctly for any
+job whose WO is Complete but not yet final-invoiced; open Who To Pay and confirm "open bill in QB"
+lands on the right bill.
+
 # WHERE THINGS STAND — Sep 7, 2026
 
 ## 🟡 Fixed: "alternate option" additions on a scope item never reached the customer's proposal — rule 148

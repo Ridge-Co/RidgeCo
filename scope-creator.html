@@ -36,6 +36,9 @@
   .pill.estimated{background:#fdf2e2;color:#9a6b00;}
   .pill.proposed{background:#eaf0ff;color:var(--accent);}
   .pill.signed{background:#eaf6ee;color:var(--accent2);}
+  .pill.inprogress{background:#f5f0ff;color:#6d28d9;}
+  .pill.readytobill{background:#fdf2e2;color:#9a6b00;font-weight:900;}
+  .pill.completed{background:#eef1f4;color:#3f4b5c;}
   .scard{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;}
   .scard:hover{border-color:var(--accent);}
   .scard .t{font-size:13px;font-weight:bold;line-height:1.3;}
@@ -163,7 +166,7 @@
 <div id="view-editor" class="hide">
   <div class="section">
     <div class="section-title">
-      <span id="ed-title">Scope</span>
+      <span id="ed-title">Scope</span> <button class="btn small secondary" onclick="editTitle()" title="Edit title">✎</button>
       <span><span id="ed-status-pill"></span> <button class="btn small secondary" onclick="showList()">← All scopes</button></span>
     </div>
     <div class="m info" id="ed-loc" style="font-size:11px;"></div>
@@ -311,17 +314,61 @@ async function boot(){
 }
 
 /* ---------- scope list ---------- */
-function statusPill(s){ var map={draft:'draft',approved:'approved','wo-created':'wocreated',estimated:'estimated',proposed:'proposed',signed:'signed'}; var cls=map[s]||'draft'; return '<span class="pill '+cls+'">'+esc(s||'draft')+'</span>'; }
+// 'invoiced' and 'fully-invoiced' are the two statuses scopeProposalBook()/scopeProposalBookFinal()
+// (worker.js) set once a signed proposal's deposit, then final balance, is booked to QuickBooks —
+// i.e. Brett's "accepted and funded" → completed money milestones. 'ready-to-bill' is a THIRD,
+// READ-TIME-ONLY label (never persisted — see scopeList() in worker.js): once a deposit is booked
+// but the linked Work Order's own status shows the job is physically done, the scope shows this
+// instead of plain 'in-progress' — Brett, Sep 8 2026: "'complete' is not just the proposal being
+// complete but the job, and thus ready for billing steps... so we don't end up with unbilled jobs
+// in the 'complete' pile." 'completed' (the collapsed, safe-to-ignore bucket) is reserved strictly
+// for Status === 'fully-invoiced' — genuinely, already fully billed — so a job that's done on site
+// but not yet invoiced can never get buried there; it stays in 'ready-to-bill', which is never
+// collapsed in loadScopes() below.
+function statusPill(s){
+  var map={draft:'draft',approved:'approved','wo-created':'wocreated',estimated:'estimated',proposed:'proposed',signed:'signed',invoiced:'inprogress','ready-to-bill':'readytobill','fully-invoiced':'completed'};
+  var labels={invoiced:'in-progress','ready-to-bill':'ready to bill','fully-invoiced':'completed'};
+  var cls=map[s]||'draft';
+  return '<span class="pill '+cls+'">'+esc(labels[s]||s||'draft')+'</span>';
+}
+function scopeCardHtml(s){
+  var loc = propLabel(s.property_id) + (s.unit_id?(' · Unit '+unitLabel(s.unit_id)):'') ;
+  return '<div class="scard" onclick="openScope(\''+s.id+'\')"><div><div class="t">#'+esc(s.id)+' · '+esc(s.title||'Untitled')+'</div>'+
+    '<div class="m">'+esc(loc)+' · '+s.item_count+' item(s)'+(s.wo_id?(' · '+esc(s.wo_id)):'')+'</div></div>'+
+    '<div>'+statusPill(s.status)+'</div></div>';
+}
 async function loadScopes(){
   try{ state.scopes = await get('/scopes'); }catch(e){ document.getElementById('scope-list').innerHTML='<div class="empty err">'+esc(e.message)+'</div>'; return; }
   var el = document.getElementById('scope-list');
   if(!state.scopes.length){ el.innerHTML='<div class="empty">No scopes yet. Tap “+ New scope”.</div>'; return; }
-  el.innerHTML = state.scopes.map(function(s){
-    var loc = propLabel(s.property_id) + (s.unit_id?(' · Unit '+unitLabel(s.unit_id)):'') ;
-    return '<div class="scard" onclick="openScope(\''+s.id+'\')"><div><div class="t">#'+esc(s.id)+' · '+esc(s.title||'Untitled')+'</div>'+
-      '<div class="m">'+esc(loc)+' · '+s.item_count+' item(s)'+(s.wo_id?(' · '+esc(s.wo_id)):'')+'</div></div>'+
-      '<div>'+statusPill(s.status)+'</div></div>';
-  }).join('');
+  // Four buckets. 'ready-to-bill' (deposit booked + the linked Work Order shows the job physically
+  // done, but the final balance isn't booked yet) is NEVER collapsed — it's the one status that
+  // means "an action is owed," so it's surfaced above even the active/proposed list, unmissable.
+  // 'in-progress' (deposit booked, job still being worked) and 'completed' (final balance actually
+  // booked — genuinely done, nothing owed) both collapse into bundles at the bottom, same as
+  // before. Collapsing/grouping here is purely a list-view convenience: it has no effect on the
+  // Work Order's own status or on generating the final bill from Signed Proposals — those keep
+  // working exactly as before, from their own pages, regardless of what's collapsed here.
+  var readyToBill=[], active=[], inProgress=[], completed=[];
+  state.scopes.forEach(function(s){
+    if(s.status==='ready-to-bill') readyToBill.push(s);
+    else if(s.status==='fully-invoiced') completed.push(s);
+    else if(s.status==='invoiced') inProgress.push(s);
+    else active.push(s);
+  });
+  var html='';
+  if(readyToBill.length){
+    html += '<div class="owner-note warn" style="margin-bottom:8px;">⚠ '+readyToBill.length+' job(s) marked done on the work order but not yet billed — generate the final invoice from Signed Proposals.</div>'
+      + readyToBill.map(scopeCardHtml).join('');
+  }
+  html += active.length ? active.map(scopeCardHtml).join('') : (readyToBill.length ? '' : '<div class="empty">No active proposals. Tap “+ New scope”.</div>');
+  if(inProgress.length){
+    html += '<details style="margin-top:10px;"><summary style="cursor:pointer;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;padding:6px 0;">▸ In progress ('+inProgress.length+')</summary>'+inProgress.map(scopeCardHtml).join('')+'</details>';
+  }
+  if(completed.length){
+    html += '<details style="margin-top:10px;"><summary style="cursor:pointer;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;padding:6px 0;">▸ Completed ('+completed.length+')</summary>'+completed.map(scopeCardHtml).join('')+'</details>';
+  }
+  el.innerHTML = html;
 }
 
 /* ---------- helpers ---------- */
@@ -410,6 +457,24 @@ function renderEditor(){
   loadScopePhotos();
   loadSignatureIfSigned();
   renderSendStatus();
+}
+// Editable at any time (Brett: "need to be able to edit title after creation and at any time"),
+// not just at scope-creation. Same /scope/update path saveItems()/saveProposalText() already use.
+async function editTitle(){
+  var s=state.current; if(!s) return;
+  var t=prompt('Scope title:', s.Title||'');
+  if(t===null) return; // cancelled
+  t=t.trim();
+  if(!t){ setStatus('conn-status','Title cannot be blank','err'); return; }
+  if(t===s.Title) return;
+  try{
+    await post('/scope/update',{ scope_id:s.ID, title:t });
+    s.Title=t;
+    document.getElementById('ed-title').textContent='Scope #'+s.ID+' · '+t;
+    var listRow=(state.scopes||[]).find(function(x){ return String(x.id)===String(s.ID); });
+    if(listRow) listRow.title=t;
+    setStatus('conn-status','✅ title updated','ok');
+  }catch(e){ setStatus('conn-status','⚠ '+e.message,'err'); }
 }
 
 /* ---------- owner / billing gate ---------- */

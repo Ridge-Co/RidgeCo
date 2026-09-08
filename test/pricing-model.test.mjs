@@ -12,9 +12,17 @@ function grab(name){
   for(;j<html.length;j++){ if(html[j]==='{')d++; else if(html[j]==='}'){d--; if(!d)break;} }
   return html.slice(i, j+1);
 }
+// index.html's calcTieredEstimate/invPricing read pricing config off a bare module-level global
+// (`var PRICING_CFG = null;`, populated at real app boot via GET /pricing-config — see index.html
+// ~line 1060), NOT a function parameter. grab() only pulls the two function bodies, never that
+// top-level declaration, so every synthetic module below must declare it itself or the extracted
+// functions throw "PRICING_CFG is not defined" the instant they run. Same tiered-config shape
+// already proven correct against worker.js's own calcTieredEstimate in test/scope-variants.test.mjs.
+const PRICING_CFG_DECL = 'var PRICING_CFG = ' + JSON.stringify({ tiers: [[1000, 0.35, 50], [2000, 0.30, 0], [null, 0.25, 0]], adminFee: 85, adminFeeThreshold: 3000, cardFeeMult: 1.05, roundTo: 5 }) + ';\n';
 const ctx = { state: { vendors: [] }, _invBill: {}, document: null };
 const { calcTieredEstimate, invPricing, setup } = new Function(
   'state','_invBill','fields',
+  PRICING_CFG_DECL +
   'function safeArray(v){return Array.isArray(v)?v:[];}\n' +
   'function invTimeTotal(k){return fields.loggedTime||0;}\n' +
   'var document={getElementById:function(id){\n' +
@@ -29,6 +37,7 @@ function price(bill, fields, vendors){
   const state={vendors:vendors||[]}, _invBill={k:bill};
   const f=Object.assign({onsite:false,brettHrs:0,travel:0,loggedTime:0,ownMaterials:0},fields);
   const mod = new Function('state','_invBill','fields',
+    PRICING_CFG_DECL +
     'function safeArray(v){return Array.isArray(v)?v:[];}\n' +
     'var _invPass5=fields&&fields._invPass5?{k:true}:{};\n' +
     'function invTimeTotal(k){return fields.loggedTime||0;}\n' +

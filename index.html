@@ -7185,6 +7185,13 @@ function stRow(inv, kind, i) {
 }
 // Deep-link to the invoice inside QuickBooks Online (where the UI shows Viewed, history, etc.)
 function qbInvoiceLink(id){ return 'https://app.qbo.intuit.com/app/invoice?txnId='+encodeURIComponent(id); }
+// Deep-link to a vendor bill inside QuickBooks Online (same txnId convention as qbInvoiceLink,
+// just the bill transaction page instead of invoice) — Brett, Who To Pay: "I want a link directly
+// to [the bill] in quickbooks for each vendor bill that is ready to pay... so i can schedule
+// payment when i'm on my desktop/laptop." Opens the bill's own page, which has QBO's own
+// "Schedule payment"/"Make payment" action right on it — same as opening the bill by hand from
+// Expenses > Vendors, just one tap instead of a manual search.
+function qbBillLink(id){ return 'https://app.qbo.intuit.com/app/bill?txnId='+encodeURIComponent(id); }
 
 // One-invoice version of the qb-invoice-email-backfill.html tool, called right from a "no
 // email" row: resolves the send-to address from the invoice's customer (or the owner above
@@ -8224,7 +8231,8 @@ function loadPayables(save) {
             ? ' · Vendor owed $' + (parseFloat(owe) || 0).toFixed(2) +
               (r.vendor_paid === true ? ' — <span style="color:var(--muted)">paid</span>'
                 : r.vendor_partial === true ? ' — <span style="color:var(--warn)">partly paid</span>' : '') +
-              ' <span style="color:var(--muted)">(' + esc(r.terms || '') + (r.bill_due ? ', due ' + esc(r.bill_due) : '') + ')</span>'
+              ' <span style="color:var(--muted)">(' + esc(r.terms || '') + (r.bill_due ? ', due ' + esc(r.bill_due) : '') + ')</span>' +
+              ' · <a href="' + qbBillLink(r.bill_id) + '" target="_blank" rel="noopener" style="color:var(--info)">open bill in QB</a>'
             : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
         '</div>' +
       '</div>';

@@ -53,18 +53,23 @@ ok(withOptions[1].variants.length === 1 && withOptions[1].variants[0].vendor_cos
 ok(withOptions[2].selected_key === 'v1', 'an invalid selected_key falls back to the first real variant key');
 
 // ---- calcTieredEstimate: markup applied, only final numbers exposed ----
-const p = calcTieredEstimate(1000);
+// calcTieredEstimate(rawCost, pc) returns null outright when pc is missing/unconfigured (its own
+// guard clause: `if (!pc || !Array.isArray(pc.tiers) || !pc.tiers.length) return null;`) — pc is a
+// real required parameter, not optional. Same tiered-config shape already proven correct in
+// test/scope-variants.test.mjs against this exact function.
+const pc = { tiers: [[1000, 0.35, 50], [2000, 0.30, 0], [null, 0.25, 0]], adminFee: 85, adminFeeThreshold: 3000, cardFeeMult: 1.05, roundTo: 5 };
+const p = calcTieredEstimate(1000, pc);
 ok(p.finalPrice > 1000, 'a $1000 vendor cost marks up to a higher customer price');
 ok(Math.abs(p.deposit - p.finalPrice / 2) < 0.01, 'deposit is exactly half the final price');
 ok(p.finalPrice % 5 === 0, 'final price rounds up to the nearest $5');
-// The pricing fn always adds the fixed $75 first-hour + 5% fee, so a $0 basis resolves to $80 —
+// The pricing fn always adds a minimum markup + the 5% fee, so a $0 basis still resolves above $0 —
 // harmless because scopeProposal requires estimate_amount > 0 before it ever runs.
-const z = calcTieredEstimate(0);
+const z = calcTieredEstimate(0, pc);
 ok(Number.isFinite(z.finalPrice) && Math.abs(z.deposit - z.finalPrice / 2) < 0.01, 'zero cost is finite (no NaN) and deposit stays half');
 
 // ---- no-leak contract: the customer proposal template must carry ONLY final price + deposit ----
 // This mirrors the exact string scopeProposal builds; assert cost/markup never appear in it.
-const est = 1200, pricing = calcTieredEstimate(est);
+const est = 1200, pricing = calcTieredEstimate(est, pc);
 const doc = `123 Main St\n\nScope of Work:\n\n- Replace faucet\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n- 50% deposit.`;
 ok(doc.includes('$' + pricing.finalPrice.toFixed(2)), 'proposal shows the final customer price');
 ok(!doc.includes(String(est)), 'proposal does NOT contain the raw vendor cost');

@@ -1490,6 +1490,24 @@ async function scopeCreate(env, body) {
   });
 }
 
+// WO statuses meaning the crew is still actively working the job (before 'Complete'). Anything
+// NOT in this set — Complete, Pending Invoice, Invoiced, Paid, or anything else — means the job
+// itself is done from a work-execution standpoint, per the existing OPEN_WO_STATUSES ordering.
+const WO_STILL_ACTIVE_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
+
+// GET /scopes — Brett (Sep 8 2026): "link status on proposal to the work order since that's how
+// we are billing it... 'complete' is not just the proposal being complete but the job, and thus
+// ready for billing steps... advise me on how to make the status more clear so we don't end up
+// with unbilled jobs in the 'complete' pile." A scope's own Status only ever reflects its OWN
+// booking history (invoiced = deposit booked, fully-invoiced = final balance booked) — it has no
+// idea whether the underlying job is actually finished. Rather than persist a third status value
+// that could go stale the moment the WO moves on, this computes a READ-TIME-ONLY 'ready-to-bill'
+// label whenever a deposit-booked scope's linked WO shows the job physically done but the final
+// balance hasn't been booked yet — nothing is ever written back to the Scopes sheet for this.
+// scope-creator.html surfaces 'ready-to-bill' as its own always-visible, never-collapsed section
+// (unlike the collapsed 'in-progress'/'completed' buckets) specifically so a job that's done but
+// not yet billed can never get lost — 'completed' (collapsed, safe to ignore) is reserved for
+// Status === 'fully-invoiced' ONLY, i.e. genuinely, already fully billed.
 async function scopeList(env, url) {
   await scopesTab(env);
   let rows = []; try { rows = await fetchTab(env, 'Scopes'); } catch (_) { return json([]); }
@@ -1497,7 +1515,24 @@ async function scopeList(env, url) {
   const status = url && url.searchParams.get('status');
   if (status && status !== 'all') rows = rows.filter(r => (r.Status || 'draft') === status);
   rows.sort((a, b) => (parseInt(b.ID) || 0) - (parseInt(a.ID) || 0));
-  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: r.Status, wo_id: r.WO_ID, parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
+
+  // Only bother reading Work_Orders at all when at least one row could actually need it.
+  let woStatusById = null;
+  if (rows.some(r => r.Status === 'invoiced' && r.WO_ID)) {
+    try {
+      const wos = await fetchTab(env, 'Work_Orders');
+      woStatusById = new Map(wos.map(w => [w.ID, w.Status]));
+    } catch (_) { woStatusById = new Map(); }
+  }
+  function displayStatus(r) {
+    if (r.Status === 'invoiced' && r.WO_ID && woStatusById) {
+      const woStatus = woStatusById.get(r.WO_ID);
+      if (woStatus && !WO_STILL_ACTIVE_STATUSES.includes(woStatus)) return 'ready-to-bill';
+    }
+    return r.Status;
+  }
+
+  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: displayStatus(r), wo_id: r.WO_ID, parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
 }
 
 // Builds a customer-facing "<Address> Unit <Label>" string for a scope — looks up the real
@@ -1931,6 +1966,36 @@ async function scopeProposalSend(env, body) {
 }
 
 // PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
+// Job photos attached to this scope's work order (or staged under SCOPE-<id> before a WO exists —
+// same key scope-creator.html's own "Before photos" upload already uses, and the same key
+// scopeToWO() re-keys onto the real WO_ID at conversion time, so this always finds the right set
+// regardless of when in the lifecycle it's called). Customer-safe subset only: 'before'/'photo'/
+// 'other' — never 'receipt'/'bill'/'invoice' (private vendor-cost docs, already never Drive-shared
+// per NON_SHARE_FILE_TYPES, but filtered here too as defense-in-depth) and never 'after'/'report'
+// (not relevant on a pre-signature estimate, admin-internal). Only returns files that are actually
+// viewable as an image/video (mirrors the isImage/isVideo check index.html's own gallery uses) —
+// a stray PDF wouldn't render in a photo strip anyway. These files are already made
+// anyone-with-link shareable at upload time (logAttachment → driveShareAnyone), so returning the
+// Drive file id here is safe on this public boundary — same trust level as any other photo URL
+// already handed to vendors/tenants elsewhere in the Hub, and never any pricing data.
+const SCOPE_PROPOSAL_PHOTO_TYPES = ['before', 'photo', 'other'];
+async function scopeProposalPhotos(env, s) {
+  try {
+    const key = s.WO_ID || ('SCOPE-' + s.ID);
+    const rows = await fetchTab(env, 'Attachments');
+    return rows
+      .filter(a => a.Active !== 'FALSE' && a.WO_ID === key)
+      .filter(a => SCOPE_PROPOSAL_PHOTO_TYPES.includes((a.File_Type || 'other').toLowerCase()))
+      .map(a => {
+        const mime = (a.Mime_Type || '').toLowerCase();
+        const isVideo = mime.indexOf('video/') === 0;
+        const isImage = mime.indexOf('image/') === 0 || (!mime && !!a.Drive_File_ID);
+        return { fileId: a.Drive_File_ID || '', url: a.Drive_URL || '', name: a.File_Name || 'photo', isVideo, isViewable: isVideo || isImage };
+      })
+      .filter(p => p.isViewable && p.fileId);
+  } catch (_) { return []; }
+}
+
 // structured per-item/variant view built by scopeProposal() (Proposal_Items_JSON) — HARD RULE:
 // strips `vendor_cost` from every variant right here, at the public boundary, so it can never
 // reach a customer even though it is stored (privately, Sheets-only) alongside price for later
@@ -1955,6 +2020,7 @@ async function scopeProposalView(env, url) {
     variants: (it.variants || []).map(v => ({ key: v.key, label: v.label, price: v.price })), // no vendor_cost
     selected_key: it.selected_key,
   })); // no `note` — free-text field with no internal/customer split; never safe to echo back
+  const photos = await scopeProposalPhotos(env, s);
   const subtotal = +(items.reduce((sum, it) => { const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2);
   let signed = null;
@@ -1967,7 +2033,7 @@ async function scopeProposalView(env, url) {
       signed = { signer_name: row.Signer_Name, signed_date: row.Signed_Date, subtotal: +row.Subtotal || subtotal, deposit: +row.Deposit_Amount || deposit, selections: sel };
     }
   } catch (_) {}
-  return json({ ok: true, address: addr || ('Property ' + s.Property_ID), title: s.Title || '', status: s.Status || '', items, subtotal, deposit, proposal_text: s.Proposal_Text || '', signed });
+  return json({ ok: true, address: addr || ('Property ' + s.Property_ID), title: s.Title || '', status: s.Status || '', items, subtotal, deposit, proposal_text: s.Proposal_Text || '', signed, photos });
 }
 
 // ── Scope proposal e-sign (Aug 19 2026) ─────────────────────────────────────
