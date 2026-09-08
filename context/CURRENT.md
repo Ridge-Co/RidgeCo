@@ -1,3 +1,32 @@
+# WHERE THINGS STAND — Sep 8, 2026 (later)
+
+## 🔴 URGENT — check WO-1025 / Alex Busey / Bill 7578 in QuickBooks directly before paying anything
+Brett flagged a live double-pay risk: Who To Pay showed this bill as "PAY THE VENDOR" ($297.50
+owed) while the actual QuickBooks bill note said "paid by venmo." **Do this now, don't wait for
+deploy**: open https://app.qbo.intuit.com/app/bill?txnId=7578 directly and check whether it shows
+a real open balance or a linked payment. Separately, search QuickBooks Expenses for a ~$297.50
+transaction to Alex Busey around early Sep 2026 that mentions Venmo — if one exists and isn't
+linked to Bill 7578, that's very likely the actual payment, just never applied against the bill
+(classic "paid outside Pay Bills, hand-entered as an Expense" gap — same pattern as the Andreas
+Cleaning $110 case). **Do NOT pay Alex Busey again until this is confirmed either way.**
+
+## 🟢 Built (not yet live-verified): Who To Pay double-pay guard — rule 153
+Same underlying issue, fixed at the Hub level going forward: `qbPayables` now cross-checks
+QuickBooks for a payment that may have gone out Venmo/Zelle/check and gotten hand-entered as a
+plain Expense instead of a proper Bill Payment — before ever telling Brett a bill is ready to pay.
+A match flags the row "⚠ POSSIBLE DUPLICATE — CHECK QB" (sorts to the very top, red, excluded from
+the bulk-pay total, and can never be batch-marked-paid) instead of "PAY THE VENDOR." Fails open on
+any error — can only ever add a warning, never hide the real state. Full detail: FEATURE_LOG rule
+153. Built and offline-tested against Brett's exact WO-1025 numbers (21 new assertions), but **not
+yet run against live QuickBooks** — no `WORKER_SECRET` in this session. 🔴 **First live check**:
+once deployed, open Who To Pay and confirm the WO-1025/Alex Busey row now shows the duplicate
+warning (assuming the QuickBooks-side facts match what's suspected above) — and separately spot-
+check a few genuinely-owed bills still show plain "PAY THE VENDOR" with no false alarms.
+
+## 🟢 Test suite is fully green — 50/50 — rules 152/153
+`pricing-model`/`scope-core` fixed same day (rule 152); the two new tests for rule 153 bring it to
+50/50. No known failures remain.
+
 # WHERE THINGS STAND — Sep 8, 2026
 
 ## 🟢 Test suite is fully green for the first time — 49/49 — rule 152

@@ -8195,11 +8195,13 @@ function loadPayables(save) {
     var rows = safeArray(res.rows);
     if (!rows.length) { if (el) el.innerHTML = '<div style="color:var(--muted);font-size:12px">Nothing sent to QuickBooks in the last 90 days.</div>'; return; }
 
-    var order = { 'PAY THE VENDOR': 0, 'owner paid in part': 1, 'waiting on the owner': 2, 'unknown': 3, 'vendor paid': 4, 'nothing to pay': 5 };
+    var order = { 'possible duplicate': -1, 'PAY THE VENDOR': 0, 'owner paid in part': 1, 'waiting on the owner': 2, 'unknown': 3, 'vendor paid': 4, 'nothing to pay': 5 };
     rows.sort(function(a, b) { return (order[a.state] ?? 9) - (order[b.state] ?? 9); });
+    var stateLabel = { 'possible duplicate': '⚠ POSSIBLE DUPLICATE — CHECK QB' };
 
     function card(r) {
-      var colour = r.state === 'PAY THE VENDOR' ? 'var(--accent2)'
+      var colour = r.state === 'possible duplicate' ? 'var(--danger)'
+                 : r.state === 'PAY THE VENDOR' ? 'var(--accent2)'
                  : r.state === 'owner paid in part' ? 'var(--warn)'
                  : r.state === 'waiting on the owner' ? 'var(--warn)'
                  : r.state === 'unknown' ? 'var(--danger)' : 'var(--muted)';
@@ -8207,9 +8209,25 @@ function loadPayables(save) {
       // The vendor's own ref number (matches QuickBooks Pay Bills "REF NO"); when the vendor gave
       // none, QuickBooks shows the WO number too, so the WO id already lines the two views up.
       var vref = r.vendor_ref ? esc(r.vendor_ref) : (r.bill_id ? esc(r.wo_id || '') : '');
+      // A possible-duplicate row is deliberately NEVER checkable for the bulk "mark paid in QB"
+      // action — Brett has to actually look at QuickBooks and clear it himself before this Hub
+      // will let it anywhere near a batch action. This is the whole point of the check.
       var canPay = r.state === 'PAY THE VENDOR' && r.bill_id;
       var chk = canPay
         ? '<input type="checkbox" class="pay-chk" value="' + esc(String(r.bill_id)) + '" data-amt="' + (parseFloat(owe)||0).toFixed(2) + '" data-vendor="' + esc(r.vendor_name||'') + '" onchange="updatePaySelection()" style="margin-right:7px;vertical-align:middle;width:15px;height:15px">'
+        : '';
+      // The specific QuickBooks transaction that looks like this vendor already got paid outside
+      // Pay Bills (Venmo/Zelle/check hand-entered as a plain Expense/Check) — see
+      // qbFindLikelyUnlinkedPayment (worker.js). Only ever a warning to check, never auto-applied.
+      var dupWarning = r.possible_duplicate
+        ? '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:5px;padding:7px 9px;margin-top:6px;font-size:11px;color:var(--danger);line-height:1.5">' +
+          '⚠ QuickBooks shows a <b>$' + (parseFloat(r.possible_duplicate.amount)||0).toFixed(2) + '</b> ' +
+          (r.possible_duplicate.payment_type ? esc(r.possible_duplicate.payment_type) + ' ' : '') + 'payment to this vendor' +
+          (r.possible_duplicate.date ? ' on ' + esc(r.possible_duplicate.date) : '') +
+          (r.possible_duplicate.doc ? ' (#' + esc(r.possible_duplicate.doc) + ')' : '') +
+          (r.possible_duplicate.note ? ' — "' + esc(r.possible_duplicate.note) + '"' : '') +
+          ' that was never linked to this bill — likely already paid by hand (Venmo/Zelle/check) and entered as a plain Expense instead of a Bill Payment. <b>Verify in QuickBooks before paying again.</b>' +
+        '</div>'
         : '';
       return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + colour + ';border-radius:6px;padding:10px;margin-bottom:7px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
@@ -8219,7 +8237,7 @@ function loadPayables(save) {
             (vref ? '<span style="color:var(--text);font-size:11px"> · vendor inv <b>' + vref + '</b></span>' : '') +
             (r.invoice_number ? '<span style="color:var(--muted);font-size:10.5px"> · cust inv #' + esc(r.invoice_number) + '</span>' : '') +
           '</div>' +
-          '<div style="color:' + colour + ';font-size:11.5px;font-weight:bold;text-transform:uppercase;letter-spacing:.04em">' + esc(r.state) + '</div>' +
+          '<div style="color:' + colour + ';font-size:11.5px;font-weight:bold;text-transform:uppercase;letter-spacing:.04em">' + esc(stateLabel[r.state] || r.state) + '</div>' +
         '</div>' +
         '<div style="color:var(--muted);font-size:11px;margin-top:4px">' +
           'Owner billed $' + (parseFloat(r.customer_total) || 0).toFixed(2) +
@@ -8235,6 +8253,7 @@ function loadPayables(save) {
               ' · <a href="' + qbBillLink(r.bill_id) + '" target="_blank" rel="noopener" style="color:var(--info)">open bill in QB</a>'
             : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
         '</div>' +
+        dupWarning +
       '</div>';
     }
 

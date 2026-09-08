@@ -34,7 +34,14 @@ const qbBillLinkSrc = extractBraced(qbBillLinkStart);
 const escStart = src.indexOf('function esc(');
 const escSrc = extractBraced(escStart);
 
-const card = new Function(`${escSrc}\n${qbBillLinkSrc}\nreturn (${cardSrc});`)();
+// card(r) closes over `stateLabel` (declared just above it in loadPayables, rule 153) — extract
+// that declaration too, or the synthetic module throws "stateLabel is not defined" the same way
+// the old PRICING_CFG gap did (see rule 152) the moment card() is called.
+const stateLabelStart = src.indexOf('var stateLabel = ');
+if (stateLabelStart === -1) throw new Error('stateLabel not found in index.html — did loadPayables get refactored?');
+const stateLabelSrc = src.slice(stateLabelStart, src.indexOf(';', stateLabelStart) + 1);
+
+const card = new Function(`${escSrc}\n${qbBillLinkSrc}\n${stateLabelSrc}\nreturn (${cardSrc});`)();
 
 console.log('Who To Pay — QB bill link — offline tests\n');
 

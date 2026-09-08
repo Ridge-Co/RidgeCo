@@ -7813,6 +7813,38 @@ async function qbRepairInvoice(env, body) {
 // Read-only against QuickBooks; the only writes are status columns on rows the Hub owns.
 
 // GET /qb/payables?days=N — every sent job with who has paid and who is owed.
+// Detects a specific, previously-diagnosed failure mode (FEATURE_LOG rule 153): a vendor gets
+// paid OUTSIDE QuickBooks' own Pay Bills flow — Venmo/Zelle/check, then hand-entered into
+// QuickBooks as a plain Expense/Check ("Purchase") transaction against the vendor — instead of a
+// proper Bill Payment linked to the open Bill. A Purchase transaction has no link back to the
+// Bill it was really for, so the Bill's own Balance never reflects it, and the Hub (reading that
+// same live Balance) correctly-but-wrongly says the vendor still needs to be paid. Brett hit this
+// exact pattern before (Andreas Cleaning audit, Sep 4 2026 — an Expense/Check entered directly
+// against a vendor "won't show in a Bill query") and again live on Who To Pay (WO-1025 / Alex
+// Busey, Sep 8 2026 — QuickBooks showed the bill "paid by venmo" as a note, but the Bill's real
+// Balance was still open because that Venmo payment was never linked to it).
+//
+// Purely a SUPPLEMENTARY, read-only cross-check — queries QuickBooks Purchase transactions for
+// this vendor and flags any whose amount is close to what's still owed. It never changes
+// anything, never marks a bill paid, and a query failure (unsupported filter, API hiccup) fails
+// OPEN with no warning — exactly today's behavior. This can only ever ADD a warning, never hide
+// or suppress the underlying "PAY THE VENDOR" state.
+async function qbFindLikelyUnlinkedPayment(env, token, vendorQboId, amountOwed) {
+  try {
+    if (!vendorQboId || !(amountOwed > 0)) return null;
+    const q = encodeURIComponent(`select Id, TxnDate, TotalAmt, PaymentType, DocNumber, PrivateNote from Purchase where EntityRef = '${qbEscape(vendorQboId)}' maxresults 100`);
+    const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+    const purchases = (r && r.QueryResponse && r.QueryResponse.Purchase) || [];
+    // Within a dollar (rounding/fee slack). A Purchase has no "which bill was this for" link BY
+    // DEFINITION (that's the whole problem) — amount match is the only real signal available, so
+    // this deliberately doesn't also filter by date; a wrong/missed date guess would be worse than
+    // showing a slightly-older match for Brett to eyeball and dismiss himself.
+    const match = purchases.find(p => Math.abs(Number(p.TotalAmt || 0) - amountOwed) < 1.00);
+    if (!match) return null;
+    return { id: String(match.Id), date: match.TxnDate || '', amount: Number(match.TotalAmt || 0), payment_type: match.PaymentType || '', doc: match.DocNumber || '', note: (match.PrivateNote || '').slice(0, 200) };
+  } catch (_) { return null; }
+}
+
 async function qbPayables(env, url) {
   try {
     const days = Math.max(1, Math.min(365, parseInt(url && url.searchParams.get('days')) || 90));
@@ -7875,6 +7907,18 @@ async function qbPayables(env, url) {
       else if (customerPaid === false) state = 'waiting on the owner';
       else                             state = 'unknown';
 
+      // Before ever telling Brett to pay a vendor, check for a payment that already went out
+      // OUTSIDE QuickBooks' own Pay Bills flow and just never got linked to this Bill — see
+      // qbFindLikelyUnlinkedPayment above. Scoped to exactly the rows where a double-pay could
+      // actually happen (i.e. only when we're about to say "PAY THE VENDOR") so this doesn't add
+      // a QB API call to every row in the list, only the ones carrying real risk.
+      let possibleDuplicate = null;
+      if (state === 'PAY THE VENDOR') {
+        const amountOwed = vendorBalance != null ? vendorBalance : (Number(ir.Vendor_Cost) || 0);
+        possibleDuplicate = await qbFindLikelyUnlinkedPayment(env, token, vendor && vendor.QBO_Vendor_ID, amountOwed);
+        if (possibleDuplicate) state = 'possible duplicate';
+      }
+
       rows.push({
         ir_id: ir.ID, wo_id: ir.WO_ID,
         vendor_id: ir.Vendor_ID || '', vendor_name: ir.Vendor_Name || (vendor ? qbVendorDisplayName(vendor) : ''),
@@ -7884,7 +7928,7 @@ async function qbPayables(env, url) {
         customer_partial: customerPartial,
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
         vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
-        bill_due: billDue, in_house: inHouse, state,
+        bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
       });
     }
 
