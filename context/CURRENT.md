@@ -1,5 +1,20 @@
 # WHERE THINGS STAND — Sep 7, 2026
 
+## 🟡 Fixed: "alternate option" additions on a scope item never reached the customer's proposal — rule 148
+Brett (screenshot, 3101 Gibbons deck job): adding a 2nd priced option ("Treated lumber decking" vs
+"Use composite decking...") on a scope item and generating the proposal didn't give the tenant a
+choice on the actual proposal page. Root cause: `genProposal()` (`scope-creator.html`) called
+`/scope/proposal` without first saving pending item edits via `/scope/update` — any option added but
+not separately "💾 Save edits"-ed was silently dropped before the proposal was built. The customer-
+facing selector itself (rule 123) was never broken — it had nothing to render because the new option
+never reached the server. Fixed by having `genProposal()` save current items first, same as
+`applyCommand()`/`splitSelected()` already do. Zero worker.js changes. Verified with a real headless
+Playwright run: confirmed the bug reproduces against an unmodified clone (only `/scope/proposal`
+fires) and is fixed on the patched file (`/scope/update` fires first with both variants correct).
+Full detail: FEATURE_LOG rule 148. 🔴 **Needs Brett's first live pass**: on a real scope, add a 2nd
+alternate option to an item, tap "Generate proposal" directly (no separate Save tap), open the
+shareable link, confirm both options now show as a real radio-button choice with live-updating total.
+
 ## 🟢 Gmail OAuth fixed live + real "Send estimate" email built (both same day, later sessions)
 Two more things shipped today on top of the review/merge session below:
 - **Gmail OAuth for `ridgecomaintenance@gmail.com` is fully live**, confirmed with a real test

@@ -787,6 +787,16 @@ async function saveEstimate(){
 
 /* proposal */
 async function genProposal(){
+  // Persist whatever's currently on screen FIRST — /scope/proposal always builds the customer
+  // proposal from the saved Line_Items on the server, never from what's still sitting unsaved in
+  // the browser. Without this, adding "+ Add alternate option" (or any other item edit) and
+  // tapping "Generate proposal" right away silently used the last-SAVED item data — the new
+  // option never reached Proposal_Items_JSON, so it never showed up as a selectable choice on the
+  // customer's page. Same save-before-act pattern applyCommand()/splitSelected() already use.
+  setStatus('prop-status','Saving items…');
+  var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
+  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items }); state.current.line_items=items; }
+  catch(e){ setStatus('prop-status','⚠ could not save your item edits, so the proposal was not generated — '+e.message,'err'); return; }
   setStatus('prop-status','Generating customer proposal…');
   try{
     var r=await post('/scope/proposal',{ scope_id:state.current.ID });
