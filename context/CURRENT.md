@@ -1,3 +1,24 @@
+# WHERE THINGS STAND — Sep 10, 2026
+
+## 🟡 Built, not yet live-verified: Receipt Reconciler — materials descriptions, bill-on-match, business-expense receipts, QB-email forwarding — rule 155
+Full detail: FEATURE_LOG rule 155. Confirmed live (via fresh anonymous clone) that the Aug
+31/Sep 2 description-fix patch (rule 140) was never actually pushed — this build redoes it plus
+three new asks: appending a newly-matched receipt onto a WO's *existing* Invoice_Review/QB
+invoice instead of creating a second one (flags already-sent invoices for the existing
+Repairable-Invoices path rather than touching QuickBooks directly); a no-work-order confirm path
+for business-expense ("company" category) receipts; and forwarding every Receipts-tab row —
+new and backfilled — to Brett's QuickBooks receipts-capture email for bank/CC reconciliation.
+`node --check` clean, full suite 50/50. Blocked on Brett supplying `qb_receipts_email` (from
+QuickBooks' own Receipts → Forward from email page) and authorizing `ridgecomaintenance@gmail.com`
+as the sending address there — QuickBooks bounces forwarded mail from an unregistered sender.
+🔴 Needs Brett's first live pass per the 5-step checklist at the end of rule 155 before this is
+trusted against real data. `BUILD_VERSION` bumped to `2026-09-10.1`.
+
+Also still outstanding, unrelated to this build: 1864 Kerns School Rd (Milam Ridge) still needs
+to be added as a Property via the existing `/property/add` (no Owner_ID — it has no owner to
+bill) — that's a one-time live data call, not a code change, and needs a working `WORKER_SECRET`
+or the Hub's own admin UI to actually run.
+
 # WHERE THINGS STAND — Sep 9, 2026 (later)
 
 ## 🟢 Live-verified against real QuickBooks: Who To Pay grouping/search/filter + auto-check + batched QB reads — rule 154

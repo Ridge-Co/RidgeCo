@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-09.1';
+const BUILD_VERSION = '2026-09-10.1';
 
 export default {
   async fetch(request, env) {
@@ -409,6 +409,7 @@ export default {
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
         if (path === '/receipt-recon/skip')       return await receiptReconSkip(env, body);
         if (path === '/receipt-recon/purge-duplicates')  return await purgeConfirmedDuplicateReceipts(env);
+        if (path === '/receipts/send-to-qb-email') return await sendReceiptsToQBEmail(env, body);
         if (path === '/trash/property/add')       return await trashAddProperty(env, body);
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
         if (path === '/trash/log-visit')          return await trashLogVisit(env, body);
@@ -505,6 +506,10 @@ export default {
     // Brett explicitly confirmed as duplicates more than 180 days ago. Runs daily alongside the
     // scan above; a normal day with nothing past the window does one harmless read.
     try { await purgeConfirmedDuplicateReceipts(env); } catch (e) { /* non-fatal */ }
+    // Forward any not-yet-emailed receipts to Brett's QuickBooks receipts-capture inbox (Sep
+    // 2026) — bounded per run (default 25) since a large backlog is worked down over several
+    // days' cron sweeps rather than all in one Worker invocation. No-op once caught up.
+    try { await sendReceiptsToQBEmail(env, {}); } catch (e) { /* non-fatal */ }
     // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
     // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
     // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
@@ -1092,25 +1097,41 @@ async function listReceipts(env, url) {
   } catch(e) { return json([]); }
 }
 
+// Brett, Sep 2026: a receipt no longer has to be tied to a work order. A Ridge Co business
+// expense (no customer, sometimes no property either — e.g. office supplies) or a receipt
+// against one of Brett's own properties (e.g. Milam Ridge / 1864 Kerns School Rd, which has
+// no owner to bill) both need to be recorded somewhere. wo_id stays the common case and is
+// still validated by the caller (receiptReconConfirm) when present, but this function itself
+// only truly requires an amount — everything else is optional context.
 async function addReceipt(env, body) {
-  const { wo_id, amount, description, store, date, added_by, added_by_id, role } = body;
-  if (!wo_id)  return json({ error: 'wo_id required' }, 400);
+  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url } = body;
   if (!amount) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
   if (isNaN(amt) || amt <= 0) return json({ error: 'amount must be a positive number' }, 400);
 
-  // Same receipt, same job, same store, seconds apart = a double-tap, not two purchases.
-  // Added_By_ID and Date are in the signature and the window is short, because two small
-  // identical purchases on one job (two of the same fitting from the same run) is a real
-  // thing and must not be swallowed.
+  // Same receipt, same job/property, same store, seconds apart = a double-tap, not two
+  // purchases. Added_By_ID and Date are in the signature and the window is short, because two
+  // small identical purchases on one job (two of the same fitting from the same run) is a
+  // real thing and must not be swallowed.
   const dupe = await findRecentDuplicate(env, 'Receipts', {
-    WO_ID: wo_id, Amount: amt.toFixed(2), Store: store || '', Description: description || '',
+    WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Store: store || '', Description: description || '',
     Added_By_ID: String(added_by_id || ''), Date: date || new Date().toISOString().split('T')[0],
   }, 30);
   if (dupe) return json({ success: true, duplicate: true, amount: amt.toFixed(2) });
 
-  await addRow(env, 'Receipts', { WO_ID: wo_id, Amount: amt.toFixed(2), Description: description||'', Store: store||'', Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''), Role: role||'hub', Created_Date: new Date().toISOString(), Active: 'TRUE' });
-  return json({ success: true, amount: amt.toFixed(2) });
+  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date']); }
+  catch (e) { /* the core fields below still land; only the new ones are at risk on a very first run */ }
+
+  const addResp = await addRow(env, 'Receipts', {
+    WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
+    Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''),
+    Role: role||'hub', Category: category || (wo_id ? 'billable' : 'company'),
+    Source_File_ID: source_file_id || '', Source_File_URL: source_file_url || '',
+    QB_Email_Sent: 'FALSE', QB_Email_Sent_Date: '',
+    Created_Date: new Date().toISOString(), Active: 'TRUE',
+  });
+  let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) {}
+  return json({ success: true, amount: amt.toFixed(2), id: newId });
 }
 
 // ── RECEIPT RECONCILER (CAP-002) — deterministic matching engine, ZERO AI ──────────────────────
@@ -1238,7 +1259,7 @@ async function receiptSuggest(env, body) {
 // Confirm (POST /receipt-recon/confirm, which calls the same addReceipt() the vendor portal and
 // every manual entry this session used) or Skip. A pending row costs one OCR call and zero other
 // AI tokens; the daily sweep of an empty folder costs nothing at all.
-const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date'];
+const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date'];
 // "Receipts and Invoices" under PAYABLES Inbox (Drive) — the folder Brett has been dropping
 // scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
 const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
@@ -1274,12 +1295,13 @@ async function receiptReconScan(env) {
       const ex = await receiptExtract(env, dl.bytes, dl.mime);
       const po = ex.po_reference || ex.handwritten_note || '';
       const items = Array.isArray(ex.items) ? ex.items : [];
+      const itemsSummary = Array.isArray(ex.items_summary) ? ex.items_summary : [];
       const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '' }, properties, workorders, receipts, custCards);
       await addRow(env, 'Receipt_Recon_Queue', {
         Source_File_ID: f.id, Source_File_URL: f.webViewLink || '', File_Name: f.name || '',
         Received_Date: new Date().toISOString(), Vendor: ex.vendor || '', Receipt_Date: ex.date || '',
         Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
-        PO_Reference: po, Items: JSON.stringify(items), Card_Last4: ex.card_last4 || '', Invoice_Number: ex.invoice_number || '',
+        PO_Reference: po, Items: JSON.stringify(items), Items_Summary: JSON.stringify(itemsSummary), Card_Last4: ex.card_last4 || '', Invoice_Number: ex.invoice_number || '',
         Suggestion: JSON.stringify(suggestion).slice(0, 4000), Status: 'pending',
         Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: '', Active: 'TRUE',
       });
@@ -1297,7 +1319,8 @@ async function listReceiptReconQueue(env, url) {
     .map(r => {
       let suggestion = null; try { suggestion = JSON.parse(r.Suggestion || 'null'); } catch (e) {}
       let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
-      return { ...r, suggestion, items };
+      let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
+      return { ...r, suggestion, items, items_summary };
     }));
 }
 
@@ -1305,28 +1328,87 @@ async function listReceiptReconQueue(env, url) {
 // path in this pipeline. Brett (or the UI, pre-filled from the suggestion) picks the WO; this
 // calls the exact same addReceipt() every other entry path uses, so its duplicate guard and
 // Receipts-tab shape are identical no matter how the receipt got there.
+// Brett, Sep 2026: when a newly-confirmed receipt lands on a WO that already has an
+// Invoice_Review row, fold it into that SAME row instead of leaving it to be picked up (or
+// silently missed) whenever Brett next approves invoicing for the job. Never creates a
+// second Invoice_Review row. If that invoice was already sent to QuickBooks, this does not
+// touch QuickBooks at all — it just flags the row so the existing qb/repairable →
+// qb/repair-invoice path (which already refuses to touch a paid invoice — see qbRepairInvoice)
+// picks it up and Brett can push the update himself.
+async function appendReceiptToInvoiceReview(env, { wo_id, receipt_id, amount }) {
+  if (!wo_id || !receipt_id) return { linked: false };
+  try {
+    await ensureColumns(env, 'Invoice_Review', ['Repair_Flagged', 'Repair_Reason']);
+    const irs = await fetchTab(env, 'Invoice_Review');
+    const candidates = irs.filter(r => r.Active !== 'FALSE' && String(r.WO_ID) === String(wo_id));
+    if (!candidates.length) return { linked: false, reason: 'no_invoice_review_yet' };
+    // Most recently approved row for this WO, mirroring approveInvoiceReview's own
+    // "hand back the existing row" precedent rather than guessing among several.
+    candidates.sort((a, b) => new Date(b.Approved_Date || 0) - new Date(a.Approved_Date || 0));
+    const ir = candidates[0];
+    const amt = +(Number(amount) || 0).toFixed(2);
+    if (amt <= 0) return { linked: false, reason: 'no_amount' };
+    const ids = String(ir.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
+    if (ids.includes(String(receipt_id))) return { linked: true, ir_id: ir.ID, already: true };
+    ids.push(String(receipt_id));
+    const newOwnMaterials = +((Number(ir.Own_Materials) || 0) + amt).toFixed(2);
+    const newCustomerTotal = +((Number(ir.Customer_Total) || 0) + amt).toFixed(2);
+    const alreadySent = !!(ir.QB_Invoice_ID || '').trim();
+    const fields = { Own_Material_IDs: ids.join(','), Own_Materials: String(newOwnMaterials), Customer_Total: String(newCustomerTotal) };
+    if (alreadySent) {
+      fields.Repair_Flagged = 'TRUE';
+      fields.Repair_Reason = `Receipt #${receipt_id} ($${amt.toFixed(2)}) added ${new Date().toISOString().split('T')[0]} after invoice was sent — run Repairable Invoices to push it to QuickBooks.`;
+    }
+    await updateRow(env, 'Invoice_Review', ir.ID, fields);
+    return { linked: true, ir_id: ir.ID, already_sent: alreadySent, new_customer_total: newCustomerTotal };
+  } catch (e) {
+    return { linked: false, error: String(e && e.message || e) };
+  }
+}
+
+// POST /receipt-recon/confirm { id, wo_id? | no_wo:true, property_id?, amount, description,
+// store, date }. wo_id is still the ordinary case and is validated as before. Brett, Sep
+// 2026: a "company"/business-expense receipt (excluded from the normal WO flow, see
+// receiptSuggestCore's category logic) has no work order at all — pass no_wo:true for that
+// path; property_id is then optional too (Ridge Co overhead has no property; a receipt for
+// Milam Ridge, which has no owner to bill, would carry property_id but still no wo_id).
 async function receiptReconConfirm(env, body) {
   const id = body.id; if (!id) return json({ error: 'id required' }, 400);
   const rows = await fetchTab(env, 'Receipt_Recon_Queue');
   const row = rows.find(r => String(r.ID) === String(id));
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (row.Status === 'confirmed') return json({ error: 'already confirmed', id }, 409);
-  const wo_id = body.wo_id || ''; if (!wo_id) return json({ error: 'wo_id required' }, 400);
+  const noWo = body.no_wo === true || String(body.no_wo).toUpperCase() === 'TRUE';
+  const wo_id = body.wo_id || '';
+  const property_id = body.property_id || '';
+  if (!noWo && !wo_id) return json({ error: 'wo_id required (or pass no_wo:true for a business expense)' }, 400);
   // Validate the WO actually exists BEFORE writing anything. The manual "type a WO number to
   // override" field on the reconciler UI has no way to know if what was typed is real — a typo
   // (1054 vs 1045) would otherwise post a real Receipts row against a nonexistent or wrong job
   // with no error and no way to notice at the time. This is the actual defense; the frontend's
   // own live validation against the already-loaded WO list is just fast-fail UX on top of it.
-  const workorders = await fetchTab(env, 'Work_Orders');
-  if (!workorders.some(w => String(w.ID) === String(wo_id))) {
-    return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
+  if (!noWo) {
+    const workorders = await fetchTab(env, 'Work_Orders');
+    if (!workorders.some(w => String(w.ID) === String(wo_id))) {
+      return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
+    }
   }
   const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : row.Total;
   const description = body.description || row.PO_Reference || row.Vendor || '';
   const store = body.store || row.Vendor || '';
   const date = body.date || row.Receipt_Date || '';
-  const addResp = await addReceipt(env, { wo_id, amount, description, store, date, added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub' });
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  const category = (suggestion && suggestion.category) || (noWo ? 'company' : 'billable');
+  const addResp = await addReceipt(env, {
+    wo_id: wo_id || '', property_id, amount, description, store, date,
+    added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
+    source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
+  });
   const addJson = await addResp.json().catch(() => ({}));
+  let invoiceLink = null;
+  if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
+    invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
+  }
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: addJson.duplicate ? 'skipped' : 'confirmed',
@@ -1334,7 +1416,7 @@ async function receiptReconConfirm(env, body) {
       Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
     });
   }
-  return json({ ok: true, wo_id, ...addJson });
+  return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink });
 }
 
 // POST /receipt-recon/skip { id, reason? } — dismiss without billing anything.
@@ -6469,10 +6551,129 @@ async function gmailSendEmail(env, { to, subject, html }) {
   return { sent: true, message_id: data.id };
 }
 
+function _escHtml(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// Best-effort recovery of a receipt's source file for rows that predate Source_File_ID being
+// carried onto the Receipts tab (everything confirmed before this build). Matches back to its
+// Receipt_Recon_Queue origin row by WO/amount/date — approximate by design, since that's the
+// only trail these older rows left. Returns '' if nothing lines up; the email still goes out,
+// just without an attachment.
+function _recoverReceiptSourceFile(receiptRow, queueRows) {
+  if (receiptRow.Source_File_ID) return { id: receiptRow.Source_File_ID, url: receiptRow.Source_File_URL || '' };
+  const amt = (Number(receiptRow.Amount) || 0).toFixed(2);
+  const hit = queueRows.find(q =>
+    String(q.Confirmed_WO_ID || '') === String(receiptRow.WO_ID || '') &&
+    (Number(q.Confirmed_Amount) || 0).toFixed(2) === amt &&
+    q.Source_File_ID);
+  return hit ? { id: hit.Source_File_ID, url: hit.Source_File_URL || '' } : { id: '', url: '' };
+}
+
+// POST /receipts/send-to-qb-email {limit?} — Brett, Sep 2026: every receipt that runs through
+// the Reconciler is Brett's own money out (an "internal expense" — the vendor-fronted-materials
+// case is a different animal, handled entirely through Vendor_Bills and never touches this tab),
+// so every row here needs to reach QuickBooks' own receipts-capture inbox for bank/credit-card
+// reconciliation — regardless of whether it's also tied to a work order/customer invoice. This
+// applies going forward (called from the daily cron below) AND retroactively: running this once
+// against the full Receipts tab is the backfill for everything already reconciled to a WO before
+// this existed. Bounded per call (default 25) since a Worker invocation has a real time limit —
+// call it again (or let the cron do it) to keep working through a large backlog; already-sent
+// rows are skipped so repeat calls are always safe.
+async function sendReceiptsToQBEmail(env, opts) {
+  const limit = Math.max(1, Math.min(200, parseInt(opts && opts.limit) || 25));
+  const cfg = await fetchConfig(env).catch(() => ({}));
+  const qbEmail = (cfg.qb_receipts_email || env.QB_RECEIPTS_EMAIL || '').trim();
+  if (!qbEmail) return json({ ok: false, error: 'qb_receipts_email is not set — add it as a Config/Settings key (or QB_RECEIPTS_EMAIL secret) first: the email address QuickBooks gave you for forwarding receipts.' }, 400);
+
+  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date']); } catch (e) {}
+
+  let all = []; try { all = await fetchTab(env, 'Receipts'); } catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + (e.message || e) }, 500); }
+  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE');
+  const batch = pending.slice(0, limit);
+  if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
+
+  let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
+  const [properties, workorders] = await Promise.all([
+    fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => []),
+  ]);
+
+  let sent = 0, sentNoFile = 0; const failed = [];
+  for (const r of batch) {
+    try {
+      const src = _recoverReceiptSourceFile(r, queueRows);
+      let attachment = null;
+      if (src.id) {
+        try {
+          const tok = await getAccessToken(env);
+          const dl = await driveDownload(tok, src.id);
+          attachment = { filename: `receipt_${r.ID}`, mimeType: dl.mime || 'application/octet-stream', base64Data: bytesToB64(dl.bytes) };
+        } catch (e) { /* fall through — send without an attachment rather than failing the row */ }
+      }
+      const wo = r.WO_ID ? workorders.find(w => String(w.ID) === String(r.WO_ID)) : null;
+      const prop = r.Property_ID ? properties.find(p => String(p.ID) === String(r.Property_ID)) : null;
+      const context = wo ? `WO ${wo.ID}${wo.Description ? ' — ' + _escHtml(String(wo.Description).slice(0, 120)) : ''}`
+        : prop ? `Property: ${_escHtml(prop.Address || ('#' + prop.ID))}`
+        : 'General Ridge Co expense (no job/property)';
+      const html = [
+        `<p><b>${_escHtml(r.Store || 'Unknown vendor')}</b> — $${_escHtml(r.Amount || '')} on ${_escHtml(r.Date || '')}</p>`,
+        `<p>${_escHtml(r.Description || '')}</p>`,
+        `<p>${context}</p>`,
+        `<p style="color:#888;font-size:11px">Ridge Co Hub Receipts row #${_escHtml(r.ID)}${src.url ? ' · <a href="' + _escHtml(src.url) + '">original scan</a>' : ' · no scanned image on file for this entry'}</p>`,
+      ].join('\n');
+      await gmailSendEmailWithAttachment(env, {
+        to: qbEmail, subject: `Receipt — ${r.Store || 'Unknown vendor'} — $${r.Amount || ''}`, html, attachment,
+      });
+      await updateRow(env, 'Receipts', r.ID, { QB_Email_Sent: 'TRUE', QB_Email_Sent_Date: new Date().toISOString() });
+      sent++; if (!attachment) sentNoFile++;
+    } catch (e) {
+      failed.push({ id: r.ID, error: String(e && e.message || e) });
+    }
+    await new Promise(res => setTimeout(res, 400)); // pace Gmail/Drive calls, matches existing convention
+  }
+  return json({ ok: true, sent, sent_without_attachment: sentNoFile, failed, remaining: pending.length - batch.length + failed.length });
+}
+
 function bytesToB64(buf) {
   const b = new Uint8Array(buf); let s = ''; const CH = 0x8000;
   for (let i = 0; i < b.length; i += CH) s += String.fromCharCode.apply(null, b.subarray(i, i + CH));
   return btoa(s);
+}
+
+// Same send path as gmailSendEmail, but multipart/mixed with one optional file attachment —
+// built for CAP-0xx (Sep 2026): forwarding a receipt to Brett's QuickBooks receipts-capture
+// email so it lands in QB for bank/CC reconciliation. attachment is optional on purpose: a
+// receipt with no recoverable image (a manually keyed entry, or an old row from before the
+// Hub tracked Source_File_ID) still gets a text-only email rather than being skipped, since
+// the point is that nothing silently falls out of reconciliation.
+async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment }) {
+  if (!to) throw new Error('gmailSendEmailWithAttachment: to required');
+  const accessToken = await gmailAccessToken(env);
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
+  if (!attachment || !attachment.base64Data) {
+    return await gmailSendEmail(env, { to, subject, html });
+  }
+  const boundary = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+  const safeName = String(attachment.filename || 'receipt').replace(/[^\w .-]/g, '_').slice(0, 80);
+  // RFC 2045 wants base64 content wrapped at 76 chars/line — some strict mail parsers choke
+  // on one giant unbroken line.
+  const wrappedB64 = String(attachment.base64Data).replace(/(.{76})/g, '$1\r\n');
+  const parts = [
+    `From: Ridge Co <${from}>`, `To: ${to}`, `Subject: ${subjectEncoded}`, 'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"', '', html || '', '',
+    `--${boundary}`,
+    `Content-Type: ${attachment.mimeType || 'application/octet-stream'}; name="${safeName}"`,
+    'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${safeName}"`, '',
+    wrappedB64, '', `--${boundary}--`,
+  ];
+  const raw = parts.join('\r\n');
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: _utf8B64url(raw) }),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id };
 }
 
 // Read a receipt image/PDF with Claude vision → strict JSON. Money-facing ⇒ Claude (PAT-031).
@@ -6488,11 +6689,11 @@ async function receiptExtract(env, bytes, mime) {
   const media = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
-  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased — e.g. "3x Smoke & Carbon combo hardwired"; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased, VERBATIM as printed — e.g. "GLIDDEN PREMIUM INT PAINT"; empty array if unreadable), items_summary (array of short GENERALIZED category words for what was bought, one per distinct item/group — e.g. "paint", "primer", "batteries", "tape" instead of the verbatim brand/SKU text in items; collapse near-duplicates, e.g. two paint SKUs both become one "paint" entry; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
   const r = await routeAI(env, { type: 'receipt_parse', moneyFacing: true, media, prompt, maxTokens: 700, source: 'receiptExtract' });
   const txt = (r.result || '').trim();
   try { return JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim()); }
-  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], card_last4: '', suggested_category: '', confidence: 0 }; }
+  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0 }; }
 }
 
 // Read a VENDOR INVOICE (photo or PDF) with Claude vision → strict JSON suggestion. This is the
@@ -7676,8 +7877,12 @@ async function qbRepairable(env, url) {
     const sent = irs.filter(r => r.Active !== 'FALSE' && (r.QB_Invoice_ID || '').trim());
     const out = [];
     for (const ir of sent) {
+      const repairFlagged = String(ir.Repair_Flagged || '').toUpperCase() === 'TRUE';
       const when = new Date(ir.Approved_Date || 0);
-      if (!isNaN(when) && when < cutoff) continue;
+      // A row explicitly flagged (a receipt was added to it after it was already sent — see
+      // appendReceiptToInvoiceReview) always gets checked, no matter how old the original
+      // send was — the day-window below is only meant to bound the routine drift sweep.
+      if (!isNaN(when) && when < cutoff && !repairFlagged) continue;
 
       const inv = await qbApi(env, `invoice/${encodeURIComponent(ir.QB_Invoice_ID)}?minorversion=73`, 'GET', null, token);
       const q = inv && inv.Invoice;
@@ -7702,10 +7907,12 @@ async function qbRepairable(env, url) {
       if (!q.DocNumber) issues.push('no invoice number');
       if (currentDesc !== rebuilt.lines.map(l => l.Description).join(' | ')) issues.push('line description');
       if (folderUrl && currentMemo.indexOf(folderUrl) === -1) issues.push('photo link missing');
+      if (repairFlagged) issues.push('materials added since send');
       if (!issues.length) continue;
 
       out.push({
         ir_id: ir.ID, wo_id: ir.WO_ID, invoice_id: ir.QB_Invoice_ID,
+        repair_flagged: repairFlagged, repair_reason: ir.Repair_Reason || '',
         doc_number: q.DocNumber || '', total: q.TotalAmt,
         paid, balance: isNaN(qBal) ? null : qBal,
         customer: (q.CustomerRef && q.CustomerRef.name) || '',
@@ -7796,6 +8003,10 @@ async function qbRepairInvoice(env, body) {
     const r = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
     const updated = r && r.Invoice;
     if (!updated) return json({ error: qbFault(r) || 'QuickBooks refused the update.' }, 500);
+
+    if (String(ir.Repair_Flagged || '').toUpperCase() === 'TRUE') {
+      try { await updateRow(env, 'Invoice_Review', ir.ID, { Repair_Flagged: 'FALSE', Repair_Reason: '' }); } catch (e) { /* non-fatal — the repair itself already succeeded */ }
+    }
 
     return json({ ok: true, applied: true, invoice_id: qbInvId, wo_id: ir.WO_ID,
       doc_number: updated.DocNumber || '', total: updated.TotalAmt,

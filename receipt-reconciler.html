@@ -311,7 +311,11 @@ function render(rows){
 
 function rowCard(r){
   const sug = r.suggestion || {};
-  const excluded = ['refund','company','customer_paid'].includes(sug.category);
+  // 'company' (a Ridge Co business expense — no customer, sometimes no property either) now
+  // gets its own lightweight confirm path below instead of being excluded outright. 'refund'
+  // and 'customer_paid' still have nothing to confirm here — those stay Skip-only.
+  const isCompany = sug.category === 'company';
+  const excluded = ['refund','customer_paid'].includes(sug.category);
   const isPendingLike = (r.Status||'pending') === 'pending';
   const isDuplicateFlagged = (sug.flags||[]).includes('duplicate_on_wo');
   const propId = (sug.property && sug.property.id) || '';
@@ -326,7 +330,14 @@ function rowCard(r){
   const flags = sug.flags || [];
   if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
 
-  if (!excluded && isPendingLike) {
+  // Materials description default: the receipt's own OCR'd items, generalized into short
+  // categories (e.g. "paint, primer, batteries" instead of the verbatim brand/SKU text) —
+  // never the work order's own job description. Falls back to the old behavior only for
+  // receipts scanned before Items_Summary existed.
+  const descDefault = (r.items_summary && r.items_summary.length) ? r.items_summary.join(', ')
+    : ((sug.suggested_wo&&sug.suggested_wo.desc)||r.PO_Reference||r.Vendor||'');
+
+  if (!excluded && !isCompany && isPendingLike) {
     html += '<div class="rc-fields">'
       + '<div><label>Property</label><select id="'+idAttr+'-prop" onchange="refreshWoSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
       + '<div><label>Work order</label><select id="'+idAttr+'-wo" onchange="document.getElementById(\''+idAttr+'-wo-manual\').value=\'\';checkManualWo(\''+r.ID+'\')"></select></div>'
@@ -335,14 +346,28 @@ function rowCard(r){
       + '<div><label>Amount</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
       + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
       + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
-      + '<div class="full"><label>Description (goes on the WO)</label><textarea id="'+idAttr+'-desc">'+esc((sug.suggested_wo&&sug.suggested_wo.desc)||r.PO_Reference||r.Vendor||'')+'</textarea></div>'
+      + '<div class="full"><label>Description (materials — goes on the WO and the invoice line)</label><textarea id="'+idAttr+'-desc">'+esc(descDefault)+'</textarea></div>'
+      + '</div>';
+  }
+
+  // Business expense (category 'company'): no customer, no work order required. Property is
+  // offered but optional — Ridge Co overhead (office supplies etc.) has no property either;
+  // a Milam Ridge cabin receipt would pick that property with still no WO.
+  if (isCompany && isPendingLike) {
+    html += '<div class="rc-fields">'
+      + '<div class="full"><label>Property (optional — leave blank for general Ridge Co overhead)</label><select id="'+idAttr+'-prop">'+propertyOptions(propId)+'</select></div>'
+      + '<div><label>Amount</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
+      + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
+      + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
+      + '<div class="full"><label>Description</label><textarea id="'+idAttr+'-desc">'+esc(descDefault)+'</textarea></div>'
       + '</div>';
   }
 
   const fileLink = r.Source_File_URL ? '<a href="'+esc(r.Source_File_URL)+'" target="_blank">View receipt →</a>' : '<span class="info">no file link</span>';
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
-    if (!excluded) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    if (!excluded && !isCompany) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    if (isCompany) html += '<button class="btn small" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>';
     if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🗐 Confirm duplicate</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
@@ -383,9 +408,38 @@ async function confirmRow(id, btn){
   try {
     const res = await post('/receipt-recon/confirm', { id, wo_id, amount, store, date, description });
     if (res.error) throw new Error(res.error);
+    let extra = '';
+    if (res.invoice_link && res.invoice_link.linked && !res.invoice_link.already) {
+      extra = res.invoice_link.already_sent
+        ? ' ⚠ That WO was already invoiced — flagged for repair (check Repairable Invoices to push $'+esc(res.invoice_link.new_customer_total)+' to QuickBooks and the customer).'
+        : ' Added to the pending invoice for that WO — will bill when you send it.';
+    }
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already on that WO — skipped, not double-posted.</span>'
-      : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.</span>';
+      : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.'+extra+'</span>';
+    setTimeout(loadQueue, 900);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Business-expense confirm (category 'company'): no work order, property optional. Posts
+// no_wo:true so the server skips the WO-required check entirely (receiptReconConfirm).
+async function confirmBusinessExpense(id, btn){
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const propSel = document.getElementById(idAttr+'-prop');
+  const property_id = propSel ? propSel.value.trim() : '';
+  const amount = document.getElementById(idAttr+'-amt').value.trim();
+  const store = document.getElementById(idAttr+'-store').value.trim();
+  const date = document.getElementById(idAttr+'-date').value.trim();
+  const description = document.getElementById(idAttr+'-desc').value.trim();
+  statusEl.innerHTML = '<span class="info">Posting…</span>';
+  try {
+    const res = await post('/receipt-recon/confirm', { id, no_wo: true, property_id, amount, store, date, description });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = res.duplicate
+      ? '<span class="warn">Already recorded — skipped, not double-posted.</span>'
+      : '<span class="ok">✓ Recorded $'+esc(res.amount||amount)+' as a business expense'+(property_id?' on that property':'')+'. It\'ll go to QuickBooks in the next receipts sweep.</span>';
     setTimeout(loadQueue, 900);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
