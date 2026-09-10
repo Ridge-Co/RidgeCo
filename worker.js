@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-07.2';
+const BUILD_VERSION = '2026-09-09.1';
 
 export default {
   async fetch(request, env) {
@@ -7852,42 +7852,71 @@ async function qbPayables(env, url) {
     const token = await qbAccessToken(env);
     const [irs, vendors] = await fetchTabs(env, ['Invoice_Review','Vendors']);
 
-    const rows = [];
-    for (const ir of irs) {
-      if (ir.Active === 'FALSE') continue;
-      const invId = (ir.QB_Invoice_ID || '').trim();
-      if (!invId) continue;
+    // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
+    // gate as before, just pulled out so the id lists below are built off exactly this set.
+    const candidates = irs.filter(ir => {
+      if (ir.Active === 'FALSE') return false;
+      if (!(ir.QB_Invoice_ID || '').trim()) return false;
       const when = new Date(ir.Approved_Date || 0);
-      if (!isNaN(when) && when < cutoff) continue;
+      return isNaN(when) || when >= cutoff;
+    });
+
+    // Batch-fetch every invoice and every bill balance in (at most) two QuickBooks calls total,
+    // instead of one GET per invoice plus one GET per bill (was up to 2 sequential round trips
+    // PER JOB — the reason this screen was read-on-demand only in the first place). QuickBooks'
+    // query language only supports `=` and `IN` as operators on the Id field (Intuit's own docs:
+    // "Filtering on the ID field does not support operators >, <, >=, <=, !=, and LIKE. Only =
+    // and IN are supported"), so `WHERE Id IN (...)` is the documented way to do this. A query
+    // response caps at 1000 rows, chunked defensively even though real volume here is nowhere
+    // close. An id that doesn't come back (deleted/bad id) just falls through to the same
+    // null/"unknown" treatment a failed single-entity GET used to produce for that one row —
+    // it no longer takes the rest of the batch down with it either way.
+    async function qbBatchById(entity, ids) {
+      const map = new Map();
+      const list = [...new Set(ids.filter(Boolean))];
+      for (let i = 0; i < list.length; i += 200) {
+        const chunk = list.slice(i, i + 200);
+        const idList = chunk.map(id => `'${id.replace(/'/g, "\\'")}'`).join(',');
+        const q = encodeURIComponent(`select * from ${entity} where Id in (${idList}) maxresults 1000`);
+        try {
+          const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+          const found = (r && r.QueryResponse && r.QueryResponse[entity]) || [];
+          for (const row of found) map.set(String(row.Id), row);
+        } catch (e) { /* this chunk's ids fall through to null/"unknown" below, same as before */ }
+      }
+      return map;
+    }
+    const [invById, billById] = await Promise.all([
+      qbBatchById('Invoice', candidates.map(ir => (ir.QB_Invoice_ID || '').trim())),
+      qbBatchById('Bill', candidates.map(ir => (ir.QB_Bill_ID || '').trim())),
+    ]);
+
+    const rows = [];
+    for (const ir of candidates) {
+      const invId = (ir.QB_Invoice_ID || '').trim();
 
       let customerPaid = null, customerBalance = null, invNumber = '';
-      try {
-        const r = await qbApi(env, `invoice/${encodeURIComponent(invId)}?minorversion=73`, 'GET', null, token);
-        const q = r && r.Invoice;
-        if (q) {
-          customerBalance = Number(q.Balance);
-          customerPaid = !isNaN(customerBalance) && customerBalance <= 0.005;
-          invNumber = q.DocNumber || '';
-        }
-      } catch (e) { /* leave null — unknown, not paid */ }
+      const q = invById.get(invId);
+      if (q) {
+        customerBalance = Number(q.Balance);
+        customerPaid = !isNaN(customerBalance) && customerBalance <= 0.005;
+        invNumber = q.DocNumber || '';
+      }
 
       const billId = (ir.QB_Bill_ID || '').trim();
       let vendorPaid = null, vendorBalance = null, billDue = '', vendorRef = '', vendorTotal = null;
       if (billId) {
-        try {
-          const r = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
-          const b = r && r.Bill;
-          if (b) {
-            vendorBalance = Number(b.Balance);
-            vendorTotal = Number(b.TotalAmt);
-            vendorPaid = !isNaN(vendorBalance) && vendorBalance <= 0.005;
-            billDue = b.DueDate || '';
-            // The vendor's own reference number (what shows in QuickBooks' Pay Bills "REF NO").
-            // Blank when the vendor gave no number — the card falls back to the WO number, which
-            // is also what QuickBooks shows in that case, so the two views still line up.
-            vendorRef = b.DocNumber || '';
-          }
-        } catch (e) { /* unknown */ }
+        const b = billById.get(billId);
+        if (b) {
+          vendorBalance = Number(b.Balance);
+          vendorTotal = Number(b.TotalAmt);
+          vendorPaid = !isNaN(vendorBalance) && vendorBalance <= 0.005;
+          billDue = b.DueDate || '';
+          // The vendor's own reference number (what shows in QuickBooks' Pay Bills "REF NO").
+          // Blank when the vendor gave no number — the card falls back to the WO number, which
+          // is also what QuickBooks shows in that case, so the two views still line up.
+          vendorRef = b.DocNumber || '';
+        }
       }
 
       const vendor = vendors.find(v => String(v.ID) === String(ir.Vendor_ID));

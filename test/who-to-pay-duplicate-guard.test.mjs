@@ -91,9 +91,11 @@ function buildQbPayables({ invoiceBalance, billBalance, billTotal, purchases, ir
   const fetchTabs = async (env, tabs) => tabs.map(t => (t === 'Invoice_Review' ? irs : t === 'Vendors' ? vendors : []));
   const qbAccessToken = async () => 'FAKE_TOKEN';
   const qbApi = async (env, path) => {
-    if (path.startsWith('invoice/')) return { Invoice: { Balance: invoiceBalance, DocNumber: '1648' } };
-    if (path.startsWith('bill/')) return { Bill: { Balance: billBalance, TotalAmt: billTotal, DueDate: '2026-09-15', DocNumber: '' } };
-    if (path.startsWith('query?')) return { QueryResponse: { Purchase: purchases || [] } };
+    // qbPayables batches invoice/bill balances via WHERE-Id-IN queries now (one query?query=...
+    // call per entity type, not one GET per id) — branch on which entity the query targets.
+    if (path.startsWith('query?') && path.includes('from%20Invoice')) return { QueryResponse: { Invoice: [{ Id: 'INV-1', Balance: invoiceBalance, DocNumber: '1648' }] } };
+    if (path.startsWith('query?') && path.includes('from%20Bill')) return { QueryResponse: { Bill: [{ Id: 'BILL-7578', Balance: billBalance, TotalAmt: billTotal, DueDate: '2026-09-15', DocNumber: '' }] } };
+    if (path.startsWith('query?') && path.includes('from%20Purchase')) return { QueryResponse: { Purchase: purchases || [] } };
     return {};
   };
   const qbVendorDisplayName = (v) => (v && v.Company) || 'Vendor';
@@ -140,9 +142,10 @@ ok(resNormal.owed_now === 1 && Math.abs(resNormal.owed_total - 297.50) < 0.01, '
 let purchaseQueried = false;
 const fetchTabsPaid = async (env, tabs) => tabs.map(t => (t === 'Invoice_Review' ? [irRow] : t === 'Vendors' ? [vendorRow] : []));
 const qbApiPaid = async (env, path) => {
-  if (path.startsWith('invoice/')) return { Invoice: { Balance: 0, DocNumber: '1648' } };
-  if (path.startsWith('bill/')) return { Bill: { Balance: 0, TotalAmt: 297.50, DueDate: '', DocNumber: '' } }; // vendor bill ALREADY paid
-  if (path.startsWith('query?')) { purchaseQueried = true; return { QueryResponse: { Purchase: [] } }; }
+  if (path.startsWith('query?') && path.includes('from%20Invoice')) return { QueryResponse: { Invoice: [{ Id: 'INV-1', Balance: 0, DocNumber: '1648' }] } };
+  // vendor bill ALREADY paid
+  if (path.startsWith('query?') && path.includes('from%20Bill')) return { QueryResponse: { Bill: [{ Id: 'BILL-7578', Balance: 0, TotalAmt: 297.50, DueDate: '', DocNumber: '' }] } };
+  if (path.startsWith('query?') && path.includes('from%20Purchase')) { purchaseQueried = true; return { QueryResponse: { Purchase: [] } }; }
   return {};
 };
 const srcPaid = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;

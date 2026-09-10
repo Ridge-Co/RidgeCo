@@ -559,7 +559,8 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="loadPayables(false)">↻ Check QuickBooks</button>
       <button class="btn small" onclick="loadPayables(true)" style="background:var(--surface2);color:var(--text)">↻ Check and save to the sheet</button>
     </div>
-    <div id="payables-body"><div style="color:var(--muted);font-size:12px">Hit "Check QuickBooks" to pull the current balances.</div></div>
+    <div id="payables-filters"></div>
+    <div id="payables-body"><div style="color:var(--muted);font-size:12px">Reading QuickBooks…</div></div>
   </div>
 
   <div class="page" id="page-qb-map">
@@ -1543,7 +1544,11 @@ function showPage(name, btn) {
   if (name === 'invoice-review') { loadSendTrack(); loadInvoiceReview(); }
   if (name === 'qb-send') { loadQBQueue(); }
   if (name === 'qb-map')  { loadQBMapping(false); }
-  if (name === 'payables') { /* read on demand — it costs a QuickBooks call per job */ }
+  // Was deliberately read-on-demand-only (a QuickBooks call per job adds up) — Brett asked
+  // 2026-09-09 for it to auto-check on open instead, same convention as the three lines above.
+  // Still costs the same QB calls loadPayables(false) always has; the "Check QuickBooks" /
+  // "Check and save to the sheet" buttons remain for a manual re-run any time after that.
+  if (name === 'payables') { loadPayables(false); }
 }
 
 // ── Dashboard ────────────────────────────────────────────────
@@ -8182,105 +8187,257 @@ function qbPreviewLink(kind, recId) {
 // Reads both balances from QuickBooks per job. Deliberately on demand rather than on page
 // load: it's one API call per invoice and one per bill, and it's a question you ask a few
 // times a week, not every time you click a tab.
+// ── Who To Pay — payables list joined to WO/Property/Owner for filtering, grouped by state
+// with "vendor paid" / "nothing to pay" collapsed so the page doesn't need scrolling past them ──
+var _payablesRows = [];
+var _payablesRes = null;
+var _payablesLastSave = false;
+
+var PAY_STATE_ORDER = ['possible duplicate', 'PAY THE VENDOR', 'owner paid in part', 'waiting on the owner', 'unknown', 'vendor paid', 'nothing to pay'];
+var PAY_STATE_GROUP = {
+  'possible duplicate':   { label: '⚠ Possible duplicate — check QuickBooks', collapsible: false },
+  'PAY THE VENDOR':       { label: 'Pay the vendor',                          collapsible: true,  openDefault: true },
+  'owner paid in part':   { label: 'Owner paid in part',                      collapsible: true,  openDefault: true },
+  'waiting on the owner': { label: 'Waiting on the owner',                    collapsible: false },
+  'unknown':              { label: 'Unknown',                                 collapsible: false },
+  'vendor paid':          { label: 'Vendor paid',                             collapsible: true,  openDefault: false },
+  'nothing to pay':       { label: 'Nothing to pay',                          collapsible: true,  openDefault: false }
+};
+
 function loadPayables(save) {
+  _payablesLastSave = !!save;
   var el = document.getElementById('payables-body');
   if (el) el.innerHTML = '<div style="color:var(--muted);font-size:12px">Reading QuickBooks…</div>';
-  var call = save ? api('POST', '/qb/sync-payments', { days: 90 })
-                  : api('GET', '/qb/payables?days=90');
-  call.then(function(res) {
+  var fhost = document.getElementById('payables-filters');
+  if (fhost) fhost.innerHTML = '';
+  // Job/property/owner context (WO → Property → Owner) powers the filter labels + search below —
+  // same top-up-if-empty pattern loadInvoiceReview() already uses. Never render context-blind.
+  var prep = [];
+  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders').then(function(r) { if (Array.isArray(r)) state.workorders = r; }).catch(function() {}));
+  if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) { if (Array.isArray(r)) state.properties = r; }).catch(function() {}));
+  if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) { if (Array.isArray(r)) state.vendors = r; }).catch(function() {}));
+  if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) { if (Array.isArray(r)) state.owners = r; }).catch(function() {}));
+
+  Promise.all(prep).then(function() {
+    return save ? api('POST', '/qb/sync-payments', { days: 90 })
+                : api('GET', '/qb/payables?days=90');
+  }).then(function(res) {
     if (!res || res.ok === false) {
       if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'failed') + '</div>';
       return;
     }
-    var rows = safeArray(res.rows);
-    if (!rows.length) { if (el) el.innerHTML = '<div style="color:var(--muted);font-size:12px">Nothing sent to QuickBooks in the last 90 days.</div>'; return; }
-
-    var order = { 'possible duplicate': -1, 'PAY THE VENDOR': 0, 'owner paid in part': 1, 'waiting on the owner': 2, 'unknown': 3, 'vendor paid': 4, 'nothing to pay': 5 };
-    rows.sort(function(a, b) { return (order[a.state] ?? 9) - (order[b.state] ?? 9); });
-    var stateLabel = { 'possible duplicate': '⚠ POSSIBLE DUPLICATE — CHECK QB' };
-
-    function card(r) {
-      var colour = r.state === 'possible duplicate' ? 'var(--danger)'
-                 : r.state === 'PAY THE VENDOR' ? 'var(--accent2)'
-                 : r.state === 'owner paid in part' ? 'var(--warn)'
-                 : r.state === 'waiting on the owner' ? 'var(--warn)'
-                 : r.state === 'unknown' ? 'var(--danger)' : 'var(--muted)';
-      var owe = r.vendor_balance != null ? r.vendor_balance : r.vendor_cost;
-      // The vendor's own ref number (matches QuickBooks Pay Bills "REF NO"); when the vendor gave
-      // none, QuickBooks shows the WO number too, so the WO id already lines the two views up.
-      var vref = r.vendor_ref ? esc(r.vendor_ref) : (r.bill_id ? esc(r.wo_id || '') : '');
-      // A possible-duplicate row is deliberately NEVER checkable for the bulk "mark paid in QB"
-      // action — Brett has to actually look at QuickBooks and clear it himself before this Hub
-      // will let it anywhere near a batch action. This is the whole point of the check.
-      var canPay = r.state === 'PAY THE VENDOR' && r.bill_id;
-      var chk = canPay
-        ? '<input type="checkbox" class="pay-chk" value="' + esc(String(r.bill_id)) + '" data-amt="' + (parseFloat(owe)||0).toFixed(2) + '" data-vendor="' + esc(r.vendor_name||'') + '" onchange="updatePaySelection()" style="margin-right:7px;vertical-align:middle;width:15px;height:15px">'
-        : '';
-      // The specific QuickBooks transaction that looks like this vendor already got paid outside
-      // Pay Bills (Venmo/Zelle/check hand-entered as a plain Expense/Check) — see
-      // qbFindLikelyUnlinkedPayment (worker.js). Only ever a warning to check, never auto-applied.
-      var dupWarning = r.possible_duplicate
-        ? '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:5px;padding:7px 9px;margin-top:6px;font-size:11px;color:var(--danger);line-height:1.5">' +
-          '⚠ QuickBooks shows a <b>$' + (parseFloat(r.possible_duplicate.amount)||0).toFixed(2) + '</b> ' +
-          (r.possible_duplicate.payment_type ? esc(r.possible_duplicate.payment_type) + ' ' : '') + 'payment to this vendor' +
-          (r.possible_duplicate.date ? ' on ' + esc(r.possible_duplicate.date) : '') +
-          (r.possible_duplicate.doc ? ' (#' + esc(r.possible_duplicate.doc) + ')' : '') +
-          (r.possible_duplicate.note ? ' — "' + esc(r.possible_duplicate.note) + '"' : '') +
-          ' that was never linked to this bill — likely already paid by hand (Venmo/Zelle/check) and entered as a plain Expense instead of a Bill Payment. <b>Verify in QuickBooks before paying again.</b>' +
-        '</div>'
-        : '';
-      return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + colour + ';border-radius:6px;padding:10px;margin-bottom:7px">' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
-          '<div>' + chk +
-            '<b style="font-size:12.5px">' + esc(r.wo_id || '') + '</b>' +
-            '<span style="color:var(--muted);font-size:11.5px"> · ' + esc(r.vendor_name || 'no vendor') + '</span>' +
-            (vref ? '<span style="color:var(--text);font-size:11px"> · vendor inv <b>' + vref + '</b></span>' : '') +
-            (r.invoice_number ? '<span style="color:var(--muted);font-size:10.5px"> · cust inv #' + esc(r.invoice_number) + '</span>' : '') +
-          '</div>' +
-          '<div style="color:' + colour + ';font-size:11.5px;font-weight:bold;text-transform:uppercase;letter-spacing:.04em">' + esc(stateLabel[r.state] || r.state) + '</div>' +
-        '</div>' +
-        '<div style="color:var(--muted);font-size:11px;margin-top:4px">' +
-          'Owner billed $' + (parseFloat(r.customer_total) || 0).toFixed(2) +
-          (r.customer_paid === true ? ' — <span style="color:var(--accent2)">paid</span>'
-            : r.customer_partial === true ? ' — <span style="color:var(--warn)">$' + ((parseFloat(r.customer_total)||0) - (parseFloat(r.customer_balance)||0)).toFixed(2) + ' paid, $' + (parseFloat(r.customer_balance) || 0).toFixed(2) + ' outstanding</span>'
-            : r.customer_paid === false ? ' — <span style="color:var(--warn)">$' + (parseFloat(r.customer_balance) || 0).toFixed(2) + ' outstanding</span>'
-            : ' — <span style="color:var(--danger)">balance unknown</span>') +
-          (r.bill_id
-            ? ' · Vendor owed $' + (parseFloat(owe) || 0).toFixed(2) +
-              (r.vendor_paid === true ? ' — <span style="color:var(--muted)">paid</span>'
-                : r.vendor_partial === true ? ' — <span style="color:var(--warn)">partly paid</span>' : '') +
-              ' <span style="color:var(--muted)">(' + esc(r.terms || '') + (r.bill_due ? ', due ' + esc(r.bill_due) : '') + ')</span>' +
-              ' · <a href="' + qbBillLink(r.bill_id) + '" target="_blank" rel="noopener" style="color:var(--info)">open bill in QB</a>'
-            : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
-        '</div>' +
-        dupWarning +
-      '</div>';
-    }
-
-    var toPay = rows.filter(function(r) { return r.state === 'PAY THE VENDOR'; });
-    if (el) el.innerHTML =
-      (toPay.length
-        ? '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:8px;padding:12px;margin-bottom:14px">' +
-          '<div style="color:var(--accent2);font-size:13px;font-weight:bold">' + toPay.length +
-          ' vendor' + (toPay.length === 1 ? '' : 's') + ' waiting on $' + (parseFloat(res.owed_total) || 0).toFixed(2) +
-          ' you have already collected</div>' +
-          '<div style="color:var(--muted);font-size:11px;margin-top:3px">The owner has paid these. Pay these first.</div>' +
-          '<div style="color:var(--danger);font-size:10.5px;margin-top:4px;font-weight:bold">⚠ The button below only marks a bill PAID IN QUICKBOOKS — it does not send money. Pay the vendor yourself (check/transfer/Zelle/QuickBooks Bill Pay) first, separately.</div>' +
-          (toPay.some(function(r){return r.bill_id;})
-            ? '<div id="pay-bar" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--accent2);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
-                '<span style="font-size:11px;color:var(--muted)">Tick the bills to pay, then:</span>' +
-                '<select id="pay-from-acct" style="font-size:11px;padding:4px 6px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px"><option value="">Pay from… (loading)</option></select>' +
-                '<button class="btn small" id="pay-go" onclick="previewPayBills()" style="background:var(--border);color:var(--muted);cursor:default" disabled>Mark 0 paid in QB</button>' +
-              '</div>'
-            : '') +
-          '</div>'
-        : '<div style="color:var(--accent2);font-size:12px;margin-bottom:12px">✓ Nobody is waiting on money you have already been paid.</div>') +
-      (save && res.written != null ? '<div style="color:var(--muted);font-size:10.5px;margin-bottom:8px">Saved to the sheet: ' + res.written + ' row(s)' + (res.failed ? ', ' + res.failed + ' failed' : '') + '.</div>' : '') +
-      rows.map(card).join('');
-    if (toPay.some(function(r){return r.bill_id;})) loadPayFromAccounts();
+    _payablesRes = res;
+    _payablesRows = safeArray(res.rows);
+    if (!_payablesRows.length) { if (el) el.innerHTML = '<div style="color:var(--muted);font-size:12px">Nothing sent to QuickBooks in the last 90 days.</div>'; return; }
+    payablesBuildFilters();
+    renderPayablesList();
   }).catch(function(e) {
     if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
   });
+}
+
+// Resolves a payables row's WO → Property → Owner — the same join loadInvoiceReview's own
+// irBillContext() already does for the adjacent Invoice Review filter bar.
+function payablesContext(r) {
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(r.wo_id); });
+  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : null;
+  var ownerId = prop ? String(prop.Owner_ID || '') : '';
+  var owner = ownerId ? safeArray(state.owners).find(function(o) { return String(o.ID) === ownerId; }) : null;
+  var ownerName = owner
+    ? (((owner.First_Name || '') + (owner.Last_Name ? ' ' + owner.Last_Name : '') + (owner.Company ? ' / ' + owner.Company : '')).trim() || owner.Name || ('Owner ' + owner.ID))
+    : '';
+  return {
+    vendor: r.vendor_name || '', propId: prop ? String(prop.ID) : '', propAddr: prop ? (prop.Address || '') : '',
+    ownerId: ownerId, ownerName: ownerName, trade: wo ? (wo.Trade || '') : '', woId: r.wo_id || '', wo: wo
+  };
+}
+
+function payablesBuildFilters() {
+  var host = document.getElementById('payables-filters');
+  if (!host) return;
+  if (!safeArray(_payablesRows).length) { host.innerHTML = ''; return; }
+  var ctxs = _payablesRows.map(payablesContext);
+  function distinct(getVal) { var seen = {}, out = []; ctxs.forEach(function(c) { var v = getVal(c); if (v && !seen[v]) { seen[v] = 1; out.push(v); } }); return out; }
+  var vendors = distinct(function(c) { return c.vendor; }).sort();
+  var trades = distinct(function(c) { return c.trade; }).sort();
+  var statesPresent = PAY_STATE_ORDER.filter(function(s) { return _payablesRows.some(function(r) { return r.state === s; }); });
+  var props = [], pseen = {};
+  ctxs.forEach(function(c) { if (c.propId && !pseen[c.propId]) { pseen[c.propId] = 1; props.push({ id: c.propId, label: c.propAddr || ('Property ' + c.propId) }); } });
+  props.sort(function(a, b) { return a.label.localeCompare(b.label); });
+  var owners = [], oseen = {};
+  ctxs.forEach(function(c) { if (c.ownerId && !oseen[c.ownerId]) { oseen[c.ownerId] = 1; owners.push({ id: c.ownerId, label: c.ownerName || ('Owner ' + c.ownerId) }); } });
+  owners.sort(function(a, b) { return a.label.localeCompare(b.label); });
+
+  var ss = 'flex:1;min-width:130px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 8px;border-radius:6px;cursor:pointer';
+  function opts(list, allLabel) { return '<option value="">' + allLabel + '</option>' + list.map(function(v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join(''); }
+  function optsPair(list, allLabel) { return '<option value="">' + allLabel + '</option>' + list.map(function(o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join(''); }
+  function optsState(list) { return '<option value="">All states</option>' + list.map(function(s) { return '<option value="' + esc(s) + '">' + esc((PAY_STATE_GROUP[s] || {}).label || s) + '</option>'; }).join(''); }
+
+  host.innerHTML =
+    '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">' +
+      '<input id="pay-q" type="text" placeholder="Search WO#, vendor, address, owner, invoice #, trade…" oninput="payablesApplyFilters()" autocomplete="off" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px;box-sizing:border-box">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' +
+        '<select id="pay-f-state" onchange="payablesApplyFilters()" style="' + ss + '">' + optsState(statesPresent) + '</select>' +
+        '<select id="pay-f-vendor" onchange="payablesApplyFilters()" style="' + ss + '">' + opts(vendors, 'All vendors') + '</select>' +
+        '<select id="pay-f-prop" onchange="payablesApplyFilters()" style="' + ss + '">' + optsPair(props, 'All properties') + '</select>' +
+        '<select id="pay-f-owner" onchange="payablesApplyFilters()" style="' + ss + '">' + optsPair(owners, 'All owners') + '</select>' +
+        '<select id="pay-f-trade" onchange="payablesApplyFilters()" style="' + ss + '">' + opts(trades, 'All trades') + '</select>' +
+        '<button onclick="payablesClearFilters()" class="btn small secondary" style="font-size:11px;padding:7px 12px;white-space:nowrap">Clear</button>' +
+      '</div>' +
+      '<div id="pay-count" style="color:var(--muted);font-size:11px;margin-top:8px"></div>' +
+    '</div>';
+}
+
+function payablesApplyFilters() { renderPayablesList(); }
+
+function payablesClearFilters() {
+  ['pay-q', 'pay-f-state', 'pay-f-vendor', 'pay-f-prop', 'pay-f-owner', 'pay-f-trade'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
+  renderPayablesList();
+}
+
+function renderPayablesList() {
+  var el = document.getElementById('payables-body');
+  if (!el) return;
+  var rows = safeArray(_payablesRows);
+  var res = _payablesRes || {};
+
+  var q  = ((document.getElementById('pay-q') || {}).value || '').toLowerCase().trim();
+  var fs = (document.getElementById('pay-f-state') || {}).value || '';
+  var fv = (document.getElementById('pay-f-vendor') || {}).value || '';
+  var fp = (document.getElementById('pay-f-prop') || {}).value || '';
+  var fo = (document.getElementById('pay-f-owner') || {}).value || '';
+  var ft = (document.getElementById('pay-f-trade') || {}).value || '';
+  var filterActive = !!(q || fs || fv || fp || fo || ft);
+
+  var filtered = rows.filter(function(r) {
+    var c = payablesContext(r);
+    if (fs && r.state !== fs) return false;
+    if (fv && c.vendor !== fv) return false;
+    if (fp && c.propId !== fp) return false;
+    if (fo && c.ownerId !== fo) return false;
+    if (ft && c.trade !== ft) return false;
+    if (q) {
+      var hay = [c.woId, c.vendor, r.invoice_number || '', r.vendor_ref || '', c.propAddr, c.ownerName, c.trade,
+                 (c.wo && c.wo.Description) || '', (c.wo && c.wo.Owner_WO_Ref) || ''].join(' ').toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
+    }
+    return true;
+  });
+
+  var countEl = document.getElementById('pay-count');
+  if (countEl) countEl.textContent = 'Showing ' + filtered.length + ' of ' + rows.length + ' payable row' + (rows.length === 1 ? '' : 's');
+
+  var stateLabel = { 'possible duplicate': '⚠ POSSIBLE DUPLICATE — CHECK QB' };
+
+  function card(r) {
+    var colour = r.state === 'possible duplicate' ? 'var(--danger)'
+               : r.state === 'PAY THE VENDOR' ? 'var(--accent2)'
+               : r.state === 'owner paid in part' ? 'var(--warn)'
+               : r.state === 'waiting on the owner' ? 'var(--warn)'
+               : r.state === 'unknown' ? 'var(--danger)' : 'var(--muted)';
+    var owe = r.vendor_balance != null ? r.vendor_balance : r.vendor_cost;
+    // The vendor's own ref number (matches QuickBooks Pay Bills "REF NO"); when the vendor gave
+    // none, QuickBooks shows the WO number too, so the WO id already lines the two views up.
+    var vref = r.vendor_ref ? esc(r.vendor_ref) : (r.bill_id ? esc(r.wo_id || '') : '');
+    // A possible-duplicate row is deliberately NEVER checkable for the bulk "mark paid in QB"
+    // action — Brett has to actually look at QuickBooks and clear it himself before this Hub
+    // will let it anywhere near a batch action. This is the whole point of the check.
+    var canPay = r.state === 'PAY THE VENDOR' && r.bill_id;
+    var chk = canPay
+      ? '<input type="checkbox" class="pay-chk" value="' + esc(String(r.bill_id)) + '" data-amt="' + (parseFloat(owe)||0).toFixed(2) + '" data-vendor="' + esc(r.vendor_name||'') + '" onchange="updatePaySelection()" style="margin-right:7px;vertical-align:middle;width:15px;height:15px">'
+      : '';
+    // The specific QuickBooks transaction that looks like this vendor already got paid outside
+    // Pay Bills (Venmo/Zelle/check hand-entered as a plain Expense/Check) — see
+    // qbFindLikelyUnlinkedPayment (worker.js). Only ever a warning to check, never auto-applied.
+    var dupWarning = r.possible_duplicate
+      ? '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:5px;padding:7px 9px;margin-top:6px;font-size:11px;color:var(--danger);line-height:1.5">' +
+        '⚠ QuickBooks shows a <b>$' + (parseFloat(r.possible_duplicate.amount)||0).toFixed(2) + '</b> ' +
+        (r.possible_duplicate.payment_type ? esc(r.possible_duplicate.payment_type) + ' ' : '') + 'payment to this vendor' +
+        (r.possible_duplicate.date ? ' on ' + esc(r.possible_duplicate.date) : '') +
+        (r.possible_duplicate.doc ? ' (#' + esc(r.possible_duplicate.doc) + ')' : '') +
+        (r.possible_duplicate.note ? ' — "' + esc(r.possible_duplicate.note) + '"' : '') +
+        ' that was never linked to this bill — likely already paid by hand (Venmo/Zelle/check) and entered as a plain Expense instead of a Bill Payment. <b>Verify in QuickBooks before paying again.</b>' +
+      '</div>'
+      : '';
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ' + colour + ';border-radius:6px;padding:10px;margin-bottom:7px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
+        '<div>' + chk +
+          '<b style="font-size:12.5px">' + esc(r.wo_id || '') + '</b>' +
+          '<span style="color:var(--muted);font-size:11.5px"> · ' + esc(r.vendor_name || 'no vendor') + '</span>' +
+          (vref ? '<span style="color:var(--text);font-size:11px"> · vendor inv <b>' + vref + '</b></span>' : '') +
+          (r.invoice_number ? '<span style="color:var(--muted);font-size:10.5px"> · cust inv #' + esc(r.invoice_number) + '</span>' : '') +
+        '</div>' +
+        '<div style="color:' + colour + ';font-size:11.5px;font-weight:bold;text-transform:uppercase;letter-spacing:.04em">' + esc(stateLabel[r.state] || r.state) + '</div>' +
+      '</div>' +
+      '<div style="color:var(--muted);font-size:11px;margin-top:4px">' +
+        'Owner billed $' + (parseFloat(r.customer_total) || 0).toFixed(2) +
+        (r.customer_paid === true ? ' — <span style="color:var(--accent2)">paid</span>'
+          : r.customer_partial === true ? ' — <span style="color:var(--warn)">$' + ((parseFloat(r.customer_total)||0) - (parseFloat(r.customer_balance)||0)).toFixed(2) + ' paid, $' + (parseFloat(r.customer_balance) || 0).toFixed(2) + ' outstanding</span>'
+          : r.customer_paid === false ? ' — <span style="color:var(--warn)">$' + (parseFloat(r.customer_balance) || 0).toFixed(2) + ' outstanding</span>'
+          : ' — <span style="color:var(--danger)">balance unknown</span>') +
+        (r.bill_id
+          ? ' · Vendor owed $' + (parseFloat(owe) || 0).toFixed(2) +
+            (r.vendor_paid === true ? ' — <span style="color:var(--muted)">paid</span>'
+              : r.vendor_partial === true ? ' — <span style="color:var(--warn)">partly paid</span>' : '') +
+            ' <span style="color:var(--muted)">(' + esc(r.terms || '') + (r.bill_due ? ', due ' + esc(r.bill_due) : '') + ')</span>' +
+            ' · <a href="' + qbBillLink(r.bill_id) + '" target="_blank" rel="noopener" style="color:var(--info)">open bill in QB</a>'
+          : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
+      '</div>' +
+      dupWarning +
+    '</div>';
+  }
+
+  // The banner (and its "tick the bills" pay-bar) is always built off the FULL unfiltered rows,
+  // so the top summary keeps showing the true global picture even while the list below is
+  // narrowed by a search/filter — same reasoning the "Showing X of Y" count line exists for.
+  var toPay = rows.filter(function(r) { return r.state === 'PAY THE VENDOR'; });
+  var banner = toPay.length
+    ? '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:8px;padding:12px;margin-bottom:14px">' +
+      '<div style="color:var(--accent2);font-size:13px;font-weight:bold">' + toPay.length +
+      ' vendor' + (toPay.length === 1 ? '' : 's') + ' waiting on $' + (parseFloat(res.owed_total) || 0).toFixed(2) +
+      ' you have already collected</div>' +
+      '<div style="color:var(--muted);font-size:11px;margin-top:3px">The owner has paid these. Pay these first.</div>' +
+      '<div style="color:var(--danger);font-size:10.5px;margin-top:4px;font-weight:bold">⚠ The button below only marks a bill PAID IN QUICKBOOKS — it does not send money. Pay the vendor yourself (check/transfer/Zelle/QuickBooks Bill Pay) first, separately.</div>' +
+      (toPay.some(function(r){return r.bill_id;})
+        ? '<div id="pay-bar" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--accent2);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+            '<span style="font-size:11px;color:var(--muted)">Tick the bills to pay, then:</span>' +
+            '<select id="pay-from-acct" style="font-size:11px;padding:4px 6px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px"><option value="">Pay from… (loading)</option></select>' +
+            '<button class="btn small" id="pay-go" onclick="previewPayBills()" style="background:var(--border);color:var(--muted);cursor:default" disabled>Mark 0 paid in QB</button>' +
+          '</div>'
+        : '') +
+      '</div>'
+    : '<div style="color:var(--accent2);font-size:12px;margin-bottom:12px">✓ Nobody is waiting on money you have already been paid.</div>';
+
+  var savedLine = (_payablesLastSave && res.written != null)
+    ? '<div style="color:var(--muted);font-size:10.5px;margin-bottom:8px">Saved to the sheet: ' + res.written + ' row(s)' + (res.failed ? ', ' + res.failed + ' failed' : '') + '.</div>'
+    : '';
+
+  // Grouped by state, same priority order the flat list used to sort by. "vendor paid" and
+  // "nothing to pay" are done-states — collapsed by default so they don't push the rows that
+  // still need attention down the page — but any active search/filter forces every group open
+  // so a match is never hidden behind a closed toggle.
+  var groupsHTML = PAY_STATE_ORDER.map(function(st) {
+    var grows = filtered.filter(function(r) { return r.state === st; });
+    if (!grows.length) return '';
+    var def = PAY_STATE_GROUP[st] || { label: st, collapsible: false };
+    var header = esc(def.label) + ' (' + grows.length + ')';
+    var body = grows.map(card).join('');
+    if (!def.collapsible) {
+      return '<div style="margin-top:14px"><div style="color:var(--muted);font-size:11px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;margin-bottom:6px">' + header + '</div>' + body + '</div>';
+    }
+    var openAttr = (def.openDefault || filterActive) ? ' open' : '';
+    return '<details' + openAttr + ' style="margin-top:14px">' +
+             '<summary style="cursor:pointer;font-size:11px;font-weight:bold;letter-spacing:.05em;color:var(--muted);text-transform:uppercase;margin-bottom:6px">' + header + '</summary>' +
+             '<div style="margin-top:6px">' + body + '</div>' +
+           '</details>';
+  }).join('');
+
+  el.innerHTML = banner + savedLine +
+    (filtered.length
+      ? groupsHTML
+      : '<div style="color:var(--muted);font-size:12px;margin-top:10px">No payable rows match these filters. <span style="cursor:pointer;color:var(--info)" onclick="payablesClearFilters()">Clear filters</span></div>');
+
+  if (toPay.some(function(r){return r.bill_id;})) loadPayFromAccounts();
 }
 
 // ── Pay vendor bills (B-217A) — preview-first, passphrase-gated money-write ──

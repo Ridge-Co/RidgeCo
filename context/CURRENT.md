@@ -1,3 +1,20 @@
+# WHERE THINGS STAND — Sep 9, 2026
+
+## 🟢 Built (not yet live-verified): Who To Pay grouping/search/filter + auto-check + batched QB reads — rule 154
+Brett asked for "nothing to pay"/"vendor paid" collapsed-but-searchable, the same search/filter
+bar Work Orders has, and auto-check on page open. Built all three, plus cut QuickBooks reads from
+one-per-job to two total (a batched `WHERE Id IN (...)` query per entity instead of one GET per
+invoice/bill) — checked Intuit's actual metering/rate-limit docs first: at this account's volume,
+cost/limits were never really the constraint, round-trip time was, and batching fixes that anyway.
+Full detail: FEATURE_LOG rule 154. `node --check` clean, full suite 50/50, 23/23 on a new headless
+verification pass (`test/manual-verify-payables-filters.mjs`) after fixing two real bugs in the
+test itself (missing login-gate bypass, a case-sensitivity assumption on CSS-styled header text —
+not the app). **Not yet run against a live Sheet or live QuickBooks** — no `WORKER_SECRET` in this
+session. 🔴 **First live check**: open Who To Pay, confirm it loads immediately without a button
+tap, confirm "Vendor paid"/"Nothing to pay" start collapsed with correct counts, try the search box
+and the State/Vendor/Property/Owner/Trade filters, confirm a search match force-opens a collapsed
+group, hit Clear and confirm it resets cleanly.
+
 # WHERE THINGS STAND — Sep 8, 2026 (later)
 
 ## 🔴 URGENT — check WO-1025 / Alex Busey / Bill 7578 in QuickBooks directly before paying anything
