@@ -381,6 +381,7 @@ export default {
         if (path === '/invoice-review/approve-bulk') return await approveInvoiceReviewBulk(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
+        if (path === '/invoice-review/set-date')  return await setInvoiceReviewDate(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
@@ -3524,6 +3525,33 @@ async function unapproveInvoiceReview(env, body) {
     bill_restored: billRestored,
     warning: billRestored ? '' : 'The approval is withdrawn, but the vendor bill could not be set back to submitted — it may not reappear in Review Bills. Check the Vendor_Bills row.',
   });
+}
+
+// POST /invoice-review/set-date { id, approved_date }
+// Backdates an Invoice_Review row's Approved_Date to the vendor's actual service date — e.g.
+// a vendor invoice priced/approved weeks after the work was done, where the customer invoice
+// should carry the ORIGINAL service date, not the Hub-approval date. qbSendInvoice stamps the
+// QuickBooks invoice's TxnDate straight from this field (`ir.Approved_Date || today`), and
+// nothing before this endpoint could ever set it to anything but "today" (approveInvoiceReview
+// hardcodes it at creation time). Only safe pre-send: once QB_Invoice_ID exists, the real
+// QuickBooks invoice already carries its own TxnDate and this Sheet-only write would silently
+// disagree with it — refuse rather than leave the two systems telling different stories.
+async function setInvoiceReviewDate(env, body) {
+  try {
+    const id = String(body.id || '').trim();
+    const newDate = String(body.approved_date || '').trim();
+    if (!id || !newDate) return json({ ok: false, error: 'id and approved_date are required' }, 400);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate)) return json({ ok: false, error: 'approved_date must be YYYY-MM-DD' }, 400);
+    const irs = await fetchTab(env, 'Invoice_Review');
+    const ir = irs.find(r => String(r.ID) === id);
+    if (!ir) return json({ ok: false, error: 'Invoice_Review row ' + id + ' not found' }, 404);
+    if (ir.Active === 'FALSE') return json({ ok: false, error: 'This review row is voided' }, 400);
+    if ((ir.QB_Invoice_ID || '').trim())
+      return json({ ok: false, error: 'Already sent to QuickBooks (invoice ' + ir.QB_Invoice_ID + ') — its real TxnDate lives there now; this endpoint only backdates a row before it is sent.' }, 409);
+    const prevDate = ir.Approved_Date || '';
+    await updateRow(env, 'Invoice_Review', id, { Approved_Date: newDate });
+    return json({ ok: true, id, wo_id: ir.WO_ID || '', was: prevDate, now: newDate });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 async function approveInvoiceReview(env, body) {
