@@ -1,3 +1,27 @@
+# WHERE THINGS STAND — Sep 9, 2026 (later)
+
+## 🟢 Live-verified against real QuickBooks: Who To Pay grouping/search/filter + auto-check + batched QB reads — rule 154
+Brett provided `WORKER_SECRET` and asked for a real check post-deploy. `GET /qb/payables?days=90`
+against live QuickBooks: **70 rows in 6 seconds, zero errors** — 22 vendor paid / 31 nothing to pay
+/ 9 waiting on the owner / 8 PAY THE VENDOR, 0 unknown, 0 possible-duplicate. Confirms the batched
+`WHERE Id IN (...)` rewrite genuinely works against production QuickBooks, not just offline mocks —
+6 seconds for 70 jobs is what the whole point of the batching was for (previously up to ~140
+sequential single-entity calls). One pre-existing data quirk noticed, unrelated to this build: WO-
+1115's `QB_Invoice_ID` (7600) isn't returned by the batch query (likely a stale/deleted invoice id,
+same family as the Oscar Padilla WO-1115 duplicate-cleanup already handled elsewhere) — falls
+through to `customer_balance: null` exactly the way a failed single GET always has for a bad id
+(the row's own vendor-paid status still resolves correctly regardless, so nothing is hidden or
+wrong, just one field unknown). Worth a look if anyone's ever confused why that one row's owner-
+billed status shows blank, but not urgent and not new.
+
+## 🟢 RESOLVED: WO-1025 / Alex Busey / Bill 7578 — QuickBooks now shows it genuinely paid
+Live pull confirms **Bill 7578 has a $0 balance and `vendor_paid: true`** — state is plain "vendor
+paid," no "possible duplicate" flag (that check only ever runs on a bill QuickBooks still shows
+open, and this one no longer does). Whatever needed to happen on the QuickBooks side to link the
+payment already happened. The double-pay guard (rule 153) never had to fire, and nothing in the
+current data suggests he's at risk of paying this vendor twice. No further action needed on this
+specific bill — the guard stays in place going forward for the next time this pattern shows up.
+
 # WHERE THINGS STAND — Sep 9, 2026
 
 ## 🟢 Built (not yet live-verified): Who To Pay grouping/search/filter + auto-check + batched QB reads — rule 154
@@ -9,15 +33,11 @@ cost/limits were never really the constraint, round-trip time was, and batching 
 Full detail: FEATURE_LOG rule 154. `node --check` clean, full suite 50/50, 23/23 on a new headless
 verification pass (`test/manual-verify-payables-filters.mjs`) after fixing two real bugs in the
 test itself (missing login-gate bypass, a case-sensitivity assumption on CSS-styled header text —
-not the app). **Not yet run against a live Sheet or live QuickBooks** — no `WORKER_SECRET` in this
-session. 🔴 **First live check**: open Who To Pay, confirm it loads immediately without a button
-tap, confirm "Vendor paid"/"Nothing to pay" start collapsed with correct counts, try the search box
-and the State/Vendor/Property/Owner/Trade filters, confirm a search match force-opens a collapsed
-group, hit Clear and confirm it resets cleanly.
+not the app). **Superseded above — now live-verified.**
 
 # WHERE THINGS STAND — Sep 8, 2026 (later)
 
-## 🔴 URGENT — check WO-1025 / Alex Busey / Bill 7578 in QuickBooks directly before paying anything
+## 🟢 RESOLVED (see Sep 9 later entry above) — WO-1025 / Alex Busey / Bill 7578
 Brett flagged a live double-pay risk: Who To Pay showed this bill as "PAY THE VENDOR" ($297.50
 owed) while the actual QuickBooks bill note said "paid by venmo." **Do this now, don't wait for
 deploy**: open https://app.qbo.intuit.com/app/bill?txnId=7578 directly and check whether it shows
