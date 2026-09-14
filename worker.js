@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.3';
+const BUILD_VERSION = '2026-09-10.4';
 
 export default {
   async fetch(request, env) {
@@ -6572,6 +6572,7 @@ async function receiptsImageCheck(env) {
   const active = receipts.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE');
   let hasOwnFile = 0, recoveredExact = 0, nearMissSameWO = 0, noTraceAtAll = 0;
   const nearMissRows = [];
+  const noTraceBreakdown = {};
   for (const r of active) {
     if (r.Source_File_ID) { hasOwnFile++; continue; }
     const src = _recoverReceiptSourceFile(r, queueRows);
@@ -6582,9 +6583,13 @@ async function receiptsImageCheck(env) {
       nearMissRows.push({ receipt_id: r.ID, wo_id: r.WO_ID, receipt_amount: r.Amount, queue_candidates: sameWO.map(q => ({ queue_id: q.ID, confirmed_amount: q.Confirmed_Amount })) });
     } else {
       noTraceAtAll++;
+      const key = (r.Role || 'unknown') + ' / ' + (r.Added_By || 'unknown');
+      if (!noTraceBreakdown[key]) noTraceBreakdown[key] = { count: 0, sample_wo_ids: [] };
+      noTraceBreakdown[key].count++;
+      if (noTraceBreakdown[key].sample_wo_ids.length < 5) noTraceBreakdown[key].sample_wo_ids.push(r.WO_ID || '(none)');
     }
   }
-  return json({ ok: true, total_active_receipts: active.length, has_own_file: hasOwnFile, recovered_exact_match: recoveredExact, near_miss_same_wo: nearMissSameWO, no_trace_at_all: noTraceAtAll, near_miss_rows: nearMissRows.slice(0, 50) });
+  return json({ ok: true, total_active_receipts: active.length, has_own_file: hasOwnFile, recovered_exact_match: recoveredExact, near_miss_same_wo: nearMissSameWO, no_trace_at_all: noTraceAtAll, near_miss_rows: nearMissRows.slice(0, 50), no_trace_breakdown: noTraceBreakdown });
 }
 
 // Best-effort recovery of a receipt's source file for rows that predate Source_File_ID being
