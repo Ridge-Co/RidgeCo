@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.1';
+const BUILD_VERSION = '2026-09-10.2';
 
 export default {
   async fetch(request, env) {
@@ -507,8 +507,9 @@ export default {
     // scan above; a normal day with nothing past the window does one harmless read.
     try { await purgeConfirmedDuplicateReceipts(env); } catch (e) { /* non-fatal */ }
     // Forward any not-yet-emailed receipts to Brett's QuickBooks receipts-capture inbox (Sep
-    // 2026) — bounded per run (default 25) since a large backlog is worked down over several
-    // days' cron sweeps rather than all in one Worker invocation. No-op once caught up.
+    // 2026) — bounded per run (default 8, max 10 — Cloudflare's per-invocation subrequest
+    // budget, hit live at 25) since a large backlog is worked down over several days' cron
+    // sweeps rather than all in one Worker invocation. No-op once caught up.
     try { await sendReceiptsToQBEmail(env, {}); } catch (e) { /* non-fatal */ }
     // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
     // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
@@ -6575,11 +6576,19 @@ function _recoverReceiptSourceFile(receiptRow, queueRows) {
 // reconciliation — regardless of whether it's also tied to a work order/customer invoice. This
 // applies going forward (called from the daily cron below) AND retroactively: running this once
 // against the full Receipts tab is the backfill for everything already reconciled to a WO before
-// this existed. Bounded per call (default 25) since a Worker invocation has a real time limit —
-// call it again (or let the cron do it) to keep working through a large backlog; already-sent
-// rows are skipped so repeat calls are always safe.
+// this existed. Bounded per call (default 8, max 10 — Cloudflare's per-invocation subrequest
+// budget; a batch of 25 hit "Too many subrequests" live around #16-21) — call it again (or let
+// the cron do it) to keep working through a large backlog; already-sent rows are skipped so
+// repeat calls are always safe.
 async function sendReceiptsToQBEmail(env, opts) {
-  const limit = Math.max(1, Math.min(200, parseInt(opts && opts.limit) || 25));
+  // Discovered live (Sep 10 2026): a batch of 25 blew through Cloudflare's per-invocation
+  // subrequest budget partway through (driveDownload + gmail send + updateRow's own
+  // read-then-write is ~3-4 subrequests per receipt, on top of 5 for the initial tab reads) —
+  // requests started failing with "Too many subrequests" around #16-21. Capped conservatively
+  // here instead of guessing at the account's actual plan/limit; a larger backlog just takes
+  // more calls (the daily cron, or Brett/Claude calling this again — already-sent rows are
+  // always skipped so repeat calls are safe and cheap).
+  const limit = Math.max(1, Math.min(10, parseInt(opts && opts.limit) || 8));
   const cfg = await fetchConfig(env).catch(() => ({}));
   const qbEmail = (cfg.qb_receipts_email || env.QB_RECEIPTS_EMAIL || '').trim();
   if (!qbEmail) return json({ ok: false, error: 'qb_receipts_email is not set — add it as a Config/Settings key (or QB_RECEIPTS_EMAIL secret) first: the email address QuickBooks gave you for forwarding receipts.' }, 400);
