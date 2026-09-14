@@ -1,3 +1,26 @@
+# WHERE THINGS STAND — Sep 10, 2026 (later)
+
+## 🟢 Live-verified: Receipt Reconciler — materials descriptions, bill-on-match, business-expense receipts, QB-email forwarding — rules 155/155a
+Brett provided `WORKER_SECRET` and `qb_receipts_email`. Live-verified in order: `/health` (Gmail
+fully configured — client_id/secret/refresh_token/sender all set), added **1864 Kerns School Rd
+(Milam Ridge) as Property ID 85** (no `Owner_ID`/`QBO_Customer_ID` — confirmed read-back), set
+`Config.qb_receipts_email` (confirmed read-back), then ran the actual email-forward sweep against
+production. Caught and fixed a real bug live: the rule-155 default batch size (25) blew through
+Cloudflare's per-invocation subrequest budget partway through — 15 sent, then 10 failed with
+"Too many subrequests." Nothing lost (failed rows retry cleanly, same design as always worked).
+Dropped the batch size to 8/max 10 (rule 155a), redeployed, verified via `/version`, then cleared
+the **entire pre-existing backlog — 45 receipts, 0 failures** across several bounded sweeps.
+Worth knowing: most of that backlog (roughly two-thirds) went out **without an attached image** —
+older rows that predate `Source_File_ID` tracking and have no recoverable `Receipt_Recon_Queue`
+origin to match back to. Still useful for reconciliation (vendor/date/amount/description all
+there), just not the scanned image. `BUILD_VERSION` → `2026-09-10.2`.
+
+**Still to verify live** (all lower-stakes than what's already confirmed): a receipt actually
+appearing in QuickBooks' Receipts inbox with the right details (only confirmed the send succeeded
+from this end, not the QuickBooks-side landing); the description-cleanup on a freshly scanned
+receipt; a business-expense confirm with `no_wo:true`; and the repair-flag path on a WO whose
+invoice was already sent (needs a real matching live scenario to trigger).
+
 # WHERE THINGS STAND — Sep 10, 2026
 
 ## 🟡 Built, not yet live-verified: Receipt Reconciler — materials descriptions, bill-on-match, business-expense receipts, QB-email forwarding — rule 155
