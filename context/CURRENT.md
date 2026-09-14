@@ -1,3 +1,26 @@
+# WHERE THINGS STAND — Sep 14, 2026 (even later)
+
+## 🔴 Live-testing found a real delivery gap: Twilio accepts the message (real SID), Brett's phone gets nothing — rule 158a
+Confirmed via live `Message_Queue` — 3 of Brett's own test sends all show `Status:'sent'` with
+real Twilio SIDs, redirected correctly to his phone via Test Mode, all gates correctly open.
+That was always the honest limit of `Status:'sent'` (Twilio-accepted, not delivery-confirmed —
+webhooks were out of scope for rule 157) — now a live symptom, not a theoretical one. New
+`GET /twilio/message-status?sid=...` queries Twilio directly for the real status/error code.
+**Fastest unblock, no deploy needed**: Brett can check Twilio Console → Monitor → Logs →
+Messaging right now for these 3 sends and read the actual status/error there.
+
+## 🟡 Built, not yet live-verified: Two fixes found mid-test on the Twilio build — rule 158
+Full detail: FEATURE_LOG rule 158. Brett started testing rule 157 and immediately hit two
+real gaps: (1) assigning a vendor at WO creation always sent the dispatch text with no way
+to skip it (needed for a WO created just to record billing for work already arranged by
+phone) — fixed with a "Notify vendor + tenant now" checkbox, default on, only shown once a
+vendor is picked; the Reassign-Vendor modal and bulk-reassign are untouched, still always
+notify. (2) The Work Orders bulk-edit checkbox rendered on the right side of each card,
+confusing to select — moved to the far left. `node --check` clean, full suite unchanged/
+green. **Not pushed yet** — same patch-file hand-off as everything else in the queue.
+**Needs Brett's live pass**: assign-with-notify-on (unchanged), assign-with-notify-off (no
+text, no Message Queue row), and confirm the bulk checkboxes now sit on the left.
+
 # WHERE THINGS STAND — Sep 14, 2026 (later)
 
 ## 🟡 Built, not yet live-verified: Twilio SMS integration, end-to-end — rule 157
