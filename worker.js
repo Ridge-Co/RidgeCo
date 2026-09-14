@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.4';
+const BUILD_VERSION = '2026-09-10.5';
 
 export default {
   async fetch(request, env) {
@@ -128,6 +128,7 @@ export default {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
+        if (path === '/receipt-recon/backfill-items-summary') return await backfillItemsSummary(env, body);
         if (path === '/version')                return json({ version: BUILD_VERSION });
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
         if (path === '/hub-bootstrap')          return await hubBootstrap(env);
@@ -503,6 +504,10 @@ export default {
     // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
     // read + queue only — nothing bills until Brett taps Confirm in the Hub.
     try { await receiptReconScan(env); } catch (e) { /* non-fatal */ }
+    // Backfill Items_Summary for any Receipt_Recon_Queue rows still missing it (Sep 10 2026) —
+    // catches receipts scanned before this field existed, or a rare failed AI call. Cheap and
+    // bounded; no-op once caught up.
+    try { await backfillItemsSummary(env, {}); } catch (e) { /* non-fatal */ }
     // Confirmed-duplicate retention sweep (Aug 23) — soft-deletes Receipt_Recon_Queue rows
     // Brett explicitly confirmed as duplicates more than 180 days ago. Runs daily alongside the
     // scan above; a normal day with nothing past the window does one harmless read.
@@ -6554,6 +6559,43 @@ async function gmailSendEmail(env, { to, subject, html }) {
 }
 
 function _escHtml(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// Cheap, text-only follow-up pass — generalizes already-extracted item strings into short
+// category words (e.g. "washers", "hardware") without re-downloading or re-OCRing the receipt
+// image. Built for backfilling Receipt_Recon_Queue rows scanned before Items_Summary existed.
+// Deliberately NOT moneyFacing: this only reworks wording for display — the underlying
+// Items/Total/etc it reads were already extracted accurately by the real receiptExtract call.
+async function summarizeItemsCheap(env, items) {
+  if (!Array.isArray(items) || !items.length) return [];
+  try {
+    const prompt = `Given this list of purchased line items from a hardware/property-maintenance receipt, return ONLY a strict minified JSON array of short GENERALIZED category words — one per distinct item/group, e.g. "paint", "primer", "batteries", "washers", "hardware" instead of the verbatim brand/SKU/price text. Collapse near-duplicates into one entry. Items: ${JSON.stringify(items).slice(0, 2000)}`;
+    const r = await routeAI(env, { type: 'items_summarize', prompt, maxTokens: 300, schema: true, source: 'summarizeItemsCheap' });
+    const parsed = JSON.parse(String(r.result || '[]').replace(/^```json?/i, '').replace(/```$/, '').trim());
+    return Array.isArray(parsed) ? parsed.filter(x => typeof x === 'string' && x.trim()).slice(0, 15) : [];
+  } catch (e) { return []; }
+}
+
+// POST /receipt-recon/backfill-items-summary {limit?} — regenerates Items_Summary for
+// Receipt_Recon_Queue rows that predate it (Items populated, Items_Summary blank/empty). Cheap
+// and text-only — no image re-download. Bounded per call (subrequest-budget lesson from
+// sendReceiptsToQBEmail applies here too) — safe to call repeatedly, already-summarized rows
+// are skipped. Also run from the daily cron so nothing lingers un-summarized indefinitely.
+async function backfillItemsSummary(env, opts) {
+  const limit = Math.max(1, Math.min(15, parseInt(opts && opts.limit) || 10));
+  let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
+  const pending = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (!r.Items_Summary || r.Items_Summary === '[]') && r.Items && r.Items !== '[]');
+  const batch = pending.slice(0, limit);
+  let updated = 0; const failed = [];
+  for (const r of batch) {
+    try {
+      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
+      const summary = await summarizeItemsCheap(env, items);
+      if (summary.length) { await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Items_Summary: JSON.stringify(summary) }); updated++; }
+      else failed.push({ id: r.ID, error: 'empty summary returned' });
+    } catch (e) { failed.push({ id: r.ID, error: String(e && e.message || e) }); }
+  }
+  return json({ ok: true, updated, failed, remaining: pending.length - batch.length });
+}
 
 // GET /admin/receipts-image-check — Sep 10 2026, diagnostic only, no writes. Brett asked
 // directly whether the Reconciler page itself is missing images (it isn't — Receipt_Recon_Queue

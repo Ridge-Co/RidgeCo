@@ -331,11 +331,16 @@ function rowCard(r){
   if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
 
   // Materials description default: the receipt's own OCR'd items, generalized into short
-  // categories (e.g. "paint, primer, batteries" instead of the verbatim brand/SKU text) —
-  // never the work order's own job description. Falls back to the old behavior only for
-  // receipts scanned before Items_Summary existed.
+  // categories (e.g. "paint, primer, batteries") when the AI-cleaned Items_Summary is on file.
+  // If it isn't (an older scan not yet backfilled — see backfillItemsSummary), fall back to the
+  // RAW item text itself (stripped of prices/qty notes) — NEVER the work order's own job
+  // description or the store name. Materials text, however unpolished, beats no materials
+  // text at all; the WO description is never materials info and was the original bug.
   const descDefault = (r.items_summary && r.items_summary.length) ? r.items_summary.join(', ')
-    : ((sug.suggested_wo&&sug.suggested_wo.desc)||r.PO_Reference||r.Vendor||'');
+    : (r.items && r.items.length) ? r.items.map(s => String(s||'')
+        .replace(/\$[\d,.]+/g, '').replace(/\([^)]*\)/g, '').replace(/^\s*\d+x\s*/i, '').trim()
+      ).filter(Boolean).join(', ')
+    : (r.PO_Reference || '');
 
   if (!excluded && !isCompany && isPendingLike) {
     html += '<div class="rc-fields">'
