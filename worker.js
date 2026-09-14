@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.9';
+const BUILD_VERSION = '2026-09-10.10';
 
 export default {
   async fetch(request, env) {
@@ -6851,7 +6851,7 @@ async function receiptImageExtractMultiple(env, bytes, mime) {
     const media = isPdf
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
       : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
-    const prompt = `This image may show ONE OR MORE separate physical store receipts, photographed or scanned together side by side (this is common — someone lays out several receipts and takes one photo). Identify EVERY distinct receipt visible, separately — do not merge two receipts into one, and do not miss a receipt just because it's smaller or partially in shadow. For EACH distinct receipt, return: vendor (store name, string), date ("YYYY-MM-DD" or ""), total (the receipt's own total, as a plain number, or null), payment_hint (how it was paid IF shown on the receipt — e.g. "cash", "LBA"/business account/charge account, a card's last 4 digits — else ""), items (array of short strings, the line items on THAT receipt only). Return ONLY strict minified JSON: {"receipt_count": <integer>, "receipts": [{"vendor":"","date":"","total":0,"payment_hint":"","items":[]}, ...]}. If genuinely only one receipt is visible, receipt_count is 1 and receipts has one entry. JSON only, no prose.`;
+    const prompt = `This image may show ONE OR MORE separate physical store receipts, photographed or scanned together side by side (this is common — someone lays out several receipts and takes one photo). Identify EVERY distinct receipt visible, separately — do not merge two receipts into one, and do not miss a receipt just because it's smaller or partially in shadow. For EACH distinct receipt, return: vendor (store name, string), date ("YYYY-MM-DD" or ""), total (the amount the customer actually paid — the line labelled TOTAL, or INVOICE TOTAL, or similar. Do NOT confuse this with CASH TEND/CASH TENDERED, or with CHANGE/CHANGE DUE — those are the cash handed over and the change given back, never the receipt's total. If a printed TOTAL line exists, use it; return null rather than guessing if you can't find one — as a plain number, or null), payment_hint (how it was paid IF shown on the receipt — e.g. "cash", "LBA"/business account/charge account, a card's last 4 digits — else ""), items (array of short strings, the line items on THAT receipt only). Return ONLY strict minified JSON: {"receipt_count": <integer>, "receipts": [{"vendor":"","date":"","total":0,"payment_hint":"","items":[]}, ...]}. If genuinely only one receipt is visible, receipt_count is 1 and receipts has one entry. JSON only, no prose.`;
     const r = await routeAI(env, { type: 'receipt_parse', moneyFacing: true, media, prompt, maxTokens: 1500, source: 'receiptImageExtractMultiple' });
     const txt = (r.result || '').trim();
     const parsed = JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim());
