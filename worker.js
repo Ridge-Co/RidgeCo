@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.5';
+const BUILD_VERSION = '2026-09-14.6';
 
 export default {
   async fetch(request, env) {
@@ -8360,7 +8360,10 @@ async function twilioAccountStatus(env) {
       const entry = { sid: svc.sid, friendly_name: svc.friendly_name };
       try {
         const comp = await get(`https://messaging.twilio.com/v1/Services/${svc.sid}/Compliance/Usa2p`);
-        entry.campaign = comp.ok ? { campaign_status: comp.data.campaign_status, campaign_id: comp.data.campaign_id, use_case: comp.data.use_case_summary || comp.data.use_case } : { error: comp.data.message || `HTTP ${comp.status}` };
+        // Always include the raw response alongside any guessed field names — Twilio's exact
+        // field naming for this resource wasn't something to guess at and ship blind; this
+        // guarantees the real data is visible even if the guessed names below are wrong.
+        entry.campaign = comp.ok ? { campaign_status: comp.data.campaign_status, campaign_id: comp.data.campaign_id, use_case: comp.data.use_case_summary || comp.data.use_case, raw: comp.data } : { error: comp.data.message || `HTTP ${comp.status}`, raw: comp.data };
       } catch (e) { entry.campaign = { error: String((e && e.message) || e) }; }
       try {
         const nums = await get(`https://messaging.twilio.com/v1/Services/${svc.sid}/PhoneNumbers`);
