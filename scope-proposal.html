@@ -244,6 +244,19 @@ function buildSelections(){
   return sel;
 }
 
+function scheduleAmounts(schedule, subtotal){
+  var running=0;
+  return (schedule||[]).map(function(m,i){
+    var isLast = i===((schedule||[]).length-1);
+    var amt = isLast ? +(subtotal-running).toFixed(2) : +((m.percent/100)*subtotal).toFixed(2);
+    running = +(running+amt).toFixed(2);
+    return { label:m.label, percent:m.percent, trigger:m.trigger, customer_amount:amt };
+  });
+}
+function scheduleLineHtml(m){
+  var when = m.trigger==='upfront' ? ' (due now)' : m.trigger==='completion' ? ' (due at completion)' : '';
+  return '<div class="total-line'+(m.trigger==='upfront'?' deposit':'')+'"><span>'+esc(m.label)+' ('+m.percent+'%)'+when+'</span><span>'+money(m.customer_amount)+'</span></div>';
+}
 function currentTotals(){
   var subtotal = 0;
   (DATA.items || []).forEach(function(it){
@@ -258,14 +271,14 @@ function currentTotals(){
     if (v) subtotal += (+v.price || 0);
   });
   subtotal = +subtotal.toFixed(2);
-  return { subtotal: subtotal, deposit: +(subtotal/2).toFixed(2) };
+  return { subtotal: subtotal, schedule: scheduleAmounts(DATA.schedule, subtotal) };
 }
 
 function recalc(){
   var t = currentTotals();
-  var totalEl = document.getElementById('live-total'); var depEl = document.getElementById('live-deposit');
+  var totalEl = document.getElementById('live-total'); var schedEl = document.getElementById('live-schedule');
   if (totalEl) totalEl.textContent = money(t.subtotal);
-  if (depEl) depEl.textContent = money(t.deposit);
+  if (schedEl) schedEl.innerHTML = t.schedule.map(scheduleLineHtml).join('');
 }
 
 /* ---------- signature pad ---------- */
@@ -355,7 +368,12 @@ function render(d){
   }
   var itemsHtml = items.map(function(it){ return itemHtml(it, locked, locked ? d.signed.selections : null); }).join('');
   var subtotal = locked ? d.signed.subtotal : d.subtotal;
-  var deposit = locked ? d.signed.deposit : d.deposit;
+  var schedule = locked ? (d.signed.schedule || []) : (d.schedule || []);
+  // Signed milestone rows carry customer_amount already computed at sign time; the live (unsigned)
+  // schedule from scopeProposalView needs the same treatment currentTotals() gives it so a page
+  // load with no variant toggling yet still shows correct dollar amounts.
+  if (!locked) schedule = scheduleAmounts(DATA.schedule, subtotal);
+  var firstUpfront = schedule.find(function(m){ return m.trigger==='upfront'; }) || schedule[0] || { percent: 0 };
 
   var html = '<div class="card">'
     + '<div class="addr">' + esc(d.address || '') + '</div>'
@@ -373,14 +391,14 @@ function render(d){
     + itemsHtml
     + '<div class="totals">'
     + '<div class="total-line grand"><span>Total</span><span id="live-total">' + money(subtotal) + '</span></div>'
-    + '<div class="total-line deposit"><span>Required 50% deposit</span><span id="live-deposit">' + money(deposit) + '</span></div>'
+    + '<div id="live-schedule">' + schedule.map(scheduleLineHtml).join('') + '</div>'
     + '</div></div>';
 
   html += '<div class="card terms">'
     + '<div class="section-hd">Payment &amp; project terms</div>'
     + '<ul>'
-    + '<li>A 50% electronic deposit is required to approve this proposal and schedule the work.</li>'
-    + '<li>All deposits and final invoices must be paid electronically. Physical checks are not accepted.</li>'
+    + '<li>Payment is due per the schedule above; the first payment (' + firstUpfront.percent + '%) is required to approve this proposal and schedule the work.</li>'
+    + '<li>All scheduled payments must be paid electronically. Physical checks are not accepted.</li>'
     + '<li>Where an item offers more than one option, the price shown reflects the option selected' + (locked ? ' at signing' : '') + '; the invoice matches that selection.</li>'
     + '</ul></div>';
 
@@ -395,7 +413,7 @@ function render(d){
       + '<div class="pad-wrap"><span class="pad-hint" id="pad-hint">Sign here</span><canvas id="sig-canvas"></canvas></div>'
       + '<div class="pad-actions"><button type="button" class="link-btn" onclick="clearPad()">Clear</button></div>'
       + '</div>'
-      + '<label class="agree-row"><input type="checkbox" id="agree-check" onchange="checkReady()"><span>I have reviewed the scope, selected options, and total above, and I authorize Ridge Co to charge the 50% deposit and begin work.</span></label>'
+      + '<label class="agree-row"><input type="checkbox" id="agree-check" onchange="checkReady()"><span>I have reviewed the scope, selected options, and total above, and I authorize Ridge Co to charge the payment schedule shown (' + firstUpfront.percent + '% now, the remainder per the schedule above) and begin work.</span></label>'
       + '<div id="sign-status" class="msg hidden"></div>'
       + '<button type="button" class="submit-btn" id="submit-btn" disabled onclick="submitSign()">Sign &amp; submit</button>'
       + '</div>';

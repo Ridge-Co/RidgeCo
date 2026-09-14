@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.11';
+const BUILD_VERSION = '2026-09-14.1';
 
 export default {
   async fetch(request, env) {
@@ -435,6 +435,7 @@ export default {
         if (path === '/scope/to-wo')              return await scopeToWO(env, body);
         if (path === '/scope/estimate')           return await scopeEstimate(env, body);
         if (path === '/scope/proposal')           return await scopeProposal(env, body);
+        if (path === '/scope/payment-schedule')   return await scopeSetPaymentSchedule(env, body);
         if (path === '/scope/proposal/link')        return await scopeProposalLink(env, body);
         if (path === '/scope/proposal/link-revoke') return await scopeProposalLinkRevoke(env, body);
         if (path === '/scope/proposal/send')        return await scopeProposalSend(env, body);
@@ -443,6 +444,7 @@ export default {
         if (path === '/scope-proposal/unbook')    return await scopeProposalUnbook(env, body);
         if (path === '/scope-proposal/book-final') return await scopeProposalBookFinal(env, body);
         if (path === '/scope-proposal/unbook-final') return await scopeProposalUnbookFinal(env, body);
+        if (path === '/scope-proposal/bill-milestones') return await scopeProposalBillMilestones(env, body);
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
@@ -1926,6 +1928,14 @@ async function scopeProposal(env, body) {
   const _pc = await getPricingConfig(env);
   if (!_pc) return json({ error: 'Pricing not configured — set PRICING_CONFIG (Cloudflare secret) or the Config sheet `pricing_config` row.' }, 400);
   const priced = scopeItemsPricing(items, _pc); // markup applied here, server-side, per item
+  const maxUpfront = await scopeMaxUpfrontPct(env);
+  const rawSchedule = scopeParsePaymentSchedule(s);
+  const scheduleCheck = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
+  // rawSchedule was already validated when it was saved (scopeSetPaymentSchedule) or is the
+  // built-in default, so scheduleCheck.error should never fire here — but if a schedule was
+  // somehow left in a bad state, fall back to the default rather than 500ing proposal generation.
+  const schedule = scheduleCheck.schedule || scopeDefaultPaymentSchedule();
+  const milestones = scopeComputeMilestoneAmounts(schedule, priced.subtotal, priced.vendorCostTotal);
 
   const bulletsPrompt = `You are a property maintenance estimate writer. Rewrite each of the following scope-of-work item descriptions into a short, polished, customer-facing sentence. Correct typos/slang/grammar, imperative and specific. Do NOT include ANY dollar amounts, costs, or pricing of any kind. Items (JSON array):\n${JSON.stringify(items.map(it => ({ id: it.id, area: it.area, description: it.description, note: it.note })))}\n\nReturn ONLY strict minified JSON: an array of {"id":"<same id>","text":"<rewritten sentence>"}, same order, no preamble.`;
   const rewritten = {};
@@ -1944,14 +1954,20 @@ async function scopeProposal(env, body) {
   // quote — the combined price is built to absorb small unknowns across a mixed batch of larger and
   // smaller tasks, and a piece done alone loses that cushion. Applies universally (not just when a
   // standalone-vs-combined comparison is shown), so it's standard boilerplate on every proposal.
-  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${priced.subtotal.toFixed(2)}\nRequired 50% Deposit: $${priced.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this proposal and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn't get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.`;
+  const scheduleLines = milestones.map(m => {
+    const when = m.trigger === 'upfront' ? ' — due to approve this proposal and schedule the work'
+      : m.trigger === 'completion' ? ' — due at job completion'
+      : ' — billed once this milestone is reached';
+    return `  - ${m.label} (${m.percent}%): $${m.customer_amount.toFixed(2)}${when}`;
+  }).join('\n');
+  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${priced.subtotal.toFixed(2)}\nPayment Schedule:\n${scheduleLines}\n\nPayment & Project Terms:\n\n- Payment is due per the schedule above; the first payment is required to approve this proposal and schedule the work.\n- All scheduled payments must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn't get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.`;
 
   await ensureColumns(env, 'Scopes', ['Proposal_Items_JSON']);
   await updateRow(env, 'Scopes', id, {
     Proposal_Text: doc, Proposal_Items_JSON: JSON.stringify(priced.items),
     Estimate_Amount: String(priced.vendorCostTotal), Status: 'proposed', Updated_Date: new Date().toISOString(),
   });
-  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, items: priced.items });
+  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: scheduleCheck.warnings || [], items: priced.items });
 }
 
 // ── Scope proposal customer link (Aug 18 2026, rule 113) ───────────────────
@@ -2121,6 +2137,10 @@ async function scopeProposalView(env, url) {
   const photos = await scopeProposalPhotos(env, s);
   const subtotal = +(items.reduce((sum, it) => { const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2);
+  const rawSchedule = scopeParsePaymentSchedule(s);
+  const scheduleValidation = scopeValidatePaymentSchedule(rawSchedule, await scopeMaxUpfrontPct(env));
+  const schedule = scopeComputeMilestoneAmounts(scheduleValidation.schedule || scopeDefaultPaymentSchedule(), subtotal, 0)
+    .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount })); // never vendor_amount — customer-facing boundary
   let signed = null;
   try {
     await scopeSigTab(env);
@@ -2128,10 +2148,16 @@ async function scopeProposalView(env, url) {
     const row = sigs.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
     if (row) {
       let sel = {}; try { sel = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
-      signed = { signer_name: row.Signer_Name, signed_date: row.Signed_Date, subtotal: +row.Subtotal || subtotal, deposit: +row.Deposit_Amount || deposit, selections: sel };
+      let signedSchedule = schedule; // fallback: unsigned live schedule, shown against the locked subtotal below
+      try {
+        await paymentMilestonesTab(env);
+        const ms = (await fetchTab(env, 'Payment_Milestones')).filter(m => m.Signature_ID === String(row.ID) && String(m.Active || '').toUpperCase() !== 'FALSE');
+        if (ms.length) signedSchedule = ms.map(m => ({ label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger, customer_amount: +m.Customer_Amount || 0, status: m.Status || 'pending' }));
+      } catch (_) {}
+      signed = { signer_name: row.Signer_Name, signed_date: row.Signed_Date, subtotal: +row.Subtotal || subtotal, deposit: +row.Deposit_Amount || deposit, selections: sel, schedule: signedSchedule };
     }
   } catch (_) {}
-  return json({ ok: true, address: addr || ('Property ' + s.Property_ID), title: s.Title || '', status: s.Status || '', items, subtotal, deposit, proposal_text: s.Proposal_Text || '', signed, photos });
+  return json({ ok: true, address: addr || ('Property ' + s.Property_ID), title: s.Title || '', status: s.Status || '', items, subtotal, deposit, schedule, proposal_text: s.Proposal_Text || '', signed, photos });
 }
 
 // ── Scope proposal e-sign (Aug 19 2026) ─────────────────────────────────────
@@ -2143,6 +2169,94 @@ async function scopeProposalView(env, url) {
 // scopes access to exactly one scope's proposal.
 const SCOPE_SIG_HEADERS = ['ID','Scope_ID','Signer_Name','Signature_PNG','Selections_JSON','Subtotal','Deposit_Amount','Vendor_Cost_Total','Signed_Date','Signed_TS','IP','User_Agent','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','QB_Final_Invoice_ID','QB_Final_Invoice_Number','QB_Final_Bill_ID','QB_Final_Bill_Number','Bill_Skip_Reason','Created_Date','Active'];
 async function scopeSigTab(env) { await ensureTab(env, 'Scope_Signatures', SCOPE_SIG_HEADERS); }
+
+// ── Payment Schedule / Milestones (Sep 14 2026) ─────────────────────────────
+// Generalizes the old fixed 50% deposit / 50% final split (scopeProposalBook/BookFinal, above)
+// into an arbitrary N-way milestone schedule — Brett: presets 1/3, 1/4, custom (e.g. 50% upfront
+// + 25% at a progress milestone + 25% final). Additive/backward-compatible by design: a
+// Scope_Signatures row signed BEFORE this shipped has no Payment_Milestones rows and keeps using
+// the original 2-stage book/book-final path unchanged — signed-proposals.html branches on
+// whether a row has milestones. Every NEW signature gets its schedule expanded into individual
+// Payment_Milestones rows at signing time (scopeProposalSign), billed via
+// scopeProposalBillMilestones (one or several milestones grouped into a single QB invoice/bill,
+// per Brett's "combine in one bill" requirement).
+//
+// MD Home Improvement Law caveat (Brett confirmed Sep 14 2026, not legal advice): a deposit
+// collected before/at signing is capped at 1/3 of the contract price (Md. Bus. Reg. §8-617(b)).
+// MAX_UPFRONT_DEPOSIT_PCT_DEFAULT enforces this as a WARNING only (Brett's explicit call — not a
+// hard block) on any milestone tagged trigger:'upfront'. A Config key 'MAX_UPFRONT_DEPOSIT_PCT'
+// overrides the default if Brett sets one.
+const MAX_UPFRONT_DEPOSIT_PCT_DEFAULT = 33.34;
+async function scopeMaxUpfrontPct(env) {
+  try { const cfg = await fetchConfig(env); const v = parseFloat(cfg.MAX_UPFRONT_DEPOSIT_PCT); return (isFinite(v) && v > 0 && v <= 100) ? v : MAX_UPFRONT_DEPOSIT_PCT_DEFAULT; }
+  catch (_) { return MAX_UPFRONT_DEPOSIT_PCT_DEFAULT; }
+}
+function scopeDefaultPaymentSchedule() {
+  return [
+    { label: 'Deposit', percent: 33.34, trigger: 'upfront' },
+    { label: 'Final', percent: 66.66, trigger: 'completion' },
+  ];
+}
+// Validates + normalizes a milestone array. Percentages must sum to 100 within a small rounding
+// tolerance (0.1) — the last entry absorbs drift under that; anything further off is REJECTED
+// rather than silently renormalized, since that would change what a customer is agreeing to pay
+// without them seeing it. Upfront total over the MD cap is a warning, never a rejection — Brett's
+// explicit "warn, don't block" call.
+function scopeValidatePaymentSchedule(milestones, maxUpfrontPct) {
+  if (!Array.isArray(milestones) || !milestones.length) return { error: 'At least one milestone is required.' };
+  const clean = [];
+  for (const m of milestones) {
+    const label = String((m && m.label) || '').trim().slice(0, 80) || 'Payment';
+    const percent = +(+(m && m.percent)).toFixed(2);
+    const trigger = ['upfront', 'manual', 'completion'].includes(m && m.trigger) ? m.trigger : 'manual';
+    if (!isFinite(percent) || percent <= 0) return { error: `"${label}" needs a percent greater than 0.` };
+    clean.push({ label, percent, trigger });
+  }
+  const total = +clean.reduce((sum, m) => sum + m.percent, 0).toFixed(2);
+  if (Math.abs(total - 100) > 0.1) return { error: `Milestone percentages must add up to 100% (currently ${total}%).` };
+  if (Math.abs(total - 100) > 0.001) clean[clean.length - 1].percent = +(clean[clean.length - 1].percent + (100 - total)).toFixed(2);
+  const warnings = [];
+  const upfrontPct = +clean.filter(m => m.trigger === 'upfront').reduce((sum, m) => sum + m.percent, 0).toFixed(2);
+  if (upfrontPct > maxUpfrontPct) warnings.push(`Upfront milestones total ${upfrontPct}%, above the ${maxUpfrontPct}% Maryland places on a deposit collected before work begins (Md. Bus. Reg. §8-617). Not blocked — confirm this job is clear before sending.`);
+  return { schedule: clean, warnings };
+}
+// Splits subtotal/vendorCostTotal across a validated schedule. The LAST milestone absorbs any
+// rounding remainder so milestones always foot exactly to the signed totals — never drift a cent
+// short or over from percent rounding, same discipline as scopeSigVendorBillAmount below.
+function scopeComputeMilestoneAmounts(schedule, subtotal, vendorCostTotal) {
+  subtotal = +subtotal || 0; vendorCostTotal = +vendorCostTotal || 0;
+  let custRunning = 0, vendRunning = 0;
+  return schedule.map((m, i) => {
+    const isLast = i === schedule.length - 1;
+    const custAmt = isLast ? +(subtotal - custRunning).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2);
+    const vendAmt = isLast ? +(vendorCostTotal - vendRunning).toFixed(2) : +((m.percent / 100) * vendorCostTotal).toFixed(2);
+    custRunning = +(custRunning + custAmt).toFixed(2); vendRunning = +(vendRunning + vendAmt).toFixed(2);
+    return { label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: custAmt, vendor_amount: vendAmt };
+  });
+}
+function scopeParsePaymentSchedule(s) {
+  try { const arr = JSON.parse((s && s.Payment_Schedule_JSON) || 'null'); if (Array.isArray(arr) && arr.length) return arr; } catch (_) {}
+  return scopeDefaultPaymentSchedule();
+}
+
+// POST /scope/payment-schedule (admin) { scope_id, milestones:[{label,percent,trigger}] }
+// Saved onto Scopes.Payment_Schedule_JSON — read by scopeProposal (proposal text/amounts) and
+// scopeProposalSign (which expands it into Payment_Milestones rows at signing time). Does not
+// retroactively touch any scope that's already been signed.
+async function scopeSetPaymentSchedule(env, body) {
+  const id = body && body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
+  await scopesTab(env);
+  const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
+  const maxUpfront = await scopeMaxUpfrontPct(env);
+  const { schedule, error, warnings } = scopeValidatePaymentSchedule(body && body.milestones, maxUpfront);
+  if (error) return json({ error }, 400);
+  await ensureColumns(env, 'Scopes', ['Payment_Schedule_JSON']);
+  await updateRow(env, 'Scopes', id, { Payment_Schedule_JSON: JSON.stringify(schedule), Updated_Date: new Date().toISOString() });
+  return json({ success: true, schedule, warnings: warnings || [] });
+}
+
+const PAYMENT_MILESTONES_HEADERS = ['ID','Scope_ID','Signature_ID','Label','Percent','Trigger','Sequence','Customer_Amount','Vendor_Amount','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Billed_Date','Created_Date','Active'];
+async function paymentMilestonesTab(env) { await ensureTab(env, 'Payment_Milestones', PAYMENT_MILESTONES_HEADERS); }
 
 // POST /scope-proposal/sign — PUBLIC (link-token gated, body.t). {t, signer_name, signature_png,
 // selections:{itemId:variantKey}}. MONEY IS SERVER-AUTHORITATIVE: the client sends WHICH variant
@@ -2187,9 +2301,9 @@ async function scopeProposalSign(env, body, ip, ua) {
     if (v) vendorCostTotal += (+v.vendor_cost || 0);
   }
   subtotal = +subtotal.toFixed(2); vendorCostTotal = +vendorCostTotal.toFixed(2);
-  const deposit = +(subtotal / 2).toFixed(2);
+  const deposit = +(subtotal / 2).toFixed(2); // legacy column, kept for any old dashboard summing it — not used for new billing
   const now = new Date();
-  await addRow(env, 'Scope_Signatures', {
+  const sigResp = await addRow(env, 'Scope_Signatures', {
     Scope_ID: String(s.ID), Signer_Name: signer,
     Signature_PNG: sigPng.length <= 45000 ? sigPng : '', // Sheets cell cap ~50k chars; skip if oversized
     Selections_JSON: JSON.stringify(finalSelections),
@@ -2198,8 +2312,44 @@ async function scopeProposalSign(env, body, ip, ua) {
     IP: String(ip || '').slice(0, 60), User_Agent: String(ua || '').slice(0, 300),
     Status: 'Signed', Created_Date: now.toISOString(), Active: 'TRUE',
   });
+  const sigJson = await sigResp.json().catch(() => ({}));
+  const signatureId = sigJson.id;
+
+  // Expand the scope's payment schedule (whatever Brett configured on scope-creator.html, or the
+  // built-in default if he never touched it) into individual Payment_Milestones rows tied to
+  // this signature — one row per milestone, billed independently later via
+  // scopeProposalBillMilestones. This is what actually replaces the old fixed deposit/final
+  // split going forward; the Deposit_Amount/Subtotal columns above are kept only for backward
+  // compatibility with anything still reading the old 2-stage shape.
+  let milestones = [];
+  if (signatureId) {
+    try {
+      const maxUpfront = await scopeMaxUpfrontPct(env);
+      const rawSchedule = scopeParsePaymentSchedule(s);
+      const { schedule } = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
+      const clean = schedule || scopeDefaultPaymentSchedule();
+      const amounts = scopeComputeMilestoneAmounts(clean, subtotal, vendorCostTotal);
+      await paymentMilestonesTab(env);
+      for (let i = 0; i < amounts.length; i++) {
+        const m = amounts[i];
+        const mResp = await addRow(env, 'Payment_Milestones', {
+          Scope_ID: String(s.ID), Signature_ID: String(signatureId), Label: m.label, Percent: String(m.percent),
+          Trigger: m.trigger, Sequence: String(i + 1), Customer_Amount: String(m.customer_amount), Vendor_Amount: String(m.vendor_amount),
+          Status: 'pending', Created_Date: now.toISOString(), Active: 'TRUE',
+        });
+        const mJson = await mResp.json().catch(() => ({}));
+        milestones.push(Object.assign({ id: mJson.id }, m));
+      }
+    } catch (e) {
+      // A milestone-row failure must never undo the signature that already succeeded — the
+      // Hub can still bill off Scope_Signatures' own Subtotal/Deposit_Amount via the legacy
+      // book/book-final path as a fallback if this ever happens; not silently swallowed either,
+      // since the empty `milestones` array itself is the visible signal (no schedule shown yet).
+    }
+  }
+
   await updateRow(env, 'Scopes', s.ID, { Status: 'signed', Updated_Date: now.toISOString() });
-  return json({ ok: true, subtotal, deposit });
+  return json({ ok: true, subtotal, deposit, schedule: milestones });
 }
 
 // ── Vendor-bill gap tracking (Aug 24 2026) ──────────────────────────────────
@@ -2244,6 +2394,11 @@ async function scopeProposalSignedList(env, url) {
   const props = await fetchTab(env, 'Properties').catch(() => []);
   // Vendors is read only to re-derive the in-house case for legacy rows (see scopeSigBillGap).
   const vendors = await fetchTab(env, 'Vendors').catch(() => []);
+  // Payment_Milestones (Sep 14 2026): rows signed under the new milestone system carry these;
+  // rows signed before it shipped have none and keep rendering the old deposit/final UI
+  // (signed-proposals.html branches on milestones.length).
+  let allMilestones = [];
+  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (_) {}
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
@@ -2256,6 +2411,15 @@ async function scopeProposalSignedList(env, url) {
     const { amount: vendorBillAmount } = scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal);
     const vend = (sc.Vendor_ID && vendors.find(v => v.ID === String(sc.Vendor_ID))) || null;
     const gap = scopeSigBillGap(r, !!vend && String(vend.In_House || '').toUpperCase() === 'TRUE');
+    const milestones = allMilestones
+      .filter(m => m.Signature_ID === String(r.ID) && String(m.Active || '').toUpperCase() !== 'FALSE')
+      .sort((a, b) => (+a.Sequence || 0) - (+b.Sequence || 0))
+      .map(m => ({
+        id: m.ID, label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger,
+        customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0, status: m.Status || 'pending',
+        qb_invoice_id: m.QB_Invoice_ID || '', qb_invoice_number: m.QB_Invoice_Number || '',
+        qb_bill_id: m.QB_Bill_ID || '', qb_bill_number: m.QB_Bill_Number || '', billed_date: m.Billed_Date || '',
+      }));
     return {
       id: r.ID, scope_id: r.Scope_ID, wo_id: sc.WO_ID || '', property: p.Address || ('Property ' + sc.Property_ID),
       title: sc.Title || '', signer: r.Signer_Name, signed_date: r.Signed_Date, signed_ts: r.Signed_TS,
@@ -2264,7 +2428,7 @@ async function scopeProposalSignedList(env, url) {
       qb_bill_id: r.QB_Bill_ID || '', qb_bill_number: r.QB_Bill_Number || '',
       qb_final_invoice_id: r.QB_Final_Invoice_ID || '', qb_final_invoice_number: r.QB_Final_Invoice_Number || '',
       qb_final_bill_id: r.QB_Final_Bill_ID || '', qb_final_bill_number: r.QB_Final_Bill_Number || '',
-      bill_gap: gap.kind, bill_skip_reason: gap.reason,
+      bill_gap: gap.kind, bill_skip_reason: gap.reason, milestones,
     };
   });
   out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
@@ -2334,6 +2498,128 @@ async function scopeSigResolveParties(env, s, row) {
   const addr = qbPropertyDisplayName(prop) ? (qbPropertyDisplayName(prop) + (unitLabel ? (' ' + unitLabel) : '')) : ('Property ' + s.Property_ID);
 
   return { tradeName, trade, prop, unit, owner, vendor, billTo, custDisplay, vendDisplay, vendorInHouse, addr };
+}
+
+// POST /scope-proposal/bill-milestones (admin) { signature_id, milestone_ids:[...], preview_only }
+// Generalized replacement for scopeProposalBook/BookFinal's fixed 2-stage booking, for any
+// signature that has Payment_Milestones rows (i.e. signed after Sep 14 2026's schedule system
+// shipped — older rows keep using book/book-final untouched, see the section header above).
+// Bills one or MORE milestones together as a single grouped QB invoice + single grouped QB
+// vendor bill (Brett: "ability to combine in one bill if I need to" — jobs sometimes move faster
+// than he can check in on). Same safety shape as scopeProposalBook: preview_only computes and
+// returns without writing; the invoice is persisted before the bill is attempted so a bill
+// failure can never duplicate the invoice on retry; a bill failure never hides or rolls back an
+// already-created invoice. Every milestone in the request must belong to the same signature and
+// still be 'pending' — mixing signatures or re-billing an already-billed milestone is rejected
+// outright rather than silently partial-processed.
+async function scopeProposalBillMilestones(env, body) {
+  const sigId = body && body.signature_id;
+  const milestoneIds = Array.isArray(body && body.milestone_ids) ? body.milestone_ids.map(String) : [];
+  if (!sigId || !milestoneIds.length) return json({ error: 'signature_id and milestone_ids required' }, 400);
+
+  await scopeSigTab(env); await paymentMilestonesTab(env);
+  const [sigs, allMilestones, scopes] = await Promise.all([fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Payment_Milestones'), fetchTab(env, 'Scopes')]);
+  const row = sigs.find(r => r.ID === String(sigId) && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (!row) return json({ error: 'signature not found' }, 404);
+  const s = scopes.find(x => x.ID === row.Scope_ID);
+  if (!s) return json({ error: 'Scope not found for this signature (Scope_ID ' + row.Scope_ID + ')' }, 404);
+
+  const picked = milestoneIds.map(id => allMilestones.find(m => m.ID === id && m.Signature_ID === String(sigId) && String(m.Active || '').toUpperCase() !== 'FALSE')).filter(Boolean);
+  if (picked.length !== milestoneIds.length) return json({ error: 'One or more milestone_ids were not found on this signature.' }, 404);
+  const notPending = picked.filter(m => (m.Status || 'pending') !== 'pending');
+  if (notPending.length) return json({ error: 'Milestone(s) already billed: ' + notPending.map(m => m.Label).join(', ') }, 400);
+
+  const { tradeName, trade, prop, unit, owner, vendor, billTo, custDisplay, vendDisplay, vendorInHouse, addr } = await scopeSigResolveParties(env, s, row);
+
+  const custTotal = +picked.reduce((sum, m) => sum + (+m.Customer_Amount || 0), 0).toFixed(2);
+  const vendTotal = +picked.reduce((sum, m) => sum + (+m.Vendor_Amount || 0), 0).toFixed(2);
+
+  let billSkipReason = '';
+  if (!vendor) billSkipReason = s.Vendor_ID ? ('Vendor ' + s.Vendor_ID + ' was not found on the Vendors tab — no vendor bill will be created.') : 'No vendor is set on this scope — no vendor bill will be created.';
+  else if (vendorInHouse) billSkipReason = SCOPE_BILL_SKIP_INHOUSE;
+  else if (!(vendTotal > 0)) billSkipReason = 'The selected milestone(s) carry $0 of vendor cost — there is nothing to bill.';
+
+  const labelList = picked.map(m => m.Label).join(' + ');
+  const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — ' + labelList + ' (' + addr + ')').slice(0, 4000);
+  const warnings = [];
+  if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
+  if (billSkipReason) warnings.push(billSkipReason);
+  if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
+
+  const preview = {
+    signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
+    milestones: picked.map(m => ({ id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0 })),
+    invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
+    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName } : null,
+    warnings,
+  };
+  if (body.preview_only) return json({ ok: true, preview });
+
+  // ---- COMMIT ----
+  if (!owner && !(billTo.qb_id || '')) return json({ ok: false, error: 'Owner not resolved for ' + addr + ' — refusing to create a QuickBooks invoice on a fallback customer. Fix the property/owner link first.', warnings });
+  const token = await qbAccessToken(env);
+  const txnDate = new Date().toISOString().slice(0, 10);
+  let invoiceId = '', invoiceNumber = '', billId = '', billNumber = '';
+
+  // 1) Customer invoice — one line per milestone, so the itemization stays visible even when
+  // several are billed together in one shot.
+  if (custTotal > 0) {
+    let customerId = (billTo.level !== 'owner' && billTo.qb_id) ? billTo.qb_id : '';
+    if (!customerId) {
+      try { customerId = await qbFindOrCreateCustomer(env, owner || {}, custDisplay, token); }
+      catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
+    }
+    const invoicePayload = {
+      Line: picked.map(m => ({ DetailType: 'SalesItemLineDetail', Amount: +(+m.Customer_Amount || 0).toFixed(2),
+        Description: (tradeName + ' — ' + (s.Title || 'scope of work') + ' — ' + m.Label + ' (' + addr + ')').slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: +(+m.Customer_Amount || 0).toFixed(2) } })),
+      CustomerRef: { value: customerId }, TxnDate: txnDate,
+      CustomerMemo: { value: ('Scope proposal ' + row.Scope_ID + ' — ' + labelList + ' — accepted ' + (row.Signed_Date || '') + ' by ' + row.Signer_Name).slice(0, 1000) },
+    };
+    const billEmail = (owner && (owner.Billing_Email || owner.Email) || '').trim();
+    if (billEmail && billEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail)) invoicePayload.BillEmail = { Address: billEmail };
+    let r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+    invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    if (!invoiceId && invoicePayload.BillEmail) { delete invoicePayload.BillEmail; r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token); invoiceId = (r && r.Invoice && r.Invoice.Id) || ''; }
+    if (!invoiceId) return json({ ok: false, error: 'QB invoice failed: ' + (qbFault(r) || 'unknown error'), warnings });
+    invoiceNumber = (r.Invoice && r.Invoice.DocNumber) || '';
+  }
+
+  // 2) Vendor bill — one line per milestone, wrapped so a failure can never hide/roll back the
+  // invoice already created above. Same skip-reason discipline as scopeProposalBook.
+  if (invoiceId && !billSkipReason) {
+    try {
+      const vendorQbId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token);
+      if (vendorQbId) {
+        const billPayload = {
+          Line: picked.map(m => ({ DetailType: 'AccountBasedExpenseLineDetail', Amount: +(+m.Vendor_Amount || 0).toFixed(2),
+            Description: (vendDisplay + ' — ' + tradeName + ' — ' + (s.Title || '') + ' — ' + m.Label + ' — ' + addr).slice(0, 4000),
+            AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } })),
+          VendorRef: { value: vendorQbId }, TxnDate: txnDate,
+          PrivateNote: ('Scope proposal ' + row.Scope_ID + ' — ' + labelList + ' — ' + vendDisplay).slice(0, 1000),
+        };
+        const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+        billId = (rb && rb.Bill && rb.Bill.Id) || '';
+        billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
+        if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+      } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
+    } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
+    if (billSkipReason) warnings.push(billSkipReason);
+  }
+
+  // 3) Persist — every included milestone gets the SAME invoice/bill id (they were billed
+  // together) and flips to 'billed'. Nothing here is undo-able yet (no bill-milestones equivalent
+  // of unbook/unbook-final) — flagged as a known gap, not silently missing.
+  const now = new Date().toISOString();
+  for (const m of picked) {
+    await updateRow(env, 'Payment_Milestones', m.ID, {
+      Status: 'billed', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber,
+      QB_Bill_ID: billId, QB_Bill_Number: billNumber, Billed_Date: now,
+    });
+  }
+  try { if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Invoiced' }); } catch (e) {}
+
+  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, milestone_ids: picked.map(m => m.ID), warnings });
 }
 
 async function scopeProposalBook(env, body) {

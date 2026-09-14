@@ -113,7 +113,7 @@
   <div id="m-body"><p class="muted"><span class="spin"></span> Building preview…</p></div>
   <div style="display:flex;gap:8px;margin-top:14px">
     <button class="btn" style="flex:1" id="m-cancel" onclick="closeModal()">Cancel</button>
-    <button class="btn primary hide" style="flex:1" id="m-confirm" onclick="confirmBook(this)">Confirm</button>
+    <button class="btn primary hide" style="flex:1" id="m-confirm" onclick="confirmModalAction(this)">Confirm</button>
   </div>
   <!-- Only shown once confirmBook() actually succeeds — see confirmBook(). Deletes the just-created
        QB invoice/bill and clears their ids off the row; gated by a confirm() dialog, and by
@@ -128,6 +128,9 @@ var WORKER='https://maintenance-hub.brett-2f8.workers.dev';
 var SECRET_KEY='mh_auth';
 var AUTH_TOKEN='';
 var cur=null;
+var curMs=null; // {sigId, ids} — the milestone-billing counterpart to `cur` (legacy book/book-final)
+var modalMode='book'; // 'book' | 'milestones' — which confirm handler the shared modal dispatches to
+var msSelections={}; // sigId -> array of currently-checked milestone ids
 
 function api(method,path,body){
   var opts={method:method,headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN}};
@@ -184,6 +187,34 @@ function load(){
       // policy (Ridge Co never bills itself for its own hours) and must stay calm, or the real
       // alarm gets trained away.
       var gap=(r.kind==='scope')?(r.bill_gap||''):'';
+      // Milestone billing (Sep 14 2026): any 'scope' row signed under the new payment-schedule
+      // system carries r.milestones — renders as a checklist + "bill selected" instead of the
+      // old fixed deposit/final block below. A row signed before this shipped has no milestones
+      // and falls through to the untouched legacy rendering.
+      if(r.kind==='scope' && r.milestones && r.milestones.length){
+        var msDone=r.milestones.filter(function(m){return m.status==='billed';}).length;
+        var msAllDone=msDone===r.milestones.length;
+        html+='<div class="card"><div class="row">'
+          +'<div><div class="name">'+esc(r.signer||'—')+'</div>'
+          +'<div class="sub">'+esc(r.property||r.proposal_id)+' · '+esc(subLine)+'</div>'
+          +'<div class="sub">Signed '+esc(r.signed_date||'')+'</div></div>'
+          +'<span class="chip '+(msAllDone?'booked':(msDone>0?'booked':'signed'))+'">'+(msAllDone?'✓ Fully billed':(msDone>0?('✓ '+msDone+'/'+r.milestones.length+' billed'):'Signed — needs billing'))+'</span>'
+          +'</div>';
+        html+='<div style="margin-top:10px">';
+        r.milestones.forEach(function(m){
+          var billed=m.status==='billed';
+          html+='<label class="row" style="gap:8px;padding:6px 0;border-bottom:1px dotted var(--line);'+(billed?'opacity:.6':'')+'">'
+            +'<input type="checkbox"'+(billed?' disabled':(' onchange="toggleMilestone(\''+esc(r.id)+'\',\''+esc(m.id)+'\',this.checked)"'))+'>'
+            +'<span style="flex:1">'+esc(m.label)+' <span class="muted">('+m.percent+'%'+(m.trigger==='upfront'?' · upfront':m.trigger==='completion'?' · completion':'')+')</span></span>'
+            +'<span>'+money(m.customer_amount)+'</span>'
+            +'<span class="chip '+(billed?'booked':'signed')+'" style="margin-left:2px">'+(billed?'billed':'pending')+(billed&&m.qb_invoice_number?(' #'+esc(m.qb_invoice_number)):'')+'</span>'
+            +'</label>';
+        });
+        html+='</div>';
+        if(!msAllDone) html+='<div style="margin-top:12px"><button class="btn primary" id="msbtn-'+esc(r.id)+'" disabled onclick="previewMilestoneBill(\''+esc(r.id)+'\')">Bill selected (0)</button></div>';
+        html+='</div>';
+        return; // skip the legacy deposit/final rendering entirely for milestone rows
+      }
       html+='<div class="card"><div class="row">'
         +'<div><div class="name">'+esc(r.signer||'—')+'</div>'
         +'<div class="sub">'+esc(r.property||r.proposal_id)+' · '+esc(subLine)+'</div>'
@@ -251,6 +282,7 @@ function undoBook(id,kind,phase,el){
 
 function preview(id,kind,phase){
   cur={id:id,kind:kind,phase:phase||''};
+  modalMode='book';
   document.getElementById('m-title').textContent=phase==='final' ? 'Preview — final balance in QuickBooks' : 'Preview — create in QuickBooks';
   document.getElementById('m-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
   document.getElementById('m-confirm').classList.add('hide');
@@ -294,7 +326,61 @@ function confirmBook(btn){
     }
   }).catch(function(e){btn.disabled=false;btn.textContent='Confirm — create in QuickBooks';toast('Error: '+e.message);});
 }
-function closeModal(){document.getElementById('modal').classList.remove('open');cur=null;}
+function closeModal(){document.getElementById('modal').classList.remove('open');cur=null;curMs=null;}
+function confirmModalAction(btn){ if(modalMode==='milestones') confirmMilestoneBill(btn); else confirmBook(btn); }
+
+// ── Milestone billing (Sep 14 2026) ─────────────────────────────────────────
+function toggleMilestone(sigId,msId,checked){
+  msSelections[sigId]=msSelections[sigId]||[];
+  var idx=msSelections[sigId].indexOf(msId);
+  if(checked && idx===-1) msSelections[sigId].push(msId);
+  if(!checked && idx!==-1) msSelections[sigId].splice(idx,1);
+  var btn=document.getElementById('msbtn-'+sigId);
+  if(btn){ var n=msSelections[sigId].length; btn.disabled=(n===0); btn.textContent='Bill selected ('+n+')'; }
+}
+function previewMilestoneBill(sigId){
+  var ids=msSelections[sigId]||[];
+  if(!ids.length) return;
+  curMs={sigId:sigId,ids:ids}; modalMode='milestones';
+  document.getElementById('m-title').textContent='Preview — bill selected milestone(s)';
+  document.getElementById('m-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
+  document.getElementById('m-confirm').classList.add('hide');
+  var mc=document.getElementById('m-cancel');mc.textContent='Cancel';mc.classList.remove('hide');
+  var mu=document.getElementById('m-undo');mu.classList.add('hide');mu.style.pointerEvents='';mu.style.opacity='';mu.textContent='Undo — delete this invoice & bill';
+  document.getElementById('modal').classList.add('open');
+  api('POST','/scope-proposal/bill-milestones',{signature_id:sigId,milestone_ids:ids,preview_only:true}).then(function(r){
+    if(!r||!r.ok||!r.preview){document.getElementById('m-body').innerHTML='<div class="warn">'+esc((r&&r.error)||'Could not build preview')+'</div>';return;}
+    var p=r.preview,h='';
+    h+='<div class="sub" style="margin-bottom:8px">'+esc(p.property)+' · '+esc(p.signer)+'</div>';
+    (p.milestones||[]).forEach(function(m){h+='<div class="line"><span>'+esc(m.label)+' ('+m.percent+'%)</span><span>'+money(m.customer_amount)+'</span></div>';});
+    h+='<div class="line" style="font-weight:700"><span>Invoice → '+esc(p.invoice.customer)+' <span class="muted">('+esc(p.invoice.level)+')</span></span><span>'+money(p.invoice.amount)+'</span></div>';
+    if(p.bill){h+='<div class="line"><span>Vendor bill → '+esc(p.bill.vendor)+' <span class="muted">('+esc(p.bill.trade)+')</span></span><span>'+money(p.bill.amount)+'</span></div>';}
+    else {h+='<div class="line muted"><span>No vendor bill</span><span>—</span></div>';}
+    if(p.warnings&&p.warnings.length){h+='<div class="warn">⚠ '+p.warnings.map(esc).join('<br>⚠ ')+'</div>';}
+    document.getElementById('m-body').innerHTML=h;
+    var b=document.getElementById('m-confirm');b.classList.remove('hide');b.textContent='Confirm — bill in QuickBooks';b.disabled=false;
+  }).catch(function(e){document.getElementById('m-body').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
+}
+function confirmMilestoneBill(btn){
+  if(!curMs)return;
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Creating…';
+  api('POST','/scope-proposal/bill-milestones',{signature_id:curMs.sigId,milestone_ids:curMs.ids}).then(function(r){
+    if(r&&r.ok){
+      var msg='Billed'+(r.invoice_number?(' invoice #'+r.invoice_number):' invoice')+(r.bill_number?(' + bill #'+r.bill_number):(r.bill_id?' + bill':''));
+      document.getElementById('m-body').innerHTML='<p style="font-weight:700;color:var(--green)">✓ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');
+      btn.classList.add('hide');
+      document.getElementById('m-cancel').textContent='Close';
+      // No undo path yet for grouped milestone bills (unlike the legacy deposit/final flow) —
+      // m-undo deliberately stays hidden here rather than wired to something that doesn't exist.
+      toast('Billed in QuickBooks');
+      if(curMs) msSelections[curMs.sigId]=[];
+      load();
+    } else {
+      btn.disabled=false;btn.textContent='Confirm — bill in QuickBooks';
+      document.getElementById('m-body').innerHTML+='<div class="warn">⚠ '+esc((r&&r.error)||'Failed')+'</div>';
+    }
+  }).catch(function(e){btn.disabled=false;btn.textContent='Confirm — bill in QuickBooks';toast('Error: '+e.message);});
+}
 
 (function(){var s=localStorage.getItem(SECRET_KEY);if(s){AUTH_TOKEN=s;api('GET','/proposal/signatures').then(enterApp).catch(function(){AUTH_TOKEN='';});}})();
 </script>

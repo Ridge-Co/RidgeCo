@@ -245,8 +245,23 @@
 
   <!-- 7. PROPOSAL -->
   <div class="section" id="sec-proposal">
-    <div class="section-title">7 · Generate the customer proposal</div>
-    <button class="btn" onclick="genProposal()">📄 Generate proposal from scope + pricing</button>
+    <div class="section-title">7 · Payment schedule &amp; customer proposal</div>
+    <div class="sub" style="margin-bottom:6px;">Set this before generating the proposal — the schedule below is what gets printed into the payment terms and signed.</div>
+    <div class="row" style="gap:6px;flex-wrap:wrap;">
+      <button class="btn small" onclick="applySchedulePreset('third')">1/3 (default)</button>
+      <button class="btn small secondary" onclick="applySchedulePreset('quarter')">1/4</button>
+      <button class="btn small secondary" onclick="applySchedulePreset('custom')">Custom</button>
+    </div>
+    <div id="schedule-rows" style="margin-top:8px;"></div>
+    <div class="row" style="margin-top:4px;">
+      <button class="btn small secondary" onclick="addScheduleRow()">+ Add milestone</button>
+    </div>
+    <div id="schedule-total" class="status"></div>
+    <div class="row" style="margin-top:6px;">
+      <button class="btn small" onclick="saveSchedule()">💾 Save payment schedule</button>
+    </div>
+    <div id="schedule-status" class="status"></div>
+    <button class="btn" style="margin-top:10px;" onclick="genProposal()">📄 Generate proposal from scope + pricing</button>
     <div class="sub" style="margin-top:4px;">⚠ Generating recomputes pricing from the items above and overwrites the text below — if you've hand-edited it (e.g. a custom combined/standalone breakdown), edit the text box directly instead of regenerating.</div>
     <div id="prop-status" class="status"></div>
     <div id="proposal-out" class="hide" style="margin-top:10px;">
@@ -275,6 +290,65 @@
 <script>
 var state = { properties:[], units:[], owners:[], vendors:[], scopes:[], current:null };
 var ownerGateEditMode=false;
+// Payment schedule (Sep 14 2026) — replaces the old fixed 50% deposit/final split. Lives as its
+// own small piece of state (not folded into state.current) because it's edited independently of
+// the rest of the scope, same way estimate fields are their own thing. maxUpfrontPct comes from
+// Config (MAX_UPFRONT_DEPOSIT_PCT) via boot(); 33.34 is the built-in fallback matching worker.js's
+// own MAX_UPFRONT_DEPOSIT_PCT_DEFAULT.
+var scheduleState = { milestones: [], maxUpfrontPct: 33.34 };
+function scheduleDefault(){ return [ {label:'Deposit', percent:33.34, trigger:'upfront'}, {label:'Final', percent:66.66, trigger:'completion'} ]; }
+function scheduleThird(){ var t=+(100/3).toFixed(2); return [ {label:'Deposit', percent:t, trigger:'upfront'}, {label:'Progress', percent:t, trigger:'manual'}, {label:'Final', percent:+(100-2*t).toFixed(2), trigger:'completion'} ]; }
+function scheduleQuarter(){ return [ {label:'Deposit', percent:25, trigger:'upfront'}, {label:'Progress 1', percent:25, trigger:'manual'}, {label:'Progress 2', percent:25, trigger:'manual'}, {label:'Final', percent:25, trigger:'completion'} ]; }
+function applySchedulePreset(which){
+  if(which==='third') scheduleState.milestones=scheduleThird();
+  else if(which==='quarter') scheduleState.milestones=scheduleQuarter();
+  else if(which==='default') scheduleState.milestones=scheduleDefault();
+  // 'custom' just leaves whatever's currently in the editor as a starting point — if it's
+  // somehow empty (shouldn't happen, editor always seeds from the saved/default schedule),
+  // seed it with the default rather than showing an empty, unsaveable list.
+  else if(which==='custom' && !scheduleState.milestones.length) scheduleState.milestones=scheduleDefault();
+  renderSchedule();
+}
+function addScheduleRow(){ scheduleState.milestones.push({label:'Milestone', percent:0, trigger:'manual'}); renderSchedule(); }
+function removeScheduleRow(i){ scheduleState.milestones.splice(i,1); renderSchedule(); }
+function updateScheduleField(i,field,val){ scheduleState.milestones[i][field] = field==='percent' ? (parseFloat(val)||0) : val; renderScheduleTotal(); }
+function renderSchedule(){
+  var html = scheduleState.milestones.map(function(m,i){
+    return '<div class="row" style="gap:6px;margin:4px 0;align-items:center;">'
+      +'<input value="'+esc(m.label)+'" oninput="updateScheduleField('+i+',\'label\',this.value)" placeholder="Label" style="flex:2;min-width:60px;">'
+      +'<input type="number" step="0.01" min="0" max="100" value="'+m.percent+'" oninput="updateScheduleField('+i+',\'percent\',this.value)" style="width:64px;">'
+      +'<span style="font-size:11px;color:var(--muted);">%</span>'
+      +'<select onchange="updateScheduleField('+i+',\'trigger\',this.value)" style="flex:1;min-width:110px;">'
+        +'<option value="upfront"'+(m.trigger==='upfront'?' selected':'')+'>Upfront</option>'
+        +'<option value="manual"'+(m.trigger==='manual'?' selected':'')+'>Progress (I trigger)</option>'
+        +'<option value="completion"'+(m.trigger==='completion'?' selected':'')+'>Completion</option>'
+      +'</select>'
+      +'<button class="btn small secondary" onclick="removeScheduleRow('+i+')" style="padding:5px 9px;" title="Remove">×</button>'
+    +'</div>';
+  }).join('');
+  document.getElementById('schedule-rows').innerHTML = html || '<p class="sub">No milestones — pick a preset or add one.</p>';
+  renderScheduleTotal();
+}
+function renderScheduleTotal(){
+  var total = scheduleState.milestones.reduce(function(s,m){return s+(+m.percent||0);},0);
+  var upfront = scheduleState.milestones.filter(function(m){return m.trigger==='upfront';}).reduce(function(s,m){return s+(+m.percent||0);},0);
+  var msg = 'Total: '+total.toFixed(2)+'%';
+  var cls = 'info';
+  if(Math.abs(total-100)>0.1){ msg+=' — must equal 100% to save'; cls='err'; }
+  else if(upfront > scheduleState.maxUpfrontPct+0.001){ msg += ' · ⚠ '+upfront.toFixed(2)+'% upfront is above the '+scheduleState.maxUpfrontPct+'% MD deposit cap — not blocked, your call, but confirm before sending'; cls='warn'; }
+  setStatus('schedule-total', msg, cls);
+}
+async function saveSchedule(){
+  setStatus('schedule-status','Saving…');
+  try{
+    var r = await post('/scope/payment-schedule', { scope_id: state.current.ID, milestones: scheduleState.milestones });
+    scheduleState.milestones = r.schedule; state.current.Payment_Schedule_JSON = JSON.stringify(r.schedule);
+    renderSchedule();
+    var msg = '✅ schedule saved';
+    if(r.warnings && r.warnings.length) msg += ' — ⚠ '+r.warnings.join(' ');
+    setStatus('schedule-status', msg, (r.warnings&&r.warnings.length)?'warn':'ok');
+  }catch(e){ setStatus('schedule-status','⚠ '+e.message,'err'); }
+}
 
 function worker(){ return document.getElementById('worker-url').value.trim(); }
 function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
@@ -305,8 +379,9 @@ function showList(){ show('list'); loadScopes(); }
 async function boot(){
   setStatus('conn-status','Loading…');
   try{
-    var res = await Promise.all([get('/properties'),get('/units'),get('/owners'),get('/vendors')]);
+    var res = await Promise.all([get('/properties'),get('/units'),get('/owners'),get('/vendors'),get('/config').catch(function(){return {};})]);
     state.properties=res[0]||[]; state.units=res[1]||[]; state.owners=res[2]||[]; state.vendors=res[3]||[];
+    var cfgVal=parseFloat((res[4]||{}).MAX_UPFRONT_DEPOSIT_PCT); if(isFinite(cfgVal)&&cfgVal>0&&cfgVal<=100) scheduleState.maxUpfrontPct=cfgVal;
     setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok');
     populateOwners(); populateVendors();
     await loadScopes();
@@ -449,6 +524,10 @@ function renderEditor(){
   document.getElementById('est-vendor').value=s.Vendor_ID||'';
   document.getElementById('est-number').value=s.Estimate_Number||'';
   document.getElementById('est-notes').value=s.Estimate_Notes||'';
+  // payment schedule
+  try{ var sched=JSON.parse(s.Payment_Schedule_JSON||'null'); scheduleState.milestones=(Array.isArray(sched)&&sched.length)?sched:scheduleDefault(); }
+  catch(e){ scheduleState.milestones=scheduleDefault(); }
+  renderSchedule();
   // proposal
   if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').value=s.Proposal_Text; }
   else { document.getElementById('proposal-out').classList.add('hide'); document.getElementById('proposal-text').value=''; }
@@ -868,7 +947,10 @@ async function genProposal(){
     document.getElementById('proposal-out').classList.remove('hide');
     document.getElementById('proposal-text').value=r.proposal_text;
     state.current.Proposal_Text=r.proposal_text; state.current.Status='proposed'; document.getElementById('ed-status-pill').innerHTML=statusPill('proposed');
-    setStatus('prop-status','✅ proposal ready — total $'+Number(r.final_price).toFixed(2)+', deposit $'+Number(r.deposit).toFixed(2),'ok');
+    var schedTxt=(r.schedule||[]).map(function(m){ return m.label+' $'+Number(m.customer_amount).toFixed(2); }).join(' · ');
+    var msg='✅ proposal ready — total $'+Number(r.final_price).toFixed(2)+' — '+schedTxt;
+    if(r.schedule_warnings && r.schedule_warnings.length) msg+=' ⚠ '+r.schedule_warnings.join(' ');
+    setStatus('prop-status',msg,(r.schedule_warnings&&r.schedule_warnings.length)?'warn':'ok');
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
 }
 function copyProposal(){ var t=document.getElementById('proposal-text').value; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 copied','ok'); }); }

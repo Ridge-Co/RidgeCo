@@ -1,3 +1,33 @@
+# WHERE THINGS STAND — Sep 14, 2026
+
+## 🟡 Built, not yet live-verified: Configurable multi-milestone payment schedules for Scope Proposals — rule 156
+Full detail: FEATURE_LOG rule 156. Replaces the fixed 50% deposit/50% final split with a
+configurable N-way milestone schedule (presets 1/3, 1/4, custom — e.g. 50% upfront + 25%
+progress + 25% final) across worker.js + scope-creator.html + scope-proposal.html +
+signed-proposals.html. New `Payment_Milestones` tab, fully backward-compatible with every
+already-signed proposal (those keep using the old book/book-final path untouched). Vendor side
+of each milestone is prorated off the VENDOR's own original estimate, never the customer's
+marked-up price, so Ridge Co's markup stays separate at every draw. Grouped billing (several
+milestones in one QB invoice+bill) built for Brett's "jobs move faster than I can check" case.
+Maryland's 1/3 deposit-before-work-starts cap (Md. Bus. Reg. §8-617(b)) is enforced as a WARNING
+only, never a hard block — Brett's explicit call, informational not legal advice.
+
+`node --check` clean everywhere touched; full test suite 51/51 (no regressions — the
+previously-noted `pricing-model`/`scope-core` failures are no longer present in this baseline).
+24 new pure-helper assertions (`test/payment-schedule.test.mjs`) plus two real-browser Playwright
+verifications with mocked Worker responses (`test/manual-verify-payment-schedule.mjs`,
+`test/manual-verify-milestone-billing-ui.mjs`, 13 checks each) — schedule rendering, live
+variant-toggle recalculation, the old "50% deposit" text confirmed gone, milestone checklist
+state, and the exact billing payload sent on confirm.
+
+**Not pushed yet** — sitting locally, prepared for Brett's push (Basic-auth PAT method per the
+standing rule in `ridgeco-git-push-proxy-bug.md`). No live Sheets/QuickBooks credentials in this
+build sandbox, so the actual tab creation, a real signature producing milestone rows, and a real
+grouped QB invoice+bill are all unverified — see rule 156's 5-step live-pass list.
+
+**Still open, out of scope for this build (Brett's own phased plan):** vendor draw requests with
+required photo evidence (email now, SMS-ready), and the Owner Change / Vendor Change order system.
+
 # WHERE THINGS STAND — Sep 10, 2026 (later)
 
 ## 🟢 Live-verified: Receipt Reconciler — materials descriptions, bill-on-match, business-expense receipts, QB-email forwarding — rules 155/155a
