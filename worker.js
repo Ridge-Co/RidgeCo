@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.2';
+const BUILD_VERSION = '2026-09-10.3';
 
 export default {
   async fetch(request, env) {
@@ -127,6 +127,7 @@ export default {
     try {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env);
+        if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
         if (path === '/hub-bootstrap')          return await hubBootstrap(env);
@@ -6553,6 +6554,38 @@ async function gmailSendEmail(env, { to, subject, html }) {
 }
 
 function _escHtml(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// GET /admin/receipts-image-check — Sep 10 2026, diagnostic only, no writes. Brett asked
+// directly whether the Reconciler page itself is missing images (it isn't — Receipt_Recon_Queue
+// rows keep Source_File_URL forever; receiptReconConfirm only ever updates Status/Confirmed_*
+// fields on that tab, never touches it) or whether the gap is specific to the Receipts tab /
+// the QB-email backfill. This quantifies it precisely instead of guessing: for every Receipts
+// row with no Source_File_ID of its own, checks whether _recoverReceiptSourceFile's exact
+// WO+Amount match found it, and — if not — whether a same-WO confirmed queue row exists at all
+// (a near-miss, meaning the image IS sitting on the Reconciler page, just not linked by this
+// heuristic) versus genuinely no trace anywhere (never scanned through the Reconciler at all).
+async function receiptsImageCheck(env) {
+  const [receipts, queueRows] = await Promise.all([
+    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTab(env, 'Receipt_Recon_Queue').catch(() => []),
+  ]);
+  const active = receipts.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE');
+  let hasOwnFile = 0, recoveredExact = 0, nearMissSameWO = 0, noTraceAtAll = 0;
+  const nearMissRows = [];
+  for (const r of active) {
+    if (r.Source_File_ID) { hasOwnFile++; continue; }
+    const src = _recoverReceiptSourceFile(r, queueRows);
+    if (src.id) { recoveredExact++; continue; }
+    const sameWO = r.WO_ID ? queueRows.filter(q => String(q.Confirmed_WO_ID || '') === String(r.WO_ID) && q.Source_File_ID) : [];
+    if (sameWO.length) {
+      nearMissSameWO++;
+      nearMissRows.push({ receipt_id: r.ID, wo_id: r.WO_ID, receipt_amount: r.Amount, queue_candidates: sameWO.map(q => ({ queue_id: q.ID, confirmed_amount: q.Confirmed_Amount })) });
+    } else {
+      noTraceAtAll++;
+    }
+  }
+  return json({ ok: true, total_active_receipts: active.length, has_own_file: hasOwnFile, recovered_exact_match: recoveredExact, near_miss_same_wo: nearMissSameWO, no_trace_at_all: noTraceAtAll, near_miss_rows: nearMissRows.slice(0, 50) });
+}
 
 // Best-effort recovery of a receipt's source file for rows that predate Source_File_ID being
 // carried onto the Receipts tab (everything confirmed before this build). Matches back to its
