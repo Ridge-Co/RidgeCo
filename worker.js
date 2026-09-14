@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.4';
+const BUILD_VERSION = '2026-09-14.5';
 
 export default {
   async fetch(request, env) {
@@ -994,10 +994,17 @@ function isTenantCurrent(t) {
 // a vendor going to an address today needs the person living there today. A moved-out
 // tenant's name and phone must not travel out to a third party — they no longer live
 // there, and it's their personal contact detail being passed to a stranger.
+// Whole-property (no-Unit) work orders never get a Tenant_ID filled in at creation — there's
+// no unit to carry one. Mirrors the same fallback enrichWO already uses for the WO-detail
+// display: an active tenant at this property with no Unit_ID of their own IS that property's
+// tenant. Found live (Sep 2026): this fallback was missing here, so tenant SMS silently never
+// fired for any whole-property WO — Tenant_SMS_Sent stayed FALSE even on a successful assign.
 function currentTenantForDispatch(tenants, unit, wo) {
   const id = (unit && unit.Tenant_ID) || (wo && wo.Tenant_ID) || '';
-  if (!id) return null;
-  const t = (tenants || []).find(x => String(x.ID) === String(id));
+  let t = id ? (tenants || []).find(x => String(x.ID) === String(id)) : null;
+  if (!t && wo && wo.Property_ID && !wo.Unit_ID) {
+    t = (tenants || []).find(x => x.Property_ID === wo.Property_ID && !x.Unit_ID && x.Active !== 'FALSE');
+  }
   return isTenantCurrent(t) ? t : null;
 }
 
@@ -3295,7 +3302,7 @@ async function updateStatus(env, body) {
   const config = await fetchConfig(env);
   if (body.status === 'Complete') {
     const [units, tenants, properties, owners] = await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
-    const unit = units.find(u => u.ID === wo.Unit_ID), tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID)), property = properties.find(p => p.ID === wo.Property_ID);
+    const unit = units.find(u => u.ID === wo.Unit_ID), tenant = currentTenantForDispatch(tenants, unit, wo), property = properties.find(p => p.ID === wo.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
     const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
@@ -3312,7 +3319,7 @@ async function updateStatus(env, body) {
   if (body.status === 'Accepted') {
     const [units, tenants, properties] = await fetchTabs(env, ['Units','Tenants','Properties']);
     const unit = units.find(u => u.ID === wo.Unit_ID);
-    const tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID));
+    const tenant = currentTenantForDispatch(tenants, unit, wo);
     const property = properties.find(p => p.ID === wo.Property_ID);
     const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
@@ -5524,7 +5531,7 @@ async function scheduleWO(env, body) {
   let tenantSMSSent=false, notifyQueued=false;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
     const [units,tenants,properties,owners]=await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
-    const unit=units.find(u=>u.ID===wo.Unit_ID), tenant=tenants.find(t=>t.ID===(unit?.Tenant_ID||wo.Tenant_ID)), property=properties.find(p=>p.ID===wo.Property_ID);
+    const unit=units.find(u=>u.ID===wo.Unit_ID), tenant=currentTenantForDispatch(tenants, unit, wo), property=properties.find(p=>p.ID===wo.Property_ID);
     const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
     const address=property?property.Address+(unit?' Unit '+unit.Unit_Label:''):'your address';
     if(isTenantNotifiable(tenant,wo)){
@@ -5927,9 +5934,15 @@ async function tenantManualUpdate(env, body) {
   const [workorders, units, tenants, properties, owners] = await fetchTabs(env, ['Work_Orders','Units','Tenants','Properties','Owners']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const unit = units.find(u => u.ID === wo.Unit_ID);
-  const tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID));
+  // Reuse the same canonical lookup assignVendor/updateStatus/scheduleWO already use — this
+  // used to be a simpler inline lookup here that missed whole-property (no-Unit) tenants;
+  // see the fix + comment on currentTenantForDispatch itself.
+  const tenant = currentTenantForDispatch(tenants, unit, wo);
   if (!tenant || !tenant.Phone) return json({ error: 'No tenant with a phone number on this work order' }, 400);
-  if (!isTenantNotifiable(tenant, wo)) return json({ error: 'This tenant is not currently notifiable (moved out, or the WO predates their move-in)' }, 400);
+  // currentTenantForDispatch already confirmed this tenant is current (active, not moved out);
+  // isBackgroundWO catches the other case it doesn't cover — a WO opened before this tenant's
+  // own move-in (background work tied to whoever lived here before them).
+  if (isBackgroundWO(tenant, wo)) return json({ error: 'This WO predates the tenant\'s move-in — not notifiable' }, 400);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;

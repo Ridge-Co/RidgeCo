@@ -1,4 +1,31 @@
-# WHERE THINGS STAND — Sep 14, 2026 (even later still)
+# WHERE THINGS STAND — Sep 14, 2026 (even later still, again)
+
+## 🟡 Built, not yet live-verified: root-cause fix for whole-property tenant SMS — rule 161
+Full detail: FEATURE_LOG rule 161. `currentTenantForDispatch` (used by every SMS trigger) never
+had the Property_ID fallback `enrichWO` already used for whole-property (no-Unit) listings —
+found live when Brett's "Send update" button failed on a real test WO despite the tenant being
+clearly shown on the WO detail screen. This predates the Twilio build; confirmed via
+`Tenant_SMS_Sent: FALSE` on that WO that the automatic tenant text never fired either, silently,
+all along. Fixed at the root (the shared helper) + swept 3 other call sites that had inlined the
+same incomplete lookup instead of using it. New test caught a real precision bug in the first
+draft before it shipped (see rule 161 for detail). `node --check` clean, full suite green.
+
+## 🟢 Two other things Brett found live-testing, NOT code bugs — his own action items
+1. **Inbound "YES" reply routes to an old PM auto-responder, not this Hub.** The Worker's own
+   `/sms-inbound` handler is fine and unchanged — the number's Twilio-side inbound webhook (or
+   the Messaging Service's own "Integration" config, which can override the number-level
+   setting) is very likely still pointed at whatever the old PM system used. Brett needs to
+   check, in Twilio Console: Phone Numbers → Manage → the number → Messaging config ("A message
+   comes in"), AND the Messaging Service's own Integration tab — both should point to
+   `https://maintenance-hub.brett-2f8.workers.dev/sms-inbound` (POST), not a Studio Flow or a
+   different webhook. Nothing to build here; this is a console setting.
+2. **Vendor dispatch text has no link to the WO.** Reasonable ask, deliberately not rushed into
+   the same patch as the two live bugs above — the codebase already has a proven shareable-WO-
+   link mechanism (`/wo/share-link`, last-4-of-phone gated), and before wiring it into the
+   accept-gated dispatch text, worth confirming what that shared page reveals pre-Accept doesn't
+   quietly widen what the accept-gate currently withholds. Queued as a real next-round item, not
+   dropped.
+
 
 ## 🔴 PR #3 (rule 159/159a) was never actually merged — a different session's work landed on main instead, in the meantime
 Brett's Claude Code session for the notify-toggle/checkbox-left/Twilio-diagnostic patch got as
