@@ -31,6 +31,35 @@ optional, not blocking.
 
 # WHERE THINGS STAND — Sep 14, 2026
 
+## 🟡 Built, not yet live-verified: Invoice descriptions now compile from what was actually logged — rule 158
+Full detail: FEATURE_LOG rule 158. Fixed the gap where per-entry hour details (and a vendor's own
+bill notes) never reached the customer invoice — only a single hand-typed WO-level field did.
+New `Invoice_Description` column (customer-facing) added alongside the existing `Notes` (now
+clearly private) on `Time_Entries` and `Vendor_Bills`, everywhere a note gets typed (index.html,
+vendor.html, wo.html). New `buildLaborDescription()` compiles the labor line from every time
+entry linked to that bill, date-ordered, wired into all four invoice-building call sites. One
+combined labor line (not per-entry lines) — Brett's explicit call, avoids leaking vendor markup
+on marked-up bills. Invoice Review memo box now pre-fills from the same compiled text, still
+fully editable. Spanish-speaking vendors' Invoice_Description translates straight to English
+(customer-facing), unlike their private Notes (kept bilingual).
+
+`node --check` clean everywhere touched. Full test suite 59/59 (fixed 2 tests that eval-extract
+`buildInvoiceLines` in isolation and needed the new helper grabbed alongside it; added 8 new
+assertions in `test/labor-description.test.mjs`). The previously-noted `pricing-model`/
+`scope-core` baseline failures are confirmed gone as of this session.
+
+**Not pushed yet** — sitting locally, prepared for Brett's push (Basic-auth PAT method, or the
+patch-file handoff if no PAT is available this session). No live Sheets/QuickBooks credentials
+in this build sandbox — see rule 158's 4-step live-pass list.
+
+**Related, raised but explicitly not built this round**: Brett wants the 5% pass-through card fee
+to cover truck-stock materials by default without necessarily applying it to labor — current
+mechanism is a single whole-invoice toggle, no per-line fee exists. Locked as "leave as-is" for
+now; also flagged a real future topic (his own words) on recovering more cost from price-sensitive
+$75/hr customers without stacking visible fees — not started, his call on when to revisit.
+
+# WHERE THINGS STAND — Sep 14, 2026 (earlier)
+
 ## 🟡 Built, not yet live-verified: Configurable multi-milestone payment schedules for Scope Proposals — rule 156
 Full detail: FEATURE_LOG rule 156. Replaces the fixed 50% deposit/50% final split with a
 configurable N-way milestone schedule (presets 1/3, 1/4, custom — e.g. 50% upfront + 25%

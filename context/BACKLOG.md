@@ -646,6 +646,7 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 | — | BrettOS | GitHub Actions archive step 403 error fixed | July 17, 2026 |
 | — | BrettOS | Estimating workflow: Gemini issues documented, Ridge Co proposal design established | July 17, 2026 |
 | — | BrettOS | Recurring 4-hour backlog check scheduled (trig_01JwivD2P6SEnAwPJqgurEXF) | July 17, 2026 |
+| — | Ridge Co | Invoice descriptions compiled from logged Time_Entries/Vendor_Bills Invoice_Description (rule 158) — not just a hand-typed WO field | Sep 14, 2026 |
 
 ---
 

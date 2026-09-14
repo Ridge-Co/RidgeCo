@@ -243,8 +243,11 @@
     <button class="btn sec" style="padding:5px 10px;font-size:13px" onclick="addRcpt()">+ <span data-i18n="Add">Add</span></button></label>
   <div id="b-rcpts"></div>
 
+  <label class="fl" data-i18n="What did you do? — the owner will see this">What did you do? — the owner will see this</label>
+  <textarea class="ff" id="b-invdesc" placeholder="Describe what was done in as much detail as possible"></textarea>
+
   <label class="fl" data-i18n="Notes (optional)">Notes (optional)</label>
-  <textarea class="ff" id="b-notes" placeholder="…"></textarea>
+  <textarea class="ff" id="b-notes" placeholder="Private — just for the office"></textarea>
 
   <!-- Invoice file — picking it auto-reads it (Claude vision) and pre-fills the amount,
        invoice #, and date below. No separate "read" button: pick file, tap Submit. -->
@@ -554,7 +557,7 @@ function openBill(){
   document.getElementById('b-hours').value=''; document.getElementById('b-flat').value='';
   document.getElementById('b-truck-desc').value=''; document.getElementById('b-truck-amt').value='';
   document.getElementById('b-truck-on').checked=false; document.getElementById('sec-truck').style.display='none';
-  document.getElementById('b-notes').value=''; document.getElementById('b-invno').value='';
+  document.getElementById('b-notes').value=''; document.getElementById('b-invdesc').value=''; document.getElementById('b-invno').value='';
   document.getElementById('b-invdate').value='';
   document.getElementById('b-invfile-status').textContent=''; document.getElementById('b-invread-status').textContent='';
   document.getElementById('b-rcpts').innerHTML=''; document.getElementById('b-msg').textContent='';
@@ -689,6 +692,7 @@ function submitBill(){
     Flat_Rate:String(flat.toFixed(2)), Total:String(c.total.toFixed(2)),
     Vendor_Invoice_No:document.getElementById('b-invno').value||'', Vendor_Invoice_Date:document.getElementById('b-invdate').value||'',
     Notes:document.getElementById('b-notes').value||'',
+    Invoice_Description:document.getElementById('b-invdesc').value||'',
   };
   post('/wo/shared/bill',{st:VIEW,wo:WO,bill:bill}).then(function(res){
     if(res && (res.success||res.id)){ msg('b-msg',t('Bill submitted ✓'),'ok'); btn.textContent='✓'; setTimeout(function(){ close_('ov-bill'); reload(); },1400); }

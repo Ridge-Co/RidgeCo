@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.2';
+const BUILD_VERSION = '2026-09-14.3';
 
 export default {
   async fetch(request, env) {
@@ -2980,7 +2980,7 @@ async function resolveHubHourlyRate(env, woId) {
 }
 
 async function addTimeEntry(env, body) {
-  const { wo_id, entered_by, entered_by_id, role, entry_type, start_datetime, end_datetime, duration_minutes_raw, notes, billable, hourly_rate } = body;
+  const { wo_id, entered_by, entered_by_id, role, entry_type, start_datetime, end_datetime, duration_minutes_raw, notes, invoice_description, billable, hourly_rate } = body;
   if (!wo_id) return json({ error: 'wo_id required' }, 400);
   if (!role)  return json({ error: 'role required (hub or vendor)' }, 400);
   let durationMinutes = 0;
@@ -3006,10 +3006,17 @@ async function addTimeEntry(env, body) {
     WO_ID: wo_id, Entered_By_ID: String(entered_by_id||''), Duration_Minutes: String(durationMinutes),
     Start_DateTime: start_datetime || '', End_DateTime: end_datetime || '',
     Notes: notes || '', Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'),
+    Invoice_Description: invoice_description || '',
   }, 30);
   if (dupe) return json({ success: true, duplicate: true, duration_minutes: durationMinutes });
 
-  await addRow(env, 'Time_Entries', { WO_ID: wo_id, Entered_By: entered_by||'', Entered_By_ID: String(entered_by_id||''), Role: role, Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'), Start_DateTime: start_datetime||'', End_DateTime: end_datetime||'', Duration_Minutes: String(durationMinutes), Notes: notes||'', Billable: role === 'hub' ? String(billable === 'TRUE' || billable === true) : 'TRUE', Hourly_Rate: String(rate), Billable_Amount: String(billableAmt.toFixed(2)), Created_Date: new Date().toISOString(), Active: 'TRUE' });
+  // Invoice_Description is what the customer actually reads on the invoice line, kept
+  // separate from Notes (private — never leaves the Hub). Same lazy ensureColumns pattern as
+  // every other additive field in this file: a write to a column the sheet doesn't have yet
+  // reports success and stores nothing (rule 37), so this has to run before the write.
+  if (invoice_description) { try { await ensureColumns(env, 'Time_Entries', ['Invoice_Description']); } catch (e) {} }
+
+  await addRow(env, 'Time_Entries', { WO_ID: wo_id, Entered_By: entered_by||'', Entered_By_ID: String(entered_by_id||''), Role: role, Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'), Start_DateTime: start_datetime||'', End_DateTime: end_datetime||'', Duration_Minutes: String(durationMinutes), Notes: notes||'', Invoice_Description: invoice_description||'', Billable: role === 'hub' ? String(billable === 'TRUE' || billable === true) : 'TRUE', Hourly_Rate: String(rate), Billable_Amount: String(billableAmt.toFixed(2)), Created_Date: new Date().toISOString(), Active: 'TRUE' });
   return json({ success: true, duration_minutes: durationMinutes, hourly_rate: rate });
 }
 
@@ -3661,6 +3668,7 @@ async function addVendorBill(env, body) {
       WO_ID: dupeKey, Vendor_ID: String(body.Vendor_ID || ''), Total: String(body.Total),
       Status: 'submitted', Notes: String(body.Notes || ''), Hours: String(body.Hours || ''),
       Receipts_Total: String(body.Receipts_Total || ''),
+      Invoice_Description: String(body.Invoice_Description || ''),
     }, 86400);
     if (dupe) {
       // A re-submit didn't create a second bill, but the hours it was built from still
@@ -3687,6 +3695,10 @@ async function addVendorBill(env, body) {
   // number) — B-fix Aug 17: vendors had no way to attach their invoice, only receipts had an
   // upload control. Drive_File_ID kept alongside the URL so the Hub can open it directly.
   if (body.Invoice_File_URL) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_File_URL', 'Invoice_File_ID']); } catch (e) {} }
+  // Invoice_Description — the customer-facing text (separate from Notes, which stays
+  // private). Used directly on flat/no-time-entry bills, and as the lead-in when time
+  // entries with their own Invoice_Description are also linked to this bill (buildInvoiceLines).
+  if (body.Invoice_Description) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_Description']); } catch (e) {} }
 
   // Hours logged on the job can BE the bill — that is the whole point when Brett is the
   // vendor. The ids ride in on the body but are not a Vendor_Bills column, so they come
@@ -8013,6 +8025,14 @@ async function woSharedBill(env, body){
   if (vendor.Language === 'es') {
     if (bill.Notes && String(bill.Notes).trim()) { const en = await translateText(env, bill.Notes, 'Spanish', 'English'); if (en && en !== bill.Notes) bill.Notes = `[ES] ${bill.Notes}\n[EN] ${en}`; }
     if (bill.Truck_Desc && String(bill.Truck_Desc).trim()) { const en = await translateText(env, bill.Truck_Desc, 'Spanish', 'English'); if (en && en !== bill.Truck_Desc) bill.Truck_Desc = en; }
+    // Invoice_Description is customer-facing (buildInvoiceLines puts it straight on the
+    // invoice line), so it goes straight to English rather than the bilingual [ES]/[EN]
+    // pattern used for internal-only fields above — the customer should never see Spanish
+    // text they didn't ask for. Falls back to the vendor's original if translation fails.
+    if (bill.Invoice_Description && String(bill.Invoice_Description).trim()) {
+      const en = await translateText(env, bill.Invoice_Description, 'Spanish', 'English');
+      if (en) bill.Invoice_Description = en;
+    }
   }
   return await addVendorBill(env, bill);
 }
@@ -8665,7 +8685,7 @@ async function qbRepairable(env, url) {
     const days = Math.max(1, Math.min(90, parseInt(url && url.searchParams.get('days')) || 7));
     const cutoff = new Date(Date.now() - days * 86400000);
     const token = await qbAccessToken(env);
-    const [irs, wos, bills] = await fetchTabs(env, ['Invoice_Review','Work_Orders','Vendor_Bills']);
+    const [irs, wos, bills, allTimeEntries] = await fetchTabs(env, ['Invoice_Review','Work_Orders','Vendor_Bills','Time_Entries']);
 
     const sent = irs.filter(r => r.Active !== 'FALSE' && (r.QB_Invoice_ID || '').trim());
     const out = [];
@@ -8686,7 +8706,8 @@ async function qbRepairable(env, url) {
       const resolved = resolveTrade(wo.Trade);
       const trade = QB_TRADE_MAP[resolved.name];
       const origItemRef = qbOriginalItemRef(q);
-      const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir));
+      const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
+      const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir), woTimeEntries);
 
       const folderId  = wo.Drive_Folder_ID || '';
       const folderUrl = wo.Drive_Folder_URL || (folderId ? ('https://drive.google.com/drive/folders/' + folderId) : '');
@@ -8725,7 +8746,7 @@ async function qbRepairInvoice(env, body) {
     const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
     if (!irId) return json({ error: 'ir_id required' }, 400);
 
-    const [irs, wos, bills] = await fetchTabs(env, ['Invoice_Review','Work_Orders','Vendor_Bills']);
+    const [irs, wos, bills, allTimeEntries] = await fetchTabs(env, ['Invoice_Review','Work_Orders','Vendor_Bills','Time_Entries']);
     const ir = irs.find(r => String(r.ID) === irId);
     if (!ir) return json({ error: `No Invoice_Review row ${irId}` }, 404);
     const qbInvId = (ir.QB_Invoice_ID || '').trim();
@@ -8741,7 +8762,8 @@ async function qbRepairInvoice(env, body) {
     const resolved = resolveTrade(wo.Trade);
     const trade = QB_TRADE_MAP[resolved.name];
     const origRef = qbOriginalItemRef(existing);
-    const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir));
+    const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
+    const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir), woTimeEntries);
     // Without the original item we'd fall back to the freshly-resolved trade, which could
     // move posted revenue to a different income account. Say so rather than doing it.
     const itemWarning = origRef ? '' : 'Could not read the income account this invoice posted to, so it would be re-derived from the trade. Check it in QuickBooks afterwards.';
@@ -11354,7 +11376,30 @@ function qbGroupOpenRows(irRows, ir) {
   return groupRows;
 }
 
-function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts) {
+// What actually reaches the customer, instead of a single generic WO description. Every
+// linked time entry's own Invoice_Description (the field vendors/Brett fill in when they log
+// hours — kept separate from Notes, which is private and never billed) compiles in date order;
+// the bill's own Invoice_Description leads if set (the flat-rate / no-time-entry case). Only
+// when NEITHER exists — old bills, or nobody filled either field in — does this fall back to
+// wo.Invoice_Memo/Description, so nothing already sent regresses.
+function buildLaborDescription(billRow, timeEntries, wo) {
+  const billId = String((billRow && billRow.ID) || '').trim();
+  const parts = [];
+  const billDesc = String((billRow && billRow.Invoice_Description) || '').trim();
+  if (billDesc) parts.push(billDesc);
+  (Array.isArray(timeEntries) ? timeEntries : [])
+    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && String(e.Invoice_Description || '').trim())
+    .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
+    .forEach(e => {
+      const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
+      const desc = String(e.Invoice_Description || '').trim();
+      parts.push(d ? (d + ' — ' + desc) : desc);
+    });
+  if (parts.length) return parts.join('; ');
+  return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
+}
+
+function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries) {
   // An override is used when REPAIRING an existing invoice: the wording changes, the
   // account it posted to must not. Trade resolution has changed since some invoices were
   // sent, and moving posted revenue between income accounts is a separate decision.
@@ -11410,7 +11455,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   // Landscaping" tells them nothing about the job.
   // Slice the description, not the joined string — otherwise a long one takes the
   // "— WO 1062" reference off the end with it.
-  const workDesc = String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim().slice(0, 3800);
+  const workDesc = buildLaborDescription(billRow, timeEntries, wo).slice(0, 3800);
   const labelParts = [tradeName];
   if (workDesc) labelParts.push(workDesc);
   labelParts.push('WO ' + (ir.WO_ID || ''));
@@ -11616,9 +11661,10 @@ async function qbSendInvoice(env, body) {
       return json({ ok: true, already_sent: true, invoice_id: ir.QB_Invoice_ID, bill_id: ir.QB_Bill_ID, status: ir.QB_Invoice_Status });
     }
 
-    const [wos, props, owners, vendors, bills, units] = await fetchTabs(env, [
-      'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units',
+    const [wos, props, owners, vendors, bills, units, allTimeEntries] = await fetchTabs(env, [
+      'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units','Time_Entries',
     ]);
+    const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
     const wo      = findWO(wos, ir.WO_ID) || {};
     const prop    = props.find(p => p.ID === wo.Property_ID) || {};
     const owner   = owners.find(o => o.ID === prop.Owner_ID) || null;
@@ -11658,7 +11704,7 @@ async function qbSendInvoice(env, body) {
     if (groupRows.length > 1) {
       return await qbSendCombinedInvoice(env, {
         groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName,
-        warnings, previewOnly, batch: body.batch,
+        warnings, previewOnly, batch: body.batch, timeEntries: woTimeEntries,
       });
     }
 
@@ -11681,7 +11727,7 @@ async function qbSendInvoice(env, body) {
       } catch (e) { warnings.push('Could not read the Receipts tab — materials you bought are not itemised on this invoice.'); }
     }
 
-    const inv = buildInvoiceLines(ir, billRow, trade, tradeName, wo, null, ownReceipts);
+    const inv = buildInvoiceLines(ir, billRow, trade, tradeName, wo, null, ownReceipts, woTimeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
@@ -11999,7 +12045,7 @@ async function qbSendInvoice(env, body) {
 // Called ONLY from qbSendInvoice when qbGroupOpenRows finds more than one row — never invoked
 // directly, so it inherits that function's route-level auth.
 async function qbSendCombinedInvoice(env, ctx) {
-  const { groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName, previewOnly } = ctx;
+  const { groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName, previewOnly, timeEntries } = ctx;
   const warnings = (ctx.warnings || []).slice();
   try {
     // Date on an already-approved bill: use the earliest approval in the group so the
@@ -12034,7 +12080,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         } catch (e) { warnings.push('Could not read the Receipts tab for bill ' + (r.Bill_ID || r.ID) + '.'); }
       }
 
-      const inv = buildInvoiceLines(r, billRow, trade, tradeName, wo, null, ownReceipts);
+      const inv = buildInvoiceLines(r, billRow, trade, tradeName, wo, null, ownReceipts, timeEntries);
       if (inv.laborAmt < 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: materials exceed its customer total — labor line is negative, check the bill.`);
 
       const vendDisplay = vendor.Name || r.Vendor_Name || ('Vendor ' + (r.Vendor_ID || ''));

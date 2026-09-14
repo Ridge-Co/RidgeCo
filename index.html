@@ -4899,8 +4899,13 @@ function hubBillHtml(k, woId, wo) {
       '</div>' +
 
       '<div style="margin-top:10px">' +
-        '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px">NOTES</label>' +
-        '<textarea id="hb-notes-' + k + '" rows="2" placeholder="What was done" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px;resize:vertical"></textarea>' +
+        '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px">INVOICE DESCRIPTION <span style="font-weight:normal">— goes to the customer</span></label>' +
+        '<textarea id="hb-invdesc-' + k + '" rows="2" placeholder="Describe what was done in as much detail as possible" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px;resize:vertical"></textarea>' +
+      '</div>' +
+
+      '<div style="margin-top:10px">' +
+        '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:3px">INTERNAL NOTES <span style="font-weight:normal">— private, never shown to the customer</span></label>' +
+        '<textarea id="hb-notes-' + k + '" rows="2" placeholder="For your own reference — e.g. why it took longer than expected" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px;resize:vertical"></textarea>' +
       '</div>' +
 
       '<div style="background:var(--surface);border-radius:6px;padding:10px;margin-top:10px">' +
@@ -5192,6 +5197,7 @@ function hubBillSubmit(k, woId) {
     Vendor_Invoice_No: (document.getElementById('hb-invno-' + k) || {}).value || '',
     Payment_Method: (document.getElementById('hb-paymethod-' + k) || {}).value || 'reimburse_via_labor_bill',
     Notes: (document.getElementById('hb-notes-' + k) || {}).value || '',
+    Invoice_Description: (document.getElementById('hb-invdesc-' + k) || {}).value || '',
     Entered_By: 'hub',
     Active: 'TRUE',
     // Not a Vendor_Bills column — the Worker strips it off and stamps these time entries
@@ -5215,7 +5221,7 @@ function hubBillSubmit(k, woId) {
     // Clear the inputs as well as the state. Resetting only the state left a saved flat
     // amount sitting in a now-hidden field, ready to reappear on the next bill.
     _hubBill[k] = null;
-    ['hb-hours', 'hb-rate', 'hb-flatamt', 'hb-truck', 'hb-truckdesc', 'hb-notes', 'hb-invno'].forEach(function(id) {
+    ['hb-hours', 'hb-rate', 'hb-flatamt', 'hb-truck', 'hb-truckdesc', 'hb-notes', 'hb-invdesc', 'hb-invno'].forEach(function(id) {
       var e = document.getElementById(id + '-' + k);
       if (e) { e.value = ''; if (id === 'hb-rate') e.dataset.auto = '1'; }
     });
@@ -5624,6 +5630,7 @@ function loadInvoiceTime(k) {
   api('GET', '/time-entries?wo_id=' + encodeURIComponent(woId)).then(function(entries) {
     if (_invTimeGen[k] !== gen) return;      // a newer load already won
     if (!Array.isArray(entries)) { _invTime[k] = []; box.innerHTML = ''; return; }
+    _invAllTime[k] = entries;
     var live = entries.filter(function(e) {
       return e.Active !== 'FALSE' && String(e.Billable).toUpperCase() !== 'FALSE' && invTimeAmount(e) > 0;
     });
@@ -5662,6 +5669,7 @@ function loadInvoiceTime(k) {
     invRenderTime(k);
     invAutoPrice(k);
     calcInvoiceMarkup(k);
+    invRefreshMemoDefault(k);
     if (!_invBill[k]) invLoadStatus(k);   // enable the invoice once time is known, even with no bill
   }).catch(function() { if (_invTimeGen[k] === gen) _invTime[k] = []; });
 }
@@ -5825,6 +5833,7 @@ function loadVendorBillForInvoice(k) {
       loadInvoiceMaterials(k);
     }
     _invBill[k] = bill;
+    invRefreshMemoDefault(k);
 
     var rows = '';
     if (live.length > 1) {
@@ -5999,6 +6008,50 @@ var _invAutoPrice = {};
 // reports the split honestly instead of assuming a fee that was never charged.
 var _invMode  = {};   // scope key → 'passthrough' | 'tiered' | 'itemized'
 var _invPass5 = {};   // scope key → is the optional 5% ON for pass-through
+var _invAllTime = {}; // scope key → the raw (unfiltered) /time-entries list, for memo composing
+var _invAutoMemo = {}; // scope key → last auto-composed memo text, so a manual edit is never overwritten
+
+// The invoice memo defaults to whatever was actually logged, not a generic job description.
+// Each time entry's Invoice_Description (only the ones linked to THIS bill) compiles in date
+// order; the bill's own Invoice_Description (set when there's no time entry behind it — flat
+// jobs, vendor bills entered as a lump sum) leads if present. Only when neither exists does
+// this fall back to the old behavior, so nothing regresses on jobs that never used the new
+// fields.
+function invComposeMemo(billId, timeEntries, billObj, wo) {
+  var billIdStr = String(billId || '').trim();
+  var parts = [];
+  var billDesc = String((billObj && billObj.Invoice_Description) || '').trim();
+  if (billDesc) parts.push(billDesc);
+  safeArray(timeEntries).filter(function(e) {
+    return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && String(e.Invoice_Description || '').trim();
+  }).sort(function(a, b) {
+    return new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0);
+  }).forEach(function(e) {
+    var d = (e.Start_DateTime || e.Created_Date || '').split('T')[0];
+    var desc = String(e.Invoice_Description || '').trim();
+    parts.push(d ? (d + ' — ' + desc) : desc);
+  });
+  if (parts.length) return parts.join('; ');
+  return (wo && (wo.Invoice_Memo || wo.Description)) || '';
+}
+
+// Only fills the box when it still holds our own last suggestion (or is empty) — the same
+// "isOurs" guard the price box uses. A bill/time-entries load landing after Brett has already
+// started typing a memo must never clobber what he typed.
+function invRefreshMemoDefault(k) {
+  var box = document.getElementById('inv-memo-' + k);
+  if (!box) return;
+  var woId = _invWO[k] || k;
+  var bill = _invBill[k];
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); }) || {};
+  var composed = invComposeMemo(bill && bill.ID, _invAllTime[k], bill, wo);
+  if (!composed) return;   // nothing new to offer — leave whatever's already in the box
+  var current = box.value || '';
+  var isOurs = current === '' || current === _invAutoMemo[k];
+  if (!isOurs) return;
+  box.value = composed;
+  _invAutoMemo[k] = composed;
+}
 
 // Pass-through is the default starting point — labor + materials at cost. Hourly customers
 // are used to a rate plus materials with no surcharge, so that is what the box pre-fills to;
@@ -6820,6 +6873,7 @@ function renderHubTimeSection(woId, entries, holder) {
     var type  = esc(e.Entry_Type || '');
     var dur   = minToStr(e.Duration_Minutes);
     var note  = esc(e.Notes || '');
+    var invDesc = esc(e.Invoice_Description || '');
     // "BILLABLE" only ever meant "allowed to be charged", never "will be". Once the hours
     // are inside a bill they say so, because that is the answer to "did logging this do
     // anything" — and until then, saying BILLABLE alone is what made it look like it had.
@@ -6833,6 +6887,7 @@ function renderHubTimeSection(woId, entries, holder) {
       '<div style="flex:1">' +
         '<span style="color:'+(isHub?'var(--accent)':'var(--info)')+';font-weight:bold">'+label+'</span>' +
         ' <span style="color:var(--muted)">'+type+'</span>'+billBadge +
+        (invDesc ? '<div style="color:var(--text);margin-top:2px">📝 '+invDesc+'</div>' : '') +
         (note ? '<div style="color:var(--muted);margin-top:2px;font-style:italic">'+note+'</div>' : '') +
       '</div>' +
       '<span style="font-weight:bold;color:var(--text);white-space:nowrap">'+dur+'</span>' +
@@ -6933,7 +6988,10 @@ function buildHubTimeForm(woId) {
       '<div><label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">OR ENTER DURATION (e.g. "2.5" for 2h30m)</label>' +
         '<input type="text" id="ht-dur-'+woId+'" placeholder="hours e.g. 1.5" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px"></div>' +
     '</div>' +
-    '<textarea id="ht-notes-'+woId+'" placeholder="Notes: picking up materials, site check, installed new valve…" style="width:100%;min-height:50px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
+    '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">INVOICE DESCRIPTION — goes to the customer</label>' +
+    '<textarea id="ht-invdesc-'+woId+'" placeholder="Describe what was done in as much detail as possible" style="width:100%;min-height:40px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
+    '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">INTERNAL NOTES — private</label>' +
+    '<textarea id="ht-notes-'+woId+'" placeholder="For your own reference — e.g. picking up materials, why this ran long…" style="width:100%;min-height:40px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
     '<div style="display:flex;align-items:center;justify-content:space-between">' +
       '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px">' +
         '<input type="checkbox" id="ht-bill-'+woId+'" style="cursor:pointer"> Billable' +
@@ -6967,6 +7025,7 @@ function submitHubTimeEntry(woId) {
   var dur    = (document.getElementById('ht-dur-'+woId)||{}).value;
   var type   = (document.getElementById('ht-type-'+woId)||{}).value || 'Site Visit / Inspection';
   var notes  = (document.getElementById('ht-notes-'+woId)||{}).value;
+  var invDesc = (document.getElementById('ht-invdesc-'+woId)||{}).value;
   var bill   = (document.getElementById('ht-bill-'+woId)||{}).checked;
   var msgEl  = document.getElementById('ht-msg-'+woId);
 
@@ -6988,7 +7047,7 @@ function submitHubTimeEntry(woId) {
     role: 'hub', entry_type: type,
     start_datetime: startDT, end_datetime: endDT,
     duration_minutes_raw: durMinRaw,
-    notes: notes, billable: bill ? 'TRUE' : 'FALSE',
+    notes: notes, invoice_description: invDesc, billable: bill ? 'TRUE' : 'FALSE',
     // Send no rate: the server resolves this customer's rate from Owners.Hourly_Rate (else
     // the default) so a per-customer price is applied without the Hub having to know it.
     hourly_rate: '',

@@ -1001,7 +1001,10 @@ function renderVendorTimeSection(woId, idx, entries) {
           return '<button onclick="setVendorTimeQuick('+idx+',\''+q+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:3px 8px;font-size:10px;cursor:pointer">'+q+'</button>';
         }).join('') +
       '</div>' +
-      '<textarea id="vt-notes-'+idx+'" rows="2" placeholder="Notes: picked up materials, took measurements, repaired faucet…" style="width:100%;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
+      '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">WHAT DID YOU DO? <span style="font-weight:normal">— the owner will see this</span></label>' +
+      '<textarea id="vt-invdesc-'+idx+'" rows="2" placeholder="Describe what was done in as much detail as possible" style="width:100%;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
+      '<label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">NOTES <span style="font-weight:normal">— private, just for the office</span></label>' +
+      '<textarea id="vt-notes-'+idx+'" rows="2" placeholder="Picked up materials, took measurements…" style="width:100%;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px;margin-bottom:6px"></textarea>' +
       '<div style="display:flex;justify-content:flex-end">' +
         '<button class="btn btn-sm btn-green" id="vt-add-'+idx+'" onclick="submitVendorTime(\''+woId+'\','+idx+')">Log Time</button>' +
       '</div>' +
@@ -1024,6 +1027,7 @@ function submitVendorTime(woId, idx) {
   var end   = (document.getElementById('vt-end-'+idx)||{}).value;
   var type  = (document.getElementById('vt-type-'+idx)||{}).value || 'Labor';
   var notes = (document.getElementById('vt-notes-'+idx)||{}).value;
+  var invDesc = (document.getElementById('vt-invdesc-'+idx)||{}).value;
   var sel   = document.getElementById('vt-type-'+idx);
   var quickDur = sel && sel.dataset.quickDur;
   var msgEl = document.getElementById('vt-msg-'+idx);
@@ -1050,13 +1054,13 @@ function submitVendorTime(woId, idx) {
     role: 'vendor', entry_type: type,
     start_datetime: startDT, end_datetime: endDT,
     duration_minutes_raw: durMinRaw,
-    notes: notes, billable: 'TRUE', hourly_rate: session.vendor_rate||'0',
+    notes: notes, invoice_description: invDesc, billable: 'TRUE', hourly_rate: session.vendor_rate||'0',
   }}).then(function(res) {
     release();
     if (res.success) {
       // Clear the entry fields — leaving start/end populated let a second tap log the
       // same block of time again. (The quick-duration path already self-clears.)
-      ['vt-start-','vt-end-','vt-notes-'].forEach(function(p) {
+      ['vt-start-','vt-end-','vt-notes-','vt-invdesc-'].forEach(function(p) {
         var f = document.getElementById(p+idx); if (f) f.value = '';
       });
       if (msgEl) msgEl.innerHTML = '';
@@ -1922,10 +1926,16 @@ function submitVendorSched(modalId) {
         style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px">
     </div>
 
+    <!-- INVOICE DESCRIPTION — this is what the owner reads on their invoice -->
+    <div style="margin-bottom:14px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">WHAT DID YOU DO? <span style="text-transform:none;font-weight:normal">— the owner will see this</span></label>
+      <textarea id="bill-invdesc" placeholder="Describe what was done in as much detail as possible" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px;min-height:60px;resize:vertical"></textarea>
+    </div>
+
     <!-- NOTES -->
     <div style="margin-bottom:14px">
-      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">NOTES (optional)</label>
-      <textarea id="bill-notes" placeholder="Any extra info about the job, materials, or access issues…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px;min-height:60px;resize:vertical"></textarea>
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">NOTES (optional) <span style="text-transform:none;font-weight:normal">— private, just for the office</span></label>
+      <textarea id="bill-notes" placeholder="Any extra info about materials, access issues, why it ran long…" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px;min-height:60px;resize:vertical"></textarea>
     </div>
 
     <!-- TOTAL -->
@@ -1973,6 +1983,7 @@ function openBillModal(woId, vendorName) {
   document.getElementById('bill-truck-desc').value = '';
   document.getElementById('bill-truck-amt').value = '';
   document.getElementById('bill-notes').value = '';
+  document.getElementById('bill-invdesc').value = '';
   document.getElementById('bill-invoice-no').value = ''; // was never reset — a prior job's invoice # could carry over
   document.getElementById('bill-invoice-date').value = '';
   _invReadState = 'idle'; _invUploadState = 'idle'; _invFileName = '';
@@ -2495,6 +2506,7 @@ async function doActualBillSubmit() {
     Invoice_File_URL: _invoiceFileURL,
     Invoice_File_ID: _invoiceFileId,
     Notes: document.getElementById('bill-notes').value,
+    Invoice_Description: document.getElementById('bill-invdesc').value,
     Active: 'TRUE',
   };
 
