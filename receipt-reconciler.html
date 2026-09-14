@@ -47,6 +47,7 @@
   .rc-fields label{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px;}
   .rc-fields input,.rc-fields select,.rc-fields textarea{width:100%;min-height:34px;}
   .rc-wo-check{font-size:10px;margin-top:2px;min-height:13px;}
+  .rc-posting{font-size:12px;padding:8px 10px;background:#f5f7fa;border-radius:6px;border:1px solid #e5e9ef;}
   .rc-closed-toggle{font-size:10px;color:var(--accent);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin:2px 0 8px;user-select:none;}
   .rc-closed-toggle input{width:auto;padding:0;min-height:auto;}
   .rc-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:8px;}
@@ -138,6 +139,7 @@ const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','P
 let curStatus = 'pending';
 let allWOs = [];
 let allProperties = [];
+let allUnits = [];
 
 function worker(){ return document.getElementById('worker-url').value.trim(); }
 function token(){ return document.getElementById('auth-token').value.trim() || (localStorage.getItem('mh_auth')||''); }
@@ -190,13 +192,15 @@ async function loadQueue(){
   const list = document.getElementById('list');
   list.innerHTML = '<div class="empty">Loading…</div>';
   try {
-    const [rows, wos, props] = await Promise.all([
+    const [rows, wos, props, units] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
       allWOs.length ? Promise.resolve(allWOs) : get('/workorders').catch(()=>[]),
       allProperties.length ? Promise.resolve(allProperties) : get('/properties').catch(()=>[]),
+      allUnits.length ? Promise.resolve(allUnits) : get('/units').catch(()=>[]),
     ]);
     allWOs = wos || [];
     allProperties = props || [];
+    allUnits = units || [];
     rebuildWoDatalist();
     render(rows || []);
     status.textContent = '✅ '+(rows||[]).length+' '+curStatus;
@@ -231,14 +235,27 @@ function propertyOptions(selectedId){
   return opts;
 }
 
+// Brett, Sep 2026: "no way to select the unit versus the property — having that interim step
+// will help filter work orders down from property-wide to unit." Optional by design — a PO/
+// handwritten note sometimes only specifies the property, even when the job is really at one
+// unit, so nothing here should force a unit pick before a WO can be chosen.
+function unitOptions(propId, selectedUnitId){
+  if (!propId) return '<option value="">— pick a property first —</option>';
+  const atProp = allUnits.filter(u => String(u.Property_ID) === String(propId))
+    .sort((a,b) => String(a.Unit_Label||'').localeCompare(String(b.Unit_Label||'')));
+  let opts = '<option value="">— all units / property-wide —</option>';
+  for (const u of atProp) opts += '<option value="'+esc(u.ID)+'"'+(String(u.ID)===String(selectedUnitId)?' selected':'')+'>'+esc(u.Unit_Label||('Unit '+u.ID))+'</option>';
+  return opts;
+}
+
 // Builds the WO select's inner HTML for one property: suggested/ranked matches first (if this
 // row has a suggestion for THIS property), then every other OPEN work order at that property —
 // not just the top 3 — then, only if showClosed is true, a second optgroup of every CLOSED/past
 // work order there too (issue B: previously only the top-3 keyword-ranked open WOs at the
 // system's one auto-guessed property were ever visible; nothing else was browsable).
-function woSelectHTML(propId, selectedWoId, showClosed, sug){
+function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId){
   if (!propId) return '<option value="">— pick a property first —</option>';
-  const atProp = allWOs.filter(w => String(w.Property_ID) === String(propId));
+  const atProp = allWOs.filter(w => String(w.Property_ID) === String(propId) && (!unitId || String(w.Unit_ID) === String(unitId)));
   const open = atProp.filter(w => OPEN_WO_STATUSES.includes(w.Status));
   const closed = atProp.filter(w => !OPEN_WO_STATUSES.includes(w.Status));
 
@@ -274,15 +291,47 @@ function woSelectHTML(propId, selectedWoId, showClosed, sug){
 // around everywhere — the suggestion is still consulted (via rowSuggestions cache) so the ★
 // suggested tag and ranking survive a property change back to the original guess.
 const rowSuggestions = {};
+function refreshUnitSelect(id){
+  const idAttr = 'rc'+id;
+  const propSel = document.getElementById(idAttr+'-prop');
+  const unitSel = document.getElementById(idAttr+'-unit');
+  if (!propSel || !unitSel) return;
+  unitSel.innerHTML = unitOptions(propSel.value, '');
+  refreshWoSelect(id);
+}
+
 function refreshWoSelect(id){
   const idAttr = 'rc'+id;
   const propSel = document.getElementById(idAttr+'-prop');
   const woSel = document.getElementById(idAttr+'-wo');
+  const unitSel = document.getElementById(idAttr+'-unit');
   const showClosed = document.getElementById(idAttr+'-showclosed');
   if (!propSel || !woSel) return;
   const propId = propSel.value;
-  woSel.innerHTML = woSelectHTML(propId, '', showClosed && showClosed.checked, rowSuggestions[id]);
+  const unitId = unitSel ? unitSel.value : '';
+  woSel.innerHTML = woSelectHTML(propId, '', showClosed && showClosed.checked, rowSuggestions[id], unitId);
   checkManualWo(id);
+}
+
+// Always-visible self-check before Confirm: property + (optional) unit + WO, spelled out in
+// one line, updated on every relevant change via checkManualWo below.
+function updatePostingLine(id){
+  const idAttr = 'rc'+id;
+  const el = document.getElementById(idAttr+'-posting');
+  if (!el) return;
+  const propSel = document.getElementById(idAttr+'-prop');
+  const unitSel = document.getElementById(idAttr+'-unit');
+  const woSel = document.getElementById(idAttr+'-wo');
+  const manual = document.getElementById(idAttr+'-wo-manual');
+  if (!propSel || !propSel.value) { el.innerHTML = ''; return; }
+  const woId = (manual && manual.value.trim()) || (woSel ? woSel.value : '');
+  const prop = allProperties.find(p => String(p.ID) === propSel.value);
+  const unit = unitSel && unitSel.value ? allUnits.find(u => String(u.ID) === unitSel.value) : null;
+  const wo = woId ? allWOs.find(w => String(w.ID) === woId) : null;
+  let line = '<b>Posting to:</b> ' + esc(prop ? (prop.Address||('Property '+prop.ID)) : '');
+  if (unit) line += ' ' + esc(unit.Unit_Label || ('Unit '+unit.ID));
+  line += wo ? (' — WO ' + esc(wo.ID)) : ' — <span class="warn">no work order selected yet</span>';
+  el.innerHTML = line;
 }
 
 // Live validation for the manual "type a WO number" override (issue C): checks the typed value
@@ -295,11 +344,12 @@ function checkManualWo(id){
   const checkEl = document.getElementById(idAttr+'-wo-check');
   if (!manual || !checkEl) return;
   const v = manual.value.trim();
-  if (!v){ checkEl.innerHTML = ''; return; }
+  if (!v){ checkEl.innerHTML = ''; updatePostingLine(id); return; }
   const hit = allWOs.find(w => String(w.ID) === v);
   checkEl.innerHTML = hit
     ? '<span class="ok">✓ '+esc(v)+' — '+esc((hit.Description||'').slice(0,60))+' ('+esc(hit.Status)+')</span>'
     : '<span class="err">✗ No work order with that ID exists.</span>';
+  updatePostingLine(id);
 }
 
 function render(rows){
@@ -344,7 +394,8 @@ function rowCard(r){
 
   if (!excluded && !isCompany && isPendingLike) {
     html += '<div class="rc-fields">'
-      + '<div><label>Property</label><select id="'+idAttr+'-prop" onchange="refreshWoSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
+      + '<div><label>Property</label><select id="'+idAttr+'-prop" onchange="refreshUnitSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
+      + '<div><label>Unit (optional — narrows the work-order list)</label><select id="'+idAttr+'-unit" onchange="refreshWoSelect(\''+r.ID+'\')">'+unitOptions(propId, '')+'</select></div>'
       + '<div><label>Work order</label><select id="'+idAttr+'-wo" onchange="document.getElementById(\''+idAttr+'-wo-manual\').value=\'\';checkManualWo(\''+r.ID+'\')"></select></div>'
       + '<div class="full"><label class="rc-closed-toggle" style="display:inline-flex"><input type="checkbox" id="'+idAttr+'-showclosed" onchange="refreshWoSelect(\''+r.ID+'\')"> Also show closed/past work orders at this property</label></div>'
       + '<div class="full"><label>...or type a WO number directly to override</label><input id="'+idAttr+'-wo-manual" list="wo-datalist" placeholder="e.g. 1234" oninput="document.getElementById(\''+idAttr+'-wo\').value=\'\';checkManualWo(\''+r.ID+'\')"><div class="rc-wo-check" id="'+idAttr+'-wo-check"></div></div>'
@@ -352,6 +403,7 @@ function rowCard(r){
       + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
       + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
       + '<div class="full"><label>Description (materials — goes on the WO and the invoice line)</label><textarea id="'+idAttr+'-desc">'+esc(descDefault)+'</textarea></div>'
+      + '<div class="full rc-posting" id="'+idAttr+'-posting"></div>'
       + '</div>';
   }
 
