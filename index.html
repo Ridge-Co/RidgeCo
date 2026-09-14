@@ -431,10 +431,12 @@ window.addEventListener('pageshow', function(e){
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
       <div class="section-title" style="margin:0">💰 VENDOR BILL REVIEW</div>
       <div style="display:flex;gap:8px">
+        <button id="ir-truck-toggle-btn" class="btn secondary" onclick="irToggleTruckStockLog()" style="font-size:11px;padding:6px 12px">🚚 Truck Stock Log</button>
         <button id="ir-bulk-toggle-btn" class="btn secondary" onclick="irToggleBulkMode()" style="font-size:11px;padding:6px 12px">☑ Select multiple</button>
         <button class="btn secondary" onclick="loadInvoiceReview()" style="font-size:11px;padding:6px 12px">↻ Refresh</button>
       </div>
     </div>
+    <div id="ir-truck-stock-log" style="display:none;margin-bottom:16px"></div>
     <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Review each vendor bill, set markup, and approve to create a customer invoice. Price each bill you want to approve, then either approve it on its own card or select several and approve them together.</p>
     <div id="ir-bulk-bar" style="display:none;position:sticky;top:0;z-index:5;background:var(--surface);border:1px solid var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -7549,6 +7551,87 @@ function irClearFilters() {
   irApplyFilters();
 }
 
+// Receipts_JSON is already on the bill object — render immediately, no fetch needed. Shows
+// each receipt the vendor entered on THIS bill with its amount, description, photo link (or a
+// clear "no photo" flag), and whether it's Ridge Co's card or owed back to the vendor.
+function renderReceiptsJsonBreakdown(b) {
+  var items = [];
+  try { items = JSON.parse(b.Receipts_JSON || '[]'); } catch (e) {}
+  if (!items.length) return '';
+  var rows = items.map(function(it) {
+    var onAccount = it.pay === 'account';
+    var badge = onAccount
+      ? '<span style="background:#e6f4ea;color:#1a7a3c;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;white-space:nowrap">💳 CARD</span>'
+      : '<span style="background:#fff3cd;color:#8a6100;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;white-space:nowrap">💵 REIMBURSE</span>';
+    return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11.5px;flex-wrap:wrap">' +
+      '<span style="color:var(--accent2);font-weight:bold;white-space:nowrap">$'+(parseFloat(it.amount)||0).toFixed(2)+'</span>' +
+      '<span style="flex:1;color:var(--text)">'+esc(it.desc||'')+'</span>' +
+      badge +
+      (it.url ? '<a href="'+esc(it.url)+'" target="_blank" style="color:var(--info);font-size:10px">photo</a>' : '<span style="color:var(--danger);font-size:10px">⚠ no photo</span>') +
+    '</div>';
+  }).join('');
+  return '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">' +
+    '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Receipts entered on this bill</div>' +
+    rows + '</div>';
+}
+
+// On-demand (not on page load — this page can list many bills) check of the SEPARATE
+// Receipts tab for this WO: entries logged via the standalone receipt panel (Hub or vendor,
+// outside this specific bill submission) or the Receipt Reconciler, which the bill's own
+// Receipts_JSON above never includes. This is the second half of "review all the receipts" —
+// a bill can look complete from Receipts_JSON alone while real purchases sit logged elsewhere.
+function irLoadWOReceipts(i, woId) {
+  var host = document.getElementById('ir-wo-receipts-' + i);
+  if (!host) return;
+  host.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading…</span>';
+  api('GET', '/receipts?wo_id=' + encodeURIComponent(woId)).then(function(rows) {
+    rows = Array.isArray(rows) ? rows : [];
+    if (!rows.length) { host.innerHTML = '<span style="color:var(--muted);font-size:11px">No separate receipts logged on this WO.</span>'; return; }
+    var lines = rows.map(function(r) {
+      var onAccount = (r.Payment_Source || 'company_card') !== 'vendor_reimburse';
+      var badge = onAccount
+        ? '<span style="background:#e6f4ea;color:#1a7a3c;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px">💳 CARD</span>'
+        : '<span style="background:#fff3cd;color:#8a6100;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px">💵 REIMBURSE</span>';
+      return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11.5px;flex-wrap:wrap">' +
+        '<span style="color:var(--accent2);font-weight:bold">$'+(parseFloat(r.Amount)||0).toFixed(2)+'</span>' +
+        '<span style="flex:1;color:var(--text)">'+esc(r.Description||'')+' <span style="color:var(--muted)">('+esc(r.Role==='vendor'?'vendor-entered':'hub-entered')+')</span></span>' +
+        badge +
+      '</div>';
+    }).join('');
+    host.innerHTML = '<div style="margin-top:4px;padding-top:4px;border-top:1px dashed var(--border)"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Separate Receipts-tab entries on this WO</div>' + lines + '</div>';
+  }).catch(function() { host.innerHTML = '<span style="color:var(--danger);font-size:11px">Could not load.</span>'; });
+}
+
+// Truck Stock Log (Sep 2026) — every Vendor_Bill with truck stock used, any status, in one
+// place. Brett: "I need to be able to review all truck material entries on the receipts page
+// AND the vendor bills page" — this is the vendor-bills-page half (receipt-reconciler.html
+// has the matching Truck Stock tab, same endpoint).
+function irToggleTruckStockLog() {
+  var host = document.getElementById('ir-truck-stock-log');
+  var btn = document.getElementById('ir-truck-toggle-btn');
+  if (!host) return;
+  var showing = host.style.display !== 'none';
+  if (showing) { host.style.display = 'none'; return; }
+  host.style.display = '';
+  host.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0"><span class="spinner"></span> Loading…</div>';
+  api('GET', '/vendor-bills/truck-stock').then(function(res) {
+    var rows = (res && res.rows) || [];
+    if (!rows.length) { host.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">No truck stock entries logged.</div>'; return; }
+    var lines = rows.map(function(r) {
+      return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:12px;flex-wrap:wrap">' +
+        '<span style="color:var(--warn);font-weight:bold;white-space:nowrap">$'+r.truck_stock.toFixed(2)+'</span>' +
+        '<span style="color:var(--text)">'+esc(r.vendor_name||'Unknown vendor')+'</span>' +
+        '<span style="color:var(--muted)">'+esc(r.wo_id||'')+(r.property_address?' · '+esc(r.property_address):'')+'</span>' +
+        (r.truck_desc ? '<span style="color:var(--muted);font-size:11px">— '+esc(r.truck_desc)+'</span>' : '') +
+        '<span style="margin-left:auto;color:var(--muted);font-size:10.5px;white-space:nowrap">'+esc(r.created_date||'')+' · '+esc(r.status||'')+'</span>' +
+      '</div>';
+    }).join('');
+    host.innerHTML = '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px">' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">'+rows.length+' entries · <b>$'+res.total.toFixed(2)+' total</b> — always owed to the vendor, never a Ridge Co card charge</div>' +
+      lines + '</div>';
+  }).catch(function() { host.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:8px 0">Could not load.</div>'; });
+}
+
 function renderIRCard(b, i) {
   var woId = b.WO_ID || '—';
   var vendorName = b.Vendor_Name || '—';
@@ -7575,6 +7658,8 @@ function renderIRCard(b, i) {
     : 'Flat rate: <b>$' + flatRate.toFixed(2) + '</b>';
   var materialLine = materials > 0
     ? '<div>Materials/receipts: <b>$' + materials.toFixed(2) + '</b></div>' : '';
+  var truckLine = truckStock > 0
+    ? '<div style="color:var(--warn)">Truck stock (vendor\'s own inventory — always owed to them): <b>$' + truckStock.toFixed(2) + '</b>' + (b.Truck_Desc ? ' — ' + esc(b.Truck_Desc) : '') + '</div>' : '';
   var noteLine = notes ? '<div style="color:var(--muted);font-style:italic;margin-top:4px">"' + esc(notes) + '"</div>' : '';
   // Vendor's own invoice — the file (Invoice_File_URL) had no upload control anywhere until
   // now (vendor.html uploadBillInvoiceFile), and even the number (Vendor_Invoice_No) was
@@ -7705,8 +7790,14 @@ function renderIRCard(b, i) {
     '<div style="background:var(--surface2);border-radius:6px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.8">' +
       '<div>' + laborLine + '</div>' +
       materialLine +
+      truckLine +
       noteLine +
       vendorInvLine +
+      renderReceiptsJsonBreakdown(b) +
+      '<div style="margin-top:8px">' +
+        '<button onclick="irLoadWOReceipts('+i+',\''+esc(woId)+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;font-family:var(--font);font-size:10.5px;padding:4px 8px;cursor:pointer">🧾 Check for separate receipts logged on this WO</button>' +
+        '<div id="ir-wo-receipts-'+i+'" style="margin-top:4px"></div>' +
+      '</div>' +
     '</div>' +
 
     flagHtml +

@@ -1938,6 +1938,7 @@ function submitVendorSched(modalId) {
     </div>
 
     <div id="bill-msg"></div>
+    <div id="bill-flow-panel" style="display:none"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button onclick="closeBillModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
       <button id="bill-submit-btn" onclick="submitVendorBill()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT BILL</button>
@@ -1978,6 +1979,7 @@ function openBillModal(woId, vendorName) {
   _reconcileState = 'idle'; _reconcileDetected = []; _reconcileUnmatched = [];
   renderInvoiceFileStatus();
   renderReconcileWarning();
+  cancelBillReviewFlow();
   document.getElementById('bill-invoice-file-lbl').style.borderColor = 'var(--border)';
   document.getElementById('bill-invoice-file-lbl').style.color = 'var(--text)';
   document.getElementById('bill-truck-toggle').checked = false;
@@ -2010,6 +2012,7 @@ function closeBillModal() {
   _billWOId = null;
   var btn = document.getElementById('bill-submit-btn');
   if (btn) { btn.disabled = false; btn.textContent = 'SUBMIT BILL'; }
+  cancelBillReviewFlow();
 }
 
 function setBillType(type, userPicked) {
@@ -2345,7 +2348,11 @@ function calcBillTotal() {
   recheckReconcileAgainstEntries();
 }
 
-async function submitVendorBill() {
+// Brett, Sep 2026: don't submit immediately — walk through a short guided review first (ask
+// about truck stock if it hasn't been addressed, then show one final summary of everything
+// about to be sent) so nothing gets missed by rushing straight to Submit. The actual POST is
+// doActualBillSubmit() below, called only from the review panel's own Confirm button.
+function submitVendorBill() {
   if (_billSubmitting) return; // guard: ignore double-tap
   var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
   var msgEl = document.getElementById('bill-msg');
@@ -2354,8 +2361,94 @@ async function submitVendorBill() {
     msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;font-weight:bold">⚠ Your invoice photo shows receipts that aren\'t entered yet — add them above before submitting (see the warning by the photo upload).</div>';
     return;
   }
+  msgEl.innerHTML = '';
+  startBillReviewFlow();
+}
+
+// Step 1 of the guided flow: truck stock, only if it hasn't already been addressed (the
+// vendor may have already ticked the toggle themselves before reaching Submit — don't ask
+// again if so). Renders into #bill-flow-panel, right above the Submit button.
+function startBillReviewFlow() {
+  var panel = document.getElementById('bill-flow-panel');
+  if (!panel) { doActualBillSubmit(); return; } // panel missing for any reason — fail open to the old direct-submit behavior rather than getting stuck
+  var truckOn = document.getElementById('bill-truck-toggle').checked;
+  if (truckOn) { showBillFinalReview(); return; }
+  panel.style.display = '';
+  panel.innerHTML = '<div style="background:#e8f0fb;border:2px solid var(--info);border-radius:8px;padding:14px;margin-bottom:10px">' +
+    '<div style="font-weight:bold;font-size:13px;margin-bottom:10px">🚚 Did you use any of your own truck stock / inventory on this job?</div>' +
+    '<div style="display:flex;gap:8px">' +
+      '<button type="button" onclick="billFlowTruckAnswer(false)" style="flex:1;padding:11px;border-radius:6px;font-weight:bold;font-size:13px;cursor:pointer;border:2px solid var(--border);background:var(--surface);color:var(--text)">No</button>' +
+      '<button type="button" onclick="billFlowTruckAnswer(true)" style="flex:1;padding:11px;border-radius:6px;font-weight:bold;font-size:13px;cursor:pointer;border:2px solid var(--info);background:var(--info);color:#fff">Yes</button>' +
+    '</div>' +
+  '</div>';
+  panel.scrollIntoView({block:'center'});
+}
+
+function billFlowTruckAnswer(usedTruck) {
+  var panel = document.getElementById('bill-flow-panel');
+  if (!usedTruck) { showBillFinalReview(); return; }
+  // "Yes" — open the truck section they'd otherwise have to scroll up to find, and hold here
+  // until they've had a chance to fill it in.
+  document.getElementById('bill-truck-toggle').checked = true;
+  toggleTruckSection();
+  calcBillTotal();
+  panel.innerHTML = '<div style="background:#e8f0fb;border:2px solid var(--info);border-radius:8px;padding:14px;margin-bottom:10px">' +
+    '<div style="font-size:12.5px;margin-bottom:10px">Fill in the truck stock section above (scrolled into view), then continue.</div>' +
+    '<button type="button" onclick="showBillFinalReview()" style="width:100%;padding:11px;border-radius:6px;font-weight:bold;font-size:13px;cursor:pointer;border:none;background:var(--info);color:#fff">Continue to final review →</button>' +
+  '</div>';
+  document.getElementById('bill-truck-section').scrollIntoView({block:'center'});
+}
+
+// Step 2: one consolidated summary of everything about to be submitted — the actual
+// "checking entries and images to make sure nothing was missed" pass. Re-validates the photo
+// reconciliation (in case a row was edited since the last check) before showing Confirm.
+function showBillFinalReview() {
+  recheckReconcileAgainstEntries();
+  var panel = document.getElementById('bill-flow-panel');
+  if (!panel) { doActualBillSubmit(); return; }
+  if (_reconcileState === 'issues' && _reconcileUnmatched.length) {
+    // Send them back to fix it rather than showing a summary that's known incomplete.
+    panel.style.display = 'none';
+    document.getElementById('bill-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;font-weight:bold">⚠ Your invoice photo still shows receipts that aren\'t entered — add them above before submitting.</div>';
+    return;
+  }
+  var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
+  var breakdown = document.getElementById('bill-breakdown').innerHTML;
+  var truckOn = document.getElementById('bill-truck-toggle').checked;
+  var truckAmt = truckOn ? (parseFloat(document.getElementById('bill-truck-amt').value) || 0) : 0;
+  var receiptCount = 0;
+  for (var i = 1; i <= _receiptCount; i++) { var el = document.getElementById('r-amt-'+i); if (el && parseFloat(el.value) > 0) receiptCount++; }
+  var invLine = _invUploadState === 'ok'
+    ? '✓ Invoice photo attached' + (_reconcileState === 'ok' ? ' — checked, nothing missing' : '')
+    : '⚠ No invoice photo attached';
+  panel.style.display = '';
+  panel.innerHTML = '<div style="background:var(--surface2);border:2px solid var(--accent2);border-radius:8px;padding:14px;margin-bottom:10px">' +
+    '<div style="font-weight:bold;font-size:13px;margin-bottom:8px">✓ Final review — check this before submitting</div>' +
+    '<div style="font-size:12px;line-height:1.7;color:var(--text)">' + breakdown + '</div>' +
+    '<div style="font-size:11.5px;color:var(--muted);margin-top:8px">' + receiptCount + ' receipt(s) entered' + (truckOn ? ', truck stock $' + truckAmt.toFixed(2) : '') + '</div>' +
+    '<div style="font-size:11.5px;color:' + (_invUploadState==='ok'?'var(--accent2)':'var(--warn)') + ';margin-top:2px">' + invLine + '</div>' +
+    '<div style="font-size:15px;font-weight:bold;margin-top:8px">Total: $' + total.toFixed(2) + '</div>' +
+    '<div style="display:flex;gap:8px;margin-top:12px">' +
+      '<button type="button" onclick="cancelBillReviewFlow()" style="flex:1;padding:10px;border-radius:6px;font-size:12.5px;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--muted)">← Back, let me edit</button>' +
+      '<button type="button" id="bill-final-confirm-btn" onclick="doActualBillSubmit()" style="flex:2;padding:10px;border-radius:6px;font-weight:bold;font-size:13px;cursor:pointer;border:none;background:var(--accent2);color:#fff">✓ Confirm &amp; Submit</button>' +
+    '</div>' +
+  '</div>';
+  panel.scrollIntoView({block:'center'});
+}
+
+function cancelBillReviewFlow() {
+  var panel = document.getElementById('bill-flow-panel');
+  if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+}
+
+async function doActualBillSubmit() {
+  var msgEl = document.getElementById('bill-msg');
+  var panel = document.getElementById('bill-flow-panel');
+  var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
 
   _billSubmitting = true;
+  var confirmBtn = document.getElementById('bill-final-confirm-btn');
+  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Submitting…'; }
   var btn = document.getElementById('bill-submit-btn');
   btn.disabled = true; btn.textContent = 'Submitting…';
 
@@ -2415,12 +2508,14 @@ async function submitVendorBill() {
       // 2 seconds, so re-enabling the button on success reopened a live window where one
       // more tap posts the identical bill a second time. The guard stays claimed until
       // closeBillModal() runs; only the error paths below hand the button back.
+      if (panel) panel.style.display = 'none';
       msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#eaf6ee;border-radius:6px">✓ Bill submitted! Total: $' + total.toFixed(2) + '</div>';
       btn.textContent = '✓ SUBMITTED';
       setTimeout(function(){ closeBillModal(); loadWorkOrders(); }, 2000);
     } else {
       _billSubmitting = false;
       btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+      if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = '✓ Confirm & Submit'; }
       msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + (res.error||'Error submitting') + '</div>';
     }
   }).catch(function(e){
@@ -2428,6 +2523,7 @@ async function submitVendorBill() {
     // here, so the vendor's natural move is to tap again. Say so plainly rather than just
     // "Connection error" — and the Worker now de-dupes an identical bill either way.
     _billSubmitting=false; btn.disabled=false; btn.textContent='SUBMIT BILL';
+    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = '✓ Confirm & Submit'; }
     msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">⚠ Connection error — the bill may still have saved. Close this and check "Bill submitted" on the job before sending it again.</div>';
   });
 }

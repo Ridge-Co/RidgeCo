@@ -132,7 +132,7 @@
 <datalist id="wo-datalist"></datalist>
 
 <script>
-const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'] ];
+const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'], ['trucks','🚚 Truck Stock'] ];
 // Mirrors worker.js's OPEN_WO_STATUSES/RECEIPT_OPEN_STATUSES exactly — keep in sync if that
 // list ever changes server-side. Used only to split the WO picker into open vs closed/past.
 const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
@@ -191,6 +191,7 @@ async function loadQueue(){
   const status = document.getElementById('conn-status');
   const list = document.getElementById('list');
   list.innerHTML = '<div class="empty">Loading…</div>';
+  if (curStatus === 'trucks') { await loadTruckStock(status, list); return; }
   try {
     const [rows, wos, props, units] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
@@ -204,6 +205,22 @@ async function loadQueue(){
     rebuildWoDatalist();
     render(rows || []);
     status.textContent = '✅ '+(rows||[]).length+' '+curStatus;
+  } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
+}
+
+// Truck stock isn't a Receipt_Recon_Queue status — it's a different tab (Sep 2026, Brett's ask)
+// pulling every Vendor_Bill that used truck stock, any status, so it's reviewable in one place
+// alongside the receipts themselves rather than buried one-bill-at-a-time on Invoice Review.
+async function loadTruckStock(status, list){
+  try {
+    const res = await get('/vendor-bills/truck-stock');
+    const rows = (res && res.rows) || [];
+    if (!rows.length){ list.innerHTML = '<div class="empty">No truck stock entries logged.</div>'; status.textContent = '✅ 0 truck stock'; return; }
+    list.innerHTML = '<div style="margin-bottom:10px;font-size:12px;color:var(--muted)">'+rows.length+' entries · $'+(res.total||0).toFixed(2)+' total (always owed to the vendor — never a Ridge Co card charge)</div>' +
+      rows.map(r => '<div class="rcard"><div class="rc-top"><div><div class="rc-title">'+esc(r.vendor_name||'Unknown vendor')+' — $'+(r.truck_stock||0).toFixed(2)+'</div>'
+        + '<div class="rc-sub">'+esc(r.wo_id||'')+(r.property_address?' · '+esc(r.property_address):'')+' · '+esc(r.created_date||'')+' · <span class="pill muted">'+esc(r.status||'')+'</span></div></div></div>'
+        + (r.truck_desc ? '<div class="rc-items">'+esc(r.truck_desc)+'</div>' : '') + '</div>').join('');
+    status.textContent = '✅ '+rows.length+' truck stock';
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
 }
 

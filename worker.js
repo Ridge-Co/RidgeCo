@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.10';
+const BUILD_VERSION = '2026-09-10.11';
 
 export default {
   async fetch(request, env) {
@@ -180,6 +180,7 @@ export default {
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
+        if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
         if (path === '/estimates')              return await listEstimates(env, url);
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
         if (path === '/stale-wos')              return await staleWos(env, url);
@@ -3435,6 +3436,31 @@ async function listVendorBills(env, url) {
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
     return json(results);
   } catch(e) { return json([]); }
+}
+
+// GET /vendor-bills/truck-stock — Brett, Sep 2026: "I need to be able to review all truck
+// material entries on the receipts page AND the vendor bills page." Truck stock lives as a
+// single Truck_Stock/Truck_Desc pair directly on each Vendor_Bills row (a vendor's own
+// inventory, always owed back to them — never a Ridge Co card purchase), not as its own list —
+// this pulls every bill (any status, not just pending review) that has one, with WO/property/
+// vendor context resolved, so both pages can render one simple table from a single call.
+async function vendorBillsTruckStock(env) {
+  try {
+    const [bills, wos, vendors, properties] = await fetchTabs(env, ['Vendor_Bills', 'Work_Orders', 'Vendors', 'Properties']);
+    const rows = bills.filter(b => b.Active !== 'FALSE' && Number(b.Truck_Stock) > 0).map(b => {
+      const wo = wos.find(w => String(w.ID) === String(b.WO_ID)) || {};
+      const vendor = vendors.find(v => String(v.ID) === String(b.Vendor_ID)) || {};
+      const prop = wo.Property_ID ? properties.find(p => String(p.ID) === String(wo.Property_ID)) : null;
+      return {
+        bill_id: b.ID, wo_id: b.WO_ID || '', vendor_name: b.Vendor_Name || vendor.Name || '',
+        truck_stock: Number(b.Truck_Stock) || 0, truck_desc: b.Truck_Desc || '',
+        status: b.Status || '', created_date: (b.Created_Date || '').split('T')[0],
+        property_address: prop ? (prop.Address || '') : (wo.Property_Address || ''),
+      };
+    }).sort((a, b) => (b.created_date || '').localeCompare(a.created_date || ''));
+    const total = rows.reduce((s, r) => s + r.truck_stock, 0);
+    return json({ ok: true, count: rows.length, total: +total.toFixed(2), rows });
+  } catch (e) { return json({ ok: false, error: String(e && e.message || e), rows: [] }); }
 }
 
 // POST /vendor-bill/move-to-new-wo { bill_id, cutoff_date?, reason?, moved_by?, apply? }
