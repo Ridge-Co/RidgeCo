@@ -647,6 +647,7 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 | — | BrettOS | Estimating workflow: Gemini issues documented, Ridge Co proposal design established | July 17, 2026 |
 | — | BrettOS | Recurring 4-hour backlog check scheduled (trig_01JwivD2P6SEnAwPJqgurEXF) | July 17, 2026 |
 | — | Ridge Co | Invoice descriptions compiled from logged Time_Entries/Vendor_Bills Invoice_Description (rule 158) — not just a hand-typed WO field | Sep 14, 2026 |
+| — | Ridge Co | Work Order Void/Hide (distinct from Cancelled) + duplicate-create guard on Work Orders (rule 162) — WO-1192 fix | Sep 14, 2026 |
 
 ---
 

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.6';
+const BUILD_VERSION = '2026-09-14.7';
 
 export default {
   async fetch(request, env) {
@@ -137,7 +137,7 @@ export default {
         if (path === '/tenants')                return await getSheet(env, 'Tenants');
         if (path === '/owners')                 return await getSheet(env, 'Owners');
         if (path === '/vendors')                return await getSheet(env, 'Vendors');
-        if (path === '/workorders')             return await getSheet(env, 'Work_Orders');
+        if (path === '/workorders')             return await getWorkOrdersList(env, url);
         if (path === '/wo-tenants')             return await listWOTenants(env, url);
         if (path === '/time-entries')           return await listTimeEntries(env, url);
         if (path === '/receipts')               return await listReceipts(env, url);
@@ -322,6 +322,8 @@ export default {
         if (path === '/wo/admin-update')          return await adminUpdateWO(env, body);
         if (path === '/wo/append-description')    return await appendDescription(env, body);
         if (path === '/wo/set-tenant-visibility') return await setTenantVisibility(env, body);
+        if (path === '/wo/void')                  return await woVoid(env, body);
+        if (path === '/wo/unvoid')                return await woUnvoid(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
         if (path === '/tenant/schedule-move-out') return await scheduleMoveOutWithTurnover(env, body);
         if (path === '/schedule')                 return await scheduleWO(env, body);
@@ -3186,6 +3188,21 @@ async function tenantWOSettingsSummary(env) {
 }
 
 async function createWorkOrder(env, body) {
+  // Same property/unit/tenant, same trade/description, seconds apart = a double-tap on
+  // Create Work Order, not two real jobs. Before this guard, a double-tap always produced
+  // two rows sharing the SAME auto-incremented WO number — both requests read the sheet's
+  // current max ID before either had appended, so both computed the identical "next" number.
+  // Every WO lookup elsewhere (findWO, updateWOFields' rowIndex, updateRow) resolves by
+  // ID with a plain first-match .find()/.findIndex(), so the second of those two rows became
+  // permanently unreachable by any endpoint in the app — no button could ever touch it again
+  // (WO-1192, 2026-09-14). Same pattern/window as Receipts and Time_Entries: short window,
+  // full signature match, hand back the row that already exists instead of appending a twin.
+  const dupe = await findRecentDuplicate(env, 'Work_Orders', {
+    Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Tenant_ID: body.tenant_id || '',
+    Trade: body.trade || '', Description: body.description || '', Type: body.type || 'manual',
+  }, 30);
+  if (dupe) return json({ success: true, duplicate: true, id: dupe.ID });
+
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
   // header row — otherwise the field maps to a non-existent header and is silently dropped.
   if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
@@ -3227,6 +3244,89 @@ async function appendWONotes(env, body) {
   const prefix = body.author ? `[${ts} — ${body.author}] ` : `[${ts}] `;
   await updateWOFields(env, body.wo_id, { Notes: wo.Notes ? `${wo.Notes}\n${prefix}${body.note}` : `${prefix}${body.note}` });
   return json({ success: true });
+}
+
+const WO_VOID_REASONS = ['Duplicate', 'Combined', 'Other'];
+const WO_VOID_COLUMNS = ['Voided', 'Void_Reason', 'Void_Reason_Detail', 'Void_Combined_Into_WO_ID', 'Voided_By', 'Voided_Date'];
+
+// Void/Hide — separate from Status. A voided WO keeps whatever Status it had; this only
+// controls whether it shows up anywhere. Distinct from Cancelled on purpose (Brett,
+// 2026-09-14): Cancelled is a real job that was issued and then called off; Voided is for a
+// work order that should never have existed at all (a duplicate create, or one job folded
+// into another) — the record stays, it's just gone from every list/search by default.
+//
+// Does NOT help a same-ID collision (two rows sharing one WO number) — findWO/updateWOFields
+// resolve by ID first-match same as everywhere else, so voiding still only ever reaches the
+// first of two colliding rows. That class of problem is what the duplicate-submission guard
+// in createWorkOrder now prevents at the source; a pre-existing collision needs a manual
+// sheet fix, same as WO-1192.
+async function woVoid(env, body) {
+  const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
+  const reason = body.reason;
+  if (!WO_VOID_REASONS.includes(reason)) return json({ error: `reason must be one of: ${WO_VOID_REASONS.join(', ')}` }, 400);
+  const combinedInto = reason === 'Combined' ? (body.combined_into_wo_id || '') : '';
+  if (reason === 'Combined' && !combinedInto) return json({ error: 'combined_into_wo_id required when reason is Combined' }, 400);
+
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(workorders, woId);
+  if (!wo) return json({ error: 'WO not found' }, 404);
+  if (combinedInto) {
+    if (combinedInto === woId) return json({ error: 'Cannot combine a work order into itself' }, 400);
+    if (!findWO(workorders, combinedInto)) return json({ error: `Target work order ${combinedInto} not found` }, 404);
+  }
+
+  const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
+  const now = new Date().toISOString();
+  await updateWOFields(env, woId, {
+    Voided: 'TRUE', Void_Reason: reason, Void_Reason_Detail: body.detail || '',
+    Void_Combined_Into_WO_ID: combinedInto, Voided_By: changedBy, Voided_Date: now,
+  });
+  await logWOAudit(env, woId, changedBy, changedByRole, 'Voided', 'FALSE', 'TRUE', `${reason}${body.detail ? ': ' + body.detail : ''}${combinedInto ? ' -> ' + combinedInto : ''}`);
+
+  // Combined: copy this WO's Notes onto the surviving WO, same timestamped-prefix convention
+  // appendWONotes already uses, so the merge is visible on the record that's actually kept —
+  // no data about the voided job's notes is lost, and nothing else (vendor bills, receipts,
+  // time entries) moves; those stay attached to their original WO_ID.
+  if (combinedInto && wo.Notes) {
+    const target = findWO(workorders, combinedInto);
+    if (target) {
+      const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const prefix = `[${ts} — combined from ${woId}] `;
+      const merged = target.Notes ? `${target.Notes}\n${prefix}${wo.Notes}` : `${prefix}${wo.Notes}`;
+      try { await updateWOFields(env, combinedInto, { Notes: merged }); } catch (e) {}
+    }
+  }
+  return json({ success: true });
+}
+
+async function woUnvoid(env, body) {
+  const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(workorders, woId);
+  if (!wo) return json({ error: 'WO not found' }, 404);
+  // Void_Reason/Detail/Combined_Into/Voided_By/Voided_Date are left in place as history
+  // (this WO was voided on X for reason Y, then restored on Z) — only the Voided flag itself
+  // flips, which is the only thing that actually controls visibility.
+  await updateWOFields(env, woId, { Voided: 'FALSE' });
+  const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
+  await logWOAudit(env, woId, changedBy, changedByRole, 'Voided', 'TRUE', 'FALSE', 'Restored');
+  return json({ success: true });
+}
+
+// Voided WOs are excluded from the default list, and from ?include_closed=true, on every
+// list endpoint below — they are not a "closed" status like Complete/Invoiced/Paid, they are
+// removed from view entirely. The admin /workorders route below is the one place that can
+// still see them, and only on request (?include_voided / ?voided_only), for the Hub's own
+// dedicated Voided filter.
+async function getWorkOrdersList(env, url) {
+  const rows = await fetchTab(env, 'Work_Orders');
+  const voidedOnly = url.searchParams.get('voided_only') === '1';
+  const includeVoided = url.searchParams.get('include_voided') === '1';
+  const filtered = voidedOnly ? rows.filter(r => r.Voided === 'TRUE')
+    : includeVoided ? rows
+    : rows.filter(r => r.Voided !== 'TRUE');
+  return json(filtered);
 }
 async function assignVendor(env, body) {
   // notify defaults TRUE — preserves existing behavior for the Assign/Reassign Vendor modal
@@ -3390,7 +3490,9 @@ async function vendorWorkorders(env, url) {
   ]);
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
-  const wos = workorders.filter(w => w.Vendor_ID === vendorId && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  // Voided is never shown to a vendor, regardless of include_closed — it isn't a closed
+  // status a vendor should be able to page back to, it's a job that shouldn't have existed.
+  const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // vendors passed through so enrichWO can tell whether THIS vendor is Brett's own
   // in-house record — that's what lets a "Brett Only" code still surface on a WO
   // that's actually assigned to him (see enrichWO's visibleLockboxes). viewingVendorId is
@@ -3412,7 +3514,7 @@ async function tenantWorkorders(env, url) {
   // isBackgroundWO: don't show a WO opened before this tenant moved in — matches the rule
   // isTenantNotifiable already applies to SMS, so "won't text them about it" and "won't show
   // it in their portal" stay in sync instead of drifting apart (see isBackgroundWO comment).
-  const wos = workorders.filter(w => { if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (isBackgroundWO(tenant, w)) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
+  const wos = workorders.filter(w => { if (w.Voided === 'TRUE') return false; if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (isBackgroundWO(tenant, w)) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
   // tenants get the assigned vendor's name/phone/trade so they can coordinate access —
   // enrichWO never resolved Vendor_ID -> a name/phone at all before this (tenant.html and
   // owner.html both had a "Technician: —" row wired up with nothing to fill it). No
@@ -3429,7 +3531,7 @@ async function ownerWorkorders(env, url) {
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
-  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
   // vendor relationship mediated through Brett rather than owners going around him. No
   // Master_Keys/viewingVendorId passed — omitLockbox:true already zeroes lockboxes below,
@@ -4335,7 +4437,7 @@ async function listNearbyWOs(env, url) {
   props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const pTags = [(p.Location_Cluster||'').trim(), ...(p.Location_Overlap||'').split(',').map(s=>s.trim())].filter(Boolean); if (pTags.some(t => allTags.includes(t))) nearbyPropIds.add(String(p.ID)); });
   if (!nearbyPropIds.size) return json({ nearby: [], message: 'no_nearby', primary_cluster: primary });
   const OPEN = new Set(['New','Assigned','Accepted','In Progress','On Hold']);
-  const nearby = wos.filter(w => w.ID !== woId && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
+  const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
   return json({ nearby, primary_cluster: primary, overlap_clusters: overlap });
 }
 

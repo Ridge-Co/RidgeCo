@@ -299,6 +299,7 @@ window.addEventListener('pageshow', function(e){
             <option value="On Hold">On Hold</option><option value="Complete">Complete</option>
             <option value="Pending Invoice">Pending Invoice</option><option value="Invoiced">Invoiced</option>
             <option value="Paid">Paid</option><option value="Declined">Declined</option><option value="Cancelled">Cancelled</option>
+            <option value="voided">Voided</option>
           </select></div>
         <div><label>OWNER</label>
           <select id="f-owner" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
@@ -741,6 +742,35 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group full"><label>Notes</label><textarea id="inv-notes" placeholder="Invoice notes..."></textarea></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-invoice')">Cancel</button><button class="btn" onclick="submitInvoice()">Log Invoice</button></div>
+  </div>
+</div>
+
+<!-- VOID / HIDE WORK ORDER MODAL -->
+<div class="modal-overlay" id="modal-void-wo">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title" id="void-modal-title">VOID / HIDE WORK ORDER</div><button class="modal-close" onclick="closeModal('modal-void-wo')">✕</button></div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">This removes it from every list and search — the row itself is never deleted, only hidden (you can always restore it). Use this for a work order that should never have existed at all — not a legitimate job that got called off, that's Cancel WO.</div>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>Reason</label>
+        <select id="void-reason" onchange="onVoidReasonChange()">
+          <option value="">— Select reason —</option>
+          <option value="Duplicate">Duplicate</option>
+          <option value="Combined">Combined with other work order</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-group full" id="void-combined-wrap" style="display:none">
+        <label>Combine into which work order?</label>
+        <select id="void-combined-wo"><option value="">— Select work order —</option></select>
+        <div style="color:var(--muted);font-size:11px;margin-top:4px">Only other work orders at the same property/unit are listed. Any notes on this work order will be copied onto the one you pick.</div>
+      </div>
+      <div class="form-group full" id="void-other-wrap" style="display:none">
+        <label>Reason detail</label>
+        <textarea id="void-other-detail" placeholder="What happened?"></textarea>
+      </div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-void-wo')">Cancel</button><button class="btn danger" onclick="submitVoidWO()">Void / Hide</button></div>
   </div>
 </div>
 
@@ -1486,7 +1516,7 @@ function _loadAllFallback() {
   return Promise.allSettled([
     api('GET','/properties', null, 20000), api('GET','/units', null, 20000),
     api('GET','/tenants', null, 20000), api('GET','/vendors', null, 20000),
-    api('GET','/workorders', null, 20000), api('GET','/invoices', null, 20000),
+    api('GET','/workorders?include_voided=1', null, 20000), api('GET','/invoices', null, 20000),
     api('GET','/owners', null, 20000), api('GET','/keys', null, 20000)
   ]).then(function(results) {
     results.forEach(function(r,i) {
@@ -1563,7 +1593,8 @@ function showPage(name, btn) {
 
 // ── Dashboard ────────────────────────────────────────────────
 function renderDashboard() {
-  var wos = safeArray(state.workorders);
+  // Voided WOs never count toward open/urgent/etc — they're not real outstanding work.
+  var wos = safeArray(state.workorders).filter(function(w){ return w.Voided !== 'TRUE'; });
   // "Open" here means ACTIVE WORK only — once a job is done or in the billing/payment tail it
   // drops off the work view (it lives in the billing screens instead). This is a work indicator,
   // not an admin/billing one.
@@ -1596,7 +1627,7 @@ function woCard(w) {
   return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
     (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
     ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\'" style="width:auto;flex:none;cursor:pointer" />' : '') +
-    '<div class="wo-id">'+w.ID+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
+    '<div class="wo-id">'+w.ID+(w.Voided==='TRUE'?' <span style="background:#eee;border:1px solid #999;color:#666;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">VOIDED — '+esc(w.Void_Reason||'')+'</span>':'')+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+(w.Turnover_Group_ID?' <span style="background:#e8f0fb;color:var(--accent);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">🔄 '+esc(w.Turnover_Group_ID)+' · '+esc(w.Turnover_Role||'')+'</span>':'')+'</div></div>' +
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
@@ -1692,8 +1723,15 @@ function renderWOPage() {
 
   var wos = safeArray(state.workorders).slice();
 
-  if (filter === 'open') wos = wos.filter(function(w){ return OPEN.includes(w.Status); });
-  else if (filter !== 'all') wos = wos.filter(function(w){ return w.Status===filter; });
+  // Voided is not part of the open/closed spectrum — it's excluded from EVERY other filter,
+  // including "all", and only appears when specifically asked for. It never mixes with
+  // Complete/Invoiced/Paid/Cancelled under "all" the way those do with each other.
+  if (filter === 'voided') { wos = wos.filter(function(w){ return w.Voided === 'TRUE'; }); }
+  else {
+    wos = wos.filter(function(w){ return w.Voided !== 'TRUE'; });
+    if (filter === 'open') wos = wos.filter(function(w){ return OPEN.includes(w.Status); });
+    else if (filter !== 'all') wos = wos.filter(function(w){ return w.Status===filter; });
+  }
 
   if (ownerId) {
     var ownerPropIds = new Set(safeArray(state.properties).filter(function(p){return String(p.Owner_ID)===String(ownerId);}).map(function(p){return String(p.ID);}));
@@ -2103,6 +2141,8 @@ function openWODetail(woId) {
   if (['Complete','Pending Invoice'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
+  if (wo.Voided==='TRUE') addBtn('↩ Restore','secondary',function(){unvoidWO(woId);});
+  else addBtn('🗑 Void / Hide','danger',function(){openVoidModal(woId);});
   openModal('modal-wo-detail');
   // Inject photo section after modal opens (deferred so modal always shows)
   setTimeout(function(){
@@ -2226,6 +2266,78 @@ function updateWOStatus(woId,status) {
   api('POST','/status',{wo_id:woId,status:status,updated_by:'admin'}).then(function(){
     toast('Status: '+status,'success'); closeModal('modal-wo-detail'); loadAll();
   }).catch(function(e){logError('Update status',e.message);toast('Error: '+e.message,'error');});
+}
+
+var _voidWOId = null;
+function openVoidModal(woId) {
+  _voidWOId = woId;
+  document.getElementById('void-modal-title').textContent = 'VOID / HIDE ' + woId;
+  document.getElementById('void-reason').value = '';
+  document.getElementById('void-combined-wrap').style.display = 'none';
+  document.getElementById('void-other-wrap').style.display = 'none';
+  document.getElementById('void-other-detail').value = '';
+  document.getElementById('void-combined-wo').innerHTML = '<option value="">— Select work order —</option>';
+  closeModal('modal-wo-detail');
+  openModal('modal-void-wo');
+}
+
+function onVoidReasonChange() {
+  var reason = document.getElementById('void-reason').value;
+  document.getElementById('void-combined-wrap').style.display = reason === 'Combined' ? '' : 'none';
+  document.getElementById('void-other-wrap').style.display = reason === 'Other' ? '' : 'none';
+  if (reason === 'Combined') populateVoidCombineOptions();
+}
+
+// Deliberately a client-side filter against already-loaded state.workorders, not a call to
+// /nearby-wos — that endpoint is for OTHER nearby properties sharing a location cluster
+// (bundling opportunities), the opposite scope from what's needed here: other work orders
+// at THIS SAME property/unit.
+function populateVoidCombineOptions() {
+  var wo = safeArray(state.workorders).find(function(w){return w.ID===_voidWOId;});
+  var sel = document.getElementById('void-combined-wo');
+  if (!wo) { sel.innerHTML = '<option value="">— Select work order —</option>'; return; }
+  var candidates = safeArray(state.workorders).filter(function(w){
+    return w.ID !== _voidWOId && w.Voided !== 'TRUE' && String(w.Property_ID) === String(wo.Property_ID) && (!wo.Unit_ID || w.Unit_ID === wo.Unit_ID);
+  }).sort(function(a,b){ return new Date(b.Created_Date) - new Date(a.Created_Date); });
+  sel.innerHTML = '<option value="">— Select work order —</option>' +
+    candidates.map(function(w){ return '<option value="'+w.ID+'">'+w.ID+' — '+esc(w.Trade||'')+(w.Description?' · '+esc(w.Description.substring(0,40)):'')+' ('+(w.Status||'New')+')</option>'; }).join('');
+}
+
+function submitVoidWO() {
+  var reason = document.getElementById('void-reason').value;
+  if (!reason) { toast('Select a reason','error'); return; }
+  var detail = '', combinedInto = '';
+  if (reason === 'Combined') {
+    combinedInto = document.getElementById('void-combined-wo').value;
+    if (!combinedInto) { toast('Select which work order to combine into','error'); return; }
+  } else if (reason === 'Other') {
+    detail = (document.getElementById('void-other-detail').value||'').trim();
+    if (!detail) { toast('Enter a reason','error'); return; }
+  }
+  api('POST','/wo/void',{wo_id:_voidWOId, reason:reason, detail:detail, combined_into_wo_id:combinedInto, updated_by:'admin', updated_by_role:'admin'}).then(function(res){
+    if (res.success) {
+      toast(_voidWOId + ' voided','info');
+      closeModal('modal-void-wo');
+      var wo = safeArray(state.workorders).find(function(w){return w.ID===_voidWOId;});
+      if (wo) { wo.Voided = 'TRUE'; wo.Void_Reason = reason; }
+      renderWOPage();
+      loadAll();
+    } else { toast('Error: '+(res.error||'void failed'),'error'); }
+  }).catch(function(e){logError('Void WO',e.message);toast('Error: '+e.message,'error');});
+}
+
+function unvoidWO(woId) {
+  if (!confirm('Restore ' + woId + '? It will show up in lists again.')) return;
+  api('POST','/wo/unvoid',{wo_id:woId, updated_by:'admin', updated_by_role:'admin'}).then(function(res){
+    if (res.success) {
+      toast(woId + ' restored','info');
+      closeModal('modal-wo-detail');
+      var wo = safeArray(state.workorders).find(function(w){return w.ID===woId;});
+      if (wo) wo.Voided = 'FALSE';
+      renderWOPage();
+      loadAll();
+    } else { toast('Error: '+(res.error||'restore failed'),'error'); }
+  }).catch(function(e){logError('Unvoid WO',e.message);toast('Error: '+e.message,'error');});
 }
 
 function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
@@ -2472,7 +2584,7 @@ function renderPropertiesPage() {
     props.map(function(p) {
       var units = safeArray(state.units).filter(function(u){ return String(u.Property_ID)===String(p.ID); });
       var openWOs = safeArray(state.workorders).filter(function(w){
-        return String(w.Property_ID)===String(p.ID) && OPEN_STATUSES.includes(w.Status);
+        return String(w.Property_ID)===String(p.ID) && w.Voided !== 'TRUE' && OPEN_STATUSES.includes(w.Status);
       });
       var vacantCount = units.filter(function(u){
         return !safeArray(state.tenants).find(function(t){ return t.Active!=='FALSE' && t.Unit_ID===u.ID; });
@@ -2596,7 +2708,7 @@ function openUnitDetail(propId, unitId) {
   });
   var OPEN = ['New','Assigned','Accepted','In Progress','On Hold'];
   var wos = safeArray(state.workorders).filter(function(w){
-    return OPEN.includes(w.Status) && String(w.Property_ID)===String(propId) &&
+    return OPEN.includes(w.Status) && w.Voided !== 'TRUE' && String(w.Property_ID)===String(propId) &&
       (unitId ? String(w.Unit_ID)===String(unitId) : !w.Unit_ID);
   });
   var isVacant = !tenants.length;
@@ -3847,6 +3959,7 @@ function loadMoveInWOPanel(propId, unitId) {
   var OPEN = ['New','Assigned','Accepted','In Progress','On Hold'];
   var openWOs = safeArray(state.workorders).filter(function(w) {
     if (!OPEN.includes(w.Status)) return false;
+    if (w.Voided === 'TRUE') return false;
     if (unitId) return w.Unit_ID === unitId;
     if (propId) return String(w.Property_ID) === String(propId);
     return false;
@@ -5148,7 +5261,7 @@ function hubBillCalc(k) {
 // Saving a bill can flip the work order to Complete server-side. Pull the row back so the
 // open modal doesn't keep showing a stale status.
 function refreshWOStatusBadge(woId, prevStatus) {
-  api('GET', '/workorders').then(function(wos) {
+  api('GET', '/workorders?include_voided=1').then(function(wos) {
     if (!Array.isArray(wos)) return;
     state.workorders = wos;
     var wo = wos.find(function(w) { return String(w.ID) === String(woId); });
@@ -7185,7 +7298,7 @@ function renderBundlingOpportunities() {
   if (!tagged.length) { section.style.display = 'none'; return; }
 
   var OPEN = ['New','Assigned','Accepted','In Progress','On Hold'];
-  var openWOs = safeArray(state.workorders).filter(function(w) { return OPEN.includes(w.Status); });
+  var openWOs = safeArray(state.workorders).filter(function(w) { return OPEN.includes(w.Status) && w.Voided !== 'TRUE'; });
 
   // Map each WO to its property's primary cluster
   var clusterGroups = {};
@@ -7486,7 +7599,7 @@ function loadInvoiceReview() {
   // that call failed — the cards would silently render with no job context and the whole
   // point of the screen is lost. So top the state up first; never render context-blind.
   var prep = [];
-  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders').then(function(r) {
+  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders?include_voided=1').then(function(r) {
     if (Array.isArray(r)) state.workorders = r;
   }).catch(function() {}));
   if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) {
@@ -8420,7 +8533,7 @@ function loadPayables(save) {
   // Job/property/owner context (WO → Property → Owner) powers the filter labels + search below —
   // same top-up-if-empty pattern loadInvoiceReview() already uses. Never render context-blind.
   var prep = [];
-  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders').then(function(r) { if (Array.isArray(r)) state.workorders = r; }).catch(function() {}));
+  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders?include_voided=1').then(function(r) { if (Array.isArray(r)) state.workorders = r; }).catch(function() {}));
   if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) { if (Array.isArray(r)) state.properties = r; }).catch(function() {}));
   if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) { if (Array.isArray(r)) state.vendors = r; }).catch(function() {}));
   if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) { if (Array.isArray(r)) state.owners = r; }).catch(function() {}));

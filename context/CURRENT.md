@@ -1,5 +1,49 @@
 # WHERE THINGS STAND — Sep 14, 2026 (even later still, again)
 
+## 🟡 Built, not yet live-verified: Work Order Void/Hide + duplicate-create guard — rule 162
+Full detail: FEATURE_LOG rule 162. Brett hit WO-1192 live: a double-tap on Create Work Order
+made two rows share one WO number, and every WO lookup in the app resolves by ID first-match —
+the second row became permanently unreachable, stuck at New, no matter which button Brett
+tapped. Diagnosed from the live code AND the live Sheet data (via `WORKER_SECRET`), not guessed.
+Brett fixed that specific row by hand; this build is the fix so it can't happen again, plus the
+Void/Hide feature Brett asked for on top (distinct from Cancelled — Void is for a work order
+that should never have existed at all, e.g. a duplicate or one job folded into another; the
+record stays, just hidden from every list/search by default, restorable).
+
+- `createWorkOrder` now runs the existing `findRecentDuplicate` guard (already used elsewhere,
+  never wired to Work_Orders before) — a same-signature create within 30s hands back the
+  existing WO instead of appending a twin.
+- New `POST /wo/void` (reasons: Duplicate / Combined / Other) + `POST /wo/unvoid` — admin-only,
+  logged to `WO_Audit`. Combined copies Notes onto the surviving WO; nothing else migrates.
+- `/workorders` excludes Voided by default (`?include_voided=1` / `?voided_only=1` available);
+  vendor/tenant/owner/nearby-WO endpoints exclude voided rows unconditionally.
+- index.html: new "Voided" filter (kept separate from open/closed/"all"), dashboard exclusion,
+  a "VOIDED — reason" badge, a Void/Restore button + modal on the WO detail screen, and every
+  other WO-picker dropdown in the admin app patched to exclude voided rows too.
+
+`node --check` clean on worker.js + all 5 inline `index.html` script blocks. This originally
+shipped as "rule 159" but that number turned out to be claimed by two other concurrent sessions'
+work (the notify-toggle/bulk-checkbox/Twilio-status patch, itself renumbered 158/158a → 159/159a
+somewhere in this same chaotic day — see the PR #3 note below) before this one could push;
+renumbered to 162 (the next actually-free number, after rule 161) to stop colliding. Rebased
+three times mid-build across the day's concurrent pushes (rule 158's invoice-description work,
+rule 158/158a→159/159a's notify-toggle work, and rule 160/161's Twilio-diagnostic + whole-
+property-SMS fixes) — `createWorkOrder` itself never had a real logical conflict with any of
+them (each session's changes sit at different points in the function), just repeated
+`BUILD_VERSION` line collisions, each one bumped past whatever the incoming tip claimed. Fixed a
+real regression this caused in `test/turnover.test.mjs` (sandbox-extracts `createWorkOrder`
+verbatim; needed the new `findRecentDuplicate` dependency grabbed alongside it). Extended
+`test/dupe-guard.test.mjs` with the WO-1192 scenario itself. New `test/wo-void.test.mjs` (25
+assertions). Full suite re-verified after the final rebase: 65/65.
+
+**Not pushed yet** — sitting locally, prepared for Brett's push (Basic-auth PAT method per the
+standing rule in `ridgeco-git-push-proxy-bug.md`, or the patch-file handoff if no PAT is
+available). No live Sheets credentials in this build sandbox, so the six new `Work_Orders`
+columns' actual creation on the live Sheet, a real double-tap against the live Worker, and a
+real Void→Restore round trip in the browser are all unverified — see rule 162's live-pass list.
+
+
+
 ## 🟡 Built, not yet live-verified: root-cause fix for whole-property tenant SMS — rule 161
 Full detail: FEATURE_LOG rule 161. `currentTenantForDispatch` (used by every SMS trigger) never
 had the Property_ID fallback `enrichWO` already used for whole-property (no-Unit) listings —

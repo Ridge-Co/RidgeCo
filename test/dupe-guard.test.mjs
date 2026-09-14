@@ -67,6 +67,32 @@ TABS = { Estimates: [
 ok(!await findRecentDuplicate({}, 'Estimates', { WO_ID: 'WO-1052', Line_Items: items, Vendor_ID: '6' }, 120),
    'a VOIDED row never counts as the duplicate (you can redo a deleted entry)');
 
+// ── 2b. Work_Orders — the WO-1192 double-create incident ────────────────────
+// Before this guard existed, a double-tap on Create Work Order always produced two rows
+// sharing the SAME auto-incremented WO number (both requests read the sheet's current max ID
+// before either had appended). Every WO lookup elsewhere resolves by ID with a first-match
+// .find()/.findIndex(), so the second of those two rows became permanently unreachable by any
+// endpoint — no button could ever touch it again. This guard is what createWorkOrder now
+// checks before appending.
+console.log('\nWork_Orders — the WO-1192 double-create incident');
+TABS = { Work_Orders: [
+  { ID: 'WO-1192', Property_ID: '76', Unit_ID: '', Tenant_ID: '', Trade: 'General',
+    Description: 'Install built-in microwave', Type: 'manual', Created_Date: agoIso(1) },
+] };
+ok(await findRecentDuplicate({}, 'Work_Orders', { Property_ID: '76', Unit_ID: '', Tenant_ID: '',
+     Trade: 'General', Description: 'Install built-in microwave', Type: 'manual' }, 30),
+   'the exact same create submitted a second later is caught — no second row would be appended');
+ok(!await findRecentDuplicate({}, 'Work_Orders', { Property_ID: '76', Unit_ID: '', Tenant_ID: '',
+     Trade: 'General', Description: 'Replace hallway light fixture', Type: 'manual' }, 30),
+   'a different job at the same property is a real second work order, not a duplicate');
+ok(!await findRecentDuplicate({}, 'Work_Orders', { Property_ID: '99', Unit_ID: '', Tenant_ID: '',
+     Trade: 'General', Description: 'Install built-in microwave', Type: 'manual' }, 30),
+   'the same description at a DIFFERENT property is not a duplicate');
+TABS.Work_Orders[0].Created_Date = agoIso(120);
+ok(!await findRecentDuplicate({}, 'Work_Orders', { Property_ID: '76', Unit_ID: '', Tenant_ID: '',
+     Trade: 'General', Description: 'Install built-in microwave', Type: 'manual' }, 30),
+   'creating the same-looking WO again two minutes later (outside the window) is allowed through');
+
 // ── 3. receipts ──────────────────────────────────────────────────────────────
 console.log('\nReceipts');
 TABS = { Receipts: [

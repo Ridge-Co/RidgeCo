@@ -57,6 +57,7 @@ const fetchTabSrc     = grab(wsrc, 'async function fetchTab(');
 const fetchTabsSrc    = grab(wsrc, 'async function fetchTabs(');
 const updateRowSrc    = grab(wsrc, 'async function updateRow(');
 const updateWOFieldsSrc = grab(wsrc, 'async function updateWOFields(');
+const findRecentDupSrc  = grab(wsrc, 'async function findRecentDuplicate(');
 const createWOSrc     = grab(wsrc, 'async function createWorkOrder(');
 const rolesSrc        = grabConst(wsrc, 'const TURNOVER_ROLES');
 const tradeMapSrc     = grabConst(wsrc, 'const TURNOVER_TRADE_BY_ROLE');
@@ -145,7 +146,7 @@ function build(db, callLog) {
   const src = [
     'const CORS = {};',
     cacheSrc, srSrc, ensureSrc, colSrc, idcSrc, jsonSrc, fetchTabSrc, fetchTabsSrc,
-    updateRowSrc, updateWOFieldsSrc,
+    updateRowSrc, updateWOFieldsSrc, findRecentDupSrc,
     'async function addRow(){ return { success:true, id:"X" }; }', // WO_Tenants linking side-effect — not under test
     'async function logTelemetry(){ /* no-op in tests */ }',
     createWOSrc,
