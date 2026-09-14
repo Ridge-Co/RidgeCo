@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.6';
+const BUILD_VERSION = '2026-09-10.7';
 
 export default {
   async fetch(request, env) {
@@ -6626,9 +6626,10 @@ async function receiptsImageCheck(env) {
     } else {
       noTraceAtAll++;
       const key = (r.Role || 'unknown') + ' / ' + (r.Added_By || 'unknown');
-      if (!noTraceBreakdown[key]) noTraceBreakdown[key] = { count: 0, sample_wo_ids: [] };
+      if (!noTraceBreakdown[key]) noTraceBreakdown[key] = { count: 0, sample_wo_ids: [], rows: [] };
       noTraceBreakdown[key].count++;
       if (noTraceBreakdown[key].sample_wo_ids.length < 5) noTraceBreakdown[key].sample_wo_ids.push(r.WO_ID || '(none)');
+      noTraceBreakdown[key].rows.push({ receipt_id: r.ID, wo_id: r.WO_ID || '', amount: r.Amount, date: r.Date, store: r.Store, description: r.Description });
     }
   }
   return json({ ok: true, total_active_receipts: active.length, has_own_file: hasOwnFile, recovered_exact_match: recoveredExact, near_miss_same_wo: nearMissSameWO, no_trace_at_all: noTraceAtAll, near_miss_rows: nearMissRows.slice(0, 50), no_trace_breakdown: noTraceBreakdown });
