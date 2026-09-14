@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.3';
+const BUILD_VERSION = '2026-09-14.4';
 
 export default {
   async fetch(request, env) {
@@ -147,6 +147,7 @@ export default {
         if (path === '/smslog')                 return await getSheet(env, 'SMS_Logs');
         if (path === '/message-queue')          return await listMessageQueue(env, url);
         if (path === '/twilio/message-status')  return await twilioMessageStatus(env, url);
+        if (path === '/twilio/account-status')  return await twilioAccountStatus(env);
         if (path === '/wishlist')               return await getSheet(env, 'Wishlist');
         if (path === '/keys')                   return await getSheet(env, 'Keys');
         if (path === '/keys-history')           return await getSheet(env, 'Keys_History');
@@ -8296,6 +8297,69 @@ async function twilioMessageStatus(env, url) {
     } catch (e) { results.push({ sid, error: String((e && e.message) || e) }); }
   }
   return json({ ok: true, results });
+}
+
+// GET /twilio/account-status — admin-gated diagnostic. Answers Brett's actual question
+// directly: is the sending number really live, is A2P 10DLC registration/campaign approval
+// actually done (not just "account approved," which only means the ACCOUNT itself is past
+// trial — brand/campaign approval is a separate, later step), and is TWILIO_FROM actually
+// in an approved campaign's sender pool. Every sub-check is independently try/caught so one
+// failing/permission-scoped call never blocks the rest from reporting. Read-only.
+async function twilioAccountStatus(env) {
+  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY)
+    return json({ error: 'Twilio not configured' }, 503);
+  const auth = 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`);
+  const get = async (u) => {
+    const resp = await fetch(u, { headers: { Authorization: auth } });
+    const data = await resp.json();
+    return { ok: resp.ok, status: resp.status, data };
+  };
+  const out = { from_number: env.TWILIO_FROM || null };
+
+  // 1. The sending number itself — is it real, SMS-capable, active on this account.
+  try {
+    const r = await get(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(env.TWILIO_FROM || '')}`);
+    const num = r.ok && r.data.incoming_phone_numbers && r.data.incoming_phone_numbers[0];
+    out.number = num
+      ? { sid: num.sid, sms_capable: !!(num.capabilities && num.capabilities.sms), status: num.status, address_requirements: num.address_requirements }
+      : { error: 'TWILIO_FROM not found on this account', raw: r.ok ? null : r.data };
+  } catch (e) { out.number = { error: String((e && e.message) || e) }; }
+
+  // 2. A2P Brand Registration(s) — the business-identity approval. status should read
+  // 'APPROVED'; 'PENDING'/'IN_REVIEW'/'FAILED' all mean traffic can still be filtered.
+  try {
+    const r = await get('https://messaging.twilio.com/v1/a2p/BrandRegistrations');
+    out.brands = r.ok
+      ? (r.data.data || []).map(b => ({ sid: b.sid, status: b.status, failure_reason: b.failure_reason || null }))
+      : { error: r.data.message || `HTTP ${r.status}` };
+  } catch (e) { out.brands = { error: String((e && e.message) || e) }; }
+
+  // 3. Messaging Services + each one's A2P Campaign compliance status. THIS is the part that
+  // actually gates whether US carriers will pass traffic — a brand can show APPROVED while
+  // the campaign itself is still pending/rejected. Also checks whether TWILIO_FROM is
+  // actually enrolled in that service's sender pool (registering a campaign does nothing for
+  // a number that was never added to the Messaging Service it's tied to).
+  try {
+    const svcResp = await get('https://messaging.twilio.com/v1/Services');
+    const services = svcResp.ok ? (svcResp.data.services || []) : [];
+    out.messaging_services = [];
+    for (const svc of services) {
+      const entry = { sid: svc.sid, friendly_name: svc.friendly_name };
+      try {
+        const comp = await get(`https://messaging.twilio.com/v1/Services/${svc.sid}/Compliance/Usa2p`);
+        entry.campaign = comp.ok ? { campaign_status: comp.data.campaign_status, campaign_id: comp.data.campaign_id, use_case: comp.data.use_case_summary || comp.data.use_case } : { error: comp.data.message || `HTTP ${comp.status}` };
+      } catch (e) { entry.campaign = { error: String((e && e.message) || e) }; }
+      try {
+        const nums = await get(`https://messaging.twilio.com/v1/Services/${svc.sid}/PhoneNumbers`);
+        const list = nums.ok ? (nums.data.phone_numbers || []) : [];
+        entry.from_number_in_sender_pool = list.some(n => n.phone_number === env.TWILIO_FROM);
+      } catch (e) { entry.from_number_in_sender_pool = null; }
+      out.messaging_services.push(entry);
+    }
+    if (!out.messaging_services.length) out.messaging_services_note = 'No Messaging Services found on this account — if TWILIO_FROM is sending outside any Messaging Service, it needs its OWN direct campaign association instead (check the number itself in the Twilio Console under Phone Numbers → Manage → your number → Messaging).';
+  } catch (e) { out.messaging_services = { error: String((e && e.message) || e) }; }
+
+  return json({ ok: true, ...out });
 }
 
 async function health(env) {

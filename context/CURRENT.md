@@ -1,6 +1,32 @@
-# WHERE THINGS STAND — Sep 14, 2026 (even later)
+# WHERE THINGS STAND — Sep 14, 2026 (even later still)
 
-## 🔴 Live-testing found a real delivery gap: Twilio accepts the message (real SID), Brett's phone gets nothing — rule 158a
+## 🔴 PR #3 (rule 159/159a) was never actually merged — a different session's work landed on main instead, in the meantime
+Brett's Claude Code session for the notify-toggle/checkbox-left/Twilio-diagnostic patch got as
+far as confirming the PR was green and mergeable, then stalled there — it was never actually
+merged. Meanwhile, an unrelated session (invoice descriptions, rule 158 below) pushed straight
+to `main`. Confirmed directly: `origin/main`'s current tip has no trace of the rule 159/159a
+commit; the PR branch (`claude/pensive-rubin-uxmdr4`) still exists, unmerged, 1 commit behind
+current `main`. **This session rebased that branch onto current `main` cleanly (no conflicts,
+full test suite still green) and added one more diagnostic endpoint on top (rule 160) — this
+combined branch supersedes PR #3 entirely.** Brett should close PR #3 without merging once the
+new combined patch lands, to avoid double-applying the same changes.
+
+## 🟡 Built, not yet live-verified: Twilio account/A2P-status diagnostic — rule 160
+Full detail: FEATURE_LOG rule 160. Brett asked directly whether he needs an opt-in, whether the
+campaign needs activating, and asked Claude to confirm via the Worker's own Twilio API access
+that everything is actually live — rather than guess, researched current (2026) Twilio/A2P
+10DLC practice: `Status:'sent'` has only ever meant "carrier/Twilio accepted the request," and
+a message can be silently carrier-filtered after that with zero trace in `Message_Queue`.
+Brand approval (already confirmed) and campaign approval are two DIFFERENT, sequential gates —
+a business can be fully approved while its specific messaging campaign is still pending carrier
+vetting. New `GET /twilio/account-status` checks the sending number, every A2P Brand
+Registration's status, and — the part that actually matters for carrier delivery — every
+Messaging Service's Campaign compliance status plus whether `TWILIO_FROM` is actually in that
+service's sender pool. `node --check` clean, full suite green. **Not yet run against the real
+account — needs this patch deployed first.**
+
+
+## 🔴 Live-testing found a real delivery gap: Twilio accepts the message (real SID), Brett's phone gets nothing — rule 159a
 Confirmed via live `Message_Queue` — 3 of Brett's own test sends all show `Status:'sent'` with
 real Twilio SIDs, redirected correctly to his phone via Test Mode, all gates correctly open.
 That was always the honest limit of `Status:'sent'` (Twilio-accepted, not delivery-confirmed —
@@ -9,8 +35,8 @@ webhooks were out of scope for rule 157) — now a live symptom, not a theoretic
 **Fastest unblock, no deploy needed**: Brett can check Twilio Console → Monitor → Logs →
 Messaging right now for these 3 sends and read the actual status/error there.
 
-## 🟡 Built, not yet live-verified: Two fixes found mid-test on the Twilio build — rule 158
-Full detail: FEATURE_LOG rule 158. Brett started testing rule 157 and immediately hit two
+## 🟡 Built, not yet live-verified: Two fixes found mid-test on the Twilio build — rule 159
+Full detail: FEATURE_LOG rule 159. Brett started testing rule 157 and immediately hit two
 real gaps: (1) assigning a vendor at WO creation always sent the dispatch text with no way
 to skip it (needed for a WO created just to record billing for work already arranged by
 phone) — fixed with a "Notify vendor + tenant now" checkbox, default on, only shown once a
