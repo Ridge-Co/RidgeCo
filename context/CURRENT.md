@@ -1,3 +1,34 @@
+# WHERE THINGS STAND — Sep 14, 2026 (later)
+
+## 🟡 Built, not yet live-verified: Twilio SMS integration, end-to-end — rule 157
+Full detail: FEATURE_LOG rule 157, live-verify checklist at the end of that entry.
+Per `TWILIO_SMS_BUILD_BRIEF_v1.0.md` — all 6 message types (tenant assigned/scheduled/
+completed/manual, vendor assigned/paid), the full Global/Property/Customer/Tenant/Vendor
+gate, Test Mode redirect, `Message_Queue` review/release screen (`message-queue.html`,
+new), `/health` Twilio flags.
+
+**Load-bearing catch made mid-build**: live worker.js already had ~10 unconditional
+`sendSMS` call sites from earlier sessions (tenant/owner/admin/vendor-reply), all silently
+broken (wrong Twilio auth var). Fixing the auth alone would have made all of them go live,
+ungated, the moment this deployed. Fixed by making the shared `sendSMS` chokepoint honor
+the same `TWILIO_ENABLED` kill switch as the new gated pipeline — so Global OFF (the
+default) means nothing sends anywhere in the file, not just the 6 new types.
+
+`node --check` clean everywhere touched (worker.js + all `index.html` + `message-queue.html`
+inline scripts); full test suite 53/53 files, no regressions; 28 new pure-helper assertions
+(`test/message-queue.test.mjs`) plus a real headless-Chromium pass on the review screen's
+bulk-select behavior (`test/manual-verify-message-queue-ui.mjs`, 11/11) — the part that
+protects Brett from a real mass-send mistake.
+
+**Not pushed yet** — sitting locally, prepared for Brett's push (Basic-auth PAT method per
+the standing rule in `ridgeco-git-push-proxy-bug.md`, or the patch-file handoff if no PAT is
+available in whatever session does the push). No live Sheets/Twilio-send credentials in this
+build sandbox, so the actual `Message_Queue` tab creation, the 4 new `SMS_Enabled` columns,
+and a real Twilio send (even in Test Mode) are all unverified — see rule 157's 6-step live-
+pass list. The 3 new Config keys (`TWILIO_ENABLED`/`TWILIO_TEST_MODE`/`TWILIO_TEST_RECIPIENT`)
+don't exist as literal Sheet rows yet — code defaults are correct without them, so this is
+optional, not blocking.
+
 # WHERE THINGS STAND — Sep 14, 2026
 
 ## 🟡 Built, not yet live-verified: Configurable multi-milestone payment schedules for Scope Proposals — rule 156

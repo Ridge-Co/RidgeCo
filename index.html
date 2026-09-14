@@ -599,6 +599,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="window.open('deliveries.html','_blank')">🚚 Deliveries</button>
       <button class="btn small" onclick="window.open('tenant-wo-access.html','_blank')">🔓 Tenant Work Order Access</button>
       <button class="btn small" onclick="openManageTemplatesModal()">📄 WO Templates — manage custom templates</button>
+      <button class="btn small" onclick="window.open('message-queue.html','_blank')">📱 Message Queue — SMS review &amp; release</button>
     </div>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">💵 MONEY &amp; QUICKBOOKS</div>
@@ -1792,6 +1793,7 @@ function openWODetail(woId) {
   var _stStatuses = ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'];
   var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:-24px -24px 14px;padding:12px 24px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<button class="btn small" onclick="openEditWOModal(\''+woId+'\')">✏️ Edit</button>' +
+    '<button class="btn small secondary" onclick="sendTenantManualUpdate(\''+woId+'\')">📱 Send update</button>' +
     '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:var(--radius)">' +
     '<option value="">Status: '+(wo.Status||'—')+' ▾</option>' +
     _stStatuses.map(function(s){ return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>'; }).join('') +
@@ -3196,6 +3198,25 @@ function linkify(text) {
   if (!text) return '—';
   var escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:var(--info);word-break:break-all">$1</a>');
+}
+
+// TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_manual, the one on-demand tenant SMS trigger. The
+// Worker prefixes "Hi {First_Name}, " and appends " Ref: {wo_id}." automatically (POST
+// /wo/tenant-update-manual) so every tenant text stays in the same voice — Brett just types
+// what goes in between. Uses prompt(), same lightweight single-field pattern already used
+// elsewhere in this file (pay-authorization passphrase, PIN entry, key-code edits).
+function sendTenantManualUpdate(woId) {
+  var msg = prompt('Text update to send the tenant on ' + woId + ':\n\n' +
+    '(Sent as: "Hi [tenant\'s first name], " + what you type here + " Ref: ' + woId + '." — just type the middle part.)');
+  if (msg === null) return;
+  msg = msg.trim();
+  if (!msg) { alert('Nothing sent — message was empty.'); return; }
+  api('POST', '/wo/tenant-update-manual', { wo_id: woId, message: msg, updated_by: 'Admin', updated_by_role: 'admin' }).then(function(r) {
+    if (r && r.error) { alert('Could not send: ' + r.error); return; }
+    if (r && r.sent) { alert('Sent.'); return; }
+    if (r && r.send_ok === false) { alert('Queued, not sent — SMS is currently gated off (' + (r.gate_snapshot || 'Global OFF') + '). It\'ll show in the Message Queue review screen once Global/Property/Tenant SMS are turned on.'); return; }
+    alert('Queued but the send itself failed — check the Message Queue review screen.');
+  }).catch(function(e) { alert('Could not send: ' + (e && e.message ? e.message : 'unknown error')); });
 }
 
 function tenantToggle(field, currentVal, label, woId) {

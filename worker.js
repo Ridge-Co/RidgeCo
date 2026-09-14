@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.1';
+const BUILD_VERSION = '2026-09-14.2';
 
 export default {
   async fetch(request, env) {
@@ -145,6 +145,7 @@ export default {
         if (path === '/invoices')               return await getSheet(env, 'Invoices');
         if (path === '/templates')              return await getSheet(env, 'Recurring_Templates');
         if (path === '/smslog')                 return await getSheet(env, 'SMS_Logs');
+        if (path === '/message-queue')          return await listMessageQueue(env, url);
         if (path === '/wishlist')               return await getSheet(env, 'Wishlist');
         if (path === '/keys')                   return await getSheet(env, 'Keys');
         if (path === '/keys-history')           return await getSheet(env, 'Keys_History');
@@ -270,6 +271,9 @@ export default {
         if (path === '/assign')                   return await assignVendor(env, body);
         if (path === '/status')                   return await updateStatus(env, body);
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
+        if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
+        if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
+        if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
         if (path === '/property/add')             return await addRow(env, 'Properties', body);
@@ -3209,12 +3213,13 @@ async function appendWONotes(env, body) {
   return json({ success: true });
 }
 async function assignVendor(env, body) {
-  const [workorders, vendors, tenants, units, properties] = await fetchTabs(env, [
-    'Work_Orders','Vendors','Tenants','Units','Properties',
+  const [workorders, vendors, tenants, units, properties, owners] = await fetchTabs(env, [
+    'Work_Orders','Vendors','Tenants','Units','Properties','Owners',
   ]);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const vendor = vendors.find(v => v.ID === body.vendor_id); if (!vendor) return json({ error: 'Vendor not found' }, 404);
   const property = properties.find(p => p.ID === wo.Property_ID);
+  const owner    = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const unit     = units.find(u => u.ID === wo.Unit_ID);
   const tenant   = currentTenantForDispatch(tenants, unit, wo);
   const room     = (wo.Room||'').trim();
@@ -3233,15 +3238,18 @@ async function assignVendor(env, body) {
     const msg = isSpanish
       ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} en ${address}. Problema: ${wo.Description}. Responda SI para aceptar — el código de la caja y el contacto del inquilino se desbloquean en su portal al aceptar. Responda NO para rechazar.`
       : `[${body.wo_id}] New job: ${wo.Trade} at ${address}. Issue: ${wo.Description}. Reply YES to accept — the lockbox code & tenant contact unlock in your portal once you accept. Reply NO to decline.`;
-    await sendSMS(env, vendor.Phone, msg);
-    await logSMS(env, body.wo_id, 'vendor', vendor.ID, vendor.Phone, msg);
-    vendorSMSSent = true;
+    // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Message content UNCHANGED (the
+    // accept-gate withholding above must not change) — only gated + queued now.
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
+    vendorSMSSent = r.sent;
   }
   if (tenant?.Phone && isTenantNotifiable(tenant, wo)) {
-    const msg = `Hi ${tenant.First_Name}, your maintenance request (${wo.Trade}) has been assigned to a technician. They will contact you to schedule. Ref: ${body.wo_id}.`;
-    await sendSMS(env, tenant.Phone, msg);
-    await logSMS(env, body.wo_id, 'tenant', tenant.ID, tenant.Phone, msg);
-    tenantSMSSent = true;
+    // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
+    // name + phone (Brett confirmed this is already customer-facing and safe to surface).
+    const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
+    const msg = `Hi ${tenant.First_Name}, your maintenance request (${wo.Trade}) has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+    tenantSMSSent = r.sent;
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent}` }); } catch(_){}
@@ -3270,12 +3278,14 @@ async function updateStatus(env, body) {
   await logWOAudit(env, body.wo_id, changedBy, changedRole, 'Status', wo.Status||'', body.status, body.notes||'');
   const config = await fetchConfig(env);
   if (body.status === 'Complete') {
-    const [units, tenants, properties] = await fetchTabs(env, ['Units','Tenants','Properties']);
+    const [units, tenants, properties, owners] = await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
     const unit = units.find(u => u.ID === wo.Unit_ID), tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID)), property = properties.find(p => p.ID === wo.Property_ID);
+    const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
     const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+      // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed.
       const msg = `Hi ${tenant.First_Name}, your ${wo.Trade} repair at ${address} is complete. If you have any concerns please reply or call us. Ref: ${body.wo_id}.`;
-      await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_complete', tenant.ID, tenant.Phone, msg);
+      await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
     if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
@@ -5492,41 +5502,90 @@ async function scheduleWO(env, body) {
   await logWOAudit(env,body.wo_id,body.updated_by||'admin',body.updated_by_role||'admin','Scheduled',wo.Scheduled_Date||'',schedDate+' '+(body.window||''),isWithinHour?'On my way notification':'Appointment scheduled');
   let tenantSMSSent=false, notifyQueued=false;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
-    const [units,tenants,properties]=await fetchTabs(env, ['Units','Tenants','Properties']);
+    const [units,tenants,properties,owners]=await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
     const unit=units.find(u=>u.ID===wo.Unit_ID), tenant=tenants.find(t=>t.ID===(unit?.Tenant_ID||wo.Tenant_ID)), property=properties.find(p=>p.ID===wo.Property_ID);
+    const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
     const address=property?property.Address+(unit?' Unit '+unit.Unit_Label:''):'your address';
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       const msg=isWithinHour?`Hi ${tenant.First_Name}, your technician is on the way and will arrive within 1 hour for the ${wo.Trade} work at ${address}. Ref: ${body.wo_id}.`:`Hi ${tenant.First_Name}, your ${wo.Trade} appointment at ${address} is scheduled for ${dateStr}, ${body.window}. Ref: ${body.wo_id}.`;
       const now=new Date(), tomorrow=new Date(now); tomorrow.setDate(tomorrow.getDate()+1); const tomorrowStr=tomorrow.toISOString().split('T')[0];
-      if(schedDate===today||isWithinHour){await sendSMS(env,tenant.Phone,msg);await logSMS(env,body.wo_id,'tenant_schedule',tenant.ID,tenant.Phone,msg);tenantSMSSent=true;}
-      else{let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter);notifyQueued=true;}
+      // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_scheduled. Same-day/within-hour sends
+      // immediately through the gate; anything further out still uses the pre-existing
+      // Notification_Queue defer-to-a-reasonable-hour mechanism (unrelated to and unchanged
+      // by this build) — but the deferred fire (processPendingNotifications, below) now
+      // re-evaluates the SAME gate at actual send time instead of sending raw, so a message
+      // queued days ahead still honors whatever Global/Property/Customer/Tenant state is
+      // true when it actually goes out, not what was true when it was scheduled.
+      if(schedDate===today||isWithinHour){
+        const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_scheduled', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+        tenantSMSSent = r.sent;
+      } else {
+        let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}
+        await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter,{ message_type: 'tenant_job_scheduled', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
+        notifyQueued=true;
+      }
     }
   }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_schedule', Skill_Or_Endpoint:'/schedule', Success:'TRUE', Notes:`window=${body.window||''} new_status=${updates.Status||wo.Status||''}` }); } catch(_){}
   return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,new_status:updates.Status||wo.Status});
 }
 
-async function queueNotification(env, woId, type, phone, message, sendAfter) {
+// Notification_Queue — a send-TIMING defer (day-before-5pm / day-of-8am cutoff so a schedule
+// text doesn't land at an odd hour days in advance), separate from and unrelated to the new
+// Message_Queue gate/review system above. Extended (additive columns) to carry enough context
+// (Message_Type/Recipient_Type/Recipient_ID/Property_ID) for processPendingNotifications to
+// re-run the FULL gate at actual fire time rather than sending raw. Self-provisions via
+// ensureTab/ensureColumns (FL rule 37/78) — previously this silently no-op'd if the tab didn't
+// exist yet (`if(!rows.length)return` on a GET that would have thrown first), so nothing queued
+// here had ever actually been confirmed to write.
+const NOTIF_QUEUE_TAB = 'Notification_Queue';
+const NOTIF_QUEUE_COLS = ['ID','WO_ID','Type','Phone','Message','Send_After','Sent','Created_At','Message_Type','Recipient_Type','Recipient_ID','Property_ID'];
+let _notifQueueReady = false;
+
+async function queueNotification(env, woId, type, phone, message, sendAfter, ctx) {
+  ctx = ctx || {};
   try {
-    const data=await sheetsRequest(env,'GET',`/values/Notification_Queue`);const rows=data.values||[];if(!rows.length)return;
-    const headers=rows[0],now=new Date().toISOString();
-    const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),WO_ID:woId,Type:type,Phone:phone,Message:message,Send_After:sendAfter,Sent:'FALSE',Created_At:now}[h]??''));
-    await sheetsRequest(env,'POST',`/values/Notification_Queue:append?valueInputOption=RAW`,{values:[newRow]});
+    if (!_notifQueueReady) { await ensureTab(env, NOTIF_QUEUE_TAB, NOTIF_QUEUE_COLS); _notifQueueReady = true; }
+    await ensureColumns(env, NOTIF_QUEUE_TAB, NOTIF_QUEUE_COLS);
+    const data=await sheetsRequest(env,'GET',`/values/${NOTIF_QUEUE_TAB}`);const rows=data.values||[];
+    const headers=rows[0]&&rows[0].length?rows[0]:NOTIF_QUEUE_COLS,now=new Date().toISOString();
+    const rowObj={ID:String(nextSafeId(rows)),WO_ID:woId,Type:type,Phone:phone,Message:message,Send_After:sendAfter,Sent:'FALSE',Created_At:now,
+      Message_Type:ctx.message_type||'',Recipient_Type:ctx.recipient_type||'',Recipient_ID:ctx.recipient_id||'',Property_ID:ctx.property_id||''};
+    const newRow=headers.map(h=>rowObj[h]??'');
+    await sheetsRequest(env,'POST',`/values/${NOTIF_QUEUE_TAB}:append?valueInputOption=RAW`,{values:[newRow]});
   } catch(e){/* non-fatal */}
 }
 
 async function processPendingNotifications(env) {
   try {
-    const data=await sheetsRequest(env,'GET',`/values/Notification_Queue`); if(!data.values||data.values.length<2) return json({processed:0});
+    const data=await sheetsRequest(env,'GET',`/values/${NOTIF_QUEUE_TAB}`); if(!data.values||data.values.length<2) return json({processed:0});
     const [headers,...rows]=data.values;
-    const iPhone=headers.indexOf('Phone'),iMsg=headers.indexOf('Message'),iAfter=headers.indexOf('Send_After'),iSent=headers.indexOf('Sent'),iWO=headers.indexOf('WO_ID');
+    const iPhone=headers.indexOf('Phone'),iMsg=headers.indexOf('Message'),iAfter=headers.indexOf('Send_After'),iSent=headers.indexOf('Sent'),iWO=headers.indexOf('WO_ID'),
+      iMType=headers.indexOf('Message_Type'),iRType=headers.indexOf('Recipient_Type'),iRId=headers.indexOf('Recipient_ID'),iPId=headers.indexOf('Property_ID');
     const now=new Date(); let processed=0;
+    let tenants=null, owners=null, properties=null, vendors=null; // lazy-loaded once, only if a gated row is actually due
     for(const row of rows){
       if((row[iSent]||'')==='TRUE') continue;
       const sendAfter=row[iAfter]?new Date(row[iAfter]):null; if(sendAfter&&sendAfter>now) continue;
-      const phone=row[iPhone],msg=row[iMsg];
-      if(phone&&msg){await sendSMS(env,phone,msg);await logSMS(env,row[iWO]||'','queued_notification','',phone,msg);const rowIndex=rows.indexOf(row);await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:[{range:`Notification_Queue!${col(iSent)}${rowIndex+2}`,values:[['TRUE']]}]});processed++;}
+      const phone=row[iPhone],msg=row[iMsg]; if(!phone||!msg) continue;
+      const messageType = iMType>=0 ? row[iMType] : '';
+      if (messageType) {
+        // New-style row (TWILIO_SMS_BUILD_BRIEF_v1.0) — re-evaluate the full gate NOW, at
+        // actual fire time, not at the time it was originally queued.
+        const recipientType = row[iRType], recipientId = row[iRId], propertyId = row[iPId];
+        if (!tenants) { [tenants,owners,properties,vendors] = await fetchTabs(env, ['Tenants','Owners','Properties','Vendors']); }
+        const property = properties.find(p=>p.ID===propertyId);
+        const owner = property ? owners.find(o=>o.ID===property.Owner_ID) : null;
+        const tenant = recipientType==='tenant' ? tenants.find(t=>t.ID===recipientId) : null;
+        const vendor = recipientType==='vendor' ? vendors.find(v=>v.ID===recipientId) : null;
+        await smsGatedSend(env, { wo_id: row[iWO]||'', message_type: messageType, recipient_type: recipientType, tenant, owner, property, vendor, message_body: msg });
+      } else {
+        // Legacy row shape (pre-dates this build) — fall back to the old raw send so nothing
+        // already queued is silently dropped. Still honors sendSMS's own Global kill switch.
+        await sendSMS(env,phone,msg);await logSMS(env,row[iWO]||'','queued_notification','',phone,msg);
+      }
+      const rowIndex=rows.indexOf(row);await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:[{range:`${NOTIF_QUEUE_TAB}!${col(iSent)}${rowIndex+2}`,values:[['TRUE']]}]});processed++;
     }
     return json({processed});
   } catch(e){return json({processed:0,error:e.message});}
@@ -5612,15 +5671,250 @@ async function handleInboundSMS(env, request) {
   return twilioResponse(`Message received. Your coordinator will follow up.`);
 }
 
-async function sendSMS(env, to, message) {
+// Raw Twilio transport — no gating, sends if credentials are present. Only ever called by
+// (a) sendSMS below, once the global kill switch has already been checked, and (b)
+// smsGatedSend, which has already run the full four/two-layer gate + Test Mode redirect.
+// Never call this directly from a new call site — call sendSMS (legacy/ungated sites) or
+// smsGatedSend (the 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types) instead.
+// Auth: Twilio accepts Basic auth with EITHER (Account SID : Auth Token) OR (API Key SID :
+// API Key Secret) — Brett's Cloudflare secrets are the API-Key pair (TWILIO_API_SID /
+// TWILIO_API_KEY), not a classic Auth Token (no TWILIO_AUTH var exists), so this uses that
+// pair. The URL path always uses the Account SID (TWILIO_SID) regardless of which credential
+// authenticates the request — that part is unchanged.
+async function sendSMSRaw(env, to, message) {
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
+  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY || !env.TWILIO_FROM)
+    return { error: 'Twilio not configured (missing TWILIO_SID/TWILIO_API_SID/TWILIO_API_KEY/TWILIO_FROM)' };
   const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
     method: 'POST',
-    headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_SID}:${env.TWILIO_AUTH}`), 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`), 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: message }).toString(),
   });
   return resp.json();
+}
+
+// sendSMS — the long-standing chokepoint every pre-existing call site in this file already
+// calls (owner status pings, admin-phone alerts, the vendor-accept SMS reply flow, the daily
+// digest). None of those are part of TWILIO_SMS_BUILD_BRIEF_v1.0's 6 gated message types, so
+// they don't get the full Property/Customer/Tenant/Vendor gate or Test Mode redirect — but
+// EVERY one of them, old and new, now honors the one Global kill switch (Config.TWILIO_ENABLED)
+// checked here. This matters because fixing the auth above (previously TWILIO_SID:TWILIO_AUTH,
+// which 401'd since TWILIO_AUTH was never set) would otherwise make all of those pre-existing,
+// never-actually-working call sites start sending real messages the moment real Twilio
+// credentials landed — with no Test Mode, no review queue, no gating at all. Matches Brett's
+// own stated intent (kept off until he's run live tests) at the one place that can enforce it
+// for every SMS in the codebase, not just the 6 new ones. TWILIO_ENABLED defaults OFF (missing
+// Config key reads as '', which is !== 'TRUE'), so nothing sends anywhere until Brett flips it.
+async function sendSMS(env, to, message) {
+  let cfg;
+  try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
+  if (String(cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE') return { skipped: true, reason: 'TWILIO_ENABLED not TRUE' };
+  return sendSMSRaw(env, to, message);
+}
+
+// ── Gated tenant/vendor messaging (TWILIO_SMS_BUILD_BRIEF_v1.0) ──────────────
+// Message_Queue: every message that WOULD be sent gets a row here first, unconditionally —
+// the durable review trail, not just a "while Global is off" log. Self-provisions like
+// Ops_Telemetry (ensureTab once per isolate + ensureColumns on every write, FL rule 37).
+const MSG_QUEUE_TAB = 'Message_Queue';
+const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active'];
+const SMS_TOGGLE_TABS = ['Properties','Owners','Tenants','Vendors'];
+let _msgQueueTabReady = false, _smsTogglesReady = false;
+
+async function ensureSmsInfra(env) {
+  if (!_msgQueueTabReady) { await ensureTab(env, MSG_QUEUE_TAB, MSG_QUEUE_COLS); _msgQueueTabReady = true; }
+  await ensureColumns(env, MSG_QUEUE_TAB, MSG_QUEUE_COLS);
+  if (!_smsTogglesReady) {
+    await Promise.all(SMS_TOGGLE_TABS.map(t => ensureColumns(env, t, ['SMS_Enabled'])));
+    _smsTogglesReady = true;
+  }
+}
+
+// Pure decision logic — kept separate from the live Sheet reads above so it's directly
+// unit-testable (test/message-queue.test.mjs) without mocking fetch/Sheets. A blank/missing
+// toggle cell reads as ON (the codebase-wide "!== 'FALSE'" convention, e.g. Tenant_Notify_
+// Updates) — that's what gives every new SMS_Enabled column its documented "default ON".
+// TENANT messages need Global AND Property AND Customer(=Owner) AND Tenant all true.
+// VENDOR messages need only Global AND Vendor — vendor does not nest under Property, per brief.
+function smsGateDecision(o) {
+  const fails = [];
+  if (!o.global) fails.push('Global OFF');
+  if (o.kind === 'tenant') {
+    if (!o.propertyOn) fails.push('Property OFF');
+    if (!o.ownerOn) fails.push('Customer OFF');
+    if (!o.tenantOn) fails.push('Tenant OFF');
+  } else if (o.kind === 'vendor') {
+    if (!o.vendorOn) fails.push('Vendor OFF');
+  }
+  return { sendOk: fails.length === 0, gateSnapshot: fails.length ? fails.join(', ') : 'all gates open' };
+}
+const smsToggleOn = v => String(v == null ? '' : v).toUpperCase() !== 'FALSE';
+
+// The one entry point for all 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types. Always writes a
+// Message_Queue row first (queue-write-first, per the brief's Build Order step 3), regardless
+// of gate outcome — then sends immediately only if every applicable gate is open, redirecting
+// to the Test Mode recipient when Test Mode is on. Returns the queue row id + outcome so the
+// caller can report vendor_sms/tenant_sms flags exactly like the old raw-sendSMS call sites did.
+//
+// opts: { wo_id, message_type, recipient_type:'tenant'|'vendor', tenant, owner, property, vendor, message_body }
+// Pass the already-fetched Sheet rows (tenant/owner/property/vendor) rather than ids — every
+// call site already has them in hand from its own earlier fetch, and re-fetching here would
+// both waste a request and risk evaluating gates against stale-vs-fresh data inconsistently.
+async function smsGatedSend(env, opts) {
+  await ensureSmsInfra(env);
+  const cfg = await fetchConfig(env);
+  const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+  const testMode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE'; // default TRUE
+  const testRecipient = normalizePhone(cfg.TWILIO_TEST_RECIPIENT || '+14439617927');
+
+  const kind = opts.recipient_type;
+  const propertyOn = smsToggleOn(opts.property && opts.property.SMS_Enabled);
+  const ownerOn    = smsToggleOn(opts.owner && opts.owner.SMS_Enabled);
+  const tenantOn   = smsToggleOn(opts.tenant && opts.tenant.SMS_Enabled);
+  const vendorOn   = smsToggleOn(opts.vendor && opts.vendor.SMS_Enabled);
+  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, kind });
+
+  const recipient = kind === 'tenant' ? opts.tenant : opts.vendor;
+  const recipientPhone = normalizePhone(recipient && recipient.Phone);
+  const recipientName = recipient ? (recipient.Name || `${recipient.First_Name || ''} ${recipient.Last_Name || ''}`.trim()) : '';
+
+  const now = new Date().toISOString();
+  const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
+  const rows = data.values || [];
+  const headers = rows[0] && rows[0].length ? rows[0] : MSG_QUEUE_COLS;
+  const id = String(nextSafeId(rows));
+  const rowObj = {
+    ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
+    Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
+    Property_ID: (opts.property && opts.property.ID) || '',
+    Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
+    Message_Body: opts.message_body || '', Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
+    Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE',
+  };
+  const newRow = headers.map(h => rowObj[h] ?? '');
+  await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
+
+  let sent = false, deliveredTo = '';
+  if (sendOk && recipientPhone) {
+    deliveredTo = testMode ? testRecipient : recipientPhone;
+    const result = await sendSMSRaw(env, deliveredTo, opts.message_body);
+    sent = !!(result && result.sid);
+    await updateMessageQueueRow(env, id, {
+      Status: sent ? 'sent' : 'failed',
+      Delivered_To: deliveredTo,
+      Sent_Date: new Date().toISOString(),
+      Twilio_Message_SID: (result && result.sid) || '',
+    });
+  } else if (sendOk && !recipientPhone) {
+    await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' });
+  }
+  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot };
+}
+
+// Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
+// processPendingNotifications already uses (not the HTTP-response-returning updateRow), since
+// this is called from inside another handler, not directly off a route.
+async function updateMessageQueueRow(env, id, fields) {
+  try {
+    const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
+    const [headers, ...rows] = data.values || [[]];
+    const rowIndex = rows.findIndex(r => r[0] === String(id));
+    if (rowIndex === -1) return;
+    const sheetRow = rowIndex + 2, updates = [];
+    for (const [field, value] of Object.entries(fields)) {
+      const colIndex = headers.indexOf(field);
+      if (colIndex !== -1) updates.push({ range: `${MSG_QUEUE_TAB}!${col(colIndex)}${sheetRow}`, values: [[value]] });
+    }
+    if (updates.length) await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
+  } catch (e) { /* best-effort — the queue row staying 'pending' after a real send is a visible discrepancy, not a crash */ }
+}
+
+// GET /message-queue?status=pending — backs the review/release screen. Small tab at this
+// volume, so a plain filtered list (no pagination) is sufficient; grouping/sorting by
+// recipient/property/WO happens client-side.
+async function listMessageQueue(env, url) {
+  await ensureSmsInfra(env);
+  const rows = await fetchTab(env, MSG_QUEUE_TAB);
+  const status = url && url.searchParams && url.searchParams.get('status');
+  const filtered = (status ? rows.filter(r => r.Status === status) : rows).filter(r => r.Active !== 'FALSE');
+  return json(filtered);
+}
+
+// POST /message-queue/release { ids:[...] } — the actual "resume after a pause" mechanism.
+// Re-evaluates the full gate NOW (not whatever it was when the row was originally queued —
+// Property/Customer/Tenant/Vendor toggles and Global may have changed since), and only sends
+// what still passes. Updates the SAME Message_Queue row in place (never inserts a new one —
+// this is a release, not a new message). Matches the recipient back to a live Tenant/Vendor
+// row by phone (scoped to Property_ID for tenants) since Message_Queue's schema — per
+// TWILIO_SMS_BUILD_BRIEF_v1.0 — deliberately carries Recipient_Phone, not a Recipient_ID.
+async function releaseMessageQueue(env, body) {
+  const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+  if (!ids.length) return json({ error: 'ids required' }, 400);
+  await ensureSmsInfra(env);
+  const cfg = await fetchConfig(env);
+  const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+  const testMode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+  const testRecipient = normalizePhone(cfg.TWILIO_TEST_RECIPIENT || '+14439617927');
+  const [rows, properties, owners, tenants, vendors] = await Promise.all([
+    fetchTab(env, MSG_QUEUE_TAB), fetchTab(env, 'Properties'), fetchTab(env, 'Owners'), fetchTab(env, 'Tenants'), fetchTab(env, 'Vendors'),
+  ]);
+  const results = [];
+  for (const id of ids) {
+    const row = rows.find(r => String(r.ID) === id);
+    if (!row) { results.push({ id, error: 'not found' }); continue; }
+    if (row.Status !== 'pending') { results.push({ id, skipped: true, reason: 'not pending (' + row.Status + ')' }); continue; }
+    const kind = row.Recipient_Type;
+    const property = properties.find(p => p.ID === row.Property_ID);
+    const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+    const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
+    const vendor = kind === 'vendor' ? vendors.find(v => normalizePhone(v.Phone) === row.Recipient_Phone) : null;
+    const propertyOn = smsToggleOn(property && property.SMS_Enabled);
+    const ownerOn = smsToggleOn(owner && owner.SMS_Enabled);
+    const tenantOn = smsToggleOn(tenant && tenant.SMS_Enabled);
+    const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
+    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, kind });
+    if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
+    const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
+    const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
+    const sent = !!(result && result.sid);
+    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot });
+    results.push({ id, sent, gate_snapshot: gateSnapshot });
+  }
+  return json({ ok: true, results });
+}
+
+// POST /message-queue/skip { ids:[...] } — never deletes (Active stays TRUE); matches the
+// Hub's standing "keep forever" pattern for reviewed rows (e.g. the receipt-reconciler
+// duplicate checker's confirmed-duplicate rows).
+async function skipMessageQueue(env, body) {
+  const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+  if (!ids.length) return json({ error: 'ids required' }, 400);
+  const results = [];
+  for (const id of ids) { await updateMessageQueueRow(env, id, { Status: 'skipped' }); results.push({ id }); }
+  return json({ ok: true, results });
+}
+
+// POST /wo/tenant-update-manual { wo_id, message, updated_by } — TWILIO_SMS_BUILD_BRIEF_v1.0's
+// tenant_manual type, the one on-demand tenant SMS trigger (the other 3 tenant types are
+// automatic off the WO lifecycle). Brett types the body of the update; the standard
+// "Hi {First_Name}, ... Ref: {wo_id}." framing is applied automatically so it reads
+// consistently with every other tenant message this file sends.
+async function tenantManualUpdate(env, body) {
+  const message = String(body.message || '').trim();
+  if (!body.wo_id || !message) return json({ error: 'Missing wo_id or message' }, 400);
+  const [workorders, units, tenants, properties, owners] = await fetchTabs(env, ['Work_Orders','Units','Tenants','Properties','Owners']);
+  const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  const unit = units.find(u => u.ID === wo.Unit_ID);
+  const tenant = tenants.find(t => t.ID === (unit?.Tenant_ID || wo.Tenant_ID));
+  if (!tenant || !tenant.Phone) return json({ error: 'No tenant with a phone number on this work order' }, 400);
+  if (!isTenantNotifiable(tenant, wo)) return json({ error: 'This tenant is not currently notifiable (moved out, or the WO predates their move-in)' }, 400);
+  const property = properties.find(p => p.ID === wo.Property_ID);
+  const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+  const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
+  const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), r.sent ? 'Sent' : (r.send_ok ? 'Send failed' : 'Queued — gate: ' + r.gate_snapshot)); } catch(_){}
+  return json({ success: true, sent: r.sent, send_ok: r.send_ok, queued_id: r.queued_id, gate_snapshot: r.gate_snapshot });
 }
 
 async function logSMS(env, woId, recipientType, recipientId, phone, message) {
@@ -7971,6 +8265,19 @@ async function health(env) {
     out.gmail.client_secret_set = !!(env && env.GMAIL_CLIENT_SECRET);
     out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
     out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
+  } catch (_) {}
+  // Twilio (TWILIO_SMS_BUILD_BRIEF_v1.0) — same never-expose-values, presence-only pattern.
+  // twilio_enabled reflects the live Config kill switch, not the secrets — lets Brett confirm
+  // from a plain curl whether sends are actually live without opening the Hub.
+  out.twilio = { sid_set: false, api_key_sid_set: false, api_key_secret_set: false, from_set: false, twilio_enabled: false, test_mode: true };
+  try {
+    out.twilio.sid_set = !!(env && env.TWILIO_SID);
+    out.twilio.api_key_sid_set = !!(env && env.TWILIO_API_SID);
+    out.twilio.api_key_secret_set = !!(env && env.TWILIO_API_KEY);
+    out.twilio.from_set = !!(env && env.TWILIO_FROM);
+    const cfg = await fetchConfig(env);
+    out.twilio.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+    out.twilio.test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
   } catch (_) {}
   return json(out);
 }
@@ -10697,6 +11004,24 @@ async function qbPayBills(env, body) {
   const logDetail = results.map(r => (r.vendor || r.vendor_id) + (r.paid ? ' ✓' : ' ✗')).join('; ');
   let logOk = await payAuthLog(env, allPaid ? 'paid' : 'partial', logDetail, paidAmt, by, idem);
   if (!logOk) logOk = await payAuthLog(env, allPaid ? 'paid' : 'partial', logDetail, paidAmt, by, idem); // one retry — transient Sheets errors are common
+  // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_paid. WO_ID is deliberately blank: a payment here is
+  // grouped by vendor and can cover several bills/WOs in one BillPayment, matching Message_
+  // Queue's own note that WO_ID is nullable "for vendor-paid messages not tied to a specific
+  // WO." `vendorId` above is QuickBooks's own VendorRef id (QBO_Vendor_ID), not the Hub's
+  // internal Vendor.ID — resolve back to the Hub's Vendor row (for Phone + SMS_Enabled) only
+  // if at least one payment actually succeeded, to avoid the extra read on an all-failed batch.
+  const paidResults = results.filter(r => r.paid);
+  if (paidResults.length) {
+    try {
+      const hubVendors = await fetchTab(env, 'Vendors');
+      for (const r of paidResults) {
+        const vendor = hubVendors.find(v => v.QBO_Vendor_ID === r.vendor_id);
+        if (!vendor || !vendor.Phone) continue;
+        const msg = `Hi ${vendor.First_Name || vendor.Name || 'there'}, payment of $${r.amount.toFixed(2)} has been sent for your recent work with Ridge Co. Thank you!`;
+        await smsGatedSend(env, { message_type: 'vendor_paid', recipient_type: 'vendor', vendor, message_body: msg });
+      }
+    } catch (e) { /* non-fatal — the QuickBooks payment already succeeded; a notification failure must never look like a payment failure */ }
+  }
   return json({ ok: true, paid: allPaid, paid_total: paidAmt, vendors_paid: results.filter(r => r.paid).length, results,
     log_failed: !logOk,
     ...(!logOk ? { log_warning: 'This batch went through in QuickBooks, but the audit log did NOT save after 2 tries. WRITE THIS DOWN yourself: ' + logDetail + ' — $' + paidAmt + ' — ' + new Date().toISOString() } : {}) });
@@ -13222,4 +13547,13 @@ function normalizePhone(phone) {
   if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
   if (digits.length === 10) return '+1' + digits;
   return '+' + digits;
+}
+
+// (xxx) xxx-xxxx for a US 10-digit number surfaced inside an SMS body (e.g. the vendor's
+// phone number in a tenant_job_assigned text) — readable/tappable, unlike the raw digit
+// string or the +1E.164 form normalizePhone produces for the Twilio API itself.
+function formatPhoneDisplay(phone) {
+  const digits = String(phone || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
+  if (digits.length !== 10) return phone ? String(phone) : '';
+  return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`;
 }

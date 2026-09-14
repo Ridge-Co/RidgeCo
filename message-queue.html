@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Message Queue — Ridge Co</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --surface:#fff; --border:#dfe3e8; --text:#1c2430; --muted:#6b7684;
+    --accent:#1d4ed8; --accent2:#1a7f4b; --danger:#c0392b; --warn:#b8860b; --chip:#eef2f7;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px}
+  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;z-index:10}
+  header h1{font-size:18px;margin:0}
+  header .ver{font-size:11px;color:var(--muted)}
+  main{padding:14px 14px 90px;max-width:720px;margin:0 auto}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  .muted{color:var(--muted);font-size:13px}
+  .btn{padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:13px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.go{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+  .btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+  .btn.small{padding:6px 10px;font-size:12px}
+  .btn:active{opacity:.85}
+  .btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .tabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+  .status-line{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px}
+  .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--chip);color:var(--muted)}
+  .pill.on{background:#e7f6ec;color:var(--accent2)}
+  .pill.off{background:#fbeaea;color:var(--danger)}
+  .pill.test{background:#fdf3e0;color:var(--warn)}
+  .group-header{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:16px 0 6px}
+  .row-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start}
+  .row-card input[type=checkbox]{width:20px;height:20px;flex:none;margin-top:2px;display:none}
+  .row-card.bulk input[type=checkbox]{display:block}
+  .row-body{flex:1;min-width:0}
+  .row-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
+  .row-name{font-weight:700;font-size:14px}
+  .row-type{font-size:11px;color:var(--muted)}
+  .row-msg{font-size:13px;line-height:1.5;margin:6px 0;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+  .row-meta{font-size:11px;color:var(--muted);margin-top:4px}
+  .row-gate{font-size:11px;color:var(--warn);margin-top:4px}
+  .row-actions{display:flex;gap:6px;margin-top:8px}
+  .badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:.03em}
+  .badge.pending{background:#fdf3e0;color:var(--warn)}
+  .badge.sent{background:#e7f6ec;color:var(--accent2)}
+  .badge.failed{background:#fbeaea;color:var(--danger)}
+  .badge.skipped{background:var(--chip);color:var(--muted)}
+  .batch-bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--border);padding:10px 14px;display:flex;gap:8px;align-items:center;justify-content:space-between;z-index:20}
+  .empty{text-align:center;color:var(--muted);padding:40px 0;font-size:14px}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+  input,select{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text)}
+  .hide{display:none}
+  .toast{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<!-- RC-NAV: shared back-to-Hub bar (matches every other standalone tool page) -->
+<div id="rc-navbar" style="position:static;z-index:9999;background:#1d4ed8;color:#fff;display:flex;align-items:center;gap:8px;padding:6px 10px;font:600 12px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;overflow-x:auto;white-space:nowrap">
+  <a href="index.html" style="color:#fff;text-decoration:none;display:flex;align-items:center;gap:4px;flex:none">← Hub</a>
+</div>
+
+<div id="login">
+  <h1>Message Queue</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized — try again.</p>
+  <button class="btn primary" style="width:100%;margin-top:12px" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <header>
+    <h1>📱 Message Queue</h1>
+    <span class="ver" id="ver"></span>
+  </header>
+  <main>
+    <div class="card">
+      <div class="status-line" id="status-line">Loading status…</div>
+    </div>
+
+    <div class="tabs" id="status-tabs">
+      <button class="btn small active" data-status="pending" onclick="switchTab('pending')">Pending</button>
+      <button class="btn small" data-status="sent" onclick="switchTab('sent')">Sent</button>
+      <button class="btn small" data-status="skipped" onclick="switchTab('skipped')">Skipped</button>
+      <button class="btn small" data-status="failed" onclick="switchTab('failed')">Failed</button>
+      <button class="btn small" data-status="" onclick="switchTab('')">All</button>
+      <button class="btn small" id="bulk-toggle-btn" style="margin-left:auto" onclick="toggleBulkMode()">☑ Select multiple</button>
+    </div>
+
+    <div id="list"></div>
+  </main>
+
+  <div class="batch-bar hide" id="batch-bar">
+    <span class="muted" id="batch-count">0 selected</span>
+    <div style="display:flex;gap:8px">
+      <button class="btn" onclick="skipSelected()">Skip selected</button>
+      <button class="btn go" onclick="releaseSelected()">Send selected</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';
+var AUTH_TOKEN = '';
+var rows = [];
+var curStatus = 'pending';
+var bulkMode = false;
+var selected = {};
+
+function api(method, path, body){
+  var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.json().then(function(data){
+      if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
+      return data;
+    });
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';},2400); }
+
+// ── Login (shares the Hub's stored code) ─────────────────────
+function doLogin(){
+  var v=document.getElementById('login-input').value.trim(); AUTH_TOKEN=v;
+  api('GET','/message-queue').then(function(r){ if(r&&r.error) throw new Error(r.error); localStorage.setItem(SECRET_KEY,v); enterApp(); })
+    .catch(function(){ AUTH_TOKEN=''; document.getElementById('login-error').classList.remove('hide'); });
+}
+document.getElementById('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored=localStorage.getItem(SECRET_KEY);
+  if(stored){ AUTH_TOKEN=stored; api('GET','/message-queue').then(function(r){ if(r&&r.error) throw new Error(r.error); enterApp(); }).catch(function(){ AUTH_TOKEN=''; }); }
+})();
+function enterApp(){
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').classList.remove('hide');
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  loadStatus(); loadList();
+}
+
+// ── Global/Test Mode status strip ─────────────────────────────
+function loadStatus(){
+  api('GET','/health').then(function(h){
+    var t = (h && h.twilio) || {};
+    var el = document.getElementById('status-line');
+    var parts = [];
+    parts.push('<span class="pill ' + (t.twilio_enabled ? 'on' : 'off') + '">Global: ' + (t.twilio_enabled ? 'ON — sending live' : 'OFF — nothing sends') + '</span>');
+    parts.push('<span class="pill ' + (t.test_mode ? 'test' : 'on') + '">Test Mode: ' + (t.test_mode ? 'ON — redirects to your phone' : 'OFF — real recipients') + '</span>');
+    var credsOk = t.sid_set && t.api_key_sid_set && t.api_key_secret_set && t.from_set;
+    if (!credsOk) parts.push('<span class="pill off">⚠ Twilio credentials incomplete</span>');
+    el.innerHTML = parts.join(' ');
+  }).catch(function(){ document.getElementById('status-line').textContent = 'Could not load status.'; });
+}
+
+// ── List ────────────────────────────────────────────────────
+function switchTab(status){
+  curStatus = status; selected = {};
+  document.querySelectorAll('#status-tabs .btn[data-status]').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-status') === status);
+  });
+  updateBatchBar();
+  loadList();
+}
+function loadList(){
+  var q = curStatus ? ('?status=' + encodeURIComponent(curStatus)) : '';
+  api('GET','/message-queue' + q).then(function(list){
+    rows = Array.isArray(list) ? list : [];
+    render();
+  }).catch(function(){ document.getElementById('list').innerHTML = '<div class="empty">Could not load — check connection.</div>'; });
+}
+function groupKey(r){
+  if (r.Recipient_Type === 'vendor') return 'Vendor · ' + (r.Recipient_Name || 'Unknown');
+  return (r.Property_Address || 'No property') + (r.Recipient_Name ? (' — ' + r.Recipient_Name) : '');
+}
+function render(){
+  var el = document.getElementById('list');
+  if (!rows.length) { el.innerHTML = '<div class="empty">Nothing here.</div>'; return; }
+  // Sort newest first, then group by property/recipient so Brett can spot a bad batch at a glance.
+  var sorted = rows.slice().sort(function(a,b){ return (b.Created_Date||'').localeCompare(a.Created_Date||''); });
+  var groups = {}, order = [];
+  sorted.forEach(function(r){
+    var k = groupKey(r);
+    if (!groups[k]) { groups[k] = []; order.push(k); }
+    groups[k].push(r);
+  });
+  var html = '';
+  order.forEach(function(k){
+    html += '<div class="group-header">' + esc(k) + ' (' + groups[k].length + ')</div>';
+    groups[k].forEach(function(r){ html += rowHtml(r); });
+  });
+  el.innerHTML = html;
+}
+function rowHtml(r){
+  var st = (r.Status || 'pending').toLowerCase();
+  var checked = selected[r.ID] ? 'checked' : '';
+  return '<div class="row-card' + (bulkMode ? ' bulk' : '') + '">' +
+    '<input type="checkbox" ' + checked + ' onchange="toggleSelect(\'' + r.ID + '\', this.checked)">' +
+    '<div class="row-body">' +
+    '<div class="row-top">' +
+    '<span class="row-name">' + esc(r.Recipient_Name || '(no name on file)') + '</span>' +
+    '<span class="badge ' + st + '">' + esc(r.Status || 'pending') + '</span>' +
+    '</div>' +
+    '<div class="row-type">' + esc(r.Message_Type || '') + (r.WO_ID ? ' · WO-' + esc(r.WO_ID) : '') + ' · ' + esc(r.Recipient_Phone || '') + '</div>' +
+    '<div class="row-msg">' + esc(r.Message_Body || '') + '</div>' +
+    (r.Status === 'pending' && r.Gate_Snapshot ? '<div class="row-gate">Not sent — ' + esc(r.Gate_Snapshot) + '</div>' : '') +
+    (r.Status === 'sent' ? '<div class="row-meta">Sent ' + esc(r.Sent_Date || '') + ' → ' + esc(r.Delivered_To || '') + '</div>' : '') +
+    '<div class="row-meta">Queued ' + esc(r.Created_Date || '') + '</div>' +
+    (!bulkMode && r.Status === 'pending' ? '<div class="row-actions">' +
+      '<button class="btn small go" onclick="releaseOne(\'' + r.ID + '\')">Send</button>' +
+      '<button class="btn small" onclick="skipOne(\'' + r.ID + '\')">Skip</button>' +
+      '</div>' : '') +
+    '</div></div>';
+}
+
+// ── Bulk select ────────────────────────────────────────────
+function toggleBulkMode(){
+  bulkMode = !bulkMode; selected = {};
+  document.getElementById('bulk-toggle-btn').textContent = bulkMode ? '✕ Cancel select' : '☑ Select multiple';
+  document.getElementById('bulk-toggle-btn').classList.toggle('active', bulkMode);
+  updateBatchBar(); render();
+}
+function toggleSelect(id, checked){
+  if (checked) selected[id] = true; else delete selected[id];
+  updateBatchBar();
+}
+function updateBatchBar(){
+  var n = Object.keys(selected).length;
+  document.getElementById('batch-bar').classList.toggle('hide', !bulkMode || n === 0);
+  document.getElementById('batch-count').textContent = n + ' selected';
+}
+
+// ── Actions ────────────────────────────────────────────────
+function releaseOne(id){ releaseIds([id]); }
+function skipOne(id){ skipIds([id]); }
+function releaseSelected(){ releaseIds(Object.keys(selected)); }
+function skipSelected(){ skipIds(Object.keys(selected)); }
+
+function releaseIds(ids){
+  if (!ids.length) return;
+  api('POST','/message-queue/release',{ids:ids}).then(function(r){
+    if (r && r.error) { toast('Error: ' + r.error); return; }
+    var sentCount = (r.results||[]).filter(function(x){return x.sent;}).length;
+    var heldCount = (r.results||[]).length - sentCount;
+    toast(sentCount + ' sent' + (heldCount ? ', ' + heldCount + ' still gated off' : ''));
+    selected = {}; updateBatchBar(); loadList();
+  }).catch(function(e){ toast('Error: ' + (e && e.message || 'send failed')); });
+}
+function skipIds(ids){
+  if (!ids.length) return;
+  api('POST','/message-queue/skip',{ids:ids}).then(function(r){
+    if (r && r.error) { toast('Error: ' + r.error); return; }
+    toast(ids.length + ' skipped');
+    selected = {}; updateBatchBar(); loadList();
+  }).catch(function(e){ toast('Error: ' + (e && e.message || 'skip failed')); });
+}
+</script>
+</body>
+</html>
