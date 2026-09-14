@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.5';
+const BUILD_VERSION = '2026-09-10.6';
 
 export default {
   async fetch(request, env) {
@@ -128,7 +128,6 @@ export default {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
-        if (path === '/receipt-recon/backfill-items-summary') return await backfillItemsSummary(env, body);
         if (path === '/version')                return json({ version: BUILD_VERSION });
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
         if (path === '/hub-bootstrap')          return await hubBootstrap(env);
@@ -412,6 +411,7 @@ export default {
         if (path === '/receipt-recon/skip')       return await receiptReconSkip(env, body);
         if (path === '/receipt-recon/purge-duplicates')  return await purgeConfirmedDuplicateReceipts(env);
         if (path === '/receipts/send-to-qb-email') return await sendReceiptsToQBEmail(env, body);
+        if (path === '/receipt-recon/backfill-items-summary') return await backfillItemsSummary(env, body);
         if (path === '/trash/property/add')       return await trashAddProperty(env, body);
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
         if (path === '/trash/log-visit')          return await trashLogVisit(env, body);
