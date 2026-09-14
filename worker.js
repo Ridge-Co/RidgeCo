@@ -146,6 +146,7 @@ export default {
         if (path === '/templates')              return await getSheet(env, 'Recurring_Templates');
         if (path === '/smslog')                 return await getSheet(env, 'SMS_Logs');
         if (path === '/message-queue')          return await listMessageQueue(env, url);
+        if (path === '/twilio/message-status')  return await twilioMessageStatus(env, url);
         if (path === '/wishlist')               return await getSheet(env, 'Wishlist');
         if (path === '/keys')                   return await getSheet(env, 'Keys');
         if (path === '/keys-history')           return await getSheet(env, 'Keys_History');
@@ -3220,6 +3221,13 @@ async function appendWONotes(env, body) {
   return json({ success: true });
 }
 async function assignVendor(env, body) {
+  // notify defaults TRUE — preserves existing behavior for the Assign/Reassign Vendor modal
+  // (which always says "Assign + Send SMS" and should keep meaning that). Pass notify:false
+  // only from the New Work Order creation flow's "Notify vendor + tenant now" checkbox, for
+  // cases like a WO created purely to record billing for work already done by phone weeks
+  // ago — the vendor is assigned (Vendor_ID/Status still update normally) but no message is
+  // composed or queued at all, since none was ever meant to exist for that case.
+  const notify = body.notify !== false;
   const [workorders, vendors, tenants, units, properties, owners] = await fetchTabs(env, [
     'Work_Orders','Vendors','Tenants','Units','Properties','Owners',
   ]);
@@ -3237,7 +3245,7 @@ async function assignVendor(env, body) {
   // `accessInfo`/`getWOLockboxes` computation that used to run here and go nowhere (Aug 24,
   // 2026) — real access info flows through enrichWO's vendorView, gated on accessGated.
   let vendorSMSSent = false, tenantSMSSent = false;
-  if (vendor.Phone) {
+  if (notify && vendor.Phone) {
     const isSpanish = vendor.Language === 'es';
     // Access-gate: the lockbox code + tenant contact are NOT sent on dispatch — they unlock
     // once the vendor accepts (reply YES or Accept in the portal). Accepting moves the status,
@@ -3250,7 +3258,7 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
-  if (tenant?.Phone && isTenantNotifiable(tenant, wo)) {
+  if (notify && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface).
     const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
@@ -3259,8 +3267,8 @@ async function assignVendor(env, body) {
     tenantSMSSent = r.sent;
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent}` }); } catch(_){}
-  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent });
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} notify=${notify}` }); } catch(_){}
+  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify });
 }
 
 async function updateStatus(env, body) {
@@ -8257,6 +8265,37 @@ async function hubBootstrap(env) {
   const [properties, units, tenants, vendors, workorders, invoices, owners, keys] =
     await fetchTabs(env, ['Properties','Units','Tenants','Vendors','Work_Orders','Invoices','Owners','Keys']);
   return json({ properties, units, tenants, vendors, workorders, invoices, owners, keys });
+}
+
+// GET /twilio/message-status?sid=SM...,SM...  — admin-gated diagnostic. Message_Queue's
+// Status:'sent' only ever meant "Twilio's API accepted the request and returned a SID" —
+// documented from day one as NOT the same as confirmed delivery (delivery-status webhooks
+// were explicitly out of scope for TWILIO_SMS_BUILD_BRIEF_v1.0). This is the on-demand way
+// to check what Twilio itself now says about a specific SID (queued/sent/delivered/failed/
+// undelivered + the real ErrorCode) without needing delivery-status webhooks built. Accepts
+// up to 10 comma-separated SIDs in one call. Read-only — never sends, never modifies anything.
+async function twilioMessageStatus(env, url) {
+  const sids = (url.searchParams.get('sid') || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 10);
+  if (!sids.length) return json({ error: 'sid required (comma-separated for multiple)' }, 400);
+  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY)
+    return json({ error: 'Twilio not configured' }, 503);
+  const auth = 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`);
+  const results = [];
+  for (const sid of sids) {
+    try {
+      const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages/${encodeURIComponent(sid)}.json`, {
+        headers: { 'Authorization': auth },
+      });
+      const data = await resp.json();
+      if (!resp.ok) { results.push({ sid, error: data.message || `HTTP ${resp.status}`, code: data.code || null }); continue; }
+      results.push({
+        sid, status: data.status, error_code: data.error_code, error_message: data.error_message,
+        to: data.to, from: data.from, date_created: data.date_created, date_sent: data.date_sent, date_updated: data.date_updated,
+        num_segments: data.num_segments, price: data.price,
+      });
+    } catch (e) { results.push({ sid, error: String((e && e.message) || e) }); }
+  }
+  return json({ ok: true, results });
 }
 
 async function health(env) {

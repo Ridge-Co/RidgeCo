@@ -684,7 +684,8 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
       <div class="form-group full"><label>Description</label><textarea id="wo-desc" placeholder="Describe the issue..."></textarea></div>
-      <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" style="width:100%"><option value="">Assign after creation</option></select></div>
+      <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" onchange="woVendorOptChanged()" style="width:100%"><option value="">Assign after creation</option></select></div>
+      <div class="form-group" id="wo-vendor-notify-group" style="display:none"><label style="cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" id="wo-vendor-notify" checked style="width:auto"> Notify vendor + tenant now</label></div>
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
       <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
       <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
@@ -1593,11 +1594,11 @@ function woCard(w) {
     else if (daysOpen >= 7) agingBadge = '<span class="badge" style="background:#fdf2e2;border:1px solid var(--warn);color:var(--warn);margin-left:4px">'+daysOpen+'d AGING</span>';
   }
   return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
+    (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
+    ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\'" style="width:auto;flex:none;cursor:pointer" />' : '') +
     '<div class="wo-id">'+w.ID+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+(w.Turnover_Group_ID?' <span style="background:#e8f0fb;color:var(--accent);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">🔄 '+esc(w.Turnover_Group_ID)+' · '+esc(w.Turnover_Role||'')+'</span>':'')+'</div></div>' +
-    (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
-    ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\'" style="width:auto;margin-right:6px;cursor:pointer" />' : '') +
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
     agingBadge +
     (vendor?'<span style="font-size:11px;color:var(--muted)">'+vendor.Name+'</span>':'')+'</div></div>';
@@ -2316,10 +2317,25 @@ function openNewWOModal() {
     safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){
       return '<option value="'+v.ID+'">'+v.Name+' — '+v.Trade+'</option>';
     }).join('');
+  // Reset the notify checkbox to its default (checked = matches the existing/pre-toggle
+  // behavior) and hide it until a vendor is actually picked — no point showing "notify"
+  // when nothing's being assigned yet.
+  var notifyCb = document.getElementById('wo-vendor-notify'); if (notifyCb) notifyCb.checked = true;
+  var notifyGroup = document.getElementById('wo-vendor-notify-group'); if (notifyGroup) notifyGroup.style.display = 'none';
   // Populate schedule time window options
   var sw = document.getElementById('wo-sched-window-opt');
   if (sw) sw.innerHTML = buildTimeWindowOpts();
   openModal('modal-new-wo');
+}
+
+// Shows/hides the "Notify vendor + tenant now" checkbox based on whether a vendor is
+// actually selected in the New Work Order modal. Brett: "there's often no reason to send
+// anything at all" for a WO created purely to record billing for work already done — this
+// is the toggle for that case, default ON so nothing changes unless he explicitly turns it off.
+function woVendorOptChanged() {
+  var vendorId = (document.getElementById('wo-vendor-opt')||{}).value||'';
+  var notifyGroup = document.getElementById('wo-vendor-notify-group');
+  if (notifyGroup) notifyGroup.style.display = vendorId ? '' : 'none';
 }
 
 function openTenantSafetyScreen() {
@@ -2390,15 +2406,16 @@ function submitNewWO() {
     if (res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
     var woId = res.id;
     var vendorId = (document.getElementById('wo-vendor-opt')||{}).value||'';
+    var notifyOnAssign = document.getElementById('wo-vendor-notify') ? document.getElementById('wo-vendor-notify').checked : true;
     var schedDate = (document.getElementById('wo-sched-date-opt')||{}).value||'';
     var schedWin  = (document.getElementById('wo-sched-window-opt')||{}).value||'';
     var chain = Promise.resolve();
-    if (vendorId) chain = chain.then(function(){ return api('POST','/assign',{wo_id:woId,vendor_id:vendorId}); });
+    if (vendorId) chain = chain.then(function(){ return api('POST','/assign',{wo_id:woId,vendor_id:vendorId,notify:notifyOnAssign}); });
     if (schedDate && schedWin) chain = chain.then(function(){
       return api('POST','/schedule',{wo_id:woId,date:schedDate,window:schedWin,notify_tenant:tvCreated,updated_by:'Admin',updated_by_role:'admin'});
     });
     chain.then(function(){ loadAll(); });
-    toast('Created '+woId+(vendorId?' + assigned':'')+(schedDate?' + scheduled':''),'success');
+    toast('Created '+woId+(vendorId?(notifyOnAssign?' + assigned':' + assigned (silent)'):'')+(schedDate?' + scheduled':''),'success');
     closeModal('modal-new-wo');
     // Keep the tenant-safety modal open and switch it to an "add photos & receipts" step
     // for the WO just created — reuses the exact before/after/receipt component from the detail view.
