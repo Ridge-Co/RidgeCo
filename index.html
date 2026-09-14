@@ -1135,6 +1135,12 @@ var assignWOId = null;
 var invoiceWOId = null;
 
 // ── Numeric address sort ───────────────────────────────────────────
+function goToWorkOrder(woId) {
+  navigateTo('workorders');
+  var search = document.getElementById('wo-search');
+  if (search) { search.value = String(woId); renderWOPage(); search.scrollIntoView({block:'center'}); }
+}
+
 function navigateTo(page) {
   var btn = document.querySelector('[onclick*=\'' + page + '\']');
   if (btn) showPage(page, btn);
@@ -6650,13 +6656,18 @@ function renderHubReceipts(woId, receipts, holder) {
   var rows = receipts.map(function(r) {
     var label = esc(r.Role === 'vendor' ? 'Vendor' : 'Hub');
     var color = r.Role === 'vendor' ? 'var(--info)' : 'var(--accent)';
-    return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
+    var src = r.Payment_Source === 'vendor_reimburse' ? 'vendor_reimburse' : 'company_card';
+    var badge = src === 'vendor_reimburse'
+      ? '<span style="background:#fff3cd;color:#8a6100;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;white-space:nowrap">💵 REIMBURSE</span>'
+      : '<span style="background:#e6f4ea;color:#1a7a3c;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;white-space:nowrap">💳 CARD</span>';
+    return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px;flex-wrap:wrap">' +
       '<span style="color:'+color+';font-weight:bold">'+label+'</span>' +
       '<div style="flex:1">' +
         '<span style="color:var(--accent2);font-weight:bold">$'+parseFloat(r.Amount).toFixed(2)+'</span>' +
         (r.Store ? ' <span style="color:var(--muted)">@ '+esc(r.Store)+'</span>' : '') +
         (r.Description ? '<div style="color:var(--text);font-size:11px">'+esc(r.Description)+'</div>' : '') +
       '</div>' +
+      badge +
       '<span style="color:var(--muted);font-size:10px;white-space:nowrap">'+esc((r.Date||r.Created_Date||'').split('T')[0])+'</span>' +
       '<button onclick="deleteHubReceipt(\''+r.ID+'\',\''+woId+'\')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:13px;padding:0 2px" title="Delete">✕</button>' +
     '</div>';
@@ -6681,6 +6692,13 @@ function renderHubReceipts(woId, receipts, holder) {
           '<div style="display:flex;align-items:flex-end"><button class="btn small" style="background:var(--accent2);color:#fff;width:100%" onclick="submitHubReceipt(\''+woId+'\')">Add Receipt</button></div>' +
         '</div>' +
         '<textarea id="rc-desc-'+woId+'" placeholder="Description: 3/4 inch copper fittings, HVAC filter, door hardware…" style="width:100%;min-height:50px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px"></textarea>' +
+        '<div style="margin-top:8px">' +
+          '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Who paid — defaults to your card unless you\'re logging this on a vendor\'s behalf</div>' +
+          '<select id="rc-paysrc-'+woId+'" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:12px">' +
+            '<option value="company_card" selected>💳 Ridge Co card</option>' +
+            '<option value="vendor_reimburse">💵 Vendor\'s own money — owed to them</option>' +
+          '</select>' +
+        '</div>' +
         '<div id="rc-msg-'+woId+'" style="margin-top:4px"></div>' +
       '</div>' +
     '</div>';
@@ -6691,6 +6709,7 @@ function submitHubReceipt(woId) {
   var date = (document.getElementById('rc-date-'+woId)||{}).value;
   var store = (document.getElementById('rc-store-'+woId)||{}).value;
   var desc = (document.getElementById('rc-desc-'+woId)||{}).value;
+  var paySrc = (document.getElementById('rc-paysrc-'+woId)||{}).value || 'company_card';
   var msgEl = document.getElementById('rc-msg-'+woId);
   if (!amt || parseFloat(amt) <= 0) {
     if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">Enter an amount.</span>';
@@ -6699,7 +6718,7 @@ function submitHubReceipt(woId) {
   if (msgEl) msgEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Saving…</span>';
   api('POST', '/receipt/add', {
     wo_id: woId, amount: amt, description: desc, store: store, date: date,
-    added_by: 'Admin', added_by_id: 'hub', role: 'hub',
+    added_by: 'Admin', added_by_id: 'hub', role: 'hub', payment_source: paySrc,
   }).then(function(res) {
     if (res.success) {
       toast('Receipt logged: $' + parseFloat(amt).toFixed(2), 'success');
@@ -8363,6 +8382,7 @@ function renderPayablesList() {
       '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">' +
         '<div>' + chk +
           '<b style="font-size:12.5px">' + esc(r.wo_id || '') + '</b>' +
+          (r.wo_id ? ' <a href="javascript:void(0)" onclick="goToWorkOrder(\'' + esc(r.wo_id) + '\')" style="color:var(--info);font-size:10.5px;text-decoration:none">↗ open WO</a>' : '') +
           '<span style="color:var(--muted);font-size:11.5px"> · ' + esc(r.vendor_name || 'no vendor') + '</span>' +
           (vref ? '<span style="color:var(--text);font-size:11px"> · vendor inv <b>' + vref + '</b></span>' : '') +
           (r.invoice_number ? '<span style="color:var(--muted);font-size:10.5px"> · cust inv #' + esc(r.invoice_number) + '</span>' : '') +

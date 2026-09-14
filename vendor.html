@@ -793,16 +793,34 @@ function renderVendorReceipts(woId, idx, receipts) {
   if (!wrap) return;
   var today = new Date().toISOString().split('T')[0];
   var total = receipts.reduce(function(s,r){ return s+(parseFloat(r.Amount)||0); }, 0);
+  // Defaults to Ridge Co card per Brett's standing rule — every receipt is assumed to be a
+  // company-card purchase unless the vendor explicitly flags it as their own money.
+  if (_vrPaySource[idx] === undefined) _vrPaySource[idx] = 'company_card';
 
   var rows = receipts.map(function(r) {
-    return '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
+    var src = r.Payment_Source === 'vendor_reimburse' ? 'vendor_reimburse' : 'company_card';
+    var badge = src === 'vendor_reimburse'
+      ? '<span style="background:#fff3cd;color:#8a6100;font-weight:bold;font-size:9.5px;padding:2px 6px;border-radius:10px;white-space:nowrap">💵 REIMBURSE ME</span>'
+      : '<span style="background:#e6f4ea;color:#1a7a3c;font-weight:bold;font-size:9.5px;padding:2px 6px;border-radius:10px;white-space:nowrap">💳 RIDGE CO CARD</span>';
+    return '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--border)20;font-size:11px;flex-wrap:wrap">' +
       '<span style="color:var(--accent2);font-weight:bold;white-space:nowrap">$'+parseFloat(r.Amount).toFixed(2)+'</span>' +
       (r.Store ? '<span style="color:var(--muted);white-space:nowrap">'+esc(r.Store)+'</span>' : '') +
       '<span style="color:var(--text);font-size:10px">'+esc(r.Description||'')+'</span>' +
+      badge +
       '<span style="color:var(--muted);font-size:10px;margin-left:auto;white-space:nowrap">'+esc((r.Date||'').split('T')[0])+'</span>' +
       '<button onclick="deleteVendorReceipt(\''+r.ID+'\',\''+woId+'\','+idx+')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:12px;padding:0">✕</button>' +
     '</div>';
   }).join('');
+
+  var cardOn = _vrPaySource[idx] === 'company_card';
+  var payToggle =
+    '<div style="margin-top:8px;margin-bottom:2px">' +
+      '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px">Who paid for this? (applies to the entry you add below)</div>' +
+      '<div style="display:flex;gap:6px">' +
+        '<button type="button" onclick="setVendorReceiptPaySource('+idx+',\'company_card\')" style="flex:1;padding:9px 6px;border-radius:6px;font-weight:bold;font-size:12px;cursor:pointer;border:2px solid ' + (cardOn ? '#1a7a3c' : 'var(--border)') + ';background:' + (cardOn ? '#e6f4ea' : 'var(--surface)') + ';color:' + (cardOn ? '#1a7a3c' : 'var(--muted)') + '">💳 Ridge Co card' + (cardOn ? ' ✓' : '') + '</button>' +
+        '<button type="button" onclick="setVendorReceiptPaySource('+idx+',\'vendor_reimburse\')" style="flex:1;padding:9px 6px;border-radius:6px;font-weight:bold;font-size:12px;cursor:pointer;border:2px solid ' + (!cardOn ? '#8a6100' : 'var(--border)') + ';background:' + (!cardOn ? '#fff3cd' : 'var(--surface)') + ';color:' + (!cardOn ? '#8a6100' : 'var(--muted)') + '">💵 My own money' + (!cardOn ? ' ✓' : '') + '</button>' +
+      '</div>' +
+    '</div>';
 
   wrap.innerHTML =
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px">' +
@@ -818,8 +836,31 @@ function renderVendorReceipts(woId, idx, receipts) {
         '<button class="btn btn-sm btn-green" id="vr-add-'+idx+'" onclick="submitVendorReceipt(\''+woId+'\','+idx+')">Add</button>' +
       '</div>' +
       '<textarea id="vr-desc-'+idx+'" rows="2" placeholder="Description: what was purchased" style="width:100%;margin-top:6px;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px"></textarea>' +
+      payToggle +
       '<div id="vr-msg-'+idx+'"></div>' +
     '</div>';
+}
+
+// Per-WO-card in-memory state for which "who paid" toggle is currently selected — resets
+// naturally each time the panel is (re)rendered, defaulting company_card, per receiptSet above.
+var _vrPaySource = {};
+function setVendorReceiptPaySource(idx, src) {
+  _vrPaySource[idx] = src;
+  var wrap = document.getElementById('receipt-wrap-' + idx);
+  // Touch the two toggle buttons directly rather than a full data re-fetch/re-render —
+  // cheapest correct update for a panel this small.
+  var btn1 = wrap ? wrap.querySelectorAll('button[type="button"]') : null;
+  if (btn1 && btn1.length === 2) {
+    var cardOn = src === 'company_card';
+    btn1[0].style.border = '2px solid ' + (cardOn ? '#1a7a3c' : 'var(--border)');
+    btn1[0].style.background = cardOn ? '#e6f4ea' : 'var(--surface)';
+    btn1[0].style.color = cardOn ? '#1a7a3c' : 'var(--muted)';
+    btn1[0].innerHTML = '💳 Ridge Co card' + (cardOn ? ' ✓' : '');
+    btn1[1].style.border = '2px solid ' + (!cardOn ? '#8a6100' : 'var(--border)');
+    btn1[1].style.background = !cardOn ? '#fff3cd' : 'var(--surface)';
+    btn1[1].style.color = !cardOn ? '#8a6100' : 'var(--muted)';
+    btn1[1].innerHTML = '💵 My own money' + (!cardOn ? ' ✓' : '');
+  }
 }
 
 function submitVendorReceipt(woId, idx) {
@@ -840,6 +881,7 @@ function submitVendorReceipt(woId, idx) {
   api('/receipt/add', { method:'POST', body: {
     wo_id: woId, amount: amt, description: desc, store: store, date: date,
     added_by: session.vendor_name||'Vendor', added_by_id: vendorId, role: 'vendor',
+    payment_source: _vrPaySource[idx] || 'company_card',
   }}).then(function(res) {
     release();
     if (res.success) {
@@ -1818,6 +1860,9 @@ function submitVendorSched(modalId) {
         </label>
       </div>
       <div id="bill-truck-section" style="display:none">
+        <div style="background:#fff3cd;color:#6b5200;font-size:11px;padding:8px 10px;border-radius:6px;margin-bottom:8px;line-height:1.4">
+          ⚠ Only for materials from <b>your own</b> truck/stock that you don't have a receipt for — this gets added to what you're owed, it does <b>not</b> replace logging a real purchase. If you bought something at a store, log it below as a Receipt instead (with the receipt) — don't put it here just to skip a step.
+        </div>
         <input type="text" id="bill-truck-desc" placeholder="e.g. 2 caulk tubes, electrical tape, wire nuts" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:8px">
           <span style="color:var(--muted);font-size:16px">$</span>
@@ -1858,6 +1903,7 @@ function submitVendorSched(modalId) {
            ⚠ glyph on the clause that actually needs the vendor to do something. -->
       <div id="bill-invoice-status" style="font-size:11px;margin-top:6px;min-height:14px;line-height:1.45"></div>
       <div style="color:var(--muted);font-size:11px;margin-top:4px">A photo or PDF of your invoice, if you have one — we'll try to read the amount, invoice #, and date for you.</div>
+      <div id="bill-reconcile-warning"></div>
     </div>
 
     <!-- VENDOR'S OWN INVOICE NUMBER — pre-filled from the file above when readable, always
@@ -1929,7 +1975,9 @@ function openBillModal(woId, vendorName) {
   document.getElementById('bill-invoice-no').value = ''; // was never reset — a prior job's invoice # could carry over
   document.getElementById('bill-invoice-date').value = '';
   _invReadState = 'idle'; _invUploadState = 'idle'; _invFileName = '';
+  _reconcileState = 'idle'; _reconcileDetected = []; _reconcileUnmatched = [];
   renderInvoiceFileStatus();
+  renderReconcileWarning();
   document.getElementById('bill-invoice-file-lbl').style.borderColor = 'var(--border)';
   document.getElementById('bill-invoice-file-lbl').style.color = 'var(--text)';
   document.getElementById('bill-truck-toggle').checked = false;
@@ -1990,16 +2038,23 @@ function setReceiptPay(n, mode) {
   _receiptPay[n] = mode;
   var rb = document.getElementById('r-pay-reimburse-'+n), ab = document.getElementById('r-pay-account-'+n);
   if (rb && ab) {
-    var on = mode === 'reimburse';
-    rb.style.background = on ? 'var(--accent2)' : 'var(--surface2)'; rb.style.color = on ? '#f3f5f8' : 'var(--muted)'; rb.style.borderColor = on ? 'var(--accent2)' : 'var(--border)';
-    ab.style.background = !on ? 'var(--warn)' : 'var(--surface2)'; ab.style.color = !on ? '#f3f5f8' : 'var(--muted)'; ab.style.borderColor = !on ? 'var(--warn)' : 'var(--border)';
+    var onAccount = mode === 'account';
+    ab.style.border = '2px solid ' + (onAccount ? '#1a7a3c' : 'var(--border)');
+    ab.style.background = onAccount ? '#e6f4ea' : 'var(--surface2)';
+    ab.style.color = onAccount ? '#1a7a3c' : 'var(--muted)';
+    ab.innerHTML = '💳 Ridge Co card' + (onAccount ? ' ✓' : '');
+    rb.style.border = '2px solid ' + (!onAccount ? '#8a6100' : 'var(--border)');
+    rb.style.background = !onAccount ? '#fff3cd' : 'var(--surface2)';
+    rb.style.color = !onAccount ? '#8a6100' : 'var(--muted)';
+    rb.innerHTML = '💵 My own money' + (!onAccount ? ' ✓' : '');
   }
   calcBillTotal();
 }
 function addReceiptRow() {
   _receiptCount++;
   var n = _receiptCount;
-  _receiptPay[n] = 'reimburse';
+  _receiptPay[n] = 'account'; // Brett, Sep 2026: default all to Ridge Co's card — the vendor
+                               // marks it "reimburse me" only when it's genuinely their own money
   var div = document.createElement('div');
   div.id = 'receipt-row-' + n;
   div.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px';
@@ -2016,10 +2071,10 @@ function addReceiptRow() {
     '<span id="r-photo-status-' + n + '" style="font-size:11px;color:var(--muted)"></span>' +
     '</div>' +
     '<div style="margin-top:8px">' +
-      '<div style="font-size:10px;color:var(--muted);margin-bottom:4px">Who paid for this?</div>' +
+      '<div style="font-size:11px;color:var(--text);font-weight:bold;margin-bottom:5px">💳 Who paid for this? — REQUIRED, please check</div>' +
       '<div style="display:flex;gap:6px">' +
-        '<button type="button" id="r-pay-reimburse-' + n + '" onclick="setReceiptPay(' + n + ',\'reimburse\')" style="flex:1;padding:6px;border-radius:5px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--accent2);background:var(--accent2);color:#fff">Reimburse me</button>' +
-        '<button type="button" id="r-pay-account-' + n + '" onclick="setReceiptPay(' + n + ',\'account\')" style="flex:1;padding:6px;border-radius:5px;font-family:var(--font);font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--muted)">On company account</button>' +
+        '<button type="button" id="r-pay-account-' + n + '" onclick="setReceiptPay(' + n + ',\'account\')" style="flex:1;padding:9px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid #1a7a3c;background:#e6f4ea;color:#1a7a3c">💳 Ridge Co card ✓</button>' +
+        '<button type="button" id="r-pay-reimburse-' + n + '" onclick="setReceiptPay(' + n + ',\'reimburse\')" style="flex:1;padding:9px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--muted)">💵 My own money</button>' +
       '</div>' +
     '</div>';
   document.getElementById('bill-receipts-list').appendChild(div);
@@ -2141,9 +2196,75 @@ function autoReadBillInvoiceFile(input) {
     api('POST', '/vendor-bill/extract', { image_b64: b64, mime: file.type || 'image/jpeg' })
       .then(function(res) { applyBillExtract(res && res.extract); })
       .catch(function() { _invReadState = 'fail'; renderInvoiceFileStatus(); }); // fail open — never blocks manual submit
+    // Separate, independent check: does this photo actually contain MORE than one receipt?
+    // (Built Sep 2026 after a real case — Alex Busey uploaded one photo holding 5 receipts;
+    // only 1 was ever entered as a Receipt row, the other 4 — Ridge Co card purchases — were
+    // never logged or billed until Brett happened to look closely at the image by hand.)
+    checkInvoiceReceiptReconcile(b64, file.type || 'image/jpeg');
   };
   reader.onerror = function() { _invReadState = 'fail'; renderInvoiceFileStatus(); };
   reader.readAsDataURL(file);
+}
+
+// State for the multi-receipt safety check. _reconcileDetected is the raw OCR result (every
+// receipt the model found in the photo); _reconcileUnmatched is recomputed locally, with no
+// extra API call, every time the vendor edits a receipt row (see recheckReconcileAgainstEntries,
+// called from calcBillTotal) — so fixing the gap by adding a row clears the warning immediately.
+var _reconcileState = 'idle', _reconcileDetected = [], _reconcileUnmatched = [];
+
+function checkInvoiceReceiptReconcile(b64, mime) {
+  _reconcileState = 'busy'; renderReconcileWarning();
+  api('POST', '/vendor-bill/reconcile-receipts', { image_b64: b64, mime: mime, wo_id: _billWOId })
+    .then(function(res) {
+      if (!res || !res.ok) { _reconcileState = 'fail'; _reconcileDetected = []; renderReconcileWarning(); return; }
+      _reconcileDetected = res.detected || [];
+      recheckReconcileAgainstEntries();
+    })
+    .catch(function() { _reconcileState = 'fail'; _reconcileDetected = []; renderReconcileWarning(); }); // fail open — a broken check never blocks a real submit
+}
+
+// Pure client-side re-match against whatever is CURRENTLY typed into the receipt rows —
+// deliberately not the Receipts tab (nothing from this bill is saved there yet). Re-run on
+// every total recalculation so adding the missing row clears the warning without a re-scan.
+function recheckReconcileAgainstEntries() {
+  if (!_reconcileDetected.length) { if (_reconcileState === 'busy') { _reconcileState = 'ok'; renderReconcileWarning(); } return; }
+  var entered = [];
+  for (var i = 1; i <= _receiptCount; i++) {
+    var amtEl = document.getElementById('r-amt-' + i);
+    if (amtEl && parseFloat(amtEl.value) > 0) entered.push(parseFloat(amtEl.value));
+  }
+  var unmatched = [], usedIdx = {};
+  _reconcileDetected.forEach(function(d) {
+    if (d.total === null || d.total === undefined) { unmatched.push(d); return; }
+    var foundIdx = -1;
+    for (var j = 0; j < entered.length; j++) { if (!usedIdx[j] && Math.abs(entered[j] - d.total) < 0.02) { foundIdx = j; break; } }
+    if (foundIdx === -1) unmatched.push(d); else usedIdx[foundIdx] = true;
+  });
+  _reconcileUnmatched = unmatched;
+  _reconcileState = unmatched.length ? 'issues' : 'ok';
+  renderReconcileWarning();
+}
+
+function renderReconcileWarning() {
+  var el = document.getElementById('bill-reconcile-warning');
+  if (!el) return;
+  if (_reconcileState === 'busy') {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-top:6px">Checking your photo for receipts we might be missing…</div>';
+  } else if (_reconcileState === 'issues' && _reconcileUnmatched.length) {
+    var list = _reconcileUnmatched.map(function(d) {
+      return '• ' + esc(d.vendor || 'Unknown store') + (d.total != null ? ' — $' + d.total.toFixed(2) : ' — amount unclear') + (d.date ? ' (' + esc(d.date) + ')' : '');
+    }).join('<br>');
+    el.innerHTML = '<div style="background:#f8d7da;color:#842029;border:2px solid #dc3545;border-radius:6px;padding:10px;margin-top:8px;font-size:12px;font-weight:bold">' +
+      '⚠ Your photo shows ' + _reconcileUnmatched.length + ' receipt(s) not entered above:<br>' +
+      '<span style="font-weight:normal">' + list + '</span>' +
+      '<br><br>Add each one as a Receipt row (with the amount and who paid) — this bill can\'t be submitted until they\'re all accounted for.</div>';
+  } else if (_reconcileState === 'ok') {
+    el.innerHTML = '<div style="color:#1a7a3c;font-size:11px;margin-top:6px">✓ Checked your photo — everything in it is accounted for below.</div>';
+  } else if (_reconcileState === 'fail') {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-top:6px">Couldn\'t auto-check your photo — please double check yourself that every receipt in it is entered below.</div>';
+  } else {
+    el.innerHTML = '';
+  }
 }
 
 function applyBillExtract(ex) {
@@ -2221,6 +2342,7 @@ function calcBillTotal() {
   var total = labor + flat + truck + receipts;
   document.getElementById('bill-breakdown').innerHTML = breakdown.join('<br>') || '<span style="color:var(--muted)">Enter hours or items above</span>';
   document.getElementById('bill-grand-total').textContent = '$' + total.toFixed(2);
+  recheckReconcileAgainstEntries();
 }
 
 async function submitVendorBill() {
@@ -2228,6 +2350,10 @@ async function submitVendorBill() {
   var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
   var msgEl = document.getElementById('bill-msg');
   if (total <= 0) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Enter at least one billable item.</div>'; return; }
+  if (_reconcileState === 'issues' && _reconcileUnmatched.length) {
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;font-weight:bold">⚠ Your invoice photo shows receipts that aren\'t entered yet — add them above before submitting (see the warning by the photo upload).</div>';
+    return;
+  }
 
   _billSubmitting = true;
   var btn = document.getElementById('bill-submit-btn');

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-10.8';
+const BUILD_VERSION = '2026-09-10.9';
 
 export default {
   async fetch(request, env) {
@@ -343,6 +343,7 @@ export default {
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
         if (path === '/vendor-bill/extract')      return await vendorBillExtract(env, body);
+        if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
         if (path === '/vendor-bill/move-to-new-wo') return await moveVendorBillToNewWO(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
@@ -1110,11 +1111,17 @@ async function listReceipts(env, url) {
 // no owner to bill) both need to be recorded somewhere. wo_id stays the common case and is
 // still validated by the caller (receiptReconConfirm) when present, but this function itself
 // only truly requires an amount — everything else is optional context.
+// Brett, Sep 2026: "default all to my cards" — every receipt (Hub or vendor-submitted) is
+// assumed to be a Ridge Co card purchase unless the person entering it explicitly says
+// otherwise. payment_source is 'company_card' (default) or 'vendor_reimburse' (the vendor
+// paid out of pocket and needs it added to what they're owed) — never silently inferred from
+// role, since Brett himself sometimes logs an entry on a vendor's behalf.
 async function addReceipt(env, body) {
-  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url } = body;
+  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source } = body;
   if (!amount) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
   if (isNaN(amt) || amt <= 0) return json({ error: 'amount must be a positive number' }, 400);
+  const paymentSource = (payment_source === 'vendor_reimburse') ? 'vendor_reimburse' : 'company_card';
 
   // Same receipt, same job/property, same store, seconds apart = a double-tap, not two
   // purchases. Added_By_ID and Date are in the signature and the window is short, because two
@@ -1126,19 +1133,19 @@ async function addReceipt(env, body) {
   }, 30);
   if (dupe) return json({ success: true, duplicate: true, amount: amt.toFixed(2) });
 
-  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date']); }
+  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source']); }
   catch (e) { /* the core fields below still land; only the new ones are at risk on a very first run */ }
 
   const addResp = await addRow(env, 'Receipts', {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
     Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''),
-    Role: role||'hub', Category: category || (wo_id ? 'billable' : 'company'),
+    Role: role||'hub', Category: category || (wo_id ? 'billable' : 'company'), Payment_Source: paymentSource,
     Source_File_ID: source_file_id || '', Source_File_URL: source_file_url || '',
     QB_Email_Sent: 'FALSE', QB_Email_Sent_Date: '',
     Created_Date: new Date().toISOString(), Active: 'TRUE',
   });
   let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) {}
-  return json({ success: true, amount: amt.toFixed(2), id: newId });
+  return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource });
 }
 
 // ── RECEIPT RECONCILER (CAP-002) — deterministic matching engine, ZERO AI ──────────────────────
@@ -1410,6 +1417,7 @@ async function receiptReconConfirm(env, body) {
     wo_id: wo_id || '', property_id, amount, description, store, date,
     added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
+    payment_source: body.payment_source,
   });
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
@@ -6677,7 +6685,10 @@ async function sendReceiptsToQBEmail(env, opts) {
   try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date']); } catch (e) {}
 
   let all = []; try { all = await fetchTab(env, 'Receipts'); } catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + (e.message || e) }, 500); }
-  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE');
+  // vendor_reimburse rows never touched a Ridge Co card — nothing to reconcile against a bank/CC
+  // statement, and sending them would just clutter QuickBooks' receipts inbox with entries that
+  // don't correspond to any real transaction on the account being reconciled.
+  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse');
   const batch = pending.slice(0, limit);
   if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
 
@@ -6829,7 +6840,80 @@ async function invoiceExtract(env, bytes, mime) {
   }
 }
 
-// Contact-card upload (Sept 2 2026, FEATURE_LOG rule 143) — business-card / contact-photo OCR
+// Detects EVERY distinct physical receipt visible in one image, not just one (Sep 2026, safety
+// build — see vendorBillReconcileReceipts below for why this matters). Vendors sometimes
+// photograph several receipts together in one shot; the old single-invoice extractor above only
+// ever reads the first/dominant one, so anything else in the frame is invisible unless someone
+// happens to look closely. Money-facing (moneyFacing:true) — same discipline as receiptExtract.
+async function receiptImageExtractMultiple(env, bytes, mime) {
+  try {
+    const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+    const media = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+    const prompt = `This image may show ONE OR MORE separate physical store receipts, photographed or scanned together side by side (this is common — someone lays out several receipts and takes one photo). Identify EVERY distinct receipt visible, separately — do not merge two receipts into one, and do not miss a receipt just because it's smaller or partially in shadow. For EACH distinct receipt, return: vendor (store name, string), date ("YYYY-MM-DD" or ""), total (the receipt's own total, as a plain number, or null), payment_hint (how it was paid IF shown on the receipt — e.g. "cash", "LBA"/business account/charge account, a card's last 4 digits — else ""), items (array of short strings, the line items on THAT receipt only). Return ONLY strict minified JSON: {"receipt_count": <integer>, "receipts": [{"vendor":"","date":"","total":0,"payment_hint":"","items":[]}, ...]}. If genuinely only one receipt is visible, receipt_count is 1 and receipts has one entry. JSON only, no prose.`;
+    const r = await routeAI(env, { type: 'receipt_parse', moneyFacing: true, media, prompt, maxTokens: 1500, source: 'receiptImageExtractMultiple' });
+    const txt = (r.result || '').trim();
+    const parsed = JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim());
+    const receipts = Array.isArray(parsed.receipts) ? parsed.receipts.slice(0, 20).map(x => ({
+      vendor: String((x && x.vendor) || ''), date: String((x && x.date) || ''),
+      total: (x && typeof x.total === 'number' && isFinite(x.total)) ? x.total : null,
+      payment_hint: String((x && x.payment_hint) || ''),
+      items: Array.isArray(x && x.items) ? x.items.map(String).slice(0, 20) : [],
+    })) : [];
+    return { receipt_count: receipts.length, receipts };
+  } catch (e) {
+    return { receipt_count: 0, receipts: [], _error: true, _error_message: String((e && e.message) || e) };
+  }
+}
+
+// POST /vendor-bill/reconcile-receipts {image_b64, mime, wo_id} — READ-ONLY safety check, no
+// writes. Runs the multi-receipt detector above against whatever image was uploaded, then checks
+// EACH detected receipt against what's already logged in the Receipts tab for this WO — flags any
+// detected receipt with no matching logged entry (amount within a cent).
+//
+// Built directly from a live incident (Sep 2026): a vendor (Alex Busey) uploaded one invoice
+// photo that actually held 5 separate receipts. Only the reimbursable one was accounted for on
+// his bill; the other 4 — Ridge Co card purchases — were never logged as Receipts and never made
+// it onto the customer invoice. Brett caught it by chance, reviewing the image by eye. This
+// endpoint is the systematic version of that manual review: run on every vendor bill submission
+// (see vendor.html) and available on demand for Brett's own review before approving a bill.
+async function vendorBillReconcileReceipts(env, body) {
+  if (!body || !body.image_b64) return json({ error: 'image_b64 required' }, 400);
+  const wo_id = body.wo_id || '';
+  let bytes, mime;
+  try {
+    const bin = atob(body.image_b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    bytes = arr.buffer; mime = body.mime || 'image/jpeg';
+  } catch (e) { return json({ error: 'bad image_b64' }, 400); }
+
+  const extract = await receiptImageExtractMultiple(env, bytes, mime);
+  const detected = extract.receipts || [];
+
+  let logged = [];
+  try { const all = await fetchTab(env, 'Receipts'); logged = wo_id ? all.filter(r => String(r.WO_ID) === String(wo_id) && r.Active !== 'FALSE') : []; }
+  catch (e) { /* best-effort — an unreadable Receipts tab still returns what was detected */ }
+
+  const matched = [], unmatched = [];
+  const usedLoggedIds = new Set();
+  for (const d of detected) {
+    if (d.total === null || d.total === undefined) { unmatched.push({ ...d, reason: 'no_total_read' }); continue; }
+    // Nearest-amount match not yet claimed by an earlier receipt in this same image — guards
+    // against two receipts with the same total both silently matching the one logged row.
+    const hit = logged.find(r => !usedLoggedIds.has(r.ID) && Math.abs((Number(r.Amount) || 0) - d.total) < 0.02);
+    if (hit) { usedLoggedIds.add(hit.ID); matched.push({ detected: d, receipt_id: hit.ID }); }
+    else unmatched.push({ ...d, reason: 'no_matching_receipt_entry' });
+  }
+  return json({
+    ok: true, receipt_count: extract.receipt_count, detected, matched, unmatched,
+    logged_count: logged.length, extraction_failed: !!extract._error,
+    all_accounted_for: !extract._error && unmatched.length === 0,
+  });
+}
+
+
 // shared by the "Add Tenant" / "Add Owner" / "Add Vendor" contact-card-upload buttons in
 // index.html, plus the new vendor-setup.html self-service link. Same routeAI/moneyFacing:true
 // shape as invoiceExtract/receiptExtract (CHEAP tier has no media support — moneyFacing pins this
@@ -7361,7 +7445,7 @@ async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 const ROLE_SCOPES = {
-  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos'],
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos'],
   tenant: ['/tenant-by-pin','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
   owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo'],
 };
