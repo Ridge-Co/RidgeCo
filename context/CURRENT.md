@@ -1,3 +1,16 @@
+# WHERE THINGS STAND — Sep 14, 2026 (even later still)
+
+## 🟡 Built, not yet live-verified: Twilio account/A2P-status diagnostic — rule 159
+Full detail: FEATURE_LOG rule 159. Brett asked directly whether he needs an opt-in, whether the
+campaign needs activating, and asked Claude to confirm via the Worker's own Twilio API access
+that everything is actually live — rather than guess: brand approval (already confirmed) and
+campaign approval are two DIFFERENT, sequential gates — a business can be fully approved while
+its specific messaging campaign is still pending carrier vetting. New `GET /twilio/account-status`
+(admin-gated) checks the sending number, every A2P Brand Registration's status, and — the part
+that actually matters for carrier delivery — every Messaging Service's Campaign compliance status
+plus whether `TWILIO_FROM` is actually in that service's sender pool. `node --check` clean, full
+suite 53/53. **Not yet run against the real account — needs this patch deployed first.**
+
 # WHERE THINGS STAND — Sep 14, 2026 (even later)
 
 ## 🔴 Live-testing found a real delivery gap: Twilio accepts the message (real SID), Brett's phone gets nothing — rule 158a
