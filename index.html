@@ -2156,6 +2156,10 @@ function openWODetail(woId) {
   actions.appendChild(qsDiv);
   addBtn(wo.Vendor_ID ? '🔄 Change Vendor' : 'Assign Vendor', wo.Vendor_ID ? 'secondary' : '', function(){openAssignModal(woId);});
   addBtn('📤 Send to Vendor','secondary',function(){openShareWO(woId);});
+  if (wo.Vendor_ID) {
+    addBtn('📷 Request Photos','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'photos');});
+    addBtn('🧾 Request Invoice','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'invoice');});
+  }
   if (['Assigned','Accepted'].includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
   if (['In Progress','Accepted','On Hold'].includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
   if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
@@ -2287,6 +2291,19 @@ function updateWOStatus(woId,status) {
   api('POST','/status',{wo_id:woId,status:status,updated_by:'admin'}).then(function(){
     toast('Status: '+status,'success'); closeModal('modal-wo-detail'); loadAll();
   }).catch(function(e){logError('Update status',e.message);toast('Error: '+e.message,'error');});
+}
+
+// Manual vendor request — "Request photos"/"Request invoice" buttons on the WO detail view
+// (Sep 14 2026). Confirms first since this sends immediately (no preview step, unlike PIN/
+// Welcome) — the message itself is short and standardized enough not to need per-send editing.
+function requestFromVendor(woId, vendorId, requestType) {
+  var label = requestType === 'photos' ? 'photos' : 'invoice';
+  if (!confirm('Send a request for '+label+' to the vendor on '+woId+'? A follow-up reminder will repeat automatically until it\'s satisfied.')) return;
+  api('POST','/vendor-request/create',{ wo_id:woId, vendor_id:vendorId, request_type:requestType })
+    .then(function(res){
+      if (res.success) { toast(res.sent ? ('Requested '+label+' — sent'+(res.test_mode?' (test mode)':'')) : ('Queued — '+(res.gate_snapshot||'blocked')), res.sent?'success':'error'); }
+      else toast('Error: '+(res.error||'unknown'),'error');
+    });
 }
 
 var _voidWOId = null;

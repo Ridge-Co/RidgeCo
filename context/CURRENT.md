@@ -1,4 +1,12 @@
-# WHERE THINGS STAND — Sep 14, 2026 (welcome messages)
+# WHERE THINGS STAND — Sep 14, 2026 (vendor nudge/request system — message redesign COMPLETE)
+
+## 🟡 Built, needs a live pass: vendor nudge/request system — rule 170
+Full detail: FEATURE_LOG rule 170. This was the last item queued from the Twilio-build message
+redesign — the whole redesign (rules 157-170) is now feature-complete pending live verification.
+Automatic status-update clock on every assignment (timing verified against Brett's own
+examples), resets on real vendor activity, quiets for a future Scheduled_Date, caps at 5 nudges
+then flags Brett. Manual "Request Photos"/"Request Invoice" buttons on the WO detail view.
+Needs a live pass — see FEATURE_LOG rule 170 for the specific checks.
 
 ## 🟡 Built, needs a live pass: welcome messages — rule 169
 Full detail: FEATURE_LOG rule 169. tenant_welcome/vendor_welcome, manual send (single +
@@ -14,14 +22,6 @@ raw sendSMS. Assigned and Invoiced retired. Tenant Received (new, 8h-delayed, bu
 Assigned if it arrives first) also added. Needs a live pass — see FEATURE_LOG rule 168 for the
 specific checks (Owner Received on a tenant-submitted WO, the 8h supersede behavior, the
 On-Hold reason block, Hold_Reason showing up correctly).
-
-## Still queued from the message-system redesign
-- Vendor nudge/update-request system — automatic clock (first nudge = later of next-day 9am ET
-  or trigger+16h, daily, 5 max then flag Brett; resets on vendor activity; converts to
-  invoice-needed nudges once scheduled date passes) + explicit "Request photos"/"Request
-  invoice" buttons + new Vendor_Requests tracking tab. Last open question before this can be
-  built: cron/scheduling mechanism for the automatic clock — could reuse the new GitHub Actions
-  sweep (rule 166/167) rather than needing anything new.
 
 ## 🟡 Built, needs 2 secrets + a live pass: quiet hours + GitHub Actions cron replacement — rule 166
 Full detail: FEATURE_LOG rule 166. Automatic SMS now holds until 9am ET if it would otherwise

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.15';
+const BUILD_VERSION = '2026-09-14.16';
 
 export default {
   async fetch(request, env) {
@@ -294,6 +294,7 @@ export default {
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
         if (path === '/cron/sweep')                return await cronSweep(env);
+        if (path === '/vendor-request/create')     return await createVendorRequest(env, body);
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
@@ -3447,6 +3448,9 @@ async function assignVendor(env, body) {
     tenantSMSSent = r.sent;
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
+  // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
+  // silent, since it tracks actual work progress rather than whether a text went out.
+  await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} notify=${notify}` }); } catch(_){}
   return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify });
 }
@@ -3484,6 +3488,10 @@ async function updateStatus(env, body) {
   }
   await updateWOFields(env, body.wo_id, fields);
   await logWOAudit(env, body.wo_id, changedBy, changedRole, 'Status', wo.Status||'', body.status, body.notes||'');
+  // Vendor nudge clock reset (Sep 14 2026) — real vendor activity (a status change or note
+  // FROM the vendor, distinguished by updated_by_role) resets the clock; an admin changing
+  // status on the vendor's behalf does not (that's not the vendor actually engaging).
+  if (changedRole === 'vendor') { await resetVendorNudgeClock(env, body.wo_id, body.vendor_id || wo.Vendor_ID); }
   const config = await fetchConfig(env);
   const [units, tenants, properties, owners] = await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
   const unit = units.find(u => u.ID === wo.Unit_ID), property = properties.find(p => p.ID === wo.Property_ID);
@@ -5770,6 +5778,8 @@ async function scheduleWO(env, body) {
   if(isWithinHour&&['Assigned','Accepted'].includes(wo.Status)) updates.Status='In Progress';
   await updateWOFields(env,body.wo_id,updates);
   await logWOAudit(env,body.wo_id,body.updated_by||'admin',body.updated_by_role||'admin','Scheduled',wo.Scheduled_Date||'',schedDate+' '+(body.window||''),isWithinHour?'On my way notification':'Appointment scheduled');
+  // Vendor nudge clock reset (Sep 14 2026) — a vendor setting a schedule is real activity.
+  if (body.updated_by_role === 'vendor') { await resetVendorNudgeClock(env, body.wo_id, body.vendor_id || wo.Vendor_ID); }
   let tenantSMSSent=false, notifyQueued=false;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
     const [units,tenants,properties,owners]=await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
@@ -5877,6 +5887,180 @@ async function processPendingNotifications(env) {
   } catch(e){return json({processed:0,error:e.message});}
 }
 
+// ── Vendor nudge/request system (Sep 14 2026, Brett) ───────────────────────────────────────
+// Automatic status-update clock (created on assignment, resets on real vendor activity, quiets
+// while a future Scheduled_Date is pending, caps at 5 nudges then flags Brett instead of a
+// 6th) plus manual "Request photos"/"Request invoice" buttons. One shared tab, one shared
+// sweep, one shared 5-nudge safety cap across all three request types.
+const VENDOR_REQ_TAB = 'Vendor_Requests';
+const VENDOR_REQ_COLS = ['ID','WO_ID','Vendor_ID','Request_Type','Status','Nudge_Count','First_Nudge_At','Next_Nudge_At','Last_Activity_At','Satisfied_Date','Created_Date','Active'];
+const VENDOR_NUDGE_MAX = 5;           // after this many sends with no resolution, flag Brett instead of nudging again
+const VENDOR_NUDGE_REPEAT_HOURS = 24; // status_update: daily, per Brett
+const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a cadence for
+  // these two — 2 days is a reasonable middle ground between the daily auto-clock (which
+  // exists specifically to chase a QUIET vendor) and a full week; easy to tune if wrong.
+let _vendorReqReady = false;
+async function ensureVendorReqTab(env) {
+  if (!_vendorReqReady) { await ensureTab(env, VENDOR_REQ_TAB, VENDOR_REQ_COLS); _vendorReqReady = true; }
+  await ensureColumns(env, VENDOR_REQ_TAB, VENDOR_REQ_COLS);
+}
+async function vendorBillExistsForWO(env, woId) {
+  const bills = await fetchTab(env, 'Vendor_Bills');
+  return bills.some(b => b.WO_ID === woId && b.Active !== 'FALSE');
+}
+
+// Called from assignVendor on every successful assignment (notify or silent — the clock
+// tracks actual work progress, not whether a text went out). Any existing OPEN status_update
+// row for this WO (any vendor — e.g. a prior assignee before a reassignment) is closed first,
+// since chasing an old assignee for a job they're no longer on doesn't make sense.
+async function createVendorNudgeClock(env, woId, vendorId) {
+  try {
+    await ensureVendorReqTab(env);
+    const rows = await fetchTab(env, VENDOR_REQ_TAB);
+    for (const r of rows) {
+      if (r.WO_ID === woId && r.Request_Type === 'status_update' && r.Status === 'open') {
+        await updateRow(env, VENDOR_REQ_TAB, r.ID, { Status: 'cancelled' });
+      }
+    }
+    const now = new Date();
+    const firstNudge = new Date(Math.max(next9amET(now).getTime(), now.getTime() + 16*3600000));
+    await addRow(env, VENDOR_REQ_TAB, {
+      WO_ID: woId, Vendor_ID: vendorId, Request_Type: 'status_update', Status: 'open',
+      Nudge_Count: '0', First_Nudge_At: firstNudge.toISOString(), Next_Nudge_At: firstNudge.toISOString(),
+      Last_Activity_At: now.toISOString(), Satisfied_Date: '', Created_Date: now.toISOString(), Active: 'TRUE',
+    });
+  } catch (e) { /* non-fatal — assignment itself already succeeded */ }
+}
+
+// Called from updateStatus/scheduleWO when updated_by_role==='vendor' — real vendor activity
+// resets the clock back to a fresh start (count back to 0, same first-nudge formula as a new
+// assignment) rather than just pushing the next check out a day. A vendor actively engaging is
+// exactly the case the nudge system exists to NOT bother.
+async function resetVendorNudgeClock(env, woId, vendorId) {
+  try {
+    await ensureVendorReqTab(env);
+    const rows = await fetchTab(env, VENDOR_REQ_TAB);
+    const row = rows.find(r => r.WO_ID === woId && r.Request_Type === 'status_update' && r.Status === 'open' && (!vendorId || r.Vendor_ID === vendorId));
+    if (!row) return;
+    const now = new Date();
+    const nextNudge = new Date(Math.max(next9amET(now).getTime(), now.getTime() + 16*3600000));
+    await updateRow(env, VENDOR_REQ_TAB, row.ID, { Nudge_Count: '0', Next_Nudge_At: nextNudge.toISOString(), Last_Activity_At: now.toISOString() });
+  } catch (e) { /* non-fatal */ }
+}
+
+// POST /vendor-request/create { wo_id, vendor_id, request_type: 'photos'|'invoice' } — the
+// manual buttons. If a matching open request already exists, this just resends immediately
+// rather than creating a duplicate row (one outstanding ask per WO+vendor+type at a time).
+async function createVendorRequest(env, body) {
+  const woId = body.wo_id, vendorId = body.vendor_id, reqType = body.request_type;
+  if (!woId || !vendorId || !['photos','invoice'].includes(reqType)) return json({ error: 'wo_id, vendor_id, and request_type (photos|invoice) are required' }, 400);
+  await ensureVendorReqTab(env);
+  const [workorders, vendors, properties, units, rows] = await Promise.all([
+    fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors'), fetchTab(env, 'Properties'), fetchTab(env, 'Units'), fetchTab(env, VENDOR_REQ_TAB),
+  ]);
+  const wo = findWO(workorders, woId); if (!wo) return json({ error: 'WO not found' }, 404);
+  const vendor = vendors.find(v => v.ID === vendorId); if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  if (!vendor.Phone) return json({ error: 'Vendor has no phone number on file' }, 400);
+  const property = properties.find(p => p.ID === wo.Property_ID);
+  const unit = units.find(u => u.ID === wo.Unit_ID);
+  const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'the property';
+  const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || 'there');
+  const msg = reqType === 'photos'
+    ? `Hi ${vname}, could you upload before/after photos for ${woId} at ${address} when you get a chance? You can add them from your vendor portal. ${vendorPortalLink(woId)}`
+    : `Hi ${vname}, please submit your invoice for ${woId} at ${address} when you get a chance — you can do this from your vendor portal. ${vendorPortalLink(woId)}`;
+  const r = await smsGatedSend(env, { wo_id: woId, message_type: `vendor_request_${reqType}`, recipient_type: 'vendor', vendor, message_body: msg });
+  const now = new Date();
+  const existing = rows.find(x => x.WO_ID === woId && x.Vendor_ID === vendorId && x.Request_Type === reqType && x.Status === 'open');
+  const nextNudge = new Date(now.getTime() + VENDOR_MANUAL_REPEAT_HOURS*3600000).toISOString();
+  if (existing) {
+    await updateRow(env, VENDOR_REQ_TAB, existing.ID, { Nudge_Count: String((parseInt(existing.Nudge_Count,10)||0) + (r.sent?1:0)), Next_Nudge_At: nextNudge, Last_Activity_At: now.toISOString() });
+  } else {
+    await addRow(env, VENDOR_REQ_TAB, {
+      WO_ID: woId, Vendor_ID: vendorId, Request_Type: reqType, Status: 'open',
+      Nudge_Count: r.sent ? '1' : '0', First_Nudge_At: now.toISOString(), Next_Nudge_At: nextNudge,
+      Last_Activity_At: now.toISOString(), Satisfied_Date: '', Created_Date: now.toISOString(), Active: 'TRUE',
+    });
+  }
+  return json({ success: true, sent: r.sent, test_mode: r.test_mode, gate_snapshot: r.gate_snapshot });
+}
+
+// Called from the periodic sweep (POST /cron/sweep, cronSweep). Handles all 3 request types
+// through one loop: satisfied-checks first (so a row that's already resolved never nudges
+// again even if it's technically "due"), then the type-specific quiet/nudge/cap logic.
+async function processVendorNudges(env) {
+  await ensureVendorReqTab(env);
+  const now = new Date();
+  const [rows, workorders, vendors, properties, units, config] = await Promise.all([
+    fetchTab(env, VENDOR_REQ_TAB), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors'), fetchTab(env, 'Properties'), fetchTab(env, 'Units'), fetchConfig(env),
+  ]);
+  const due = rows.filter(r => r.Status === 'open' && r.Next_Nudge_At && new Date(r.Next_Nudge_At) <= now);
+  const results = [];
+  let billCache = null; // lazy: only fetched if a row actually needs the bill-exists check
+  for (const row of due) {
+    const wo = findWO(workorders, row.WO_ID);
+    const vendor = vendors.find(v => v.ID === row.Vendor_ID);
+    // WO gone, voided, or vendor gone — nothing left to chase.
+    if (!wo || wo.Voided === 'TRUE' || !vendor) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_missing' }); continue; }
+    if (['Cancelled','Declined'].includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
+    if (!billCache) billCache = await fetchTab(env, 'Vendor_Bills');
+    const hasBill = billCache.some(b => b.WO_ID === row.WO_ID && b.Active !== 'FALSE');
+    // Satisfied: for invoice requests and for status_update once the WO is Complete, a real
+    // Vendor_Bill row is the actual signal (per Brett: "stop when Vendor Bill row exists").
+    if ((row.Request_Type === 'invoice' || (row.Request_Type === 'status_update' && wo.Status === 'Complete')) && hasBill) {
+      await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'satisfied', Satisfied_Date: now.toISOString() });
+      results.push({ id: row.ID, action: 'satisfied_billed' }); continue;
+    }
+    if (row.Request_Type === 'photos') {
+      const attachments = await fetchTab(env, 'Attachments'); // only fetched for an actually-due photos row
+      const hasNewPhoto = attachments.some(a => a.WO_ID === row.WO_ID && a.Active !== 'FALSE' && ['before','after','photo'].includes((a.File_Type||'').toLowerCase()) && a.Created_Date && new Date(a.Created_Date) >= new Date(row.Created_Date));
+      if (hasNewPhoto) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'satisfied', Satisfied_Date: now.toISOString() }); results.push({ id: row.ID, action: 'satisfied_photos' }); continue; }
+    }
+    // status_update quiet period: a future Scheduled_Date pauses nudging until that date
+    // arrives — pushed forward rather than re-checked every sweep in the meantime.
+    if (row.Request_Type === 'status_update' && wo.Scheduled_Date) {
+      const sched = new Date(wo.Scheduled_Date + 'T12:00:00Z');
+      if (sched > now) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Next_Nudge_At: sched.toISOString() }); results.push({ id: row.ID, action: 'quieted_for_schedule' }); continue; }
+    }
+    const nudgeCount = parseInt(row.Nudge_Count, 10) || 0;
+    if (nudgeCount >= VENDOR_NUDGE_MAX) {
+      await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'flagged' });
+      const property = properties.find(p => p.ID === wo.Property_ID);
+      const flagMsg = `⚠️ ${vendor.Name||vendor.First_Name||'Vendor'} hasn't responded after ${VENDOR_NUDGE_MAX} reminders on ${row.WO_ID}${property?' at '+property.Address:''} (${row.Request_Type}). May need a personal follow-up.`;
+      if (config.admin_phone) await sendSMS(env, config.admin_phone, flagMsg);
+      results.push({ id: row.ID, action: 'flagged_to_brett' }); continue;
+    }
+    const property = properties.find(p => p.ID === wo.Property_ID);
+    const unit = units.find(u => u.ID === wo.Unit_ID);
+    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'the property';
+    const vname = vendor.First_Name || (vendor.Name||'').split(' ')[0] || 'there';
+    let msg, msgType, repeatHours;
+    if (row.Request_Type === 'status_update') {
+      // Dynamic content, decided fresh each nudge rather than a one-way "convert the request
+      // type" flip: Complete-but-unbilled asks for the invoice (the practically useful next
+      // step); anything else asks for a plain status update. Naturally covers Brett's "after
+      // scheduled date with no completion" case too — once a future Scheduled_Date is no
+      // longer blocking (the quiet-check above), nudging just resumes on whichever ask fits
+      // the WO's actual current state.
+      msg = wo.Status === 'Complete'
+        ? `Hi ${vname}, ${row.WO_ID} — ${woJobLabel(wo)} at ${address} — shows complete but we haven't gotten an invoice yet. Please submit when you get a chance. ${vendorPortalLink(row.WO_ID)}`
+        : `Hi ${vname}, checking in on ${row.WO_ID} — ${woJobLabel(wo)} at ${address}. Any update on status? ${vendorPortalLink(row.WO_ID)}`;
+      msgType = 'vendor_nudge_status'; repeatHours = VENDOR_NUDGE_REPEAT_HOURS;
+    } else if (row.Request_Type === 'photos') {
+      msg = `Hi ${vname}, following up — could you upload before/after photos for ${row.WO_ID} at ${address}? ${vendorPortalLink(row.WO_ID)}`;
+      msgType = 'vendor_nudge_photos'; repeatHours = VENDOR_MANUAL_REPEAT_HOURS;
+    } else {
+      msg = `Hi ${vname}, following up — please submit your invoice for ${row.WO_ID} at ${address} when you get a chance. ${vendorPortalLink(row.WO_ID)}`;
+      msgType = 'vendor_nudge_invoice'; repeatHours = VENDOR_MANUAL_REPEAT_HOURS;
+    }
+    const r = await smsGatedSend(env, { wo_id: row.WO_ID, message_type: msgType, recipient_type: 'vendor', vendor, message_body: msg });
+    await updateRow(env, VENDOR_REQ_TAB, row.ID, {
+      Nudge_Count: String(nudgeCount + (r.sent ? 1 : 0)),
+      Next_Nudge_At: new Date(now.getTime() + repeatHours*3600000).toISOString(),
+    });
+    results.push({ id: row.ID, action: r.sent ? 'nudged' : 'nudge_blocked', gate_snapshot: r.gate_snapshot });
+  }
+  return { checked: due.length, results };
+}
 const OWNER_NOTIFY_DEFAULTS={urgent:'always',normal:'key',low:'completion'};
 // Sep 14 2026 — trimmed to the 4 owner message types that actually exist now (Received/
 // Scheduled/Complete/On_Hold). 'Assigned' and 'Invoiced' are retired per Brett's own call
@@ -6243,11 +6427,15 @@ async function processQuietHoursQueue(env) {
 //      GET /notifications/pending — so deferred reminders have been silently sitting unsent
 //      this whole time. Wiring it in here is the actual fix, not just a new feature riding
 //      alongside one.
-// Each step is independently try/caught so one failing step never blocks the other.
+//   3. processVendorNudges — the vendor status-update clock + manual photos/invoice nudges
+//      (Sep 14 2026). This closes the exact open question flagged when the sweep was first
+//      built (CURRENT.md, rule 166) — no new scheduling mechanism needed, it just plugs in here.
+// Each step is independently try/caught so one failing step never blocks the others.
 async function cronSweep(env) {
   const out = { ok: true, ts: new Date().toISOString() };
   try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
+  try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
   return json(out);
 }
 
@@ -6347,6 +6535,22 @@ function nextQuietHoursEnd(date) {
   let y = +p.year, mo = +p.month - 1, d = +p.day;
   if (h >= QUIET_HOURS_START_ET) d += 1;
   return new Date(Date.UTC(y, mo, d, QUIET_HOURS_END_ET, 0, 0) - offsetMin * 60000);
+}
+// General "next 9am ET after this instant" — unlike nextQuietHoursEnd (only meaningful when
+// already inside quiet hours), this works from ANY starting time. Used by the vendor nudge
+// clock's first-nudge rule: max(next 9am ET, trigger + 16h). Verified against Brett's own
+// examples in test/vendor-nudges.test.mjs (assigned 10pm -> 2pm next day; assigned 5pm -> 9am
+// next day) — both fall out of this formula with no special-casing.
+function next9amET(date) {
+  date = date || new Date();
+  const h = etHour(date);
+  const offsetMin = nyOffsetMinutes(date);
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  let y = +p.year, mo = +p.month - 1, d = +p.day;
+  if (h >= 9) d += 1; // at/past 9am already today -> next occurrence is tomorrow
+  return new Date(Date.UTC(y, mo, d, 9, 0, 0) - offsetMin * 60000);
 }
 function daysAgoISO(n) { return new Date(Date.now()-n*86400000).toLocaleDateString('en-CA', { timeZone:'America/New_York' }); }
 function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpperCase() !== 'FALSE'); }
