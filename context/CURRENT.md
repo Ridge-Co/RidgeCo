@@ -1,5 +1,14 @@
 # WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, the pattern behind them closed off — rule 175, then the repair tool's own limit + batching + delivery + diagnostics bugs fixed — FL-20260915-1649-q8, FL-20260915-1714-wy, FL-20260915-1731-yh)
 
+## 🟡 Diagnostic added, root cause not yet run: WO-1039's 5 files are 404 — but which kind? — FL-20260915-1745-tp
+Full detail: FEATURE_LOG `[FL-20260915-1745-tp]`. Brett's first real batch (with the corrected
+tool) confirmed all 5 WO-1039 failures are `404 File not found`. That's ambiguous on its own —
+Google Drive returns 404 both for a truly-gone file AND for one the service account simply can't
+see (hiding existence rather than returning 403). Added a read-only `/admin/drive-file-check`
+(`files.get` per ID, never writes) to tell them apart. Verified: 16/16 new tests, full suite
+70/70, deployed (`2026-09-15.6`). **Next step**: actually run it against WO-1039's 5 file IDs and
+read the result together with Brett — this session hasn't done that yet.
+
 ## 🟡 Fixed and deployed, one thing still open: real batches revealed 2 more issues — FL-20260915-1731-yh
 Full detail: FEATURE_LOG `[FL-20260915-1731-yh]`. Brett ran "Run for real" 3 times and got
 byte-identical results — correctly asked if this was actually doing anything. Two separate
