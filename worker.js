@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.3';
+const BUILD_VERSION = '2026-09-15.4';
 
 export default {
   async fetch(request, env) {
@@ -5780,6 +5780,13 @@ async function adminShareAttachments(env, body) {
   body = body || {};
   const dryRun = body.dry_run === true;
   const limit = Number.isInteger(body.limit) && body.limit > 0 ? body.limit : 0;
+  // Rule 177: without an offset, every call — real or dry-run — always considered the SAME
+  // first `limit` shareable rows in the table, from row 1, every time. Calling this again with
+  // the same limit (exactly what the tool's own UI text told Brett to do — "run again if more
+  // remain") never actually advanced past that first window; it just re-checked/re-shared the
+  // same files. `offset` lets a caller say "skip the first N shareable files, I already handled
+  // those" so consecutive batches genuinely walk the whole table instead of looping on batch 1.
+  const offset = Number.isInteger(body.offset) && body.offset > 0 ? body.offset : 0;
   try {
     const rows = await fetchTab(env, 'Attachments');
     const token = await getAccessToken(env);
@@ -5804,7 +5811,8 @@ async function adminShareAttachments(env, body) {
       const fileId = r.Drive_File_ID || '';
       if (!fileId) { skippedNoId++; continue; }
       shareable++;
-      if (limit && considered >= limit) continue;
+      if (shareable <= offset) continue;         // already handled by an earlier batch
+      if (limit && considered >= limit) continue; // this batch's window is full
       considered++;
       if (dryRun) {
         const isShared = await driveIsSharedAnyone(token, fileId);
@@ -5814,15 +5822,18 @@ async function adminShareAttachments(env, body) {
       const ok = await driveShareAnyone(token, fileId);
       if (ok) shared++; else { failed++; if (failures.length < 25) failures.push({ wo: r.WO_ID || '', file: r.File_Name || '', id: fileId }); }
     }
-    const remainingAfterBatch = Math.max(0, shareable - considered);
-    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Notes:`dry_run=${dryRun} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}` }); } catch(_){}
+    const remainingAfterBatch = Math.max(0, shareable - offset - considered);
+    const nextOffset = offset + considered;
+    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}` }); } catch(_){}
     const out = {
       success: true,
       dry_run: dryRun,
       scanned,
       shareable,
+      offset,
       limit: limit || null,
       considered_this_batch: considered,
+      next_offset: nextOffset,
       remaining_after_this_batch: remainingAfterBatch,
       skipped_internal: skippedInternal,
       skipped_no_id: skippedNoId,

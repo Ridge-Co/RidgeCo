@@ -1,4 +1,22 @@
-# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, the pattern behind them closed off — rule 175, then the repair tool's own limit bug fixed — FL-20260915-1649-q8)
+# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, the pattern behind them closed off — rule 175, then the repair tool's own limit + batching bugs fixed — FL-20260915-1649-q8, FL-20260915-1714-wy)
+
+## 🟢 Fixed and deployed: `/admin/share-attachments` couldn't advance past its first batch — FL-20260915-1714-wy
+Full detail: FEATURE_LOG `[FL-20260915-1714-wy]`. Found right after the limit fix below, before
+recommending Brett a batching plan for the ~492-file backlog: even with `limit` fixed, calling
+the endpoint again with the same limit always re-scanned from row 1 and reconsidered the SAME
+first N shareable files — no way to say "skip what an earlier batch already did." Added `offset`
++ a `next_offset` response field so calls chain correctly. The local repair tool
+(`ridgeco-share-attachments-repair.html`) now tracks its own position automatically — click
+"Dry run" or "Run for real" repeatedly and it continues where the last click left off, with a
+visible Progress line and a reset button. Verified: 38/38 assertions in
+`test/share-attachments-limit.test.mjs`, full suite 69/69, deployed (`2026-09-15.4`), confirmed
+live.
+**Recommendation given to Brett**: don't run all ~492 in one call — this codebase has hit
+Cloudflare's subrequest cap live before at similar scale in a different function, and a mid-batch
+failure here would return a bare error with no partial-progress stats. A live 100-item dry-run
+batch completed cleanly, so batches of ~100-150 (the tool defaults to 100, auto-advancing) are a
+reasonable balance. Still his call/his button to press — this session's write-classifier still
+blocks the real endpoint from being called directly from here.
 
 ## 🟢 Fixed and deployed: `/admin/share-attachments` dry-run `limit` was a silent no-op — FL-20260915-1649-q8
 Full detail: FEATURE_LOG `[FL-20260915-1649-q8]`. Brett tried the rule-174/175 photo-share repair
