@@ -1,0 +1,62 @@
+// welcomeSend (Sep 14 2026) — distinct from sendPinMessage (which sends portal credentials):
+// this is a warm intro that never includes a PIN, goes through the real gated pipeline
+// (smsGatedSend) instead of a direct sendSMS, and only marks Welcome_Sent on an ACTUAL sent
+// message — not on a gate-blocked or failed one. Structural/source checks (heavy Sheets I/O
+// makes a full mocked-fetch test not worth the setup here, matching this codebase's own
+// convention — see releaseMessageQueue/cronSweep, verified live instead).
+import fs from 'fs';
+import assert from 'node:assert';
+const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
+function grab(name) {
+  const i = src.indexOf('async function ' + name + '(');
+  if (i < 0) throw new Error('missing ' + name);
+  let d = 0, j = src.indexOf('{', src.indexOf(')', i));
+  for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } }
+  return src.slice(i, j + 1);
+}
+
+let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
+const fnBody = grab('welcomeSend');
+
+// ---- never a PIN in the welcome text — that's sendPinMessage's job, not this one's ----
+{
+  ok(!/\$\{pin\}/.test(fnBody) && !fnBody.includes('recipient.PIN'), 'the welcome message template never references a PIN — distinct purpose from sendPinMessage');
+}
+
+// ---- goes through the real gate, not a direct sendSMS ----
+{
+  ok(fnBody.includes('smsGatedSend('), 'welcomeSend sends via smsGatedSend (Global/Property/Customer/Tenant or Global/Vendor gate, Test Mode, Message_Queue)');
+  ok(!fnBody.includes('await sendSMS(env'), 'welcomeSend never calls the raw sendSMS path — that would bypass Test Mode and the gate entirely');
+}
+
+// ---- correct message_type per recipient type ----
+{
+  ok(fnBody.includes("message_type: 'tenant_welcome'"), 'tenant sends use message_type tenant_welcome');
+  ok(fnBody.includes("message_type: 'vendor_welcome'"), 'vendor sends use message_type vendor_welcome');
+}
+
+// ---- Welcome_Sent is only written AFTER confirming the message actually sent ----
+{
+  const guardIdx = fnBody.indexOf('if (!r.sent) return');
+  const writeIdx = fnBody.indexOf("Welcome_Sent: 'TRUE'");
+  ok(guardIdx >= 0, 'a not-sent guard exists at all');
+  ok(writeIdx >= 0, 'the Welcome_Sent write exists at all');
+  ok(guardIdx < writeIdx, 'the not-sent guard is positioned BEFORE the Welcome_Sent write — a gate-blocked or failed send can never falsely mark someone as welcomed');
+}
+
+// ---- tenant gate is given real property/owner, not left to default-open ----
+{
+  ok(fnBody.includes('property, owner, message_body'), 'tenant sendOpts passes the real property/owner objects to smsGatedSend, not leaving those gates to silently default open');
+}
+
+// ---- editable override: body.message, when given, replaces the default entirely ----
+{
+  ok(fnBody.includes('body.message ? String(body.message) : defaultMsg'), 'an explicit message in the request body fully overrides the generated default, so Hub edits actually take effect');
+}
+
+// ---- invalid type is rejected, not silently mishandled ----
+{
+  ok(fnBody.includes("Invalid type. Use: tenant or vendor"), 'an unrecognized type gets a clear error, not a silent fall-through');
+}
+
+console.log(`welcome-send: ${n}/${n} passing`);

@@ -375,9 +375,11 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary" onclick="window.open('vendor-setup.html','_blank')" title="Opens a full page with a contact-card upload — same link you can send to a new vendor">+ Add Vendor (full page / shareable link)</button>
     </div>
     <div id="vendors-pending-section"></div>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-unwelcomed" onchange="renderVendorsPage()"> Only show vendors who haven't received a welcome message</label>
     <div id="vendors-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
       <button class="btn small" onclick="bulkSendPinFromTab()">📱 Send PIN to Selected</button>
+      <button class="btn small" onclick="bulkSendWelcomeFromTab()">👋 Send Welcome to Selected</button>
       <button class="btn small secondary" onclick="clearPinChecks()">Deselect All</button>
     </div>
     <div id="vendors-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
@@ -389,9 +391,11 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary small" onclick="bulkSetPins()">Auto-Set PINs from Phone</button>
     </div>
     <div class="search-bar" style="margin-bottom:10px"><input type="text" id="tenant-search" placeholder="Search by name, property, unit…" oninput="renderTenantsPage()" style="width:100%;padding:9px 12px 9px 32px"></div>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-unwelcomed" onchange="renderTenantsPage()"> Only show tenants who haven't received a welcome message</label>
     <div id="tenants-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
       <button class="btn small" onclick="bulkSendPinFromTab()">📱 Send PIN to Selected</button>
+      <button class="btn small" onclick="bulkSendWelcomeFromTab()">👋 Send Welcome to Selected</button>
       <button class="btn small secondary" onclick="clearPinChecks()">Deselect All</button>
     </div>
     <div id="tenants-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
@@ -2924,15 +2928,20 @@ function rejectVendorRequest(id){
 function renderVendorsPage() {
   renderVendorsPendingSection();
   var el = document.getElementById('vendors-list');
+  var onlyUnwelcomed = !!((document.getElementById('vendor-filter-unwelcomed')||{}).checked);
   var vendors = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE' && String(v.Status||'').toLowerCase()!=='pending_review';});
-  if (!vendors.length) { el.innerHTML='<div class="loading">No vendors yet</div>'; return; }
+  if (onlyUnwelcomed) vendors = vendors.filter(function(v){ return v.Welcome_Sent !== 'TRUE'; });
+  if (!vendors.length) { el.innerHTML='<div class="loading">'+(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet')+'</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
-    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
       var nm = v.Name || '';
+      var welcomeBadge = v.Welcome_Sent === 'TRUE'
+        ? '<span style="color:var(--accent2);font-size:11px" title="'+esc(v.Welcome_Sent_Date||'')+'">👋 sent'+(v.Welcome_Sent_Date?' '+esc(v.Welcome_Sent_Date.slice(0,10)):'')+'</span>'
+        : '<span style="color:var(--muted);font-size:11px">— not yet</span>';
       return '<tr>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+v.ID+'" data-type="vendor" data-name="'+nm+'" data-phone="'+(v.Phone||'')+'" onchange="updatePinActionBar(\'vendors-action-bar\')"></td>' +
         '<td>'+nm+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
@@ -2942,11 +2951,13 @@ function renderVendorsPage() {
         '<td>'+(v.Markets||'—')+'</td>' +
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
+        '<td>'+welcomeBadge+'</td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
         '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
         '<button class="btn small secondary" style="font-size:10px" onclick="regenerateAndShowPIN(\'vendor\',\''+v.ID+'\',\''+nm+'\')" title="Regenerate PIN">🔄</button>' +
+        (v.Phone?'<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')" title="Send Welcome">👋</button>':'') +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
@@ -2955,7 +2966,9 @@ function renderVendorsPage() {
 function renderTenantsPage() {
   var el = document.getElementById('tenants-list');
   var search = ((document.getElementById('tenant-search')||{}).value||'').toLowerCase().trim();
+  var onlyUnwelcomed = !!((document.getElementById('tenant-filter-unwelcomed')||{}).checked);
   var allTenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
+  if (onlyUnwelcomed) allTenants = allTenants.filter(function(t){ return t.Welcome_Sent !== 'TRUE'; });
 
   var tenants = search ? allTenants.filter(function(t) {
     var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
@@ -2968,11 +2981,11 @@ function renderTenantsPage() {
            (prop&&(prop.City||'').toLowerCase().includes(search));
   }) : allTenants;
 
-  if (!tenants.length) { el.innerHTML='<div class="loading">No tenants match "'+esc(search)+'" — try name, address, phone, or unit</div>'; return; }
+  if (!tenants.length) { el.innerHTML='<div class="loading">'+(onlyUnwelcomed?'Everyone has been welcomed.':'No tenants match "'+esc(search)+'" — try name, address, phone, or unit')+'</div>'; return; }
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
     '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'tenants-action-bar\')"></th>' +
-    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th>Welcome</th><th></th></tr></thead><tbody>' +
     tenants.map(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
       var propId = t.Property_ID || (unit&&unit.Property_ID) || '';
@@ -2981,6 +2994,9 @@ function renderTenantsPage() {
       var canSend = !!(t.PIN && t.Phone);
       var nm = (t.First_Name+' '+(t.Last_Name||'')).trim();
       var moveIn = t.Move_In_Date ? '<span style="color:var(--muted);font-size:11px">'+esc(t.Move_In_Date)+'</span>' : '<span style="color:var(--border)">—</span>';
+      var welcomeBadge = t.Welcome_Sent === 'TRUE'
+        ? '<span style="color:var(--accent2);font-size:11px" title="'+esc(t.Welcome_Sent_Date||'')+'">👋 sent'+(t.Welcome_Sent_Date?' '+esc(t.Welcome_Sent_Date.slice(0,10)):'')+'</span>'
+        : '<span style="color:var(--muted);font-size:11px">— not yet</span>';
       return '<tr>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+t.ID+'" data-type="tenant" data-name="'+nm+'" data-phone="'+(t.Phone||'')+'" onchange="updatePinActionBar(\'tenants-action-bar\')"></td>' +
         '<td>'+esc(nm)+'</td>' +
@@ -2989,12 +3005,14 @@ function renderTenantsPage() {
         '<td style="font-size:11px;color:var(--muted)">'+(prop?esc(prop.Address):'—')+'</td>' +
         '<td>'+moveIn+'</td>' +
         '<td style="'+pinColor+';font-weight:bold;letter-spacing:0.1em">'+(t.PIN||'—')+'</td>' +
+        '<td>'+welcomeBadge+'</td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
         '<button class="btn small secondary" onclick="openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅</button>' +
         '<button class="btn small secondary" onclick="openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')" style="background:var(--danger)20;border-color:var(--danger);color:var(--danger)">Move Out</button>' +
         '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+esc(t.Phone||'')+'\')" title="Set PIN">PIN</button>' +
         (canSend?'<button class="btn small" style="background:var(--info);color:#fff" onclick="previewSendPin(\'tenant\',\''+t.ID+'\',\''+esc(t.First_Name)+'\',\''+esc(t.Phone||'')+'\')">📱</button>':'') +
+        (t.Phone?'<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'tenant\',\''+t.ID+'\',\''+esc(nm)+'\',\''+esc(t.Phone||'')+'\')" title="Send Welcome">👋</button>':'') +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
@@ -3874,6 +3892,112 @@ function bulkSendPinFromTab() {
   document.getElementById('bulk-pin-send-btn').disabled = false;
   document.getElementById('bulk-pin-send-btn').textContent = 'SEND TO ALL (' + _pinSendQueue.length + ')';
   openModal('modal-send-pin-bulk');
+}
+
+// ── Welcome message system (Sep 14 2026) — same preview-then-send / bulk-queue-then-send
+// shape as the PIN system above, but the message text is EDITABLE (a textarea, not a fixed
+// preview) since welcome wording is more likely to want a per-send tweak, and sends go
+// through smsGatedSend server-side (Global/Property/Customer/Tenant or Global/Vendor gates,
+// Test Mode redirect, Message_Queue row) rather than a dedicated raw-send path like PIN uses.
+// Bulk defaults are deliberately generic (no name) since one shared text goes to everyone
+// selected — the single-send preview is the personalized one (comes from the server, uses
+// that person's actual name/address).
+var DEFAULT_TENANT_WELCOME_TEXT = "Hi, this is Ridge Co Property Maintenance. Save this number — you can text us anytime with a maintenance request, and we'll keep you updated on any work by text. Questions? Just reply here.";
+var DEFAULT_VENDOR_WELCOME_TEXT = "Hi, welcome to the Ridge Co vendor network. You'll get a text with job details whenever we assign you work, along with a link to your vendor portal to accept jobs, log time, and submit invoices. Questions? Reply here or give us a call.";
+var _welcomeSendQueue = [];
+var _currentWelcomeSend = null;
+
+function previewSendWelcome(type, id, name, phone) {
+  _currentWelcomeSend = { type: type, id: id };
+  document.getElementById('send-welcome-to').textContent = 'To: ' + name + ' · ' + phone;
+  document.getElementById('send-welcome-text').value = 'Loading…';
+  document.getElementById('send-welcome-msg').innerHTML = '';
+  document.getElementById('send-welcome-confirm-btn').disabled = false;
+  openModal('modal-send-welcome');
+  api('POST', '/welcome/send', { type: type, id: id, preview_only: true }).then(function(res) {
+    if (res.preview) {
+      document.getElementById('send-welcome-text').value = res.preview;
+    } else {
+      document.getElementById('send-welcome-text').value = '';
+      document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + (res.error || 'Cannot preview') + '</div>';
+      document.getElementById('send-welcome-confirm-btn').disabled = true;
+    }
+  });
+}
+
+function confirmSendWelcome() {
+  if (!_currentWelcomeSend) return;
+  var text = document.getElementById('send-welcome-text').value.trim();
+  if (!text) { toast('Message cannot be blank','error'); return; }
+  var btn = document.getElementById('send-welcome-confirm-btn');
+  btn.disabled = true; btn.textContent = 'SENDING…';
+  document.getElementById('send-welcome-msg').innerHTML = '';
+  api('POST', '/welcome/send', { type: _currentWelcomeSend.type, id: _currentWelcomeSend.id, message: text }).then(function(res) {
+    btn.textContent = 'SEND SMS';
+    if (res.success) {
+      document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>';
+      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); }, 1800);
+    } else {
+      btn.disabled = false;
+      document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + (res.error||'Error') + '</div>';
+    }
+  });
+}
+
+function bulkSendWelcomeFromTab() {
+  var checked = Array.from(document.querySelectorAll('.pin-check:checked'));
+  if (!checked.length) return;
+  _welcomeSendQueue = checked.map(function(cb) {
+    return { type: cb.dataset.type, id: cb.dataset.id, name: cb.dataset.name, phone: cb.dataset.phone };
+  });
+  var listEl = document.getElementById('bulk-welcome-list');
+  listEl.innerHTML = _welcomeSendQueue.map(function(item) {
+    return '<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface2);border-radius:4px;align-items:center">' +
+      '<span>' + esc(item.name) + '</span>' +
+      '<span style="color:var(--muted)">' + esc(item.phone || '—') + '</span>' +
+      '<span style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:10px;color:var(--muted)">' + (item.type||'').toUpperCase() + '</span>' +
+      '</div>';
+  }).join('');
+  // Same-typed selections share a sensible default; a mixed tenant+vendor batch starts from
+  // the tenant default and Brett edits it — bulk welcome across two different recipient types
+  // needing genuinely different wording in one send is an edge case, not the common path.
+  var sampleType = _welcomeSendQueue[0] ? _welcomeSendQueue[0].type : 'tenant';
+  document.getElementById('bulk-welcome-text').value = sampleType === 'vendor' ? DEFAULT_VENDOR_WELCOME_TEXT : DEFAULT_TENANT_WELCOME_TEXT;
+  document.getElementById('bulk-welcome-progress').style.display = 'none';
+  document.getElementById('bulk-welcome-msg').innerHTML = '';
+  document.getElementById('bulk-welcome-send-btn').disabled = false;
+  document.getElementById('bulk-welcome-send-btn').textContent = 'SEND TO ALL (' + _welcomeSendQueue.length + ')';
+  openModal('modal-send-welcome-bulk');
+}
+
+async function executeBulkSendWelcome() {
+  var total = _welcomeSendQueue.length;
+  if (!total) return;
+  var text = document.getElementById('bulk-welcome-text').value.trim();
+  if (!text) { toast('Message cannot be blank','error'); return; }
+  var sendBtn = document.getElementById('bulk-welcome-send-btn');
+  var cancelBtn = document.getElementById('bulk-welcome-cancel-btn');
+  sendBtn.disabled = true;
+  cancelBtn.textContent = 'Close';
+  document.getElementById('bulk-welcome-progress').style.display = '';
+  var sent = 0, errors = [];
+  for (var i = 0; i < total; i++) {
+    var item = _welcomeSendQueue[i];
+    document.getElementById('bulk-welcome-status').textContent = 'Sending to ' + item.name + '… (' + (i+1) + '/' + total + ')';
+    document.getElementById('bulk-welcome-bar').style.width = Math.round(((i+1)/total)*100) + '%';
+    try {
+      var res = await apiPromise('POST', '/welcome/send', { type: item.type, id: item.id, message: text });
+      if (res.success) { sent++; }
+      else { errors.push(item.name + ': ' + (res.error||'error')); }
+    } catch(e) { errors.push(item.name + ': connection error'); }
+    await new Promise(function(r){ setTimeout(r, 300); }); // rate limit buffer
+  }
+  document.getElementById('bulk-welcome-status').textContent = '✓ Done: ' + sent + ' sent' + (errors.length ? ', ' + errors.length + ' failed' : '');
+  document.getElementById('bulk-welcome-msg').innerHTML = errors.length
+    ? '<div style="color:var(--danger);font-size:12px;margin-top:8px">' + errors.map(esc).join('<br>') + '</div>'
+    : '';
+  clearPinChecks();
+  loadAll();
 }
 
 async function executeBulkSendPin() {
@@ -9878,6 +10002,44 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
     <div class="modal-actions">
       <button class="btn secondary" id="bulk-pin-cancel-btn" onclick="closeModal('modal-send-pin-bulk')">Cancel</button>
       <button class="btn" id="bulk-pin-send-btn" onclick="executeBulkSendPin()">SEND TO ALL</button>
+    </div>
+  </div>
+</div>
+
+<!-- SEND WELCOME MODAL (single) — editable textarea, not a fixed preview, since welcome
+     wording is more likely to need a per-send tweak than a standardized PIN reminder. -->
+<div class="modal-overlay" id="modal-send-welcome">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-title">👋 SEND WELCOME — PREVIEW</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Edit the message if you'd like, then send. This will be sent as an SMS to the number shown.</p>
+    <div id="send-welcome-to" style="color:var(--info);font-size:12px;margin-bottom:10px"></div>
+    <textarea id="send-welcome-text" style="width:100%;min-height:120px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;color:var(--text);font-family:var(--font);resize:vertical;margin-bottom:10px"></textarea>
+    <div id="send-welcome-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-send-welcome')">Cancel</button>
+      <button class="btn" id="send-welcome-confirm-btn" onclick="confirmSendWelcome()">SEND SMS</button>
+    </div>
+  </div>
+</div>
+
+<!-- BULK SEND WELCOME MODAL — one shared, editable message sent to everyone selected, same
+     shared-text pattern as the bulk On-Hold reason prompt. -->
+<div class="modal-overlay" id="modal-send-welcome-bulk">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title">👋 SEND WELCOME — BULK</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">Edit the message below — the SAME text goes to everyone listed. Useful for onboarding a new property's tenants (or a batch of new vendors) all at once.</p>
+    <textarea id="bulk-welcome-text" style="width:100%;min-height:100px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;color:var(--text);font-family:var(--font);resize:vertical;margin-bottom:10px"></textarea>
+    <div id="bulk-welcome-list" style="max-height:180px;overflow-y:auto;margin-bottom:12px;font-size:12px;display:flex;flex-direction:column;gap:6px"></div>
+    <div id="bulk-welcome-progress" style="display:none">
+      <div style="background:var(--surface2);border-radius:4px;height:6px;margin-bottom:8px">
+        <div id="bulk-welcome-bar" style="background:var(--accent2);height:100%;border-radius:4px;width:0;transition:width .3s"></div>
+      </div>
+      <div id="bulk-welcome-status" style="color:var(--muted);font-size:12px"></div>
+    </div>
+    <div id="bulk-welcome-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" id="bulk-welcome-cancel-btn" onclick="closeModal('modal-send-welcome-bulk')">Cancel</button>
+      <button class="btn" id="bulk-welcome-send-btn" onclick="executeBulkSendWelcome()">SEND TO ALL</button>
     </div>
   </div>
 </div>

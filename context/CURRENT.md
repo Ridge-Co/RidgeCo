@@ -1,4 +1,11 @@
-# WHERE THINGS STAND — Sep 14, 2026 (owner messages rebuilt)
+# WHERE THINGS STAND — Sep 14, 2026 (welcome messages)
+
+## 🟡 Built, needs a live pass: welcome messages — rule 169
+Full detail: FEATURE_LOG rule 169. tenant_welcome/vendor_welcome, manual send (single +
+bulk), editable text at send time, gated pipeline, Welcome_Sent tracking + a "hasn't been
+welcomed" filter on both Tenants and Vendors tables. Needs a live pass — see FEATURE_LOG
+rule 169 for the specific checks (preview/edit flow, bulk send, badge/filter update, a
+gate-blocked send showing the real reason rather than silently marking someone welcomed).
 
 ## 🟡 Built, needs a live pass: owner messages on the gated pipeline — rule 168
 Full detail: FEATURE_LOG rule 168. Owner Received (new)/Scheduled/Complete/On-Hold (new,
@@ -9,12 +16,12 @@ specific checks (Owner Received on a tenant-submitted WO, the 8h supersede behav
 On-Hold reason block, Hold_Reason showing up correctly).
 
 ## Still queued from the message-system redesign
-- Welcome messages (tenant_welcome / vendor_welcome) — manual button + "hasn't received one
-  yet" flag/bulk-send view.
 - Vendor nudge/update-request system — automatic clock (first nudge = later of next-day 9am ET
   or trigger+16h, daily, 5 max then flag Brett; resets on vendor activity; converts to
   invoice-needed nudges once scheduled date passes) + explicit "Request photos"/"Request
-  invoice" buttons + new Vendor_Requests tracking tab.
+  invoice" buttons + new Vendor_Requests tracking tab. Last open question before this can be
+  built: cron/scheduling mechanism for the automatic clock — could reuse the new GitHub Actions
+  sweep (rule 166/167) rather than needing anything new.
 
 ## 🟡 Built, needs 2 secrets + a live pass: quiet hours + GitHub Actions cron replacement — rule 166
 Full detail: FEATURE_LOG rule 166. Automatic SMS now holds until 9am ET if it would otherwise

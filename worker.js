@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.14';
+const BUILD_VERSION = '2026-09-14.15';
 
 export default {
   async fetch(request, env) {
@@ -351,6 +351,7 @@ export default {
         if (path === '/owner-user/add')           return await addRow(env, 'Owner_Users', body);
         if (path === '/owner-user/update')        return await updateRow(env, 'Owner_Users', body.id, body.fields);
         if (path === '/send-pin')                 return await sendPinMessage(env, body);
+        if (path === '/welcome/send')              return await welcomeSend(env, body);
         if (path === '/regenerate-pin')           return await regeneratePIN(env, body);
         if (path === '/admin/fix-pins')           return await adminFixPins(env, body);
         if (path === '/admin/fix-stale-tenants')  return await adminFixStaleTenants(env, body);
@@ -3856,6 +3857,55 @@ async function sendPinMessage(env, body) {
   await sendSMS(env, phone, messages[type]);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
   return json({ success: true, sent_to: phone, name: firstName });
+}
+
+// POST /welcome/send { type: 'tenant'|'vendor', id, preview_only?, message? } — Sep 14 2026,
+// Brett. Distinct from sendPinMessage above: that sends portal credentials; this is a warm
+// intro ("this is Ridge Co, save this number") that never includes a PIN. Goes through the
+// real gated pipeline (smsGatedSend), unlike sendPinMessage's direct sendSMS — a welcome text
+// still respects Global/Test Mode/the person's own SMS_Enabled toggle, and lands in
+// Message_Queue for review like every other gated message. The default text generated here is
+// PERSONALIZED (real name/address) for the single-send preview; body.message, if provided,
+// overrides it entirely — the Hub always lets Brett edit before sending (single: pre-filled
+// textarea; bulk: one shared editable text for the whole batch, deliberately generic/unnamed).
+async function welcomeSend(env, body) {
+  const { type, id } = body;
+  if (!type || !id) return json({ error: 'Missing type or id' }, 400);
+  let recipient, firstName, phone, defaultMsg, property = null, owner = null;
+  if (type === 'tenant') {
+    const [tenants, units, properties, owners] = await fetchTabs(env, ['Tenants','Units','Properties','Owners']);
+    recipient = tenants.find(t => t.ID === id);
+    if (!recipient) return json({ error: 'Tenant not found' }, 404);
+    if (!recipient.Phone) return json({ error: 'No phone number on file', name: recipient.First_Name||'' }, 400);
+    firstName = recipient.First_Name || 'there';
+    phone = recipient.Phone;
+    const unit = units.find(u => u.ID === recipient.Unit_ID);
+    const propId = recipient.Property_ID || (unit && unit.Property_ID) || '';
+    property = properties.find(p => p.ID === propId) || null;
+    owner = property ? owners.find(o => o.ID === property.Owner_ID) || null : null;
+    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+    defaultMsg = `Hi ${firstName}, this is Ridge Co Property Maintenance for ${address}. Save this number — you can text us anytime with a maintenance request, and we'll keep you updated on any work by text. Questions? Just reply here.`;
+  } else if (type === 'vendor') {
+    const vendors = await fetchTab(env, 'Vendors');
+    recipient = vendors.find(v => v.ID === id);
+    if (!recipient) return json({ error: 'Vendor not found' }, 404);
+    if (!recipient.Phone) return json({ error: 'No phone number on file', name: recipient.Name||'' }, 400);
+    firstName = (recipient.Name || 'there').split(' ')[0];
+    phone = recipient.Phone;
+    defaultMsg = `Hi ${firstName}, welcome to the Ridge Co vendor network. You'll get a text with job details whenever we assign you work, along with a link to your vendor portal (${PORTAL_BASE}/vendor.html) to accept jobs, log time, and submit invoices. Questions? Reply here or give us a call.`;
+  } else {
+    return json({ error: 'Invalid type. Use: tenant or vendor' }, 400);
+  }
+  if (body.preview_only) return json({ preview: defaultMsg, phone, name: firstName });
+  const finalMsg = body.message ? String(body.message) : defaultMsg;
+  const sendOpts = type === 'tenant'
+    ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg }
+    : { wo_id: '', message_type: 'vendor_welcome', recipient_type: 'vendor', vendor: recipient, message_body: finalMsg };
+  const r = await smsGatedSend(env, sendOpts);
+  if (!r.sent) return json({ error: r.send_ok ? 'Send failed' : ('Blocked: ' + r.gate_snapshot), name: firstName }, r.send_ok ? 502 : 400);
+  try { await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', ['Welcome_Sent','Welcome_Sent_Date']); } catch (_) {}
+  await updateRow(env, type === 'tenant' ? 'Tenants' : 'Vendors', id, { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString() });
+  return json({ success: true, sent_to: r.test_mode ? '(test mode)' : phone, name: firstName });
 }
 
 // ── VENDOR BILLING ───────────────────────────────────────────
