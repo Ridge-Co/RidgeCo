@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.5';
+const BUILD_VERSION = '2026-09-15.6';
 
 export default {
   async fetch(request, env) {
@@ -365,6 +365,7 @@ export default {
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
+        if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
         if (path === '/estimate/unapprove')       return await unapproveEstimate(env, body);
@@ -5692,6 +5693,46 @@ async function testDriveAccess(env) {
     if(createData.id){const delRes=await fetch(`https://www.googleapis.com/drive/v3/files/${createData.id}?supportsAllDrives=true`,{method:'DELETE',headers:{Authorization:`Bearer ${token}`}});results.deleteStatus=delRes.status;}
     return json({ok:results.createStatus===200,results});
   } catch(e){return json({ok:false,error:e.message,results});}
+}
+
+// Read-only diagnostic (rule 179): a 404 from Drive's permissions/share API can mean the file
+// is genuinely gone, OR that the service account has zero visibility into a file that still
+// exists (Google returns 404 rather than 403 for files the caller can't see at all, to avoid
+// leaking existence) — driveShareAnyone's failure alone can't tell those apart. This calls
+// Drive's files.get directly per ID and reports what Drive itself says: found (+ whether it's
+// merely trashed, which still counts as "gone" for sharing purposes) or the real error. Never
+// writes anything — files.get is a plain read.
+async function adminDriveFileCheck(env, body) {
+  body = body || {};
+  const ids = Array.isArray(body.file_ids) ? body.file_ids.filter(Boolean).slice(0, 50) : [];
+  if (!ids.length) return json({ error: 'file_ids (array, max 50) required' }, 400);
+  try {
+    const token = await getAccessToken(env);
+    if (!token) return json({ error: 'Failed to get Google access token' }, 500);
+    const results = [];
+    for (const id of ids) {
+      try {
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=id,name,trashed,driveId,parents,mimeType,owners(emailAddress)&supportsAllDrives=true`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          results.push({
+            id, found: true, trashed: !!data.trashed, name: data.name || null,
+            drive_id: data.driveId || null, parents: data.parents || [],
+            owners: (data.owners || []).map(o => o.emailAddress),
+          });
+        } else {
+          let msg = `HTTP ${res.status}`;
+          try { const eb = await res.json(); msg = (eb && eb.error && eb.error.message) || msg; } catch (_) {}
+          results.push({ id, found: false, status: res.status, error: msg });
+        }
+      } catch (e) {
+        results.push({ id, found: false, status: null, error: String((e && e.message) || e) });
+      }
+    }
+    return json({ ok: true, checked: results.length, results });
+  } catch (e) { return json({ error: e.message }, 500); }
 }
 
 async function createUploadSession(env, body) {
