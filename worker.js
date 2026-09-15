@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.7';
+const BUILD_VERSION = '2026-09-14.8';
 
 export default {
   async fetch(request, env) {
@@ -3359,8 +3359,8 @@ async function assignVendor(env, body) {
     // once the vendor accepts (reply YES or Accept in the portal). Accepting moves the status,
     // which is what lets the tenant-notification automation fire.
     const msg = isSpanish
-      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} en ${address}. Problema: ${wo.Description}. Responda SI para aceptar — el código de la caja y el contacto del inquilino se desbloquean en su portal al aceptar. Responda NO para rechazar.`
-      : `[${body.wo_id}] New job: ${wo.Trade} at ${address}. Issue: ${wo.Description}. Reply YES to accept — the lockbox code & tenant contact unlock in your portal once you accept. Reply NO to decline.`;
+      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Responda SI para aceptar — el código de la caja y el contacto del inquilino se desbloquean en su portal al aceptar. Responda NO para rechazar.`
+      : `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Reply YES to accept — the lockbox code & tenant contact unlock in your portal once you accept. Reply NO to decline.`;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Message content UNCHANGED (the
     // accept-gate withholding above must not change) — only gated + queued now.
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
@@ -3368,9 +3368,12 @@ async function assignVendor(env, body) {
   }
   if (notify && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
-    // name + phone (Brett confirmed this is already customer-facing and safe to surface).
+    // name + phone (Brett confirmed this is already customer-facing and safe to surface),
+    // and a short job label (woJobLabel) so two same-trade/same-address jobs never read
+    // identically in a text — "your General job" alone was indistinguishable from any other
+    // General job at the same address.
     const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
-    const msg = `Hi ${tenant.First_Name}, your maintenance request (${wo.Trade}) has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
+    const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     tenantSMSSent = r.sent;
   }
@@ -3406,8 +3409,9 @@ async function updateStatus(env, body) {
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
     const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
-      // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed.
-      const msg = `Hi ${tenant.First_Name}, your ${wo.Trade} repair at ${address} is complete. If you have any concerns please reply or call us. Ref: ${body.wo_id}.`;
+      // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
+      // same-address jobs distinguishable in the text (see tenant_job_assigned's comment).
+      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. If you have any concerns please reply or call us. Ref: ${body.wo_id}.`;
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
     if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
@@ -5638,7 +5642,8 @@ async function scheduleWO(env, body) {
     const address=property?property.Address+(unit?' Unit '+unit.Unit_Label:''):'your address';
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
-      const msg=isWithinHour?`Hi ${tenant.First_Name}, your technician is on the way and will arrive within 1 hour for the ${wo.Trade} work at ${address}. Ref: ${body.wo_id}.`:`Hi ${tenant.First_Name}, your ${wo.Trade} appointment at ${address} is scheduled for ${dateStr}, ${body.window}. Ref: ${body.wo_id}.`;
+      // woJobLabel keeps two same-trade/same-address jobs distinguishable in the text.
+      const msg=isWithinHour?`Hi ${tenant.First_Name}, your technician is on the way and will arrive within 1 hour for your ${woJobLabel(wo)} at ${address}. Ref: ${body.wo_id}.`:`Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is scheduled for ${dateStr}, ${body.window}. Ref: ${body.wo_id}.`;
       const now=new Date(), tomorrow=new Date(now); tomorrow.setDate(tomorrow.getDate()+1); const tomorrowStr=tomorrow.toISOString().split('T')[0];
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_scheduled. Same-day/within-hour sends
       // immediately through the gate; anything further out still uses the pre-existing
@@ -13823,4 +13828,19 @@ function formatPhoneDisplay(phone) {
   const digits = String(phone || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
   if (digits.length !== 10) return phone ? String(phone) : '';
   return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`;
+}
+
+// "Trade job: short description" for tenant/vendor SMS. Brett: two same-trade, same-address
+// jobs (e.g. two "General" WOs at the same property) were indistinguishable in a text — "your
+// General job at 123 Test St" reads identically whether it's "repair the front steps" or
+// "diagnose the leak that fell on the tenant's bed." Same 60-char truncation convention the
+// WO card list already uses (woCard(), index.html) — doesn't need to be the full description,
+// just enough that two jobs at the same address/trade never read the same. No trade -> falls
+// back to "General" (matches the same default used elsewhere for an unset Trade).
+function woJobLabel(wo) {
+  const trade = (wo && wo.Trade) || 'General';
+  const desc = String((wo && wo.Description) || '').trim();
+  if (!desc) return `${trade} job`;
+  const short = desc.length > 60 ? desc.slice(0, 60).trim() + '…' : desc;
+  return `${trade} job (${short})`;
 }

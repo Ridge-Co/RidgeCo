@@ -1,4 +1,13 @@
-# WHERE THINGS STAND — Sep 14, 2026 (even later still, again)
+# WHERE THINGS STAND — Sep 14, 2026 (Twilio live-test round, later still)
+
+## 🟡 Built, not yet live-verified: SMS text now names the actual job — rule 163
+Full detail: FEATURE_LOG rule 163. Brett, live-testing: two same-trade jobs at the same address
+read identically in a text ("your General job at 123 Test St" either way). New `woJobLabel(wo)`
+builds `"{Trade} job ({short description})"` — used in all 3 tenant message types; vendor's own
+text keeps the FULL untruncated description (lower priority per Brett — vendors have portal
+access as a backup). `node --check` clean, full suite green, new `test/wo-job-label.test.mjs`
+(8 assertions, reproduces Brett's own two example labels exactly). **Needs Brett's live pass**:
+assign a vendor on a real WO and confirm the tenant text names the actual job now.
 
 ## 🟡 Built, not yet live-verified: Work Order Void/Hide + duplicate-create guard — rule 162
 Full detail: FEATURE_LOG rule 162. Brett hit WO-1192 live: a double-tap on Create Work Order
