@@ -72,4 +72,17 @@ const resetBody = grabAsync('resetVendorNudgeClock');
   ok(resetBody.includes('Nudge_Count'), 'resetting the clock also resets the nudge count, not just the timer — a re-engaged vendor is no longer a 5-strikes-in candidate');
 }
 
+// ---- regression guard: a quiet-hours-held nudge still counts, caught by live testing ----
+// (a message held for quiet hours returns sent:false from smsGatedSend even though it WILL
+// go out once quiet hours end — treating that as "didn't happen" would let the sweep fire a
+// second nudge on top of the one already queued for release).
+const createReqBody = grabAsync('createVendorRequest');
+{
+  ok(createReqBody.includes('held_for_quiet_hours'), 'createVendorRequest treats a quiet-hours hold as dispatched, not as a no-op, for nudge counting');
+  ok(!createReqBody.includes('r.sent?1:0') && !createReqBody.includes('r.sent ? 1 : 0'), 'the nudge-count increment no longer keys off r.sent alone');
+}
+{
+  ok(sweepBody.includes('held_for_quiet_hours'), 'processVendorNudges also treats a quiet-hours hold as dispatched, not as a no-op');
+}
+
 console.log(`vendor-nudges: ${n}/${n} passing`);

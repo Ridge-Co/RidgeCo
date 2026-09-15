@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.17';
+const BUILD_VERSION = '2026-09-14.18';
 
 export default {
   async fetch(request, env) {
@@ -5970,19 +5970,25 @@ async function createVendorRequest(env, body) {
     ? `Hi ${vname}, could you upload before/after photos for ${woId} at ${address} when you get a chance? You can add them from your vendor portal. ${vendorPortalLink(woId)}`
     : `Hi ${vname}, please submit your invoice for ${woId} at ${address} when you get a chance — you can do this from your vendor portal. ${vendorPortalLink(woId)}`;
   const r = await smsGatedSend(env, { wo_id: woId, message_type: `vendor_request_${reqType}`, recipient_type: 'vendor', vendor, message_body: msg });
+  // "Dispatched" means the message actually entered the pipeline — either sent outright, or
+  // held for quiet hours (which WILL send once quiet hours end, per rule 166's own release
+  // sweep). Only a genuine gate block or send failure should NOT count toward the nudge
+  // budget/timer — a quiet-hours hold isn't that, and treating it as "didn't happen" would let
+  // the automatic sweep fire ANOTHER nudge on top of the one already queued for 9am release.
+  const dispatched = r.sent || r.held_for_quiet_hours;
   const now = new Date();
   const existing = rows.find(x => x.WO_ID === woId && x.Vendor_ID === vendorId && x.Request_Type === reqType && x.Status === 'open');
   const nextNudge = new Date(now.getTime() + VENDOR_MANUAL_REPEAT_HOURS*3600000).toISOString();
   if (existing) {
-    await updateRow(env, VENDOR_REQ_TAB, existing.ID, { Nudge_Count: String((parseInt(existing.Nudge_Count,10)||0) + (r.sent?1:0)), Next_Nudge_At: nextNudge, Last_Activity_At: now.toISOString() });
+    await updateRow(env, VENDOR_REQ_TAB, existing.ID, { Nudge_Count: String((parseInt(existing.Nudge_Count,10)||0) + (dispatched?1:0)), Next_Nudge_At: nextNudge, Last_Activity_At: now.toISOString() });
   } else {
     await addRow(env, VENDOR_REQ_TAB, {
       WO_ID: woId, Vendor_ID: vendorId, Request_Type: reqType, Status: 'open',
-      Nudge_Count: r.sent ? '1' : '0', First_Nudge_At: now.toISOString(), Next_Nudge_At: nextNudge,
+      Nudge_Count: dispatched ? '1' : '0', First_Nudge_At: now.toISOString(), Next_Nudge_At: nextNudge,
       Last_Activity_At: now.toISOString(), Satisfied_Date: '', Created_Date: now.toISOString(), Active: 'TRUE',
     });
   }
-  return json({ success: true, sent: r.sent, test_mode: r.test_mode, gate_snapshot: r.gate_snapshot });
+  return json({ success: true, sent: r.sent, held_for_quiet_hours: !!r.held_for_quiet_hours, test_mode: r.test_mode, gate_snapshot: r.gate_snapshot });
 }
 
 // Called from the periodic sweep (POST /cron/sweep, cronSweep). Handles all 3 request types
@@ -6054,11 +6060,14 @@ async function processVendorNudges(env) {
       msgType = 'vendor_nudge_invoice'; repeatHours = VENDOR_MANUAL_REPEAT_HOURS;
     }
     const r = await smsGatedSend(env, { wo_id: row.WO_ID, message_type: msgType, recipient_type: 'vendor', vendor, message_body: msg });
+    // Same dispatched-vs-sent distinction as createVendorRequest above — a quiet-hours hold
+    // still counts and still advances the timer, since the message IS queued to go out.
+    const dispatched = r.sent || r.held_for_quiet_hours;
     await updateRow(env, VENDOR_REQ_TAB, row.ID, {
-      Nudge_Count: String(nudgeCount + (r.sent ? 1 : 0)),
+      Nudge_Count: String(nudgeCount + (dispatched ? 1 : 0)),
       Next_Nudge_At: new Date(now.getTime() + repeatHours*3600000).toISOString(),
     });
-    results.push({ id: row.ID, action: r.sent ? 'nudged' : 'nudge_blocked', gate_snapshot: r.gate_snapshot });
+    results.push({ id: row.ID, action: dispatched ? 'nudged' : 'nudge_blocked', gate_snapshot: r.gate_snapshot });
   }
   return { checked: due.length, results };
 }
