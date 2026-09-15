@@ -1,4 +1,48 @@
-# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, the pattern behind them closed off — rule 175, then the repair tool's own limit + batching + delivery + diagnostics bugs fixed — FL-20260915-1649-q8, FL-20260915-1714-wy, FL-20260915-1731-yh)
+# WHERE THINGS STAND — Sep 15, 2026 (documentation-completeness infrastructure — FL-20260915-1644-cz — on top of the share-attachments repair chain and rule 175)
+
+## 🟢 Shipped, one real bug caught by its own first live run: documentation-completeness infrastructure — FL-20260915-1644-cz
+Full detail: FEATURE_LOG `[FL-20260915-1644-cz]`. Brett's ask after the Sep 14 documentation
+gaps: capture more as it happens, plus a scheduled audit to catch what still slips through,
+without needing a manual save from every session that touched something that day. Four pieces:
+
+1. **ID/tag convention** (FEATURE_LOG.md + BACKLOG.md headers) — new entries get
+   `[FL-YYYYMMDD-HHMM-xx] [tags]` instead of the next sequential number. Kills the
+   "two concurrent sessions both grab 171" collision class outright rather than detecting it
+   after the fact; tags make cross-session/cross-subject search work via plain grep. Already
+   picked up and used correctly by a concurrent session the same day (see the share-attachments
+   entries below, IDs `FL-20260915-1649-q8` etc.) — a good early sign it's actually sticking.
+2. **`ridgeco-validate` documentation gate** — output contract gained a Documentation field;
+   a change with no FEATURE_LOG entry now blocks autonomy-ladder eligibility. **Sandbox-local
+   skill edit — persistence to a real future session is NOT confirmed.** Watch for whether this
+   field actually shows up next time ridgeco-validate runs.
+3. **`brett-context` staleness tripwire** — session-start check comparing CURRENT.md's header
+   date against the latest commit date, surfaces a plain warning if they've drifted. **Same
+   persistence caveat as above** — watch for whether it fires on the next fresh session load.
+4. **`scripts/doc_audit.py` + `.github/workflows/doc-audit.yml`** — nightly, no-Worker-needed
+   audit (full repo access from the GitHub Actions runner itself) flagging commits with no
+   apparent FEATURE_LOG entry, via per-entry keyword clustering (an early whole-file-presence
+   version was useless — scored 9/9 false-positive "hits" on an undocumented commit, since
+   common words like "receipt"/"work"/"property" appear everywhere in a 150+-entry file).
+   Commits its own run result to `context/DOC_AUDIT_LOG.md` — a missed night is a visible gap
+   in that file's own run history, not silence.
+
+**Real bug caught by the audit's own first live run, same day**: it crashed before writing
+anything — `CURRENT.md`'s header used an abbreviated month ("Sep 15") and the parser only
+accepted the full name, an untested path since local testing always passed `--since-date`
+explicitly. The workflow's own `|| echo gaps_found=true` masked the crash as a green step —
+looked like "ran, found nothing" when the check never actually ran. Fixed: parser accepts both
+month formats now; more importantly, "since" now sources from the audit's OWN last recorded run
+in `DOC_AUDIT_LOG.md` first (self-contained, doesn't depend on another file's formatting staying
+stable), falling back to `CURRENT.md`'s header only on a genuine first run, and a fixed lookback
+window if even that's unavailable — never just crashes. Exit codes now distinguish "ran fine,
+found gaps" (1) from "the audit itself broke" (2), so a future silent crash can't hide behind a
+green checkmark. Re-triggered for real after the fix — confirmed a real commit landed
+(`4140450`) with a correct run entry.
+
+**Not built**: SMS notification on a flagged gap — wasn't part of what was asked, would need a
+new endpoint/token. **Worth checking periodically**: `context/DOC_AUDIT_LOG.md` for whether the
+nightly run is actually firing on schedule (not just that it can, which is all that's confirmed
+so far via two manual triggers).
 
 ## 🟡 Diagnostic added, root cause not yet run: WO-1039's 5 files are 404 — but which kind? — FL-20260915-1745-tp
 Full detail: FEATURE_LOG `[FL-20260915-1745-tp]`. Brett's first real batch (with the corrected
