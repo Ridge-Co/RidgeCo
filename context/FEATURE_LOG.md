@@ -1,5 +1,41 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.86 | **Last Updated:** September 15, 2026 (preventive measure: centralized the silent-failure pattern that caused rule 174, per Brett's explicit ask)
+**Version:** v1.87 | **Last Updated:** September 15, 2026 (ID/tag convention for new entries)
+
+## ID/tag convention (Sep 15, 2026) — read this before adding a new entry
+Entries before this note keep their old `**NNN.**` sequential numbers — never renumbered, never
+touched, for real. **Every new entry from here forward gets an ID instead of the next number:**
+
+    **[FL-YYYYMMDD-HHMM-xx] [tag-one] [tag-two] Title of what happened (files/functions touched).**
+
+- **`YYYYMMDD-HHMM`** — the date and time (24h, your local time is fine, just be consistent) you
+  write the entry. Year-first so entries sort correctly as plain text.
+- **`xx`** — two random base-36 characters (`0-9a-z`), picked fresh for this entry. Not
+  meaningful on their own — they exist purely so two entries written in the same minute
+  (two concurrent sessions is the real case this guards against) can't collide. To pick them:
+  `echo $((RANDOM % 36)) $((RANDOM % 36))` in bash, or just type two characters that feel
+  arbitrary — collision odds at this scale (a handful of entries per minute, worst case) are
+  low enough that "arbitrary" is fine; this isn't cryptography.
+- **Why not a commit SHA in the ID itself**: the entry is usually written as part of the same
+  commit as the code it describes, so that commit's own SHA doesn't exist yet at write time —
+  using it would mean either a two-commit dance (code, then docs) or an `--amend` that changes
+  the SHA out from under the reference. Sidestepped entirely: the ID doesn't need the SHA to be
+  unique (the timestamp+random already guarantees that), and tracing an ID to its real commit
+  works by just **including the exact ID string in the git commit message** — `git log --grep
+  "FL-20260915-1430-k7"` finds it. No self-reference problem, no two-commit requirement.
+- **Tags** — `[bracketed-lowercase-hyphenated]`, as many as genuinely apply (usually 1-3): the
+  subsystem/area, not the specific fix. `[twilio-sms]`, `[vendor-payments]`,
+  `[receipt-reconciler]`, `[owner-messages]`. Multiple entries sharing a tag is the whole point
+  — `grep '\[twilio-sms\]' FEATURE_LOG.md` should surface every entry that's ever touched that
+  area, related or not. This is what actually solves "did session A and session B step on the
+  same code for unrelated reasons" — not by preventing it (you can't, two sessions running at
+  once will sometimes land on the same file), but by making it trivially searchable after the
+  fact instead of requiring a human to remember or a Claude to guess.
+- Never check what's "already taken" before writing an ID — there's nothing to collide with by
+  construction. If two sessions land in the same file at the same time, they get two different
+  IDs and that's the end of it; no lookup, no coordination needed.
+
+Example: `**[FL-20260915-1430-k7] [twilio-sms] [owner-messages] Owner On-Hold now requires a
+reason before the status write happens (worker.js updateStatus).**`
 
 **175. Preventive measure for rule 174's failure class — `ensureColumns` and `driveShareAnyone` now log failures centrally, so a future missing column/unshared file is discoverable instead of silently invisible (Sep 15 2026, worker.js + test/ensure-columns.test.mjs + test/turnover.test.mjs).** Brett's direct ask after rule 174: don't just fix the two reported bugs, reduce the CHANCE of this class of bug recurring. The actual risk wasn't limited to Receipts/`Payment_Source` — `ensureColumns` has 70+ call sites across this file, and most wrap it in a `catch(e){}`/`catch(_){}` written on the reasonable-sounding assumption that "the core write still lands, only a new field is at risk." That assumption is exactly what went silently wrong for weeks.
 

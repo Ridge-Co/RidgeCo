@@ -1,6 +1,21 @@
 # BrettOS Master Backlog
-**Version:** v1.44 | **Last Updated:** Sep 7, 2026
+**Version:** v1.45 | **Last Updated:** Sep 15, 2026
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
+
+## ID/tag convention (Sep 15, 2026) — read this before adding a new item
+Existing items keep their old `B-NNN` sequential numbers — never renumbered, never touched.
+**Every new item from here forward gets an ID instead of the next number:**
+
+    B-YYYYMMDD-HHMM-xx · 🔴/🟠/🟡/🟢/⏳ **Title** — description...
+
+Same scheme as FEATURE_LOG.md's new convention (see that file's own note for the full
+reasoning) — date+time down to the minute, plus two arbitrary base-36 characters so two items
+opened in the same minute across two different sessions can't collide, no lookup required
+before claiming an ID. Add `[bracketed-lowercase-hyphenated]` tags for the area (`[twilio-sms]`,
+`[vendor-payments]`, `[receipt-reconciler]`) so related items across unrelated sessions stay
+findable by grep even though they never share a number. Example:
+
+    B-20260915-1512-q3 · 🟠 **[vendor-payments]** Expedited vendor pay via QuickBooks Faster ACH — description...
 
 **Reconciliation pass — Sep 7, 2026 (this file + CURRENT.md had both gone stale since Aug 24 despite real Sep 2/3/7 sessions shipping real work):**
 - ✅ B-142/143/144-equivalents (manual price override, final-balance invoicing, eager QB customer creation) — shipped Sep 2, confirmed live on `main`, none Brett-verified yet. See CURRENT.md.
