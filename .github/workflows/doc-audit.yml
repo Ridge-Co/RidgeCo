@@ -1,0 +1,55 @@
+name: Documentation Audit
+
+# Runs scripts/doc_audit.py nightly — flags commits that landed with no apparent
+# FEATURE_LOG.md entry, so a real gap (like Sep 14 2026: 9 commits, ~2.5 hours of
+# real work, zero documentation, only found because Brett asked for an audit by
+# hand) gets caught on a schedule instead of by Brett noticing something's off.
+#
+# This workflow does its own git log/grep work directly (full repo checkout, no
+# Worker call needed for the core check) and commits its own run result to
+# context/DOC_AUDIT_LOG.md — that commit IS the "the audit actually ran tonight"
+# signal. A night this workflow doesn't fire shows up as a gap in that file's own
+# run history, not as silence nobody notices.
+#
+# Deliberately does NOT auto-write FEATURE_LOG entries for anything it flags —
+# see the script's own docstring for why: this is a heuristic worklist for a
+# human/Claude to actually look at, never a substitute for someone describing
+# what they built.
+
+on:
+  schedule:
+    - cron: '0 13 * * *'   # 9am ET daily (UTC 13:00; doesn't account for DST, so this
+                            # drifts to 8am ET during EDT — fine for a daily check, not
+                            # worth the complexity of a DST-aware cron schedule)
+  workflow_dispatch:        # manual/on-demand trigger
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # full history — the script needs real git log, not a shallow clone
+
+      - name: Run the audit
+        id: audit
+        run: |
+          python3 scripts/doc_audit.py || echo "gaps_found=true" >> "$GITHUB_OUTPUT"
+
+      - name: Commit the run result
+        run: |
+          git config user.name "Claude (Cowork)"
+          git config user.email "claude@brettos.local"
+          git add context/DOC_AUDIT_LOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Documentation audit run $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Documentation Audit" >> "$GITHUB_STEP_SUMMARY"
+          tail -20 context/DOC_AUDIT_LOG.md >> "$GITHUB_STEP_SUMMARY"
