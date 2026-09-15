@@ -1,4 +1,24 @@
-# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, then the pattern behind them closed off — rule 175)
+# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, the pattern behind them closed off — rule 175, then the repair tool's own limit bug fixed — FL-20260915-1649-q8)
+
+## 🟢 Fixed and deployed: `/admin/share-attachments` dry-run `limit` was a silent no-op — FL-20260915-1649-q8
+Full detail: FEATURE_LOG `[FL-20260915-1649-q8]`. Brett tried the rule-174/175 photo-share repair
+tool with `limit` at 5, 10, 15, and 100 in dry-run and got byte-identical output every time —
+correctly didn't trust it enough to run for real. Root cause: the limit check compared against
+`shared`, a counter dry-run never moves (it always skips the share call before that counter would
+increment) — so `limit` provably had zero effect on any dry-run response. Fixed: limit now gates
+on a new `considered` counter that increments in both modes, response reports
+`considered_this_batch`/`remaining_after_this_batch` so the limit's effect is visible. Also fixed
+the tautological `shared: 0` in dry-run — it now does a real read-only Drive permission check per
+considered file (`driveIsSharedAnyone`, no write) and reports genuine `already_shared`/
+`needs_sharing` counts. Verified: `node --check` clean, new
+`test/share-attachments-limit.test.mjs` (25 assertions), full suite 69/69, deployed
+(`BUILD_VERSION 2026-09-15.3`), confirmed via `/version`.
+**Still needs Brett's go**: the actual retroactive sweep (492 shareable attachments, rule 174) —
+he should now get a trustworthy dry-run reading via the same local tool
+(`ridgeco-share-attachments-repair.html`, same URL/token, no changes needed to the tool itself —
+the fix is entirely server-side) before deciding whether to run it for real. Still only runnable
+from his own browser — the platform's write-classifier has twice blocked this session from
+calling the real endpoint directly.
 
 ## 🟢 Fixed and deployed: preventive measure for rule 174's failure class — rule 175
 Full detail: FEATURE_LOG rule 175. Direct response to Brett's ask: don't just fix the two

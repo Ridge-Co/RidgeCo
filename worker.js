@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.2';
+const BUILD_VERSION = '2026-09-15.3';
 
 export default {
   async fetch(request, env) {
@@ -5784,7 +5784,17 @@ async function adminShareAttachments(env, body) {
     const rows = await fetchTab(env, 'Attachments');
     const token = await getAccessToken(env);
     if (!token) return json({ error: 'Failed to get Google access token' }, 500);
-    let scanned = 0, shareable = 0, shared = 0, skippedInternal = 0, skippedNoId = 0, failed = 0;
+    // Rule 176: `limit` used to be checked only against `shared`, which dry-run never
+    // increments (it always `continue`d before the share call) — so limit was silently a
+    // no-op in dry-run mode and every dry-run response was identical regardless of the value
+    // typed in. It's now checked against `considered` (files this batch actually looks at),
+    // so it bounds real work in BOTH modes: real Drive share calls when not dry-run, and real
+    // Drive permission-list lookups (see driveIsSharedAnyone below) when dry-run. Dry-run also
+    // no longer reports a tautological `shared: 0` — it does a genuine read-only check per
+    // considered file and reports `already_shared` / `needs_sharing`, so Brett can tell
+    // whether the sweep would actually do anything before running it for real.
+    let scanned = 0, shareable = 0, skippedInternal = 0, skippedNoId = 0;
+    let considered = 0, alreadyShared = 0, shared = 0, failed = 0;
     const failures = [];
     for (const r of rows) {
       scanned++;
@@ -5794,13 +5804,38 @@ async function adminShareAttachments(env, body) {
       const fileId = r.Drive_File_ID || '';
       if (!fileId) { skippedNoId++; continue; }
       shareable++;
-      if (limit && shared >= limit) continue;
-      if (dryRun) continue;
+      if (limit && considered >= limit) continue;
+      considered++;
+      if (dryRun) {
+        const isShared = await driveIsSharedAnyone(token, fileId);
+        if (isShared) alreadyShared++;
+        continue;
+      }
       const ok = await driveShareAnyone(token, fileId);
       if (ok) shared++; else { failed++; if (failures.length < 25) failures.push({ wo: r.WO_ID || '', file: r.File_Name || '', id: fileId }); }
     }
-    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Notes:`dry_run=${dryRun} shareable=${shareable} shared=${shared} failed=${failed}` }); } catch(_){}
-    return json({ success: true, dry_run: dryRun, scanned, shareable, shared, skipped_internal: skippedInternal, skipped_no_id: skippedNoId, failed, failures });
+    const remainingAfterBatch = Math.max(0, shareable - considered);
+    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Notes:`dry_run=${dryRun} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}` }); } catch(_){}
+    const out = {
+      success: true,
+      dry_run: dryRun,
+      scanned,
+      shareable,
+      limit: limit || null,
+      considered_this_batch: considered,
+      remaining_after_this_batch: remainingAfterBatch,
+      skipped_internal: skippedInternal,
+      skipped_no_id: skippedNoId,
+      failed,
+      failures,
+    };
+    if (dryRun) {
+      out.already_shared = alreadyShared;
+      out.needs_sharing = considered - alreadyShared;
+    } else {
+      out.shared = shared;
+    }
+    return json(out);
   } catch (e) { return json({ error: e.message }, 500); }
 }
 
@@ -12292,6 +12327,23 @@ async function driveShareAnyone(token, fileId) {
     } catch (e) { if (attempt < 2) await new Promise(r => setTimeout(r, 400)); }
   }
   return false;
+}
+
+// Read-only check: does this file already have an "anyone with the link" reader permission?
+// Used by the admin repair sweep's dry-run mode so it can report real already-shared/needs-
+// sharing counts instead of a tautological "shared: 0" (rule 176). Never writes anything.
+async function driveIsSharedAnyone(token, fileId) {
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true&fields=permissions(type,role)`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    const perms = (data && data.permissions) || [];
+    return perms.some(p => p.type === 'anyone');
+  } catch (e) {
+    return false;
+  }
 }
 
 // Download a Drive file's bytes (+ its content-type) so they can be re-uploaded to QuickBooks.
