@@ -1,4 +1,51 @@
-# WHERE THINGS STAND — Sep 14, 2026 (vendor nudge/request system — message redesign COMPLETE)
+# WHERE THINGS STAND — Sep 15, 2026 (documentation audit + a real open bug on rule 170)
+
+## 🔴 OPEN BUG, not yet root-caused: Brett expected vendor nudges to fire and they didn't
+Rule 170 (vendor nudge/request system) was built, deployed, and live-verified mechanically
+(clock creation timing, reset-on-activity, the quiet-hours-hold fix) — but Brett reports that
+after all that, he should have gotten actual nudge SMS and did not. **Per Brett's explicit
+instruction, this was NOT troubleshot in the session that found it** — flagging here so the
+next session picks it up directly rather than re-discovering it. Start here: check
+`GET /vendor-requests` for the real row(s) and their `Next_Nudge_At`/`Status`/`Nudge_Count`;
+check whether `POST /cron/sweep` is actually firing on schedule via the GitHub Actions run
+history (`cron-sweep.yml`) — rule 166/167 needed 2 secrets set (`CRON_SWEEP_TOKEN`, both
+Cloudflare + GitHub) before anything in the sweep can run at all; confirm those are actually
+set and the workflow has been running (not just that it CAN run, which was already verified
+once manually). Also worth checking Twilio's own delivery status for any nudge that the
+Message_Queue says went out but Brett never received — rule 159a already found a real
+"Twilio accepts it, phone gets nothing" gap in a different message type, not yet ruled out
+here too.
+
+## 🟢 Documentation audit — closed 3 real gaps where Sep 14 work never got a CURRENT.md/
+FEATURE_LOG entry (found and fixed Sep 15, 2026, in response to Brett's own audit request)
+Cross-checked every commit timestamped Sep 14 (14:24 through the Sep 15 early-morning
+continuation) against this file and FEATURE_LOG.md. Found and backfilled:
+- **Property Structure management** (Unit_Count auto-compute, Units add/rename/remove, tenant
+  unit reassignment) — had a FEATURE_LOG entry (from a concurrent session, landed mid this
+  session's own work) but it was mis-numbered **rule 163**, colliding with this session's own
+  unrelated "SMS text names the actual job" entry. Renumbered to **rule 171** (nothing else
+  referenced the old number, confirmed before renumbering) — no CURRENT.md entry existed for
+  it at all until now. See FEATURE_LOG rule 171.
+- **Receipt Reconciler description-fallback fix + pending-receipt backfill + image-gap
+  diagnostic** (5 commits, 14:32-14:58) — had NO FEATURE_LOG or CURRENT.md entry anywhere.
+  Backfilled as **FEATURE_LOG rule 172**, reconstructed from the original commit messages
+  (each already had detailed, self-documenting messages) — not re-verified live by this
+  backfill pass.
+- **Receipt Reconciler Unit picker + payment-source delineation + multi-receipt-per-photo
+  safety check + guided bill-submit review + Truck Stock Log** (4 commits, 15:27-16:38) — same
+  gap, backfilled as **FEATURE_LOG rule 173**, same caveat (reconstructed, not re-verified).
+
+**Also worth noting**: several of the backfilled commits' own `BUILD_VERSION` strings are
+still dated `2026-09-10.x` even though the actual work happened Sep 14 — a version-string/
+calendar drift, not a functional bug, not corrected by this pass since the version has moved
+on many times since. If anything from this specific cluster is ever the exact thing being
+live-tested, don't rely on the BUILD_VERSION string alone to prove it's deployed — check
+`git log` directly.
+
+**Not re-checked in this pass**: whether every OTHER session's work from Sep 14 (rules
+145-162 and earlier, already in this file) is fully accurate — this audit specifically
+targeted the GAP (things with zero entry anywhere), not a correctness re-review of entries
+that already exist.
 
 ## 🟡 Built, needs a live pass: vendor nudge/request system — rule 170
 Full detail: FEATURE_LOG rule 170. This was the last item queued from the Twilio-build message
