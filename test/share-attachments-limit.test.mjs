@@ -30,9 +30,9 @@ function grab(name) {
 let pass = 0, fail = 0;
 const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? ('got ' + JSON.stringify(got)) : ''); } };
 
-function makeSandbox({ fetchTabRows, alreadySharedIds, shareOkIds, telemetryCalls }) {
+function makeSandbox({ fetchTabRows, alreadySharedIds, shareOkIds, shareErrors, telemetryCalls }) {
   const factory = new Function(
-    'fetchTab', 'getAccessToken', 'logTelemetry', 'json', 'driveShareAnyone', 'driveIsSharedAnyone',
+    'fetchTab', 'getAccessToken', 'logTelemetry', 'json', 'driveShareAnyoneVerbose', 'driveIsSharedAnyone',
     "const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice'];\n" +
     grab('adminShareAttachments') +
     '\nreturn { adminShareAttachments };'
@@ -42,7 +42,14 @@ function makeSandbox({ fetchTabRows, alreadySharedIds, shareOkIds, telemetryCall
     async () => 'fake-token',
     async (env, rec) => { telemetryCalls.push(rec); },
     (data) => ({ __json: true, data }),
-    async (token, fileId) => (shareOkIds ? shareOkIds.has(fileId) : true),
+    // Rule 178: adminShareAttachments now calls the verbose variant directly to get real
+    // status/error detail on failure, not just a boolean.
+    async (token, fileId) => {
+      const ok = shareOkIds ? shareOkIds.has(fileId) : true;
+      if (ok) return { ok: true, status: 200, error: null };
+      const detail = (shareErrors && shareErrors[fileId]) || { status: 500, error: 'mock failure' };
+      return { ok: false, status: detail.status, error: detail.error };
+    },
     async (token, fileId) => alreadySharedIds.has(fileId),
   );
 }
@@ -100,11 +107,27 @@ function rowsOf(n, opts = {}) {
   t('real run has no dry-run-only fields', real5.already_shared === undefined && real5.needs_sharing === undefined);
   t('real run leaves the rest for a later batch', real5.remaining_after_this_batch === 5, real5.remaining_after_this_batch);
 
-  // ── 4. Real mode: failures still collect correctly, bounded by limit ──
+  // ── 4. Real mode: failures still collect correctly, bounded by limit, WITH real diagnostics ──
+  // Rule 178: a failure used to just say "failed" with zero detail — Brett hit 5 files under one
+  // WO that failed the same way every retry and there was no way to tell why. Failures now carry
+  // the real HTTP status + Drive's own error message.
   tc = [];
-  const S4 = makeSandbox({ fetchTabRows: rowsOf(6), alreadySharedIds: new Set(), telemetryCalls: tc, shareOkIds: new Set(['file-1','file-3']) });
+  const S4 = makeSandbox({
+    fetchTabRows: rowsOf(6), alreadySharedIds: new Set(), telemetryCalls: tc,
+    shareOkIds: new Set(['file-1','file-3']),
+    shareErrors: {
+      'file-2': { status: 403, error: 'The user does not have sufficient permissions for this file.' },
+      'file-4': { status: 404, error: 'File not found: file-4.' },
+      'file-5': { status: 403, error: 'The user does not have sufficient permissions for this file.' },
+      'file-6': { status: 500, error: 'Internal error' },
+    },
+  });
   const realFail = (await S4.adminShareAttachments({}, { dry_run: false, limit: 6 })).data;
   t('failed files are counted', realFail.failed === 4, realFail.failed);
+  t('failures carry the real HTTP status', realFail.failures.find(f => f.id === 'file-2').status === 403);
+  t('failures carry Drive\'s real error message', /sufficient permissions/.test(realFail.failures.find(f => f.id === 'file-2').error));
+  t('a 404 is distinguishable from a 403', realFail.failures.find(f => f.id === 'file-4').status === 404);
+  t('two files failing for the SAME reason both show it (spot the pattern)', realFail.failures.filter(f => f.status === 403).length === 2);
   t('failed files are listed', realFail.failures.length === 4, realFail.failures.length);
   t('telemetry logs the batch outcome', tc.length === 1 && /shareable=6/.test(tc[0].Notes), tc[0] && tc[0].Notes);
 

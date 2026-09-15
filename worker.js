@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.4';
+const BUILD_VERSION = '2026-09-15.5';
 
 export default {
   async fetch(request, env) {
@@ -5819,8 +5819,8 @@ async function adminShareAttachments(env, body) {
         if (isShared) alreadyShared++;
         continue;
       }
-      const ok = await driveShareAnyone(token, fileId);
-      if (ok) shared++; else { failed++; if (failures.length < 25) failures.push({ wo: r.WO_ID || '', file: r.File_Name || '', id: fileId }); }
+      const shareResult = await driveShareAnyoneVerbose(token, fileId);
+      if (shareResult.ok) shared++; else { failed++; if (failures.length < 25) failures.push({ wo: r.WO_ID || '', file: r.File_Name || '', id: fileId, status: shareResult.status, error: shareResult.error }); }
     }
     const remainingAfterBatch = Math.max(0, shareable - offset - considered);
     const nextOffset = offset + considered;
@@ -12326,6 +12326,20 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
 // image — the share call never succeeded). One retry with a short backoff, still non-fatal to
 // the caller, so a transient failure doesn't become a permanent one.
 async function driveShareAnyone(token, fileId) {
+  const r = await driveShareAnyoneVerbose(token, fileId);
+  return r.ok;
+}
+
+// Same retry/backoff behavior as driveShareAnyone, but returns the REAL reason on failure
+// (HTTP status + Drive's own error message) instead of collapsing it to a bare boolean.
+// Added rule 178: the admin repair sweep's `failures` array used to just say a file failed
+// with zero detail — Brett hit 5 files under one WO that failed the same way on every retry
+// (real writes, not the offset bug) and there was no way to tell "permission denied on this
+// specific Shared Drive" apart from "file no longer exists" apart from a transient network
+// blip, all of which need a different fix. driveShareAnyone (used at the other 5 fire-and-forget
+// call sites, which only ever cared about true/false) now just wraps this.
+async function driveShareAnyoneVerbose(token, fileId) {
+  let lastStatus = null, lastError = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`, {
@@ -12333,11 +12347,21 @@ async function driveShareAnyone(token, fileId) {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ role: 'reader', type: 'anyone' }),
       });
-      if (res.ok) return true;
+      if (res.ok) return { ok: true, status: res.status, error: null };
+      lastStatus = res.status;
+      try {
+        const errBody = await res.json();
+        lastError = (errBody && errBody.error && errBody.error.message) || JSON.stringify(errBody).slice(0, 200);
+      } catch (_) {
+        lastError = (await res.text().catch(() => '')).slice(0, 200) || `HTTP ${res.status}`;
+      }
       if (attempt < 2) await new Promise(r => setTimeout(r, 400));
-    } catch (e) { if (attempt < 2) await new Promise(r => setTimeout(r, 400)); }
+    } catch (e) {
+      lastError = String((e && e.message) || e);
+      if (attempt < 2) await new Promise(r => setTimeout(r, 400));
+    }
   }
-  return false;
+  return { ok: false, status: lastStatus, error: lastError };
 }
 
 // Read-only check: does this file already have an "anyone with the link" reader permission?

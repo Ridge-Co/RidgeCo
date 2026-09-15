@@ -1,4 +1,23 @@
-# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, the pattern behind them closed off — rule 175, then the repair tool's own limit + batching bugs fixed — FL-20260915-1649-q8, FL-20260915-1714-wy)
+# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, the pattern behind them closed off — rule 175, then the repair tool's own limit + batching + delivery + diagnostics bugs fixed — FL-20260915-1649-q8, FL-20260915-1714-wy, FL-20260915-1731-yh)
+
+## 🟡 Fixed and deployed, one thing still open: real batches revealed 2 more issues — FL-20260915-1731-yh
+Full detail: FEATURE_LOG `[FL-20260915-1731-yh]`. Brett ran "Run for real" 3 times and got
+byte-identical results — correctly asked if this was actually doing anything. Two separate
+causes: (1) **the updated offset-tracking tool from FL-20260915-1714-wy was never actually
+re-sent to him** — he was still on the original file, which never included `offset` in its
+requests, so every "batch" silently repeated the same first 25 files (the 20 real shares from
+batch 1 did land — not wasted, just not visible as progress). Delivered the corrected file this
+time. (2) **5 files under WO-1039 fail identically every retry** — a real, persistent issue,
+separate from the delivery mistake. `driveShareAnyone` discarded the actual Drive API error on
+failure; added `driveShareAnyoneVerbose` so `failures[]` now carries the real HTTP status +
+error message (403 vs 404 vs 5xx are very different problems). Tool also now persists its
+position via `localStorage` so a phone backgrounding the tab mid-sweep can't cause a repeat of
+issue (1). Verified: 42/42 in `test/share-attachments-limit.test.mjs`, full suite 69/69,
+deployed (`2026-09-15.5`), confirmed live.
+**Still open**: WO-1039's actual failure reason isn't known yet — this session's
+write-classifier blocks a real share call from here, so it couldn't be reproduced directly.
+Brett's next real batch (starting fresh with the corrected tool) will show the real status/error
+for those 5 files in the response; worth a quick read-together once he has it.
 
 ## 🟢 Fixed and deployed: `/admin/share-attachments` couldn't advance past its first batch — FL-20260915-1714-wy
 Full detail: FEATURE_LOG `[FL-20260915-1714-wy]`. Found right after the limit fix below, before
