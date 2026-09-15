@@ -1,4 +1,20 @@
-# WHERE THINGS STAND — Sep 15, 2026 (documentation audit + a real open bug on rule 170)
+# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, and two more live bugs fixed — rule 174)
+
+## 🟢 Fixed and deployed: receipt payment-source + photo-sharing silent failures — rule 174
+Full detail: FEATURE_LOG rule 174. Brett reported two live bugs (vendor "my own money" receipt
+toggle not sticking; WO-1071 photos unviewable in-app but fine in Drive directly) — both
+root-caused to the same pattern: a "non-fatal, silent" catch around a Sheets/Drive write that
+had actually been failing every time, with zero trace. `Payment_Source` column: confirmed via
+live data it has NEVER existed on the Receipts sheet since the feature shipped (rule 173,
+Sep 14) — fixed live via new `/admin/ensure-receipts-payment-source` (called for real this
+session, confirmed column now exists going forward; historical rows still read as the
+company_card default — the true answer was never captured for those). Photo sharing:
+`driveShareAnyone` now retries once + logs failures instead of swallowing. **Still needs
+Brett's go**: the retroactive `/admin/share-attachments` sweep to fix already-affected photos
+(492 shareable attachments scanned dry-run, real count of actually-broken ones unknown until
+it runs) — held for his confirm, not run autonomously (Drive permission change at scale). Also
+needs a live pass: vendor selects "my own money" on a new receipt and confirms the badge shows
+correctly.
 
 ## 🔴 OPEN BUG, not yet root-caused: Brett expected vendor nudges to fire and they didn't
 Rule 170 (vendor nudge/request system) was built, deployed, and live-verified mechanically

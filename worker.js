@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.18';
+const BUILD_VERSION = '2026-09-15.1';
 
 export default {
   async fetch(request, env) {
@@ -362,6 +362,7 @@ export default {
         if (path === '/admin/owner-to-user')      return await adminOwnerToUser(env, body);
         if (path === '/admin/migrate-trades')     return await adminMigrateTrades(env, body);
         if (path === '/admin/share-attachments')  return await adminShareAttachments(env, body);
+        if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
@@ -981,7 +982,12 @@ async function handlePhotoUploadClean(env, request) {
     // Make customer/job-facing media (before/after/report/photo/video) anyone-with-link readable so
     // vendors/tenants/owners can open it in the portal without a Google login. Internal cost docs
     // (receipt/bill/invoice → _Internal — Vendor Bills) are NEVER shared (FEATURE_LOG rule 13).
-    if (!isInternal) { try { await driveShareAnyone(token, uploaded.id); } catch(_) { /* non-fatal */ } }
+    if (!isInternal) {
+      try {
+        const shared = await driveShareAnyone(token, uploaded.id);
+        if (!shared) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'drive_share_failed', Skill_Or_Endpoint: 'upload-photo', Success: 'FALSE', Notes: `wo=${woId} file=${filename} id=${uploaded.id}` }); } catch (_) {} }
+      } catch (_) { /* still non-fatal to the upload itself */ }
+    }
     step.current = 'log_attachments';
     try {
       await addRow(env, 'Attachments', { WO_ID: woId, File_Name: filename, File_Type: fileType, Drive_File_ID: uploaded.id, Drive_URL: uploaded.webViewLink || uploaded.id, Mime_Type: mimeType, Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE' });
@@ -1175,7 +1181,14 @@ async function addReceipt(env, body) {
   if (dupe) return json({ success: true, duplicate: true, amount: amt.toFixed(2) });
 
   try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source']); }
-  catch (e) { /* the core fields below still land; only the new ones are at risk on a very first run */ }
+  catch (e) {
+    // The core fields below still land; only the new ones are at risk on a very first run.
+    // Rule 171: this used to swallow silently — real-world result was Payment_Source never
+    // actually getting created on the live sheet, so every vendor's "my own money" selection
+    // was computed correctly and then dropped on write with zero trace anywhere. Log it now so
+    // a persistent failure here is discoverable instead of invisible.
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ensure_columns_failed', Skill_Or_Endpoint: 'addReceipt/Receipts', Success: 'FALSE', Notes: String((e && e.message) || e) }); } catch (_) {}
+  }
 
   const addResp = await addRow(env, 'Receipts', {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
@@ -5742,6 +5755,29 @@ async function logAttachment(env, body) {
 // past work orders open in the portal without a Google login. Skips vendor cost docs (receipt/bill/
 // invoice — FEATURE_LOG rule 13). Idempotent: re-sharing an already-public file is harmless.
 // Body: { dry_run?:true, limit?:N }. Secret-gated (admin).
+// One-time repair + live diagnostic for rule 171: Payment_Source has never actually existed as
+// a column on the live Receipts sheet (confirmed by reading real receipt rows back from prod —
+// the key is absent, not blank, on every single row going back to August), so `addReceipt`'s
+// swallowed ensureColumns call has been silently dropping every vendor's/hub's payment-source
+// selection on write since the feature was added. This calls ensureColumns directly with NO
+// swallowing catch, so if it fails again the real Sheets API error comes back in the response
+// instead of vanishing. Schema-only — adds a header cell if missing, touches no row data.
+async function adminEnsureReceiptsPaymentSource(env) {
+  const before = await sheetsRequest(env, 'GET', `/values/Receipts`);
+  const headersBefore = (before.values && before.values[0]) || [];
+  if (headersBefore.includes('Payment_Source')) {
+    return json({ success: true, already_present: true, headers: headersBefore });
+  }
+  await ensureColumns(env, 'Receipts', ['Payment_Source']);
+  const after = await sheetsRequest(env, 'GET', `/values/Receipts`);
+  const headersAfter = (after.values && after.values[0]) || [];
+  return json({
+    success: headersAfter.includes('Payment_Source'),
+    headers_before: headersBefore,
+    headers_after: headersAfter,
+  });
+}
+
 async function adminShareAttachments(env, body) {
   body = body || {};
   const dryRun = body.dry_run === true;
@@ -12212,15 +12248,25 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
 }
 
 // Make a Drive folder/file anyone-with-link readable (for the customer photo link). Idempotent.
+// Rule 171: this used to be a single fire-and-forget attempt, non-fatal at every call site — a
+// real 500/rate-limit here left the file permanently unshared with zero record of it having
+// happened (WO-1071's 4 "before" photos, live-confirmed: logged as Active attachments, correct
+// File_Type, but the direct drive.google.com link resolves to a Google HTML error page, not the
+// image — the share call never succeeded). One retry with a short backoff, still non-fatal to
+// the caller, so a transient failure doesn't become a permanent one.
 async function driveShareAnyone(token, fileId) {
-  try {
-    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'reader', type: 'anyone' }),
-    });
-    return res.ok;
-  } catch (e) { return false; }
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+      });
+      if (res.ok) return true;
+      if (attempt < 2) await new Promise(r => setTimeout(r, 400));
+    } catch (e) { if (attempt < 2) await new Promise(r => setTimeout(r, 400)); }
+  }
+  return false;
 }
 
 // Download a Drive file's bytes (+ its content-type) so they can be re-uploaded to QuickBooks.
