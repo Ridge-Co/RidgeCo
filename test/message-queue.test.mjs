@@ -88,6 +88,24 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(r.gateSnapshot === 'Global OFF, Vendor OFF', 'vendor: snapshot lists Global then Vendor when both are off');
 }
 
+// ---- smsGateDecision: OWNER messages (Sep 14 2026) need Global AND Property AND Customer — no Tenant layer ----
+{
+  const r = smsGateDecision({ global:true, propertyOn:true, ownerOn:true, tenantOn:false, vendorOn:false, kind:'owner' });
+  ok(r.sendOk === true, 'owner send ignores Tenant entirely — same shape as vendor not nesting under property, just one layer up');
+}
+{
+  const r = smsGateDecision({ global:true, propertyOn:false, ownerOn:true, tenantOn:false, vendorOn:false, kind:'owner' });
+  ok(r.sendOk === false && r.gateSnapshot === 'Property OFF', 'owner: Property off alone blocks the send');
+}
+{
+  const r = smsGateDecision({ global:true, propertyOn:true, ownerOn:false, tenantOn:false, vendorOn:false, kind:'owner' });
+  ok(r.sendOk === false && r.gateSnapshot === 'Customer OFF', 'owner: Customer (the owner\'s own SMS_Enabled) off alone blocks the send');
+}
+{
+  const r = smsGateDecision({ global:false, propertyOn:false, ownerOn:false, tenantOn:false, vendorOn:false, kind:'owner' });
+  ok(r.gateSnapshot === 'Global OFF, Property OFF, Customer OFF', 'owner: snapshot lists all three failing gates in order');
+}
+
 // ---- formatPhoneDisplay: readable (xxx) xxx-xxxx for a tenant_job_assigned message ----
 {
   ok(formatPhoneDisplay('4439617927') === '(443) 961-7927', 'bare 10-digit formats correctly');

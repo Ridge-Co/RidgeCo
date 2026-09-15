@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.13';
+const BUILD_VERSION = '2026-09-14.14';
 
 export default {
   async fetch(request, env) {
@@ -3252,6 +3252,43 @@ async function createWorkOrder(env, body) {
       await addRow(env, 'WO_Tenants', { WO_ID: woId, Tenant_ID: tid, Tenant_Name: ((t.First_Name||'')+' '+(t.Last_Name||'')).trim(), Tenant_Phone: t.Phone||'', Added_By: 'system-auto', Added_Date: now, Active: 'TRUE' });
     }
   } catch(e) {}
+  // Owner Received + Tenant Received (Sep 14 2026, Brett) — fire only on WO creation, not on
+  // later status changes (Scheduled/Complete/On_Hold already fire from updateStatus). Own
+  // try/catch, non-fatal — WO creation itself already succeeded above regardless of this.
+  try {
+    const [units, properties, owners, tenants] = await fetchTabs(env, ['Units','Properties','Owners','Tenants']);
+    const unit = units.find(u => u.ID === body.unit_id);
+    const property = properties.find(p => p.ID === body.property_id);
+    const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+    const woLike = { ID: woId, Unit_ID: body.unit_id||'', Property_ID: body.property_id||'', Tenant_ID: body.tenant_id||'', Trade: body.trade||'', Description: body.description||'', Created_Date: now };
+    // Owner Received: ONLY for tenant-portal-submitted WOs (Type='tenant') — Brett was
+    // explicit an admin-created manual WO should NOT trigger this (the admin creating it
+    // already knows about it; a tenant-submitted request is the one case the owner genuinely
+    // wasn't already aware of). Fires immediately — unlike the tenant-side message below,
+    // there's no "might get bumped by Assigned soon" concern on the owner side.
+    if ((body.type || '') === 'tenant' && owner?.Phone && property) {
+      const notify = await shouldNotifyOwner(env, woLike, 'Received');
+      if (notify) {
+        const msg = `Hi ${owner.First_Name}, we've received a new ${woLike.Trade || 'General'} request from your tenant at ${property.Address}: ${woLike.Description || '(no description)'}. We'll follow up once it's scheduled. Ref: ${woId}.`;
+        const r = await smsGatedSend(env, { wo_id: woId, message_type: 'owner_job_received', recipient_type: 'owner', owner, property, message_body: msg });
+        if (r.sent) await updateWOFields(env, woId, { Owner_Notified: 'TRUE' });
+      }
+    }
+    // Tenant Received: separate from tenant_job_assigned — tells the tenant only that the
+    // request landed and is pending assignment/scheduling. Not scoped to Type='tenant' (unlike
+    // Owner Received above) — applies to any new WO with a notifiable tenant, same scope the
+    // existing Tenant_Notify_Created toggle already covers. Delayed 8h so a fast assignment can
+    // supersede/bump it (see the tenant_job_received check in processPendingNotifications)
+    // instead of the tenant getting "we got it" immediately followed by "you're assigned".
+    const tenant = currentTenantForDispatch(tenants, unit, woLike);
+    const tenantNotifyCreated = body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE';
+    if (isTenantNotifiable(tenant, woLike) && tenantNotifyCreated) {
+      const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+      const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
+      const sendAfter = new Date(Date.now() + 8*3600000).toISOString();
+      await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
+    }
+  } catch (e) { /* non-fatal */ }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){}
   return json({ success: true, id: woId });
 }
@@ -3414,6 +3451,15 @@ async function assignVendor(env, body) {
 }
 
 async function updateStatus(env, body) {
+  // On Hold now REQUIRES a reason (Sep 14 2026, Brett) — checked before anything is written,
+  // so a bad request never leaves a WO On Hold with no reason on record. hold_reason is the
+  // real field name the client should send; notes is accepted as a fallback so an older/other
+  // caller that only ever sent notes doesn't suddenly break.
+  let holdReason = '';
+  if (body.status === 'On Hold') {
+    holdReason = String(body.hold_reason || body.notes || '').trim();
+    if (!holdReason) return json({ error: 'A reason is required to put a work order On Hold.' }, 400);
+  }
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
@@ -3431,14 +3477,19 @@ async function updateStatus(env, body) {
   if (body.scheduled_date) fields.Scheduled_Date = body.scheduled_date;
   if (body.status === 'Complete' || body.status === 'Pending Invoice')
     fields.Completed_Date = wo.Completed_Date || new Date().toISOString();
+  if (body.status === 'On Hold') {
+    try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (_) {}
+    fields.Hold_Reason = holdReason;
+  }
   await updateWOFields(env, body.wo_id, fields);
   await logWOAudit(env, body.wo_id, changedBy, changedRole, 'Status', wo.Status||'', body.status, body.notes||'');
   const config = await fetchConfig(env);
+  const [units, tenants, properties, owners] = await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
+  const unit = units.find(u => u.ID === wo.Unit_ID), property = properties.find(p => p.ID === wo.Property_ID);
+  const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+  const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
   if (body.status === 'Complete') {
-    const [units, tenants, properties, owners] = await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
-    const unit = units.find(u => u.ID === wo.Unit_ID), tenant = currentTenantForDispatch(tenants, unit, wo), property = properties.find(p => p.ID === wo.Property_ID);
-    const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+    const tenant = currentTenantForDispatch(tenants, unit, wo);
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
       // same-address jobs distinguishable in the text (see tenant_job_assigned's comment).
@@ -3452,11 +3503,7 @@ async function updateStatus(env, body) {
   // This is the automation the acceptance gate exists to enable: the status moving to
   // Accepted is the trigger, so a vendor who just starts the job no longer silently skips it.
   if (body.status === 'Accepted') {
-    const [units, tenants, properties] = await fetchTabs(env, ['Units','Tenants','Properties']);
-    const unit = units.find(u => u.ID === wo.Unit_ID);
     const tenant = currentTenantForDispatch(tenants, unit, wo);
-    const property = properties.find(p => p.ID === wo.Property_ID);
-    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
       const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${wo.Trade} request at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
@@ -3470,17 +3517,25 @@ async function updateStatus(env, body) {
   if (body.status === 'Complete' && wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
     try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { /* non-fatal */ }
   }
-  const notifyStatuses = ['Assigned','Scheduled','Complete','Invoiced'];
-  if (notifyStatuses.includes(body.status)) {
-    const notify = await shouldNotifyOwner(env, wo, body.status);
+  // Owner notifications (Sep 14 2026 rebuild) — Received/Scheduled/Complete/On_Hold only.
+  // 'Assigned' and 'Invoiced' retired per Brett's own call (see NOTIFY_TIERS comment). Routed
+  // through the real gated pipeline now (Global+Property+Customer, Test Mode, Message_Queue),
+  // not the old raw sendSMS — the old path bypassed Test Mode entirely, so a real owner could
+  // receive a live text about a WO created purely for testing. This closes that gap.
+  const OWNER_STATUS_EVENTS = { Scheduled: 'Scheduled', Complete: 'Complete', 'On Hold': 'On_Hold' };
+  const ownerEvent = OWNER_STATUS_EVENTS[body.status];
+  if (ownerEvent && owner?.Phone) {
+    const notify = await shouldNotifyOwner(env, wo, ownerEvent);
     if (notify) {
-      const [properties, owners] = await fetchTabs(env, ['Properties','Owners']);
-      const property = properties.find(p => p.ID === wo.Property_ID), owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-      if (owner?.Phone) {
-        const statusMsgs = { Assigned: `Hi ${owner.First_Name}, a technician has been assigned to the ${wo.Trade} job at ${property.Address}. Ref: ${body.wo_id}.`, Scheduled: `Hi ${owner.First_Name}, the ${wo.Trade} job at ${property.Address} has been scheduled. Ref: ${body.wo_id}.`, Complete: `Hi ${owner.First_Name}, the ${wo.Trade} work at ${property.Address} is complete. An invoice will follow. Ref: ${body.wo_id}.`, Invoiced: `Hi ${owner.First_Name}, an invoice has been submitted for ${wo.Trade} at ${property.Address}. Ref: ${body.wo_id}. Contact us with any questions.` };
-        const msg = statusMsgs[body.status];
-        if (msg) { await sendSMS(env, owner.Phone, msg); await logSMS(env, body.wo_id, `owner_${body.status.toLowerCase()}`, owner.ID, owner.Phone, msg); await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' }); }
-      }
+      const ownerMsgs = {
+        Scheduled: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is scheduled for ${wo.Scheduled_Date || 'a date to be confirmed'}, subject to change. Ref: ${body.wo_id}.`,
+        Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is complete. Ref: ${body.wo_id}.`,
+        On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
+      };
+      const msg = ownerMsgs[ownerEvent];
+      const msgType = ownerEvent === 'On_Hold' ? 'owner_job_on_hold' : `owner_job_${ownerEvent.toLowerCase()}`;
+      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: msgType, recipient_type: 'owner', owner, property, message_body: msg });
+      if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
     }
   }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_status', Skill_Or_Endpoint:'/status', Success:'TRUE', Notes:`status=${body.status||''}` }); } catch(_){}
@@ -5730,7 +5785,7 @@ async function processPendingNotifications(env) {
     const iPhone=headers.indexOf('Phone'),iMsg=headers.indexOf('Message'),iAfter=headers.indexOf('Send_After'),iSent=headers.indexOf('Sent'),iWO=headers.indexOf('WO_ID'),
       iMType=headers.indexOf('Message_Type'),iRType=headers.indexOf('Recipient_Type'),iRId=headers.indexOf('Recipient_ID'),iPId=headers.indexOf('Property_ID');
     const now=new Date(); let processed=0;
-    let tenants=null, owners=null, properties=null, vendors=null; // lazy-loaded once, only if a gated row is actually due
+    let tenants=null, owners=null, properties=null, vendors=null, workorders=null; // lazy-loaded once, only if a gated row is actually due
     for(const row of rows){
       if((row[iSent]||'')==='TRUE') continue;
       const sendAfter=row[iAfter]?new Date(row[iAfter]):null; if(sendAfter&&sendAfter>now) continue;
@@ -5741,6 +5796,21 @@ async function processPendingNotifications(env) {
         // actual fire time, not at the time it was originally queued.
         const recipientType = row[iRType], recipientId = row[iRId], propertyId = row[iPId];
         if (!tenants) { [tenants,owners,properties,vendors] = await fetchTabs(env, ['Tenants','Owners','Properties','Vendors']); }
+        // tenant_job_received (Sep 14 2026): queued 8h out specifically so the tenant_job_
+        // assigned message can supersede/"bump" it if the WO gets assigned before the 8h is
+        // up — a tenant doesn't need "we got your request" AND "we assigned someone" back to
+        // back. Checked at actual fire time (not queue time) since assignment could happen
+        // any time in that 8h window. workorders is lazy-loaded here too, only when an actual
+        // tenant_job_received row is due, so every other message type pays zero extra cost.
+        if (messageType === 'tenant_job_received') {
+          if (!workorders) { workorders = await fetchTab(env, 'Work_Orders'); }
+          const liveWO = workorders.find(w => w.ID === (row[iWO] || ''));
+          if (liveWO && liveWO.Vendor_ID) {
+            const rowIndex2 = rows.indexOf(row);
+            await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:[{range:`${NOTIF_QUEUE_TAB}!${col(iSent)}${rowIndex2+2}`,values:[['TRUE']]}]});
+            continue; // superseded — already assigned, no separate "we received it" needed
+          }
+        }
         const property = properties.find(p=>p.ID===propertyId);
         const owner = property ? owners.find(o=>o.ID===property.Owner_ID) : null;
         const tenant = recipientType==='tenant' ? tenants.find(t=>t.ID===recipientId) : null;
@@ -5758,7 +5828,12 @@ async function processPendingNotifications(env) {
 }
 
 const OWNER_NOTIFY_DEFAULTS={urgent:'always',normal:'key',low:'completion'};
-const NOTIFY_TIERS={always:['Assigned','Accepted','In Progress','Scheduled','Complete','Pending Invoice','Invoiced'],key:['Assigned','Scheduled','Complete','Invoiced'],completion:['Complete','Invoiced'],off:[]};
+// Sep 14 2026 — trimmed to the 4 owner message types that actually exist now (Received/
+// Scheduled/Complete/On_Hold). 'Assigned' and 'Invoiced' are retired per Brett's own call
+// (owners don't need an Assigned text; Invoiced is dropped — the invoice email already covers
+// it). On_Hold included in every tier except 'off': a delay is something any owner receiving
+// SOME notifications would want to know, not just the high-priority "always" tier.
+const NOTIFY_TIERS={always:['Received','Scheduled','Complete','On_Hold'],key:['Received','Scheduled','Complete','On_Hold'],completion:['Complete','On_Hold'],off:[]};
 
 async function getOwnerNotifications(env, url) {
   const ownerId=url.searchParams.get('owner_id'); if(!ownerId) return json({error:'Missing owner_id'},400);
@@ -5903,6 +5978,9 @@ async function ensureSmsInfra(env) {
 // Updates) — that's what gives every new SMS_Enabled column its documented "default ON".
 // TENANT messages need Global AND Property AND Customer(=Owner) AND Tenant all true.
 // VENDOR messages need only Global AND Vendor — vendor does not nest under Property, per brief.
+// OWNER messages (Sep 14 2026, Received/Scheduled/Completed/On-Hold) need Global AND Property
+// AND Customer — same "Customer" toggle tenant messages already use (Owners.SMS_Enabled), but
+// no Tenant layer, same shape as Vendor not nesting under Property.
 function smsGateDecision(o) {
   const fails = [];
   if (!o.global) fails.push('Global OFF');
@@ -5912,6 +5990,9 @@ function smsGateDecision(o) {
     if (!o.tenantOn) fails.push('Tenant OFF');
   } else if (o.kind === 'vendor') {
     if (!o.vendorOn) fails.push('Vendor OFF');
+  } else if (o.kind === 'owner') {
+    if (!o.propertyOn) fails.push('Property OFF');
+    if (!o.ownerOn) fails.push('Customer OFF');
   }
   return { sendOk: fails.length === 0, gateSnapshot: fails.length ? fails.join(', ') : 'all gates open' };
 }
@@ -5941,7 +6022,7 @@ async function smsGatedSend(env, opts) {
   const vendorOn   = smsToggleOn(opts.vendor && opts.vendor.SMS_Enabled);
   const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, kind });
 
-  const recipient = kind === 'tenant' ? opts.tenant : opts.vendor;
+  const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
   const recipientName = recipient ? (recipient.Name || `${recipient.First_Name || ''} ${recipient.Last_Name || ''}`.trim()) : '';
 

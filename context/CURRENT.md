@@ -1,4 +1,20 @@
-# WHERE THINGS STAND — Sep 14, 2026 (quiet hours + cron replacement)
+# WHERE THINGS STAND — Sep 14, 2026 (owner messages rebuilt)
+
+## 🟡 Built, needs a live pass: owner messages on the gated pipeline — rule 168
+Full detail: FEATURE_LOG rule 168. Owner Received (new)/Scheduled/Complete/On-Hold (new,
+requires a reason) all now go through the real gate + Test Mode + Message_Queue, not the old
+raw sendSMS. Assigned and Invoiced retired. Tenant Received (new, 8h-delayed, bumped by
+Assigned if it arrives first) also added. Needs a live pass — see FEATURE_LOG rule 168 for the
+specific checks (Owner Received on a tenant-submitted WO, the 8h supersede behavior, the
+On-Hold reason block, Hold_Reason showing up correctly).
+
+## Still queued from the message-system redesign
+- Welcome messages (tenant_welcome / vendor_welcome) — manual button + "hasn't received one
+  yet" flag/bulk-send view.
+- Vendor nudge/update-request system — automatic clock (first nudge = later of next-day 9am ET
+  or trigger+16h, daily, 5 max then flag Brett; resets on vendor activity; converts to
+  invoice-needed nudges once scheduled date passes) + explicit "Request photos"/"Request
+  invoice" buttons + new Vendor_Requests tracking tab.
 
 ## 🟡 Built, needs 2 secrets + a live pass: quiet hours + GitHub Actions cron replacement — rule 166
 Full detail: FEATURE_LOG rule 166. Automatic SMS now holds until 9am ET if it would otherwise

@@ -10758,7 +10758,17 @@ async function submitMoveOut() {
 // ── Quick status change ────────────────────────────────────────
 function quickStatusChange(woId, newStatus) {
   if (!newStatus) return;
-  api('POST','/status',{ wo_id:woId, status:newStatus, updated_by:'Admin', updated_by_role:'admin' })
+  var payload = { wo_id:woId, status:newStatus, updated_by:'Admin', updated_by_role:'admin' };
+  // On Hold requires a reason server-side (Sep 14 2026) — prompt here so the person gets a
+  // clear "why" ask instead of a bare 400 back from the API after the fact.
+  if (newStatus === 'On Hold') {
+    var reason = prompt('Reason for putting this work order on hold:');
+    if (reason === null) return; // cancelled — don't change status at all
+    reason = reason.trim();
+    if (!reason) { toast('A reason is required to put a work order on hold','error'); return; }
+    payload.hold_reason = reason;
+  }
+  api('POST','/status',payload)
     .then(function(res){
       if (res.success||res.id) { toast('Status → '+newStatus,'success'); loadAll().then(function(){ openWODetail(woId); }); }
       else toast('Error: '+(res.error||'unknown'),'error');
@@ -10791,9 +10801,20 @@ function applyBulkStatus() {
   // confirm() — bulk-cancelling the wrong batch is the one bulk action Brett specifically
   // flagged as needing double protection.
   if (status === 'Cancelled') { openBulkCancelConfirm(ids); return; }
+  // On Hold requires a reason server-side (Sep 14 2026) — one shared reason applied to every
+  // WO in this batch (e.g. "waiting on a parts delivery"), not a per-WO prompt in a bulk flow.
+  var holdReason = '';
+  if (status === 'On Hold') {
+    holdReason = prompt('Reason for putting these '+ids.length+' work order'+(ids.length>1?'s':'')+' on hold:');
+    if (holdReason === null) return;
+    holdReason = holdReason.trim();
+    if (!holdReason) { toast('A reason is required to put work orders on hold','error'); return; }
+  }
   if (!confirm('Change '+ids.length+' work order'+(ids.length>1?'s':'')+" to '"+status+"'?")) return;
   runBulkWOUpdate(ids, function(id){
-    return api('POST','/status',{ wo_id:id, status:status, updated_by:'Admin', updated_by_role:'admin' });
+    var payload = { wo_id:id, status:status, updated_by:'Admin', updated_by_role:'admin' };
+    if (status === 'On Hold') payload.hold_reason = holdReason;
+    return api('POST','/status',payload);
   }, document.getElementById('bulk-apply-btn'), 'Updated');
 }
 
