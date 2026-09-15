@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.10';
+const BUILD_VERSION = '2026-09-14.11';
 
 export default {
   async fetch(request, env) {
@@ -116,7 +116,19 @@ export default {
         const _signOk = !!env.PROPOSAL_SIGN_TOKEN
           && _tok === env.PROPOSAL_SIGN_TOKEN
           && request.method === 'POST' && path === '/proposal/sign';
-        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk) {
+        // Narrow WRITE token for the periodic message-queue sweep (Sep 14 2026) — replaces
+        // Cloudflare Cron Triggers for time-sensitive message processing (quiet-hours-held
+        // sends, deferred appointment-reminder notifications). Cloudflare caps Cron Triggers at
+        // 3 (free) / 5 (paid) per Worker, and all 4 paid-tier slots are already used (daily
+        // digest, 2x optimizer review, weekly AR report) — so this runs from a GitHub Actions
+        // scheduled workflow instead (free, no practical limit, on the public repo), the same
+        // pattern already proven by the Invoice OCR Canary. Accepted ONLY for POST /cron/sweep.
+        // Fully inert unless env.CRON_SWEEP_TOKEN is set, so deploying this has zero effect
+        // until the secret exists.
+        const _cronSweepOk = !!env.CRON_SWEEP_TOKEN
+          && _tok === env.CRON_SWEEP_TOKEN
+          && request.method === 'POST' && path === '/cron/sweep';
+        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -274,6 +286,7 @@ export default {
         if (path === '/status')                   return await updateStatus(env, body);
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
+        if (path === '/cron/sweep')                return await cronSweep(env);
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
@@ -5864,7 +5877,7 @@ async function sendSMS(env, to, message) {
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
 // Ops_Telemetry (ensureTab once per isolate + ensureColumns on every write, FL rule 37).
 const MSG_QUEUE_TAB = 'Message_Queue';
-const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active'];
+const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After'];
 const SMS_TOGGLE_TABS = ['Properties','Owners','Tenants','Vendors'];
 let _msgQueueTabReady = false, _smsTogglesReady = false;
 
@@ -5936,13 +5949,23 @@ async function smsGatedSend(env, opts) {
     Property_ID: (opts.property && opts.property.ID) || '',
     Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
     Message_Body: opts.message_body || '', Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
-    Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE',
+    Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
   };
   const newRow = headers.map(h => rowObj[h] ?? '');
   await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
 
   let sent = false, deliveredTo = '';
   if (sendOk && recipientPhone) {
+    // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
+    // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
+    // not sent; the row keeps Status:'pending' with Send_After set, and the GitHub Actions
+    // sweep (processQuietHoursQueue, replacing Cloudflare cron — see CURRENT.md) re-checks
+    // Global/Test-Mode and actually sends once due.
+    if (isQuietHoursNow(new Date())) {
+      const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
+      await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
+      return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot };
+    }
     deliveredTo = testMode ? testRecipient : recipientPhone;
     const result = await sendSMSRaw(env, deliveredTo, opts.message_body);
     sent = !!(result && result.sid);
@@ -6030,6 +6053,66 @@ async function releaseMessageQueue(env, body) {
   return json({ ok: true, results });
 }
 
+// Fires quiet-hours-held Message_Queue rows once their Send_After has actually passed. Called
+// from the periodic sweep (GET /cron/sweep), not directly by any user action. Re-checks the
+// full gate at fire time (same phone-based re-resolution as releaseMessageQueue) rather than
+// trusting whatever passed hours earlier — Global or Test Mode could plausibly have changed
+// overnight; the property/tenant/vendor SMS_Enabled gates are re-checked too for the same
+// reason, cheap insurance since we're already re-fetching these tabs. A row that no longer
+// passes just has its Gate_Snapshot updated and Send_After cleared — it stays 'pending' and
+// visible in the Message Queue review screen rather than silently vanishing.
+async function processQuietHoursQueue(env) {
+  await ensureSmsInfra(env);
+  const cfg = await fetchConfig(env);
+  const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+  const testMode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+  const testRecipient = normalizePhone(cfg.TWILIO_TEST_RECIPIENT || '+14439617927');
+  const now = new Date();
+  const [rows, properties, owners, tenants, vendors] = await Promise.all([
+    fetchTab(env, MSG_QUEUE_TAB), fetchTab(env, 'Properties'), fetchTab(env, 'Owners'), fetchTab(env, 'Tenants'), fetchTab(env, 'Vendors'),
+  ]);
+  const due = rows.filter(r => r.Status === 'pending' && r.Send_After && new Date(r.Send_After) <= now);
+  const results = [];
+  for (const row of due) {
+    const id = row.ID, kind = row.Recipient_Type;
+    const property = properties.find(p => p.ID === row.Property_ID);
+    const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+    const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
+    const vendor = kind === 'vendor' ? vendors.find(v => normalizePhone(v.Phone) === row.Recipient_Phone) : null;
+    const propertyOn = smsToggleOn(property && property.SMS_Enabled);
+    const ownerOn = smsToggleOn(owner && owner.SMS_Enabled);
+    const tenantOn = smsToggleOn(tenant && tenant.SMS_Enabled);
+    const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
+    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, kind });
+    if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
+    const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
+    const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
+    const sent = !!(result && result.sid);
+    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot, Send_After: '' });
+    results.push({ id, sent, gate_snapshot: gateSnapshot });
+  }
+  return { checked: due.length, results };
+}
+
+// POST /cron/sweep — the ONE endpoint the GitHub Actions workflow (.github/workflows/
+// cron-sweep.yml) hits periodically, replacing Cloudflare Cron Triggers for this kind of
+// time-sensitive work. Consolidates every periodic message-processing job into one call so
+// one scheduled workflow run covers all of them:
+//   1. processQuietHoursQueue — fires quiet-hours-held Message_Queue rows now due.
+//   2. processPendingNotifications — the Notification_Queue deferred-appointment-reminder
+//      sweep (tenant_job_scheduled messages queued days ahead). This existed already but was
+//      NEVER actually called automatically anywhere — only reachable via the admin-gated
+//      GET /notifications/pending — so deferred reminders have been silently sitting unsent
+//      this whole time. Wiring it in here is the actual fix, not just a new feature riding
+//      alongside one.
+// Each step is independently try/caught so one failing step never blocks the other.
+async function cronSweep(env) {
+  const out = { ok: true, ts: new Date().toISOString() };
+  try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
+  try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
+  return json(out);
+}
+
 // POST /message-queue/skip { ids:[...] } — never deletes (Active stays TRUE); matches the
 // Hub's standing "keep forever" pattern for reviewed rows (e.g. the receipt-reconciler
 // duplicate checker's confirmed-duplicate rows).
@@ -6085,6 +6168,48 @@ const DIGEST_CLOSED = ['Paid','Invoiced','Cancelled','Closed','Void'];
 
 function etTodayISO() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
 function etStamp() { return new Date().toLocaleString('en-US', { timeZone:'America/New_York', weekday:'short', month:'short', day:'numeric', year:'numeric' }); }
+
+// ── Quiet hours (Sep 14 2026) ─────────────────────────────────────────────────
+// Brett: don't let an automatic SMS land after 7pm ET or before 9am ET — hold it until 9am.
+// DST-aware without a timezone library: nyOffsetMinutes gets the real UTC offset for
+// America/New_York at a given instant by formatting that instant's wall-clock reading in NY
+// and diffing it against the same instant's real UTC value. Verified in
+// test/quiet-hours.test.mjs across both EDT and EST.
+function nyOffsetMinutes(date) {
+  date = date || new Date();
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  return (asUTC - date.getTime()) / 60000;
+}
+function etHour(date) {
+  date = date || new Date();
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23' }).formatToParts(date);
+  return parseInt(p.find(x => x.type === 'hour').value, 10);
+}
+const QUIET_HOURS_START_ET = 19; // 7pm — from this hour (inclusive) it's quiet
+const QUIET_HOURS_END_ET = 9;    // 9am — quiet hours end here (9am itself is NOT quiet)
+function isQuietHoursNow(date) {
+  date = date || new Date();
+  const h = etHour(date);
+  return h >= QUIET_HOURS_START_ET || h < QUIET_HOURS_END_ET;
+}
+// Only meaningful when isQuietHoursNow(date) is true. Returns the real UTC Date for the next
+// 9:00 AM Eastern — TODAY if currently in the early-morning tail (before 9am), TOMORROW if in
+// the evening (7pm or later).
+function nextQuietHoursEnd(date) {
+  date = date || new Date();
+  const h = etHour(date);
+  const offsetMin = nyOffsetMinutes(date);
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  let y = +p.year, mo = +p.month - 1, d = +p.day;
+  if (h >= QUIET_HOURS_START_ET) d += 1;
+  return new Date(Date.UTC(y, mo, d, QUIET_HOURS_END_ET, 0, 0) - offsetMin * 60000);
+}
 function daysAgoISO(n) { return new Date(Date.now()-n*86400000).toLocaleDateString('en-CA', { timeZone:'America/New_York' }); }
 function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpperCase() !== 'FALSE'); }
 
@@ -8536,6 +8661,10 @@ async function health(env) {
     out.twilio.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
     out.twilio.test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
   } catch (_) {}
+  // Cron-sweep token presence (Sep 14 2026) — same never-expose-values pattern. If this is
+  // false, the GitHub Actions sweep (cron-sweep.yml) has nothing to authenticate with, so
+  // quiet-hours-held messages and deferred appointment reminders will sit unsent until it's set.
+  out.cron_sweep = { token_set: !!(env && env.CRON_SWEEP_TOKEN) };
   return json(out);
 }
 

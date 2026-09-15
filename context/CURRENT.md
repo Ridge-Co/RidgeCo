@@ -1,4 +1,16 @@
-# WHERE THINGS STAND — Sep 14, 2026 (Twilio live-test round, later still)
+# WHERE THINGS STAND — Sep 14, 2026 (quiet hours + cron replacement)
+
+## 🟡 Built, needs 2 secrets + a live pass: quiet hours + GitHub Actions cron replacement — rule 166
+Full detail: FEATURE_LOG rule 166. Automatic SMS now holds until 9am ET if it would otherwise
+fire after 7pm ET (DST-aware, real Intl-derived offset, not a hardcoded UTC number). Periodic
+processing (firing held messages, plus the deferred-appointment-reminder sweep that was never
+actually wired to anything before this) now runs via a new GitHub Actions workflow
+(`cron-sweep.yml`, every 15 min) instead of a Cloudflare Cron Trigger — free, no limit, doesn't
+compete for the 4 Cloudflare cron slots already in use. **Brett needs to set `CRON_SWEEP_TOKEN`
+as both a Cloudflare Worker secret and a GitHub Actions repo secret (same value, one-time)**
+before any of this actually runs — until then it's fully inert (`/health` shows
+`cron_sweep.token_set: false`). `node --check` clean, full suite green, new
+`test/quiet-hours.test.mjs` (12 assertions, verified across real EDT/EST timestamps).
 
 ## 🟡 Built, not yet live-verified: SMS text now names the actual job — rule 163
 Full detail: FEATURE_LOG rule 163. Brett, live-testing: two same-trade jobs at the same address

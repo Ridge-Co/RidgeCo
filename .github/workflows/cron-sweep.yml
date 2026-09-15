@@ -1,0 +1,47 @@
+name: Message Queue Sweep
+
+# Replaces Cloudflare Cron Triggers for time-sensitive message processing (quiet-hours-held
+# SMS sends, deferred appointment-reminder notifications). Cloudflare caps Cron Triggers at
+# 3 (free) / 5 (paid) per Worker, and all 4 paid-tier slots are already used (daily digest,
+# 2x weekly optimizer review, weekly AR report) — so this runs from GitHub Actions instead,
+# which is free with no practical run-count limit on a public repo. Same pattern already
+# proven by selftest-invoice.yml (the Invoice OCR Canary).
+#
+# Secrets: CRON_SWEEP_TOKEN only — a dedicated, narrow-scope token, deliberately NOT
+# WORKER_SECRET (see the security note in CLAUDE.md: don't widen that shared key). This
+# token is accepted ONLY for POST /cron/sweep — nothing else.
+#
+# What it actually processes (see cronSweep() in worker.js):
+#   1. Quiet-hours-held tenant/vendor SMS (held for 7pm-9am ET, now due).
+#   2. Deferred appointment-reminder notifications (Notification_Queue) — this existed before
+#      but was never wired to anything automatic; this workflow is what actually fires it now.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 minutes. GitHub may delay scheduled runs, especially at
+                              # busy :00/:15/:30/:45 marks — fine here, nothing is minute-critical.
+  workflow_dispatch:          # manual/on-demand trigger — useful right after deploying a change
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit the sweep endpoint
+        env:
+          CRON_SWEEP_TOKEN: ${{ secrets.CRON_SWEEP_TOKEN }}
+        run: |
+          if [ -z "$CRON_SWEEP_TOKEN" ]; then
+            echo "CRON_SWEEP_TOKEN not set as a GitHub Actions secret yet — nothing to do."
+            echo "Add it under Settings > Secrets and variables > Actions once Brett has also"
+            echo "set the matching Cloudflare Worker secret of the same name."
+            exit 0
+          fi
+          http_code=$(curl -s -o response.json -w "%{http_code}" -X POST \
+            "https://maintenance-hub.brett-2f8.workers.dev/cron/sweep" \
+            -H "X-Auth-Token: $CRON_SWEEP_TOKEN")
+          echo "HTTP $http_code"
+          cat response.json
+          if [ "$http_code" != "200" ]; then
+            echo "Sweep endpoint did not return 200 — see response above."
+            exit 1
+          fi
