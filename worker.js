@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.6';
+const BUILD_VERSION = '2026-09-15.7';
 
 export default {
   async fetch(request, env) {
@@ -502,6 +502,22 @@ export default {
   // with delivery off just builds the digest and returns — no messages, negligible cost.
   async scheduled(event, env, ctx) {
     const cron = event && event.cron;
+    // Message-queue sweep (Sep 15 2026) — quiet-hours release, deferred notifications, and
+    // vendor nudges. Uses the 5th (last available) paid-tier Cloudflare Cron Trigger slot.
+    // Originally built to run ONLY via a GitHub Actions workflow (cron-sweep.yml, rule 166/167)
+    // to avoid using a Cloudflare slot at all — but real live testing (Sep 15 2026) found
+    // GitHub's own `schedule:` trigger is unreliable for this repo's activity level: it ran
+    // roughly every 5 hours instead of every 15 minutes (confirmed via the Actions run
+    // history), which is a real problem for anything time-sensitive (quiet-hours release
+    // meant to happen at 9am ET, daily vendor nudges). Cloudflare Cron Triggers don't have
+    // that queueing-delay behavior. Calls cronSweep(env) directly — no HTTP round-trip, no
+    // CRON_SWEEP_TOKEN needed for this path (that token still gates the GitHub Actions path,
+    // which stays in place as a redundant second path — both call the same idempotent
+    // function, so having both fire is harmless, just occasionally redundant work).
+    if (cron === '*/15 * * * *') {
+      try { await cronSweep(env); } catch (e) { /* non-fatal — next run tries again */ }
+      return;
+    }
     // Optimizer Reviewer (B-129) — Mon + Wed 12:00 UTC (8am ET). Reads the last 7 days
     // of Ops_Telemetry, computes metrics, asks Claude for a ranked proposal, logs it to
     // Ops_Review_Log, and delivers IF digest delivery is enabled. Isolated from the digest.
