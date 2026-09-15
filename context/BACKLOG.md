@@ -504,6 +504,7 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 | B-101 | 🟠 | Estimate approval with start-date + deadline | Approve estimate but earliest-start = +N days; add to calendar; vendor notice carries earliest-start + deadline disclaimer. Builds on approveEstimate (worker.js:1064). |
 | B-102 | 🟡 | Hub UI redesign to the Fairfax-estimate design standard | Codify the 4518 Fairfax estimate look as the Hub design system (minimum standard, then elevate). Design-led track; do AFTER functional stability. Wishlist #23/#30/#57/#70/#75/#76. |
 | B-103 | 🟠 | Email → Work Order intake engine (Buildium + manual lists) | Source-agnostic intake engine + pluggable parsers. Apps Script poller forwards new maintenance emails → new `POST /intake` in worker.js → detect source → parse → find-or-create Owner/Property/Unit/Tenant → pull photos (S3→Drive) → `createWorkOrder` with `Owner_WO_Ref` → notify admin (`onIntakeCreated` = auto-assign seam). v1 = engine + **Buildium parser** (deterministic, high-confidence, auto-create) + **manual-list AI parser** (Mark's free-text lists → new `Intake_Queue` tab + Hub review screen → `/intake/approve`). Keyword trade-guess (easily overridable). Dedicated `INTAKE_TOKEN`. Build on a **staging branch + test sheet** (see EMAIL_INTAKE_BUILD_BRIEF). Decisions locked July 21. Full plan: `RidgeCo_Email_Intake_Build_Plan_v1.0` + `context/EMAIL_INTAKE_BUILD_BRIEF_v1.0.md`. Phase D (auto-assign) + AppFolio parser = future. |
+| B-237 | 🟡 | Cross-property tenant reassignment | The new Edit Tenant "Unit" dropdown (rule 163) only reassigns within the tenant's current property. Brett wants a real address-change move (different property + unit) as a future extension of the same tool — deliberately out of v1 scope. |
 
 **Also — escalate B-092 (integration sync):** since the July 20 `WORKER_SECRET` rotation the BrettOS sync into maintenance_hub + barrelco is now **HTTP 401 Unauthorized** (was error 1042) — the sync caller still uses the OLD secret. Urgent quick-fix; ties the security work (Phase 0). Barrelco also throws an `atob()` base64 error (separate).
 
@@ -648,6 +649,7 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 | — | BrettOS | Recurring 4-hour backlog check scheduled (trig_01JwivD2P6SEnAwPJqgurEXF) | July 17, 2026 |
 | — | Ridge Co | Invoice descriptions compiled from logged Time_Entries/Vendor_Bills Invoice_Description (rule 158) — not just a hand-typed WO field | Sep 14, 2026 |
 | — | Ridge Co | Work Order Void/Hide (distinct from Cancelled) + duplicate-create guard on Work Orders (rule 162) — WO-1192 fix | Sep 14, 2026 |
+| — | Ridge Co | Property Structure management — Unit_Count auto-compute + Units add/rename/remove + tenant unit reassignment (rule 163) — Battery Ave SFH→multi fix | Sep 14, 2026 |
 
 ---
 

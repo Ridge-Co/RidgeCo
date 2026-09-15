@@ -862,7 +862,7 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group full"><label>Address</label><input type="text" id="ep-address"></div>
       <div class="form-group"><label>City</label><input type="text" id="ep-city"></div>
       <div class="form-group"><label>Market</label><select id="ep-market"><option>Baltimore</option><option>Waynesboro</option><option>Winchester</option><option>Other</option></select></div>
-      <div class="form-group"><label>Type</label><select id="ep-type"><option value="house">House</option><option value="rowhome">Rowhome</option><option value="multi">Multi-Unit</option><option value="condo">Condo</option></select></div>
+      <div class="form-group"><label>Type</label><select id="ep-type" onchange="epTypeChanged()"><option value="house">House</option><option value="rowhome">Rowhome</option><option value="multi">Multi-Unit</option><option value="condo">Condo</option></select></div>
       <div class="form-group"><label>Lockbox Code</label><input type="text" id="ep-lockbox"></div>
       <div class="form-group"><label>Door Lock Code</label><input type="text" id="ep-lockcode"></div>
       <div class="form-group"><label>Water Shutoff</label><input type="text" id="ep-shutoff"></div>
@@ -870,6 +870,22 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Breaker Location</label><input type="text" id="ep-breaker"></div>
       <div class="form-group full"><label>Access Notes <span style="font-weight:normal;color:var(--muted)">— shown to vendors on every WO for this property</span></label><textarea id="ep-access" placeholder="e.g. Contact tenant for access · No lockbox — call owner for key · Gate code 1234# · Spare key under mat" style="min-height:80px;resize:vertical"></textarea></div>
       <div class="form-group full"><label>Owner</label><select id="ep-owner"><option value="">No owner assigned</option></select></div>
+    </div>
+    <div class="form-group full" id="ep-units-section" style="display:none;border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+      <label>Units <span style="font-weight:normal;color:var(--muted)">— multi-unit / condo only</span></label>
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;flex-wrap:wrap">
+        <span id="ep-unit-count-display" style="font-size:13px"></span>
+        <button type="button" class="btn small secondary" onclick="toggleEpUnitCountOverride()" id="ep-unit-count-toggle">Set count manually</button>
+      </div>
+      <div id="ep-unit-count-override-row" style="display:none;margin-bottom:8px">
+        <input type="number" min="0" id="ep-unit-count-override" placeholder="Manual unit count" oninput="epRenderUnitCountWarning()">
+        <div id="ep-unit-count-warning" style="font-size:11px;color:var(--warn)"></div>
+      </div>
+      <div id="ep-units-list" style="margin-bottom:8px"></div>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="ep-new-unit-label" placeholder="e.g. Apt 1, 1st Floor" style="flex:1;margin-bottom:0">
+        <button type="button" class="btn small" onclick="addUnitToEditedProperty()">+ Add Unit</button>
+      </div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-property')">Cancel</button><button class="btn" onclick="submitEditProperty()">Save Changes</button></div>
   </div>
@@ -952,6 +968,7 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Last Name</label><input type="text" id="et-last"></div>
       <div class="form-group"><label>Phone</label><input type="tel" id="et-phone"></div>
       <div class="form-group"><label>Email</label><input type="email" id="et-email"></div>
+      <div class="form-group full" id="et-unit-row"><label>Unit <span style="font-weight:normal;color:var(--muted)">— reassign within this property; moving to a different property isn't supported here yet</span></label><select id="et-unit"><option value="">Whole property / no unit</option></select></div>
       <div class="form-group full"><label>Status</label><select id="et-active"><option value="TRUE">Active</option><option value="FALSE">Inactive / Moved Out</option></select></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-tenant')">Cancel</button><button class="btn" onclick="submitEditTenant()">Save Changes</button></div>
@@ -3275,23 +3292,146 @@ function submitEditVendor() {
 }
 
 // ── Edit Tenant ──────────────────────────────────────────────
+var _etOriginalUnitId = '';
 function openEditTenantModal(id) {
   var t=safeArray(state.tenants).find(function(x){return x.ID===id;}); if(!t) return;
   document.getElementById('et-id').value=t.ID; document.getElementById('et-first').value=t.First_Name||'';
   document.getElementById('et-last').value=t.Last_Name||''; document.getElementById('et-phone').value=t.Phone||'';
   document.getElementById('et-email').value=t.Email||''; document.getElementById('et-active').value=t.Active||'TRUE';
+  _etOriginalUnitId = t.Unit_ID||'';
+  var propUnits = safeArray(state.units).filter(function(u){ return String(u.Property_ID)===String(t.Property_ID) && u.Active!=='FALSE'; });
+  document.getElementById('et-unit').innerHTML = '<option value="">Whole property / no unit</option>' +
+    propUnits.map(function(u){ return '<option value="'+u.ID+'"'+(u.ID===_etOriginalUnitId?' selected':'')+'>'+esc(u.Unit_Label||('Unit '+u.ID))+'</option>'; }).join('') +
+    (!propUnits.length ? '' : '');
+  document.getElementById('et-unit-row').style.display = propUnits.length ? 'block' : (t.Unit_ID ? 'block' : 'none');
   openModal('modal-edit-tenant');
 }
 function submitEditTenant() {
   var id=document.getElementById('et-id').value;
+  var newUnitId = document.getElementById('et-unit').value;
   var fields={First_Name:document.getElementById('et-first').value,Last_Name:document.getElementById('et-last').value,Phone:document.getElementById('et-phone').value,Email:document.getElementById('et-email').value,Active:document.getElementById('et-active').value};
+  var unitChanged = newUnitId !== _etOriginalUnitId;
+  if (unitChanged) {
+    var newUnit = safeArray(state.units).find(function(u){ return u.ID===newUnitId; });
+    var oldUnit = safeArray(state.units).find(function(u){ return u.ID===_etOriginalUnitId; });
+    var msg = 'Move this tenant to ' + (newUnit ? ('unit "'+(newUnit.Unit_Label||newUnit.ID)+'"') : 'no unit (whole property)') +
+      (oldUnit ? ' (off "'+(oldUnit.Unit_Label||oldUnit.ID)+'")' : '') + '?';
+    if (!confirm(msg)) return;
+    fields.Unit_ID = newUnitId;
+  }
   api('POST','/tenant/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit tenant',res.error);toast('Error: '+res.error,'error');return;}
-    toast('Tenant updated','success');closeModal('modal-edit-tenant');loadAll();
+    if (!unitChanged) { toast('Tenant updated','success');closeModal('modal-edit-tenant');loadAll(); return; }
+    // Relink both sides: clear the old unit's Tenant_ID (if any), set the new one's (if any).
+    var chain = Promise.resolve();
+    if (_etOriginalUnitId) chain = chain.then(function(){ return api('POST','/unit/update',{id:_etOriginalUnitId,fields:{Tenant_ID:''}}).catch(function(){}); });
+    if (newUnitId) chain = chain.then(function(){ return api('POST','/unit/update',{id:newUnitId,fields:{Tenant_ID:id}}); });
+    chain.then(function(unitRes){
+      if (unitRes && unitRes.error) { toast('Tenant updated, but unit link failed: '+unitRes.error,'warn'); }
+      else { toast('Tenant updated and moved','success'); }
+      closeModal('modal-edit-tenant');loadAll();
+    }).catch(function(e){ toast('Tenant updated, but unit link failed: '+e.message,'warn'); closeModal('modal-edit-tenant');loadAll(); });
   }).catch(function(e){logError('Edit tenant',e.message);toast('Error: '+e.message,'error');});
 }
 
 // ── Edit Property ────────────────────────────────────────────
+// Units section (added 2026-09-14): Unit_Count auto-computes from actual active Units rows
+// for multi/condo properties (the two types Brett confirmed can have units), with a manual
+// override still available since Unit_Count is sometimes known before individual units are
+// entered. Overriding never silently drifts unnoticed — epRenderUnitCountWarning() flags it
+// live if the manual number stops matching the real unit list, which is the exact failure mode
+// that motivated this build (Unit_Count typed into the sheet with zero matching Units rows).
+var EP_MULTI_TYPES = ['multi','condo'];
+
+function epTypeChanged(){
+  var type = document.getElementById('ep-type').value;
+  document.getElementById('ep-units-section').style.display = EP_MULTI_TYPES.indexOf(type)!==-1 ? 'block' : 'none';
+}
+function epComputedUnitCount(propId){
+  return safeArray(state.units).filter(function(u){ return String(u.Property_ID)===String(propId) && u.Active!=='FALSE'; }).length;
+}
+function toggleEpUnitCountOverride(){
+  var row = document.getElementById('ep-unit-count-override-row');
+  var showing = row.style.display !== 'none';
+  row.style.display = showing ? 'none' : 'block';
+  document.getElementById('ep-unit-count-toggle').textContent = showing ? 'Set count manually' : 'Use auto-count';
+  if (!showing) {
+    var input = document.getElementById('ep-unit-count-override');
+    if (!input.value) input.value = epComputedUnitCount(document.getElementById('ep-id').value);
+    epRenderUnitCountWarning();
+  }
+}
+function epRenderUnitCountWarning(){
+  var propId = document.getElementById('ep-id').value;
+  var override = document.getElementById('ep-unit-count-override').value;
+  var actual = epComputedUnitCount(propId);
+  var warnEl = document.getElementById('ep-unit-count-warning');
+  warnEl.textContent = (override !== '' && Number(override) !== actual)
+    ? 'Set to '+override+', but '+actual+' active unit'+(actual===1?'':'s')+' actually exist'+(actual===1?'s':'')+' below.'
+    : '';
+}
+function renderEpUnitsSection(propId){
+  var actual = epComputedUnitCount(propId);
+  document.getElementById('ep-unit-count-display').textContent = actual+' active unit'+(actual===1?'':'s')+' (auto-counted)';
+  // Always reopen showing the true auto-computed state, never a stale manual value from last time.
+  document.getElementById('ep-unit-count-override-row').style.display = 'none';
+  document.getElementById('ep-unit-count-toggle').textContent = 'Set count manually';
+  document.getElementById('ep-unit-count-override').value = '';
+  document.getElementById('ep-unit-count-warning').textContent = '';
+
+  var units = safeArray(state.units).filter(function(u){ return String(u.Property_ID)===String(propId) && u.Active!=='FALSE'; });
+  var listEl = document.getElementById('ep-units-list');
+  listEl.innerHTML = !units.length ? '<div style="color:var(--muted);font-size:12px">No units yet — add one below.</div>' :
+    units.map(function(u){
+      var tenant = safeArray(state.tenants).find(function(t){ return t.ID===u.Tenant_ID && t.Active!=='FALSE'; });
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+        '<span style="flex:1;font-size:13px">'+esc(u.Unit_Label||('Unit '+u.ID))+
+        (tenant ? ' <span style="color:var(--muted);font-size:11px">— '+esc((tenant.First_Name+' '+(tenant.Last_Name||'')).trim())+'</span>'
+                : ' <span style="color:var(--muted);font-size:11px">— vacant</span>') + '</span>' +
+        '<button type="button" class="btn small secondary" onclick="renameEpUnit(\''+u.ID+'\')">Rename</button>' +
+        '<button type="button" class="btn small danger" onclick="deactivateEpUnit(\''+u.ID+'\')">Remove</button></div>';
+    }).join('');
+}
+function addUnitToEditedProperty(){
+  var propId = document.getElementById('ep-id').value;
+  var labelEl = document.getElementById('ep-new-unit-label');
+  var label = labelEl.value.trim();
+  if (!label) { toast('Enter a unit label first (e.g. Apt 1, 1st Floor)','error'); return; }
+  api('POST','/unit/add',{ Property_ID: propId, Unit_Label: label, Active: 'TRUE' }).then(function(res){
+    if (res.error) { logError('Add unit', res.error); toast('Error: '+res.error,'error'); return; }
+    state.units = safeArray(state.units).concat([{ ID: res.id, Property_ID: propId, Unit_Label: label, Tenant_ID: '', Active: 'TRUE' }]);
+    labelEl.value = ''; toast('Unit added','success'); renderEpUnitsSection(propId);
+  }).catch(function(e){ logError('Add unit', e.message); toast('Error: '+e.message,'error'); });
+}
+function renameEpUnit(unitId){
+  var u = safeArray(state.units).find(function(x){ return x.ID===unitId; }); if (!u) return;
+  var newLabel = prompt('Rename unit', u.Unit_Label||'');
+  if (newLabel===null) return;
+  newLabel = newLabel.trim();
+  if (!newLabel) { toast('Label cannot be blank','error'); return; }
+  api('POST','/unit/update',{ id: unitId, fields: { Unit_Label: newLabel } }).then(function(res){
+    if (res.error) { logError('Rename unit', res.error); toast('Error: '+res.error,'error'); return; }
+    u.Unit_Label = newLabel; toast('Unit renamed','success'); renderEpUnitsSection(u.Property_ID);
+  }).catch(function(e){ logError('Rename unit', e.message); toast('Error: '+e.message,'error'); });
+}
+// Hard block (Brett's call, 2026-09-14): a unit with an active tenant, an open work order, or
+// an active key still attached cannot be removed here — clear those first. Prevents silently
+// orphaning a tenant/WO/key off a unit that vanishes out from under them.
+var UNIT_REMOVE_BLOCK_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+function deactivateEpUnit(unitId){
+  var u = safeArray(state.units).find(function(x){ return x.ID===unitId; }); if (!u) return;
+  var tenant = safeArray(state.tenants).find(function(t){ return t.Unit_ID===unitId && t.Active!=='FALSE'; });
+  if (tenant) { toast('Move '+(tenant.First_Name||'this tenant')+' off this unit first (Edit Tenant → Unit)','error'); return; }
+  var openWO = safeArray(state.workorders).find(function(w){ return w.Unit_ID===unitId && UNIT_REMOVE_BLOCK_STATUSES.indexOf(w.Status)!==-1 && w.Voided!=='TRUE'; });
+  if (openWO) { toast('Unit has an open work order ('+openWO.ID+') — close it first','error'); return; }
+  var activeKey = safeArray(state.keys).find(function(k){ return k.Unit_ID===unitId && k.Active!=='FALSE'; });
+  if (activeKey) { toast('Unit still has an active key on file — remove that first','error'); return; }
+  if (!confirm('Remove unit "'+(u.Unit_Label||u.ID)+'"? This deactivates it — no history is deleted.')) return;
+  api('POST','/unit/update',{ id: unitId, fields: { Active: 'FALSE' } }).then(function(res){
+    if (res.error) { logError('Remove unit', res.error); toast('Error: '+res.error,'error'); return; }
+    u.Active = 'FALSE'; toast('Unit removed','success'); renderEpUnitsSection(u.Property_ID);
+  }).catch(function(e){ logError('Remove unit', e.message); toast('Error: '+e.message,'error'); });
+}
 function openEditPropertyModal(id){
   var p=state.properties.find(function(x){return x.ID===id;}); if(!p) return;
   document.getElementById('ep-id').value=p.ID; document.getElementById('ep-address').value=p.Address||'';
@@ -3303,11 +3443,20 @@ function openEditPropertyModal(id){
   var epOwnerId = String(p.Owner_ID||'');
   document.getElementById('ep-owner').innerHTML = '<option value="">No owner assigned</option>' +
     safeArray(state.owners).map(function(o){return '<option value="'+o.ID+'"'+(String(o.ID)===epOwnerId?' selected':'')+'>'+(o.First_Name+' '+(o.Last_Name||'')).trim()+(o.Company?' — '+o.Company:'')+'</option>';}).join('');
+  epTypeChanged();
+  renderEpUnitsSection(p.ID);
   openModal('modal-edit-property');
 }
 function submitEditProperty(){
   var id=document.getElementById('ep-id').value;
   var fields={Address:document.getElementById('ep-address').value,City:document.getElementById('ep-city').value,Market:document.getElementById('ep-market').value,Type:document.getElementById('ep-type').value,Lockbox_Code:document.getElementById('ep-lockbox').value,Lock_Code:document.getElementById('ep-lockcode').value,Water_Shutoff:document.getElementById('ep-shutoff').value,HVAC_Filter_Size:document.getElementById('ep-hvac').value,Breaker_Location:document.getElementById('ep-breaker').value,Access_Notes:document.getElementById('ep-access').value,Owner_ID:document.getElementById('ep-owner').value};
+  if (EP_MULTI_TYPES.indexOf(fields.Type) !== -1) {
+    var overrideVisible = document.getElementById('ep-unit-count-override-row').style.display !== 'none';
+    var overrideVal = document.getElementById('ep-unit-count-override').value;
+    fields.Unit_Count = (overrideVisible && overrideVal !== '') ? overrideVal : String(epComputedUnitCount(id));
+  } else {
+    fields.Unit_Count = '1';
+  }
   api('POST','/property/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit property',res.error);toast('Error: '+res.error,'error');return;}
     toast('Property updated','success');closeModal('modal-edit-property');loadAll();
