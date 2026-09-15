@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.9';
+const BUILD_VERSION = '2026-09-15.10';
 
 export default {
   async fetch(request, env) {
@@ -159,6 +159,7 @@ export default {
         if (path === '/smslog')                 return await getSheet(env, 'SMS_Logs');
         if (path === '/message-queue')          return await listMessageQueue(env, url);
         if (path === '/vendor-requests')        return await getSheet(env, VENDOR_REQ_TAB);
+        if (path === '/notification-queue')     return await getSheet(env, NOTIF_QUEUE_TAB);
         if (path === '/twilio/message-status')  return await twilioMessageStatus(env, url);
         if (path === '/twilio/account-status')  return await twilioAccountStatus(env);
         if (path === '/wishlist')               return await getSheet(env, 'Wishlist');
