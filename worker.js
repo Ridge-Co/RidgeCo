@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.9';
+const BUILD_VERSION = '2026-09-14.10';
 
 export default {
   async fetch(request, env) {
@@ -3365,12 +3365,15 @@ async function assignVendor(env, body) {
     // generic Flow response, not this Hub. Telling them to text YES/NO would be actively
     // misleading until real reply/call handling replaces the Flow. Portal Accept/Decline
     // (Aug 13 build) is unaffected by this — it's a real, working button, not an SMS reply.
+    const link = vendorPortalLink(body.wo_id);
     const msg = isSpanish
-      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.`
-      : `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.`;
+      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.\n${link}`
+      : `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
     // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
-    // SMS-reply instruction was removed per the comment above.
+    // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
+    // (Sep 14 2026) — deep-links into the portal (vendorPortalLink), not the no-login
+    // shareable-link mechanism, specifically to avoid bypassing this same accept-gate.
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
@@ -13851,4 +13854,19 @@ function woJobLabel(wo) {
   if (!desc) return `${trade} job`;
   const short = desc.length > 60 ? desc.slice(0, 60).trim() + '…' : desc;
   return `${trade} job (${short})`;
+}
+
+// Deep-link straight into the vendor's own PIN-gated portal, filtered to this WO — for vendor
+// "assignment"/"update" SMS text. Deliberately NOT the no-login shareable-link mechanism
+// (woShareLink/wo.html): that flow's own /wo/shared read handler explicitly does NOT apply the
+// accept-gate (see its comment — "deliberately NOT passing vendorView:true... that would also
+// turn on the accept-gate, a behavior change this task didn't ask for"), so it hands over the
+// lockbox code and tenant phone immediately, with no Accept tap required. Embedding THAT link
+// in the dispatch text would silently defeat the Aug 13 accept-gate the text's own wording
+// promises ("the lockbox code & tenant contact unlock once you accept"). This link instead
+// just deep-links into the normal PIN-login portal (vendor.html's own WO view already
+// correctly respects accessGated/vendorView) — no token, no bypass, same login every vendor
+// already uses. vendor.html reads `?wo=` and filters straight to that job once logged in.
+function vendorPortalLink(woId) {
+  return `https://ridge-co.github.io/RidgeCo/vendor.html?wo=${encodeURIComponent(woId)}`;
 }

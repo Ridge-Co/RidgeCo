@@ -214,6 +214,10 @@ var SESS_KEY = 'mh_vendor_sess'; // persisted {…, token} so a reload / auto-re
 var session = null;
 var currentTab = 'open';
 var failCount = 0;
+// Deep-link support: an SMS can link straight to ?wo=WO-1234 so the vendor's portal opens
+// already filtered to the job the text was about, instead of making them search for it.
+var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ return ''; } })();
+var _deepLinkApplied = false;
 
 function api(path, opts) {
   // Accept hub-style calls too: api('GET'|'POST', path, body)
@@ -563,6 +567,15 @@ function renderWOs(wos) {
   window._wos = wos;
   window._pendingStatus = {};
   wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); loadVendorTimeTracking(wo.ID, idx); loadVendorReceipts(wo.ID, idx); loadVendorBillSummary(wo.ID, idx); });
+  // Deep-link from an SMS ("?wo=WO-1234") — filter straight to that job on first load only,
+  // so the vendor doesn't have to search for the job the text was actually about. Applied
+  // once per page load (not on every re-render after accepting/submitting something) so the
+  // vendor can freely search afterward without it snapping back.
+  if (_deepLinkWoId && !_deepLinkApplied) {
+    _deepLinkApplied = true;
+    var searchBox = document.getElementById('woSearch');
+    if (searchBox) { searchBox.value = _deepLinkWoId; filterVendorWOs(); }
+  }
 }
 
 // ── Estimate widget: load history, show current total, allow revisions ──
