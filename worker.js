@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.11';
+const BUILD_VERSION = '2026-09-14.12';
 
 export default {
   async fetch(request, env) {
@@ -245,7 +245,14 @@ export default {
       if (request.method === 'POST') {
         if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
-        const body = await request.json();
+        // Body parsing is now tolerant of an empty/missing body (POST /cron/sweep and any
+        // future no-payload POST route don't need to send one) — previously this threw a raw
+        // "Unexpected end of JSON input" 500 for ANY POST with no body at all, which is exactly
+        // what a plain `curl -X POST` (no -d) produces. Routes that genuinely require fields
+        // still fail with their own clear "X required" 400 from validating `body` afterward —
+        // this only removes the uncaught-parse-error class of failure, not real validation.
+        let body = {};
+        try { body = await request.json(); } catch (e) { body = {}; }
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
         // captured once here, harmlessly unused by every other POST route.
         const _clientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';

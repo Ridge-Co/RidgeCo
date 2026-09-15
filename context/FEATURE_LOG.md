@@ -1,5 +1,11 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.79 | **Last Updated:** September 14, 2026 (Twilio live-test round, quiet hours + cron-replacement)
+**Version:** v1.80 | **Last Updated:** September 14, 2026 (Twilio live-test round, cron-sweep fix)
+
+**167. Real live bug found testing rule 166: every POST route 500'd with a raw "Unexpected end of JSON input" if the client sent no body at all — exactly what `POST /cron/sweep` (and the GitHub Actions curl calling it) does (Sep 14 2026, worker.js body-parsing).** Caught immediately by actually calling the new endpoint live rather than assuming a clean deploy meant it worked — `const body = await request.json();` ran unconditionally for every POST route before reaching any handler, uncaught, so an empty body threw before `cronSweep(env)` (which doesn't even take a body) ever ran. This wasn't new to `/cron/sweep` — any existing POST route would have hit the same failure if ever called with zero body bytes; it just never came up before because every other POST caller always sends `{...}`.
+
+Fixed generally, not just for this one route: `let body = {}; try { body = await request.json(); } catch (e) { body = {}; }` — an empty or malformed body now defaults to `{}` instead of throwing, and routes that genuinely require fields still fail with their own clear "X required" 400 from validating `body` afterward, same as always. `node --check` clean, full suite green — no test relied on the old throw-on-empty-body behavior.
+
+**NOT verified against live data — no live credentials in this build sandbox.**
 
 **166. Quiet hours (7pm–9am ET) hold on automatic SMS, and a free GitHub-Actions replacement for the periodic sweep Cloudflare Cron Triggers can't cheaply cover (Sep 14 2026, worker.js `isQuietHoursNow`/`nextQuietHoursEnd`/`processQuietHoursQueue`/`cronSweep`; new `.github/workflows/cron-sweep.yml`).** Brett: hold any automatic message that would fire after 7pm ET until 9am ET the next day, and asked to get off Cloudflare Cron Triggers entirely for this kind of thing given the platform limit (3 triggers/Worker free, 5 paid — all 4 paid-tier slots already spoken for: daily digest, 2x optimizer review, weekly AR report) — wanted a genuinely free alternative, floated Google Calendar.
 
