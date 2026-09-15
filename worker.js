@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.8';
+const BUILD_VERSION = '2026-09-15.9';
 
 export default {
   async fetch(request, env) {
@@ -3943,10 +3943,17 @@ async function welcomeSend(env, body) {
     ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg }
     : { wo_id: '', message_type: 'vendor_welcome', recipient_type: 'vendor', vendor: recipient, message_body: finalMsg };
   const r = await smsGatedSend(env, sendOpts);
-  if (!r.sent) return json({ error: r.send_ok ? 'Send failed' : ('Blocked: ' + r.gate_snapshot), name: firstName }, r.send_ok ? 502 : 400);
+  // Sep 15 2026 — same fix as createVendorRequest/processVendorNudges (found live-testing
+  // both the same day): a quiet-hours hold returns sent:false from smsGatedSend even though
+  // the message WILL go out once quiet hours end (it's correctly queued, not failed). Treating
+  // that as an error here had two real consequences: (1) the caller got a false "Send failed"
+  // 502 for a message that was actually working correctly, and (2) because the function
+  // returned before reaching the Welcome_Sent write below, a person with a legitimately queued
+  // welcome message would still show as "not yet welcomed" in the Hub's own filter.
+  if (!r.sent && !r.held_for_quiet_hours) return json({ error: r.send_ok ? 'Send failed' : ('Blocked: ' + r.gate_snapshot), name: firstName }, r.send_ok ? 502 : 400);
   try { await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', ['Welcome_Sent','Welcome_Sent_Date']); } catch (_) {}
   await updateRow(env, type === 'tenant' ? 'Tenants' : 'Vendors', id, { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString() });
-  return json({ success: true, sent_to: r.test_mode ? '(test mode)' : phone, name: firstName });
+  return json({ success: true, sent_to: r.held_for_quiet_hours ? '(queued — held for quiet hours)' : (r.test_mode ? '(test mode)' : phone), held_for_quiet_hours: !!r.held_for_quiet_hours, name: firstName });
 }
 
 // ── VENDOR BILLING ───────────────────────────────────────────

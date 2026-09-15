@@ -35,13 +35,14 @@ const fnBody = grab('welcomeSend');
   ok(fnBody.includes("message_type: 'vendor_welcome'"), 'vendor sends use message_type vendor_welcome');
 }
 
-// ---- Welcome_Sent is only written AFTER confirming the message actually sent ----
+// ---- Welcome_Sent is only written AFTER confirming the message actually sent (or was
+// correctly queued for quiet hours — see the regression guard below for that distinction) ----
 {
-  const guardIdx = fnBody.indexOf('if (!r.sent) return');
+  const guardIdx = fnBody.indexOf('!r.sent && !r.held_for_quiet_hours');
   const writeIdx = fnBody.indexOf("Welcome_Sent: 'TRUE'");
   ok(guardIdx >= 0, 'a not-sent guard exists at all');
   ok(writeIdx >= 0, 'the Welcome_Sent write exists at all');
-  ok(guardIdx < writeIdx, 'the not-sent guard is positioned BEFORE the Welcome_Sent write — a gate-blocked or failed send can never falsely mark someone as welcomed');
+  ok(guardIdx < writeIdx, 'the not-sent guard is positioned BEFORE the Welcome_Sent write — a genuinely blocked or failed send can never falsely mark someone as welcomed');
 }
 
 // ---- tenant gate is given real property/owner, not left to default-open ----
@@ -57,6 +58,15 @@ const fnBody = grab('welcomeSend');
 // ---- invalid type is rejected, not silently mishandled ----
 {
   ok(fnBody.includes("Invalid type. Use: tenant or vendor"), 'an unrecognized type gets a clear error, not a silent fall-through');
+}
+
+// ---- regression guard (Sep 15 2026, live-testing): a quiet-hours hold is a SUCCESS, not an
+// error — same bug class already fixed once today in createVendorRequest/processVendorNudges.
+// A message held for quiet hours WILL send once quiet hours end; treating it as a failure gave
+// a false "Send failed" 502 AND skipped the Welcome_Sent write entirely. ----
+{
+  ok(fnBody.includes('!r.sent && !r.held_for_quiet_hours'), 'the error-return guard checks held_for_quiet_hours too, not just r.sent — a quiet-hours hold no longer reports as a failure');
+  ok(!fnBody.includes('if (!r.sent) return json') , 'the old sent-only guard is gone, not left alongside the fixed one');
 }
 
 console.log(`welcome-send: ${n}/${n} passing`);
