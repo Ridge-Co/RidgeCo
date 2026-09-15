@@ -1,4 +1,17 @@
-# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, and two more live bugs fixed — rule 174)
+# WHERE THINGS STAND — Sep 15, 2026 (documentation audit, an open nudge bug, two live bugs fixed, then the pattern behind them closed off — rule 175)
+
+## 🟢 Fixed and deployed: preventive measure for rule 174's failure class — rule 175
+Full detail: FEATURE_LOG rule 175. Direct response to Brett's ask: don't just fix the two
+reported bugs, reduce the chance of this exact class recurring. `ensureColumns` (70+ call sites)
+and `driveShareAnyone` now log a Telemetry row on every failure centrally, in the shared
+function — so any NEW call site automatically gets this protection with no extra work, instead
+of needing 70+ individual call sites fixed by hand. `driveShareAnyone` also retries once.
+**Important gap flagged, not fixed by this build**: the existing weekly ops review already turns
+2+ repeated failures for the same job type into a flagged pattern delivered to Brett by
+SMS/email — but that delivery (`digest_enabled`) is OFF by default and has been the whole time.
+Logging a failure that nobody is told about is only half the fix. **Brett: worth deciding
+whether to turn `digest_enabled` on now that Twilio is live**, or confirm you want it to stay
+manual-check-only for now.
 
 ## 🟢 Fixed and deployed: receipt payment-source + photo-sharing silent failures — rule 174
 Full detail: FEATURE_LOG rule 174. Brett reported two live bugs (vendor "my own money" receipt

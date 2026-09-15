@@ -49,6 +49,9 @@ const t = (n, c) => { if (c) pass++; else { fail++; console.log('FAIL:', n); } }
 
 const cacheSrc      = grabRange(wsrc, 'const __tabCache = new Map();', '// Google throttles Sheets reads');
 const srSrc          = grab(wsrc, 'async function sheetsRequest(');
+// Rule 174: ensureColumns is now a thin wrapper over ensureColumnsInner (logs a Telemetry row
+// on failure) — grab both, same as ensure-columns.test.mjs does.
+const ensureInnerSrc  = grab(wsrc, 'async function ensureColumnsInner(');
 const ensureSrc       = grab(wsrc, 'async function ensureColumns(');
 const colSrc          = grab(wsrc, 'function col(index)') || grab(wsrc, 'function col(index');
 const idcSrc          = grab(wsrc, 'function idColIndex(');
@@ -145,10 +148,11 @@ function makeFetch(db, callLog) {
 function build(db, callLog) {
   const src = [
     'const CORS = {};',
-    cacheSrc, srSrc, ensureSrc, colSrc, idcSrc, jsonSrc, fetchTabSrc, fetchTabsSrc,
+    "const TELEMETRY_TAB = 'Ops_Telemetry';",
+    'async function logTelemetry(){ /* no-op in tests */ }',
+    cacheSrc, srSrc, ensureInnerSrc, ensureSrc, colSrc, idcSrc, jsonSrc, fetchTabSrc, fetchTabsSrc,
     updateRowSrc, updateWOFieldsSrc, findRecentDupSrc,
     'async function addRow(){ return { success:true, id:"X" }; }', // WO_Tenants linking side-effect — not under test
-    'async function logTelemetry(){ /* no-op in tests */ }',
     createWOSrc,
     rolesSrc, tradeMapSrc, descMapSrc, doneStatusesSrc,
     dayBeforeSrc, nextGroupIdSrc, createTOSrc, startTOSrc, scheduleMOSrc, releaseIfReadySrc, releaseByDateSrc,

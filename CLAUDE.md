@@ -36,6 +36,23 @@ action — no cheerleading. When corrected, change approach; never restate a ref
   cannot reach Intuit directly — all QB work goes through Worker endpoints.
 
 ## Regression rules — DON'T break working features (full log in /context/FEATURE_LOG.md)
+- **A silent `catch(e){}`/`catch(_){}` around a Sheets/Drive write is a real blind spot, not a
+  safe default** (rule 174, Sep 15 2026): `Payment_Source` never actually got created on the
+  live Receipts sheet for weeks — every write silently dropped it, every read silently defaulted
+  wrong, and nothing anywhere recorded the failure, because `ensureColumns`'s own call site
+  swallowed the error "since the core fields still land." `ensureColumns` and `driveShareAnyone`
+  now log a Telemetry row on every failure centrally (in the shared function, not at each of the
+  70+ call sites) and `driveShareAnyone` retries once — so a NEW call site automatically gets
+  this protection for free, no extra work needed at the call site itself. Before adding a
+  `try { await ensureColumns(...) } catch { /* non-fatal */ }` anywhere, know that the failure is
+  now logged either way — the swallow only needs to protect the REQUEST from failing, not hide
+  the failure from ever being seen. Same logic applies to any other "best-effort, non-fatal"
+  write going forward: prefer logging centrally over swallowing at the call site.
+- **The weekly ops review (`runWeeklyReview`) already turns 2+ repeated Telemetry failures for
+  the same `Job_Type` into a flagged "stuck pattern"** fed to an LLM proposal and (once
+  `digest_enabled` is TRUE) delivered to Brett by SMS/email — but delivery is DORMANT by default
+  until he turns it on. A logged failure with nobody reading the log is only half a fix; if a
+  new silent-failure class turns up again, check whether `digest_enabled` ever got flipped on.
 - **WO writes match on `WO_ID`** (ID fallback). Newer Work_Orders rows have a blank ID column;
   ID-only matching silently no-matches → status-not-saving. Do not revert to ID-only.
 - **`wrangler.toml` must keep `keep_vars = true`** — without it a deploy wipes dashboard

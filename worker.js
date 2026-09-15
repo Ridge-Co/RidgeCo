@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.1';
+const BUILD_VERSION = '2026-09-15.2';
 
 export default {
   async fetch(request, env) {
@@ -1180,15 +1180,13 @@ async function addReceipt(env, body) {
   }, 30);
   if (dupe) return json({ success: true, duplicate: true, amount: amt.toFixed(2) });
 
+  // The core fields below still land even if this fails; only the new ones are at risk on a
+  // very first run. Rule 174: ensureColumns itself now logs a Telemetry row on any failure
+  // (see its own comment) — this used to swallow that same failure with zero trace anywhere,
+  // which is exactly how Payment_Source went unnoticed for weeks. No swallow needed here
+  // anymore; the shared function's own logging covers it.
   try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source']); }
-  catch (e) {
-    // The core fields below still land; only the new ones are at risk on a very first run.
-    // Rule 171: this used to swallow silently — real-world result was Payment_Source never
-    // actually getting created on the live sheet, so every vendor's "my own money" selection
-    // was computed correctly and then dropped on write with zero trace anywhere. Log it now so
-    // a persistent failure here is discoverable instead of invisible.
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ensure_columns_failed', Skill_Or_Endpoint: 'addReceipt/Receipts', Success: 'FALSE', Notes: String((e && e.message) || e) }); } catch (_) {}
-  }
+  catch (e) { /* logged centrally by ensureColumns; the write below still proceeds with whatever columns exist */ }
 
   const addResp = await addRow(env, 'Receipts', {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
@@ -10145,7 +10143,34 @@ async function qbMapEntity(env, body) {
 // Properties and Units have no QuickBooks column out of the box, and updateRow maps by
 // header name — writing to a column that doesn't exist succeeds and stores nothing. That
 // silent no-op has bitten this system before, so the column is created before it's used.
+// Rule 174 hardening: ensureColumns has 70+ call sites across this file, most wrapped in a
+// `catch (e) {}`/`catch (_) {}` that was written assuming "the core write still lands, only a
+// brand-new field is at risk" — reasonable for a call that hits its happy path almost every
+// time. It went unnoticed for weeks specifically because it silently DIDN'T hit its happy path:
+// Receipts' Payment_Source column never got created, every call site's catch swallowed that,
+// and there was zero record anywhere. Rather than touch all 70+ call sites (each its own
+// unrelated feature, real risk of an unrelated regression for no gain), the fix goes in the one
+// shared function: log a Telemetry row on every failure, in addition to still throwing, so a
+// caller's own catch can keep whatever behavior it already has while the failure ALSO becomes
+// visible — it now surfaces in `computeTelemetryMetrics`' stuck-pattern detector (2+ failures
+// for the same tab within the review window) and, once Brett turns `digest_enabled` on, in the
+// weekly ops review he already gets. See CLAUDE.md's regression rules for the standing version
+// of this rule.
 async function ensureColumns(env, tab, columns) {
+  try {
+    return await ensureColumnsInner(env, tab, columns);
+  } catch (e) {
+    // Guard against recursion: logTelemetry itself calls ensureColumns(TELEMETRY_TAB, ...) —
+    // if THAT specific call is what's failing, logging the failure via logTelemetry would call
+    // straight back into this same failing path instead of just reporting it.
+    if (tab !== TELEMETRY_TAB) {
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ensure_columns_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (_) {}
+    }
+    throw e;
+  }
+}
+
+async function ensureColumnsInner(env, tab, columns) {
   // Read the WHOLE tab, not just row 1. Sheets trims trailing empty cells, so a column with
   // a blank header but real data underneath makes row 1 look narrower than the sheet is —
   // and appending at that index would drop a new header on top of live data. The widest row
