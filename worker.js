@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-14.8';
+const BUILD_VERSION = '2026-09-14.9';
 
 export default {
   async fetch(request, env) {
@@ -3356,13 +3356,21 @@ async function assignVendor(env, body) {
   if (notify && vendor.Phone) {
     const isSpanish = vendor.Language === 'es';
     // Access-gate: the lockbox code + tenant contact are NOT sent on dispatch — they unlock
-    // once the vendor accepts (reply YES or Accept in the portal). Accepting moves the status,
-    // which is what lets the tenant-notification automation fire.
+    // once the vendor accepts in the portal. Accepting moves the status, which is what lets
+    // the tenant-notification automation fire. Message text deliberately does NOT tell the
+    // vendor to reply YES/NO by text (Sep 14 2026, Brett's call) — handleInboundSMS's YES/NO
+    // handling still exists in code but is currently unreachable: the Twilio number's inbound
+    // webhook routes through a Twilio Studio Flow (Brett's own fix for the old-PM-autoresponder
+    // issue) that never forwards to /sms-inbound, so a vendor texting YES today would hit that
+    // generic Flow response, not this Hub. Telling them to text YES/NO would be actively
+    // misleading until real reply/call handling replaces the Flow. Portal Accept/Decline
+    // (Aug 13 build) is unaffected by this — it's a real, working button, not an SMS reply.
     const msg = isSpanish
-      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Responda SI para aceptar — el código de la caja y el contacto del inquilino se desbloquean en su portal al aceptar. Responda NO para rechazar.`
-      : `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Reply YES to accept — the lockbox code & tenant contact unlock in your portal once you accept. Reply NO to decline.`;
-    // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Message content UNCHANGED (the
-    // accept-gate withholding above must not change) — only gated + queued now.
+      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.`
+      : `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.`;
+    // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
+    // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
+    // SMS-reply instruction was removed per the comment above.
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
