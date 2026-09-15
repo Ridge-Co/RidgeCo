@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-15.7';
+const BUILD_VERSION = '2026-09-15.8';
 
 export default {
   async fetch(request, env) {
@@ -3555,18 +3555,22 @@ async function updateStatus(env, body) {
   if (body.status === 'Complete' && wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
     try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { /* non-fatal */ }
   }
-  // Owner notifications (Sep 14 2026 rebuild) — Received/Scheduled/Complete/On_Hold only.
+  // Owner notifications (Sep 14 2026 rebuild) — Received/Complete/On_Hold here; Scheduled
+  // moved to scheduleWO itself (Sep 15 2026 — real gap found live-testing: nothing in this
+  // codebase ever actually sets Status to the literal 'Scheduled', so the mapping that used to
+  // live here could never fire; see scheduleWO's own comment). Deliberately NOT kept as a
+  // dead/defensive entry here too — leaving it would risk a double-send if some future code
+  // path ever did set status:'Scheduled' via this endpoint.
   // 'Assigned' and 'Invoiced' retired per Brett's own call (see NOTIFY_TIERS comment). Routed
   // through the real gated pipeline now (Global+Property+Customer, Test Mode, Message_Queue),
   // not the old raw sendSMS — the old path bypassed Test Mode entirely, so a real owner could
   // receive a live text about a WO created purely for testing. This closes that gap.
-  const OWNER_STATUS_EVENTS = { Scheduled: 'Scheduled', Complete: 'Complete', 'On Hold': 'On_Hold' };
+  const OWNER_STATUS_EVENTS = { Complete: 'Complete', 'On Hold': 'On_Hold' };
   const ownerEvent = OWNER_STATUS_EVENTS[body.status];
   if (ownerEvent && owner?.Phone) {
     const notify = await shouldNotifyOwner(env, wo, ownerEvent);
     if (notify) {
       const ownerMsgs = {
-        Scheduled: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is scheduled for ${wo.Scheduled_Date || 'a date to be confirmed'}, subject to change. Ref: ${body.wo_id}.`,
         Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is complete. Ref: ${body.wo_id}.`,
         On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
       };
@@ -5919,10 +5923,11 @@ async function scheduleWO(env, body) {
   // Vendor nudge clock reset (Sep 14 2026) — a vendor setting a schedule is real activity.
   if (body.updated_by_role === 'vendor') { await resetVendorNudgeClock(env, body.wo_id, body.vendor_id || wo.Vendor_ID); }
   let tenantSMSSent=false, notifyQueued=false;
+  const [units,tenants,properties,owners]=await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
+  const unit=units.find(u=>u.ID===wo.Unit_ID), property=properties.find(p=>p.ID===wo.Property_ID);
+  const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
-    const [units,tenants,properties,owners]=await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
-    const unit=units.find(u=>u.ID===wo.Unit_ID), tenant=currentTenantForDispatch(tenants, unit, wo), property=properties.find(p=>p.ID===wo.Property_ID);
-    const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
+    const tenant=currentTenantForDispatch(tenants, unit, wo);
     const address=property?property.Address+(unit?' Unit '+unit.Unit_Label:''):'your address';
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
@@ -5946,8 +5951,28 @@ async function scheduleWO(env, body) {
       }
     }
   }
+  // Owner Scheduled (Sep 15 2026 — real gap found live-testing rule 168): the owner-scheduled
+  // message was wired into updateStatus, gated on body.status==='Scheduled' — but nothing in
+  // this codebase ever actually sets Status to that literal value (scheduling only ever
+  // touches Scheduled_Date/Scheduled_Window here in scheduleWO, independent of Status). That
+  // made the notification permanently unreachable, not just for this rebuild but for however
+  // long it existed before. Fixed by triggering it from the actual code path that handles
+  // scheduling, independent of notify_tenant (an owner's own preference, not tied to whether
+  // the tenant toggle happens to be on) and independent of isWithinHour (Brett's own event set
+  // — Received/Scheduled/Complete/On_Hold — doesn't have a distinct "technician en route" tier).
+  let ownerSMSSent=false;
+  if (property && owner?.Phone) {
+    const notify = await shouldNotifyOwner(env, wo, 'Scheduled');
+    if (notify) {
+      const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
+      const ownerMsg = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is scheduled for ${dateStr}, ${body.window}, subject to change. Ref: ${body.wo_id}.`;
+      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_scheduled', recipient_type: 'owner', owner, property, message_body: ownerMsg });
+      ownerSMSSent = r.sent;
+      if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
+    }
+  }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_schedule', Skill_Or_Endpoint:'/schedule', Success:'TRUE', Notes:`window=${body.window||''} new_status=${updates.Status||wo.Status||''}` }); } catch(_){}
-  return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,new_status:updates.Status||wo.Status});
+  return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,owner_sms:ownerSMSSent,new_status:updates.Status||wo.Status});
 }
 
 // Notification_Queue — a send-TIMING defer (day-before-5pm / day-of-8am cutoff so a schedule
