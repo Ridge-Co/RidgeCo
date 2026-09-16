@@ -36,9 +36,21 @@ action — no cheerleading. When corrected, change approach; never restate a ref
 - Backend: `worker.js` — Cloudflare Worker, auto-deploys on push to `main`. **Never Wrangler CLI.**
 - Database: Google Sheets via service account `brett-os-sheets@brettos-502323.iam.gserviceaccount.com`.
 - Repo: `Ridge-Co/RidgeCo`. Sheet ID: `1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4`.
-- Worker URL: `https://maintenance-hub.brett-2f8.workers.dev`.
+- Worker URL (prod): `https://maintenance-hub.brett-2f8.workers.dev`.
+- Worker URL (staging): `https://maintenance-hub-staging.brett-2f8.workers.dev` — separate Cloudflare
+  Worker service, own Sheet, own dashboard vars. QB writes/SMS/Gmail send are stubbed there
+  (`isStaging()` in worker.js). See PAT-033 below.
 - QuickBooks: connected at the Worker level (prod, realm 9130355695406136). The cloud/session
   cannot reach Intuit directly — all QB work goes through Worker endpoints.
+
+## MANDATORY: branch-first + staging-verify (PAT-033)
+Any change touching `worker.js`, `index.html`, `vendor.html`, or `wo.html` lands on a branch —
+never a direct push to `main`. Verify on the staging Worker (`?api=staging` on the frontend,
+curl the staging URL directly for the backend) BEFORE merging to `main`, which is what actually
+triggers the production deploy. Not optional, not feature-specific — this is what closed the gap
+after the Sept 1, 2026 incident (a push straight to `main`, tested against production only after
+the fact). Full detail: `context/Brett_Context_Document_v1.13.md` PAT-033; the "Staging sandbox"
+credentials note now lives in `brett332/data/CREDENTIALS_MAP.md` (moved off this public repo Sep 16).
 
 ## Regression rules — DON'T break working features (full log in /context/FEATURE_LOG.md)
 - **A silent `catch(e){}`/`catch(_){}` around a Sheets/Drive write is a real blind spot, not a
