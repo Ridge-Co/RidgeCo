@@ -10648,6 +10648,14 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
 </div>
 <script>
 // ── Edit Owner ───────────────────────────────────────────────
+function loadTenantWOSettings(force) {
+  if (state._tenantWOSettings && !force) return Promise.resolve(state._tenantWOSettings);
+  return api('GET', '/tenant-wo-settings').then(function(res) {
+    state._tenantWOSettings = res || { owners: [], properties: [] };
+    return state._tenantWOSettings;
+  }).catch(function() { return state._tenantWOSettings || { owners: [], properties: [] }; });
+}
+
 function openEditOwnerModal(id) {
   var o = safeArray(state.owners).find(function(x){return x.ID===id;}); if(!o) return;
   document.getElementById('eo-id').value = o.ID;
@@ -10659,8 +10667,18 @@ function openEditOwnerModal(id) {
   document.getElementById('eo-rate').value = parseFloat(o.Hourly_Rate)>0 ? parseFloat(o.Hourly_Rate) : '';
   document.getElementById('eo-pin').value = o.PIN||'';
   document.getElementById('eo-active').value = o.Active==='FALSE' ? 'FALSE' : 'TRUE';
+  document.getElementById('eo-two-toggle').value = o.Tenant_WO_Toggle==='ON'||o.Tenant_WO_Toggle==='OFF' ? o.Tenant_WO_Toggle : '';
+  document.getElementById('eo-two-propids').value = o.Tenant_WO_Property_IDs||'';
+  document.getElementById('eo-held-note').value = o.Held_Contact_Note||'';
+  document.getElementById('eo-two-effective').textContent = '';
   document.getElementById('eo-msg').innerHTML = '';
   openModal('modal-edit-owner');
+  loadTenantWOSettings(true).then(function(s) {
+    var props = safeArray(s.properties).filter(function(p){ return String(p.owner_id)===String(o.ID); });
+    if (!props.length) return;
+    var onCount = props.filter(function(p){ return p.whole_property_enabled; }).length;
+    document.getElementById('eo-two-effective').textContent = '— currently ON for ' + onCount + ' of ' + props.length + ' propert' + (props.length===1?'y':'ies');
+  });
 }
 function submitEditOwner() {
   var id = document.getElementById('eo-id').value;
@@ -10676,9 +10694,20 @@ function submitEditOwner() {
     PIN: document.getElementById('eo-pin').value.trim().toUpperCase(),
     Active: document.getElementById('eo-active').value,
   };
-  api('POST','/owner/update',{id:id,fields:fields}).then(function(res){
-    if (res && res.error) { document.getElementById('eo-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(res.error)+'</div>'; return; }
-    toast('Owner updated','success'); closeModal('modal-edit-owner'); loadAll(); renderOwnersPage();
+  var twoToggle = document.getElementById('eo-two-toggle').value;
+  var twoPropIds = document.getElementById('eo-two-propids').value.trim();
+  var heldNote = document.getElementById('eo-held-note').value;
+  // Tenant WO toggle + the held-contact note go through their own dedicated endpoints, not
+  // folded into /owner/update's generic fields — those endpoints ensureColumns first, so a
+  // save can never silently no-op on a sheet that's never had this column written before.
+  Promise.all([
+    api('POST','/owner/update',{id:id,fields:fields}),
+    api('POST','/owner/tenant-wo-toggle',{owner_id:id,toggle:twoToggle,property_ids:twoPropIds}),
+    api('POST','/owner/held-contact-note',{owner_id:id,note:heldNote}),
+  ]).then(function(results){
+    var err = results.map(function(r){ return r && r.error; }).find(Boolean);
+    if (err) { document.getElementById('eo-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(err)+'</div>'; return; }
+    toast('Owner updated','success'); closeModal('modal-edit-owner'); loadAll(); renderOwnersPage(); loadTenantWOSettings(true);
   }).catch(function(e){ document.getElementById('eo-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(e.message)+'</div>'; });
 }
 
