@@ -3,7 +3,11 @@
 ## 🟢 Fixed: 1109 Battery Ave (Property 84) unit/tenant data — full detail FEATURE_LOG [FL-20260916-2150-t8]
 Brett supplied the two answers rule 171 was blocked on (unit labels Apt 1/Apt 2; Reagan is in
 Apt 2). Created Units 55 (Apt 1, vacant) and 56 (Apt 2, linked to tenant 102/Reagan) via the
-existing `/unit/add` + `/tenant/update` endpoints — no code changes, pure data fix.
+existing `/unit/add` + `/tenant/update` endpoints — no code changes, pure data fix. Verified live
+via `/units` and `/tenants` after the write. Also re-confirmed the Property Structure management
+feature itself (rule 171, Sep 14) is live and correct in the current build — Brett can now do
+this himself in the Hub (Edit Property → Units section; Edit Tenant → Unit dropdown) for any
+future property without needing a session.
 
 # WHERE THINGS STAND — Sep 16, 2026 (vendor nudge satisfied-check fixed off real live false-positives; 3 SMS templates stopped over-promising a reply channel that doesn't route anywhere)
 
