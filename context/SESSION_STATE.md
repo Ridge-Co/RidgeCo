@@ -2,6 +2,39 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
+## Last checkpoint: Sep 16, 2026 — 1109 Battery Ave unit/tenant fix closed out; FEATURE_LOG/CURRENT.md too large to update from a chat session
+
+**What happened:** Brett asked (chat session, not Cowork) to pull up the 1109 Battery Ave fix from
+FEATURE_LOG rule 171 (Sep 14 — Property Structure management feature built, but the actual Battery
+Ave record itself left pending two answers). Brett supplied both: unit labels "Apt 1"/"Apt 2",
+existing tenant Reagan (ID 102) is in Apt 2. Fixed live via the already-shipped `/unit/add` +
+`/tenant/update` endpoints (no code changes) — created Unit 55 (Apt 1, Property 84, vacant) and
+Unit 56 (Apt 2, `Tenant_ID:102`), set Reagan's `Unit_ID` to 56. Verified live via `/units`/`/tenants`
+after the write. Also re-confirmed live in `index.html` (matches `BUILD_VERSION 2026-09-16.1`) that
+rule 171's feature (Edit Property → Units section; Edit Tenant → Unit dropdown) is fully wired —
+Brett can do this himself in the Hub for any future property, no session needed.
+
+**🔴 Real gap surfaced this session, worth acting on: `FEATURE_LOG.md` (476KB) and `CURRENT.md`
+(211KB) are now too large to fully rewrite through a chat session's GitHub write path** (`GH Broker`'s
+`commit_file` only does whole-file replace, no patch/diff — reproducing either file's full existing
+content plus a new entry exceeds what a single chat turn can output). This is why rule 171's "still
+pending" line in `FEATURE_LOG.md` was NOT corrected to reflect this fix, and no new FEATURE_LOG/
+CURRENT.md entry was added for it — only this file (small enough to round-trip) got updated. **Not
+a one-off** — this will keep happening for any future chat-session context update as both files keep
+growing. Worth deciding: (a) a periodic archive/rotation (e.g. move entries older than N months into
+a dated `FEATURE_LOG_ARCHIVE_2026H1.md`, matching a roll-old-entries-into-a-summary pattern), or
+(b) route all future FEATURE_LOG/CURRENT.md edits through an actual Claude Code session (local git,
+not a chat-turn tool call) rather than a Cowork/chat session, since Claude Code isn't bottlenecked by
+a single-turn output limit the way this session was.
+
+**Next step:** Someone with a proper git session (Claude Code, or Brett's own PAT via the documented
+Basic-auth method if he chooses to provide one) should: (1) correct rule 171 in `FEATURE_LOG.md` —
+the "Battery Ave record itself is still pending..." sentence is now stale, and (2) add a short
+CURRENT.md status line pointing at it. Low priority / no rush — the underlying Sheet data is already
+correct and live either way; this is purely a documentation-trail gap.
+
+---
+
 ## Last checkpoint: Aug 22, 2026 — B-140 confirmed, B-141 done, B-127 built but NOT pushed. Next: B-211, WITH Brett.
 
 **Next step:** Brett is opening this fresh session specifically to build **B-211** (`judge()` write-gate)
