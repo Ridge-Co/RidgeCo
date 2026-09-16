@@ -1549,6 +1549,14 @@ function rcRenderLightbox() {
   if (it.isVideo) {
     body.innerHTML = '<video id="rc-lb-video" controls autoplay playsinline style="max-width:100%;max-height:78vh" src="https://drive.google.com/uc?export=download&id=' + it.fileId + '"></video>' +
       '<div style="text-align:center;margin-top:8px"><a href="' + esc(it.driveUrl) + '" target="_blank" style="color:#8fb8ff;font-size:12px">Won\'t play? Open in Drive &rarr;</a></div>';
+  } else if (it.internal) {
+    // Receipt/bill/invoice: never Drive-shared (rule 13), so both the public thumbnail AND the
+    // driveUrl fallback below 404/blank for these — that mismatch is the "black page" bug. Go
+    // straight to the authenticated proxy, with an "Open" link as the fallback instead of a
+    // Drive link the vendor has no access to.
+    var viewUrl = internalFileUrl(it.woId, it.fileId);
+    body.innerHTML = '<img src="' + esc(viewUrl) + '" style="max-width:100%;max-height:82vh;object-fit:contain" onerror="this.style.display=\'none\';document.getElementById(\'rc-lb-fallback\').style.display=\'block\'">' +
+      '<div id="rc-lb-fallback" style="display:none;text-align:center;margin-top:8px"><a href="' + esc(viewUrl) + '" target="_blank" style="color:#8fb8ff;font-size:12px">Can\'t preview — open file &rarr;</a></div>';
   } else {
     body.innerHTML = '<img src="https://drive.google.com/thumbnail?id=' + it.fileId + '&sz=w1600" style="max-width:100%;max-height:82vh;object-fit:contain" onerror="this.onerror=null;this.src=\'' + esc(it.driveUrl) + '\'">';
   }
