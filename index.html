@@ -10501,6 +10501,15 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
         <select id="eo-active"><option value="TRUE">Active</option><option value="FALSE">Inactive</option></select>
       </div>
     </div>
+    <div class="form-grid" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+      <div class="form-group full"><label>Tenant Work Order Submission <span id="eo-two-effective" style="font-weight:normal"></span></label>
+        <select id="eo-two-toggle"><option value="">— Not set (falls through to each property's own setting)</option><option value="ON">ON — tenants can submit requests</option><option value="OFF">OFF — tenants cannot submit requests</option></select>
+      </div>
+      <div class="form-group full"><label>Scope to specific properties <span style="font-weight:normal;color:var(--muted)">— blank = applies to ALL this owner's properties</span></label>
+        <input type="text" id="eo-two-propids" placeholder="e.g. 14, 27"></div>
+      <div class="form-group full"><label>Message shown on a job this owner has claimed as their own <span style="font-weight:normal;color:var(--muted)">— e.g. "Check your Buildium portal" or a phone number</span></label>
+        <textarea id="eo-held-note" placeholder="Shown to the tenant instead of the usual Ridge Co contact." style="min-height:56px;resize:vertical"></textarea></div>
+    </div>
     <div id="eo-msg"></div>
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-edit-owner')">Cancel</button>
