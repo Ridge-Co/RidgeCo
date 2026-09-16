@@ -1053,6 +1053,53 @@ async function viewInternalFile(env, url) {
   }
 }
 
+// GET /owner-file/view?wo_id=&file_id=&t= — owner-scoped receipt viewer (rule 177, Sep 16 2026).
+// Brett: receipts (materials proof-of-purchase photos) should be visible to the property owner;
+// vendor invoices/bills should not — the second half was already true (never Drive-shared, no
+// owner UI slot even renders them), but receipts were stuck in the same never-shared bucket, so
+// owner.html could show a receipt's filename with a link that always blanked out. This is the
+// owner-facing twin of viewInternalFile above, with two checks that function does not need
+// because an owner session is a different trust level than an admin/vendor one:
+//   1. Hard content-type gate — refuses anything whose Attachments.File_Type isn't exactly
+//      'receipt', so a bill/invoice can never be served through this path no matter what
+//      file_id is guessed.
+//   2. Ownership check — an 'owner' session (callerRole/callerSessionId, from the verified PIN
+//      session token) may only view a receipt on a WO whose property actually belongs to them
+//      (Work_Orders.Property_ID -> Properties.Owner_ID). The admin secret (callerRole stays
+//      null at the auth gate) skips this, same as every other endpoint's "admin = full access."
+// Every rejection path returns the same generic 404 — missing file, wrong type, and wrong owner
+// all look identical from the outside, so a snooping session can't use the response shape to
+// tell those cases apart or fish for what exists.
+async function viewOwnerReceiptFile(env, url, callerRole, callerSessionId) {
+  const woId = url.searchParams.get('wo_id') || '';
+  const fileId = url.searchParams.get('file_id') || '';
+  if (!woId || !fileId) return json({ error: 'wo_id and file_id required' }, 400);
+  try {
+    const attachments = await fetchTab(env, 'Attachments');
+    const row = attachments.find(a => a.Active !== 'FALSE' && a.WO_ID === woId && a.Drive_File_ID === fileId);
+    if (!row || (row.File_Type || '').toLowerCase() !== 'receipt') return json({ error: 'File not found for this work order' }, 404);
+    if (callerRole === 'owner') {
+      const [wos, properties] = await fetchTabs(env, ['Work_Orders', 'Properties']);
+      const wo = findWO(wos, woId);
+      const prop = wo ? properties.find(p => p.ID === wo.Property_ID) : null;
+      if (!prop || String(prop.Owner_ID || '') !== String(callerSessionId || '')) return json({ error: 'File not found for this work order' }, 404);
+    }
+    const token = await getAccessToken(env);
+    const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!driveRes.ok || !driveRes.body) return json({ error: 'Could not load file from Drive' }, 502);
+    const mime = row.Mime_Type || driveRes.headers.get('content-type') || 'application/octet-stream';
+    const safeName = (row.File_Name || 'file').replace(/[^\w.\- ]/g, '_');
+    return new Response(driveRes.body, {
+      status: 200,
+      headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
+    });
+  } catch (e) {
+    return json({ error: e.message }, 500);
+  }
+}
+
 // GET /selftest/vendor-file-view — live canary for the vendor-file-view proxy (rule 142
 // follow-up, Sept 2 2026). viewInternalFile's real auth path is a vendor's PIN-issued session
 // token as ?t=, which CI/a script can't obtain without live vendor credentials — this calls
