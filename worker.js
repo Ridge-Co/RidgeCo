@@ -298,6 +298,19 @@ export default {
           // session creating their own WO (submit.html). Admin (WORKER_SECRET) and owner
           // sessions are never gated here — this feature is tenant-only, per Brett's ask.
           if (callerRole === 'tenant') {
+            // Session-identity hardening (Sep 16 2026, build brief Part A): body.property_id/
+            // unit_id/tenant_id are self-reported by the client. Rather than cross-check them
+            // against the session and 403 on a mismatch, overwrite them with the tenant's own
+            // REAL record resolved from their verified session id — this removes the spoofing
+            // vector entirely (a tenant can no longer submit a WO tagged to a different
+            // property/unit/tenant than their own) instead of merely detecting it.
+            const [tenants, units] = await fetchTabs(env, ['Tenants', 'Units']);
+            const _tenant = tenants.find(t => t.ID === callerSessionId && t.Active !== 'FALSE');
+            if (!_tenant) return json({ error: 'Tenant session not found or no longer active' }, 403);
+            const _unit = units.find(u => u.ID === _tenant.Unit_ID) || {};
+            body.tenant_id   = _tenant.ID;
+            body.unit_id     = _tenant.Unit_ID || '';
+            body.property_id = _tenant.Property_ID || _unit.Property_ID || '';
             const _allowed = await resolveTenantSubmitAccess(env, body.property_id, body.unit_id);
             if (!_allowed) return json({ error: 'Work order submission is currently turned off for your unit. Please contact your property manager.', tenant_wo_disabled: true }, 403);
           }
