@@ -12022,6 +12022,13 @@ function deleteAttachment(attachId, woId, wrapEl) {
 // you tapped into. Fixes "no album view / only back-and-forth one photo / two lists instead
 // of an album." Same pattern as vendor.html's loadPortalAttachments.
 var _rcWoItems = {};
+// Receipt/bill/invoice files are deliberately never made anyone-with-link shareable on Drive
+// (FEATURE_LOG rule 13). rule 142 (Sep 15 2026) already fixed vendor.html's copy of this exact
+// duplicated code to route through the authenticated /vendor-file/view proxy instead of a raw
+// Drive link -- but index.html has its OWN byte-copy of this same panel (see rule 134's note on
+// the duplication) that never got that fix, so it kept blanking out for Brett's own admin view.
+// Fixes "still can't view the receipts in the Hub" (rule 178, Sep 16 2026).
+var INTERNAL_FILE_TYPES = ['receipt', 'bill', 'invoice'];
 
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
@@ -12044,6 +12051,7 @@ function loadPortalAttachments(woId, opts) {
         combined.push({
           fileId: f.Drive_File_ID || '', driveUrl: f.Drive_URL || '#', name: f.File_Name || 'file',
           typeLabel: TYPE_LABELS[type] || 'File', isVideo: isVideo, isViewable: isVideo || isImage,
+          woId: woId, internal: INTERNAL_FILE_TYPES.indexOf(type) !== -1,
         });
       });
     });
@@ -12068,7 +12076,11 @@ function loadPortalAttachments(woId, opts) {
           var thumb = document.createElement('span');
           thumb.style.cssText = 'position:relative;display:inline-block;width:56px;height:56px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border);margin:2px 4px 2px 0;vertical-align:top';
           thumb.onclick = (function(woIdC, idxC){ return function(){ rcOpenLightbox(_rcWoItems[woIdC], idxC); }; })(woId, itemIdx);
-          var imgTag = '<img src="https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w150" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\'">';
+          // Internal (receipt/bill/invoice) files are never Drive-shared (rule 13), so the
+          // public thumbnail endpoint always fails for them -- go straight to the authenticated
+          // proxy instead of wasting a request on a thumbnail that can never load.
+          var thumbSrc = item.internal ? internalFileUrl(woId, item.fileId) : ('https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w150');
+          var imgTag = '<img src="' + thumbSrc + '" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\'">';
           var videoBadge = item.isVideo ? '<span style="position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.65);color:#fff;font-size:9px;border-radius:3px;padding:1px 3px">&#9658;</span>' : '';
           var typeBadge = '<span style="position:absolute;left:2px;top:2px;font-size:10px;text-shadow:0 0 3px rgba(0,0,0,.8)">' + icon + '</span>';
           thumb.innerHTML = imgTag + videoBadge + typeBadge;
@@ -12084,7 +12096,7 @@ function loadPortalAttachments(woId, opts) {
           var wrap = document.createElement('span');
           wrap.style.cssText = 'display:inline-flex;align-items:center;gap:0;margin:2px 4px 2px 0';
           var a = document.createElement('a');
-          a.href = f.Drive_URL || '#'; a.target = '_blank';
+          a.href = (item && item.internal && f.Drive_File_ID) ? internalFileUrl(woId, f.Drive_File_ID) : (f.Drive_URL || '#'); a.target = '_blank';
           a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px 0 0 4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
           a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
           var del2 = document.createElement('button');
