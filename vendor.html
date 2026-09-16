@@ -1717,7 +1717,7 @@ function submitFeedback() {
   var who = (session && session.vendor_name) ? " from " + session.vendor_name : "";
   var fullText = "[" + _feedbackSource + "] " + typeLabel + who + ": " + text;
   document.getElementById("feedbackBtn").disabled = true;
-  fetch("https://maintenance-hub.brett-2f8.workers.dev/wishlist/add", {
+  fetch(WORKER + "/wishlist/add", {
     method:"POST", headers:{"X-Auth-Token":SECRET,"Content-Type":"application/json"},
     body:JSON.stringify({text:fullText})
   }).then(function(r){return r.json();}).then(function(res){
