@@ -421,6 +421,8 @@ export default {
         if (path === '/send-pin')                 return await sendPinMessage(env, body);
         if (path === '/welcome/send')              return await welcomeSend(env, body);
         if (path === '/regenerate-pin')           return await regeneratePIN(env, body);
+        if (path === '/message-template/update')  return await updateMessageTemplate(env, body);
+        if (path === '/property/notice')          return await sendPropertyNotice(env, body);
         if (path === '/admin/fix-pins')           return await adminFixPins(env, body);
         if (path === '/admin/fix-stale-tenants')  return await adminFixStaleTenants(env, body);
         if (path === '/admin/merge-property')     return await adminMergeProperty(env, body);
