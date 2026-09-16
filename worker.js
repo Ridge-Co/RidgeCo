@@ -1586,7 +1586,8 @@ async function listReceiptReconQueue(env, url) {
       let suggestion = null; try { suggestion = JSON.parse(r.Suggestion || 'null'); } catch (e) {}
       let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
       let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
-      return { ...r, suggestion, items, items_summary };
+      let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
+      return { ...r, suggestion, items, items_summary, duplicate_evidence };
     }));
 }
 
