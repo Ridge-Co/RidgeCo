@@ -1458,7 +1458,11 @@ function qbInvoiceCandidatesByDate(invoices, date, windowDays) {
   });
 }
 
-
+// PURE — the whole reconciliation decision, no I/O. Given an already-extracted receipt and
+// already-fetched tabs, decides category/action. Factored out of receiptSuggest() so the SAME
+// logic drives both the interactive POST /receipt/suggest endpoint and the bulk cron scan
+// (receiptReconScan) below — one source of truth, and fully unit-testable with no live Sheets.
+function receiptSuggestCore(input, properties, workorders, receipts, custCards) {
   const po = String(input.po || '').trim();
   const total = Number(input.total) || 0;
   const date = String(input.date || '').trim();
