@@ -1,1 +1,0 @@
-GH Broker write-path test — em-dash —, checkmark ✅, warning ⚠️, arrow →, curly quotes "like this", café, 日本語, emoji 🎉. If this file exists with all of that intact, the UTF-8 base64 fix worked. Safe to delete.
