@@ -60,11 +60,26 @@ const sweepBody = grabAsync('processVendorNudges');
   ok(capIdx >= 0, 'a nudge-count cap check exists in the sweep');
   ok(sweepBody.includes('VENDOR_NUDGE_MAX'), 'the cap is a named constant, not a magic number buried in the logic');
 }
+// Sep 16 2026 (Brett) — replaces the earlier Vendor_Bills-row check, which stalled once a WO
+// moved past 'Complete' to 'Invoiced' (a Vendor_Bill row existing isn't the same as the WO
+// actually being invoiced). status_update now stops at Complete-or-later regardless of
+// billing; a separate 'invoice' request persists until the WO reaches Invoiced-or-later.
 {
-  ok(sweepBody.includes('Vendor_Bills'), 'the sweep checks for a real Vendor_Bills row as the invoice-satisfied condition, not just a status field');
+  ok(sweepBody.includes('WO_STATUS_COMPLETE_OR_LATER'), 'status_update is satisfied off a named Complete-or-later status set, not tied to a Vendor_Bills row');
+  ok(sweepBody.includes('WO_STATUS_INVOICED_OR_LATER'), 'invoice is satisfied off a named Invoiced-or-later status set, not tied to a Vendor_Bills row');
+}
+{
+  ok(sweepBody.includes("Request_Type === 'invoice'") && sweepBody.includes('invoice_chase_started'), 'once status_update is satisfied pre-invoice, the sweep starts a fresh invoice request rather than going silent on an unbilled job');
+  ok(sweepBody.includes('hasOpenInvoiceReq'), 'the auto-started invoice chase checks for an already-open one first, so it never duplicates a row for the same WO+vendor');
+}
+{
+  ok(sweepBody.includes("['Cancelled','Declined']"), 'Cancelled/Declined still short-circuit both request types before either satisfied-check runs, per Brett\'s "cancelled stops all nudges" rule');
 }
 {
   ok(sweepBody.includes('Scheduled_Date'), 'the sweep respects a future Scheduled_Date to go quiet, per Brett\'s stated rule');
+}
+{
+  ok(sweepBody.includes("Remember to add the schedule") && sweepBody.includes("submit your invoice"), 'the status_update nudge coaches the vendor through the actual portal steps (schedule, mark complete, then invoice), not just a bare "any update?" ask');
 }
 
 const resetBody = grabAsync('resetVendorNudgeClock');
