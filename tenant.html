@@ -312,7 +312,27 @@ function loadWOs() {
       document.getElementById('statOpen').textContent = open.length;
       document.getElementById('statDone').textContent = done.length;
       renderWOs();
+      applyDeepLink();
     });
+}
+
+// Deep-link support (Sep 16 2026): a completed-job text can link straight to ?wo=WO-1234 so the
+// tenant lands on that job with the note box already open, instead of having to find it and dig
+// for how to ask a question. Mirrors vendor.html's own ?wo= pattern. Once-per-load, same as
+// vendor.html, so the tenant can freely browse/search afterward without it snapping back.
+var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ return ''; } })();
+var _deepLinkApplied = false;
+function applyDeepLink() {
+  if (!_deepLinkWoId || _deepLinkApplied) return;
+  _deepLinkApplied = true;
+  var statusSel = document.getElementById('fStatus'), searchBox = document.getElementById('fSearch');
+  if (statusSel) statusSel.value = 'all'; // the target WO may already be Invoiced/Paid by the time this link is tapped
+  if (searchBox) searchBox.value = _deepLinkWoId;
+  renderWOs();
+  var match = (window._renderedWOs || []).findIndex(function(w){ return w.ID === _deepLinkWoId; });
+  if (match === -1) return; // not found (wrong tenant, voided, etc.) — leave the filtered list showing, no modal
+  toggleCard(match);
+  openNote(_deepLinkWoId);
 }
 
 function renderWOs() {
@@ -510,7 +530,6 @@ function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
 // ══════════════════════════════════════════════════════════════
 //  PHOTO UPLOAD (tenant portal)
 // ══════════════════════════════════════════════════════════════
-
 
 
 
