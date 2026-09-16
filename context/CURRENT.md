@@ -1,3 +1,22 @@
+# WHERE THINGS STAND — Sep 16, 2026 (TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part B shipped — brief fully closed out)
+
+## 🟢 Shipped: Owners/Properties tenant-WO settings UI + admin Managed_By control — full detail FEATURE_LOG [FL-20260916-2234-b6]
+Both parts of the build brief are now done. Folded into the existing Owners and Properties edit
+modals (Brett's answer — no standalone settings page): a Tenant Work Order Submission toggle +
+scope + resolved-effective-state line on each, plus a held-contact-note field on Owner. The WO
+detail modal gets a "WHO'S HANDLING THIS JOB" section with a confirm-gated admin toggle matching
+owner.html's own weight; `adminUpdateWO` now texts the owner (via `smsGatedSend`, unconditionally)
+whenever Brett changes `Managed_By` either direction, per his "notify owner" answer. `node --check`
+clean, full suite 78/78 (new `test/tenant-wo-settings-ui.test.mjs` 26/26, `managed-by.test.mjs`
+grown to 12/12), zero regressions. Pushed as 9 small GH-Broker commits, deployed, confirmed via
+`/version` (`2026-09-16.8`) and a fresh anonymous clone.
+
+**Not verified live** — no live Hub session in the build sandbox. Needs Brett's first live pass:
+set a real Owner/Property's toggle and confirm the resolved state; flip a real WO's `Managed_By`
+from the admin side and confirm both the confirm-dialog wording and the actual owner text land;
+confirm an unrelated Edit Owner/Edit Property save still works cleanly with the new fields present
+but untouched.
+
 # WHERE THINGS STAND — Sep 16, 2026 (TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part A shipped)
 
 ## 🟢 Shipped: /workorder tenant-submission session-identity hardening — full detail FEATURE_LOG [FL-20260916-2210-p3]
