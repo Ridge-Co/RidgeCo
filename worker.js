@@ -53,6 +53,13 @@ export default {
       // self-verifies a dedicated SELFTEST_TOKEN before doing anything — deliberately NOT
       // WORKER_SECRET, which already gates too much (see the security note in CLAUDE.md).
       '/selftest/invoice-extract',
+      // Live canary for the vendor-file-view proxy (Sept 2 2026, rule 142 follow-up): same
+      // pattern — public at the router gate, but selfTestVendorFileView self-verifies
+      // SELFTEST_TOKEN before doing anything. Exists because /vendor-file/view's real auth
+      // path (a vendor's PIN-issued session token as ?t=) can't be exercised from CI without
+      // live vendor credentials; this lets scripts/selftest-vendor-file-view.mjs prove the
+      // actual Drive byte-stream works end to end against a real logged Attachment row.
+      '/selftest/vendor-file-view',
       // Weekly Open Item Report link (Aug 18 session): same pattern — public at the gate, but
       // every handler self-verifies a signed ar-report share token before doing anything.
       '/ar-report/view','/ar-report/pay-link',
