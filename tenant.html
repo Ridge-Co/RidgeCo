@@ -155,6 +155,8 @@ textarea{resize:vertical;min-height:70px;}
       <div class="stat-pill">Completed: <span id="statDone">—</span></div>
     </div>
 
+    <button class="btn btn-full" id="newRequestBtn" onclick="openSubmitRequest()" style="display:none;margin-bottom:14px">+ SUBMIT A NEW REQUEST</button>
+
     <div class="filter-row">
       <select id="fStatus" onchange="renderWOs()">
         <option value="open">Open / In Progress</option>
@@ -179,6 +181,43 @@ textarea{resize:vertical;min-height:70px;}
     <div class="modal-actions">
       <button class="btn btn-sm btn-muted" onclick="closeModal('modalNote')">Cancel</button>
       <button class="btn btn-sm btn-green" id="noteBtn" onclick="submitNote()">SEND</button>
+    </div>
+  </div>
+</div>
+
+<!-- SUBMIT REQUEST MODAL -->
+<div class="modal-overlay" id="modalSubmitRequest">
+  <div class="modal">
+    <div class="modal-title">SUBMIT A NEW REQUEST</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">This is for issues Ridge Co handles at your property. Your property manager is notified as soon as you submit.</p>
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Type of Issue</label>
+      <select id="srTrade" style="width:100%">
+        <option value="">Select…</option>
+        <option>Plumbing</option><option>Electrical</option><option>HVAC</option><option>Appliance</option><option>General</option><option>Carpentry</option><option>Painting</option><option>Flooring</option><option>Roofing</option><option>Windows</option><option>Locks</option><option>Landscaping</option><option>Cleaning</option><option>Pest Control</option>
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Describe the Issue</label>
+      <textarea id="srDesc" placeholder="What's happening? When did it start? Is it getting worse?" style="min-height:90px"></textarea>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">How Urgent Is This?</label>
+      <select id="srPriority" style="width:100%">
+        <option value="normal">Normal — schedule when available</option>
+        <option value="urgent">Urgent — needs prompt attention</option>
+        <option value="low">Low — no rush</option>
+      </select>
+    </div>
+    <div style="margin-bottom:8px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Photos / Video <span style="font-weight:normal;text-transform:none">(optional — helps us fix it faster)</span></label>
+      <input type="file" id="srFiles" accept="image/*,video/*" multiple onchange="srHandleFiles(this.files)">
+      <div id="srPreview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+    </div>
+    <div id="srMsg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-sm btn-muted" onclick="closeModal('modalSubmitRequest')">Cancel</button>
+      <button class="btn btn-sm btn-green" id="srSubmitBtn" onclick="submitNewRequest()">SUBMIT</button>
     </div>
   </div>
 </div>
@@ -278,6 +317,11 @@ function onLoginSuccess(data, persist){
   var n=document.getElementById('tenantName'); if(n) n.textContent = data.tenant_name || '';
   var a=document.getElementById('tenantAddr'); if(a) a.textContent = (data.property_address||'') + (data.unit_label ? ' · Unit ' + data.unit_label : '');
   var fb=document.getElementById('feedbackFloatBtn'); if(fb) fb.style.display = '';
+  // Tenant-work-order-submission toggle (built Aug 20 2026, wired into this portal Sep 16
+  // 2026): server resolves the owner/property/unit hierarchy and hands back a plain boolean
+  // -- this only shows/hides the button; POST /workorder re-checks the same thing server-side
+  // so it can't be bypassed by anyone inspecting or editing the page.
+  var nr=document.getElementById('newRequestBtn'); if(nr) nr.style.display = data.can_submit_wo ? '' : 'none';
   show('screenLogin', false);
   show('screenDash', true);
   loadWOs();
@@ -294,6 +338,7 @@ function doLogout() {
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
   document.getElementById('feedbackFloatBtn').style.display = 'none';
+  document.getElementById('newRequestBtn').style.display = 'none';
   show('screenDash', false);
   show('screenLogin', true);
 }
@@ -491,6 +536,74 @@ function submitNote() {
       document.getElementById('noteMsg').innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>';
     }
   }).catch(function(){ document.getElementById('noteBtn').disabled = false; });
+}
+
+// ── Submit a new request (Sep 16 2026) ──────────────────────────
+// Reuses this portal's own login/session — no separate PIN or page, matching the goal of
+// one place for a tenant's whole interaction rather than bouncing them between logins.
+// Gated by can_submit_wo (set at login from the existing owner/property toggle hierarchy);
+// POST /workorder re-checks the same thing server-side.
+var srFiles = [];
+function openSubmitRequest() {
+  document.getElementById('srTrade').value = '';
+  document.getElementById('srDesc').value = '';
+  document.getElementById('srPriority').value = 'normal';
+  document.getElementById('srFiles').value = '';
+  document.getElementById('srPreview').innerHTML = '';
+  document.getElementById('srMsg').innerHTML = '';
+  srFiles = [];
+  openModal('modalSubmitRequest');
+}
+function srHandleFiles(fileList) {
+  Array.from(fileList).forEach(function(f) { if (srFiles.length < 6) srFiles.push(f); });
+  renderSrPreview();
+}
+function renderSrPreview() {
+  document.getElementById('srPreview').innerHTML = srFiles.map(function(f, i) {
+    var url = URL.createObjectURL(f);
+    var isVideo = f.type.startsWith('video/');
+    return '<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;background:var(--surface2)">' +
+      (isVideo ? '<video src="' + url + '" muted style="width:100%;height:100%;object-fit:cover"></video>' : '<img src="' + url + '" style="width:100%;height:100%;object-fit:cover">') +
+      '<button onclick="srRemoveFile(' + i + ')" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,.8);color:#fff;border:none;border-radius:50%;width:16px;height:16px;font-size:9px;cursor:pointer">&#x2715;</button>' +
+      '</div>';
+  }).join('');
+}
+function srRemoveFile(i) { srFiles.splice(i, 1); renderSrPreview(); }
+
+function submitNewRequest() {
+  var trade = document.getElementById('srTrade').value;
+  var desc = document.getElementById('srDesc').value.trim();
+  var msgEl = document.getElementById('srMsg');
+  msgEl.innerHTML = '';
+  if (!trade) { msgEl.innerHTML = '<div class="msg error">Please select the type of issue.</div>'; return; }
+  if (!desc)  { msgEl.innerHTML = '<div class="msg error">Please describe the issue.</div>'; return; }
+  document.getElementById('srSubmitBtn').disabled = true;
+  api('/workorder', { method:'POST', body: {
+    property_id: session.property_id, unit_id: session.unit_id, tenant_id: session.tenant_id,
+    trade: trade, priority: document.getElementById('srPriority').value, description: desc,
+    type: 'tenant', created_by: session.tenant_name,
+  }}).then(function(res) {
+    if (!res.id) {
+      document.getElementById('srSubmitBtn').disabled = false;
+      msgEl.innerHTML = '<div class="msg error">' + esc(res.error || 'Error submitting request') + '</div>';
+      return;
+    }
+    var woId = res.id;
+    var uploadNext = function(i) {
+      if (i >= srFiles.length) {
+        document.getElementById('srSubmitBtn').disabled = false;
+        closeModal('modalSubmitRequest');
+        loadWOs();
+        return;
+      }
+      var fd = new FormData();
+      fd.append('file', srFiles[i]);
+      fd.append('wo_id', woId);
+      fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
+        .then(function(){ uploadNext(i + 1); }).catch(function(){ uploadNext(i + 1); });
+    };
+    uploadNext(0);
+  }).catch(function(){ document.getElementById('srSubmitBtn').disabled = false; msgEl.innerHTML = '<div class="msg error">Connection error.</div>'; });
 }
 
 // ── Feedback ──────────────────────────────────────────────────
