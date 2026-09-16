@@ -1,3 +1,26 @@
+# WHERE THINGS STAND — Sep 16, 2026 (owner-managed WO toggle shipped; tenant-submit-request UI wired up to Aug 20's orphaned backend)
+
+## 🟢 Shipped: owners can claim/release a WO themselves; tenants can submit new requests where enabled — full detail FEATURE_LOG [FL-20260916-1950-m4] / [FL-20260916-2135-r4]
+Two pieces from the same design conversation with Brett (per-owner/per-property access model:
+Phoenix = owner-first no tenant-submit, Goldszmidt = tenant-submit + owner auto-notified,
+owner-occupant as a shadow-tenant flag):
+1. **`Managed_By` bidirectional owner toggle** (worker.js + owner.html) — an owner can mark a WO
+   as handled by themselves; Ridge Co is mechanically blocked from assigning a vendor to it
+   until it's handed back. Live, tested (74/74 → since grown to 75/75).
+2. **Tenant "Submit a New Request"** (tenant.html only) — turned out the entire backend already
+   existed from an Aug 20 2026 build (owner→property→unit toggle hierarchy, the `/workorder`
+   gate, dedicated toggle-setting endpoints, a settings-summary endpoint) but nothing ever linked
+   to it. Wired tenant.html up to it rather than building a parallel system. Goldszmidt's toggle
+   set ON live via the existing endpoint; everyone else stays at the existing OFF default.
+
+**Flagged, not fixed**: the pre-existing (Aug 20) tenant-submission gate checks property-level
+permission but doesn't cross-verify the calling tenant's session against the property/tenant_id
+in the request body — worth hardening before wider rollout, see FEATURE_LOG entry for detail.
+
+**Still open**: the owner-managed WO's tenant-facing grayed-out display + a per-owner redirect-
+contact field; an admin (index.html) settings screen for the toggle hierarchy (currently set via
+direct API call — `GET /tenant-wo-settings` already exists and is ready for exactly this).
+
 # WHERE THINGS STAND — Sep 16, 2026 (1109 Battery Ave unit/tenant fix closed out — rule 171's feature confirmed self-serve)
 
 ## 🟢 Fixed: 1109 Battery Ave (Property 84) unit/tenant data — full detail FEATURE_LOG [FL-20260916-2150-t8]
