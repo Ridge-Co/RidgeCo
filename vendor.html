@@ -1423,6 +1423,15 @@ var INTERNAL_FILE_TYPES = ['receipt', 'bill', 'invoice'];
 function internalFileUrl(woId, fileId) {
   return WORKER + '/vendor-file/view?wo_id=' + encodeURIComponent(woId) + '&file_id=' + encodeURIComponent(fileId) + '&t=' + encodeURIComponent(SECRET);
 }
+// Pulls the Drive file id out of a stored Drive URL (webViewLink shape,
+// "https://drive.google.com/file/d/<id>/view?..."). Needed anywhere a raw URL was saved
+// (e.g. Vendor_Bills.Receipts_JSON[].url) instead of a bare file id, so it can still be routed
+// through internalFileUrl() above instead of being linked to directly (rule 176 — a bill's own
+// receipt-summary "View" link was still pointing straight at the never-shared Drive URL).
+function driveIdFromDriveUrl(u) {
+  var m = String(u||'').match(/\/file\/d\/([^\/]+)/) || String(u||'').match(/[?&]id=([^&]+)/);
+  return m ? m[1] : '';
+}
 
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
