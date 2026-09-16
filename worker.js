@@ -81,7 +81,11 @@ export default {
       // (scoped, see ROLE_SCOPES). Per-record authz (vendor_id/Owner_ID/PIN) still
       // enforced inside each handler. PIN-login endpoints are PUBLIC (gated by PIN +
       // lockout) so a portal can log in without ever carrying the admin secret.
-      const _tok = request.headers.get('X-Auth-Token') || '';
+      // /vendor-file/view is loaded as an <img src> / direct navigation (Drive-viewer
+      // replacement) so it can't carry a custom header — accept the same session token as a
+      // ?t= query param for this one path, same convention already used by the WO share link
+      // (wo.html?wo=...&t=...). Every other endpoint still requires the header.
+      const _tok = request.headers.get('X-Auth-Token') || (path === '/vendor-file/view' ? (url.searchParams.get('t') || '') : '');
       if (_tok !== env.WORKER_SECRET) {
         // Dedicated contacts-sync token (Google Contacts sync). Accepted ONLY for:
         //   • GET on the list endpoints the sync reads, and
