@@ -12627,6 +12627,171 @@ async function qbFindBills(env, body) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// ── Receipt duplicate CHECKER — QuickBooks read-only search, on-demand only (never automatic;
+// these are real, cost-metered API calls) ───────────────────────────────────────────────────
+// Layer 2 of 3: a QuickBooks Bill (vendor payable — the normal path a receipt becomes) at the
+// same amount within a few days of the receipt date. Deliberately not scoped by vendor —
+// Bill.VendorRef needs a resolved QBO vendor id, and this check has to work even when the
+// receipt's vendor was never matched to one; a tight date+amount window at Brett's real
+// transaction volume is a stronger signal here than a vendor-name text match would be anyway.
+async function qbDuplicateBillsNear(env, token, amount, date) {
+  const amt = (Number(amount) || 0).toFixed(2);
+  if (!(Number(amt) > 0) || !date) return [];
+  const d = new Date(date + 'T00:00:00Z'); if (isNaN(d)) return [];
+  const from = new Date(d.getTime() - 3 * 86400000).toISOString().slice(0, 10);
+  const to = new Date(d.getTime() + 3 * 86400000).toISOString().slice(0, 10);
+  const q = `select Id, DocNumber, TxnDate, TotalAmt, VendorRef from Bill where TxnDate >= '${from}' and TxnDate <= '${to}' and TotalAmt = '${amt}' maxresults 20`;
+  const r = await qbApi(env, `query?query=${encodeURIComponent(q)}&minorversion=73`, 'GET', null, token);
+  const bills = (r && r.QueryResponse && r.QueryResponse.Bill) || [];
+  return bills.map(b => ({ id: String(b.Id), doc: b.DocNumber || '', date: b.TxnDate, amount: Number(b.TotalAmt || 0), vendor: (b.VendorRef && b.VendorRef.name) || '' }));
+}
+
+// Layer 2, other half: a QuickBooks Expense/card purchase (Purchase entity — the path a
+// company-card receipt logged directly in QuickBooks, outside the Hub, would have taken).
+async function qbDuplicateExpensesNear(env, token, amount, date) {
+  const amt = (Number(amount) || 0).toFixed(2);
+  if (!(Number(amt) > 0) || !date) return [];
+  const d = new Date(date + 'T00:00:00Z'); if (isNaN(d)) return [];
+  const from = new Date(d.getTime() - 3 * 86400000).toISOString().slice(0, 10);
+  const to = new Date(d.getTime() + 3 * 86400000).toISOString().slice(0, 10);
+  const q = `select Id, DocNumber, TxnDate, TotalAmt, EntityRef from Purchase where TxnDate >= '${from}' and TxnDate <= '${to}' and TotalAmt = '${amt}' maxresults 20`;
+  const r = await qbApi(env, `query?query=${encodeURIComponent(q)}&minorversion=73`, 'GET', null, token);
+  const purchases = (r && r.QueryResponse && r.QueryResponse.Purchase) || [];
+  return purchases.map(p => ({ id: String(p.Id), doc: p.DocNumber || '', date: p.TxnDate, amount: Number(p.TotalAmt || 0), vendor: (p.EntityRef && p.EntityRef.name) || '' }));
+}
+
+// Layer 3, step A (cheap): a broad Invoice list pull, list fields only — reused across an
+// ENTIRE batch check (see receiptReconCheckDuplicatesBulk) so N receipts checked together cost
+// ONE Invoice list call, not N. Mirrors arInvoices' own "SELECT * / filter in code" convention —
+// naming a complex sub-field like Line directly in the query can fault QBO's parser.
+async function qbAllInvoicesRaw(env, token) {
+  const q = 'SELECT * FROM Invoice ORDERBY TxnDate DESC MAXRESULTS 1000';
+  const r = await qbApi(env, `query?query=${encodeURIComponent(q)}&minorversion=73`, 'GET', null, token);
+  if (r && r.Fault) throw new Error('QB query fault: ' + JSON.stringify(r.Fault).slice(0, 200));
+  return (r && r.QueryResponse && r.QueryResponse.Invoice) || [];
+}
+
+// Layer 3, step B — the actual "real API cost" step the Sep 2 design explicitly called out:
+// opens each DATE-PROXIMATE candidate individually (list-query results don't reliably carry
+// Line items) and scans its real Line array for one matching the receipt amount. This is
+// checking for the pre-Hub-bookkeeping case Brett described — a receipt already billed to a
+// customer by hand before this queue existed. Capped at MAX_INVOICE_OPENS so a busy week's
+// date window never turns into dozens of calls in one request.
+const DUPLICATE_CHECK_MAX_INVOICE_OPENS = 5;
+async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
+  const amt = (Number(amount) || 0).toFixed(2);
+  if (!(Number(amt) > 0)) return [];
+  const matches = [];
+  for (const cand of (candidates || []).slice(0, DUPLICATE_CHECK_MAX_INVOICE_OPENS)) {
+    try {
+      const full = await qbApi(env, `invoice/${cand.Id}?minorversion=73`, 'GET', null, token);
+      const inv = full && full.Invoice; if (!inv) continue;
+      for (const line of (inv.Line || [])) {
+        if (line.DetailType === 'SalesItemLineDetail' && (Number(line.Amount) || 0).toFixed(2) === amt) {
+          matches.push({ invoice_id: String(inv.Id), doc: inv.DocNumber || '', date: inv.TxnDate, amount: Number(line.Amount || 0), description: String(line.Description || '').slice(0, 120) });
+        }
+      }
+    } catch (e) { /* one bad invoice open must not kill the rest of this receipt's check */ }
+  }
+  return matches;
+}
+
+// Orchestrates all 3 layers for ONE queue row into a flat evidence array Brett can read and
+// act on — a match here never decides anything by itself, it's information for the "It's this
+// one" confirm step (receiptReconConfirmDuplicate). `opts.token`/`opts.allInvoices` let a batch
+// caller share one QB token + one Invoice list pull across every row instead of re-fetching per
+// row (see receiptReconCheckDuplicatesBulk).
+async function receiptCheckDuplicatesOne(env, row, opts) {
+  opts = opts || {};
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (_) {}
+  const amount = row.Total, date = row.Receipt_Date;
+  const propertyId = (suggestion && suggestion.property && suggestion.property.id) || '';
+  const evidence = [];
+
+  try {
+    const [receipts, workorders] = await fetchTabs(env, ['Receipts', 'Work_Orders']);
+    const propDupes = receiptDuplicatesAtProperty({ total: amount, store: row.Vendor, date, property_id: propertyId, id: null }, receipts, workorders);
+    for (const d of propDupes) {
+      evidence.push({
+        signal: 'other_receipt_at_property', wo_id: d.wo_id, amount: d.amount, date: d.date, store: d.store,
+        reason: `Same amount ($${(+d.amount || 0).toFixed(2)}), date (${d.date}), and store already logged as a Receipts entry${d.wo_id ? ' on WO ' + d.wo_id : ''} at this property.`,
+      });
+    }
+  } catch (e) { /* best-effort — a Receipts read failure shouldn't block the QB checks below */ }
+
+  if (Number(amount) > 0 && date) {
+    try {
+      const token = opts.token || await qbAccessToken(env);
+      const [bills, expenses] = await Promise.all([
+        qbDuplicateBillsNear(env, token, amount, date),
+        qbDuplicateExpensesNear(env, token, amount, date),
+      ]);
+      for (const b of bills) evidence.push({ signal: 'qb_bill', qb_id: b.id, doc: b.doc, amount: b.amount, date: b.date, vendor: b.vendor,
+        reason: `A QuickBooks Bill${b.vendor ? ' for ' + b.vendor : ''} (#${b.doc || b.id}) for $${b.amount.toFixed(2)} on ${b.date} already exists.` });
+      for (const x of expenses) evidence.push({ signal: 'qb_expense', qb_id: x.id, doc: x.doc, amount: x.amount, date: x.date, vendor: x.vendor,
+        reason: `A QuickBooks Expense${x.vendor ? ' for ' + x.vendor : ''} (#${x.doc || x.id}) for $${x.amount.toFixed(2)} on ${x.date} already exists.` });
+
+      const allInvoices = opts.allInvoices || await qbAllInvoicesRaw(env, token);
+      const candidates = qbInvoiceCandidatesByDate(allInvoices, date, 45);
+      const lineMatches = await qbInvoiceLineDuplicates(env, token, amount, candidates);
+      for (const m of lineMatches) evidence.push({ signal: 'qb_invoice_line', qb_id: m.invoice_id, doc: m.doc, amount: m.amount, date: m.date, description: m.description,
+        reason: `Already appears as a $${m.amount.toFixed(2)} line item on sent invoice #${m.doc || m.invoice_id} (${m.date})${m.description ? ': "' + m.description + '"' : ''}.` });
+    } catch (e) {
+      evidence.push({ signal: 'qb_check_error', reason: 'Could not complete the QuickBooks checks: ' + (e && e.message || e) });
+    }
+  }
+  return evidence;
+}
+
+// POST /receipt-recon/check-duplicates { id } — single-row, on-demand cross-source check (the
+// actual detection Brett asked for on top of the existing same-WO-only flag). Evidence is
+// persisted onto the queue row so it survives a page refresh.
+async function receiptReconCheckDuplicates(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  const evidence = await receiptCheckDuplicatesOne(env, row);
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Duplicate_Evidence_JSON', 'Duplicate_Checked_Date']);
+  await updateRow(env, 'Receipt_Recon_Queue', id, {
+    Duplicate_Evidence_JSON: JSON.stringify(evidence).slice(0, 8000),
+    Duplicate_Checked_Date: new Date().toISOString(),
+  });
+  return json({ ok: true, id, evidence });
+}
+
+// POST /receipt-recon/check-duplicates-bulk { ids:[...] } — batch, capped small (real QB API
+// cost per row: up to 2 list queries + up to DUPLICATE_CHECK_MAX_INVOICE_OPENS individual
+// invoice opens). Shares ONE QB token + ONE Invoice list pull across the whole batch rather
+// than refetching per row. Same "click again to continue" shape as the existing Drive-sharing
+// repair tool — the frontend calls this repeatedly over a backlog, not once for everything.
+const DUPLICATE_CHECK_BULK_MAX = 5;
+async function receiptReconCheckDuplicatesBulk(env, body) {
+  const ids = Array.isArray(body.ids) ? body.ids.slice(0, DUPLICATE_CHECK_BULK_MAX) : [];
+  if (!ids.length) return json({ error: `ids required (array, max ${DUPLICATE_CHECK_BULK_MAX} per call)` }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Duplicate_Evidence_JSON', 'Duplicate_Checked_Date']);
+  let token = null, allInvoices = null;
+  try { token = await qbAccessToken(env); allInvoices = await qbAllInvoicesRaw(env, token); }
+  catch (e) { /* per-row calls below fall back to fetching their own token/list on a miss */ }
+  const results = [];
+  for (const id of ids) {
+    const row = rows.find(r => String(r.ID) === String(id));
+    if (!row) { results.push({ id, error: 'not found' }); continue; }
+    try {
+      const evidence = await receiptCheckDuplicatesOne(env, row, { token, allInvoices });
+      await updateRow(env, 'Receipt_Recon_Queue', id, {
+        Duplicate_Evidence_JSON: JSON.stringify(evidence).slice(0, 8000),
+        Duplicate_Checked_Date: new Date().toISOString(),
+      });
+      results.push({ id, evidence_count: evidence.length });
+    } catch (e) { results.push({ id, error: e.message }); }
+  }
+  return json({ ok: true, checked: results.length, results });
+}
+
+
+
 // Shared "was there ever a payment against this txn" guard, used before ANY delete-based undo —
 // a vendor bill, a customer invoice, doesn't matter. A txn whose remaining Balance differs from
 // its TotalAmt by more than a penny had SOME payment/credit applied against it; deleting it would
