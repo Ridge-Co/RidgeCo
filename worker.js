@@ -221,6 +221,7 @@ export default {
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
         if (path === '/attachments')            return await getAttachments(env, url);
         if (path === '/vendor-file/view')       return await viewInternalFile(env, url);
+        if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
