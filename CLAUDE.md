@@ -16,8 +16,11 @@ action — no cheerleading. When corrected, change approach; never restate a ref
    BACKLOG, CAPTURE_INBOX, HANDWRITING_KEY). Read every file it lists.
 2. **Business / private context** lives in the private repo `brett332/data` (business briefs,
    the `productivity/CLAUDE.md` decoder, Gemini archive) and loads via the `brett-context`
-   skill. That clone needs a classic PAT in `BRETT_GH_PAT` (repo scope). If it's unset in a
-   Code session, the code context here still works — just flag that private context is missing.
+   skill, which reads it through **GH Broker** (`read_file`/`list_directory` against
+   `brett332/data`) — no PAT, no clone, no credential ever pasted into a session. If GH Broker
+   is down, the PAT fallback protocol lives in `context/CREDENTIALS_MAP.md` (GITHUB section):
+   only when Brett explicitly hands over a token for that purpose, never solicited, and rotate
+   it afterward. On a normal day this path should never be needed.
 3. Do not write code or make changes until context is loaded and confirmed.
 
 ## Workflow: PLAN first, then implement
