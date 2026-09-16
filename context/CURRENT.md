@@ -763,15 +763,27 @@ refusing to delete anything with a payment already applied. Full detail: FEATURE
 low-stakes test deposit or final balance, confirm Undo appears/reads correctly, tap it, confirm the
 dialog wording, and check in QuickBooks that the invoice+bill are actually gone and the row reverted.
 
-## ⏳ Two more real fixes still sitting unmerged, not yet deployed — Brett's call on when to merge
-Found during today's branch audit, not yet actioned:
-- **Vendor portal 3-bug fix** (`claude/ridgeco-receipt-invoice-fixes-1t4527`) — receipt-view black
-  page, Trash invoice JSON-parse crash, invoice-modal Close-button hit-target. Built, tested
-  (39/41), low risk, no money path touched. Ready to merge whenever Brett says go.
-- **Staging deploy gate** (`claude/staging-deploy-gate-8nttsk` / `staging`) — stubs QB/SMS/Gmail on
-  a staging Worker so future changes can be verified before they ever reach `main`. Built, unmerged.
-  Ironic that the thing meant to protect future merges is itself sitting unmerged — worth
-  prioritizing this one specifically so it can start protecting the next batch of changes.
+## 🟢 Vendor portal 3-bug fix — MERGED TO MAIN (Sep 16 2026), after sitting unmerged since Sep 2
+A cross-session reconciliation pass (prompted by Brett asking to unearth everything stuck on old
+PAT/push blockers) found `claude/ridgeco-receipt-invoice-fixes-1t4527` still sitting unmerged, built
+and tested Sep 2, never actually deployed despite BACKLOG describing it as "just needs Brett's go."
+Rebased onto current `main` (rules 143-175 had landed since) — two trivial additive-only conflicts
+(`BUILD_VERSION`, `ROLE_SCOPES.vendor` — both resolved by taking the union/newer value, no logic
+collision). Full suite re-run post-merge: 74/74 passing (zero failures, not just the same 2
+pre-existing ones — those two now pass too). `node --check` clean on worker.js and every inline
+script block in index.html/vendor.html/trash.html/wo.html. `BUILD_VERSION` bumped to `2026-09-16.3`.
+Full detail: FEATURE_LOG `[FL-20260916-2330-r7]`. 🔴 **Still needs Brett's first live pass** (no live
+Drive credentials in the build sandbox to test actual byte-streaming): (1) as a vendor, tap an
+uploaded receipt photo and confirm it opens instead of a black screen; (2) same for a PDF invoice
+upload; (3) in Trash Service billing, send an invoice and confirm the Close/Send button responds
+anywhere tapped, not just the edges.
+
+## ⏳ Staging deploy gate — still unmerged, not yet deployed — Brett's call on when to merge
+`claude/staging-deploy-gate-8nttsk` / `staging` — stubs QB/SMS/Gmail writes on a staging Worker so
+future changes can be verified before they ever reach `main`. Built, unmerged, not touched by this
+reconciliation pass (queued separately — see BACKLOG). Ironic that the thing meant to protect future
+merges is itself sitting unmerged — worth prioritizing this one specifically so it can start
+protecting the next batch of changes.
 
 ## ⚠️ Receipt-reconciler duplicate-checker + unit-search fix (Sep 2 session) may be LOST, not just unmerged
 Unlike the branches above, this one doesn't exist anywhere in git history at all — checked
