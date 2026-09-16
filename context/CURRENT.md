@@ -1,3 +1,23 @@
+# WHERE THINGS STAND — Sep 16, 2026 (all 3 parts of the owner-managed-WO access-control build shipped)
+
+## 🟢 Shipped: full access-control model live — Phoenix owner-first, Goldszmidt tenant-submit, held-WO tenant redirect — full detail FEATURE_LOG [FL-20260916-2145-w2]
+Closes out today's design conversation with Brett. All three pieces are live: (1) owners can
+bidirectionally claim/release a WO via `Managed_By`, Ridge Co blocked from assigning a vendor
+to a claimed one; (2) tenants can submit new requests where the owner/property toggle allows it
+(Goldszmidt ON, everyone else at the existing OFF default) — turned out to reuse an already-built
+Aug 20 backend rather than needing a new one; (3) a held WO shows visibly different to the tenant
+— dimmed card + "Handled by your landlord" label + a top banner with the owner's own contact info
+(custom note or name+phone fallback), description still fully visible. 76/76 tests, deployed
+(`2026-09-16.4`).
+
+**Flagged, not fixed**: the pre-existing (Aug 20) tenant-submission gate doesn't cross-verify the
+calling tenant's session against the property/tenant_id in the request body — worth hardening
+before wider rollout.
+
+**Still open**: no admin (index.html) UI for managing the toggle hierarchy or setting a held-
+contact note day-to-day — both set via direct API call this session. `GET /tenant-wo-settings`
+already exists and is ready for a real settings screen whenever wanted.
+
 # WHERE THINGS STAND — Sep 16, 2026 (owner-managed WO toggle shipped; tenant-submit-request UI wired up to Aug 20's orphaned backend)
 
 ## 🟢 Shipped: owners can claim/release a WO themselves; tenants can submit new requests where enabled — full detail FEATURE_LOG [FL-20260916-1950-m4] / [FL-20260916-2135-r4]
