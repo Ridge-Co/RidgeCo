@@ -184,6 +184,8 @@ export default {
         if (path === '/keys-by-property')       return await keysByProperty(env, url);
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
         if (path === '/attachments')            return await getAttachments(env, url);
+        if (path === '/vendor-file/view')       return await viewInternalFile(env, url);
+        if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         if (path === '/owner-by-pin')           return await ownerByPin(env, url);
