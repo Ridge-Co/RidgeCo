@@ -9525,7 +9525,8 @@ async function health(env) {
   // PUBLIC read-only self-check so an automated agent can verify the Worker
   // without a browser or auth. Row counts per key tab + which sheet it points at
   // (last 6 chars of SHEET_ID, so staging vs prod is visible without leaking it).
-  const out = { ok: true, sheet_tail: (env.SHEET_ID || '').slice(-6), tabs: {}, ts: Date.now() };
+  // `staging: true` also means QB writes/SMS/Gmail are stubbed — see isStaging().
+  const out = { ok: true, sheet_tail: (env.SHEET_ID || '').slice(-6), staging: !!env.__STAGING__, tabs: {}, ts: Date.now() };
   for (const t of ['Work_Orders','Vendors','Invoices','Config']) {
     try { const rows = await fetchTab(env, t); out.tabs[t] = rows.length; }
     catch (e) { out.ok = false; out.tabs[t] = 'ERROR: ' + (e && e.message ? e.message : String(e)); }
