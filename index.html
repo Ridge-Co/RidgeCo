@@ -1147,11 +1147,14 @@ function esc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g
 // authenticated /vendor-file/view proxy instead of linking straight to the stored URL. Takes
 // the full stored Drive URL (Vendor_Bills.Receipts_JSON[].url is a URL, not a bare file id) and
 // pulls the file id out of it (rule 176).
+function internalFileUrl(woId, fileId) {
+  return WORKER + '/vendor-file/view?wo_id=' + encodeURIComponent(woId) + '&file_id=' + encodeURIComponent(fileId) + '&t=' + encodeURIComponent(AUTH_TOKEN);
+}
 function internalReceiptUrl(woId, driveUrl) {
   var m = String(driveUrl||'').match(/\/file\/d\/([^\/]+)/) || String(driveUrl||'').match(/[?&]id=([^&]+)/);
   var fileId = m ? m[1] : '';
   if (!woId || !fileId) return driveUrl || '#';
-  return WORKER + '/vendor-file/view?wo_id=' + encodeURIComponent(woId) + '&file_id=' + encodeURIComponent(fileId) + '&t=' + encodeURIComponent(AUTH_TOKEN);
+  return internalFileUrl(woId, fileId);
 }
 
 // Pricing constants are CONFIDENTIAL — not in this file. They're fetched at runtime from the
