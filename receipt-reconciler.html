@@ -573,6 +573,47 @@ async function confirmDuplicate(id, btn){
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// On-demand cross-source duplicate check (Sep 16 2026, the design Brett asked for on top of
+// the same-WO-only flag above): checks other Receipts at the same property, QuickBooks
+// Bills/Expenses near the same date+amount, and already-sent customer invoice line items —
+// real, cost-metered QuickBooks API calls, so this only ever runs when tapped, never on load.
+async function checkDuplicatesOne(id, btn){
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  statusEl.innerHTML = '<span class="info">Checking Receipts + QuickBooks for duplicates…</span>';
+  try {
+    const res = await post('/receipt-recon/check-duplicates', { id });
+    if (res.error) throw new Error(res.error);
+    rowEvidence[id] = res.evidence || [];
+    statusEl.innerHTML = res.evidence.length
+      ? '<span class="warn">Found '+res.evidence.length+' possible match(es) — see below.</span>'
+      : '<span class="ok">✓ No matching Receipts/QuickBooks entries found.</span>';
+    setTimeout(loadQueue, 900);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// "It's this one" — confirms duplicate status using the SPECIFIC reason from the matched
+// evidence signal (looked up from the cache by index, not passed through the onclick attribute
+// directly, since a QuickBooks description/vendor name can contain quote characters that would
+// break a naive inline string). Same terminal state as confirmDuplicate above — just arrives
+// with a specific reason on the record instead of the generic note.
+async function confirmDuplicateFromEvidence(id, idx, btn){
+  const ev = (rowEvidence[id] || [])[idx];
+  if (!ev) return;
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  statusEl.innerHTML = '<span class="info">Marking as duplicate…</span>';
+  try {
+    const res = await post('/receipt-recon/confirm-duplicate', { id, reason: ev.reason || '' });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Confirmed duplicate — clears itself in 180 days.</span>';
+    setTimeout(loadQueue, 900);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+
 renderTabs();
 loadQueue();
 </script>
