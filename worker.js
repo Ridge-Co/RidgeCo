@@ -567,6 +567,10 @@ export default {
   // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
   // with delivery off just builds the digest and returns — no messages, negligible cost.
   async scheduled(event, env, ctx) {
+    // No cron triggers are configured on the staging Worker (wrangler.toml's
+    // `staging` branch override removes [triggers] entirely), so this never
+    // actually fires there today — set defensively in case that ever changes.
+    env.__STAGING__ = isStaging(env);
     const cron = event && event.cron;
     // Message-queue sweep (Sep 15 2026) — quiet-hours release, deferred notifications, and
     // vendor nudges. Uses the 5th (last available) paid-tier Cloudflare Cron Trigger slot.
