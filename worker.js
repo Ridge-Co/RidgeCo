@@ -31,13 +31,40 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-16.5';
+const BUILD_VERSION = '2026-09-16.6';
+
+// ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
+// `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
+// its own SHEET_ID already points at the isolated staging Sheet, so Sheets
+// calls never need branching here (see BUILD_ORDER_v1.0 Phase 1.1: a hostname
+// swap on ONE shared worker.js was rejected July 23 because preview secrets
+// are global — this repo instead ships the SAME worker.js to two independent
+// Worker services with independent env, which is what makes Sheet isolation
+// already correct with zero code change). What's NOT yet isolated per-service
+// is money/PII side effects: QuickBooks writes, Twilio SMS, and Gmail send all
+// read real secrets that may or may not differ on the staging service. This
+// gate stubs those regardless of what's configured, so staging can never move
+// real money or contact a real customer even if its secrets are copies of prod's.
+// Detection: env.STAGING === '1' (a Var Brett can add to ONLY the staging
+// Worker's dashboard — optional, not required) OR the request hostname
+// containing "staging" (true today with zero setup, since the real staging
+// hostname is maintenance-hub-staging.brett-2f8.workers.dev). Computed once
+// per request/cron tick and stashed on env (fresh per invocation in Workers,
+// so this never leaks across requests) so every downstream function that
+// already receives env — qbApi, sendSMS, gmailSendEmail — can check it without
+// a new parameter threaded through every call site.
+function isStaging(env, url) {
+  if (env && env.STAGING === '1') return true;
+  if (url && typeof url.hostname === 'string' && url.hostname.includes('staging')) return true;
+  return false;
+}
 
 export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
+    env.__STAGING__ = isStaging(env, url);
     // Role of the caller for this request — null for the admin secret (full access) or a
     // narrow service token; 'tenant'/'vendor'/'owner' when a PIN-issued session token was
     // used. Set inside the auth gate below. Used by the tenant-work-order-submission toggle
