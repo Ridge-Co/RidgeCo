@@ -1496,7 +1496,11 @@ function loadPortalAttachments(woId, opts) {
           // keep the plain link-out chip, same as before.
           var a = document.createElement('a');
           a.setAttribute('data-att-chip', '1');
-          a.href = f.Drive_URL || '#'; a.target = '_blank';
+          // Same rule-13 fix as the thumbnail above: an internal PDF receipt/invoice's raw
+          // Drive_URL is never shared, so linking straight to it is the other half of the
+          // "blank page" bug. Route through the authenticated proxy instead.
+          a.href = (INTERNAL_FILE_TYPES.indexOf(type) !== -1 && f.Drive_File_ID) ? internalFileUrl(woId, f.Drive_File_ID) : (f.Drive_URL || '#');
+          a.target = '_blank';
           a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
           a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
           el.appendChild(a);
