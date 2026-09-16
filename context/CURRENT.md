@@ -1,4 +1,38 @@
-# WHERE THINGS STAND — Sep 16, 2026 (TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part B shipped — brief fully closed out)
+# WHERE THINGS STAND — Sep 16, 2026 (owner-scoped receipt viewer shipped; Hub's own Photos & Files receipt-view bug found and fixed; Alex Busey's WO-1091 bill corrected)
+
+## 🟢 Shipped: owner-facing receipt viewer + Hub Photos & Files receipt-viewing fix — full detail FEATURE_LOG rules 176-178
+Brett's policy confirmed and enforced: receipts should be visible to the property owner; vendor
+invoices/bills stay hidden from them (that half was already correctly true). New `GET
+/owner-file/view` (rule 177) refuses anything but `File_Type=receipt` and checks the requesting
+owner's session actually owns the WO's property — live-tested with a real owner PIN login
+(Jennifer Goldszmidt), including a genuine cross-owner refusal against another owner's WO, not
+just a code read-through. `owner.html`'s receipt links now route through it.
+
+Also found and fixed: the receipt "View" link fix shipped earlier this session (rule 176, on
+`vendor.html`'s bill-summary and `index.html`'s Review Bills view) didn't cover a THIRD, separate
+render path — `index.html`'s own WO-detail "Photos & Files" thumbnail grid + lightbox is a
+byte-duplicated copy of vendor.html's code (see rule 134) that never got rule 142's original
+Sep 15 proxy fix. That was the actual spot Brett was clicking when he said receipts still didn't
+show after a hard refresh. Fixed (rule 178) — same `internalFileUrl` proxy pattern, both the
+thumbnail/link rendering and the full-size lightbox.
+
+Live data fix, same session: WO-1091's Vendor_Bills row (Alex Busey, 2930 St Paul) was missing 2
+of 3 uploaded receipts ($174.74 + $51.79) — added from the actual receipt photos via the now-working
+proxy. All 3 receipts share one card with no way to confirm it's Alex's own vs. a company card, so
+all stay non-reimbursed per Brett's explicit "don't reimburse without confirming the card"
+instruction — flagged in the bill's own Notes so it isn't lost. `Receipts_Total` now correctly
+reads $230.54 (customer materials billing); vendor payout (`Total`) unchanged at $175 pending that
+confirmation — nothing silently paid out, nothing silently dropped either way. Bill still shows in
+Review Bills, ready once the card question is settled.
+
+`BUILD_VERSION` → `2026-09-16.9`, confirmed live. `node --check` clean throughout (all inline
+`<script>` blocks in both `owner.html` and `index.html`, checked against the actual live-deployed
+GitHub Pages copy, not just the repo commit).
+
+**Needs Brett's first live pass**: confirm the receipt thumbnails/lightbox actually render in a
+real WO detail view now; confirm with Alex Busey whether card ...7508 is his own or a company
+card, then flip the right receipt(s) to reimbursable on WO-1091's bill.
+
 
 ## 🟢 Shipped: Owners/Properties tenant-WO settings UI + admin Managed_By control — full detail FEATURE_LOG [FL-20260916-2234-b6]
 Both parts of the build brief are now done. Folded into the existing Owners and Properties edit
