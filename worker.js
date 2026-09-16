@@ -370,6 +370,8 @@ export default {
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
         if (path === '/estimate/unapprove')       return await unapproveEstimate(env, body);
+        if (path === '/wo/deposit-approve')       return await depositApprove(env, body);
+        if (path === '/wo/deposit-clear')         return await depositClear(env, body);
         if (path === '/geocode-property')         return await geocodeProperty(env, body);
         if (path === '/save-property-clusters')   return await savePropertyClusters(env, body);
         if (path === '/import-key-registry')      return await importKeyRegistry(env, body);
@@ -4368,6 +4370,17 @@ async function approveInvoiceReview(env, body) {
     if (parsed && parsed.error) return addRes;      // missing tab / no header row — surface it
     realId = String(parsed && parsed.id || '');
   } catch (e) { /* fall through with an empty id rather than fail the whole approval */ }
+  // Sep 15 2026 — a WO carrying an unapplied vendor deposit (POST /wo/deposit-approve) has
+  // now had its final bill reviewed and folded into vendor_cost (per the deposit banner
+  // renderIRCard shows). Flip Deposit_Applied so a SECOND bill/review on this same WO never
+  // nets the same deposit out twice, and the banner stops showing once it's been accounted for.
+  try {
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = findWO(wos, wo_id);
+    if (wo && wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0 && wo.Deposit_Applied !== 'TRUE') {
+      await updateWOFields(env, wo_id, { Deposit_Applied: 'TRUE' });
+    }
+  } catch (e) { /* non-fatal — the review itself is already saved */ }
   return json({ success: true, id: realId });
 }
 
@@ -4549,6 +4562,64 @@ async function approveEstimate(env, body) {
     try { const vendors = await fetchTab(env, 'Vendors'); const vendor = vendors.find(v => v.ID === latest.Vendor_ID); if (vendor?.Phone) { const msg = requestDeposit ? `Estimate approved for WO ${woId} ($${latest.Subtotal}). Deposit being requested from customer — we'll confirm once received.` : `Estimate approved for WO ${woId} ($${latest.Subtotal}). You're clear to proceed — no deposit required for this job.`; await sendSMS(env, vendor.Phone, msg); } } catch(e) {}
   }
   return json({ success: true, requestDeposit });
+}
+
+// POST /wo/deposit-approve { wo_id, vendor_id?, amount, notes? }
+// Sep 15 2026 — Brett: regular (non-Scope-Proposal) work orders had no way to record a vendor
+// deposit paid outside the Hub (he sends it himself via QuickBooks instant pay) without either
+// (a) using /vendor-bill/add, which auto-flips the WO to Complete — wrong mid-job — or (b) just
+// remembering the deposit exists and mentally subtracting it later, which is exactly the kind
+// of after-the-fact catch this is meant to prevent. This is pure Hub bookkeeping: it does NOT
+// create a Vendor_Bills row (keeps it out of Who-To-Pay/QuickBooks-payable reconciliation, which
+// would otherwise treat it as a separate unpaid bill) and does NOT touch QuickBooks at all —
+// Brett sends the actual money himself. It only records the fact of the deposit on the WO so the
+// FINAL bill's review card can show the net amount still owed (see renderIRCard's deposit banner
+// in index.html and the Deposit_Applied flip in approveInvoiceReview below).
+async function depositApprove(env, body) {
+  const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
+  const amount = parseFloat(body.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return json({ error: 'amount must be a positive number' }, 400);
+
+  const wos = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(wos, woId);
+  if (!wo) return json({ error: `No work order ${woId} found` }, 404);
+
+  // Refuse a second deposit on top of one still outstanding (Applied !== TRUE) unless Brett
+  // explicitly forces it — a duplicate-tap here is real money, not a cosmetic re-save.
+  const hasOutstanding = wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0 && wo.Deposit_Applied !== 'TRUE';
+  if (hasOutstanding && !body.force) {
+    return json({
+      error: `WO ${woId} already has an unapplied deposit of $${parseFloat(wo.Deposit_Amount).toFixed(2)} ` +
+             `(approved ${wo.Deposit_Approved_Date || '?'}). Clear it first (POST /wo/deposit-clear) or pass force:true to replace it.`,
+      existing_amount: wo.Deposit_Amount, existing_date: wo.Deposit_Approved_Date,
+    }, 409);
+  }
+
+  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied']);
+  await updateWOFields(env, woId, {
+    Deposit_Amount: amount.toFixed(2),
+    Deposit_Vendor_ID: body.vendor_id || wo.Vendor_ID || '',
+    Deposit_Approved_Date: new Date().toISOString().split('T')[0],
+    Deposit_Notes: body.notes || '',
+    Deposit_Applied: 'FALSE',
+  });
+  return json({ success: true, wo_id: woId, amount: amount.toFixed(2) });
+}
+
+// POST /wo/deposit-clear { wo_id, reason? } — undo a deposit entered in error, or one that's
+// been fully resolved without going through a final bill (job cancelled, refunded, etc).
+async function depositClear(env, body) {
+  const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
+  const wos = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(wos, woId);
+  if (!wo) return json({ error: `No work order ${woId} found` }, 404);
+  if (!wo.Deposit_Amount) return json({ error: 'No deposit recorded on this WO' }, 404);
+  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied']);
+  await updateWOFields(env, woId, {
+    Deposit_Amount: '', Deposit_Vendor_ID: '', Deposit_Approved_Date: '',
+    Deposit_Notes: body.reason ? `Cleared: ${body.reason}` : 'Cleared', Deposit_Applied: 'FALSE',
+  });
+  return json({ success: true, wo_id: woId });
 }
 
 async function addEstimateVersion(env, body) {

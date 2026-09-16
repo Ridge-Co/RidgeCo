@@ -7010,7 +7010,7 @@ function renderHubEstimateView(woId, estimates, holder) {
       ? '<div style="margin-top:10px;background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
         '<span style="color:var(--accent2);font-weight:bold;font-size:11px">✓ APPROVED</span>' +
         (current.Approved_By ? '<span style="color:var(--muted);font-size:10px;margin-left:6px">by ' + esc(current.Approved_By) + (current.Approval_Note ? ' — ' + esc(current.Approval_Note) : '') + '</span>' : '') +
-        '</div>'
+        '</div>' + renderDepositPanel(woId)
       : '<div style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px">' +
         '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
         '<input type="checkbox" id="est-deposit-' + woId + '"> Request deposit from customer (skip for small/known-customer jobs — owner approval alone is enough)' +
@@ -7129,6 +7129,63 @@ function approveEstimateUI(woId) {
       } else {
         toast(res.error || 'Approval failed', 'error');
       }
+    }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+// ── Vendor deposit panel (Sep 15 2026) ────────────────────────
+// A dollar deposit Brett sends the vendor himself (QuickBooks instant pay), tied to an
+// approved Estimate on a REGULAR work order — separate from Scope Proposal milestone billing.
+// Creates no Vendor_Bills row and touches no QuickBooks; it's a Hub-only record so the FINAL
+// bill's Review card (renderIRCard) can show the net amount still owed instead of the vendor
+// getting the full estimate paid twice. Intentionally absent from vendor.html and wo.html —
+// this is Brett's own bookkeeping, not something a vendor needs to see or act on.
+function renderDepositPanel(woId) {
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  var amt = wo ? parseFloat(wo.Deposit_Amount || 0) : 0;
+  if (wo && amt > 0 && wo.Deposit_Applied !== 'TRUE') {
+    return '<div style="margin-top:8px;background:var(--surface);border:1px solid var(--warn);border-radius:6px;padding:10px">' +
+      '<div style="font-size:11px;color:var(--warn);font-weight:bold">💰 DEPOSIT RECORDED — $' + amt.toFixed(2) + '</div>' +
+      '<div style="font-size:10.5px;color:var(--muted);margin-top:2px">Approved ' + esc(wo.Deposit_Approved_Date || '') + (wo.Deposit_Notes ? ' — ' + esc(wo.Deposit_Notes) : '') + '. ' +
+      'Not sent by the Hub — send it yourself via QuickBooks. This just makes sure the final bill nets it out.</div>' +
+      '<button class="btn small secondary" style="margin-top:6px" onclick="depositClearUI(\'' + woId + '\')">Clear (entered in error)</button>' +
+      '</div>';
+  }
+  return '<div style="margin-top:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px">' +
+    '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Vendor deposit</div>' +
+    '<div style="display:flex;gap:6px;align-items:center">' +
+    '<input type="number" step="0.01" min="0.01" placeholder="$ amount" id="dep-amt-' + woId + '" style="width:110px;font-size:13px;padding:7px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text)">' +
+    '<button class="btn small" style="background:var(--warn);color:#fff" onclick="depositApproveUI(\'' + woId + '\')">Approve deposit &amp; create payable</button>' +
+    '</div>' +
+    '<div style="font-size:10.5px;color:var(--muted);margin-top:6px">Records that you\'re sending this much to the vendor now (you still send it yourself via QuickBooks). ' +
+    'The final bill\'s Review card will show the net amount owed so the vendor isn\'t paid the deposit twice.</div>' +
+    '</div>';
+}
+
+function depositApproveUI(woId) {
+  var el = document.getElementById('dep-amt-' + woId);
+  var amt = el ? parseFloat(el.value) : NaN;
+  if (!Number.isFinite(amt) || amt <= 0) { toast('Enter a deposit amount', 'error'); return; }
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  api('POST', '/wo/deposit-approve', { wo_id: woId, vendor_id: wo ? wo.Vendor_ID : '', amount: amt })
+    .then(function(res) {
+      if (!res.success) { toast(res.error || 'Failed to record deposit', 'error'); return; }
+      toast('Deposit recorded — $' + amt.toFixed(2), 'success');
+      return api('GET', '/workorders?include_voided=1');
+    }).then(function(wos) {
+      if (Array.isArray(wos)) state.workorders = wos;
+      refreshHubEstimateView(woId);
+    }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+function depositClearUI(woId) {
+  api('POST', '/wo/deposit-clear', { wo_id: woId })
+    .then(function(res) {
+      if (!res.success) { toast(res.error || 'Failed to clear deposit', 'error'); return; }
+      toast('Deposit cleared', 'success');
+      return api('GET', '/workorders?include_voided=1');
+    }).then(function(wos) {
+      if (Array.isArray(wos)) state.workorders = wos;
+      refreshHubEstimateView(woId);
     }).catch(function(e) { toast(e.message, 'error'); });
 }
 
@@ -8217,6 +8274,24 @@ function renderIRCard(b, i) {
       '</div>';
   }
 
+  // ── DEPOSIT ALREADY PAID? ─────────────────────────────────────
+  // Sep 15 2026: a deposit approved via the Estimate panel (/wo/deposit-approve) is Hub-only
+  // bookkeeping, not a Vendor_Bills row — so it never shows up anywhere else on this screen.
+  // Surface it right here, at the moment Brett is about to type a vendor-cost number, since
+  // that's the one number this whole feature exists to keep him from double-paying.
+  var depositHtml = '';
+  var depAmt = wo ? parseFloat(wo.Deposit_Amount || 0) : 0;
+  if (wo && depAmt > 0 && wo.Deposit_Applied !== 'TRUE') {
+    var netOwed = Math.max(0, vendorTotal - depAmt);
+    depositHtml =
+      '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.6">' +
+        '💰 <b>$' + depAmt.toFixed(2) + ' deposit already paid</b> to this vendor on ' + esc(wo.Deposit_Approved_Date || '?') +
+        (wo.Deposit_Notes ? ' — "' + esc(wo.Deposit_Notes) + '"' : '') + '. ' +
+        'This bill\'s raw total is $' + vendorTotal.toFixed(2) + ' — the net amount still owed is <b>$' + netOwed.toFixed(2) + '</b> unless you\'re adjusting for overages. ' +
+        'Enter the netted number as the vendor cost below, not the raw total.' +
+      '</div>';
+  }
+
   // ── THE JOB ──────────────────────────────────────────────────
   // Vendor_Bills carries only WO_ID + Vendor_Name — its Job_Type/Notes columns are empty in
   // practice — so approving a bill used to mean leaving this screen, looking the work order
@@ -8282,6 +8357,9 @@ function renderIRCard(b, i) {
 
     // Already settled outside the Hub? Say so before anything else.
     handledHtml +
+
+    // Vendor already has a deposit paid on this WO — say so before the number gets typed.
+    depositHtml +
 
     // What the job actually was — joined from Work_Orders
     jobHtml +
