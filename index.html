@@ -8144,7 +8144,7 @@ function renderReceiptsJsonBreakdown(b) {
       '<span style="color:var(--accent2);font-weight:bold;white-space:nowrap">$'+(parseFloat(it.amount)||0).toFixed(2)+'</span>' +
       '<span style="flex:1;color:var(--text)">'+esc(it.desc||'')+'</span>' +
       badge +
-      (it.url ? '<a href="'+esc(it.url)+'" target="_blank" style="color:var(--info);font-size:10px">photo</a>' : '<span style="color:var(--danger);font-size:10px">⚠ no photo</span>') +
+      (it.url ? '<a href="'+esc(internalReceiptUrl(b.WO_ID,it.url))+'" target="_blank" style="color:var(--info);font-size:10px">photo</a>' : '<span style="color:var(--danger);font-size:10px">⚠ no photo</span>') +
     '</div>';
   }).join('');
   return '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border)">' +
