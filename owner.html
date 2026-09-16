@@ -1140,6 +1140,16 @@ function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
   input.value = '';
 }
 
+// Receipts (materials proof-of-purchase) are deliberately never made anyone-with-link
+// shareable on Drive (rule 13) — a raw drive.google.com link always blanks out. rule 177
+// (Sep 16 2026, Brett): the owner SHOULD be able to view receipts (it's vendor invoices/bills
+// that stay hidden from them, and those never even get a UI slot here) — so route the receipt
+// link through the new owner-scoped /owner-file/view proxy instead of the raw URL. Every other
+// type here (before/after/report/other) is already properly shared and untouched.
+function ownerFileUrl(woId, fileId) {
+  return WORKER + '/owner-file/view?wo_id=' + encodeURIComponent(woId) + '&file_id=' + encodeURIComponent(fileId) + '&t=' + encodeURIComponent(SECRET);
+}
+
 // Load and display attachments grouped by type
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
@@ -1161,7 +1171,7 @@ function loadPortalAttachments(woId, opts) {
         var icon = type === 'after' ? '\u2705' : type === 'before' ? '📷' :
                    type === 'receipt' ? '🧾' : type === 'report' ? '\u26a0\ufe0f' : '📎';
         var a = document.createElement('a');
-        a.href = f.Drive_URL || '#'; a.target = '_blank';
+        a.href = (type === 'receipt' && f.Drive_File_ID) ? ownerFileUrl(woId, f.Drive_File_ID) : (f.Drive_URL || '#'); a.target = '_blank';
         a.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;color:var(--info);text-decoration:none';
         a.textContent = icon + ' ' + (f.File_Name||'file').substring(0,16);
         el.appendChild(a);
