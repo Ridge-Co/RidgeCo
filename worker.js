@@ -6248,22 +6248,35 @@ async function adminFixStaleTenants(env, body) {
                 wos_with_former_tenant_contact_phone: contactExposed, stale });
 }
 
+// Any PIN not matching this shape is either a pre-alphanumeric-scheme legacy value (plain
+// digits, e.g. a tenant's raw phone suffix from before generatePIN existed) or otherwise
+// malformed — regenerated the same way generatePIN produces a fresh one. Sep 16 2026: this
+// replaced two hardcoded name-based special cases ("if name==='Adrian'/'Heather'") that were
+// themselves a prior one-off patch for exactly this problem on two Owners rows — a real
+// symptom that legacy PINs keep resurfacing and a name-keyed fix doesn't generalize. Also
+// caught, live, while building this: two Tenants rows (James/Kelsey, same property) sharing
+// the identical legacy PIN, with James's not even matching his own phone — a real collision,
+// not just a cosmetic old-format issue. Regenerating off each row's own phone fixes both at
+// once, since a fresh random 3-letter prefix collision is vanishingly unlikely.
+const PIN_FORMAT_OK = p => /^[A-Z]{3}\d{5}$/.test(p || '');
+
 async function adminFixPins(env, body) {
   const results=[], batchData=[];
   function colLetter(n){return n<26?String.fromCharCode(65+n):'A'+String.fromCharCode(65+n-26);}
   function queueCell(tab,sheetRowNum,colIdx,value){batchData.push({range:`${tab}!${colLetter(colIdx)}${sheetRowNum}`,values:[[value]]});}
-  const vData=await sheetsRequest(env,'GET','/values/Vendors'); const vRows=vData.values||[],vH=vRows[0]||[],vPhone=vH.indexOf('Phone');
-  for(let i=1;i<vRows.length;i++){const row=vRows[i];if(!row[vPhone])continue;const norm=normalizePhone(row[vPhone]);if(norm&&norm!==row[vPhone]){queueCell('Vendors',i+1,vPhone,norm);results.push({tab:'Vendors',name:row[vH.indexOf('Name')],field:'Phone',from:row[vPhone],to:norm});}}
+  const vData=await sheetsRequest(env,'GET','/values/Vendors'); const vRows=vData.values||[],vH=vRows[0]||[];
+  const [vPhone,vPin,vName]=[vH.indexOf('Phone'),vH.indexOf('PIN'),vH.indexOf('Name')];
+  for(let i=1;i<vRows.length;i++){const row=vRows[i];if(!row[vPhone])continue;const norm=normalizePhone(row[vPhone]);if(norm&&norm!==row[vPhone]){queueCell('Vendors',i+1,vPhone,norm);results.push({tab:'Vendors',name:row[vName],field:'Phone',from:row[vPhone],to:norm});}const pin=row[vPin]||'';if(!PIN_FORMAT_OK(pin)){const np=generatePIN(norm||row[vPhone]);queueCell('Vendors',i+1,vPin,np);results.push({tab:'Vendors',name:row[vName],field:'PIN',from:pin,to:np});}}
   const oData=await sheetsRequest(env,'GET','/values/Owners');const oRows=oData.values||[],oH=oRows[0]||[];
   const [oPhone,oPin,oFirst]=[oH.indexOf('Phone'),oH.indexOf('PIN'),oH.indexOf('First_Name')];
-  for(let i=1;i<oRows.length;i++){const row=oRows[i],name=row[oFirst]||'';if(row[oPhone]){const norm=normalizePhone(row[oPhone]);if(norm&&norm!==row[oPhone]){queueCell('Owners',i+1,oPhone,norm);results.push({tab:'Owners',name,field:'Phone',from:row[oPhone],to:norm});}const pin=row[oPin]||'',digits=normalizePhone(row[oPhone]).replace(/\D/g,'').slice(-5).padStart(5,'0');if(name==='Adrian'&&pin.length<8){const np='ADR'+digits;queueCell('Owners',i+1,oPin,np);results.push({tab:'Owners',name,field:'PIN',from:pin,to:np});}if(name==='Heather'&&pin.length<8){const np='HER'+digits;queueCell('Owners',i+1,oPin,np);results.push({tab:'Owners',name,field:'PIN',from:pin,to:np});}}}
-  const ouData=await sheetsRequest(env,'GET','/values/Owner_Users');const ouRows=ouData.values||[],ouH=ouRows[0]||[],[ouPhone,ouFirst]=[ouH.indexOf('Phone'),ouH.indexOf('First_Name')];
+  for(let i=1;i<oRows.length;i++){const row=oRows[i],name=row[oFirst]||'';if(row[oPhone]){const norm=normalizePhone(row[oPhone]);if(norm&&norm!==row[oPhone]){queueCell('Owners',i+1,oPhone,norm);results.push({tab:'Owners',name,field:'Phone',from:row[oPhone],to:norm});}const pin=row[oPin]||'';if(!PIN_FORMAT_OK(pin)){const np=generatePIN(norm||row[oPhone]);queueCell('Owners',i+1,oPin,np);results.push({tab:'Owners',name,field:'PIN',from:pin,to:np});}}}
+  const ouData=await sheetsRequest(env,'GET','/values/Owner_Users');const ouRows=ouData.values||[],ouH=ouRows[0]||[],[ouPhone,ouPin,ouFirst]=[ouH.indexOf('Phone'),ouH.indexOf('PIN'),ouH.indexOf('First_Name')];
   let heatherInOwnUsers=false;
-  for(let i=1;i<ouRows.length;i++){const row=ouRows[i];if((row[ouFirst]||'')==='Heather')heatherInOwnUsers=true;if(row[ouPhone]){const norm=normalizePhone(row[ouPhone]);if(norm&&norm!==row[ouPhone]){queueCell('Owner_Users',i+1,ouPhone,norm);results.push({tab:'Owner_Users',name:row[ouFirst],field:'Phone',from:row[ouPhone],to:norm});}}}
+  for(let i=1;i<ouRows.length;i++){const row=ouRows[i];if((row[ouFirst]||'')==='Heather')heatherInOwnUsers=true;if(row[ouPhone]){const norm=normalizePhone(row[ouPhone]);if(norm&&norm!==row[ouPhone]){queueCell('Owner_Users',i+1,ouPhone,norm);results.push({tab:'Owner_Users',name:row[ouFirst],field:'Phone',from:row[ouPhone],to:norm});}if(ouPin>=0){const pin=row[ouPin]||'';if(!PIN_FORMAT_OK(pin)){const np=generatePIN(norm||row[ouPhone]);queueCell('Owner_Users',i+1,ouPin,np);results.push({tab:'Owner_Users',name:row[ouFirst],field:'PIN',from:pin,to:np});}}}}
   const tData=await sheetsRequest(env,'GET','/values/Tenants');const tRows=tData.values||[],tH=tRows[0]||[],[tPhone,tPin,tFirst]=[tH.indexOf('Phone'),tH.indexOf('PIN'),tH.indexOf('First_Name')];
-  for(let i=1;i<tRows.length;i++){const row=tRows[i],rawPhone=row[tPhone]||'';if(!rawPhone)continue;const norm=normalizePhone(rawPhone);if(norm&&norm!==rawPhone){queueCell('Tenants',i+1,tPhone,norm);results.push({tab:'Tenants',name:row[tFirst],field:'Phone',from:rawPhone,to:norm});}if(!row[tPin]&&norm){const np=generatePIN(norm);queueCell('Tenants',i+1,tPin,np);results.push({tab:'Tenants',name:row[tFirst],field:'PIN',from:'',to:np});}}
+  for(let i=1;i<tRows.length;i++){const row=tRows[i],rawPhone=row[tPhone]||'';if(!rawPhone)continue;const norm=normalizePhone(rawPhone);if(norm&&norm!==rawPhone){queueCell('Tenants',i+1,tPhone,norm);results.push({tab:'Tenants',name:row[tFirst],field:'Phone',from:rawPhone,to:norm});}const pin=row[tPin]||'';if(!PIN_FORMAT_OK(pin)){const np=generatePIN(norm||rawPhone);queueCell('Tenants',i+1,tPin,np);results.push({tab:'Tenants',name:row[tFirst],field:'PIN',from:pin,to:np});}}
   if(batchData.length) await sheetsRequest(env,'POST','/values:batchUpdate',{valueInputOption:'RAW',data:batchData});
-  if(!heatherInOwnUsers){const heather=oRows.slice(1).map(r=>({row:r,name:r[oFirst]})).find(x=>x.name==='Heather');if(heather){const phone=normalizePhone(heather.row[oPhone]||''),pin='HER'+phone.replace(/\D/g,'').slice(-5).padStart(5,'0');await addRow(env,'Owner_Users',{Owner_ID:heather.row[oH.indexOf('ID')]||'5',First_Name:'Heather',Phone:phone,PIN:pin,Active:'TRUE'});results.push({tab:'Owner_Users',action:'created',name:'Heather',pin,phone});}}
+  if(!heatherInOwnUsers){const heather=oRows.slice(1).map(r=>({row:r,name:r[oFirst]})).find(x=>x.name==='Heather');if(heather){const phone=normalizePhone(heather.row[oPhone]||''),pin=generatePIN(phone);await addRow(env,'Owner_Users',{Owner_ID:heather.row[oH.indexOf('ID')]||'5',First_Name:'Heather',Phone:phone,PIN:pin,Active:'TRUE'});results.push({tab:'Owner_Users',action:'created',name:'Heather',pin,phone});}}
   return json({success:true,changes:results.length,results});
 }
 
