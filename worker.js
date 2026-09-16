@@ -509,6 +509,8 @@ export default {
         if (path === '/receipt-recon/scan')       return await receiptReconScan(env);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
+        if (path === '/receipt-recon/check-duplicates')  return await receiptReconCheckDuplicates(env, body);
+        if (path === '/receipt-recon/check-duplicates-bulk') return await receiptReconCheckDuplicatesBulk(env, body);
         if (path === '/receipt-recon/skip')       return await receiptReconSkip(env, body);
         if (path === '/receipt-recon/purge-duplicates')  return await purgeConfirmedDuplicateReceipts(env);
         if (path === '/receipts/send-to-qb-email') return await sendReceiptsToQBEmail(env, body);
