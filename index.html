@@ -11171,6 +11171,22 @@ function quickStatusChange(woId, newStatus) {
     });
 }
 
+// Admin-side Managed_By toggle (Part B, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0).
+// Mirrors owner.html's own toggleManagedBy confirm-dialog weight (claiming/releasing a job is
+// a real workflow decision, not a display preference) — adapted to the admin voice and the
+// reverse direction, and mentions the owner-notify SMS adminUpdateWO now sends on this change
+// so the confirm itself sets that expectation rather than it being a silent side effect.
+function adminToggleManagedBy(woId, newVal) {
+  var msg = newVal === 'Owner'
+    ? "Mark this job as handled by the owner instead of Ridge Co? Ridge Co won't assign a vendor to it while it's set this way, their tenant will be directed to them for updates, and the owner will get a text letting them know."
+    : "Take this job back for Ridge Co? Ridge Co will resume handling scheduling and vendor assignment, and the owner will get a text letting them know.";
+  if (!confirm(msg)) return;
+  api('POST','/wo/admin-update',{ wo_id: woId, admin_name: 'Admin', fields: { Managed_By: newVal } }).then(function(res) {
+    if (res && res.success) { toast('Updated — owner notified','success'); loadAll().then(function(){ openWODetail(woId); }); }
+    else toast('Error: '+((res && res.error) || 'unknown'),'error');
+  });
+}
+
 // ── Bulk WO status change ──────────────────────────────────────
 var _bulkWOMode = false;
 
