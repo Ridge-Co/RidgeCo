@@ -1109,6 +1109,20 @@ var AUTH_TOKEN = '';
 var state = { properties:[], units:[], tenants:[], vendors:[], workorders:[], invoices:[], owners:[] };
 function esc(s) { return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
+// Receipt/bill/invoice files are deliberately never made anyone-with-link shareable on Drive
+// (FEATURE_LOG rule 13 — keeps vendor cost data out of customer-facing links), so a raw
+// drive.google.com link for one of these always blanks out, even for Brett's own admin view.
+// Same fix as vendor.html's internalFileUrl (rule 142) — route through the Worker's own
+// authenticated /vendor-file/view proxy instead of linking straight to the stored URL. Takes
+// the full stored Drive URL (Vendor_Bills.Receipts_JSON[].url is a URL, not a bare file id) and
+// pulls the file id out of it (rule 176).
+function internalReceiptUrl(woId, driveUrl) {
+  var m = String(driveUrl||'').match(/\/file\/d\/([^\/]+)/) || String(driveUrl||'').match(/[?&]id=([^&]+)/);
+  var fileId = m ? m[1] : '';
+  if (!woId || !fileId) return driveUrl || '#';
+  return WORKER + '/vendor-file/view?wo_id=' + encodeURIComponent(woId) + '&file_id=' + encodeURIComponent(fileId) + '&t=' + encodeURIComponent(AUTH_TOKEN);
+}
+
 // Pricing constants are CONFIDENTIAL — not in this file. They're fetched at runtime from the
 // admin-gated GET /pricing-config (backed by the private PRICING_CONFIG secret / Config row)
 // into PRICING_CFG. Mirrors the worker's config-driven calcTieredEstimate exactly.
