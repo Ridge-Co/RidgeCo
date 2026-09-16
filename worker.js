@@ -5243,11 +5243,39 @@ async function ownerUpdateWO(env, body) {
 async function adminUpdateWO(env, body) {
   const adminName = body.admin_name||'Admin'; if (!body.wo_id||!body.fields) return json({ error: 'Missing wo_id or fields' }, 400);
   const workorders = await fetchTab(env, 'Work_Orders'); const wo = workorders.find(w => w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  // Managed_By (Sep 16 2026, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part B):
+  // adminUpdateWO takes arbitrary body.fields with no allow-list (unlike ownerUpdateWO's
+  // OWNER_EDITABLE_FIELDS), so Managed_By gets the same validation + ensureColumns here that
+  // ownerUpdateWO already has — several other code paths (assignVendor's guard, the tenant
+  // portal's grayed-out treatment) branch on this being exactly one of two strings.
+  if ('Managed_By' in body.fields) {
+    if (!['RidgeCo','Owner'].includes(body.fields.Managed_By)) return json({ error: "Managed_By must be 'RidgeCo' or 'Owner'" }, 400);
+    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {}
+  }
   await updateRow(env, 'Work_Orders', body.wo_id, body.fields);
   // One batched audit write covering every changed field, instead of a GET+POST pair per
   // field — a 3-field edit used to mean 3 extra re-reads of WO_Audit in one save.
   const _adminEntries = Object.entries(body.fields).filter(([field,newVal]) => String(wo[field]||'') !== String(newVal||'')).map(([field,newVal]) => ({ woId: body.wo_id, changedBy: adminName, changedByRole: 'admin', field, oldValue: wo[field]||'', newValue: newVal, notes: 'Admin updated via portal' }));
   await logWOAuditMany(env, _adminEntries);
+  // Owner notify on Managed_By change (Brett's call, Part B): unlike owner.html's own
+  // claim/release toggle — where the owner already knows, since they just did it — an admin
+  // flipping this is news to the owner either direction, so it's sent unconditionally here
+  // rather than gated by shouldNotifyOwner's routine-status tiers (same "always tell them"
+  // treatment as the Owner Received message in createWorkOrder). Non-fatal: the WO field
+  // update above already succeeded regardless of whether this notify goes through.
+  if ('Managed_By' in body.fields && String(wo.Managed_By||'RidgeCo') !== String(body.fields.Managed_By)) {
+    try {
+      const [properties, owners] = await fetchTabs(env, ['Properties','Owners']);
+      const property = properties.find(p => p.ID === wo.Property_ID);
+      const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+      if (owner?.Phone && property) {
+        const msg = body.fields.Managed_By === 'Owner'
+          ? `Hi ${owner.First_Name}, we've marked ${body.wo_id} at ${property.Address} as being handled by you rather than Ridge Co — we won't assign a vendor to it while it's set this way. Let us know if that's not right.`
+          : `Hi ${owner.First_Name}, ${body.wo_id} at ${property.Address} is back with Ridge Co to handle — we'll take it from here.`;
+        await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_managed_by_changed', recipient_type: 'owner', owner, property, message_body: msg });
+      }
+    } catch (e) { /* non-fatal */ }
+  }
   return json({ success: true });
 }
 
