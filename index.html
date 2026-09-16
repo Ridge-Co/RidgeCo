@@ -1668,6 +1668,7 @@ function showPage(name, btn) {
   // Still costs the same QB calls loadPayables(false) always has; the "Check QuickBooks" /
   // "Check and save to the sheet" buttons remain for a manual re-run any time after that.
   if (name === 'payables') { loadPayables(false); }
+  if (name === 'messaging') { loadMessagingPage(); }
 }
 
 // ── Dashboard ────────────────────────────────────────────────
