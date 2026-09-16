@@ -3534,7 +3534,11 @@ async function updateStatus(env, body) {
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
       // same-address jobs distinguishable in the text (see tenant_job_assigned's comment).
-      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. If you have any concerns please reply or call us. Ref: ${body.wo_id}.`;
+      // Sep 16 2026 (Brett): dropped the "reply or call us" line — inbound SMS from a tenant
+      // number currently dead-ends into handleInboundSMS's vendor-only lookup ("Sorry, we
+      // could not find your vendor record"), so this was promising a channel that doesn't
+      // actually route anywhere yet. Revisit once a real tenant contact path exists.
+      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
     if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
@@ -3928,7 +3932,12 @@ async function welcomeSend(env, body) {
     property = properties.find(p => p.ID === propId) || null;
     owner = property ? owners.find(o => o.ID === property.Owner_ID) || null : null;
     const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
-    defaultMsg = `Hi ${firstName}, this is Ridge Co Property Maintenance for ${address}. Save this number — you can text us anytime with a maintenance request, and we'll keep you updated on any work by text. Questions? Just reply here.`;
+    // Sep 16 2026 (Brett): dropped the "text us anytime with a request" / "reply here" promise
+    // — handleInboundSMS only recognizes vendor phone numbers today, so a tenant texting in
+    // a new request or a question currently gets a nonsensical "could not find your vendor
+    // record" auto-reply. Revisit once a real tenant intake path (form or inbound routing)
+    // exists — this welcome text should only promise what actually works right now.
+    defaultMsg = `Hi ${firstName}, this is Ridge Co Property Maintenance for ${address}. Save this number — we'll keep you updated on any maintenance work by text.`;
   } else if (type === 'vendor') {
     const vendors = await fetchTab(env, 'Vendors');
     recipient = vendors.find(v => v.ID === id);
@@ -4946,7 +4955,9 @@ async function addWONote(env, body) {
       const noteProp = properties.find(p => p.ID === wo.Property_ID);
       const noteOwner = noteProp ? owners.find(o => o.ID === noteProp.Owner_ID) : null;
       if (noteOwner?.Phone) {
-        const ownerMsg = `Hi ${noteOwner.First_Name}, your work order ${body.wo_id} has been placed on hold. Note: ${noteText}. Reply or call us with any questions.`;
+        // Sep 16 2026 (Brett): same "reply" gap as the tenant-completed text — owner numbers
+        // aren't recognized by handleInboundSMS either, so dropped the reply promise here too.
+        const ownerMsg = `Hi ${noteOwner.First_Name}, your work order ${body.wo_id} has been placed on hold. Note: ${noteText}.`;
         await sendSMS(env, noteOwner.Phone, ownerMsg);
         await logSMS(env, body.wo_id, 'owner_onhold_note', noteOwner.ID, noteOwner.Phone, ownerMsg);
       }
@@ -6202,6 +6213,13 @@ const VENDOR_NUDGE_REPEAT_HOURS = 24; // status_update: daily, per Brett
 const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a cadence for
   // these two — 2 days is a reasonable middle ground between the daily auto-clock (which
   // exists specifically to chase a QUIET vendor) and a full week; easy to tune if wrong.
+// Satisfied-condition status sets (Sep 16 2026, Brett — replaces the earlier Vendor_Bills-row
+// check, which stalled indefinitely once a WO moved past 'Complete' to 'Invoiced': the status
+// nudge is answered the moment the WO reaches Complete or later; the invoice nudge is a
+// separate, later-starting ask that isn't answered until the WO actually reaches Invoiced or
+// later. Cancelled/Declined already short-circuit BOTH types earlier in the sweep, unchanged.
+const WO_STATUS_COMPLETE_OR_LATER = ['Complete','Pending Invoice','Invoiced','Paid','Closed'];
+const WO_STATUS_INVOICED_OR_LATER = ['Invoiced','Paid'];
 let _vendorReqReady = false;
 async function ensureVendorReqTab(env) {
   if (!_vendorReqReady) { await ensureTab(env, VENDOR_REQ_TAB, VENDOR_REQ_COLS); _vendorReqReady = true; }
@@ -6304,20 +6322,40 @@ async function processVendorNudges(env) {
   ]);
   const due = rows.filter(r => r.Status === 'open' && r.Next_Nudge_At && new Date(r.Next_Nudge_At) <= now);
   const results = [];
-  let billCache = null; // lazy: only fetched if a row actually needs the bill-exists check
   for (const row of due) {
     const wo = findWO(workorders, row.WO_ID);
     const vendor = vendors.find(v => v.ID === row.Vendor_ID);
     // WO gone, voided, or vendor gone — nothing left to chase.
     if (!wo || wo.Voided === 'TRUE' || !vendor) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_missing' }); continue; }
+    // Cancelled/Declined stop ALL open request types for this WO outright — nothing left worth
+    // chasing a vendor for on a job that isn't happening (per Brett, Sep 16 2026).
     if (['Cancelled','Declined'].includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
-    if (!billCache) billCache = await fetchTab(env, 'Vendor_Bills');
-    const hasBill = billCache.some(b => b.WO_ID === row.WO_ID && b.Active !== 'FALSE');
-    // Satisfied: for invoice requests and for status_update once the WO is Complete, a real
-    // Vendor_Bill row is the actual signal (per Brett: "stop when Vendor Bill row exists").
-    if ((row.Request_Type === 'invoice' || (row.Request_Type === 'status_update' && wo.Status === 'Complete')) && hasBill) {
+    // status_update is answered the moment the WO reaches Complete or later — the vendor told
+    // us what we needed to know, regardless of billing. If invoicing isn't done yet, hand off
+    // to a fresh 'invoice' request (below) rather than going silent — that's the ask that
+    // should now persist until the WO is actually Invoiced.
+    if (row.Request_Type === 'status_update' && WO_STATUS_COMPLETE_OR_LATER.includes(wo.Status)) {
       await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'satisfied', Satisfied_Date: now.toISOString() });
-      results.push({ id: row.ID, action: 'satisfied_billed' }); continue;
+      results.push({ id: row.ID, action: 'satisfied_complete' });
+      if (!WO_STATUS_INVOICED_OR_LATER.includes(wo.Status)) {
+        const hasOpenInvoiceReq = rows.some(x => x.WO_ID === row.WO_ID && x.Vendor_ID === row.Vendor_ID && x.Request_Type === 'invoice' && x.Status === 'open');
+        if (!hasOpenInvoiceReq) {
+          await addRow(env, VENDOR_REQ_TAB, {
+            WO_ID: row.WO_ID, Vendor_ID: row.Vendor_ID, Request_Type: 'invoice', Status: 'open',
+            Nudge_Count: '0', First_Nudge_At: now.toISOString(), Next_Nudge_At: now.toISOString(),
+            Last_Activity_At: now.toISOString(), Satisfied_Date: '', Created_Date: now.toISOString(), Active: 'TRUE',
+          });
+          results.push({ id: row.ID, action: 'invoice_chase_started' });
+        }
+      }
+      continue;
+    }
+    // invoice persists specifically until the WO is Invoiced or later — a Vendor_Bills row
+    // existing isn't the same as the WO actually being invoiced (see WO-1200/1201, Sep 16),
+    // so the status field is the authoritative signal here, not the bill's mere presence.
+    if (row.Request_Type === 'invoice' && WO_STATUS_INVOICED_OR_LATER.includes(wo.Status)) {
+      await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'satisfied', Satisfied_Date: now.toISOString() });
+      results.push({ id: row.ID, action: 'satisfied_invoiced' }); continue;
     }
     if (row.Request_Type === 'photos') {
       const attachments = await fetchTab(env, 'Attachments'); // only fetched for an actually-due photos row
@@ -6344,15 +6382,11 @@ async function processVendorNudges(env) {
     const vname = vendor.First_Name || (vendor.Name||'').split(' ')[0] || 'there';
     let msg, msgType, repeatHours;
     if (row.Request_Type === 'status_update') {
-      // Dynamic content, decided fresh each nudge rather than a one-way "convert the request
-      // type" flip: Complete-but-unbilled asks for the invoice (the practically useful next
-      // step); anything else asks for a plain status update. Naturally covers Brett's "after
-      // scheduled date with no completion" case too — once a future Scheduled_Date is no
-      // longer blocking (the quiet-check above), nudging just resumes on whichever ask fits
-      // the WO's actual current state.
-      msg = wo.Status === 'Complete'
-        ? `Hi ${vname}, ${row.WO_ID} — ${woJobLabel(wo)} at ${address} — shows complete but we haven't gotten an invoice yet. Please submit when you get a chance. ${vendorPortalLink(row.WO_ID)}`
-        : `Hi ${vname}, checking in on ${row.WO_ID} — ${woJobLabel(wo)} at ${address}. Any update on status? ${vendorPortalLink(row.WO_ID)}`;
+      // By the time this fires, the WO is confirmed still pre-Complete (the satisfied-check
+      // above already peeled off anything Complete-or-later into an invoice chase instead).
+      // Coaching language per Brett (Sep 16 2026): walk the vendor through the actual portal
+      // steps we're waiting on, not just a bare "any update?" ask.
+      msg = `Hi ${vname}, checking in on ${row.WO_ID} — ${woJobLabel(wo)} at ${address}. Remember to add the schedule for the job in your portal, and mark it Complete once the work's done — then you'll just need to submit your invoice. ${vendorPortalLink(row.WO_ID)}`;
       msgType = 'vendor_nudge_status'; repeatHours = VENDOR_NUDGE_REPEAT_HOURS;
     } else if (row.Request_Type === 'photos') {
       msg = `Hi ${vname}, following up — could you upload before/after photos for ${row.WO_ID} at ${address}? ${vendorPortalLink(row.WO_ID)}`;

@@ -1,3 +1,34 @@
+# WHERE THINGS STAND — Sep 16, 2026 (vendor nudge satisfied-check fixed off real live false-positives; 3 SMS templates stopped over-promising a reply channel that doesn't route anywhere)
+
+## 🟢 Fixed: WO-1200/1201 kept getting "any update on status?" nudges after already being Invoiced — full detail FEATURE_LOG [FL-20260916-1950-m4]
+Brett pulled the last 48h of SMS via `/message-queue` to review content/timing and flagged two live
+false positives directly (WO-1200, WO-1201, both nudged at 3:06pm ET despite already being
+Invoiced with a real reviewed Vendor_Bills row on file). Root cause confirmed against the live
+Sheet, not guessed: `processVendorNudges`'s satisfied-check only recognized `wo.Status ===
+'Complete'` as the status-ask stopping condition — once a WO moved past Complete to Invoiced, it
+silently fell through and kept nudging forever. Fixed per Brett's explicit new rule: the status ask
+now stops at Complete-or-later regardless of billing; a separate `invoice`-type ask auto-starts at
+that same moment and persists specifically until Invoiced-or-later; Cancelled/Declined still stop
+everything. Status nudge copy also rewritten to coach the vendor through the actual workflow
+(schedule → mark complete → invoice) instead of a bare "any update?". `node --check` clean, full
+suite 65/65. **Not yet live-verified** — needs a real sweep pass to confirm WO-1200/1201 go fully
+quiet next cycle.
+
+**Also surfaced, not yet re-confirmed**: the Sep 15 evening cron-cadence fix (FL-20260915-1839-x7,
+5th Cloudflare Cron Trigger) doesn't look fully effective yet per today's real firing times — nudges
+due at 9:00am/12:16-12:20pm actually fired at 11:33am/3:06pm (~2.5-2.8h late), batched in pairs.
+Better than the original ~5h GH-Actions-only gap, but not the intended 15-min cadence. Worth
+confirming the new Cloudflare Cron Trigger is actually registered and firing.
+
+## 🟢 Fixed: 3 SMS templates promised "reply or call us" with no real inbound path — full detail FEATURE_LOG [FL-20260916-1955-p1]
+Brett flagged the tenant-job-completed text specifically; confirmed via `handleInboundSMS` that it
+only recognizes vendor phone numbers, so a tenant OR owner replying gets a nonsensical "could not
+find your vendor record" dead end. Dropped the reply/call promise from `tenant_job_completed`,
+`tenant_welcome`, and the `addWONote` owner on-hold notification. `vendor_welcome` left untouched —
+vendor replies genuinely do route somewhere today. **Interim only** — Brett wants a real contact
+form (name/phone/address/details) and eventually AI-agent-routed inbound replies; that's a separate
+unscoped build, not attempted this session. `node --check` clean, full suite 65/65.
+
 # WHERE THINGS STAND — Sep 16, 2026 (GH Broker built, broke, and got fixed — with no documentation trail until this entry)
 
 ## 🟢 Fixed and live-verified: GH Broker's write path (`commit_file`) crashed on any non-ASCII character — full detail FEATURE_LOG [FL-20260916-1750-k3]
