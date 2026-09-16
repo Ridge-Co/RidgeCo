@@ -152,6 +152,7 @@ export default {
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
           callerRole = _session.role;
+          callerSessionId = _session.id;
         }
       }
     }
