@@ -1412,11 +1412,53 @@ function receiptIsDuplicate(receipts, woId, amount, date, store) {
     (Number(r.Amount)||0).toFixed(2) === amt && String(r.Date||'') === String(date||'') && _rcNorm(r.Store) === st);
 }
 
-// PURE — the whole reconciliation decision, no I/O. Given an already-extracted receipt and
-// already-fetched tabs, decides category/action. Factored out of receiptSuggest() so the SAME
-// logic drives both the interactive POST /receipt/suggest endpoint and the bulk cron scan
-// (receiptReconScan) below — one source of truth, and fully unit-testable with no live Sheets.
-function receiptSuggestCore(input, properties, workorders, receipts, custCards) {
+// ── Receipt duplicate CHECKER (Sep 2 2026 design, built Sep 16 2026) ────────────────────────
+// PURE — property-wide duplicate check, deliberately WIDER than receiptIsDuplicate above (which
+// only ever compares against the ONE work order a receipt is being posted to). Brett re-scanning
+// a batch of old receipts: "I think some of these receipts are actual duplicates... check
+// against duplicates in QuickBooks and/or existing work orders." A receipt entered against the
+// wrong WO at the same property (a real, recurring mistake — several jobs often run at once on
+// one property) would never be caught by the same-WO check; this compares against every OTHER
+// Receipts row logged at the same property, regardless of which WO it landed on.
+// `workorders` resolves a candidate's property when it only carries a WO_ID (older rows may
+// predate Receipts.Property_ID existing at all) — never trusted over an explicit Property_ID.
+function receiptDuplicatesAtProperty(receipt, allReceipts, workorders) {
+  const amt = (Number(receipt.total ?? receipt.amount) || 0).toFixed(2);
+  const st = _rcNorm(receipt.store);
+  const date = String(receipt.date || '');
+  const propId = String(receipt.property_id || '');
+  if (!propId || !date) return []; // can't safely scope a property-wide check without both
+  const excludeId = receipt.id != null ? String(receipt.id) : null;
+  const woPropMap = {}; (workorders || []).forEach(w => { woPropMap[String(w.ID)] = String(w.Property_ID || ''); });
+  return (allReceipts || [])
+    .filter(r => {
+      if (r.Active === 'FALSE') return false;
+      if (excludeId && String(r.ID) === excludeId) return false;
+      const rProp = String(r.Property_ID || woPropMap[String(r.WO_ID)] || '');
+      if (rProp !== propId) return false;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) return false;
+      if (String(r.Date || '') !== date) return false;
+      if (_rcNorm(r.Store) !== st) return false;
+      return true;
+    })
+    .map(r => ({ id: r.ID, wo_id: r.WO_ID || '', amount: r.Amount, date: r.Date, store: r.Store, added_by: r.Added_By || '' }));
+}
+
+// PURE — narrows a broad QuickBooks Invoice list (Id/DocNumber/TxnDate only — no Line items,
+// see qbInvoiceLineDuplicates below for why) down to candidates within `windowDays` of a
+// receipt's date. Kept separate from the QB fetch itself so the date-window logic is
+// unit-testable with no live Sheets/QuickBooks.
+function qbInvoiceCandidatesByDate(invoices, date, windowDays) {
+  if (!date) return [];
+  const target = new Date(date + 'T00:00:00Z').getTime();
+  if (isNaN(target)) return [];
+  return (invoices || []).filter(inv => {
+    const txn = inv.TxnDate ? new Date(inv.TxnDate + 'T00:00:00Z').getTime() : null;
+    return txn != null && !isNaN(txn) && Math.abs(txn - target) <= windowDays * 86400000;
+  });
+}
+
+
   const po = String(input.po || '').trim();
   const total = Number(input.total) || 0;
   const date = String(input.date || '').trim();
