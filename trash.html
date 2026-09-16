@@ -54,7 +54,16 @@
   .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
   @keyframes sp{to{transform:rotate(360deg)}}
   #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
-  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s}
+  /* pointer-events:none is the fix for "the Close button only registers a tap in one exact
+     spot": unlike vendor.html's toast (a one-off element that's fully removed from the DOM after
+     it fades), this #toast div is static markup that lives at the bottom of the screen forever —
+     opacity:0 makes it invisible when "hidden," but without pointer-events:none it still sits on
+     top of anything underneath it (e.g. the invoice modal's Close/Send row) and swallows clicks
+     there, visible or not. Reproduced live: right after "Invoice sent" fires the toast, tapping
+     the CENTER of Close hit the toast instead of the button — only the very edges, outside the
+     toast's own centered width, ever reached the button. Confirmed via headless Chromium
+     elementFromPoint() before shipping this fix, not guessed. */
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s;pointer-events:none}
   .toast.show{opacity:1}
 </style>
 </head>
