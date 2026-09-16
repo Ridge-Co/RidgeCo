@@ -1,3 +1,31 @@
+# WHERE THINGS STAND — Sep 16, 2026 (gh-broker: GitHub App write connector stood up and verified end-to-end — FL-20260916-1235-q4)
+
+## 🟢 Shipped and verified end-to-end: `gh-broker` GitHub App write connector — FL-20260916-1235-q4
+Full detail: FEATURE_LOG `[FL-20260916-1235-q4]`. New infra, not a BrettOS code change: a
+Cloudflare Worker (`brett332/gh-broker`) that mints short-lived GitHub App installation tokens
+and exposes `read_file`/`commit_file`/`create_pull_request` as a custom Claude MCP connector
+("GH Broker"), gated by a `BROKER_KEY` bearer token — replaces the `BRETT_GH_PAT` env-var
+dependency that wasn't reliably reaching fresh Cowork sandboxes.
+
+Setup surfaced 3 real bugs along the way (all fixed on `main`): Cloudflare's Runtime-vs-Builds
+variable sections silently split where secrets landed; GitHub's private-key download (PKCS#1)
+doesn't match what the `jose` library needs (PKCS#8), needed an `openssl` conversion; and a
+genuine code bug in the original spec — `mintInstallationToken`'s token-mint `fetch()` was
+missing a `User-Agent` header, which GitHub's API 403s on unconditionally.
+
+**Actually verified, not just "connector shows green"**: real `read_file` against both
+`brett332/gh-broker` and `Ridge-Co/RidgeCo` (proves both installation-ID code paths), a real
+GPG-signed `commit_file` attributed to `ridgeco-gh-broker[bot]` on `Ridge-Co/RidgeCo`, and a
+real `create_pull_request` (PR #4, opened then closed unmerged as a deliberate throwaway test).
+
+**Known minor bug, not fixed**: `readFile`'s `atob()` mangles non-ASCII UTF-8 on read-back
+(confirmed: em-dashes came back corrupted). Cosmetic only today.
+
+**Open items, Brett's call, not acted on**: `commit_file`/`create_pull_request` are set to
+"Always allow" in the connector's tool permissions (no per-action confirmation account-wide) —
+flagged, left as-is. The test branch `gh-broker-e2e-test` on Ridge-Co/RidgeCo is closed-PR but
+undeleted (no delete-branch tool available in-session) — one click to clean up on GitHub.
+
 # WHERE THINGS STAND — Sep 15, 2026 (documentation-completeness infrastructure — FL-20260915-1644-cz — on top of the share-attachments repair chain and rule 175)
 
 ## 🟢 Shipped, one real bug caught by its own first live run: documentation-completeness infrastructure — FL-20260915-1644-cz
