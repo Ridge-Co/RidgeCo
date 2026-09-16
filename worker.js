@@ -4565,16 +4565,23 @@ async function approveEstimate(env, body) {
 }
 
 // POST /wo/deposit-approve { wo_id, vendor_id?, amount, notes? }
-// Sep 15 2026 — Brett: regular (non-Scope-Proposal) work orders had no way to record a vendor
-// deposit paid outside the Hub (he sends it himself via QuickBooks instant pay) without either
-// (a) using /vendor-bill/add, which auto-flips the WO to Complete — wrong mid-job — or (b) just
-// remembering the deposit exists and mentally subtracting it later, which is exactly the kind
-// of after-the-fact catch this is meant to prevent. This is pure Hub bookkeeping: it does NOT
-// create a Vendor_Bills row (keeps it out of Who-To-Pay/QuickBooks-payable reconciliation, which
-// would otherwise treat it as a separate unpaid bill) and does NOT touch QuickBooks at all —
-// Brett sends the actual money himself. It only records the fact of the deposit on the WO so the
-// FINAL bill's review card can show the net amount still owed (see renderIRCard's deposit banner
-// in index.html and the Deposit_Applied flip in approveInvoiceReview below).
+// Sep 15-16 2026 — Brett: regular (non-Scope-Proposal) work orders had no way to record a
+// vendor deposit without either (a) using /vendor-bill/add, which auto-flips the WO to
+// Complete — wrong mid-job — or (b) mentally subtracting it later, which is exactly the kind
+// of after-the-fact catch this exists to prevent.
+//
+// CORRECTION (Sep 16): the first version of this only recorded the deposit as a Hub-side
+// note and deliberately never touched QuickBooks. That was wrong — Brett pays the deposit
+// himself via QuickBooks' own Instant Pay, which pays against a real Bill record, and there
+// was none, so there was nothing for him to actually pay. This now creates a REAL QuickBooks
+// Bill for the vendor (no customer Invoice — Brett bills the owner once, at job completion,
+// for the whole job) and leaves it OPEN/unpaid for Brett to pay himself in QuickBooks — the
+// Hub creates the obligation, Brett executes the actual payment, matching how a vendor bill
+// half already gets created automatically elsewhere in this file (e.g. scopeProposalBook)
+// while payment itself always stays a separate, human-triggered step.
+// The Hub-side Work_Orders fields still exist so the FINAL bill's review card can show the
+// net amount still owed (renderIRCard's deposit banner + the Deposit_Applied flip in
+// approveInvoiceReview) — that part of the original design was right, just incomplete.
 async function depositApprove(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   const amount = parseFloat(body.amount);
@@ -4585,41 +4592,95 @@ async function depositApprove(env, body) {
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
 
   // Refuse a second deposit on top of one still outstanding (Applied !== TRUE) unless Brett
-  // explicitly forces it — a duplicate-tap here is real money, not a cosmetic re-save.
+  // explicitly forces it — a duplicate-tap here is a real second QuickBooks bill, not a
+  // cosmetic re-save.
   const hasOutstanding = wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0 && wo.Deposit_Applied !== 'TRUE';
   if (hasOutstanding && !body.force) {
     return json({
       error: `WO ${woId} already has an unapplied deposit of $${parseFloat(wo.Deposit_Amount).toFixed(2)} ` +
-             `(approved ${wo.Deposit_Approved_Date || '?'}). Clear it first (POST /wo/deposit-clear) or pass force:true to replace it.`,
+             `(approved ${wo.Deposit_Approved_Date || '?'}, QuickBooks bill ${wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID || '?'}). ` +
+             `Clear it first (POST /wo/deposit-clear) or pass force:true to replace it.`,
       existing_amount: wo.Deposit_Amount, existing_date: wo.Deposit_Approved_Date,
     }, 409);
   }
 
-  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied']);
+  const vendorId = body.vendor_id || wo.Vendor_ID || '';
+  if (!vendorId) return json({ error: 'No vendor on this WO and none passed — vendor_id required' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => v.ID === vendorId);
+  if (!vendor) return json({ error: `Vendor ${vendorId} not found` }, 404);
+
+  const [properties, units] = await Promise.all([
+    fetchTab(env, 'Properties').catch(() => []),
+    fetchTab(env, 'Units').catch(() => []),
+  ]);
+  const prop = properties.find(p => String(p.ID) === String(wo.Property_ID));
+  const unit = units.find(u => String(u.ID) === String(wo.Unit_ID));
+  const addr = ((prop ? prop.Address : (wo.Property_Address || '')) + (unit && unit.Unit_Label ? ' ' + unit.Unit_Label : '')).trim();
+
+  let token;
+  try { token = await qbAccessToken(env); }
+  catch (e) { return json({ error: 'QuickBooks auth failed, nothing was recorded: ' + e.message }, 502); }
+
+  let vendorQbId;
+  try { vendorQbId = await qbFindOrCreateVendor(env, vendor, vendor.Name || vendor.Company || vendor.First_Name || 'Vendor', token); }
+  catch (e) { return json({ error: 'QuickBooks vendor lookup failed, nothing was recorded: ' + e.message }, 502); }
+
+  const trade = QB_TRADE_MAP[(wo.Trade || '').trim()] || QB_TRADE_MAP.General;
+  const desc = (`Deposit — ${addr || ('WO ' + woId)}${wo.Description ? ' — ' + wo.Description : ''}`).slice(0, 4000);
+  const billPayload = {
+    Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +amount.toFixed(2), Description: desc,
+      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+    VendorRef: { value: vendorQbId }, TxnDate: new Date().toISOString().slice(0, 10),
+    PrivateNote: (`Deposit approved by Brett — WO ${woId} — pay via QuickBooks Instant Pay; nets against the final vendor bill at job completion.` +
+                  (body.notes ? ' ' + body.notes : '')).slice(0, 1000),
+  };
+  const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+  const qbBillId = (rb && rb.Bill && rb.Bill.Id) || '';
+  const qbBillNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
+  if (!qbBillId) return json({ error: 'QuickBooks bill was not created (' + (qbFault(rb) || 'unknown error') + ') — nothing was recorded, nothing to pay yet.' }, 502);
+
+  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number']);
   await updateWOFields(env, woId, {
     Deposit_Amount: amount.toFixed(2),
-    Deposit_Vendor_ID: body.vendor_id || wo.Vendor_ID || '',
+    Deposit_Vendor_ID: vendorId,
     Deposit_Approved_Date: new Date().toISOString().split('T')[0],
     Deposit_Notes: body.notes || '',
     Deposit_Applied: 'FALSE',
+    Deposit_QB_Bill_ID: qbBillId,
+    Deposit_QB_Bill_Number: qbBillNumber,
   });
-  return json({ success: true, wo_id: woId, amount: amount.toFixed(2) });
+  return json({ success: true, wo_id: woId, amount: amount.toFixed(2), qb_bill_id: qbBillId, qb_bill_number: qbBillNumber });
 }
 
-// POST /wo/deposit-clear { wo_id, reason? } — undo a deposit entered in error, or one that's
-// been fully resolved without going through a final bill (job cancelled, refunded, etc).
+// POST /wo/deposit-clear { wo_id, reason? } — undo a deposit entered in error. If a QuickBooks
+// bill was already created for it, this also tries to delete that bill — but only when it's
+// still unpaid (qbDeleteBillSafe refuses anything with a payment applied), so clearing the Hub
+// record can never silently orphan a bill Brett already paid.
 async function depositClear(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   const wos = await fetchTab(env, 'Work_Orders');
   const wo = findWO(wos, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
   if (!wo.Deposit_Amount) return json({ error: 'No deposit recorded on this WO' }, 404);
-  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied']);
+
+  let qbNote = '';
+  if (wo.Deposit_QB_Bill_ID) {
+    try {
+      const token = await qbAccessToken(env);
+      const del = await qbDeleteBillSafe(env, wo.Deposit_QB_Bill_ID, token);
+      if (del.ok && !del.skipped) qbNote = `QuickBooks bill ${del.doc || wo.Deposit_QB_Bill_ID} deleted.`;
+      else if (!del.ok) qbNote = `Hub record cleared, but the QuickBooks bill could NOT be deleted (${del.error}) — check QuickBooks directly, it may already be paid.`;
+    } catch (e) { qbNote = `Hub record cleared, but clearing the QuickBooks bill failed: ${e.message} — check QuickBooks directly.`; }
+  }
+
+  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number']);
   await updateWOFields(env, woId, {
     Deposit_Amount: '', Deposit_Vendor_ID: '', Deposit_Approved_Date: '',
     Deposit_Notes: body.reason ? `Cleared: ${body.reason}` : 'Cleared', Deposit_Applied: 'FALSE',
+    Deposit_QB_Bill_ID: '', Deposit_QB_Bill_Number: '',
   });
-  return json({ success: true, wo_id: woId });
+  return json({ success: true, wo_id: woId, qb_note: qbNote });
 }
 
 async function addEstimateVersion(env, body) {

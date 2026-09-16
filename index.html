@@ -7132,13 +7132,14 @@ function approveEstimateUI(woId) {
     }).catch(function(e) { toast(e.message, 'error'); });
 }
 
-// ── Vendor deposit panel (Sep 15 2026) ────────────────────────
-// A dollar deposit Brett sends the vendor himself (QuickBooks instant pay), tied to an
-// approved Estimate on a REGULAR work order — separate from Scope Proposal milestone billing.
-// Creates no Vendor_Bills row and touches no QuickBooks; it's a Hub-only record so the FINAL
-// bill's Review card (renderIRCard) can show the net amount still owed instead of the vendor
-// getting the full estimate paid twice. Intentionally absent from vendor.html and wo.html —
-// this is Brett's own bookkeeping, not something a vendor needs to see or act on.
+// ── Vendor deposit panel (Sep 15-16 2026) ─────────────────────
+// A dollar deposit tied to an approved Estimate on a REGULAR work order — separate from Scope
+// Proposal milestone billing. Creates a real, OPEN QuickBooks Bill for the vendor (no customer
+// Invoice — Brett bills the owner once, at job completion) so Brett can actually pay it via
+// QuickBooks' own Instant Pay; the Hub itself never moves money. It also flags the FINAL bill's
+// Review card (renderIRCard) so the vendor doesn't get the deposit paid twice. Intentionally
+// absent from vendor.html and wo.html — this is Brett's own bookkeeping, not something a vendor
+// needs to see or act on.
 function renderDepositPanel(woId) {
   var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
   var amt = wo ? parseFloat(wo.Deposit_Amount || 0) : 0;
@@ -7146,30 +7147,35 @@ function renderDepositPanel(woId) {
     return '<div style="margin-top:8px;background:var(--surface);border:1px solid var(--warn);border-radius:6px;padding:10px">' +
       '<div style="font-size:11px;color:var(--warn);font-weight:bold">💰 DEPOSIT RECORDED — $' + amt.toFixed(2) + '</div>' +
       '<div style="font-size:10.5px;color:var(--muted);margin-top:2px">Approved ' + esc(wo.Deposit_Approved_Date || '') + (wo.Deposit_Notes ? ' — ' + esc(wo.Deposit_Notes) : '') + '. ' +
-      'Not sent by the Hub — send it yourself via QuickBooks. This just makes sure the final bill nets it out.</div>' +
-      '<button class="btn small secondary" style="margin-top:6px" onclick="depositClearUI(\'' + woId + '\')">Clear (entered in error)</button>' +
+      (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID
+        ? 'QuickBooks bill <b>' + esc(wo.Deposit_QB_Bill_Number || ('#' + wo.Deposit_QB_Bill_ID)) + '</b> is open and waiting — pay it yourself via QuickBooks Instant Pay.'
+        : '<span style="color:var(--danger)">No QuickBooks bill id on file — check QuickBooks directly before assuming there\'s something to pay.</span>') +
+      '</div>' +
+      '<button class="btn small secondary" style="margin-top:6px" onclick="depositClearUI(\'' + woId + '\')">Clear (entered in error — also deletes the QB bill if still unpaid)</button>' +
       '</div>';
   }
   return '<div style="margin-top:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px">' +
     '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">Vendor deposit</div>' +
-    '<div style="display:flex;gap:6px;align-items:center">' +
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
     '<input type="number" step="0.01" min="0.01" placeholder="$ amount" id="dep-amt-' + woId + '" style="width:110px;font-size:13px;padding:7px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text)">' +
-    '<button class="btn small" style="background:var(--warn);color:#fff" onclick="depositApproveUI(\'' + woId + '\')">Approve deposit &amp; create payable</button>' +
+    '<input type="text" placeholder="Note (optional)" id="dep-note-' + woId + '" style="flex:1;min-width:120px;font-size:13px;padding:7px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text)">' +
+    '<button class="btn small" style="background:var(--warn);color:#fff" onclick="depositApproveUI(\'' + woId + '\')">Approve deposit &amp; create QB bill</button>' +
     '</div>' +
-    '<div style="font-size:10.5px;color:var(--muted);margin-top:6px">Records that you\'re sending this much to the vendor now (you still send it yourself via QuickBooks). ' +
+    '<div style="font-size:10.5px;color:var(--muted);margin-top:6px">Creates an OPEN QuickBooks bill for this vendor (no customer invoice) — pay it yourself via QuickBooks Instant Pay. ' +
     'The final bill\'s Review card will show the net amount owed so the vendor isn\'t paid the deposit twice.</div>' +
     '</div>';
 }
 
 function depositApproveUI(woId) {
   var el = document.getElementById('dep-amt-' + woId);
+  var noteEl = document.getElementById('dep-note-' + woId);
   var amt = el ? parseFloat(el.value) : NaN;
   if (!Number.isFinite(amt) || amt <= 0) { toast('Enter a deposit amount', 'error'); return; }
   var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
-  api('POST', '/wo/deposit-approve', { wo_id: woId, vendor_id: wo ? wo.Vendor_ID : '', amount: amt })
+  api('POST', '/wo/deposit-approve', { wo_id: woId, vendor_id: wo ? wo.Vendor_ID : '', amount: amt, notes: noteEl ? noteEl.value.trim() : '' }, 20000)
     .then(function(res) {
       if (!res.success) { toast(res.error || 'Failed to record deposit', 'error'); return; }
-      toast('Deposit recorded — $' + amt.toFixed(2), 'success');
+      toast('Deposit recorded — $' + amt.toFixed(2) + ' — QuickBooks bill ' + (res.qb_bill_number || res.qb_bill_id), 'success');
       return api('GET', '/workorders?include_voided=1');
     }).then(function(wos) {
       if (Array.isArray(wos)) state.workorders = wos;
@@ -7178,10 +7184,10 @@ function depositApproveUI(woId) {
 }
 
 function depositClearUI(woId) {
-  api('POST', '/wo/deposit-clear', { wo_id: woId })
+  api('POST', '/wo/deposit-clear', { wo_id: woId }, 20000)
     .then(function(res) {
       if (!res.success) { toast(res.error || 'Failed to clear deposit', 'error'); return; }
-      toast('Deposit cleared', 'success');
+      toast(res.qb_note || 'Deposit cleared', 'success');
       return api('GET', '/workorders?include_voided=1');
     }).then(function(wos) {
       if (Array.isArray(wos)) state.workorders = wos;
@@ -8286,6 +8292,7 @@ function renderIRCard(b, i) {
     depositHtml =
       '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.6">' +
         '💰 <b>$' + depAmt.toFixed(2) + ' deposit already paid</b> to this vendor on ' + esc(wo.Deposit_Approved_Date || '?') +
+        (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID ? ' (QuickBooks bill ' + esc(wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ')' : '') +
         (wo.Deposit_Notes ? ' — "' + esc(wo.Deposit_Notes) + '"' : '') + '. ' +
         'This bill\'s raw total is $' + vendorTotal.toFixed(2) + ' — the net amount still owed is <b>$' + netOwed.toFixed(2) + '</b> unless you\'re adjusting for overages. ' +
         'Enter the netted number as the vendor cost below, not the raw total.' +
