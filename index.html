@@ -3557,7 +3557,15 @@ function openEditPropertyModal(id){
     safeArray(state.owners).map(function(o){return '<option value="'+o.ID+'"'+(String(o.ID)===epOwnerId?' selected':'')+'>'+(o.First_Name+' '+(o.Last_Name||'')).trim()+(o.Company?' — '+o.Company:'')+'</option>';}).join('');
   epTypeChanged();
   renderEpUnitsSection(p.ID);
+  document.getElementById('ep-two-toggle').value = p.Tenant_WO_Toggle==='ON'||p.Tenant_WO_Toggle==='OFF' ? p.Tenant_WO_Toggle : '';
+  renderEpTwoUnitsScope(p.ID, p.Tenant_WO_Unit_IDs||'');
+  document.getElementById('ep-two-effective').textContent = '';
   openModal('modal-edit-property');
+  loadTenantWOSettings(true).then(function(s) {
+    var row = safeArray(s.properties).find(function(x){ return String(x.property_id)===String(p.ID); });
+    if (!row) return;
+    document.getElementById('ep-two-effective').textContent = '— currently ' + (row.whole_property_enabled ? 'ON' : 'OFF') + (row.owner_toggle ? ' (owner-level override in play)' : '');
+  });
 }
 function submitEditProperty(){
   var id=document.getElementById('ep-id').value;
@@ -3569,9 +3577,18 @@ function submitEditProperty(){
   } else {
     fields.Unit_Count = '1';
   }
-  api('POST','/property/update',{id:id,fields:fields}).then(function(res){
-    if(res.error){logError('Edit property',res.error);toast('Error: '+res.error,'error');return;}
-    toast('Property updated','success');closeModal('modal-edit-property');loadAll();
+  var twoToggle = document.getElementById('ep-two-toggle').value;
+  var twoUnitIds = Array.prototype.slice.call(document.querySelectorAll('.ep-two-unit-check:checked')).map(function(el){ return el.value; });
+  // Tenant WO toggle goes through its own dedicated endpoint, not folded into /property/
+  // update's generic fields — that endpoint ensureColumns first (propertyUpdate's own
+  // ensureColumns only covers the Source_* fields, not this one).
+  Promise.all([
+    api('POST','/property/update',{id:id,fields:fields}),
+    api('POST','/property/tenant-wo-toggle',{property_id:id,toggle:twoToggle,unit_ids:twoUnitIds}),
+  ]).then(function(results){
+    var err = results.map(function(r){ return r && r.error; }).find(Boolean);
+    if(err){logError('Edit property',err);toast('Error: '+err,'error');return;}
+    toast('Property updated','success');closeModal('modal-edit-property');loadAll();loadTenantWOSettings(true);
   }).catch(function(e){logError('Edit property',e.message);toast('Error: '+e.message,'error');});
 }
 
