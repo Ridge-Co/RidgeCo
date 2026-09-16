@@ -10328,6 +10328,31 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- PROPERTY NOTICE MODAL — shared by the property-card "📢 Notice" button and the
+     Messaging page's "New Property Notice" button -->
+<div class="modal-overlay" id="modal-property-notice">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-title">📢 SEND PROPERTY NOTICE</div>
+    <label style="font-size:11px;color:var(--muted)">Property</label>
+    <select id="pn-property" onchange="propertyNoticeRecalc()" style="width:100%;margin:4px 0 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;color:var(--text)"></select>
+    <label style="font-size:11px;color:var(--muted)">Send by</label>
+    <div style="margin:4px 0 10px">
+      <label style="font-size:12px;margin-right:14px"><input type="checkbox" id="pn-ch-sms" checked onchange="propertyNoticeRecalc()"> Text (SMS)</label>
+      <label style="font-size:12px"><input type="checkbox" id="pn-ch-email" onchange="propertyNoticeRecalc()"> Email</label>
+    </div>
+    <label style="font-size:11px;color:var(--muted)">Message</label>
+    <textarea id="pn-message" oninput="propertyNoticeRecalc()" style="width:100%;min-height:90px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;color:var(--text);font-family:var(--font);resize:vertical;margin:4px 0 4px"></textarea>
+    <div id="pn-segment-info" style="font-size:11px;color:var(--muted);margin-bottom:8px"></div>
+    <div id="pn-recipients" style="font-size:12px;color:var(--info);margin-bottom:10px"></div>
+    <div id="pn-msg"></div>
+    <p style="color:var(--muted);font-size:10.5px;margin:6px 0 0">Sends immediately, even during quiet hours (7pm–9am ET) — this is for urgent, property-wide issues. Tenants who've opted out of texting are always skipped.</p>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-property-notice')">Cancel</button>
+      <button class="btn" id="pn-send-btn" onclick="sendPropertyNoticeNow()" disabled>Send Now</button>
+    </div>
+  </div>
+</div>
+
 <!-- SEND TO QUICKBOOKS PREVIEW MODAL -->
 <div class="modal-overlay" id="modal-qb-send">
   <div class="modal" style="max-width:480px">
