@@ -1482,7 +1482,11 @@ function loadPortalAttachments(woId, opts) {
           thumb.setAttribute('data-att-chip', '1');
           thumb.style.cssText = 'position:relative;width:56px;height:56px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border)';
           thumb.onclick = (function(woIdC, idxC){ return function(){ rcOpenLightbox(_rcWoItems[woIdC], idxC); }; })(woId, itemIdx);
-          var imgTag = '<img src="https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w150" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\'">';
+          // Internal (receipt/bill/invoice) files are never Drive-shared (rule 13), so the
+          // public thumbnail endpoint always fails for them — go straight to the authenticated
+          // proxy instead of wasting a request on a thumbnail that can never load.
+          var thumbSrc = item.internal ? internalFileUrl(woId, item.fileId) : ('https://drive.google.com/thumbnail?id=' + item.fileId + '&sz=w150');
+          var imgTag = '<img src="' + thumbSrc + '" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display=\'none\'">';
           var videoBadge = item.isVideo ? '<span style="position:absolute;right:2px;bottom:2px;background:rgba(0,0,0,.65);color:#fff;font-size:9px;border-radius:3px;padding:1px 3px">&#9658;</span>' : '';
           var typeBadge = '<span style="position:absolute;left:2px;top:2px;font-size:10px;text-shadow:0 0 3px rgba(0,0,0,.8)">' + icon + '</span>';
           thumb.innerHTML = imgTag + videoBadge + typeBadge;
