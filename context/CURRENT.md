@@ -1,3 +1,32 @@
+# WHERE THINGS STAND — Sep 16, 2026 (TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part A shipped)
+
+## 🟢 Shipped: /workorder tenant-submission session-identity hardening — full detail FEATURE_LOG [FL-20260916-2210-p3]
+Closes the gap flagged at the end of today's 3-part access-control build. The tenant-submission
+gate used to trust body.property_id/unit_id/tenant_id as sent by the client; it now resolves the
+caller's real Tenants row from their verified session id and overwrites all three before the
+access check or WO creation run — a tenant session can no longer be used to submit a WO tagged to
+a different property/unit/tenant. Scoped strictly to callerRole === 'tenant'; admin/owner paths
+untouched. `test/tenant-submit-request.test.mjs` +8 assertions, full suite 76/76, zero
+regressions. Deployed (`2026-09-16.5`), confirmed via `/version` and a fresh anonymous clone.
+
+**Not verified live** — no live tenant PIN session available from the build sandbox. Needs
+Brett's first live pass: log in to tenant.html as a real tenant, replay POST /workorder via
+browser dev tools with a spoofed property_id/unit_id, confirm the WO lands on the tenant's own
+real property/unit regardless (overwritten, not rejected) — then confirm a normal unmodified
+submission still works.
+
+## Next up: Part B — Hub (index.html) UI for tenant-WO settings + admin Managed_By control
+Brett's answers (this session): (1) fold into the existing Owners and Properties pages, not a
+standalone settings page/tab; (2) the admin-side Managed_By toggle shows the same confirm dialog
+owner.html's does; (3) Brett flagging a WO as owner-managed himself DOES notify the owner (not a
+quiet internal-only flag — differs from the brief's "recommend yes for consistency, confirm"
+framing, which left this open). Every endpoint Part B needs already exists and is already
+correct (GET /tenant-wo-settings, POST /owner|property/tenant-wo-toggle, POST
+/owner/held-contact-note, POST /wo/admin-update) — this is a pure frontend build against
+already-tested endpoints, plus one small addition: an owner-notify SMS/queue call when admin sets
+Managed_By='Owner' via the new UI (doesn't exist yet — today's owner.html-side toggle doesn't
+notify either, so this is net-new, not a gap in existing code).
+
 # WHERE THINGS STAND — Sep 16, 2026 (all 3 parts of the owner-managed-WO access-control build shipped)
 
 ## 🟢 Shipped: full access-control model live — Phoenix owner-first, Goldszmidt tenant-submit, held-WO tenant redirect — full detail FEATURE_LOG [FL-20260916-2145-w2]
