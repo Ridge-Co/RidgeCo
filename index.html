@@ -3439,7 +3439,25 @@ var EP_MULTI_TYPES = ['multi','condo'];
 
 function epTypeChanged(){
   var type = document.getElementById('ep-type').value;
-  document.getElementById('ep-units-section').style.display = EP_MULTI_TYPES.indexOf(type)!==-1 ? 'block' : 'none';
+  var isMulti = EP_MULTI_TYPES.indexOf(type)!==-1;
+  document.getElementById('ep-units-section').style.display = isMulti ? 'block' : 'none';
+  document.getElementById('ep-two-units-scope').style.display = isMulti ? 'block' : 'none';
+}
+// Part B, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 — unit-scoping checkboxes for
+// this property's own Tenant_WO_Unit_IDs, reusing the same units list renderEpUnitsSection
+// already draws from. Single-family/rowhome properties skip this entirely (no units to scope
+// to — the toggle alone covers the whole property, matching how resolveTenantWOAccess treats
+// a blank unitId).
+function renderEpTwoUnitsScope(propId, scopedIds){
+  var scoped = String(scopedIds||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+  var units = safeArray(state.units).filter(function(u){ return String(u.Property_ID)===String(propId) && u.Active!=='FALSE'; });
+  var listEl = document.getElementById('ep-two-units-list');
+  listEl.innerHTML = !units.length ? '<div style="color:var(--muted);font-size:12px">No units yet.</div>' :
+    units.map(function(u){
+      var checked = scoped.indexOf(u.ID)!==-1;
+      return '<label style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 6px 0;font-size:12px">' +
+        '<input type="checkbox" class="ep-two-unit-check" value="'+u.ID+'"'+(checked?' checked':'')+'> '+esc(u.Unit_Label||('Unit '+u.ID))+'</label>';
+    }).join('');
 }
 function epComputedUnitCount(propId){
   return safeArray(state.units).filter(function(u){ return String(u.Property_ID)===String(propId) && u.Active!=='FALSE'; }).length;
