@@ -20,7 +20,7 @@ findable by grep even though they never share a number. Example:
 **Reconciliation pass — Sep 7, 2026 (this file + CURRENT.md had both gone stale since Aug 24 despite real Sep 2/3/7 sessions shipping real work):**
 - ✅ B-142/143/144-equivalents (manual price override, final-balance invoicing, eager QB customer creation) — shipped Sep 2, confirmed live on `main`, none Brett-verified yet. See CURRENT.md.
 - ✅ Signed-proposal vendor-bill-gap fix (the Cesar Gomez "deposit share showed full cost" bug) — built Aug 24, sat unmerged for 2 weeks, merged to `main` today as FEATURE_LOG rule 145.
-- ⏳ Vendor portal 3-bug fix (black page/JSON crash/Close button) and the staging deploy gate — both built + tested, both still sitting on unmerged branches, both awaiting Brett's go to merge.
+- ✅ Vendor portal 3-bug fix (black page/JSON crash/Close button) — merged Sep 16 2026, see B-227-followup below. ⏳ Staging deploy gate — still unmerged, still awaiting Brett's go.
 - 🔴 Receipt-reconciler duplicate-checker + unit-search fix (Sep 2) — not in git anywhere, may need a rebuild if the delivered patch file was never pasted in.
 - ▶ New: CAP-034 (scope/estimate/signature/invoice one-page consolidation, wishlist only) and B-236 (auto invoice lifecycle on scope proposals, brief only — `context/SCOPE_INVOICE_AUTOMATION_BUILD_BRIEF_v1.0.md`) added to this Quick Index below; both existed only as loose files before this pass.
 
