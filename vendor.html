@@ -1413,6 +1413,17 @@ function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
 // of an album."
 var _rcWoItems = {};
 
+// Receipt/bill/invoice files are deliberately never made anyone-with-link shareable on Drive
+// (FEATURE_LOG rule 13 — keeps vendor cost data out of customer-facing links), so a direct
+// drive.google.com URL for one of these always 404s/blanks out, even for the vendor who
+// uploaded it. Route these through the Worker's own authenticated /vendor-file/view proxy
+// instead, which streams the bytes the portal already has legitimate access to. Fixes "tap a
+// receipt, get a blank/black page."
+var INTERNAL_FILE_TYPES = ['receipt', 'bill', 'invoice'];
+function internalFileUrl(woId, fileId) {
+  return WORKER + '/vendor-file/view?wo_id=' + encodeURIComponent(woId) + '&file_id=' + encodeURIComponent(fileId) + '&t=' + encodeURIComponent(SECRET);
+}
+
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
   api('GET', '/attachments?wo_id=' + woId).then(function(items) {
