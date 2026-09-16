@@ -936,7 +936,15 @@ function loadVendorBillSummary(woId, idx) {
       var receipts = [];
       try { receipts = JSON.parse(bill.Receipts_JSON || '[]'); } catch(e) {}
       var receiptLines = receipts.map(function(r) {
-        return '<div>🧾 ' + esc(r.desc||'Receipt') + ': $' + parseFloat(r.amount||0).toFixed(2) + (r.url ? ' <a href="'+esc(r.url)+'" target="_blank" style="color:var(--info);font-size:10px">View</a>' : '') + '</div>';
+        // Receipt files are deliberately never Drive-shared (rule 13) — a raw drive.google.com
+        // link always blanks out, even for the vendor who uploaded it. This is what "once I
+        // submit, it removes my permission to view it" actually was: nothing was ever revoked,
+        // the link just was never shared in the first place, and this View link is the first
+        // place it's actually clicked. Route through the same authenticated proxy already used
+        // by the photo gallery (rule 142).
+        var fid = driveIdFromDriveUrl(r.url);
+        var viewHref = fid ? internalFileUrl(woId, fid) : '';
+        return '<div>🧾 ' + esc(r.desc||'Receipt') + ': $' + parseFloat(r.amount||0).toFixed(2) + (viewHref ? ' <a href="'+esc(viewHref)+'" target="_blank" style="color:var(--info);font-size:10px">View</a>' : '') + '</div>';
       }).join('');
       var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--muted)';
       return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:6px">' +
