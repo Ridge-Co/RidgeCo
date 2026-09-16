@@ -9878,6 +9878,15 @@ async function qbAccessToken(env) {
 }
 
 async function qbApi(env, path, method = 'GET', body = null, token = null) {
+  // Reads stay live (safe, and staging needs them to render real-shaped test
+  // data) — only writes are stubbed. Every QB call in this file goes through
+  // this one function, so this single check covers every /qb/* write endpoint
+  // and every internal QB-booking path (scope/proposal signatures, trash
+  // invoicing, etc.) without touching any of their call sites.
+  if (method && method !== 'GET' && (env.__STAGING__ ?? isStaging(env))) {
+    console.log(`🧪 STAGING — QuickBooks ${method} ${path} stubbed (nothing sent to Intuit)`);
+    return { staged: true, would_have: { method, path, body: body || null }, note: '🧪 STAGING MODE — QuickBooks call stubbed, nothing booked.' };
+  }
   if (!token) token = await qbAccessToken(env);
   const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
