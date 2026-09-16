@@ -6989,8 +6989,75 @@ async function ensureSmsInfra(env) {
   await ensureColumns(env, MSG_QUEUE_TAB, MSG_QUEUE_COLS);
   if (!_smsTogglesReady) {
     await Promise.all(SMS_TOGGLE_TABS.map(t => ensureColumns(env, t, ['SMS_Enabled'])));
+    // Sep 16 2026: SMS_OptOut already existed as a column on Tenants/Vendors but nothing in
+    // this file actually checked it — a real gap for a bulk-broadcast feature that needs to
+    // honor an explicit opt-out regardless of how urgent the message is. Wired into
+    // smsGateDecision below; this just guarantees the column exists everywhere it's read.
+    await Promise.all(['Tenants', 'Vendors'].map(t => ensureColumns(env, t, ['SMS_OptOut'])));
     _smsTogglesReady = true;
   }
+}
+
+// ── Editable message templates (Sep 16 2026) — one place to change SMS/email copy without a
+// redeploy. Rows are seeded once, only if the tab is empty, so a redeploy never clobbers an
+// edit Brett made in the Messaging page. {Token} placeholders are filled by renderTemplate()
+// at send time; a token with no value renders blank rather than leaking the literal "{Token}"
+// into a real message. ASSISTANT_NAME lives in Config (falls back to 'Riley' if unset) so the
+// persona name is a one-place edit too, not hardcoded into every template.
+const MSG_TEMPLATES_TAB = 'Message_Templates';
+const MSG_TEMPLATES_COLS = ['ID', 'Message_Type', 'Channel', 'Subject', 'Body', 'Active', 'Updated_Date', 'Updated_By'];
+let _msgTemplatesReady = false;
+const DEFAULT_MESSAGE_TEMPLATES = [
+  { Message_Type: 'pin_tenant', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}! This is {AssistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of {Owner}. New number, worth saving (it's outbound-only for now, so texting back won't reach us yet). Portal: {PortalUrl} PIN: {PIN}. Use it to check on repair requests or submit a new one. We'll only text you about maintenance at your property, never marketing." },
+  { Message_Type: 'pin_vendor', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co (new text line - outbound-only for now, so a reply won't reach anyone yet). Your vendor portal's ready: {PortalUrl} PIN: {PIN}. Log in to see your jobs, update status, and upload photos." },
+  { Message_Type: 'pin_owner', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}! This is {AssistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: {PortalUrl} PIN: {PIN}. Log in to check on your work orders, submit requests, and manage your notification settings." },
+  { Message_Type: 'tenant_welcome', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of {Owner} at {Address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing." },
+  { Message_Type: 'vendor_welcome', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal ({PortalUrl}) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)" },
+  { Message_Type: 'property_notice', Channel: 'sms', Subject: '', Body:
+    "This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}, with an update about {Address}: [describe the issue here] (This line is outbound-only for now - a reply won't reach us.)" },
+  { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
+    "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
+];
+async function ensureMessageTemplates(env) {
+  if (!_msgTemplatesReady) { await ensureTab(env, MSG_TEMPLATES_TAB, MSG_TEMPLATES_COLS); _msgTemplatesReady = true; }
+  await ensureColumns(env, MSG_TEMPLATES_TAB, MSG_TEMPLATES_COLS);
+  const rows = await fetchTab(env, MSG_TEMPLATES_TAB);
+  if (!rows.length) {
+    const now = new Date().toISOString();
+    for (const t of DEFAULT_MESSAGE_TEMPLATES) {
+      await addRow(env, MSG_TEMPLATES_TAB, { Message_Type: t.Message_Type, Channel: t.Channel, Subject: t.Subject, Body: t.Body, Active: 'TRUE', Updated_Date: now, Updated_By: 'system_default' });
+    }
+  }
+}
+function renderTemplate(body, tokens) {
+  return String(body || '').replace(/\{(\w+)\}/g, (m, key) => (tokens && tokens[key] != null) ? String(tokens[key]) : '');
+}
+async function getMessageTemplate(env, messageType, channel) {
+  await ensureMessageTemplates(env);
+  const rows = await fetchTab(env, MSG_TEMPLATES_TAB);
+  return rows.find(r => r.Message_Type === messageType && r.Channel === channel && r.Active !== 'FALSE') || null;
+}
+// GET /message-templates
+async function listMessageTemplates(env) {
+  await ensureMessageTemplates(env);
+  const rows = await fetchTab(env, MSG_TEMPLATES_TAB);
+  return json(rows.filter(r => r.Active !== 'FALSE'));
+}
+// POST /message-template/update { id, Subject?, Body? }
+async function updateMessageTemplate(env, body) {
+  if (!body || !body.id) return json({ error: 'id required' }, 400);
+  const fields = {};
+  if (body.Subject != null) fields.Subject = body.Subject;
+  if (body.Body != null) fields.Body = body.Body;
+  if (!Object.keys(fields).length) return json({ error: 'Nothing to update' }, 400);
+  fields.Updated_Date = new Date().toISOString();
+  fields.Updated_By = body.updated_by || 'brett';
+  return await updateRow(env, MSG_TEMPLATES_TAB, body.id, fields);
 }
 
 // Pure decision logic — kept separate from the live Sheet reads above so it's directly
@@ -7009,8 +7076,10 @@ function smsGateDecision(o) {
     if (!o.propertyOn) fails.push('Property OFF');
     if (!o.ownerOn) fails.push('Customer OFF');
     if (!o.tenantOn) fails.push('Tenant OFF');
+    if (o.tenantOptOut) fails.push('Tenant opted out');
   } else if (o.kind === 'vendor') {
     if (!o.vendorOn) fails.push('Vendor OFF');
+    if (o.vendorOptOut) fails.push('Vendor opted out');
   } else if (o.kind === 'owner') {
     if (!o.propertyOn) fails.push('Property OFF');
     if (!o.ownerOn) fails.push('Customer OFF');
@@ -7041,7 +7110,9 @@ async function smsGatedSend(env, opts) {
   const ownerOn    = smsToggleOn(opts.owner && opts.owner.SMS_Enabled);
   const tenantOn   = smsToggleOn(opts.tenant && opts.tenant.SMS_Enabled);
   const vendorOn   = smsToggleOn(opts.vendor && opts.vendor.SMS_Enabled);
-  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, kind });
+  const tenantOptOut = String((opts.tenant && opts.tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
+  const vendorOptOut = String((opts.vendor && opts.vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
+  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
 
   const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
@@ -7070,7 +7141,10 @@ async function smsGatedSend(env, opts) {
     // not sent; the row keeps Status:'pending' with Send_After set, and the GitHub Actions
     // sweep (processQuietHoursQueue, replacing Cloudflare cron — see CURRENT.md) re-checks
     // Global/Test-Mode and actually sends once due.
-    if (isQuietHoursNow(new Date())) {
+    // bypassQuietHours (Sep 16 2026): property-wide urgent notices — water shutoffs, power
+    // outages — can't wait for a 9am release like a routine status update can. Only
+    // sendPropertyNotice sets this; every other call site is unaffected and still holds.
+    if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours) {
       const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
       return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot };
@@ -7151,7 +7225,9 @@ async function releaseMessageQueue(env, body) {
     const ownerOn = smsToggleOn(owner && owner.SMS_Enabled);
     const tenantOn = smsToggleOn(tenant && tenant.SMS_Enabled);
     const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
-    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, kind });
+    const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
+    const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
+    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
@@ -7192,7 +7268,9 @@ async function processQuietHoursQueue(env) {
     const ownerOn = smsToggleOn(owner && owner.SMS_Enabled);
     const tenantOn = smsToggleOn(tenant && tenant.SMS_Enabled);
     const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
-    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, kind });
+    const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
+    const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
+    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
