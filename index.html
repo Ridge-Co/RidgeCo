@@ -556,6 +556,15 @@ window.addEventListener('pageshow', function(e){
     </div>
   </div>
 
+  <div class="page" id="page-messaging">
+    <div class="section-title">MESSAGING</div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:16px">Edit the SMS/email copy the Hub sends automatically, and send a one-off notice to every active tenant at a property (water shutoffs, power outages, building-wide updates).</p>
+    <button class="btn small" style="margin-bottom:22px" onclick="openPropertyNoticeModal()">📢 New Property Notice</button>
+    <div class="section-title" style="font-size:13px">✏️ EDIT MESSAGE COPY</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">Changes here take effect on the next send — no redeploy needed.</p>
+    <div id="template-list" style="display:flex;flex-direction:column;gap:12px;max-width:640px"></div>
+  </div>
+
   <div class="page" id="page-payables">
     <div class="section-title" style="margin-bottom:4px">WHO DO I NEED TO PAY</div>
     <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:780px">
