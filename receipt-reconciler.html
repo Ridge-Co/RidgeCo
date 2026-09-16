@@ -374,7 +374,7 @@ function render(rows){
   const list = document.getElementById('list');
   if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; return; }
   list.innerHTML = rows.map(r => rowCard(r)).join('');
-  rows.forEach(r => { rowSuggestions[r.ID] = r.suggestion || {}; if ((r.Status||'pending')==='pending') refreshWoSelect(r.ID); });
+  rows.forEach(r => { rowSuggestions[r.ID] = r.suggestion || {}; rowEvidence[r.ID] = r.duplicate_evidence || []; if ((r.Status||'pending')==='pending') refreshWoSelect(r.ID); });
 }
 
 function rowCard(r){
