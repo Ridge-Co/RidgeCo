@@ -106,6 +106,27 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(r.gateSnapshot === 'Global OFF, Property OFF, Customer OFF', 'owner: snapshot lists all three failing gates in order');
 }
 
+// ---- smsGateDecision: SMS_OptOut (Sep 16 2026) — a real opt-out blocks even when every
+// toggle is otherwise ON. Wired in alongside the property-notice bulk feature, which is
+// exactly the case where "urgent" must not mean "ignore an explicit opt-out." ----
+{
+  const r = smsGateDecision({ global:true, propertyOn:true, ownerOn:true, tenantOn:true, vendorOn:true, tenantOptOut:true, kind:'tenant' });
+  ok(r.sendOk === false, 'tenant: opted out blocks the send even with every toggle ON');
+  ok(r.gateSnapshot === 'Tenant opted out', 'tenant: snapshot names the opt-out specifically');
+}
+{
+  const r = smsGateDecision({ global:true, propertyOn:true, ownerOn:true, tenantOn:true, vendorOn:true, tenantOptOut:false, kind:'tenant' });
+  ok(r.sendOk === true, 'tenant: explicit opt-out FALSE still sends normally');
+}
+{
+  const r = smsGateDecision({ global:true, vendorOn:true, vendorOptOut:true, kind:'vendor' });
+  ok(r.sendOk === false && r.gateSnapshot === 'Vendor opted out', 'vendor: opted out blocks the send, named specifically');
+}
+{
+  const r = smsGateDecision({ global:true, propertyOn:true, ownerOn:true, tenantOn:true, vendorOn:true, kind:'tenant' });
+  ok(r.sendOk === true, 'tenant: omitting tenantOptOut entirely (older call sites) still defaults to not-opted-out');
+}
+
 // ---- formatPhoneDisplay: readable (xxx) xxx-xxxx for a tenant_job_assigned message ----
 {
   ok(formatPhoneDisplay('4439617927') === '(443) 961-7927', 'bare 10-digit formats correctly');
