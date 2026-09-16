@@ -1707,9 +1707,14 @@ async function receiptReconConfirmDuplicate(env, body) {
   const row = rows.find(r => String(r.ID) === String(id));
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (row.Status === 'duplicate_confirmed') return json({ ok: true, id, already: true });
+  // A specific reason from a matched evidence signal (see receiptCheckDuplicatesOne) is far
+  // more useful on later reference than the generic note — Brett's own "there may be reason to
+  // reference it later" ask. Falls back to the original generic wording when confirmed the old
+  // way (from the same-WO-only flag, with no cross-source evidence attached).
+  const reason = String(body.reason || '').trim();
   await updateRow(env, 'Receipt_Recon_Queue', id, {
     Status: 'duplicate_confirmed', Duplicate_Confirmed_Date: new Date().toISOString(),
-    Notes: 'Confirmed duplicate by Brett — not billed. Auto-purges from the queue after 180 days.',
+    Notes: (reason ? reason + ' ' : '') + 'Confirmed duplicate by Brett — not billed. Auto-purges from the queue after 180 days.',
   });
   return json({ ok: true, id, status: 'duplicate_confirmed' });
 }
