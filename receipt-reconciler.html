@@ -308,6 +308,7 @@ function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId){
 // around everywhere — the suggestion is still consulted (via rowSuggestions cache) so the ★
 // suggested tag and ranking survive a property change back to the original guess.
 const rowSuggestions = {};
+const rowEvidence = {};
 function refreshUnitSelect(id){
   const idAttr = 'rc'+id;
   const propSel = document.getElementById(idAttr+'-prop');
