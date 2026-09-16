@@ -1939,6 +1939,20 @@ function openWODetail(woId) {
     '<tr><td style="color:var(--muted)">Owner Ref #</td><td style="color:var(--info);font-weight:bold;letter-spacing:0.05em">'+(wo.Owner_WO_Ref||'<span style="color:var(--muted)">—</span>')+'</td></tr>' +
     '<tr><td style="color:var(--muted);font-size:10px">Property ID (raw)</td><td style="color:var(--muted);font-size:11px">'+(wo.Property_ID||'—')+'</td></tr>' +
     '</table>';
+  // ── Who's handling this job — admin-side Managed_By control (Part B,
+  // TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0). Mirrors owner.html's own
+  // "WHO'S HANDLING THIS JOB" section/confirm-dialog wording so the two sides read
+  // consistently, adapted to the admin voice and the reverse direction (Brett flagging it,
+  // not the owner). ──
+  var managedByHtml = '<div style="margin-bottom:14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">WHO\'S HANDLING THIS JOB</div>' +
+    (wo.Managed_By === 'Owner'
+      ? '<p style="font-size:12px;margin:0 0 8px">The owner is currently handling this job themselves — Ridge Co won\'t assign a vendor to it while it\'s marked this way, and their tenant is being directed to them for updates.</p>' +
+        '<button class="btn small secondary" onclick="adminToggleManagedBy(\''+woId+'\',\'RidgeCo\')">TAKE THIS BACK FOR RIDGE CO</button>'
+      : '<p style="font-size:12px;margin:0 0 8px">Ridge Co is currently handling this job.</p>' +
+        '<button class="btn small secondary" onclick="adminToggleManagedBy(\''+woId+'\',\'Owner\')">HAND THIS TO THE OWNER</button>') +
+    '</div>';
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', managedByHtml);
   // ── C: Drive folder + QBO status ────────────────────────
   var driveUrl  = wo.Drive_Folder_URL || '';
   var qboInv    = wo.QBO_Invoice_Number || '';
