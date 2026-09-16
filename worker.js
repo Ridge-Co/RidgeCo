@@ -963,6 +963,75 @@ async function getAttachments(env, url) {
   return json(attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; }));
 }
 
+// Stream the bytes of a receipt/bill/invoice file (the INTERNAL_TYPES that are deliberately
+// NEVER made anyone-with-link shareable — FEATURE_LOG rule 13, to keep vendor cost data out of
+// customer-facing links) back through the Worker's own Drive access, so the vendor who uploaded
+// it can actually view it. Root cause of "blank/black page when a vendor taps their receipt":
+// the portal's photo gallery/lightbox (vendor.html rcRenderLightbox / the plain <a> fallback for
+// PDFs) was pointing straight at drive.google.com — which 404s/blanks for a file that is
+// correctly kept private. This does NOT change the sharing policy (the file is still never
+// public); it only lets an already-authenticated vendor session read the bytes of a file that's
+// logged against a WO_ID they have legitimate access to, same trust boundary as GET /attachments.
+async function viewInternalFile(env, url) {
+  const woId = url.searchParams.get('wo_id') || '';
+  const fileId = url.searchParams.get('file_id') || '';
+  if (!woId || !fileId) return json({ error: 'wo_id and file_id required' }, 400);
+  try {
+    const attachments = await fetchTab(env, 'Attachments');
+    const row = attachments.find(a => a.Active !== 'FALSE' && a.WO_ID === woId && a.Drive_File_ID === fileId);
+    if (!row) return json({ error: 'File not found for this work order' }, 404);
+    const token = await getAccessToken(env);
+    const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!driveRes.ok || !driveRes.body) return json({ error: 'Could not load file from Drive' }, 502);
+    const mime = row.Mime_Type || driveRes.headers.get('content-type') || 'application/octet-stream';
+    const safeName = (row.File_Name || 'file').replace(/[^\w.\- ]/g, '_');
+    return new Response(driveRes.body, {
+      status: 200,
+      headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
+    });
+  } catch (e) {
+    return json({ error: e.message }, 500);
+  }
+}
+
+// GET /selftest/vendor-file-view — live canary for the vendor-file-view proxy (rule 142
+// follow-up, Sept 2 2026). viewInternalFile's real auth path is a vendor's PIN-issued session
+// token as ?t=, which CI/a script can't obtain without live vendor credentials — this calls
+// the exact same function (same Attachments-row lookup, same Drive alt=media fetch, same
+// trust boundary as GET /attachments) so a pass here is proof the actual byte-stream works
+// end to end against a real logged Attachment row, not a guess. Reports JSON instead of
+// streaming bytes so scripts/selftest-vendor-file-view.mjs can assert on it directly.
+// Gated by its own SELFTEST_TOKEN, never WORKER_SECRET — same discipline as
+// selfTestInvoiceExtract; CLAUDE.md's standing note is not to widen that shared key.
+// Read-only, no writes, no PII beyond a file name already visible to whoever holds WO_ID +
+// file_id (same as viewInternalFile itself).
+async function selfTestVendorFileView(env, url) {
+  const want = env.SELFTEST_TOKEN;
+  if (!want) return json({ error: 'SELFTEST_TOKEN not configured on this Worker', configured: false }, 503);
+  const got = url.searchParams.get('token') || '';
+  let diff = got.length ^ want.length;
+  for (let i = 0; i < got.length && i < want.length; i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  if (diff !== 0) return json({ error: 'Unauthorized' }, 401);
+  const t0 = Date.now();
+  const res = await viewInternalFile(env, url);
+  const buf = await res.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  const head = Array.from(bytes.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join('');
+  let errMsg = null;
+  if (!res.ok) { try { errMsg = JSON.parse(new TextDecoder().decode(bytes)).error; } catch (e) { errMsg = 'non-JSON error body'; } }
+  return json({
+    success: res.ok && bytes.length > 0,
+    status: res.status,
+    content_type: res.headers.get('Content-Type') || '',
+    byte_length: bytes.length,
+    first_bytes_hex: head,
+    error: errMsg,
+    ms: Date.now() - t0,
+  });
+}
+
 async function listAttachments(env, url) {
   const woId = url.searchParams.get('wo_id') || '';
   const rows = await fetchTab(env, 'Attachments');
