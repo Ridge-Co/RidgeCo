@@ -8332,6 +8332,10 @@ function _utf8B64url(str) {
 
 async function gmailSendEmail(env, { to, subject, html }) {
   if (!to) throw new Error('gmailSendEmail: to required');
+  if (env.__STAGING__ ?? isStaging(env)) {
+    console.log(`🧪 STAGING — Gmail send stubbed (not sent) → ${to}: ${subject}`);
+    return { staged: true, sent: false, would_have: { to, subject }, note: '🧪 STAGING MODE — logged only, no real email sent.' };
+  }
   const accessToken = await gmailAccessToken(env);
   const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
   const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
