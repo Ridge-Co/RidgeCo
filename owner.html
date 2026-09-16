@@ -661,6 +661,18 @@ function buildWODetail(wo, audit) {
   if (wo.Owner_WO_Ref) html += row('Your Ref #', '<span class="dv info">' + esc(wo.Owner_WO_Ref) + '</span>');
   html += '</div>';
 
+  // ── Who's handling this job (Sep 16 2026) ──
+  html += '<div class="detail-section">';
+  html += '<div class="detail-section-title">WHO\'S HANDLING THIS JOB</div>';
+  if (wo.Managed_By === 'Owner') {
+    html += '<p style="color:var(--muted);font-size:12px;margin-bottom:8px">You\'re currently handling this job yourself — Ridge Co won\'t assign a vendor to it while it\'s marked this way, and your tenant is being directed to you for updates.</p>';
+    html += '<button class="btn btn-sm btn-outline" onclick="toggleManagedBy(\'' + wo.ID + '\',\'RidgeCo\')">HAND THIS BACK TO RIDGE CO</button>';
+  } else {
+    html += '<p style="color:var(--muted);font-size:12px;margin-bottom:8px">Ridge Co is currently handling this job.</p>';
+    html += '<button class="btn btn-sm btn-outline" onclick="toggleManagedBy(\'' + wo.ID + '\',\'Owner\')">I\'LL HANDLE THIS MYSELF</button>';
+  }
+  html += '</div>';
+
   // ── Description (threaded) ──
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">DESCRIPTION</div>';
@@ -756,6 +768,25 @@ function toggleOwnerTvField(woId, field, newVal) {
     .then(function(res){
       if (res.success) refreshWOInList(woId);
     });
+}
+
+// Sep 16 2026: separate from the tenant-visibility toggles above on purpose — this goes through
+// /wo/owner-update (ownerUpdateWO), which checks the owner actually owns this WO's property and
+// writes a full WO_Audit entry, since claiming or releasing a job is a real workflow decision,
+// not a display preference. A confirm() gate matches the weight of the action: setting it stops
+// Ridge Co from assigning a vendor; releasing it hands scheduling back.
+function toggleManagedBy(woId, newVal) {
+  var msg = newVal === 'Owner'
+    ? "Mark this job as handled by you instead of Ridge Co? Ridge Co won't assign a vendor to it while it's set this way, and your tenant will be directed to you for updates."
+    : "Hand this job back to Ridge Co? Ridge Co will resume handling scheduling and vendor assignment.";
+  if (!confirm(msg)) return;
+  api('/wo/owner-update', { method:'POST', body: {
+    wo_id: woId, owner_id: session.owner_id, owner_name: session.owner_name,
+    fields: { Managed_By: newVal },
+  }}).then(function(res) {
+    if (res.success) refreshWOInList(woId);
+    else alert(res.error || 'Error');
+  });
 }
 
 function editableRow(label, displayVal, woId, field, type, currentVal) {
@@ -1022,7 +1053,6 @@ function submitFeedback() {
 // ══════════════════════════════════════════════════════════════
 //  PHOTO UPLOAD (owner/tenant portal)
 // ══════════════════════════════════════════════════════════════
-
 
 
 
