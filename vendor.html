@@ -1445,6 +1445,7 @@ function loadPortalAttachments(woId, opts) {
         combined.push({
           fileId: f.Drive_File_ID || '', driveUrl: f.Drive_URL || '#', name: f.File_Name || 'file',
           typeLabel: TYPE_LABELS[type] || 'File', isVideo: isVideo, isViewable: isVideo || isImage,
+          woId: woId, internal: INTERNAL_FILE_TYPES.indexOf(type) !== -1,
         });
       });
     });
