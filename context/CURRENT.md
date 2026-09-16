@@ -1,3 +1,27 @@
+# WHERE THINGS STAND — Sep 16, 2026 (GH Broker built, broke, and got fixed — with no documentation trail until this entry)
+
+## 🟢 Fixed and live-verified: GH Broker's write path (`commit_file`) crashed on any non-ASCII character — full detail FEATURE_LOG [FL-20260916-1750-k3]
+GH Broker (`brett332/gh-broker`) is the Cloudflare Worker MCP connector that gives Cowork sessions
+GitHub read/write access without a pasted PAT. A session today built it further (added
+`list_directory`, fixed UTF-8 decoding on reads) and then disconnected with **no checkpoint saved
+and no FEATURE_LOG/CURRENT.md entry written** — the only record was the git history itself.
+A follow-up session found `commit_file` (the write tool) was failing on almost every real call —
+root cause: it base64-encoded content with plain `btoa()`, which throws on any non-Latin-1
+character (em-dashes, checkmarks, curly quotes, emoji, CJK — i.e. almost all real prose). Fixed
+with a proper UTF-8-safe encoder, verified live against the actual deployed connector with a
+string containing every one of those character classes. `context/CREDENTIALS_MAP.md` bumped to
+v1.4 and now documents GH Broker as the primary GitHub-access method (previously undocumented
+entirely — the file still told sessions to ask Brett to paste a PAT by default).
+
+**Real gap this exposes**: `brett332/gh-broker` is a separate repo from this one, so nothing in
+this repo's doc-audit system (`scripts/doc_audit.py`) ever sees changes to it. Worth deciding
+whether it needs its own FEATURE_LOG or whether changes there should always also get logged here
+(this entry is the first instance of the latter).
+
+**Open/unknown**: whatever RidgeCo task the lost session was originally working toward before it
+became "fix GH Broker" is not recorded anywhere and may need to be re-asked of Brett directly —
+there's no trail to recover it from.
+
 # WHERE THINGS STAND — Sep 15, 2026 (documentation-completeness infrastructure — FL-20260915-1644-cz — on top of the share-attachments repair chain and rule 175)
 
 ## 🟢 Shipped, one real bug caught by its own first live run: documentation-completeness infrastructure — FL-20260915-1644-cz
