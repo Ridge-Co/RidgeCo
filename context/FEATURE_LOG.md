@@ -1,5 +1,38 @@
 # BrettOS Feature Log — What Works, Don't Break It
-**Version:** v1.95 | **Last Updated:** September 16, 2026 (gh-broker stood up and verified end-to-end)
+**Version:** v1.96 | **Last Updated:** September 16, 2026 (gh-broker gained list_directory; brett-context rewritten off BRETT_GH_PAT, pending Brett's Save-skill click)
+
+**[FL-20260916-1243-r7] [gh-broker] [brett-context] [pat-retirement] Extended gh-broker with `list_directory`, fixed a UTF-8 decode bug, then rewrote `brett-context` to load both repos through GH Broker instead of `git clone` + `BRETT_GH_PAT` — delivered as a `.skill` package for Brett to install, NOT yet confirmed live.**
+
+Brett's ask: eliminate the remaining PAT dependency so any session, on any surface, can pull/push
+context and code without pasting a credential. Two real gaps stood between here and that:
+
+1. **GH Broker could only fetch one exact known path — no directory browsing.** `git clone` (what
+   `BRETT_GH_PAT` was for) gets the whole tree; the broker couldn't. Added a 4th tool,
+   `list_directory` (GitHub's contents API already returns a directory listing when the path isn't a
+   file — the broker just wasn't using that shape). Committed straight to `main` at
+   `brett332/gh-broker` **using the broker's own `commit_file` on itself** — a fitting live test.
+   Also fixed the known `atob()` UTF-8 bug from the last entry in the same commit (confirmed fixed:
+   `CLAUDE.md`'s em-dashes now round-trip correctly through `read_file`).
+2. **`brett-context` is an account-level custom skill (`source: custom` in the skill manifest), synced
+   read-only into each sandbox** — editing the local mirror under
+   `/root/.claude/skills/synced/.../brett-context/SKILL.md` would NOT persist (same caveat already on
+   record from the Sep 15 doc-infrastructure entry for a different skill edit). The real mechanism,
+   confirmed via `skill-creator`: package the updated skill as a `.skill` file and deliver it to Brett
+   — the file card's **Save skill** button is what actually installs an update to the account. Rewrote
+   `SKILL.md`'s body (frontmatter/triggering left untouched) to call `read_file` / `list_directory` /
+   `commit_file` instead of the git-clone-with-Basic-auth-PAT block, including a live `list_directory`
+   call to find "latest version" files (`Brett_Context_Document_vNN.md` etc.) instead of hardcoding a
+   path — same capability `git clone` + directory-walk gave, no PAT. Packaged and delivered to Brett.
+
+**Explicitly NOT confirmed working yet — two separate open loops, both need Brett or a fresh session**:
+- `list_directory` is deployed and correct (verified by code + by the fact the same deploy's UTF-8
+  fix demonstrably works), but this session's own GH Broker connection cached its tool list before
+  `list_directory` existed, so it couldn't be called and verified directly here. A session that
+  connects to GH Broker fresh should see it.
+- The new `brett-context` **has not been installed** — Brett needs to click **Save skill** on the
+  delivered file, then a genuinely fresh session needs to trigger it and confirm both repos load via
+  GH Broker with no PAT prompt and no failure. Until that happens, `BRETT_GH_PAT` stays load-bearing
+  and should not be revoked or removed from wherever it's configured.
 
 **[FL-20260916-1235-q4] [gh-broker] [github-integration] [infrastructure] Stood up `gh-broker` — a GitHub App-authenticated Cloudflare Worker (`brett332/gh-broker`) exposed to Claude as a custom MCP connector, replacing the fragile `BRETT_GH_PAT` env-var dependency for repo writes. Full read/commit/PR chain verified end-to-end against both installations before being called done.**
 

@@ -1,3 +1,20 @@
+# WHERE THINGS STAND — Sep 16, 2026 (later) (brett-context rewritten off BRETT_GH_PAT — pending Brett's Save-skill click — FL-20260916-1243-r7)
+
+## 🟡 Built and delivered, NOT yet installed/confirmed: brett-context rewritten to use GH Broker instead of BRETT_GH_PAT — FL-20260916-1243-r7
+Full detail: FEATURE_LOG `[FL-20260916-1243-r7]`. Direct response to Brett wanting the PAT fully out
+of the loop. Added `list_directory` to gh-broker (deployed, code-verified, but not yet callable from
+any session whose GH Broker connection was established before this change — needs a fresh
+connect/reconnect to pick up). Rewrote `brett-context`'s SKILL.md body to load `Ridge-Co/RidgeCo` and
+`brett332/data` entirely through GH Broker (`read_file`/`list_directory`/`commit_file`) instead of
+`git clone` with `BRETT_GH_PAT` — delivered to Brett as a `.skill` file; **he needs to click "Save
+skill" to actually install it**, since a custom account-level skill can't be durably edited from
+inside a sandbox.
+
+**Do not remove or stop maintaining `BRETT_GH_PAT` yet** — the new skill is unverified until Brett
+installs it AND a genuinely fresh session runs it end to end and confirms both repos load with no PAT
+involved. Next session that touches this: check whether the skill was installed, and if so, watch the
+very first `brett-context` trigger closely for exactly this.
+
 # WHERE THINGS STAND — Sep 16, 2026 (gh-broker: GitHub App write connector stood up and verified end-to-end — FL-20260916-1235-q4)
 
 ## 🟢 Shipped and verified end-to-end: `gh-broker` GitHub App write connector — FL-20260916-1235-q4
