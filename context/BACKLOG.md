@@ -23,6 +23,7 @@ findable by grep even though they never share a number. Example:
 - ✅ Vendor portal 3-bug fix (black page/JSON crash/Close button) — merged Sep 16 2026, see B-227-followup below. ⏳ Staging deploy gate — still unmerged, still awaiting Brett's go.
 - ✅ Receipt-reconciler duplicate-checker — rebuilt and shipped Sep 16 2026 (the Sep 2 original was confirmed lost, not in git anywhere). Full detail in CURRENT.md and FEATURE_LOG. The unit-search half of the same Sep 2 session was separately rebuilt Sep 14 (rule 173).
 - ▶ New: CAP-034 (scope/estimate/signature/invoice one-page consolidation, wishlist only) and B-236 (auto invoice lifecycle on scope proposals, brief only — `context/SCOPE_INVOICE_AUTOMATION_BUILD_BRIEF_v1.0.md`) added to this Quick Index below; both existed only as loose files before this pass.
+- ▶ New: B-20260916-1930-k7 `[vendor-invoices] [gmail-email]` (auto-email a vendor their bill/invoice + attachments on submission, with a 14-day payment-window reminder — brief only, `context/VENDOR_INVOICE_CONFIRMATION_EMAIL_BUILD_BRIEF_v1.0.md`) added below.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
 
