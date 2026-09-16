@@ -3431,6 +3431,11 @@ async function assignVendor(env, body) {
     'Work_Orders','Vendors','Tenants','Units','Properties','Owners',
   ]);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  // Sep 16 2026 (Brett): an owner can claim a WO as their own (Managed_By='Owner', via
+  // ownerUpdateWO) — once that's set, nobody should dispatch a Ridge Co vendor to it until the
+  // owner hands it back. This is the actual enforcement point, not just a UI hint: it blocks
+  // the assign call itself regardless of which screen it's triggered from.
+  if (wo.Managed_By === 'Owner') return json({ error: 'This work order is being handled by the property owner, not Ridge Co — it cannot be assigned a vendor while marked that way.' }, 400);
   const vendor = vendors.find(v => v.ID === body.vendor_id); if (!vendor) return json({ error: 'Vendor not found' }, 404);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner    = property ? owners.find(o => o.ID === property.Owner_ID) : null;
@@ -4949,6 +4954,25 @@ async function addWONote(env, body) {
   await updateWOFields(env, body.wo_id, { Notes: newNotes });
   await logWOAudit(env, body.wo_id, body.author, body.author_role, 'Notes', wo.Notes||'', noteText.substring(0,100), 'Note appended');
 
+  // Sep 16 2026 (Brett): the tenant portal's note box has said "Sent to your property manager"
+  // since it shipped, but nothing ever actually notified anyone — same false-promise shape as
+  // the SMS wording fixed earlier today. This makes that line true: a real-time admin ping,
+  // matching every other "Brett gets pinged" pattern already in this file (handleInboundSMS's
+  // vendor-reply relay, the vendor-nudge flagged-to-Brett alert) — plain sendSMS, not the gated
+  // tenant/owner/vendor pipeline, since this is an internal alert to Brett's own number, not a
+  // customer-facing message subject to Test Mode/toggles.
+  if (body.author_role === 'tenant') {
+    try {
+      const config = await fetchConfig(env);
+      if (config.admin_phone) {
+        const noteProperties = await fetchTab(env, 'Properties');
+        const noteWOProp = noteProperties.find(p => p.ID === wo.Property_ID);
+        const noteAddr = noteWOProp ? noteWOProp.Address : wo.Property_ID;
+        await sendSMS(env, config.admin_phone, `💬 ${body.author||'A tenant'} left a note on ${body.wo_id} (${noteAddr}): "${noteText}"`);
+      }
+    } catch (e) { /* non-fatal — note already saved */ }
+  }
+
   if (body.notify_owner_status_note === true) {
     try {
       const [properties, owners] = await fetchTabs(env, ['Properties','Owners']);
@@ -4967,11 +4991,20 @@ async function addWONote(env, body) {
   return json({ success: true });
 }
 
-const OWNER_EDITABLE_FIELDS = ['Owner_WO_Ref','Priority','Scheduled_Date'];
+const OWNER_EDITABLE_FIELDS = ['Owner_WO_Ref','Priority','Scheduled_Date','Managed_By'];
 
 async function ownerUpdateWO(env, body) {
   const allowed = {}; for (const [k,v] of Object.entries(body.fields||{})) { if (OWNER_EDITABLE_FIELDS.includes(k)) allowed[k]=v; }
   if (!Object.keys(allowed).length) return json({ error: 'No owner-editable fields provided' }, 400);
+  // Managed_By (Sep 16 2026, Brett): additive column, ensured here on first real write rather
+  // than a central schema pass — same convention as Hold_Reason in updateStatus. Values are
+  // 'RidgeCo' (default/blank) or 'Owner'; validated so a bad client value can't write junk into
+  // a field several other code paths branch on (assignVendor's guard, the tenant portal's
+  // grayed-out treatment).
+  if ('Managed_By' in allowed) {
+    if (!['RidgeCo','Owner'].includes(allowed.Managed_By)) return json({ error: "Managed_By must be 'RidgeCo' or 'Owner'" }, 400);
+    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {}
+  }
   const [workorders, properties] = await fetchTabs(env, ['Work_Orders','Properties']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const prop = properties.find(p => p.ID === wo.Property_ID);
