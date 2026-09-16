@@ -4149,13 +4149,21 @@ async function regeneratePIN(env, body) {
 async function sendPinMessage(env, body) {
   const { type, id } = body;
   if (!type || !id) return json({ error: 'Missing type or id' }, 400);
-  let firstName, phone, pin;
+  let firstName, phone, pin, owner = null, address = '';
   if (type === 'tenant') {
-    const tenants = await fetchTab(env, 'Tenants'); const t = tenants.find(r => r.ID === id);
+    const [tenants, units, properties, owners] = await fetchTabs(env, ['Tenants', 'Units', 'Properties', 'Owners']);
+    const t = tenants.find(r => r.ID === id);
     if (!t) return json({ error: 'Tenant not found' }, 404);
     if (!t.Phone) return json({ error: 'No phone number on file', name: t.First_Name||'' }, 400);
     if (!t.PIN)   return json({ error: 'No PIN set — set a PIN first', name: t.First_Name||'' }, 400);
     firstName = t.First_Name||'Resident'; phone = t.Phone; pin = t.PIN;
+    // Sep 16 2026: resolve the tenant's own property → owner so the intro text can say "on
+    // behalf of {Owner}" instead of a generic "Ridge Co" — same join welcomeSend already does.
+    const unit = units.find(u => u.ID === t.Unit_ID);
+    const propId = t.Property_ID || (unit && unit.Property_ID) || '';
+    const property = properties.find(p => p.ID === propId) || null;
+    owner = property ? (owners.find(o => o.ID === property.Owner_ID) || null) : null;
+    address = property ? property.Address + (unit ? ' Unit ' + unit.Unit_Label : '') : '';
   } else if (type === 'vendor') {
     const vendors = await fetchTab(env, 'Vendors'); const v = vendors.find(r => r.ID === id);
     if (!v) return json({ error: 'Vendor not found' }, 404);
@@ -4176,14 +4184,27 @@ async function sendPinMessage(env, body) {
     firstName = u.First_Name||'Owner'; phone = u.Phone; pin = u.PIN;
   } else { return json({ error: 'Invalid type. Use: tenant, vendor, owner, owner_user' }, 400); }
   const portalUrl = type === 'vendor' ? PORTAL_BASE+'/vendor.html' : type === 'tenant' ? PORTAL_BASE+'/tenant.html' : PORTAL_BASE+'/owner.html';
-  const messages = {
-    tenant:     `Hi ${firstName}! Ridge Co. Property Management has set up your resident portal.\n\nPortal: ${portalUrl}\nYour PIN: ${pin}\n\nUse this to check on maintenance requests and submit new ones. Reply to this number with any questions.`,
-    vendor:     `Hi ${firstName}! Ridge Co. has set up your vendor portal.\n\nPortal: ${portalUrl}\nYour PIN: ${pin}\n\nLog in to view your assigned jobs, update work order status, and upload photos. Reply to this number with questions.`,
-    owner:      `Hi ${firstName}! Ridge Co. has set up your owner portal.\n\nPortal: ${portalUrl}\nYour PIN: ${pin}\n\nLog in to check on your work orders, submit requests, and manage your notification settings. Reply to this number with questions.`,
-    owner_user: `Hi ${firstName}! Ridge Co. has set up your owner portal.\n\nPortal: ${portalUrl}\nYour PIN: ${pin}\n\nLog in to check on your work orders, submit requests, and manage your notification settings. Reply to this number with questions.`,
+  // Sep 16 2026: pulled out of a hardcoded `messages` object into Message_Templates (editable
+  // in the Messaging page without a redeploy). The literal strings below are ONLY a fallback
+  // for the split second before the tab is first seeded — every real send after that reads the
+  // live template. Assistant persona (not Brett's own name) + "on behalf of {Owner}" + the
+  // never-marketing line are Brett's explicit Sep 16 requirements; ASSISTANT_NAME defaults to
+  // 'Riley' but is a one-place Config edit, not hardcoded here.
+  const cfg = await fetchConfig(env);
+  const assistantName = cfg.ASSISTANT_NAME || 'Riley';
+  const ownerLabel = (owner && (owner.Company || owner.First_Name)) || 'your property owner';
+  const tokens = { FirstName: firstName, PortalUrl: portalUrl, PIN: pin, Owner: ownerLabel, Address: address, AssistantName: assistantName };
+  const templateType = type === 'owner_user' ? 'pin_owner' : `pin_${type}`;
+  const tpl = await getMessageTemplate(env, templateType, 'sms');
+  const fallback = {
+    tenant:     `Hi ${firstName}! This is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of ${ownerLabel}. New number, worth saving (it's outbound-only for now, so texting back won't reach us yet). Portal: ${portalUrl} PIN: ${pin}. Use it to check on repair requests or submit a new one. We'll only text you about maintenance at your property, never marketing.`,
+    vendor:     `Hi ${firstName}, it's ${assistantName} with Ridge Co (new text line - outbound-only for now, so a reply won't reach anyone yet). Your vendor portal's ready: ${portalUrl} PIN: ${pin}. Log in to see your jobs, update status, and upload photos.`,
+    owner:      `Hi ${firstName}! This is ${assistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: ${portalUrl} PIN: ${pin}. Log in to check on your work orders, submit requests, and manage your notification settings.`,
+    owner_user: `Hi ${firstName}! This is ${assistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: ${portalUrl} PIN: ${pin}. Log in to check on your work orders, submit requests, and manage your notification settings.`,
   };
-  if (body.preview_only) return json({ preview: messages[type], phone, name: firstName, pin });
-  await sendSMS(env, phone, messages[type]);
+  const message = tpl ? renderTemplate(tpl.Body, tokens) : fallback[type];
+  if (body.preview_only) return json({ preview: message, phone, name: firstName, pin });
+  await sendSMS(env, phone, message);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
   return json({ success: true, sent_to: phone, name: firstName });
 }
@@ -4218,7 +4239,18 @@ async function welcomeSend(env, body) {
     // a new request or a question currently gets a nonsensical "could not find your vendor
     // record" auto-reply. Revisit once a real tenant intake path (form or inbound routing)
     // exists — this welcome text should only promise what actually works right now.
-    defaultMsg = `Hi ${firstName}, this is Ridge Co Property Maintenance for ${address}. Save this number — we'll keep you updated on any maintenance work by text.`;
+    // Sep 16 2026: now reads from the editable tenant_welcome/sms template (assistant persona,
+    // "on behalf of {Owner}", never-marketing line) — same template pin_tenant shares the
+    // tone with, so the two don't drift again the way the old hardcoded copies did.
+    {
+      const cfg = await fetchConfig(env);
+      const assistantName = cfg.ASSISTANT_NAME || 'Riley';
+      const ownerLabel = (owner && (owner.Company || owner.First_Name)) || 'your property owner';
+      const tpl = await getMessageTemplate(env, 'tenant_welcome', 'sms');
+      const tokens = { FirstName: firstName, Address: address, Owner: ownerLabel, AssistantName: assistantName };
+      defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
+        : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of ${ownerLabel} at ${address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing.`;
+    }
   } else if (type === 'vendor') {
     const vendors = await fetchTab(env, 'Vendors');
     recipient = vendors.find(v => v.ID === id);
@@ -4226,7 +4258,14 @@ async function welcomeSend(env, body) {
     if (!recipient.Phone) return json({ error: 'No phone number on file', name: recipient.Name||'' }, 400);
     firstName = (recipient.Name || 'there').split(' ')[0];
     phone = recipient.Phone;
-    defaultMsg = `Hi ${firstName}, welcome to the Ridge Co vendor network. You'll get a text with job details whenever we assign you work, along with a link to your vendor portal (${PORTAL_BASE}/vendor.html) to accept jobs, log time, and submit invoices. Questions? Reply here or give us a call.`;
+    {
+      const cfg = await fetchConfig(env);
+      const assistantName = cfg.ASSISTANT_NAME || 'Riley';
+      const tpl = await getMessageTemplate(env, 'vendor_welcome', 'sms');
+      const tokens = { FirstName: firstName, PortalUrl: PORTAL_BASE + '/vendor.html', AssistantName: assistantName };
+      defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
+        : `Hi ${firstName}, it's ${assistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal (${PORTAL_BASE}/vendor.html) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)`;
+    }
   } else {
     return json({ error: 'Invalid type. Use: tenant or vendor' }, 400);
   }
@@ -4247,6 +4286,67 @@ async function welcomeSend(env, body) {
   try { await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', ['Welcome_Sent','Welcome_Sent_Date']); } catch (_) {}
   await updateRow(env, type === 'tenant' ? 'Tenants' : 'Vendors', id, { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString() });
   return json({ success: true, sent_to: r.held_for_quiet_hours ? '(queued — held for quiet hours)' : (r.test_mode ? '(test mode)' : phone), held_for_quiet_hours: !!r.held_for_quiet_hours, name: firstName });
+}
+
+// POST /property/notice { property_id, message?, email_subject?, email_body?,
+// channels: ['sms']|['sms','email'], preview_only } — Sep 16 2026, Brett. A property-wide
+// broadcast: every active tenant at one property, one shot (water shutoffs, power outages,
+// anything affecting the whole building). Deliberately its own function rather than a loop
+// over welcomeSend/smsGatedSend call sites elsewhere: this is the one place that (a) bypasses
+// the quiet-hours hold — an urgent notice can't wait for a 9am release the way a routine
+// status update can — while (b) still honoring Global/Test Mode and each tenant's own
+// SMS_OptOut. Urgent doesn't mean "ignore an explicit opt-out." Email is a separate channel,
+// sent directly via gmailSendEmail (not gated by the SMS toggle system, since it isn't SMS).
+async function sendPropertyNotice(env, body) {
+  const propertyId = body.property_id;
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+  const channels = Array.isArray(body.channels) && body.channels.length ? body.channels : ['sms'];
+  const [properties, owners, tenants] = await fetchTabs(env, ['Properties', 'Owners', 'Tenants']);
+  const property = properties.find(p => p.ID === propertyId);
+  if (!property) return json({ error: 'Property not found' }, 404);
+  const owner = property ? (owners.find(o => o.ID === property.Owner_ID) || null) : null;
+  const activeTenants = tenants.filter(t => t.Active !== 'FALSE' && String(t.Property_ID) === String(propertyId));
+
+  const cfg = await fetchConfig(env);
+  const assistantName = cfg.ASSISTANT_NAME || 'Riley';
+  const ownerLabel = (owner && (owner.Company || owner.First_Name)) || 'your property owner';
+  const tokens = { Address: property.Address || '', Owner: ownerLabel, AssistantName: assistantName };
+
+  const smsTpl = await getMessageTemplate(env, 'property_notice', 'sms');
+  const emailTpl = await getMessageTemplate(env, 'property_notice', 'email');
+  const smsBody = body.message ? String(body.message) : renderTemplate(smsTpl ? smsTpl.Body : '', tokens);
+  const emailSubject = body.email_subject ? String(body.email_subject) : renderTemplate(emailTpl ? emailTpl.Subject : 'Maintenance update - {Address}', tokens);
+  const emailBody = body.email_body ? String(body.email_body) : renderTemplate(emailTpl ? emailTpl.Body : '', tokens);
+
+  const isOptedOut = t => String(t.SMS_OptOut || '').toUpperCase() === 'TRUE';
+  const smsRecipients = channels.includes('sms') ? activeTenants.filter(t => t.Phone && !isOptedOut(t)) : [];
+  const smsSkippedOptOut = channels.includes('sms') ? activeTenants.filter(t => t.Phone && isOptedOut(t)).length : 0;
+  const emailRecipients = channels.includes('email') ? activeTenants.filter(t => t.Email) : [];
+
+  if (body.preview_only) {
+    return json({
+      property_address: property.Address, owner: ownerLabel,
+      sms_message: smsBody, email_subject: emailSubject, email_body: emailBody,
+      total_active_tenants: activeTenants.length,
+      sms_recipient_count: smsRecipients.length, sms_skipped_opted_out: smsSkippedOptOut,
+      email_recipient_count: emailRecipients.length,
+    });
+  }
+
+  const results = { sms_sent: 0, sms_failed: 0, sms_queued_quiet_hours: 0, email_sent: 0, email_failed: 0 };
+  for (const tenant of smsRecipients) {
+    try {
+      const r = await smsGatedSend(env, { wo_id: '', message_type: 'property_notice', recipient_type: 'tenant', tenant, owner, property, message_body: smsBody, bypassQuietHours: true });
+      if (r.sent) results.sms_sent++; else if (r.held_for_quiet_hours) results.sms_queued_quiet_hours++; else results.sms_failed++;
+    } catch (e) { results.sms_failed++; }
+  }
+  if (channels.includes('email')) {
+    for (const tenant of emailRecipients) {
+      try { await gmailSendEmail(env, { to: tenant.Email, subject: emailSubject, html: emailBody }); results.email_sent++; }
+      catch (e) { results.email_failed++; }
+    }
+  }
+  return json({ success: true, property_address: property.Address, ...results, skipped_opted_out: smsSkippedOptOut });
 }
 
 // ── VENDOR BILLING ───────────────────────────────────────────
