@@ -834,12 +834,49 @@ reconciliation pass (queued separately — see BACKLOG). Ironic that the thing m
 merges is itself sitting unmerged — worth prioritizing this one specifically so it can start
 protecting the next batch of changes.
 
-## ⚠️ Receipt-reconciler duplicate-checker + unit-search fix (Sep 2 session) may be LOST, not just unmerged
-Unlike the branches above, this one doesn't exist anywhere in git history at all — checked
-`git log --all`, nothing. It only ever existed as a delivered paste-ready file
-(`PASTE-THIS-TO-PUSH-receipt-reconciler-duplicate-checker.md`). If Brett never pasted that into
-claude.ai/code, the actual code may need to be rebuilt from scratch — the design is fully documented
-in FEATURE_LOG rule 141/`ridgeco-receipt-reconciler-unit-fix.md` if a rebuild is needed.
+## 🟢 Receipt-reconciler duplicate checker — REBUILT AND SHIPPED Sep 16 2026 (Sep 2 original confirmed lost, not just unmerged)
+The Sep 2 build never existed anywhere in git history (checked `git log --all` at the time —
+nothing) and only ever existed as a delivered paste-ready file Brett apparently never pasted in.
+The unit-search half of that same Sep 2 session was independently rebuilt Sep 14 (rule 173) — this
+closes the other half: property-wide cross-source duplicate detection, on-demand only (real,
+cost-metered QuickBooks reads — never automatic). Three layers, matching the original Sep 2 design
+exactly: (1) other Receipts entries at the SAME PROPERTY, wider than the existing same-WO-only
+`receiptIsDuplicate` flag — a receipt entered against the wrong WO at a multi-job property was
+never caught before this; (2) a QuickBooks Bill or Expense/Purchase within 3 days at the same
+amount; (3) an already-sent customer Invoice with a matching line-item amount (the pre-Hub
+bookkeeping case — a receipt manually billed to a customer before this queue existed), found via a
+cheap date-windowed list pull then a small number of individual invoice opens (capped at 5 per
+receipt) for the real line-item scan.
+
+New: `receiptDuplicatesAtProperty` (pure), `qbInvoiceCandidatesByDate` (pure), 3 QuickBooks
+read-only helpers, `receiptCheckDuplicatesOne` orchestration, `POST /receipt-recon/check-duplicates`
+(single) + `/receipt-recon/check-duplicates-bulk` (batch, capped at 5 rows/call, shares one QB
+token + one Invoice list pull across the batch). Evidence persists onto the queue row
+(`Duplicate_Evidence_JSON`, `Duplicate_Checked_Date`) so it survives a refresh.
+`receiptReconConfirmDuplicate` now accepts an optional specific `reason` from the matched evidence
+instead of always writing the generic note — directly answers Brett's original "there may be
+reason to reference it later" ask. Frontend: a "🔍 Check duplicates" button on every pending
+receipt-reconciler row, an evidence block per match with its own "It's this one" confirm button
+(reason looked up from a JS-side cache by index, not passed through the onclick string, since a
+QuickBooks vendor name or line description can contain characters that would break a naive inline
+string).
+
+New `test/receipt-duplicate-checker.test.mjs` (11 assertions) covers both pure helpers — the
+QB-touching functions themselves need live credentials no build sandbox has, same as every other
+QuickBooks-reading build in this repo. Full suite 77/77 post-build, `node --check` clean on
+worker.js and receipt-reconciler.html's inline script.
+
+**Caught and fixed a real self-inflicted bug before this was called done**: an early edit used the
+`receiptSuggestCore` function's own declaration line as unique anchor context for a str_replace but
+didn't include it in the replacement text, silently deleting that line and orphaning the function
+body underneath it. The full test suite caught this immediately (75/76, not 76/76) — fixed and
+re-verified clean on a fresh clone before moving on.
+
+🔴 **Needs Brett's first live pass — no QuickBooks credentials in any build sandbox to exercise
+this against real data**: open Receipt Reconciler, tap "🔍 Check duplicates" on a pending receipt,
+confirm it returns real evidence (or a clean "nothing found") without erroring; if a match comes
+back, confirm "It's this one" records the specific reason and the row moves to Duplicates the same
+way the original same-WO flag's "Confirm duplicate" always has.
 
 # WHERE THINGS STAND — Aug 24, 2026 (later still)
 
