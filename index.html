@@ -2722,6 +2722,7 @@ function renderPropertiesPage() {
           '</div>' +
           '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0" onclick="event.stopPropagation()">' +
             '<button class="btn small secondary" onclick="openEditPropertyModal(\''+p.ID+'\')">Edit</button>' +
+            '<button class="btn small secondary" onclick="openPropertyNoticeModal(\''+p.ID+'\')">📢 Notice</button>' +
             (openWOs.length ? '<button class="btn small secondary" onclick="goToPropertyWOs(\''+p.ID+'\')">'+openWOs.length+' WOs →</button>' : '') +
           '</div>' +
           '<span id="prop-arrow-'+p.ID+'" style="color:var(--muted);font-size:14px;flex-shrink:0">▶</span>' +
