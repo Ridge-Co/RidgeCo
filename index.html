@@ -4126,6 +4126,151 @@ async function executeBulkSendWelcome() {
   loadAll();
 }
 
+// ── Messaging page: editable copy + property-wide notices (Sep 16 2026) ────────────────
+// smsSegmentInfo is a deliberately simple approximation (pure-ASCII vs. not), not a byte-exact
+// GSM-7 encoder — good enough to warn "this em dash/curly quote just tripled your segment
+// count," which is the mistake actually worth catching before a send, not a billing calculator.
+function smsSegmentInfo(text) {
+  text = text || '';
+  var unicode = /[^\x00-\x7F]/.test(text);
+  var singleLimit = unicode ? 70 : 160;
+  var concatLimit = unicode ? 67 : 153;
+  var segments = !text.length ? 0 : (text.length <= singleLimit ? 1 : Math.ceil(text.length / concatLimit));
+  return { length: text.length, unicode: unicode, segments: segments };
+}
+
+var TEMPLATE_LABELS = {
+  pin_tenant: 'Tenant — PIN / portal invite',
+  pin_vendor: 'Vendor — PIN / portal invite',
+  pin_owner: 'Owner — PIN / portal invite',
+  tenant_welcome: 'Tenant — welcome text (no PIN)',
+  vendor_welcome: 'Vendor — welcome text (no PIN)',
+  property_notice: 'Property-wide notice — default starting text',
+};
+
+function loadMessagingPage() {
+  api('GET', '/message-templates').then(function(rows) { renderTemplateList(Array.isArray(rows) ? rows : []); });
+}
+
+function renderTemplateList(rows) {
+  var el = document.getElementById('template-list');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = '<div class="loading">No templates loaded — try refreshing</div>'; return; }
+  el.innerHTML = rows.map(function(r) {
+    var label = (TEMPLATE_LABELS[r.Message_Type] || r.Message_Type) + (r.Channel === 'email' ? ' · Email' : ' · SMS');
+    var subjectField = r.Channel === 'email'
+      ? '<label style="font-size:11px;color:var(--muted)">Subject</label><input type="text" id="tpl-subject-'+r.ID+'" value="'+esc(r.Subject||'')+'" style="width:100%;margin:4px 0 8px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;color:var(--text)">'
+      : '';
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">' +
+      '<div style="font-weight:bold;font-size:12px;margin-bottom:6px">' + esc(label) + '</div>' +
+      subjectField +
+      '<textarea id="tpl-body-'+r.ID+'" oninput="updateTplSegmentInfo(\''+r.ID+'\')" style="width:100%;min-height:80px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;color:var(--text);font-family:var(--font);resize:vertical">' + esc(r.Body||'') + '</textarea>' +
+      '<div id="tpl-info-'+r.ID+'" style="font-size:10.5px;color:var(--muted);margin-top:4px"></div>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:6px">' +
+        '<span style="font-size:10px;color:var(--muted)">Tokens: {FirstName} {Owner} {Address} {AssistantName} {PortalUrl} {PIN}</span>' +
+        '<span style="display:flex;gap:8px;align-items:center">' +
+          '<span id="tpl-saved-'+r.ID+'" style="font-size:11px;color:var(--accent2)"></span>' +
+          '<button class="btn small" onclick="saveTemplate(\''+r.ID+'\', '+ (r.Channel === 'email') +')">Save</button>' +
+        '</span>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  rows.forEach(function(r){ updateTplSegmentInfo(r.ID); });
+}
+
+function updateTplSegmentInfo(id) {
+  var ta = document.getElementById('tpl-body-'+id);
+  if (!ta) return;
+  var info = smsSegmentInfo(ta.value);
+  var el = document.getElementById('tpl-info-'+id);
+  if (el) el.textContent = info.length + ' chars · ' + info.segments + ' segment' + (info.segments===1?'':'s') + (info.unicode ? ' · ⚠ a special character (em dash, curly quote, etc.) is forcing shorter Unicode segments — swap for a plain hyphen/quote to fit more per segment' : '');
+}
+
+function saveTemplate(id, isEmail) {
+  var bodyEl = document.getElementById('tpl-body-'+id);
+  if (!bodyEl) return;
+  var payload = { id: id, Body: bodyEl.value };
+  if (isEmail) { var subjEl = document.getElementById('tpl-subject-'+id); if (subjEl) payload.Subject = subjEl.value; }
+  api('POST', '/message-template/update', payload).then(function(res) {
+    if (res && res.error) { toast(res.error, 'error'); return; }
+    var el = document.getElementById('tpl-saved-'+id);
+    if (el) { el.textContent = '✓ saved'; setTimeout(function(){ el.textContent = ''; }, 2000); }
+  }).catch(function(){ toast('Save failed — connection error', 'error'); });
+}
+
+// Shared by both entry points: the "📢 Notice" button on a property card (pre-selects that
+// property) and "New Property Notice" on the Messaging page (blank, pick any property).
+function openPropertyNoticeModal(propId) {
+  var sel = document.getElementById('pn-property');
+  var props = sortPropsNumeric(safeArray(state.properties).filter(function(p){ return p.Active !== 'FALSE'; }));
+  sel.innerHTML = props.map(function(p){ return '<option value="'+p.ID+'">'+esc(p.Address)+'</option>'; }).join('');
+  if (propId) sel.value = String(propId);
+  document.getElementById('pn-message').value = '';
+  document.getElementById('pn-ch-sms').checked = true;
+  document.getElementById('pn-ch-email').checked = false;
+  document.getElementById('pn-recipients').textContent = '';
+  document.getElementById('pn-segment-info').textContent = '';
+  document.getElementById('pn-msg').innerHTML = '';
+  var btn = document.getElementById('pn-send-btn');
+  btn.disabled = true; btn.textContent = 'Send Now';
+  openModal('modal-property-notice');
+  propertyNoticeRecalc();
+}
+
+var _pnDebounce = null;
+function propertyNoticeRecalc() {
+  var info = smsSegmentInfo(document.getElementById('pn-message').value);
+  document.getElementById('pn-segment-info').textContent = info.length
+    ? (info.length + ' chars · ' + info.segments + ' SMS segment' + (info.segments===1?'':'s') + (info.unicode ? ' · ⚠ special character forces shorter Unicode segments' : ''))
+    : '';
+  clearTimeout(_pnDebounce);
+  _pnDebounce = setTimeout(propertyNoticePreviewNow, 350);
+}
+
+function propertyNoticePreviewNow() {
+  var propId = document.getElementById('pn-property').value;
+  if (!propId) return;
+  var channels = [];
+  if (document.getElementById('pn-ch-sms').checked) channels.push('sms');
+  if (document.getElementById('pn-ch-email').checked) channels.push('email');
+  var customMsg = document.getElementById('pn-message').value.trim();
+  api('POST', '/property/notice', { property_id: propId, channels: channels, message: customMsg || undefined, preview_only: true }).then(function(res) {
+    var btn = document.getElementById('pn-send-btn');
+    if (!res || res.error) { document.getElementById('pn-recipients').textContent = res ? res.error : 'Preview failed'; btn.disabled = true; return; }
+    if (!customMsg && res.sms_message) { document.getElementById('pn-message').value = res.sms_message; propertyNoticeRecalc(); return; }
+    var parts = [];
+    if (channels.indexOf('sms') > -1) parts.push(res.sms_recipient_count + ' by text' + (res.sms_skipped_opted_out ? ' (' + res.sms_skipped_opted_out + ' opted out, skipped)' : ''));
+    if (channels.indexOf('email') > -1) parts.push(res.email_recipient_count + ' by email');
+    document.getElementById('pn-recipients').textContent = res.total_active_tenants + ' active tenant(s) at ' + res.property_address + ' — ' + (parts.join(', ') || 'no channel selected');
+    btn.disabled = !(channels.length && ((res.sms_recipient_count||0) + (res.email_recipient_count||0) > 0));
+  }).catch(function(){ document.getElementById('pn-recipients').textContent = 'Preview failed — connection error'; document.getElementById('pn-send-btn').disabled = true; });
+}
+
+function sendPropertyNoticeNow() {
+  var propId = document.getElementById('pn-property').value;
+  var channels = [];
+  if (document.getElementById('pn-ch-sms').checked) channels.push('sms');
+  if (document.getElementById('pn-ch-email').checked) channels.push('email');
+  var message = document.getElementById('pn-message').value.trim();
+  var propOpt = document.getElementById('pn-property').selectedOptions[0];
+  var propAddr = propOpt ? propOpt.textContent : 'this property';
+  var recipText = document.getElementById('pn-recipients').textContent;
+  if (!confirm('Send this notice to every active tenant at ' + propAddr + ' right now?\n\n' + recipText + '\n\nThis goes out immediately, even outside normal quiet hours.')) return;
+  var btn = document.getElementById('pn-send-btn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  api('POST', '/property/notice', { property_id: propId, channels: channels, message: message }).then(function(res) {
+    if (!res || res.error) { document.getElementById('pn-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Send failed') + '</div>'; btn.disabled = false; btn.textContent = 'Send Now'; return; }
+    var summary = (res.sms_sent||0) + ' sent by text';
+    if (res.sms_queued_quiet_hours) summary += ', ' + res.sms_queued_quiet_hours + ' queued';
+    if (res.sms_failed) summary += ', ' + res.sms_failed + ' failed';
+    if (channels.indexOf('email') > -1) summary += ' · ' + (res.email_sent||0) + ' sent by email' + (res.email_failed ? ', ' + res.email_failed + ' failed' : '');
+    document.getElementById('pn-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px">✓ ' + esc(summary) + '</div>';
+    toast('Property notice sent', 'success');
+    btn.textContent = 'Send Now';
+    setTimeout(function(){ closeModal('modal-property-notice'); }, 2200);
+  }).catch(function(e){ document.getElementById('pn-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message||'Send failed') + '</div>'; btn.disabled = false; btn.textContent = 'Send Now'; });
+}
+
 async function executeBulkSendPin() {
   var total = _pinSendQueue.length;
   if (!total) return;
