@@ -324,6 +324,7 @@ export default {
         if (path === '/owner/update')             return await updateRow(env, 'Owners', body.id, body.fields);
         if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
+        if (path === '/owner/held-contact-note') return await setOwnerHeldContactNote(env, body);
         if (path === '/owner/billing')            return await updateOwnerBilling(env, body);
         if (path === '/owner/get-billing')        return await getOwnerBilling(env, url);
         // B-227 Phase 1: Vendor_Type (labor/materials_store/materials_hybrid) + Payment_Address
@@ -3290,6 +3291,19 @@ async function setPropertyTenantWOToggle(env, body) {
   return await updateRow(env, 'Properties', body.property_id, { Tenant_WO_Toggle: toggle, Tenant_WO_Unit_IDs: ids });
 }
 
+// Sep 16 2026 (Brett): free text shown to a tenant on any WO the owner has claimed as their
+// own (Managed_By='Owner'), directing them to the owner instead of Ridge Co — e.g. "Check
+// your Buildium portal for updates" for an owner who runs their own tenant system, or just a
+// phone number for one who doesn't. Set once per owner, added lazily (only once a reassignment
+// actually happens for that owner), not pre-populated for every owner up front. Same
+// ensureColumns-then-updateRow shape as setOwnerTenantWOToggle right above, since the generic
+// POST /owner/update endpoint won't auto-create a brand-new column on its own.
+async function setOwnerHeldContactNote(env, body) {
+  if (!body.owner_id) return json({ error: 'Missing owner_id' }, 400);
+  await ensureColumns(env, 'Owners', ['Held_Contact_Note']);
+  return await updateRow(env, 'Owners', body.owner_id, { Held_Contact_Note: body.note || '' });
+}
+
 // One-shot read for the settings page: every active owner (with its toggle + scoped
 // properties) and every active property (with its own toggle + a per-unit resolved
 // "enabled" so the page can render the live effective state without re-implementing the
@@ -3735,7 +3749,7 @@ async function tenantWorkorders(env, url) {
   const tenantId = url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
+  const [workorders, properties, units, tenants, keys, vendors, owners] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Owners']);
   const tenant = tenants.find(t => t.ID === tenantId); if (!tenant) return json([]);
   // isBackgroundWO: don't show a WO opened before this tenant moved in — matches the rule
   // isTenantNotifiable already applies to SMS, so "won't text them about it" and "won't show
@@ -3747,6 +3761,28 @@ async function tenantWorkorders(env, url) {
   // Master_Keys/viewingVendorId passed — omitLockbox:true already zeroes lockboxes below, and
   // a tenant must never learn a master key exists at all, let alone who holds a copy.
   const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, tenantView: true, vendors }));
+  // Sep 16 2026 (Brett): a WO the owner has claimed as their own (Managed_By='Owner', see the
+  // owner.html toggle) shows the OWNER's own contact info here instead of Ridge Co's — the
+  // tenant should never be left thinking Ridge Co is quietly handling it. Held_Contact_Note is
+  // free text Brett sets once per owner (e.g. "Check your Buildium portal for updates" for an
+  // owner who runs their own tenant system, or just a phone number for one who doesn't) so this
+  // covers any owner's actual setup rather than assuming a fixed phone/email shape. Falls back
+  // to the owner's own name+phone on file if no custom note has been set yet. Resolved here
+  // (not inside enrichWO) so every OTHER caller of enrichWO — vendor/owner/shared-link views —
+  // is completely unaffected by this tenant-only concern.
+  enriched.forEach(wo => {
+    if (wo.Managed_By !== 'Owner') return;
+    const property = properties.find(p => p.ID === wo.Property_ID);
+    const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+    if (owner && owner.Held_Contact_Note) {
+      wo.owner_managed_contact = owner.Held_Contact_Note;
+    } else if (owner) {
+      const ownerName = (`${owner.First_Name||''} ${owner.Last_Name||''}`.trim()) || owner.Company || 'your property manager';
+      wo.owner_managed_contact = owner.Phone ? `Contact ${ownerName} at ${owner.Phone}` : `Contact ${ownerName} directly`;
+    } else {
+      wo.owner_managed_contact = 'Please contact your property manager directly.';
+    }
+  });
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
   return json(enriched);
 }
