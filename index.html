@@ -891,6 +891,14 @@ window.addEventListener('pageshow', function(e){
         <button type="button" class="btn small" onclick="addUnitToEditedProperty()">+ Add Unit</button>
       </div>
     </div>
+    <div class="form-group full" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+      <label>Tenant Work Order Submission <span id="ep-two-effective" style="font-weight:normal"></span></label>
+      <select id="ep-two-toggle"><option value="">— Not set (falls through to the owner's own setting, else OFF)</option><option value="ON">ON — tenants can submit requests</option><option value="OFF">OFF — tenants cannot submit requests</option></select>
+      <div id="ep-two-units-scope" style="display:none;margin-top:8px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Scope to specific units — none checked = applies to the whole property</div>
+        <div id="ep-two-units-list"></div>
+      </div>
+    </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-property')">Cancel</button><button class="btn" onclick="submitEditProperty()">Save Changes</button></div>
   </div>
 </div>
