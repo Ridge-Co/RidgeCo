@@ -21,7 +21,7 @@ findable by grep even though they never share a number. Example:
 - ✅ B-142/143/144-equivalents (manual price override, final-balance invoicing, eager QB customer creation) — shipped Sep 2, confirmed live on `main`, none Brett-verified yet. See CURRENT.md.
 - ✅ Signed-proposal vendor-bill-gap fix (the Cesar Gomez "deposit share showed full cost" bug) — built Aug 24, sat unmerged for 2 weeks, merged to `main` today as FEATURE_LOG rule 145.
 - ✅ Vendor portal 3-bug fix (black page/JSON crash/Close button) — merged Sep 16 2026, see B-227-followup below. ⏳ Staging deploy gate — still unmerged, still awaiting Brett's go.
-- 🔴 Receipt-reconciler duplicate-checker + unit-search fix (Sep 2) — not in git anywhere, may need a rebuild if the delivered patch file was never pasted in.
+- ✅ Receipt-reconciler duplicate-checker — rebuilt and shipped Sep 16 2026 (the Sep 2 original was confirmed lost, not in git anywhere). Full detail in CURRENT.md and FEATURE_LOG. The unit-search half of the same Sep 2 session was separately rebuilt Sep 14 (rule 173).
 - ▶ New: CAP-034 (scope/estimate/signature/invoice one-page consolidation, wishlist only) and B-236 (auto invoice lifecycle on scope proposals, brief only — `context/SCOPE_INVOICE_AUTOMATION_BUILD_BRIEF_v1.0.md`) added to this Quick Index below; both existed only as loose files before this pass.
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
