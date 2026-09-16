@@ -205,6 +205,7 @@ export default {
         if (path === '/templates')              return await getSheet(env, 'Recurring_Templates');
         if (path === '/smslog')                 return await getSheet(env, 'SMS_Logs');
         if (path === '/message-queue')          return await listMessageQueue(env, url);
+        if (path === '/message-templates')      return await listMessageTemplates(env);
         if (path === '/vendor-requests')        return await getSheet(env, VENDOR_REQ_TAB);
         if (path === '/notification-queue')     return await getSheet(env, NOTIF_QUEUE_TAB);
         if (path === '/twilio/message-status')  return await twilioMessageStatus(env, url);
