@@ -1,3 +1,10 @@
+# WHERE THINGS STAND — Sep 16, 2026 (1109 Battery Ave unit/tenant fix closed out — rule 171's feature confirmed self-serve)
+
+## 🟢 Fixed: 1109 Battery Ave (Property 84) unit/tenant data — full detail FEATURE_LOG [FL-20260916-2150-t8]
+Brett supplied the two answers rule 171 was blocked on (unit labels Apt 1/Apt 2; Reagan is in
+Apt 2). Created Units 55 (Apt 1, vacant) and 56 (Apt 2, linked to tenant 102/Reagan) via the
+existing `/unit/add` + `/tenant/update` endpoints — no code changes, pure data fix.
+
 # WHERE THINGS STAND — Sep 16, 2026 (vendor nudge satisfied-check fixed off real live false-positives; 3 SMS templates stopped over-promising a reply channel that doesn't route anywhere)
 
 ## 🟢 Fixed: WO-1200/1201 kept getting "any update on status?" nudges after already being Invoiced — full detail FEATURE_LOG [FL-20260916-1950-m4]
