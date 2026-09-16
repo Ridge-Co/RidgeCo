@@ -6709,6 +6709,10 @@ async function handleInboundSMS(env, request) {
 async function sendSMSRaw(env, to, message) {
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
+  if (env.__STAGING__ ?? isStaging(env)) {
+    console.log(`🧪 STAGING — SMS stubbed (not sent via Twilio) → ${to}: ${message}`);
+    return { staged: true, would_have: { to, message }, note: '🧪 STAGING MODE — logged only, no real SMS sent.' };
+  }
   if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY || !env.TWILIO_FROM)
     return { error: 'Twilio not configured (missing TWILIO_SID/TWILIO_API_SID/TWILIO_API_KEY/TWILIO_FROM)' };
   const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
