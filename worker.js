@@ -44,6 +44,14 @@ export default {
     // (Aug 20, 2026) to tell "Brett/admin creating a WO from the Hub" (always allowed) apart
     // from "a tenant creating their own WO via submit.html" (gated).
     let callerRole = null;
+    // The verified session's own id (Tenant.ID / Owner.ID / Vendor.ID, matching whichever
+    // role was issued) — set alongside callerRole below. Session-identity hardening (Sep 16
+    // 2026, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part A): the /workorder
+    // tenant gate previously trusted body.property_id/unit_id/tenant_id as sent by the
+    // client. This lets a tenant-role handler resolve the caller's REAL record from their
+    // own signed session instead, so a valid tenant session can't submit a WO tagged to a
+    // different property/unit/tenant than their own.
+    let callerSessionId = null;
     const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
