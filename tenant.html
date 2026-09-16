@@ -60,6 +60,7 @@ textarea{resize:vertical;min-height:70px;}
 .wo-card.high{border-left:3px solid var(--warn);}
 .wo-card.normal{border-left:3px solid var(--border);}
 .wo-card.low{border-left:3px solid var(--muted);}
+.wo-card.owner-managed{opacity:.65;}
 .wo-head{padding:14px;cursor:pointer;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
 .wo-trade{color:var(--text);font-size:.95rem;font-weight:bold;}
 .wo-date{color:var(--muted);font-size:11px;margin-top:3px;}
@@ -398,13 +399,14 @@ function renderWOs() {
 
   list.innerHTML = wos.map(function(wo, idx) {
     var pri = (wo.Priority||'normal').toLowerCase();
+    var isHeld = wo.Managed_By === 'Owner';
     var sc = 'badge-' + (wo.Status||'new').toLowerCase().replace(/\s+/g,'');
     var statusLabel = STATUS_LABELS[wo.Status] || wo.Status;
     var descPrev = (wo.Description||'').split('\n')[0].substring(0, 65);
-    return '<div class="wo-card ' + pri + '" id="tc-' + idx + '">' +
+    return '<div class="wo-card ' + pri + (isHeld ? ' owner-managed' : '') + '" id="tc-' + idx + '">' +
       '<div class="wo-head" onclick="toggleCard(' + idx + ')">' +
         '<div style="flex:1;min-width:0">' +
-          '<div class="wo-trade">' + esc(wo.Trade||'Maintenance Request') + '</div>' +
+          '<div class="wo-trade">' + esc(wo.Trade||'Maintenance Request') + (isHeld ? ' <span style="font-weight:normal;font-size:10px;color:var(--muted)">🏠 Handled by your landlord</span>' : '') + '</div>' +
           '<div class="wo-date">Submitted ' + fmtDate(wo.Created_Date) + (wo.ID ? ' · ' + esc(wo.ID) : '') + '</div>' +
           '<div class="wo-desc-prev">' + esc(descPrev) + '</div>' +
         '</div>' +
@@ -429,6 +431,17 @@ function toggleCard(idx) {
 
 function buildDetail(wo, idx) {
   var html = '';
+  var isHeld = wo.Managed_By === 'Owner';
+
+  // Owner-managed banner (Sep 16 2026) — shown first so it's the first thing a tenant sees on
+  // expand, not buried below the timeline/description. Description stays fully visible below
+  // regardless (Brett: a tenant should still know what the issue is, just who's handling it).
+  if (isHeld) {
+    html += '<div class="detail-section" style="background:var(--surface2)">';
+    html += '<div class="detail-section-title">🏠 HANDLED BY YOUR PROPERTY OWNER</div>';
+    html += '<p style="font-size:12px;line-height:1.6;color:var(--text)">This job isn\'t being handled by Ridge Co. ' + esc(wo.owner_managed_contact || 'Please contact your property manager directly.') + '</p>';
+    html += '</div>';
+  }
 
   // Status timeline
   html += '<div class="detail-section">';
@@ -479,11 +492,18 @@ function buildDetail(wo, idx) {
     html += '</div>';
   }
 
-  // Add info button
-  html += '<div class="note-box">';
-  html += '<button class="btn btn-sm btn-outline" onclick="openNote(\'' + wo.ID + '\')">+ ADD INFORMATION</button>';
-  html += '<p style="color:var(--muted);font-size:11px;margin-top:8px">Provide additional details, availability, or updates to your property manager.</p>';
-  html += '</div>';
+  // Add info button — replaced with the owner's contact info on a held WO, since a note here
+  // goes to Brett (Ridge Co), who isn't the one managing this job (Sep 16 2026).
+  if (isHeld) {
+    html += '<div class="note-box">';
+    html += '<p style="color:var(--muted);font-size:11px">Questions about this job? ' + esc(wo.owner_managed_contact || 'Please contact your property manager directly.') + '</p>';
+    html += '</div>';
+  } else {
+    html += '<div class="note-box">';
+    html += '<button class="btn btn-sm btn-outline" onclick="openNote(\'' + wo.ID + '\')">+ ADD INFORMATION</button>';
+    html += '<p style="color:var(--muted);font-size:11px;margin-top:8px">Provide additional details, availability, or updates to your property manager.</p>';
+    html += '</div>';
+  }
 
   html += buildPhotoSection(wo.ID, wo.property_address||wo.Address||'', { canBefore:false, canAfter:false, canReport:true, canReceipt:false, viewAll:true });
 
