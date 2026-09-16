@@ -13,14 +13,16 @@ action — no cheerleading. When corrected, change approach; never restate a ref
 ## MANDATORY: load context before writing code
 1. Read ALL files in `/context/`, starting with `/context/CURRENT.md` (it names the active
    versions of the Context Document, Best Practices, CREDENTIALS_MAP, VENTURES, FEATURE_LOG,
-   BACKLOG, CAPTURE_INBOX, HANDWRITING_KEY). Read every file it lists.
+   BACKLOG, CAPTURE_INBOX, HANDWRITING_KEY). Read every file it lists. **Exception:**
+   `CREDENTIALS_MAP.md` itself now lives in `brett332/data/CREDENTIALS_MAP.md` (private repo,
+   moved Sep 16, 2026) — `context/CREDENTIALS_MAP.md` here is just a redirect stub.
 2. **Business / private context** lives in the private repo `brett332/data` (business briefs,
-   the `productivity/CLAUDE.md` decoder, Gemini archive) and loads via the `brett-context`
-   skill, which reads it through **GH Broker** (`read_file`/`list_directory` against
-   `brett332/data`) — no PAT, no clone, no credential ever pasted into a session. If GH Broker
-   is down, the PAT fallback protocol lives in `context/CREDENTIALS_MAP.md` (GITHUB section):
-   only when Brett explicitly hands over a token for that purpose, never solicited, and rotate
-   it afterward. On a normal day this path should never be needed.
+   the `productivity/CLAUDE.md` decoder, Gemini archive, CREDENTIALS_MAP.md) and loads via the
+   `brett-context` skill, which reads it through **GH Broker** (`read_file`/`list_directory`
+   against `brett332/data`) — no PAT, no clone, no credential ever pasted into a session. If GH
+   Broker is down, the PAT fallback protocol lives in `brett332/data/CREDENTIALS_MAP.md`
+   (GITHUB section): only when Brett explicitly hands over a token for that purpose, never
+   solicited, and rotate it afterward. On a normal day this path should never be needed.
 3. Do not write code or make changes until context is loaded and confirmed.
 
 ## Workflow: PLAN first, then implement
