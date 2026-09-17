@@ -853,6 +853,70 @@ async function getOwnerUsers(env, url) {
   return json(users.filter(u => u.Owner_ID === ownerId && u.Active !== 'FALSE'));
 }
 
+// Vendor self-service contact-info edit — a real "My Info" screen in vendor.html, following
+// Brett's own ask. Every changed field is logged here (old value + new value, best-effort,
+// never blocks the actual update) BEFORE the Vendors row is overwritten, so prior contact info
+// is never simply lost. New tab, additive: Vendor_Contact_History.
+async function logVendorContactChange(env, vendorId, vendorName, field, oldValue, newValue, changedBy) {
+  try {
+    await ensureTab(env, 'Vendor_Contact_History', ['ID','Vendor_ID','Vendor_Name','Field','Old_Value','New_Value','Changed_By','Changed_Date','Active']);
+    await addRow(env, 'Vendor_Contact_History', {
+      Vendor_ID: vendorId, Vendor_Name: vendorName || '', Field: field,
+      Old_Value: oldValue || '', New_Value: newValue || '',
+      Changed_By: changedBy || 'vendor', Changed_Date: new Date().toISOString(),
+    });
+  } catch (e) { /* history is best-effort — a logging failure must never block the real update */ }
+}
+
+// POST /vendor/update-contact {vendor_id, phone?, email?, company?} — deliberately does NOT
+// allow editing First_Name/Last_Name/Name here: vendorByPin's own login match is keyed off
+// First_Name (the vendor types it in alongside their PIN), so a self-service name change could
+// lock a vendor out of their own next login. A name correction stays an admin (/vendor/update)
+// action. Only fields actually present AND actually different get changed/logged — re-saving
+// unchanged info is a harmless no-op, not a spurious history row.
+async function vendorUpdateContact(env, body) {
+  const vendorId = String((body && body.vendor_id) || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+
+  const changes = {};
+  const changedFields = [];
+
+  if (body.email !== undefined) {
+    const newEmail = String(body.email || '').trim();
+    if (newEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return json({ error: "That email address doesn't look right" }, 400);
+    if (newEmail !== String(vendor.Email || '').trim()) { changes.Email = newEmail; changedFields.push({ field: 'Email', old: vendor.Email || '', new: newEmail }); }
+  }
+  if (body.phone !== undefined) {
+    const rawPhone = String(body.phone || '').trim();
+    const newPhone = normalizePhone(rawPhone);
+    if (rawPhone && !newPhone) return json({ error: "That phone number doesn't look right" }, 400);
+    if (newPhone !== normalizePhone(vendor.Phone)) { changes.Phone = newPhone; changedFields.push({ field: 'Phone', old: vendor.Phone || '', new: newPhone }); }
+  }
+  if (body.company !== undefined) {
+    const newCompany = String(body.company || '').trim();
+    if (newCompany !== String(vendor.Company || '').trim()) { changes.Company = newCompany; changedFields.push({ field: 'Company', old: vendor.Company || '', new: newCompany }); }
+  }
+
+  if (!changedFields.length) return json({ success: true, changed: [] });
+
+  const vendorName = vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim();
+  for (const c of changedFields) {
+    await logVendorContactChange(env, vendorId, vendorName, c.field, c.old, c.new, 'vendor:' + vendorId);
+  }
+  await updateRow(env, 'Vendors', vendorId, changes);
+  return json({
+    success: true, changed: changedFields.map(c => c.field),
+    vendor: {
+      phone: changes.Phone !== undefined ? changes.Phone : (vendor.Phone || ''),
+      email: changes.Email !== undefined ? changes.Email : (vendor.Email || ''),
+      company: changes.Company !== undefined ? changes.Company : (vendor.Company || ''),
+    },
+  });
+}
+
 async function vendorByPin(env, url) {
   const pin  = url.searchParams.get('pin')  || '';
   const name = (url.searchParams.get('name') || '').trim().toLowerCase();
