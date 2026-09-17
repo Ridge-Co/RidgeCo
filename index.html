@@ -3968,8 +3968,24 @@ document.addEventListener('DOMContentLoaded',function(){
 var _pinSendQueue = [];
 var _currentPinSend = null;
 
+// Sep 17 2026 (Brett): Tenants/Vendors/Owners each need their own independent bulk-select —
+// checking, selecting, or sending on one page must never see or touch another page's
+// checkboxes, even though all three share the same .pin-check class and these helpers. Every
+// function below scopes its DOM query to the specific page's list container, never document-
+// wide, which is what let a checked vendor row silently ride along on a tenant-only send with
+// no way to even see it (from the Tenants page you can't see the Vendors page's checkboxes).
+var PIN_CHECK_PAGES = [
+  { list: 'tenants-list', bar: 'tenants-action-bar' },
+  { list: 'vendors-list', bar: 'vendors-action-bar' },
+  { list: 'owners-list',  bar: 'owners-action-bar'  },
+];
+function pinCheckScopeEl(barId) {
+  var page = PIN_CHECK_PAGES.find(function(p){ return p.bar === barId; });
+  return (page && document.getElementById(page.list)) || document;
+}
+
 function updatePinActionBar(barId) {
-  var checked = document.querySelectorAll('.pin-check:checked');
+  var checked = pinCheckScopeEl(barId).querySelectorAll('.pin-check:checked');
   var bar = document.getElementById(barId);
   if (!bar) return;
   bar.style.display = checked.length > 0 ? 'flex' : 'none';
@@ -3978,16 +3994,20 @@ function updatePinActionBar(barId) {
 }
 
 function selectAllPinChecks(headerCb, barId) {
-  var allCbs = document.querySelectorAll('.pin-check');
+  var allCbs = pinCheckScopeEl(barId).querySelectorAll('.pin-check');
   allCbs.forEach(function(cb){ cb.checked = headerCb.checked; });
   updatePinActionBar(barId);
 }
 
-function clearPinChecks() {
-  document.querySelectorAll('.pin-check').forEach(function(cb){ cb.checked = false; });
-  ['tenants-action-bar','vendors-action-bar','owners-action-bar'].forEach(function(id){
-    var el = document.getElementById(id);
-    if (el) el.style.display = 'none';
+// listId omitted -> clears every page (used after a bulk send finishes, a full UI reset).
+// Passed explicitly -> only that page's own checkboxes/action bar are touched.
+function clearPinChecks(listId) {
+  var pages = listId ? PIN_CHECK_PAGES.filter(function(p){ return p.list === listId; }) : PIN_CHECK_PAGES;
+  pages.forEach(function(p){
+    var listEl = document.getElementById(p.list);
+    if (listEl) listEl.querySelectorAll('.pin-check').forEach(function(cb){ cb.checked = false; });
+    var barEl = document.getElementById(p.bar);
+    if (barEl) barEl.style.display = 'none';
   });
 }
 
