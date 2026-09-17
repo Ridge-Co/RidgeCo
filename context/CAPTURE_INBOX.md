@@ -517,7 +517,7 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - Links: touches the same surface as rules 142 (manual price override, scope-creator.html) and 143 (final-balance booking, signed-proposals.html) — both still fresh/unverified live as of this capture, so this consolidation should wait until Brett's confirmed those work, not compete with verifying them.
 - ❓ Fold into `scope-creator.html`, or a new single page that replaces both? Brett's framing ("should exist on one page not 2") suggests the former but wasn't explicit.
 
-## CAP — `.btn-muted` isn't an actual defined CSS class in `vendor.html`
+## CAP-035 — `.btn-muted` isn't an actual defined CSS class in `vendor.html`
 - Type: cosmetic bug, very low priority
 - Status: new, found in passing (Sep 17 2026, live Playwright test of the new MY INFO screen — FEATURE_LOG rule 180 addendum), not fixed
 - Detail: the FEEDBACK button (pre-existing) and the new MY INFO button both carry `class="btn btn-sm btn-muted"`, intending a muted/secondary look distinct from the primary accent-blue `.btn`. No `.btn-muted` rule exists anywhere in `vendor.html`'s `<style>` block, so both silently fall back to the plain `.btn` default (solid accent blue) — visually indistinguishable from a primary action button. Confirmed via a real screenshot, not just a code read.
