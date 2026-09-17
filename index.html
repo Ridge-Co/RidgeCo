@@ -4045,8 +4045,9 @@ function confirmSendPin() {
   });
 }
 
-function bulkSendPinFromTab() {
-  var checked = Array.from(document.querySelectorAll('.pin-check:checked'));
+function bulkSendPinFromTab(listId) {
+  var scopeEl = (listId && document.getElementById(listId)) || document;
+  var checked = Array.from(scopeEl.querySelectorAll('.pin-check:checked'));
   if (!checked.length) return;
   _pinSendQueue = checked.map(function(cb) {
     return { type: cb.dataset.type, id: cb.dataset.id, name: cb.dataset.name, phone: cb.dataset.phone };
