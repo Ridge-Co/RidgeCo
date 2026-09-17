@@ -8188,7 +8188,7 @@ function computeTelemetryMetrics(rows) {
     if (isTrue(r.Human_Corrected)) { humanCorrected++; byJob[jt].corrected++; }
     if (isFalse(r.Success)) byJob[jt].fail++;
     if (r.Success !== undefined && r.Success !== '') { successKnown++; byJob[jt]._sk++; if (isTrue(r.Success)) { successTrue++; byJob[jt]._st++; } }
-    const c = parseFloat(r.Est_Cost);   if (Number.isFinite(c)) cost += c;
+    const c = parseFloat(r.Est_Cost);   if (Number.isFinite(c)) { cost += c; byJob[jt]._cost += c; }
     const l = parseFloat(r.Latency_ms); if (Number.isFinite(l)) { latSum += l; latN++; byJob[jt]._ls += l; byJob[jt]._ln++; }
   }
   // Stuck-pattern flags (H2): a job type looping on the same failure or repeatedly corrected.
