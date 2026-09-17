@@ -8309,7 +8309,7 @@ async function runWeeklyReview(env, opts) {
 const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // Problem is stored (B-218) so a greenlit item keeps its WHY — a build brief without the
 // problem statement is half a brief. Every field the proposal carried survives the approve step.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By'];
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By'];
 const OPS_QUEUE_STATUSES = ['greenlit', 'building', 'done', 'dropped'];
 
 async function opsApprove(env, body) {
