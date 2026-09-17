@@ -595,12 +595,17 @@ export default {
       try { await cronSweep(env); } catch (e) { /* non-fatal — next run tries again */ }
       return;
     }
-    // Optimizer Reviewer (B-129) — Mon + Wed 12:00 UTC (8am ET). Reads the last 7 days
-    // of Ops_Telemetry, computes metrics, asks Claude for a ranked proposal, logs it to
-    // Ops_Review_Log, and delivers IF digest delivery is enabled. Isolated from the digest.
-    // Mid-week (Wed) run added per greenlit ID-1 to halve max issue-detection lag (7d → ~3.5d).
-    if (cron === '0 12 * * 1' || cron === '0 12 * * 3') {
+    // Optimizer Reviewer (B-129). Reads the last 7 days of Ops_Telemetry, computes metrics,
+    // asks Claude for a ranked proposal, logs it to Ops_Review_Log. Mid-week (Wed) run added
+    // per greenlit ID-1 to halve max issue-detection lag (7d → ~3.5d) — still runs, still logs,
+    // but Sep 17 2026: Brett asked for delivery to be weekly, not twice a week, so only the
+    // Monday run (now 12:30 UTC / 8:30am ET) actually pushes a notification.
+    if (cron === '30 12 * * 1') {
       try { await runWeeklyReview(env, { deliver: true, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
+      return;
+    }
+    if (cron === '0 12 * * 3') {
+      try { await runWeeklyReview(env, { deliver: false, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
       return;
     }
     // Weekly Open Item Report (Aug 18 session) — Monday 13:00 UTC (9am EDT/8am EST), one hour
