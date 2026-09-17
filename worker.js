@@ -4288,6 +4288,13 @@ async function welcomeSend(env, body) {
   const { type, id } = body;
   if (!type || !id) return json({ error: 'Missing type or id' }, 400);
   let recipient, firstName, phone, defaultMsg, property = null, owner = null;
+  // Sep 17 2026 (Brett): a bulk welcome send lets Brett edit the shared text before sending —
+  // that edited text (body.message) needs the SAME {FirstName}/{Owner}/{Address}/{AssistantName}
+  // substitution the template default already gets, or a bulk batch would either send every
+  // recipient the literal, un-personalized string, or (worse) the literal "{FirstName}" text if
+  // Brett left the template's own tokens in place expecting them to fill in per person. `tokens`
+  // is populated per type below and applied to body.message too, not just the template default.
+  let tokens = {};
   if (type === 'tenant') {
     const [tenants, units, properties, owners] = await fetchTabs(env, ['Tenants','Units','Properties','Owners']);
     recipient = tenants.find(t => t.ID === id);
