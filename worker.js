@@ -8251,6 +8251,7 @@ async function deliverReview(env, metrics, proposal, days) {
 }
 
 async function runWeeklyReview(env, opts) {
+  const _t0 = Date.now();
   opts = opts || {};
   const days = opts.days || 7;
   const rows = await readTelemetryRows(env, days);
