@@ -5473,49 +5473,95 @@ function renderTemplates() {
         '<td>' + esc(t.Trade||'—') + '</td>' +
         '<td style="color:var(--muted);font-size:11px">' + (owner?esc(owner.First_Name+(owner.Company?' / '+owner.Company:'')):'Global') + '</td>' +
         '<td>' + (t.Link_URL?'<a href="'+esc(t.Link_URL)+'" target="_blank" style="color:var(--info)">'+esc(t.Link_Label||'View')+'</a>':'—') + '</td>' +
-        '<td>' +
-          '<button class="btn small danger" onclick="if(confirm(\'Delete?\')) api(\'POST\',\'/wo-template/update\',{id:\''+t.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshTemplates)">Del</button>' +
+        '<td style="white-space:nowrap">' +
+          '<button class="btn small" style="margin-right:6px;min-height:32px" onclick="openEditTemplateModal(\''+t.ID+'\')">Edit</button>' +
+          '<button class="btn small secondary" style="margin-right:6px;min-height:32px" onclick="createWOFromTemplate(\''+t.ID+'\')">Create WO</button>' +
+          '<button class="btn small danger" style="min-height:32px" onclick="if(confirm(\'Delete?\')) api(\'POST\',\'/wo-template/update\',{id:\''+t.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshTemplates)">Del</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
 
+// Resets the Add/Edit Template modal to ADD mode (blank form, no tmpl-id).
 function openAddTemplateModal() {
-  ['tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('tmpl-owner');
   if (sel) sel.innerHTML = '<option value="">Global (all owners)</option>' +
     safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
+  var pr = document.getElementById('tmpl-priority'); if (pr) pr.value = 'normal';
+  var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'ADD WO TEMPLATE';
+  var saveBtn = document.getElementById('tmpl-save-btn'); if (saveBtn) saveBtn.textContent = 'SAVE TEMPLATE';
   openModal('modal-add-template');
+}
+
+// Opens the same modal pre-filled with an existing template's values, in EDIT mode
+// (tmpl-id set → submitAddTemplate routes to /wo-template/update instead of /add).
+function openEditTemplateModal(id) {
+  var t = _woTemplates.find(function(x){ return x.ID===id; });
+  if (!t) { toast('Template not found — try Refresh','error'); return; }
+  openAddTemplateModal();
+  document.getElementById('tmpl-id').value = t.ID;
+  document.getElementById('tmpl-name').value = t.Name || '';
+  document.getElementById('tmpl-owner').value = t.Owner_ID || '';
+  document.getElementById('tmpl-trade').value = t.Trade || '';
+  document.getElementById('tmpl-priority').value = t.Priority || 'normal';
+  document.getElementById('tmpl-desc').value = t.Description || '';
+  document.getElementById('tmpl-link-url').value = t.Link_URL || '';
+  document.getElementById('tmpl-link-label').value = t.Link_Label || '';
+  var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'EDIT WO TEMPLATE';
+  var saveBtn = document.getElementById('tmpl-save-btn'); if (saveBtn) saveBtn.textContent = 'SAVE CHANGES';
 }
 
 function submitAddTemplate() {
   var name = document.getElementById('tmpl-name').value.trim();
   if (!name) { toast('Name required','error'); return; }
-  api('POST','/wo-template/add',{
+  var id = document.getElementById('tmpl-id') ? document.getElementById('tmpl-id').value : '';
+  var fields = {
     Name: name, Owner_ID: document.getElementById('tmpl-owner').value,
     Trade: document.getElementById('tmpl-trade').value,
     Priority: document.getElementById('tmpl-priority').value,
     Description: document.getElementById('tmpl-desc').value.trim(),
     Link_URL: document.getElementById('tmpl-link-url').value.trim(),
     Link_Label: document.getElementById('tmpl-link-label').value.trim()||'View',
-    Active: 'TRUE',
-  }).then(function(res){ if(res.id){ toast('Template added','success'); closeModal('modal-add-template'); refreshTemplates(); } });
+  };
+  if (id) {
+    api('POST','/wo-template/update',{id:id, fields:fields}).then(function(res){
+      if (res && !res.error) { toast('Template updated','success'); closeModal('modal-add-template'); refreshTemplates(); }
+      else { toast('Update failed','error'); }
+    });
+  } else {
+    fields.Active = 'TRUE';
+    api('POST','/wo-template/add',fields).then(function(res){ if(res.id){ toast('Template added','success'); closeModal('modal-add-template'); refreshTemplates(); } });
+  }
+}
+
+// Opens a fresh New WO form pre-filled from a template — the direct "use this template
+// right now" action from the management list (previously only reachable via the
+// "From Template" picker inside an already-open New WO form).
+function createWOFromTemplate(id) {
+  closeModal('modal-manage-templates');
+  openNewWOModal();
+  applySheetTemplate(id);
 }
 
 function applySheetTemplate(id) {
   var t = _woTemplates.find(function(x){ return x.ID===id; });
   if (!t) return;
-  // Check if new WO modal is open
+  // Check if new WO modal is open. Bug fix (2026-09-17): this used to check for class
+  // 'modal-active', which openModal()/closeModal() never actually set (they use 'open') —
+  // so this branch never matched and a template applied from the "From Template" picker
+  // silently did nothing to the form. Fixed to check the real class.
   var newModal = document.getElementById('modal-new-wo');
   var editModal = document.getElementById('modal-edit-wo');
   var desc = '';
   if (t.Description) desc += t.Description;
   if (t.Link_URL) desc += (desc?'\n\n':'') + (t.Link_Label||'Link') + ': ' + t.Link_URL;
 
-  if (newModal && newModal.classList.contains('modal-active')) {
+  if (newModal && newModal.classList.contains('open')) {
     document.getElementById('wo-trade').value = t.Trade || document.getElementById('wo-trade').value;
     document.getElementById('wo-priority').value = t.Priority || document.getElementById('wo-priority').value;
     document.getElementById('wo-desc').value = desc;
-  } else if (editModal && editModal.classList.contains('modal-active')) {
+  } else if (editModal && editModal.classList.contains('open')) {
     var ta = document.getElementById('ewo-description');
     if (ta) { ta.value = (ta.value?ta.value+'\n\n':'')+desc; ta.style.height='auto'; ta.style.height=Math.max(140,ta.scrollHeight)+'px'; }
   }
