@@ -1729,6 +1729,64 @@ function submitFeedback() {
 }
 </script>
 
+<!-- MY INFO MODAL -->
+<div class="modal-overlay" id="modalMyInfo" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:420px;padding:20px">
+    <div style="color:var(--accent);font-size:.9rem;letter-spacing:.1em;margin-bottom:8px">MY CONTACT INFO</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Keep your phone and email current so job updates and invoice confirmations reach you. To correct your name, contact Ridge Co directly.</p>
+    <label>Phone</label>
+    <input type="tel" id="myInfoPhone" placeholder="(410) 555-0100" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:8px;text-transform:none;letter-spacing:normal;text-align:left">
+    <label>Email</label>
+    <input type="email" id="myInfoEmail" placeholder="you@example.com" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:8px;text-transform:none;letter-spacing:normal;text-align:left">
+    <label>Company (optional)</label>
+    <input type="text" id="myInfoCompany" placeholder="" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:8px;text-transform:none;letter-spacing:normal;text-align:left">
+    <div id="myInfoMsg"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-sm btn-muted" onclick="closeMyInfo()">Cancel</button>
+      <button class="btn btn-sm" id="myInfoBtn" onclick="submitMyInfo()">SAVE</button>
+    </div>
+  </div>
+</div>
+<script>
+// Vendor self-service "My Info" — phone/email/company only. Name is deliberately not
+// editable here: vendorByPin's own login match is keyed off First_Name, so a self-service
+// name change here could lock a vendor out of their own next login. Old values are kept
+// server-side (Vendor_Contact_History) before the Vendors row is overwritten.
+function openMyInfo() {
+  document.getElementById("myInfoPhone").value = (session && session.vendor_phone) || "";
+  document.getElementById("myInfoEmail").value = (session && session.vendor_email) || "";
+  document.getElementById("myInfoCompany").value = (session && session.vendor_company) || "";
+  document.getElementById("myInfoMsg").innerHTML = "";
+  document.getElementById("modalMyInfo").style.display = "flex";
+}
+function closeMyInfo() { document.getElementById("modalMyInfo").style.display = "none"; }
+function submitMyInfo() {
+  if (!session || !session.vendor_id) return;
+  var phone = document.getElementById("myInfoPhone").value.trim();
+  var email = document.getElementById("myInfoEmail").value.trim();
+  var company = document.getElementById("myInfoCompany").value.trim();
+  document.getElementById("myInfoBtn").disabled = true;
+  document.getElementById("myInfoMsg").innerHTML = "";
+  fetch(WORKER + "/vendor/update-contact", {
+    method: "POST", headers: { "X-Auth-Token": SECRET, "Content-Type": "application/json" },
+    body: JSON.stringify({ vendor_id: session.vendor_id, phone: phone, email: email, company: company })
+  }).then(function(r){ return r.json(); }).then(function(res){
+    document.getElementById("myInfoBtn").disabled = false;
+    if (res.error) { document.getElementById("myInfoMsg").innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + res.error + '</div>'; return; }
+    if (res.vendor) {
+      session.vendor_phone = res.vendor.phone; session.vendor_email = res.vendor.email; session.vendor_company = res.vendor.company;
+      try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){}
+    }
+    var msg = (res.changed && res.changed.length) ? "✓ Saved" : "No changes to save";
+    document.getElementById("myInfoMsg").innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + msg + '</div>';
+    setTimeout(closeMyInfo, 1200);
+  }).catch(function(){
+    document.getElementById("myInfoBtn").disabled = false;
+    document.getElementById("myInfoMsg").innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">Error saving — try again</div>';
+  });
+}
+</script>
+
 <!-- SCHEDULING MODAL -->
 <div class="modal-overlay" id="modalSched" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
   <div class="modal" style="max-width:440px">
