@@ -4343,7 +4343,10 @@ async function welcomeSend(env, body) {
     return json({ error: 'Invalid type. Use: tenant or vendor' }, 400);
   }
   if (body.preview_only) return json({ preview: defaultMsg, phone, name: firstName });
-  const finalMsg = body.message ? String(body.message) : defaultMsg;
+  // Apply the same token substitution to a custom/edited message as the template default gets
+  // — a no-op for plain text with no {Token} in it, correct per-recipient fill-in for anything
+  // that came from (or still contains) the live template's tokens, e.g. a bulk send.
+  const finalMsg = body.message ? renderTemplate(String(body.message), tokens) : defaultMsg;
   const sendOpts = type === 'tenant'
     ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg }
     : { wo_id: '', message_type: 'vendor_welcome', recipient_type: 'vendor', vendor: recipient, message_body: finalMsg };
