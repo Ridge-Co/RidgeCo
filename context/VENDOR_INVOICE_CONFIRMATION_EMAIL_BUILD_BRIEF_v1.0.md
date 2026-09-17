@@ -1,7 +1,10 @@
 # Vendor Invoice Confirmation Email — Build Brief v1.0
 
-Status: **scope only, nothing built.** Captured 2026-09-16 from Brett's voice memo, decisions
-locked same day. Backlog ID **B-20260916-1930-k7** `[vendor-invoices] [gmail-email]`.
+Status: **built and deployed** (`BUILD_VERSION 2026-09-16.13`), soft-launched to Alex Busey only
+via `Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS`. Full detail: FEATURE_LOG rule 179. Awaiting
+Brett's first live pass (a real bill submission for Alex Busey) before widening. Captured
+2026-09-16 from Brett's voice memo, decisions locked same day, built same day. Backlog ID
+**B-20260916-1930-k7** `[vendor-invoices] [gmail-email]`.
 
 ## The ask (condensed)
 
