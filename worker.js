@@ -3562,6 +3562,7 @@ async function tenantWOSettingsSummary(env) {
 }
 
 async function createWorkOrder(env, body) {
+  const _t0 = Date.now();
   // Same property/unit/tenant, same trade/description, seconds apart = a double-tap on
   // Create Work Order, not two real jobs. Before this guard, a double-tap always produced
   // two rows sharing the SAME auto-incremented WO number — both requests read the sheet's
