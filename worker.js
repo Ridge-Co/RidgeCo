@@ -7699,6 +7699,27 @@ async function buildDigest(env) {
   const billsTotal = pendingBills.reduce((s,b)=> s + (parseFloat(b.Total||b.Customer_Total||0)||0), 0);
   const since = daysAgoISO(4);
   const wins = wos.filter(w => w.Completed_Date && w.Completed_Date >= since).slice(0,6);
+  // System health (greenlit #16 — success-rate degradation alerting). Reuses the existing
+  // telemetry/metrics functions rather than standing up a separate monitor: any job type with
+  // enough volume (>=3 runs, so one blip doesn't cry wolf) and <95% success in the last 24h.
+  // Best-effort — a telemetry read failing must never take the digest down with it.
+  let healthAlerts = [];
+  try {
+    const dayMetrics = computeTelemetryMetrics(await readTelemetryRows(env, 1));
+    for (const [jt, jm] of Object.entries(dayMetrics.byJob)) {
+      if (jm.count >= 3 && jm.success_rate != null && jm.success_rate < 0.95) {
+        healthAlerts.push(`${jt}: ${Math.round(jm.success_rate * 100)}% success (${jm.fail}/${jm.count} failed) — last 24h`);
+      }
+    }
+  } catch (e) { /* non-fatal — health check must never break the digest */ }
+  // Receipts that failed intake 3x and were given up on (receiptScan fix, greenlit #17) —
+  // surfaced here rather than silently retried forever with no way for Brett to find out.
+  let stuckReceipts = [];
+  try {
+    const cfg = await fetchConfig(env);
+    const failures = JSON.parse(cfg.receipt_intake_failures || '{}');
+    stuckReceipts = Object.values(failures).filter(x => x.attempts >= 3).map(x => `${x.name} — ${x.error}`);
+  } catch (e) { /* non-fatal */ }
   return {
     today, stamp: etStamp(),
     overdue: overdue.map(label), dueToday: dueToday.map(label), onHold: onHold.map(label), urgent: urgent.map(label),
@@ -7706,6 +7727,7 @@ async function buildDigest(env) {
     billsTotal,
     wins: wins.map(w=>`WO-${w.ID} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))} · ${w.Status} · ${String(w.Description||'').slice(0,45)}`),
     pulse: { properties: activeRows(props).length, tenants: activeRows(tenants).length, vendors: activeRows(vendors).length, open_wos: open.length, pending_bills: pendingBills.length },
+    healthAlerts, stuckReceipts,
   };
 }
 
