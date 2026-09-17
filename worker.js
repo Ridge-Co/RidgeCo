@@ -3815,6 +3815,7 @@ async function assignVendor(env, body) {
 }
 
 async function updateStatus(env, body) {
+  const _t0 = Date.now();
   // On Hold now REQUIRES a reason (Sep 14 2026, Brett) — checked before anything is written,
   // so a bad request never leaves a WO On Hold with no reason on record. hold_reason is the
   // real field name the client should send; notes is accepted as a fallback so an older/other
