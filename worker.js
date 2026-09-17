@@ -4557,6 +4557,12 @@ async function addVendorBill(env, body) {
   // entries with their own Invoice_Description are also linked to this bill (buildInvoiceLines).
   if (body.Invoice_Description) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_Description']); } catch (e) {} }
 
+  // B-20260916-1930-k7: real time-of-day, for the vendor confirmation email + a genuine audit
+  // trail — Created_Date is date-only (matches this tab's existing business-date convention),
+  // Submitted_At captures the actual moment regardless of what the caller sends.
+  if (!body.Submitted_At) body.Submitted_At = new Date().toISOString();
+  try { await ensureColumns(env, 'Vendor_Bills', ['Submitted_At']); } catch (e) {}
+
   // Hours logged on the job can BE the bill — that is the whole point when Brett is the
   // vendor. The ids ride in on the body but are not a Vendor_Bills column, so they come
   // out before the row is written and get stamped onto the time rows afterwards instead.
