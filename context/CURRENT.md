@@ -1,4 +1,73 @@
-# WHERE THINGS STAND — Sep 16-17, 2026 (owner-scoped receipt viewer shipped; Hub's own Photos & Files receipt-view bug found and fixed; Alex Busey's WO-1091 bill corrected; vendor invoice confirmation email built + soft-launched; vendor self-service contact-info update shipped)
+# WHERE THINGS STAND — Sep 16-17, 2026 (editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+
+## 🟡 Open: confirm the GitHub Actions `CRON_SWEEP_TOKEN` repo secret is actually set
+Brett ran a live bulk-welcome test into quiet hours and asked whether it should have gone out
+yet. It's correctly queued (`Message_Queue`, `Send_After` = next 9am ET) — that part is working
+— but this session couldn't confirm the *scheduled* GitHub Actions side of `cron-sweep.yml`
+actually fires every 15 minutes. A Cloudflare Worker secret of the same name being set
+(confirmed via `/health` → `cron_sweep.token_set: true`) does NOT mean the separate GitHub
+Actions repo secret is also set — and this exact failure mode (Cloudflare secret set, GitHub
+Actions secret never was, workflow "succeeds" every run while silently no-op'ing) is already a
+confirmed, documented problem in this same repo for a different workflow (`SELFTEST_TOKEN`, PR
+#3). Two ways to close this out: Brett confirms `CRON_SWEEP_TOKEN` is listed under repo Settings
+→ Secrets and variables → Actions, or a future session checks back after 9am ET and manually
+fires `POST /cron/sweep` (admin-token-gated, confirmed working when called directly) if nothing
+went out on its own.
+
+## 🟢 Shipped + LIVE ROLLOUT UNDERWAY: editable Message Templates + property-wide notices — full detail FEATURE_LOG rules 181, 186
+Brett wanted to release SMS to tenants/vendors for real, then — before anything actually went to
+a real person — caught that the copy was wrong: generic "Ridge Co. Property Management," no
+landlord reference, no acknowledgment of the new number, named Brett personally instead of an
+assistant persona, and no way to edit any of it without a code push. Built a real
+`Message_Templates` tab (self-seeding, editable via a new Messaging page with a live
+character/segment counter that flags stray em dashes/curly quotes silently forcing Unicode
+encoding), an assistant persona (`Riley`, one Config key), `{Owner}` interpolation pulling the
+real `Owners.Company`, and outbound-only language on every template (inbound is fully routed
+through a Twilio Studio Flow today, not this codebase — Brett is handling that side himself).
+Also built `POST /property/notice` — a property-wide SMS+email broadcast (water shutoffs, power
+outages) that deliberately bypasses the quiet-hours hold while still honoring
+Global/Test-Mode/`SMS_OptOut` (wired into the send gate for the first time this session).
+
+Found and fixed same day (rule 186): the bulk-welcome-send textarea was pre-filling from a
+hardcoded Sep-14 snapshot that had drifted completely from the live template, AND the actual
+send applied zero token substitution to a custom message — a batch would either send everyone
+the identical unpersonalized line, or the literal text "{FirstName}" if the template's own
+tokens were left in the box. Both fixed; live-verified end to end (a real send with tokens to
+Brett's own test tenant record came back fully substituted, no leftover braces).
+
+**Live status**: `TWILIO_ENABLED = TRUE`, `TWILIO_TEST_MODE = FALSE` — Brett is actively rolling
+out. Plan: Goldszmidt Properties tenants first (smaller, controlled batch), the rest of the
+portfolio staggered over the following days via the new Owner-filter/exclude tool (rule 184) to
+manage volume. `BUILD_VERSION` → `2026-09-16.15`, confirmed live.
+
+## 🟢 Shipped: legacy/duplicate tenant PIN bug — full detail FEATURE_LOG rule 182
+Brett, right before the rollout above: many tenants still had old 5-digit numeric PINs instead
+of the 3-letter+5-digit scheme. Live audit found 18 such Tenants (0 on Vendors/Owners) —
+regenerated off each tenant's own phone. Caught in the process: two tenants at the same property
+(James/Kelsey, 20 E Eager St) shared the **identical** PIN, and James's didn't even match his own
+phone — a real access collision, not just an old-format cosmetic issue. Root cause: the "Backfill
+PINs" admin tool only ever filled in a *blank* PIN, never checked an existing malformed one — the
+only prior defense was two hardcoded name checks on two specific Owners rows, itself a past
+one-off patch for this same problem that never generalized. Replaced with a real format check
+(`PIN_FORMAT_OK`) applied across Vendors/Owners/Owner_Users/Tenants, so this is now caught
+automatically going forward, not just today. Verified live: 0 bad-format PINs, 0 duplicates,
+anywhere, after the fix.
+
+## 🟢 Shipped: tenant portal — Completed is the last stage a tenant sees — full detail FEATURE_LOG rule 183
+Removed the Closed/Paid filter option from `tenant.html` entirely; folded Pending
+Invoice/Invoiced/Paid into a plain "Completed" label everywhere a tenant sees status (badge,
+filter, per-job timeline) — billing-lifecycle jargon a tenant never needed. The "Completed"
+filter itself was widened to still catch anything that's progressed to those billing statuses
+internally, so nothing became invisible just because the separate Paid filter was removed.
+
+## 🟢 Shipped: Owner filter + cross-page checkbox-bleed fix on bulk sends — full detail FEATURE_LOG rules 184-185
+Two related fixes so Brett can actually run a segmented, owner-scoped rollout: (1) a new Owner
+filter (show-only or exclude) on the Tenants page, so "everyone but Goldszmidt" is a two-click
+selection instead of hand-picking ~100 rows; (2) a real, pre-existing bug where Tenants/Vendors/
+Owners all shared the exact same document-wide checkbox-selection code — a box checked on one
+page (even one no longer visible) silently rode along on a send from a different page, with no
+way to even see it to deselect. Each of the three pages' select-all/action-bar/bulk-send is now
+scoped to its own list container only.
 
 ## 🟢 Shipped: vendor self-service contact-info update ("My Info") — full detail FEATURE_LOG rule 180 (+ addendum)
 Follow-on to the vendor confirmation email work: a real "👤 MY INFO" screen in `vendor.html` so a
