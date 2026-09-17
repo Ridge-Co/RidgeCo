@@ -4320,7 +4320,7 @@ async function welcomeSend(env, body) {
       const assistantName = cfg.ASSISTANT_NAME || 'Riley';
       const ownerLabel = (owner && (owner.Company || owner.First_Name)) || 'your property owner';
       const tpl = await getMessageTemplate(env, 'tenant_welcome', 'sms');
-      const tokens = { FirstName: firstName, Address: address, Owner: ownerLabel, AssistantName: assistantName };
+      tokens = { FirstName: firstName, Address: address, Owner: ownerLabel, AssistantName: assistantName };
       defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
         : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of ${ownerLabel} at ${address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing.`;
     }
