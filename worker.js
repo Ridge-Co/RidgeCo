@@ -8182,7 +8182,7 @@ function computeTelemetryMetrics(rows) {
     const jt = r.Job_Type || '(none)';
     // Per-job-type health (B-217): count/fail/corrected/escalated + accumulators for success &
     // latency, so the Command Center can show a breakdown BY job type, not just the global roll-up.
-    byJob[jt] = byJob[jt] || { count: 0, fail: 0, corrected: 0, escalated: 0, _sk: 0, _st: 0, _ls: 0, _ln: 0 };
+    byJob[jt] = byJob[jt] || { count: 0, fail: 0, corrected: 0, escalated: 0, _sk: 0, _st: 0, _ls: 0, _ln: 0, _cost: 0 };
     byJob[jt].count++;
     if (isTrue(r.Escalated)) { escalated++; byJob[jt].escalated++; }
     if (isTrue(r.Human_Corrected)) { humanCorrected++; byJob[jt].corrected++; }
