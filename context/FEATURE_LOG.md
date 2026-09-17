@@ -1437,4 +1437,14 @@ Two stacked bugs, not one:
 
 Human-gate required: no.
 
+**187. Optimizer v1.1 — Product/UX Opportunity lens (folded into Scout & Reuse-Radar) + `Ops_Build_Queue` integrity self-check (Sep 17 2026, worker.js + context/CONTINUOUS_IMPROVEMENT_STRATEGY_v1.1.md).** Brett's ask: widen the Optimizer beyond telemetry-reactive fixes and cross-venture reuse to also surface UI/functionality/feature/usability opportunities he hasn't named, and stop letting approved-but-unbuilt `Ops_Build_Queue` items go stale unnoticed.
+
+- Design lands in a new `CONTINUOUS_IMPROVEMENT_STRATEGY_v1.1.md` addendum (v1.0 unchanged, still governs) — no code change was needed for the lens itself, since it's a 3rd angle on the ALREADY-scheduled Scout & Reuse-Radar Cowork task (Mon/Thu), not a new task: the same run now also looks at the real screens + `HUB_UX_DESIGN_FOUNDATION_v1.1.md` + the 224 already-scored `SERVICE_DELIVERY_ROADMAP` ideas for gaps Brett hasn't asked about, grounded/dedup'd the same way the existing two lenses are.
+- The one real code change: `Ops_Build_Queue` gains `Drop_Reason`/`Superseded_By` columns (additive, `ensureColumns`), and `opsQueueUpdate` now accepts optional `reason`/`superseded_by` fields so a round's queue-integrity pass (re-checking every `greenlit`/`building` row against recent `FEATURE_LOG`/live code) can auto-set `Status=dropped` on clearly-superseded items **with a traceable reason**, per Brett's explicit call — same SAFE-class write already allowed (internal metadata, no money/PII/auth), it just now carries evidence. Ambiguous items are flagged, not touched — Brett decides those.
+- **Not done in this pass, flagged for Brett:** the Scout & Reuse-Radar task's own stored trigger prompt (`trig_01CphCdHS4...`) isn't a repo file — no tool in this session can read/edit it. If its prompt already defers to `CONTINUOUS_IMPROVEMENT_STRATEGY_v1.0.md`, it should pick up v1.1 on its own next run; if it has its own hardcoded lens list, Brett needs to update it by hand.
+- Also surfaced in passing: `OPTIMIZER_ROUND_LOG.md` itself only had Round 0 and Round 1 logged, despite a Round 2 apparently having run (Sep 16 session, digest-email-wiring) — exactly the kind of drift the new queue-integrity check exists to catch. Worth a look next round.
+- `node --check` clean, full suite 80/80 (no new assertions — pure schema/param addition, no new branching logic worth a dedicated test). `BUILD_VERSION` → `2026-09-17.1`.
+
+Human-gate required: no (SAFE-class internal metadata only; the lens content itself still routes every proposal through the existing greenlit approval gate — nothing about approvals changed).
+
 
