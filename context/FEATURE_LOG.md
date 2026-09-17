@@ -1371,3 +1371,12 @@ Verified: `node --check worker.js` clean; all 7 inline `<script>` blocks in `ven
 
 Human-gate required: no — this is Brett's own explicit ask, built to spec, and live-verified end to end this session (not just code-read-through). Worth Brett's own quick look at the modal's copy/placement next time he's in the portal, but nothing here needs a decision before it's usable.
 
+**180 addendum — real browser UI verification, same session.** Brett asked directly whether the UI itself had been live-tested (only the backend endpoint had been, via curl + a Sheets read-back). Ran a full headless-Chromium (Playwright) pass against the actual live page at `ridge-co.github.io/RidgeCo/vendor.html` — a real PIN login (Alex Busey, not a mocked session), not just a code read-through:
+- Modal opens correctly from a real click, pre-filled with the real live values (`+14436172152` / `abusey87@gmail.com` / blank company) — screenshot confirms clean layout, left-aligned inputs (the page's global `input{}` CSS defaults to uppercase/centered/letter-spaced, matching the PIN field — the inline overrides on these three fields render correctly, not fighting that default).
+- Full save round-trip through the actual UI (not the API directly): changed Company, saved, got "✓ Saved", modal auto-closed; reopened without a reload and saw the new value immediately (confirms the client-side `session`/`localStorage` update on save); reverted back to blank, saved again.
+- Harder check: cleared `localStorage`, reloaded the page fully, logged in from scratch, reopened the modal — Company came back blank and Email was still correct, confirming the save is real and server-side, not just a cached session artifact.
+- Cancel button correctly hides the modal. Zero console errors across the entire run.
+- **Found, not introduced, this pass:** the MY INFO button (and the pre-existing FEEDBACK button next to it) render solid blue instead of muted/outline — `.btn-muted` isn't an actual defined CSS class anywhere in `vendor.html`, so both buttons silently fall back to the plain `.btn` default. Purely cosmetic, pre-existing (FEEDBACK has always looked like this), not something this build introduced or something that affects function — logged to `CAPTURE_INBOX.md` rather than fixed inline, since it's outside this ask's scope and touches an existing button too.
+
+No code changed as a result of this pass — confirms rule 180 as shipped, doesn't amend it.
+
