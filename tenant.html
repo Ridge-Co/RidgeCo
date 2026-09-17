@@ -454,13 +454,15 @@ function buildDetail(wo, idx) {
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">STATUS TIMELINE</div>';
   html += '<div class="timeline">';
-  var tlSteps = ['New','Assigned','In Progress','Complete','Paid'];
+  var tlSteps = ['New','Assigned','In Progress','Complete'];
   var curIdx = tlSteps.indexOf(wo.Status);
   if (['Accepted'].includes(wo.Status)) curIdx = 2; // In Progress equivalent
-  if (['Pending Invoice','Invoiced'].includes(wo.Status)) curIdx = 4;
+  // Completed is the last stage a tenant sees — any later billing status (Pending Invoice,
+  // Invoiced, Paid) just lands on the same final "Complete" step, not a step of its own.
+  if (['Pending Invoice','Invoiced','Paid'].includes(wo.Status)) curIdx = 3;
   tlSteps.forEach(function(s, i) {
     var cls = i < curIdx ? 'done' : i === curIdx ? 'current' : 'future';
-    var labels = {New:'Request received',Assigned:'Technician assigned','In Progress':'Work in progress',Complete:'Work complete',Paid:'Closed'};
+    var labels = {New:'Request received',Assigned:'Technician assigned','In Progress':'Work in progress',Complete:'Work complete'};
     html += '<div class="tl-item"><div class="tl-dot ' + cls + '"></div><div class="tl-label ' + cls + '">' + (labels[s]||s) + '</div></div>';
   });
   html += '</div></div>';
