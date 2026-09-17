@@ -7925,12 +7925,20 @@ async function routeAI(env, job) {
   if (pinned && tier === 'CHEAP') tier = 'REASON';
 
   let escalated = false;
+  let cheapFailReason = '';
   let attempt = await routeAICall(env, tier, job);
 
   // 2. Validate. Failure = escalate ONE bump, never past REASON→HARD, and never
   //    downward (a pinned REASON call that fails does NOT fall back to CHEAP).
   if (!routeAIValid(attempt, job) && tier === 'CHEAP') {
     escalated = true;
+    // Capture WHY the cheap attempt was rejected BEFORE it's overwritten below — otherwise
+    // every escalation is silently unexplained in telemetry (greenlit #18: items_summarize
+    // escalated 49/49 times with no way to tell whether the CHEAP call threw, came back
+    // empty, or returned non-JSON for a schema job).
+    cheapFailReason = attempt.error ? String(attempt.error).slice(0, 150)
+      : (!attempt.text || !String(attempt.text).trim()) ? 'cheap tier: empty response'
+      : 'cheap tier: response failed JSON schema parse';
     tier = 'REASON';
     attempt = await routeAICall(env, tier, job);
   }
