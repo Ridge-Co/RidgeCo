@@ -1,4 +1,27 @@
-# WHERE THINGS STAND — Sep 16, 2026 (owner-scoped receipt viewer shipped; Hub's own Photos & Files receipt-view bug found and fixed; Alex Busey's WO-1091 bill corrected)
+# WHERE THINGS STAND — Sep 16, 2026 (owner-scoped receipt viewer shipped; Hub's own Photos & Files receipt-view bug found and fixed; Alex Busey's WO-1091 bill corrected; vendor invoice confirmation email built + soft-launched)
+
+## 🟢 Shipped: vendor invoice confirmation email on bill submission — full detail FEATURE_LOG rule 179, `context/VENDOR_INVOICE_CONFIRMATION_EMAIL_BUILD_BRIEF_v1.0.md`
+Brett (voice memo): auto-email a vendor everything they submitted on a bill — job description,
+WO#, invoice #, invoice file + reimbursable receipts as links, real timestamp, a 14-day
+payment-window reminder that skips weekends AND holidays (`Config.US_HOLIDAYS`, Brett-maintained
+list). QuickBooks bills stay "due on receipt" unchanged — the 14 days is a vendor-communicated
+policy tracked separately, by design. Spanish vendors get the email in Spanish. A vendor with no
+email gets a one-time SMS asking them to add one, not a silent skip. Files are linked via signed
+`/vendor-file/view` links (reusing the same token shape a normal vendor PIN login already mints)
+— NOT a raw Drive link, which would have silently reproduced the WO-1071 black-page bug (rules
+142/176/178) since these files are deliberately never Drive-shared.
+
+Soft-launched behind `Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS` — currently just Alex Busey
+(Vendor_ID 2) — widen by editing that one Config value once Brett's confirmed a real send looks
+right. `BUILD_VERSION` → `2026-09-16.13`, confirmed live via `/version`. Full suite 80/80 against
+a fresh clone (`test/vendor-invoice-confirmation-email.test.mjs`, 21 new assertions on the
+business-day/holiday logic — the piece most likely to have an off-by-one).
+
+**Needs Brett's first live pass**: no real bill was submitted this session to trigger an actual
+send — flagged rather than triggered unasked, since it emails a real vendor and writes a real
+Vendor_Bills row (which can auto-flip a real WO to Complete). Submit one real bill for Alex Busey
+(or ask for it to be triggered) to confirm the email formats correctly, the file links open, and
+the due date reads right, before widening the Config allow-list past Vendor_ID 2.
 
 ## 🟢 Shipped: owner-facing receipt viewer + Hub Photos & Files receipt-viewing fix — full detail FEATURE_LOG rules 176-178
 Brett's policy confirmed and enforced: receipts should be visible to the property owner; vendor
