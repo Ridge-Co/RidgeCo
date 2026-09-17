@@ -251,17 +251,22 @@ var allWOs = [];
 var activeNoteWOId = null;
 
 var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice'];
-var STATUS_TIMELINE = ['New','Assigned','Accepted','In Progress','Complete','Invoiced','Paid'];
+// Sep 17 2026 (Brett): tenants don't need or want billing-lifecycle stages exposed — Completed
+// is the last stage a tenant should ever see. STATUS_TIMELINE stops there (kept only for the
+// STATUS_LABELS lookup below; the per-WO detail view computes its own steps in buildDetail).
+// Pending Invoice/Invoiced/Paid all fold into a plain "Completed" label rather than surfacing
+// "Invoice submitted" / "Closed" / billing jargon a tenant has no reason to parse.
+var STATUS_TIMELINE = ['New','Assigned','Accepted','In Progress','Complete'];
 var STATUS_LABELS = {
   'New':'Request received',
   'Assigned':'Technician assigned',
   'Accepted':'Technician confirmed',
   'In Progress':'Work in progress',
   'On Hold':'On hold',
-  'Complete':'Work complete',
-  'Pending Invoice':'Work complete — billing pending',
-  'Invoiced':'Invoice submitted',
-  'Paid':'Closed',
+  'Complete':'Completed',
+  'Pending Invoice':'Completed',
+  'Invoiced':'Completed',
+  'Paid':'Completed',
   'Declined':'Request declined',
   'Cancelled':'Cancelled',
 };
