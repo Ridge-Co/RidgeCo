@@ -7955,7 +7955,7 @@ async function routeAI(env, job) {
       Tier_Requested: tier, Model_Used: reg.model, Escalated: escalated ? 'TRUE' : 'FALSE',
       Tokens_In: attempt.tokens_in || 0, Tokens_Out: attempt.tokens_out || 0,
       Est_Cost: estCost.toFixed(6), Latency_ms: ms, Success: attempt.error ? 'FALSE' : 'TRUE',
-      Notes: attempt.error ? String(attempt.error).slice(0, 200) : (pinned ? 'pinned' : ''),
+      Notes: attempt.error ? String(attempt.error).slice(0, 200) : (escalated ? `escalated_from_cheap: ${cheapFailReason}` : (pinned ? 'pinned' : '')),
     });
   } catch (_) { /* telemetry best-effort — never fail the caller's job over a logging miss */ }
 
