@@ -3644,7 +3644,7 @@ async function createWorkOrder(env, body) {
       await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
     }
   } catch (e) { /* non-fatal */ }
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){}
   return json({ success: true, id: woId });
 }
 
