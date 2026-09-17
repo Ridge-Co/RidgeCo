@@ -8201,7 +8201,8 @@ function computeTelemetryMetrics(rows) {
   for (const m of Object.values(byJob)) {
     m.success_rate  = m._sk ? +(m._st / m._sk).toFixed(3) : null;
     m.avg_latency_ms = m._ln ? Math.round(m._ls / m._ln) : null;
-    delete m._sk; delete m._st; delete m._ls; delete m._ln;
+    m.cost_total = +m._cost.toFixed(6);
+    delete m._sk; delete m._st; delete m._ls; delete m._ln; delete m._cost;
   }
   return {
     total: rows.length, bySource, byJob,
