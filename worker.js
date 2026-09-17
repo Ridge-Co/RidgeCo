@@ -8384,7 +8384,10 @@ async function opsQueueUpdate(env, body) {
   if (!OPS_QUEUE_STATUSES.includes(status)) return json({ error: 'status must be one of ' + OPS_QUEUE_STATUSES.join('|') }, 400);
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
-  return await updateRow(env, OPS_QUEUE_TAB, id, { Status: status });
+  const fields = { Status: status };
+  if (body && body.reason) fields.Drop_Reason = String(body.reason).slice(0, 500);
+  if (body && body.superseded_by) fields.Superseded_By = String(body.superseded_by).slice(0, 200);
+  return await updateRow(env, OPS_QUEUE_TAB, id, fields);
 }
 
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
