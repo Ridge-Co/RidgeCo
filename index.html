@@ -4141,12 +4141,23 @@ function bulkSendWelcomeFromTab(listId) {
   // the tenant default and Brett edits it — bulk welcome across two different recipient types
   // needing genuinely different wording in one send is an edge case, not the common path.
   var sampleType = _welcomeSendQueue[0] ? _welcomeSendQueue[0].type : 'tenant';
+  // Sep 17 2026 (Brett): this prefill had drifted from the live template on the Messaging page
+  // — DEFAULT_TENANT/VENDOR_WELCOME_TEXT were a hardcoded snapshot from before that page
+  // existed, never updated since. Show them instantly (avoids a blank textarea flash) then
+  // replace with the real tenant_welcome/vendor_welcome row the instant it loads. Tokens are
+  // left intact on purpose — the server fills in {FirstName}/{Owner}/{Address} per recipient
+  // at send time (see welcomeSend in worker.js), same as a single welcome send already does.
   document.getElementById('bulk-welcome-text').value = sampleType === 'vendor' ? DEFAULT_VENDOR_WELCOME_TEXT : DEFAULT_TENANT_WELCOME_TEXT;
   document.getElementById('bulk-welcome-progress').style.display = 'none';
   document.getElementById('bulk-welcome-msg').innerHTML = '';
   document.getElementById('bulk-welcome-send-btn').disabled = false;
   document.getElementById('bulk-welcome-send-btn').textContent = 'SEND TO ALL (' + _welcomeSendQueue.length + ')';
   openModal('modal-send-welcome-bulk');
+  var templateType = sampleType === 'vendor' ? 'vendor_welcome' : 'tenant_welcome';
+  api('GET', '/message-templates').then(function(rows) {
+    var row = Array.isArray(rows) && rows.find(function(r){ return r.Message_Type === templateType && r.Channel === 'sms'; });
+    if (row && row.Body) document.getElementById('bulk-welcome-text').value = row.Body;
+  }).catch(function(){});
 }
 
 async function executeBulkSendWelcome() {
