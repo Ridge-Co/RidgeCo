@@ -8279,13 +8279,20 @@ ${JSON.stringify(metrics, null, 2)}`;
 
 async function deliverReview(env, metrics, proposal, days) {
   const cfg = await fetchConfig(env);
-  if (String(cfg.digest_enabled || '').toUpperCase() !== 'TRUE') return { delivered: false, reason: 'digest_enabled not TRUE (dormant)' };
+  // Weekly review delivery has its own gate, separate from the daily digest's digest_enabled
+  // (Brett, Sep 17 2026: turn weekly review delivery on while the daily digest stays off — the
+  // two used to share one flag, so there was no way to enable one without the other).
+  if (String(cfg.weekly_review_enabled || '').toUpperCase() !== 'TRUE') return { delivered: false, reason: 'weekly_review_enabled not TRUE (dormant)' };
   const pct = (x) => (x == null ? 'n/a' : Math.round(x * 100) + '%');
   const text = `Ridge Co — Weekly Ops Review (${days}d)\n${metrics.total} jobs · success ${pct(metrics.success_rate)} · escalation ${pct(metrics.escalation_rate)} · $${metrics.est_cost_total}\n\n${proposal}`;
   const out = {};
   if (String(cfg.digest_sms_enabled || '').toUpperCase() === 'TRUE' && cfg.digest_sms_to && env.TWILIO_FROM) out.sms = await sendSMS(env, cfg.digest_sms_to, text.slice(0, 1400));
   if (String(cfg.digest_email_enabled || '').toUpperCase() === 'TRUE' && cfg.digest_email_to) out.email = await deliverDigestEmail(env, cfg.digest_email_to, 'Ridge Co — Weekly Ops Review', text);
-  return { delivered: true, out };
+  // Fixed (Sep 17 2026): this used to return delivered:true unconditionally past the gate
+  // above, even if neither SMS nor email sub-condition actually fired (e.g. digest_sms_to
+  // unset) — the exact "success:true, nothing actually happened" shape this codebase has
+  // been burned by before (rule 6/19). Now reflects whether a real send actually went out.
+  return { delivered: !!(out.sms || out.email), out };
 }
 
 async function runWeeklyReview(env, opts) {
