@@ -9,8 +9,7 @@ per Brett's direct follow-up, a real headless-Chromium pass against the actual l
 (real PIN login, real save/reopen/revert, a full page reload to confirm the save was genuinely
 server-side, zero console errors — not just a code read-through). One pre-existing, unrelated
 cosmetic quirk found in passing (MY INFO/FEEDBACK buttons render solid blue instead of muted —
-`.btn-muted` isn't an actual defined class) and logged to `CAPTURE_INBOX.md`, not fixed inline. end to end (a real Company change + revert produced exactly
-the two expected history rows with correct before/after values, not just a code read-through).
+`.btn-muted` isn't an actual defined class) and logged to `CAPTURE_INBOX.md`, not fixed inline.
 Name is deliberately NOT self-editable (would risk breaking the vendor's own PIN-login name
 match) — stays an admin edit. `BUILD_VERSION` → `2026-09-16.14`, confirmed live. Nothing pending
 — built to spec and verified, no open decision needed from Brett.
