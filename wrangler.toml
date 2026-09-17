@@ -14,16 +14,17 @@ workers_dev = true
 # it lands at 6:00 AM during EST (winter) — refine with DST logic later if needed.
 # The scheduled() handler builds the digest but sends nothing until Config
 # digest_enabled=TRUE, so this trigger is harmless until Brett turns delivery on.
-# Optimizer Reviewer (B-129) now runs TWICE weekly — Mon + Wed 12:00 UTC (8am ET) —
+# Optimizer Reviewer (B-129) runs TWICE weekly — Mon 12:30 UTC (8:30am ET) + Wed 12:00 UTC —
 # per greenlit item ID-1 "Increase Weekly Review Run Frequency": the mid-week run halves
-# max issue-detection lag from 7 days to ~3.5. The scheduled() handler branches on
-# event.cron and runs runWeeklyReview for BOTH the Monday and Wednesday crons; each reads
-# Ops_Telemetry, ranks a proposal, logs to Ops_Review_Log, and delivers only if digest_enabled=TRUE.
+# max issue-detection lag from 7 days to ~3.5. Both still read Ops_Telemetry, rank a proposal,
+# and log to Ops_Review_Log, but as of Sep 17 2026 only the Monday run actually DELIVERS
+# (Config weekly_review_enabled=TRUE) — Brett asked for one weekly send, not two. Monday's
+# time was moved from 12:00 to 12:30 UTC per his explicit ask (8:30am, not 8:00am).
 # Weekly Open Item Report (Aug 18 session) — Monday 13:00 UTC (9am EDT/8am EST), an hour after
 # the daily digest slot. Dormant until Config ar_report_enabled=TRUE AND AR_Report_OptIn has
 # rows — see runWeeklyArReport in worker.js.
 [triggers]
-crons = ["0 11 * * *", "0 12 * * 1", "0 12 * * 3", "0 13 * * 1", "*/15 * * * *"]
+crons = ["0 11 * * *", "30 12 * * 1", "0 12 * * 3", "0 13 * * 1", "*/15 * * * *"]
 
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 
