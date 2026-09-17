@@ -8350,7 +8350,14 @@ async function runWeeklyReview(env, opts) {
 const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // Problem is stored (B-218) so a greenlit item keeps its WHY — a build brief without the
 // problem statement is half a brief. Every field the proposal carried survives the approve step.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By'];
+// Risk_Class (Sep 17 2026, Optimizer Rung-2 build brief, B-239): SAFE|GATED, matching the
+// exact 'SAFE' string judge() already hard-requires as riskClass (worker.js ~line 8086 —
+// judge() refuses structurally on anything else). Whichever lens proposed the item is what
+// sets it; UNSET/blank is treated as GATED everywhere this is read, never SAFE-by-default —
+// matches AUTONOMY_GUARDRAILS_v1.0's own rule ("everything not explicitly SAFE is GATED").
+// Greenlighting an item never changes its Risk_Class — only the lens that proposed it (or
+// Brett by hand) may.
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class'];
 const OPS_QUEUE_STATUSES = ['greenlit', 'building', 'done', 'dropped'];
 
 async function opsApprove(env, body) {
