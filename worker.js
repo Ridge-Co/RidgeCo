@@ -7906,6 +7906,7 @@ const JOB_ROUTES = {
   note_transcribe:    'CHEAP',
   task_tag:            'CHEAP',
   email_summarize:    'CHEAP',
+  items_summarize:    'CHEAP',
   estimate_markup:    'REASON',
   qb_reconcile:        'REASON',
   tenant_message:      'REASON',
