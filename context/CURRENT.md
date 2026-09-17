@@ -1,4 +1,36 @@
-# WHERE THINGS STAND — Sep 16-17, 2026 (editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+# WHERE THINGS STAND — Sep 17, 2026 (Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+
+## 🟡 Open: confirm the first Monday 8:30am ET weekly-review text actually arrives
+Weekly Optimizer review delivery was turned on this session (its own `weekly_review_enabled`
+Config flag, separate from the still-dormant daily digest `digest_enabled`) — recipient is
+`admin_phone` (410-259-2314, reused from the existing admin-alert pattern), cron moved to `30 12
+* * 1` (8:30am ET). **Not live-verified with an actual sent SMS** — `POST /ops-review`
+deliberately hardcodes `deliver:false` for manual/on-demand runs (an existing reviewer note,
+"don't let checking the review spam a real send"), so there's no way to force a real test short
+of the actual cron firing. First real send is the next Monday. Full detail FEATURE_LOG rule 189.
+
+## 🟢 Shipped: greenlit Ops_Build_Queue batch (telemetry + digest health) — full detail FEATURE_LOG rule 188
+Brett handed over the live 18-item greenlit queue and asked for relevance-checked builds, not a
+blind pass. Every item was checked against live `/ops-telemetry` first. Root-caused two items
+that the queue itself had mis-described: receipt_parse's "73% failure rate" was one permanently
+corrupt file retrying forever (a hard 0-token Claude vision API rejection, not an OCR-quality
+problem) — fixed with a 3-attempt cap tracked in Config; items_summarize's "100% escalation" had
+zero diagnosable cause in telemetry because `routeAI` silently discarded the CHEAP-tier failure
+reason before escalating — now captured and logged. Also shipped: latency timers on the four
+job types that had none, per-job-type cost breakdown in `computeTelemetryMetrics`, and a digest
+`SYSTEM HEALTH` section (job types with ≥3 runs and <95% success in 24h). Queue itself updated to
+match reality: 9 items marked `done`/`dropped` with traceable reasons (via the `Drop_Reason`/
+`Superseded_By` columns rule 187 added), 6 left `greenlit` with reasons why (2 need real
+profiling data first, not a blind fix; 1 is architecturally impossible to build as a pure
+self-check; 1 touches auto-SMS to real owners and needs its own design pass, not a freehand
+build). `BUILD_VERSION` → `2026-09-17.2`.
+
+## 🟢 Shipped: Optimizer v1.1 — product/UX lens + Ops_Build_Queue integrity self-check — full detail FEATURE_LOG rule 187
+Concurrent session (landed mid-build on the item above, no conflict): widened the Optimizer
+beyond telemetry-reactive fixes to also surface UI/functionality/usability opportunities via the
+existing Scout & Reuse-Radar task, and gave `Ops_Build_Queue` real `Drop_Reason`/`Superseded_By`
+columns so a dropped/superseded item carries its own evidence instead of just vanishing.
+`BUILD_VERSION` → `2026-09-17.1`.
 
 ## 🟡 Open: confirm the GitHub Actions `CRON_SWEEP_TOKEN` repo secret is actually set
 Brett ran a live bulk-welcome test into quiet hours and asked whether it should have gone out
