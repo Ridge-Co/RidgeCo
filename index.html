@@ -392,6 +392,12 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary small" onclick="bulkSetPins()">Auto-Set PINs from Phone</button>
     </div>
     <div class="search-bar" style="margin-bottom:10px"><input type="text" id="tenant-search" placeholder="Search by name, property, unit…" oninput="renderTenantsPage()" style="width:100%;padding:9px 12px 9px 32px"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <select id="tenant-filter-owner" onchange="renderTenantsPage()" style="min-width:200px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px;font-size:12px;color:var(--text)">
+        <option value="">All Owners</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px"><input type="checkbox" id="tenant-filter-owner-exclude" onchange="renderTenantsPage()"> Exclude this owner instead of showing only them</label>
+    </div>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-unwelcomed" onchange="renderTenantsPage()"> Only show tenants who haven't received a welcome message</label>
     <div id="tenants-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
