@@ -8368,12 +8368,18 @@ async function opsApprove(env, body) {
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   const now = new Date().toISOString(); let queued = 0;
   for (const it of items) {
+    // Risk_Class carries through from whatever proposed the item — never invented here, and
+    // never defaulted to SAFE. Only the literal string 'SAFE' counts as SAFE; anything else
+    // (missing, misspelled, explicitly 'GATED') stores as GATED, matching judge()'s own
+    // fail-closed posture (see the OPS_QUEUE_COLS comment above).
+    const riskClass = String(it.risk_class || it.riskClass || '').toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
     await addRow(env, OPS_QUEUE_TAB, {
       Timestamp: now, Title: String(it.title || '').slice(0, 200), Rank: String(it.rank || ''),
       Problem: String(it.problem || '').slice(0, 600),
       Impact: String(it.impact || '').slice(0, 300), Effort: String(it.effort || ''), Tag: String(it.tag || ''),
       First_Step: String(it.action || it.first_step || '').slice(0, 500),
       Review_TS: String((body && body.review_ts) || ''), Status: 'greenlit', Approved_By: String((body && body.by) || 'command-center'),
+      Risk_Class: riskClass,
     });
     queued++;
   }
