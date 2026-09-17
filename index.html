@@ -3062,10 +3062,30 @@ function renderVendorsPage() {
 // ── Tenants ──────────────────────────────────────────────────
 function renderTenantsPage() {
   var el = document.getElementById('tenants-list');
+  var ownerSel = document.getElementById('tenant-filter-owner');
+  // Populate once — rebuilding on every keystroke would reset whatever the person picked.
+  if (ownerSel && ownerSel.options.length <= 1) {
+    var ownersForFilter = safeArray(state.owners).filter(function(o){return o.Active!=='FALSE';})
+      .sort(function(a,b){ return (a.Company||a.First_Name||'').localeCompare(b.Company||b.First_Name||''); });
+    ownerSel.innerHTML = '<option value="">All Owners</option>' + ownersForFilter.map(function(o){
+      return '<option value="'+o.ID+'">'+esc(o.Company || ((o.First_Name||'')+' '+(o.Last_Name||'')).trim())+'</option>';
+    }).join('');
+  }
+  var ownerFilter = ownerSel ? ownerSel.value : '';
+  var ownerExclude = !!((document.getElementById('tenant-filter-owner-exclude')||{}).checked);
   var search = ((document.getElementById('tenant-search')||{}).value||'').toLowerCase().trim();
   var onlyUnwelcomed = !!((document.getElementById('tenant-filter-unwelcomed')||{}).checked);
   var allTenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
   if (onlyUnwelcomed) allTenants = allTenants.filter(function(t){ return t.Welcome_Sent !== 'TRUE'; });
+  if (ownerFilter) {
+    allTenants = allTenants.filter(function(t){
+      var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
+      var propId = t.Property_ID || (unit&&unit.Property_ID) || '';
+      var prop = safeArray(state.properties).find(function(p){return String(p.ID)===String(propId);});
+      var isOwner = !!(prop && String(prop.Owner_ID) === String(ownerFilter));
+      return ownerExclude ? !isOwner : isOwner;
+    });
+  }
 
   var tenants = search ? allTenants.filter(function(t) {
     var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
