@@ -1,10 +1,15 @@
 # WHERE THINGS STAND — Sep 16-17, 2026 (owner-scoped receipt viewer shipped; Hub's own Photos & Files receipt-view bug found and fixed; Alex Busey's WO-1091 bill corrected; vendor invoice confirmation email built + soft-launched; vendor self-service contact-info update shipped)
 
-## 🟢 Shipped: vendor self-service contact-info update ("My Info") — full detail FEATURE_LOG rule 180
+## 🟢 Shipped: vendor self-service contact-info update ("My Info") — full detail FEATURE_LOG rule 180 (+ addendum)
 Follow-on to the vendor confirmation email work: a real "👤 MY INFO" screen in `vendor.html` so a
 vendor can update their own Phone/Email/Company. Old values are captured in a new
 `Vendor_Contact_History` tab (old + new value, one row per changed field) BEFORE the `Vendors`
-row is overwritten — live-verified end to end (a real Company change + revert produced exactly
+row is overwritten — live-verified at BOTH layers: the backend (real Sheets round-trip) and,
+per Brett's direct follow-up, a real headless-Chromium pass against the actual live page
+(real PIN login, real save/reopen/revert, a full page reload to confirm the save was genuinely
+server-side, zero console errors — not just a code read-through). One pre-existing, unrelated
+cosmetic quirk found in passing (MY INFO/FEEDBACK buttons render solid blue instead of muted —
+`.btn-muted` isn't an actual defined class) and logged to `CAPTURE_INBOX.md`, not fixed inline. end to end (a real Company change + revert produced exactly
 the two expected history rows with correct before/after values, not just a code read-through).
 Name is deliberately NOT self-editable (would risk breaking the vendor's own PIN-login name
 match) — stays an admin edit. `BUILD_VERSION` → `2026-09-16.14`, confirmed live. Nothing pending
