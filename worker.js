@@ -3741,6 +3741,7 @@ async function getWorkOrdersList(env, url) {
   return json(filtered);
 }
 async function assignVendor(env, body) {
+  const _t0 = Date.now();
   // notify defaults TRUE — preserves existing behavior for the Assign/Reassign Vendor modal
   // (which always says "Assign + Send SMS" and should keep meaning that). Pass notify:false
   // only from the New Work Order creation flow's "Notify vendor + tenant now" checkbox, for
