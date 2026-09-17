@@ -4335,7 +4335,7 @@ async function welcomeSend(env, body) {
       const cfg = await fetchConfig(env);
       const assistantName = cfg.ASSISTANT_NAME || 'Riley';
       const tpl = await getMessageTemplate(env, 'vendor_welcome', 'sms');
-      const tokens = { FirstName: firstName, PortalUrl: PORTAL_BASE + '/vendor.html', AssistantName: assistantName };
+      tokens = { FirstName: firstName, PortalUrl: PORTAL_BASE + '/vendor.html', AssistantName: assistantName };
       defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
         : `Hi ${firstName}, it's ${assistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal (${PORTAL_BASE}/vendor.html) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)`;
     }
