@@ -73,4 +73,12 @@ const fnBody = grab('welcomeSend');
   ok(!fnBody.includes('if (!r.sent) return json') , 'the old sent-only guard is gone, not left alongside the fixed one');
 }
 
+// ---- regression guard: tokens must be the single hoisted variable renderTemplate uses below,
+// not re-declared inside a branch (which would shadow it and silently reintroduce today's bug —
+// a custom message rendering with no tokens available) ----
+{
+  ok(fnBody.includes('let tokens = {}'), 'tokens is declared once, hoisted above both branches');
+  ok(!fnBody.includes('const tokens ='), 'neither branch re-declares tokens with const — that would shadow the hoisted one');
+}
+
 console.log(`welcome-send: ${n}/${n} passing`);
