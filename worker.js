@@ -4351,6 +4351,164 @@ async function sendPropertyNotice(env, body) {
 
 // ── VENDOR BILLING ───────────────────────────────────────────
 
+// B-20260916-1930-k7: vendor invoice confirmation email — pure date/holiday helpers.
+// See context/VENDOR_INVOICE_CONFIRMATION_EMAIL_BUILD_BRIEF_v1.0.md for the full design.
+// Config.US_HOLIDAYS holds "YYYY-MM-DD:Name,YYYY-MM-DD:Name,..." — a small, Brett-maintained
+// list (no floating-holiday date math to get subtly wrong), parsed into a Map here.
+function parseHolidayMap(raw) {
+  const map = new Map();
+  String(raw || '').split(',').forEach(pair => {
+    const idx = pair.indexOf(':');
+    if (idx < 0) return;
+    const date = pair.slice(0, idx).trim();
+    const name = pair.slice(idx + 1).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && name) map.set(date, name);
+  });
+  return map;
+}
+
+// The next BUSINESS day strictly after dateStr — skips Saturday, Sunday, and any date in
+// holidayMap. Returns the date the clock starts on, plus which (if any) named holidays were
+// skipped, so the caller can decide whether to explain the shift to the vendor. A skipped
+// weekend with no named holiday is NOT reported — that's the ordinary, expected case and
+// doesn't need explaining every time.
+function nextBusinessDay(dateStr, holidayMap) {
+  const hmap = holidayMap instanceof Map ? holidayMap : new Map();
+  const d = new Date(String(dateStr || '') + 'T00:00:00Z');
+  if (isNaN(d.getTime())) return { date: '', skippedHolidays: [] };
+  const skippedHolidays = [];
+  d.setUTCDate(d.getUTCDate() + 1);
+  for (let guard = 0; guard < 30; guard++) {
+    const iso = d.toISOString().split('T')[0];
+    const dow = d.getUTCDay();
+    const holidayName = hmap.get(iso);
+    if (dow !== 0 && dow !== 6 && !holidayName) return { date: iso, skippedHolidays };
+    if (holidayName) skippedHolidays.push({ date: iso, name: holidayName });
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return { date: '', skippedHolidays }; // guard tripped — malformed/huge holiday list, fail safe rather than loop forever
+}
+
+// The vendor payment window: clock starts the next business day after submission, due 14
+// calendar days after that (Brett's own rule — a calendar-day count from a business-day start,
+// not 14 more business days).
+function vendorPaymentWindow(submissionDateStr, holidayMap) {
+  const start = nextBusinessDay(submissionDateStr, holidayMap);
+  if (!start.date) return null;
+  const due = new Date(start.date + 'T00:00:00Z');
+  due.setUTCDate(due.getUTCDate() + 14);
+  return { clock_start: start.date, due_date: due.toISOString().split('T')[0], skipped_holidays: start.skippedHolidays };
+}
+
+// B-20260916-1930-k7: the confirmation email itself. Best-effort — every caller wraps this in
+// its own try/catch; a failure here must never fail or slow the vendor's Submit tap. Soft-
+// launched behind Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS (comma-separated Vendor IDs) so
+// it can be proven on one real vendor (Alex Busey) before being widened to everyone. Attachments
+// are sent as signed /vendor-file/view links (the same private-file proxy the portal already
+// uses), NEVER as a raw drive.google.com share link — these files are deliberately never made
+// "anyone with the link" shareable (privacy — FEATURE_LOG rule 13), and a bare Drive link would
+// silently repeat the WO-1071 black-page bug.
+async function sendVendorInvoiceConfirmationEmail(env, billRow) {
+  const vendorId = billRow.Vendor_ID || billRow.vendor_id || '';
+  const woId = billRow.WO_ID || billRow.wo_id || '';
+  if (!vendorId || !woId) return;
+  const config = await fetchConfig(env);
+  const allowIds = String(config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!allowIds.includes(String(vendorId))) return; // soft launch — not enabled for this vendor yet
+
+  const [vendors, wos, properties] = await Promise.all([
+    fetchTab(env, 'Vendors').catch(() => []),
+    fetchTab(env, 'Work_Orders').catch(() => []),
+    fetchTab(env, 'Properties').catch(() => []),
+  ]);
+  const vendor = vendors.find(v => String(v.ID) === String(vendorId));
+  if (!vendor) return;
+
+  if (!vendor.Email) {
+    // Ask once, via SMS (subject to the standing Config.TWILIO_ENABLED switch, same as every
+    // other SMS in this file) — never re-nudge on every future bill while Email stays blank.
+    if (!vendor.Email_Request_Sent_Date) {
+      try { await ensureColumns(env, 'Vendors', ['Email_Request_Sent_Date']); } catch (e) {}
+      const vname = (vendor.First_Name || (vendor.Name || '').split(' ')[0] || '').trim();
+      const msg = (vendor.Language === 'es')
+        ? `Hola${vname ? ' ' + vname : ''}, no tenemos un correo electrónico registrado para usted. Agréguelo en su portal de proveedores de Ridge Co para recibir una copia de cada factura que envíe y la fecha de pago.`
+        : `Hi${vname ? ' ' + vname : ''}, we don't have an email on file for you. Add one in your Ridge Co vendor portal so we can send you a copy of every invoice you submit and when payment is due.`;
+      try {
+        await sendSMS(env, vendor.Phone, msg);
+        await updateRow(env, 'Vendors', vendor.ID, { Email_Request_Sent_Date: new Date().toISOString().split('T')[0] });
+      } catch (e) {}
+    }
+    return;
+  }
+
+  const wo = findWO(wos, woId) || {};
+  const prop = wo.Property_ID ? properties.find(p => String(p.ID) === String(wo.Property_ID)) : null;
+  const address = prop ? (prop.Address || '') : '';
+  const isEs = vendor.Language === 'es';
+  let description = wo.Description || '';
+  if (isEs && description) { try { const t = await translateText(env, description, 'English', 'Spanish'); if (t) description = t; } catch (e) {} }
+
+  const holidayMap = parseHolidayMap(config.US_HOLIDAYS);
+  const submissionDate = String(billRow.Submitted_At || new Date().toISOString()).split('T')[0];
+  const win = vendorPaymentWindow(submissionDate, holidayMap);
+  const submittedDisplay = billRow.Submitted_At
+    ? new Date(billRow.Submitted_At).toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : '';
+  const dueDisplay = win ? new Date(win.due_date + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) : '';
+  const reasonEn = (win && win.skipped_holidays.length) ? ` (${win.skipped_holidays.map(h => h.name).join(', ')} falls in between, so the window starts a bit later than usual)` : '';
+  const reasonEs = (win && win.skipped_holidays.length) ? ` (${win.skipped_holidays.map(h => h.name).join(', ')} cae en medio, así que la ventana comienza un poco más tarde de lo habitual)` : '';
+
+  const base = String(env.WORKER_BASE_URL || 'https://maintenance-hub.brett-2f8.workers.dev').replace(/\/+$/, '');
+  let fileToken = '';
+  try { fileToken = await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET); } catch (e) {}
+  const fileLink = (fileId) => `${base}/vendor-file/view?wo_id=${encodeURIComponent(woId)}&file_id=${encodeURIComponent(fileId)}&t=${encodeURIComponent(fileToken)}`;
+
+  const linkRows = [];
+  if (fileToken && billRow.Invoice_File_ID) {
+    linkRows.push(`<li><a href="${_escHtml(fileLink(billRow.Invoice_File_ID))}">${isEs ? 'Su factura' : 'Your invoice file'}</a></li>`);
+  }
+  if (fileToken) {
+    let receipts = [];
+    try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+    (Array.isArray(receipts) ? receipts : []).forEach((r, i) => {
+      if (!r || r.pay === 'account' || !r.url) return;
+      const fid = driveIdFromUrl(r.url);
+      if (!fid) return;
+      const label = r.desc ? _escHtml(String(r.desc)) : (isEs ? `Recibo ${i + 1}` : `Receipt ${i + 1}`);
+      linkRows.push(`<li><a href="${_escHtml(fileLink(fid))}">${label}</a></li>`);
+    });
+  }
+
+  const vname = (vendor.First_Name || (vendor.Name || '').split(' ')[0] || '').trim();
+  const html = isEs ? [
+    `<p>Hola${vname ? ' ' + vname : ''},</p>`,
+    `<p>Hemos recibido su factura para <b>OT ${_escHtml(woId)}</b>${address ? ' — ' + _escHtml(address) : ''}${description ? '<br>' + _escHtml(description) : ''}.</p>`,
+    `<ul>`,
+    billRow.Vendor_Invoice_No ? `<li>Su número de factura: ${_escHtml(billRow.Vendor_Invoice_No)}</li>` : '',
+    billRow.Vendor_Invoice_Date ? `<li>Fecha de la factura: ${_escHtml(billRow.Vendor_Invoice_Date)}</li>` : '',
+    billRow.Total ? `<li>Monto: $${_escHtml(billRow.Total)}</li>` : '',
+    submittedDisplay ? `<li>Enviado: ${_escHtml(submittedDisplay)}</li>` : '',
+    `</ul>`,
+    linkRows.length ? `<p>Archivos que envió:</p><ul>${linkRows.join('')}</ul>` : '',
+    win ? `<p>Ventana de pago estándar: 14 días, comenzando el siguiente día hábil después del envío${reasonEs}. Fecha de pago prevista: <b>${_escHtml(dueDisplay)}</b>.</p>` : '',
+    `<p style="color:#888;font-size:11px">Ridge Co — esta es una confirmación automática, no es necesario responder.</p>`,
+  ] : [
+    `<p>Hi${vname ? ' ' + vname : ''},</p>`,
+    `<p>We've received your invoice for <b>WO ${_escHtml(woId)}</b>${address ? ' — ' + _escHtml(address) : ''}${description ? '<br>' + _escHtml(description) : ''}.</p>`,
+    `<ul>`,
+    billRow.Vendor_Invoice_No ? `<li>Your invoice #: ${_escHtml(billRow.Vendor_Invoice_No)}</li>` : '',
+    billRow.Vendor_Invoice_Date ? `<li>Invoice date: ${_escHtml(billRow.Vendor_Invoice_Date)}</li>` : '',
+    billRow.Total ? `<li>Amount: $${_escHtml(billRow.Total)}</li>` : '',
+    submittedDisplay ? `<li>Submitted: ${_escHtml(submittedDisplay)}</li>` : '',
+    `</ul>`,
+    linkRows.length ? `<p>Files you submitted:</p><ul>${linkRows.join('')}</ul>` : '',
+    win ? `<p>Standard payment window: 14 days, starting the next business day after submission${reasonEn}. Expected payment date: <b>${_escHtml(dueDisplay)}</b>.</p>` : '',
+    `<p style="color:#888;font-size:11px">Ridge Co — this is an automated confirmation, no reply needed.</p>`,
+  ];
+  const subject = isEs ? `Hemos recibido su factura — OT ${woId}` : `We've received your invoice — WO ${woId}`;
+  await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') });
+}
+
 async function addVendorBill(env, body) {
   // Vendor_Bills stores Created_Date as a date only, so the finest duplicate window
   // available here is the same day: same job, same vendor, same total, same day, still
