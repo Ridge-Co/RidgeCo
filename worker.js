@@ -867,6 +867,7 @@ async function vendorByPin(env, url) {
       vendor_id: vendor.ID, vendor_name: vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim(),
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
       vendor_trades: vendor.Trades||vendor.Trade||'', vendor_rate: vendor.Hourly_Rate||'', language: vendor.Language||'en',
+      vendor_email: vendor.Email||'', vendor_company: vendor.Company||'',
       token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET),
     });
   });
