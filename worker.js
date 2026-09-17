@@ -9421,9 +9421,31 @@ async function receiptScan(env) {
   const data = await res.json(); const files = data.files || [];
   let existing = []; try { existing = await fetchTab(env, 'Receipts_Queue'); } catch (e) {}
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
-  let n = 0; const errs = [];
-  for (const f of files) { if (seen.has(f.id)) continue; try { await receiptIntake(env, { file_id: f.id, source: 'drive' }); n++; } catch (e) { errs.push(f.name + ': ' + (e.message || 'err')); } }
-  return json({ ok: true, folder_id: folder, scanned: n, skipped: files.length - n, errors: errs });
+  // Permanently-failing files (Sep 2026, greenlit #17): live telemetry showed the SAME file
+  // failing every single day at cron time with "Could not process image" — a hard Claude
+  // vision API rejection at 0 tokens (a format/corruption problem, not an OCR-quality one).
+  // Nothing ever added the file to Receipts_Queue on failure, so `seen` never included it and
+  // it retried forever. Now capped at 3 attempts, tracked in Config (no schema change to the
+  // live Receipts_Queue tab), then skipped and surfaced via `stuck` instead of retried daily.
+  let failures = {}; try { failures = JSON.parse(cfg.receipt_intake_failures || '{}'); } catch (e) { failures = {}; }
+  let n = 0; const errs = []; let failuresChanged = false;
+  for (const f of files) {
+    if (seen.has(f.id)) continue;
+    const prior = failures[f.id];
+    if (prior && prior.attempts >= 3) continue; // already tried 3x — permanently unreadable, don't keep burning API calls
+    try {
+      await receiptIntake(env, { file_id: f.id, source: 'drive' });
+      n++;
+      if (prior) { delete failures[f.id]; failuresChanged = true; } // succeeded on a later retry — clear the record
+    } catch (e) {
+      errs.push(f.name + ': ' + (e.message || 'err'));
+      failures[f.id] = { name: f.name, error: String(e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
+      failuresChanged = true;
+    }
+  }
+  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_intake_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  const stuck = Object.values(failures).filter(x => x.attempts >= 3);
+  return json({ ok: true, folder_id: folder, scanned: n, skipped: files.length - n, errors: errs, stuck });
 }
 
 async function listReceiptQueue(env, url) {
