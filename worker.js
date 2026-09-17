@@ -3915,7 +3915,7 @@ async function updateStatus(env, body) {
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
     }
   }
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_status', Skill_Or_Endpoint:'/status', Success:'TRUE', Notes:`status=${body.status||''}` }); } catch(_){}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_status', Skill_Or_Endpoint:'/status', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`status=${body.status||''}` }); } catch(_){}
   return json({ success: true });
 }
 
