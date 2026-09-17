@@ -1,7 +1,9 @@
 # Optimizer Round Log
 
 The live, persistent home of the Optimizer's ranked Top-10 and the carry-forward **Bench**.
-Governed by `CONTINUOUS_IMPROVEMENT_STRATEGY_v1.0` + PAT-032. Updated every round.
+Governed by `CONTINUOUS_IMPROVEMENT_STRATEGY_v1.0` (+ the **v1.1 addendum**, Sep 17 — 4th Product/UX
+lens folded into Scout & Reuse-Radar + a standing `Ops_Build_Queue` integrity self-check) + PAT-032.
+Updated every round.
 
 **How to read this:** Impact is ranked highest-first (time/effort saved OR cost saved; effectiveness never ignored — see the rubric in the strategy doc). Effort is the *selection* factor, not the ranking axis. **Chosen** items graduate to a build. **Not chosen** items drop to the Bench and are **re-scored next round** — nothing is discarded; a lower rank now can rise to #1 later.
 
