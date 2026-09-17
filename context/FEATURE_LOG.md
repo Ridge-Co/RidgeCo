@@ -1380,3 +1380,61 @@ Human-gate required: no — this is Brett's own explicit ask, built to spec, and
 
 No code changed as a result of this pass — confirms rule 180 as shipped, doesn't amend it.
 
+**181. Editable Message Templates system (Message_Templates tab, {Token} substitution) + property-wide notice broadcast (Sep 16 2026, worker.js + index.html; new test/message-queue.test.mjs opt-out assertions + test/message-templates.test.mjs).** Brett: turn on real SMS to tenants/vendors — then, before any went out, caught that the copy was wrong (generic "Ridge Co. Property Management," no landlord reference, no acknowledgment of the new number, and named Brett personally when he wanted an assistant persona instead) and that there was no way to edit that copy without a code push each time.
+
+- New `Message_Templates` tab (self-seeding — rows are inserted once, only if the tab is empty, so a redeploy never clobbers an edit made on the Messaging page) holding `pin_tenant`/`pin_vendor`/`pin_owner`/`tenant_welcome`/`vendor_welcome`/`property_notice` (sms + email channels), each editable via a new Messaging page (nav: 📢 MESSAGING) with a live character/segment counter that warns when a stray em dash or curly quote silently forces Unicode encoding (70 vs 160 chars/segment) — the single biggest, most avoidable driver of SMS cost/length, worth catching at edit time.
+- `sendPinMessage` and `welcomeSend` both now resolve the tenant's own Property → Owner and interpolate `{Owner}` (the real `Owners.Company`, e.g. "Goldszmidt Properties") instead of a generic "Ridge Co" — same join, so the two message paths can't drift from each other's tone again.
+- Assistant persona: `Riley` (Config key `ASSISTANT_NAME`, defaults to `'Riley'` if unset — a one-place rename, not hardcoded into every template). Every template also states plainly that this line is outbound-only for now ("texting back won't reach anyone yet") since inbound is fully routed through a Twilio Studio Flow, not this codebase, today — set up deliberately so the two don't tell contradictory stories once Brett's own Studio Flow auto-response goes live.
+- New `POST /property/notice` — a property-wide broadcast (water shutoffs, power outages) to every active tenant at one property, SMS and/or email. Deliberately bypasses the quiet-hours hold (an urgent notice can't wait for 9am) while still honoring Global/Test Mode and — new, see below — `SMS_OptOut`. `smsGatedSend` gained a `bypassQuietHours` opt used only by this call site.
+- `Tenants`/`Vendors.SMS_OptOut` existed as a column already but nothing in this file ever checked it — wired into `smsGateDecision` for the first time (tenant and vendor), and into `releaseMessageQueue`/`processQuietHoursQueue`'s re-evaluation too, not just the live-send path.
+- Full suite 72/72 at time of shipping (new opt-out assertions in `test/message-queue.test.mjs`, new `test/message-templates.test.mjs` for `renderTemplate` token substitution). `BUILD_VERSION` → `2026-09-16.11`, confirmed live.
+
+Human-gate required: no for the mechanism itself (Global stayed `FALSE` through this build); yes for actually turning `TWILIO_ENABLED`/`TWILIO_TEST_MODE` on, which Brett did himself in a later session turn, not this one.
+
+**182. Legacy/duplicate tenant PIN format fixed portfolio-wide; `adminFixPins` generalized to catch this class of bug automatically going forward (Sep 16 2026, worker.js; live data fix via `/tenant/update` + `/admin/fix-pins`).** Brett, right before a real rollout: "lots of tenants still have the old 5 digit numeric pin instead of the alphanumeric... also fix on owners and vendors as needed."
+
+- Live audit found 18 active Tenants with a plain 5-digit legacy PIN (pre-dating the 3-letter-prefix scheme) — regenerated each via `generatePIN(phone)`, live-verified afterward: 0 bad-format PINs remain, 0 duplicate PINs anywhere across Tenants/Vendors/Owners.
+- Found in the process, not by design: Tenants 27 (James) and 29 (Kelsey), same property (20 E Eager St), shared the **identical** PIN `37450` — and James's didn't even match his own phone, it matched Kelsey's. A real access collision, not just a cosmetic formatting gap. Resolved as a side effect of regenerating off each tenant's own phone.
+- `adminFixPins` (the Dev Log "Backfill PINs" tool) previously only filled in a *blank* PIN — never checked an existing-but-malformed one. That's the actual root cause: the only prior defense against this was two hardcoded name checks (`if name==='Adrian'`/`'Heather'`) on the Owners tab, a one-off patch for exactly this problem that never generalized. Replaced with `PIN_FORMAT_OK` (`/^[A-Z]{3}\d{5}$/`), checked across Vendors/Owners/Owner_Users/Tenants — any non-conforming PIN (blank or malformed) now gets regenerated automatically the next time this tool runs, not just on request.
+- Vendors and Owners had zero malformed PINs at audit time — the widened check found nothing to fix there today, but is now live protection against it recurring.
+- `BUILD_VERSION` → `2026-09-16.12`, confirmed live. Full suite unaffected (this touches only admin/data-repair code, no new test added — verified live instead via before/after audits of all three tables, matching this tool's own established convention).
+
+Human-gate required: no — data-repair tool improvement + a live fix Brett asked for directly before a real send.
+
+**183. Tenant portal: Completed is the last stage a tenant sees — Closed/Paid filter removed, billing-lifecycle labels folded into a plain "Completed" everywhere (Sep 17 2026, tenant.html only).** Brett: "the tenant page does not need to filter by closed/paid at all. completed is the last stage the tenant needs to see."
+
+- Removed the `<option value="Paid">Closed / Paid</option>` filter entirely.
+- `STATUS_LABELS`: `Pending Invoice`/`Invoiced`/`Paid` now all read `"Completed"` (were "Work complete — billing pending" / "Invoice submitted" / "Closed") — same badge CSS class already shared the same green look, so nothing changes visually except the words.
+- The "Completed" filter itself now matches `Complete`/`Pending Invoice`/`Invoiced`/`Paid` (previously a strict `Status === 'Complete'` match) — removing the Paid filter option without this would have quietly hidden any WO that had progressed past Complete internally, with no remaining way for a tenant to find it.
+- The per-WO detail "STATUS TIMELINE" (`tlSteps`) now ends at `Complete` — any later billing status lands on that same final step rather than continuing to a "Paid"/"Closed" step of its own.
+- Full suite unaffected (frontend-only copy/filter change, no new backend logic to test). Live-verified via a fresh anonymous clone + inline-script `node --check` on all 3 `tenant.html` script blocks.
+
+Human-gate required: no.
+
+**184. Tenants page: Owner filter (show-only or exclude) for segmented bulk sends (Sep 17 2026, index.html only).** Follow-on to rule 183's conversation — Brett wants to send a different, PIN-less notice to every tenant except one owner's (Goldszmidt Properties, rolled out separately), staggering the full portfolio over several days "to manage the volume." No existing way to select "everyone but owner X" out of ~100 tenants by hand.
+
+- New `<select id="tenant-filter-owner">` (All Owners + each active owner by Company/name) + an "Exclude this owner instead of showing only them" checkbox, wired into `renderTenantsPage()`'s existing filter chain (alongside search / only-unwelcomed). Populated once on first render, not rebuilt on every keystroke.
+- Filters by the tenant's own Property → `Owner_ID`, same join pattern used elsewhere in this file.
+
+Human-gate required: no.
+
+**185. Cross-page checkbox bleed fixed — Tenants/Vendors/Owners bulk-select now fully independent (Sep 17 2026, index.html only).** Brett, live: "you added vendors somehow and i can't de-select them... i only want to send tenant messages from the tenant page and so on."
+
+- Root cause: `updatePinActionBar`/`selectAllPinChecks`/`clearPinChecks`/`bulkSendPinFromTab`/`bulkSendWelcomeFromTab` all queried `.pin-check(:checked)` **document-wide** — a checkbox ticked on the Vendors or Owners page (even from an earlier session; page-hidden rows stay in the DOM, just not visible) silently rode along on a Tenants-only send, with no way to even see it from the Tenants page to deselect it.
+- Fixed by scoping every one of those functions to the specific page's own list container (`tenants-list`/`vendors-list`/`owners-list`) via a small `PIN_CHECK_PAGES` map, rather than `document`. `bulkSendPinFromTab`/`bulkSendWelcomeFromTab` now take the calling page's list id as a parameter (all 5 button call sites across the 3 pages updated to pass their own). `clearPinChecks(listId)` — omitted, clears every page (the existing post-send full-reset behavior); passed, clears only that one page.
+- One pre-existing, unreachable dead function (`bulkSendPins(type)`, no callers anywhere) has the same document-wide-query pattern and was deliberately left untouched — zero live impact, out of scope for this fix.
+- Full suite 73/73 (frontend-only bug, verified via `node --check` on all 5 index.html script blocks; no new automated test — the fix is a DOM-scoping change with no pure logic to extract).
+
+Human-gate required: no.
+
+**186. Bulk welcome-send text finally matches the Messaging page template, and is actually personalized per recipient (Sep 17 2026, worker.js + index.html; test/welcome-send.test.mjs updated).** Brett: "the bulk send text differs greatly from the template on the messages page. that was not the intention."
+
+Two stacked bugs, not one:
+- `bulkSendWelcomeFromTab`'s textarea prefill (`DEFAULT_TENANT_WELCOME_TEXT`/`DEFAULT_VENDOR_WELCOME_TEXT`) was a hardcoded snapshot from Sep 14, before the Messaging page (rule 181) existed — never touched since, so it read nothing like the live `tenant_welcome`/`vendor_welcome` template. Fixed: the modal now fetches `/message-templates` live and replaces the (updated, but still just a fallback-for-the-instant-before-the-fetch-resolves) hardcoded text with the real row's `Body`.
+- Deeper bug: `welcomeSend`'s `finalMsg` used `body.message` **verbatim**, with zero `{FirstName}`/`{Owner}`/`{Address}` substitution — a bulk batch either sent every recipient the exact same unpersonalized line, or, worse, the literal text `"{FirstName}"` if Brett left the template's own tokens in place expecting them to fill in per person. Fixed: `tokens` is now hoisted out of the per-type branches and `renderTemplate()` is applied to a custom `body.message` too, not just the generated default — a no-op for plain text with no braces in it, correct per-recipient substitution for anything that came from (or still contains) the live template's tokens.
+- Live-verified end to end, not just via source-pattern tests: sent a real message with `{FirstName}`/`{AssistantName}`/`{Owner}`/`{Address}` tokens to Brett's own test tenant record and confirmed the queued `Message_Queue` row shows them fully substituted ("Hi Brett! This is Riley, on behalf of Goldszmidt Properties, about 20 E Eager St Unit Apt 3...") — no leftover braces.
+- `test/welcome-send.test.mjs` updated for the new `body.message ? renderTemplate(...) : defaultMsg` source shape, plus a new regression guard confirming `tokens` stays the single hoisted variable (never re-shadowed by a `const tokens` inside a branch, which would silently reintroduce this exact bug in a new form). Full suite 73/73. `BUILD_VERSION` → `2026-09-16.15`, confirmed live.
+
+Human-gate required: no.
+
+
