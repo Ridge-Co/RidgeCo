@@ -50,9 +50,13 @@ const fnBody = grab('welcomeSend');
   ok(fnBody.includes('property, owner, message_body'), 'tenant sendOpts passes the real property/owner objects to smsGatedSend, not leaving those gates to silently default open');
 }
 
-// ---- editable override: body.message, when given, replaces the default entirely ----
+// ---- editable override: body.message, when given, still overrides the default, but now gets
+// the same per-recipient token substitution the template default gets (Sep 17 2026 fix — a
+// bulk send's edited text used to go out completely raw, so a batch either sent every
+// recipient literally the same unpersonalized string, or the literal text "{FirstName}" if
+// Brett left the template's own tokens in place expecting them to fill in per person) ----
 {
-  ok(fnBody.includes('body.message ? String(body.message) : defaultMsg'), 'an explicit message in the request body fully overrides the generated default, so Hub edits actually take effect');
+  ok(fnBody.includes('body.message ? renderTemplate(String(body.message), tokens) : defaultMsg'), 'an explicit message in the request body still overrides the generated default, but is run through renderTemplate with that recipient\'s own tokens first — a bulk edit is no longer sent completely raw');
 }
 
 // ---- invalid type is rejected, not silently mishandled ----
