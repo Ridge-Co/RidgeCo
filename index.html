@@ -4117,8 +4117,9 @@ function confirmSendWelcome() {
   });
 }
 
-function bulkSendWelcomeFromTab() {
-  var checked = Array.from(document.querySelectorAll('.pin-check:checked'));
+function bulkSendWelcomeFromTab(listId) {
+  var scopeEl = (listId && document.getElementById(listId)) || document;
+  var checked = Array.from(scopeEl.querySelectorAll('.pin-check:checked'));
   if (!checked.length) return;
   _welcomeSendQueue = checked.map(function(cb) {
     return { type: cb.dataset.type, id: cb.dataset.id, name: cb.dataset.name, phone: cb.dataset.phone };
