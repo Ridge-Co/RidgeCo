@@ -10732,10 +10732,12 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
-<!-- ADD TEMPLATE MODAL -->
+<!-- ADD/EDIT TEMPLATE MODAL — same form serves both; tmpl-id set = editing (see
+     openEditTemplateModal / submitAddTemplate) -->
 <div class="modal-overlay" id="modal-add-template">
   <div class="modal" style="max-width:500px">
-    <div class="modal-header"><div class="modal-title">ADD WO TEMPLATE</div><button class="modal-close" onclick="closeModal('modal-add-template')">✕</button></div>
+    <div class="modal-header"><div class="modal-title" id="tmpl-modal-title">ADD WO TEMPLATE</div><button class="modal-close" onclick="closeModal('modal-add-template')">✕</button></div>
+    <input type="hidden" id="tmpl-id" value="">
     <div class="form-grid">
       <div class="form-group full"><label>Template Name *</label><input type="text" id="tmpl-name" placeholder="e.g. Phoenix Inspection, HVAC PM, Pest Control Q"></div>
       <div class="form-group"><label>Owner <span style="font-weight:normal;color:var(--muted)">(blank = global)</span></label><select id="tmpl-owner"><option value="">Global</option></select></div>
@@ -10751,7 +10753,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
     </div>
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-add-template')">Cancel</button>
-      <button class="btn" onclick="submitAddTemplate()">SAVE TEMPLATE</button>
+      <button class="btn" id="tmpl-save-btn" onclick="submitAddTemplate()">SAVE TEMPLATE</button>
     </div>
   </div>
 </div>
