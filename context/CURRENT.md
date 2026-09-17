@@ -1,4 +1,14 @@
-# WHERE THINGS STAND — Sep 16, 2026 (owner-scoped receipt viewer shipped; Hub's own Photos & Files receipt-view bug found and fixed; Alex Busey's WO-1091 bill corrected; vendor invoice confirmation email built + soft-launched)
+# WHERE THINGS STAND — Sep 16-17, 2026 (owner-scoped receipt viewer shipped; Hub's own Photos & Files receipt-view bug found and fixed; Alex Busey's WO-1091 bill corrected; vendor invoice confirmation email built + soft-launched; vendor self-service contact-info update shipped)
+
+## 🟢 Shipped: vendor self-service contact-info update ("My Info") — full detail FEATURE_LOG rule 180
+Follow-on to the vendor confirmation email work: a real "👤 MY INFO" screen in `vendor.html` so a
+vendor can update their own Phone/Email/Company. Old values are captured in a new
+`Vendor_Contact_History` tab (old + new value, one row per changed field) BEFORE the `Vendors`
+row is overwritten — live-verified end to end (a real Company change + revert produced exactly
+the two expected history rows with correct before/after values, not just a code read-through).
+Name is deliberately NOT self-editable (would risk breaking the vendor's own PIN-login name
+match) — stays an admin edit. `BUILD_VERSION` → `2026-09-16.14`, confirmed live. Nothing pending
+— built to spec and verified, no open decision needed from Brett.
 
 ## 🟢 Shipped: vendor invoice confirmation email on bill submission — full detail FEATURE_LOG rule 179, `context/VENDOR_INVOICE_CONFIRMATION_EMAIL_BUILD_BRIEF_v1.0.md`
 Brett (voice memo): auto-email a vendor everything they submitted on a bill — job description,
