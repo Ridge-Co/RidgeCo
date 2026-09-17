@@ -4075,8 +4075,13 @@ function bulkSendPinFromTab(listId) {
 // Bulk defaults are deliberately generic (no name) since one shared text goes to everyone
 // selected — the single-send preview is the personalized one (comes from the server, uses
 // that person's actual name/address).
-var DEFAULT_TENANT_WELCOME_TEXT = "Hi, this is Ridge Co Property Maintenance. Save this number — you can text us anytime with a maintenance request, and we'll keep you updated on any work by text. Questions? Just reply here.";
-var DEFAULT_VENDOR_WELCOME_TEXT = "Hi, welcome to the Ridge Co vendor network. You'll get a text with job details whenever we assign you work, along with a link to your vendor portal to accept jobs, log time, and submit invoices. Questions? Reply here or give us a call.";
+// Fallback only — shown for the instant before bulkSendWelcomeFromTab's live /message-templates
+// fetch resolves, so the textarea never flashes empty. Sep 17 2026: kept in sync with the actual
+// tenant_welcome/vendor_welcome template bodies at the time of writing, but the live fetch is
+// the source of truth — if these two drift from the Messaging page again, it only shows for a
+// moment, not on every send the way the old version (fetched never) did.
+var DEFAULT_TENANT_WELCOME_TEXT = "Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of {Owner} at {Address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing.";
+var DEFAULT_VENDOR_WELCOME_TEXT = "Hi {FirstName}, it's {AssistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal ({PortalUrl}) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)";
 var _welcomeSendQueue = [];
 var _currentWelcomeSend = null;
 
