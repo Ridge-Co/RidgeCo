@@ -8289,7 +8289,7 @@ async function runWeeklyReview(env, opts) {
     logged = true;
   } catch (_) { /* history write is best-effort; the review still returns */ }
   // Self-instrument (PAT-031): the reviewer is itself a measured job.
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Notes: `${metrics.total} rows/${days}d` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Latency_ms: Date.now() - _t0, Notes: `${metrics.total} rows/${days}d` }); } catch (_) {}
   return { ok: true, window_days: days, metrics, proposal, items: proposalItems, thin_data: thinData, logged, delivery };
 }
 
