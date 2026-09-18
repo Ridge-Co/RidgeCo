@@ -2640,10 +2640,20 @@ function scopeComputeMilestoneAmounts(schedule, subtotal, vendorCostTotal) {
   let custRunning = 0, vendRunning = 0;
   return schedule.map((m, i) => {
     const isLast = i === schedule.length - 1;
-    const custAmt = isLast ? +(subtotal - custRunning).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2);
+    // 'flat' overrides the CUSTOMER amount only, exactly as typed — never the vendor side (see
+    // scopeValidatePaymentSchedule's comment on why). A flat milestone never absorbs rounding
+    // drift either, last or not: "exactly Flat_Customer_Amount" means exactly that.
+    const isFlat = m.calc_mode === 'flat' && m.flat_customer_amount != null;
+    const custAmt = isFlat
+      ? +(+m.flat_customer_amount).toFixed(2)
+      : (isLast ? +(subtotal - custRunning).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2));
     const vendAmt = isLast ? +(vendorCostTotal - vendRunning).toFixed(2) : +((m.percent / 100) * vendorCostTotal).toFixed(2);
     custRunning = +(custRunning + custAmt).toFixed(2); vendRunning = +(vendRunning + vendAmt).toFixed(2);
-    return { label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: custAmt, vendor_amount: vendAmt };
+    return {
+      label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: custAmt, vendor_amount: vendAmt,
+      vendor_paid: m.vendor_paid !== false, calc_mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
+      flat_customer_amount: (m.flat_customer_amount != null ? m.flat_customer_amount : null),
+    };
   });
 }
 function scopeParsePaymentSchedule(s) {
