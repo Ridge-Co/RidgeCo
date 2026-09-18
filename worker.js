@@ -2759,6 +2759,9 @@ async function scopeProposalSign(env, body, ip, ua) {
           Scope_ID: String(s.ID), Signature_ID: String(signatureId), Label: m.label, Percent: String(m.percent),
           Trigger: m.trigger, Sequence: String(i + 1), Customer_Amount: String(m.customer_amount), Vendor_Amount: String(m.vendor_amount),
           Status: 'pending', Created_Date: now.toISOString(), Active: 'TRUE',
+          Vendor_Paid_At_This_Milestone: m.vendor_paid !== false ? 'TRUE' : 'FALSE',
+          Calc_Mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
+          Flat_Customer_Amount: (m.flat_customer_amount != null ? String(m.flat_customer_amount) : ''),
         });
         const mJson = await mResp.json().catch(() => ({}));
         milestones.push(Object.assign({ id: mJson.id }, m));
