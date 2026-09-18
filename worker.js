@@ -8370,7 +8370,7 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // finished build-ready brief once it moves an item to 'prepared'. Sliced to 45,000 chars in
 // opsQueuePrepare — comfortably under the Sheets 50,000-char cell limit. Blank until prepared.
 const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief'];
-// 'prepared' (Sep 18 2026, B-141) sits between greenlit and building: the Rung-1 Prepare agent's
+// 'prepared' (Sep 18 2026, B-240) sits between greenlit and building: the Rung-1 Prepare agent's
 // ONLY allowed transition (via the narrow OPS_QUEUE_TOKEN, see opsQueuePrepare). It can never
 // set building/done/dropped — those stay behind the full admin secret (opsQueueUpdate), reached
 // by Brett or, later, the Ship cron.
