@@ -1,5 +1,5 @@
 # BrettOS Master Backlog
-**Version:** v1.45 | **Last Updated:** Sep 15, 2026
+**Version:** v1.46 | **Last Updated:** Sep 18, 2026 (B-141/B-145/B-212 quick-index rows updated — Optimizer Round 2 item #1's POST /selftest build partially closes them; see FEATURE_LOG rule 193)
 **Rule:** This is the single source of truth for everything to build, fix, or automate across all ventures. Update after every session. When Brett says "do it," the item moves to In Progress. When done, it moves to Completed with the date.
 
 ## ID/tag convention (Sep 15, 2026) — read this before adding a new item
