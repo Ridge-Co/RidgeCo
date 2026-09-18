@@ -560,6 +560,7 @@ export default {
         if (path === '/scope-proposal/book-final') return await scopeProposalBookFinal(env, body);
         if (path === '/scope-proposal/unbook-final') return await scopeProposalUnbookFinal(env, body);
         if (path === '/scope-proposal/bill-milestones') return await scopeProposalBillMilestones(env, body);
+        if (path === '/scope-proposal/adjust-bill') return await scopeProposalAdjustBill(env, body);
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
