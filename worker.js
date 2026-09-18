@@ -143,16 +143,22 @@ export default {
         const _nudgeOk = !!env.TRASH_NUDGE_TOKEN
           && _tok === env.TRASH_NUDGE_TOKEN
           && request.method === 'GET' && path === '/trash/unbilled';
-        // Narrow read-only token for the Optimizer Prepare agent (B-141 / greenlit→build
-        // bridge): accepted ONLY for GET /ops-queue — the greenlit build backlog
-        // (Title/Problem/Rank/Impact/action, no money, no PII, no writes). Lets the Tue/Fri
-        // headless Prepare agent read greenlit items and draft build-ready briefs WITHOUT
-        // carrying the admin secret (which can deploy). Read-only: the write path
-        // (POST /ops-queue-update) still requires the full admin secret. Fully inert unless
-        // env.OPS_QUEUE_TOKEN is set, so deploying this has zero effect until the secret exists.
+        // Token for the Optimizer Prepare agent (B-141 / greenlit→build bridge): accepted for
+        // GET /ops-queue — the greenlit build backlog (Title/Problem/Rank/Impact/action, no
+        // money, no PII) — and, as of Sep 18 2026, POST /ops-queue-prepare, its ONE narrow
+        // write: attach a finished brief and move a single item from 'greenlit' to 'prepared'
+        // (opsQueuePrepare refuses anything not currently 'greenlit', so this token can never
+        // reach building/done/dropped). Lets the headless Prepare agent draft AND hand off
+        // build-ready briefs WITHOUT ever carrying the admin secret (which can deploy). The
+        // full status lifecycle (POST /ops-queue-update) still requires the full admin secret.
+        // Fully inert unless env.OPS_QUEUE_TOKEN is set, so deploying this has zero effect
+        // until the secret exists.
         const _opsQueueOk = !!env.OPS_QUEUE_TOKEN
           && _tok === env.OPS_QUEUE_TOKEN
-          && request.method === 'GET' && path === '/ops-queue';
+          && (
+            (request.method === 'GET'  && path === '/ops-queue') ||
+            (request.method === 'POST' && path === '/ops-queue-prepare')
+          );
         // Narrow WRITE token for the customer-facing proposal e-sign (B-076). Accepted ONLY for
         // POST /proposal/sign, which appends a signed-acceptance row to Proposal_Signatures. No
         // money, no QuickBooks, no PII beyond the signer's own name + signature image. The QB
