@@ -3312,8 +3312,11 @@ async function scopeProposalBookFinal(env, body) {
     try { await updateRow(env, 'Scope_Signatures', row.ID, { QB_Final_Invoice_ID: invoiceId, QB_Final_Invoice_Number: invoiceNumber }); } catch (e) {}
   }
 
-  // 2) Vendor bill (remaining cost) — idempotent; skipped if vendor missing/in-house/zero.
-  if (!billId && vendor && !vendorInHouse && finalVendorAmount > 0) {
+  // 2) Vendor bill (remaining cost) — idempotent; skipped if vendor missing/in-house/zero. Same
+  // !billId && !billSkipReason gate as the deposit half, so a bill is only ever attempted when
+  // nothing already disqualified it — and every path that ends without a bill has already set
+  // billSkipReason, persisted in step 3 below (mirrors rule 145's Bill_Skip_Reason exactly).
+  if (!billId && !billSkipReason) {
     try {
       const vendorQbId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token);
       if (vendorQbId) {
@@ -3327,14 +3330,18 @@ async function scopeProposalBookFinal(env, body) {
         const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
-        if (!billId) warnings.push('QB bill failed: ' + (qbFault(rb) || 'unknown error'));
-      } else { warnings.push('Vendor QB id could not be resolved — no bill created.'); }
-    } catch (e) { warnings.push('Vendor bill error: ' + e.message); }
+        if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+      } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
+    } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
+    if (billSkipReason) warnings.push(billSkipReason);
   }
 
-  // 3) Persist QB ids + tie back to the scope/work order.
+  // 3) Persist QB ids + the bill-gap reason + tie back to the scope/work order. The reason is
+  // written on EVERY commit, so a retry that succeeds clears a previously recorded gap — same
+  // convention as the deposit half's Bill_Skip_Reason.
   await updateRow(env, 'Scope_Signatures', row.ID, {
     QB_Final_Invoice_ID: invoiceId, QB_Final_Invoice_Number: invoiceNumber, QB_Final_Bill_ID: billId, QB_Final_Bill_Number: billNumber,
+    Final_Bill_Skip_Reason: billId ? '' : billSkipReason,
   });
   try { await updateRow(env, 'Scopes', s.ID, { Status: 'fully-invoiced', Updated_Date: new Date().toISOString() }); } catch (e) {}
   // WO_Status intentionally left untouched here — unlike the deposit half, the job is already
