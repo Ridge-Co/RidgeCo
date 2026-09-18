@@ -2817,7 +2817,9 @@ async function scopeProposalSignedList(env, url) {
     // the real one was $325.
     const { amount: vendorBillAmount } = scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal);
     const vend = (sc.Vendor_ID && vendors.find(v => v.ID === String(sc.Vendor_ID))) || null;
-    const gap = scopeSigBillGap(r, !!vend && String(vend.In_House || '').toUpperCase() === 'TRUE');
+    const vendInHouse = !!vend && String(vend.In_House || '').toUpperCase() === 'TRUE';
+    const gap = scopeSigBillGap(r, vendInHouse);
+    const finalGap = scopeSigFinalBillGap(r, vendInHouse);
     const milestones = allMilestones
       .filter(m => m.Signature_ID === String(r.ID) && String(m.Active || '').toUpperCase() !== 'FALSE')
       .sort((a, b) => (+a.Sequence || 0) - (+b.Sequence || 0))
