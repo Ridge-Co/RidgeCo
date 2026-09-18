@@ -3225,7 +3225,7 @@ async function scopeProposalUnbook(env, body) {
 async function scopeProposalBookFinal(env, body) {
   if (!body || !body.id) return json({ error: 'id required' }, 400);
   await scopeSigTab(env);
-  await ensureColumns(env, 'Scope_Signatures', ['QB_Final_Invoice_ID', 'QB_Final_Invoice_Number', 'QB_Final_Bill_ID', 'QB_Final_Bill_Number']);
+  await ensureColumns(env, 'Scope_Signatures', ['QB_Final_Invoice_ID', 'QB_Final_Invoice_Number', 'QB_Final_Bill_ID', 'QB_Final_Bill_Number', 'Final_Bill_Skip_Reason']);
   const rows = await fetchTab(env, 'Scope_Signatures');
   const row = rows.find(r => r.ID === String(body.id) && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (!row) return json({ error: 'signature not found' }, 404);
