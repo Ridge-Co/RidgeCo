@@ -2775,6 +2775,23 @@ function scopeSigBillGap(row, inHouseFallback) {
   return { kind: 'missing', reason: 'The customer was invoiced but no vendor bill was created, and no reason was recorded (booked before skip-reason tracking).' };
 }
 
+// Same classification as scopeSigBillGap, above, for the FINAL-balance half
+// (scopeProposalBookFinal) — added Sep 18 2026 after a real gap: 1305 N Calvert St's final
+// vendor bill existed in QuickBooks but was invisible everywhere Brett actually looks (this
+// page had no banner for it, and Who To Pay never knew Signed-Proposal bills exist at all — see
+// the qbPayables changes below). The final phase had every other protection rule 145 added to
+// the deposit phase except this one.
+function scopeSigFinalBillGap(row, inHouseFallback) {
+  row = row || {};
+  const booked = !!row.QB_Final_Invoice_ID;
+  if (!booked) return { kind: 'not_booked', reason: '' };
+  if (row.QB_Final_Bill_ID) return { kind: 'billed', reason: '' };
+  const reason = String(row.Final_Bill_Skip_Reason || '').trim();
+  if (reason) return { kind: scopeSigSkipIsInHouse(reason) ? 'in_house' : 'missing', reason };
+  if (inHouseFallback) return { kind: 'in_house', reason: SCOPE_BILL_SKIP_INHOUSE };
+  return { kind: 'missing', reason: 'The customer was invoiced the final balance but no vendor bill was created, and no reason was recorded (booked before skip-reason tracking).' };
+}
+
 // GET /scope-proposal/signed (admin) — signed scope proposals, for the Hub to review before
 // booking them into QuickBooks via POST /scope-proposal/book (below).
 async function scopeProposalSignedList(env, url) {
