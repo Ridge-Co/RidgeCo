@@ -2605,7 +2605,24 @@ function scopeValidatePaymentSchedule(milestones, maxUpfrontPct) {
     const percent = +(+(m && m.percent)).toFixed(2);
     const trigger = ['upfront', 'manual', 'completion'].includes(m && m.trigger) ? m.trigger : 'manual';
     if (!isFinite(percent) || percent <= 0) return { error: `"${label}" needs a percent greater than 0.` };
-    clean.push({ label, percent, trigger });
+    // Vendor-pay-per-milestone (Sep 18 2026): defaults TRUE — matches today's implicit
+    // always-pay-vendor-every-milestone behavior, so no proposal already signed under the old
+    // behavior changes. See scopeVendorPayableSchedule for what FALSE actually does at bill time
+    // (rolls this milestone's vendor share forward, never drops it).
+    const vendorPaid = !(m && m.vendor_paid === false);
+    // Calc mode (Sep 18 2026): 'percent' (default — today's exact behavior, unchanged) or 'flat'
+    // — a typed CUSTOMER-facing override for this one milestone. Modeled the same way
+    // price_override already sits alongside vendor_cost on a scope item (scopeCleanVariants,
+    // above): an overlay field that never replaces the underlying percent/vendor-cost math, which
+    // is exactly why vendor-side proration stays percent-based regardless of this flag.
+    const calcMode = (m && m.calc_mode === 'flat') ? 'flat' : 'percent';
+    let flatCustomerAmount = null;
+    if (calcMode === 'flat') {
+      const fa = +(+(m && m.flat_customer_amount)).toFixed(2);
+      if (!isFinite(fa) || fa < 0) return { error: `"${label}" is set to a flat customer amount, but flat_customer_amount is missing or invalid.` };
+      flatCustomerAmount = fa;
+    }
+    clean.push({ label, percent, trigger, vendor_paid: vendorPaid, calc_mode: calcMode, flat_customer_amount: flatCustomerAmount });
   }
   const total = +clean.reduce((sum, m) => sum + m.percent, 0).toFixed(2);
   if (Math.abs(total - 100) > 0.1) return { error: `Milestone percentages must add up to 100% (currently ${total}%).` };
