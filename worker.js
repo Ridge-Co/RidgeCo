@@ -2837,7 +2837,8 @@ async function scopeProposalSignedList(env, url) {
       qb_bill_id: r.QB_Bill_ID || '', qb_bill_number: r.QB_Bill_Number || '',
       qb_final_invoice_id: r.QB_Final_Invoice_ID || '', qb_final_invoice_number: r.QB_Final_Invoice_Number || '',
       qb_final_bill_id: r.QB_Final_Bill_ID || '', qb_final_bill_number: r.QB_Final_Bill_Number || '',
-      bill_gap: gap.kind, bill_skip_reason: gap.reason, milestones,
+      bill_gap: gap.kind, bill_skip_reason: gap.reason,
+      final_bill_gap: finalGap.kind, final_bill_skip_reason: finalGap.reason, milestones,
     };
   });
   out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
