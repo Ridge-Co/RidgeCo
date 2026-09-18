@@ -493,6 +493,7 @@ export default {
         if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
         if (path === '/ops-queue-prepare')        return await opsQueuePrepare(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
+        if (path === '/selftest')                 return await selftestRunEndpoint(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/invoice-review/approve-bulk') return await approveInvoiceReviewBulk(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
