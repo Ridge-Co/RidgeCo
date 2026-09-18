@@ -2752,6 +2752,7 @@ async function scopeProposalSign(env, body, ip, ua) {
       const clean = schedule || scopeDefaultPaymentSchedule();
       const amounts = scopeComputeMilestoneAmounts(clean, subtotal, vendorCostTotal);
       await paymentMilestonesTab(env);
+      try { await ensureColumns(env, 'Payment_Milestones', ['Vendor_Paid_At_This_Milestone', 'Calc_Mode', 'Flat_Customer_Amount']); } catch (_) {}
       for (let i = 0; i < amounts.length; i++) {
         const m = amounts[i];
         const mResp = await addRow(env, 'Payment_Milestones', {
