@@ -11075,6 +11075,91 @@ async function qbPayables(env, url) {
       });
     }
 
+    // ── Signed Proposal vendor bills (Sep 18 2026) ──────────────────────────────────────────
+    // Scope-Proposal bookings (scopeProposalBook/scopeProposalBookFinal) create real QuickBooks
+    // invoices and bills directly, tracked only on Scope_Signatures — never as an Invoice_Review
+    // row, which is the only thing the loop above reads. That made every Signed-Proposal vendor
+    // bill invisible on THIS page: 1305 N Calvert St's own final vendor bill existed and was
+    // paid down in QuickBooks, but Who To Pay had no idea it existed at all. Folded in here as
+    // extra rows in the exact same shape as above, so they get the same filters, the same "open
+    // bill in QB" link, and the same Pay-the-vendor batch action (qbPayBills only ever needs a
+    // real QuickBooks bill id — never an Invoice_Review row) — this page becomes the one real
+    // list instead of two. Wrapped in its own try/catch: a failure here must never break the
+    // Invoice_Review-based payables that already work.
+    try {
+      const [sigRows, scopes] = await Promise.all([fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Scopes')]);
+      const sigCandidates = [];
+      for (const r of sigRows) {
+        if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+        const sc = scopes.find(x => x.ID === r.Scope_ID);
+        if (!sc || !sc.WO_ID) continue;
+        const subtotal = +r.Subtotal || 0, deposit = +r.Deposit_Amount || 0, vendorCostTotal = +r.Vendor_Cost_Total || 0;
+        const { amount: depositVendorAmt } = scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal);
+        if ((r.QB_Invoice_ID || '').trim()) {
+          sigCandidates.push({ r, sc, phase: 'deposit', invId: (r.QB_Invoice_ID || '').trim(), billId: (r.QB_Bill_ID || '').trim(),
+            custTotal: deposit, vendorCost: depositVendorAmt, skipReason: r.Bill_Skip_Reason || '' });
+        }
+        if ((r.QB_Final_Invoice_ID || '').trim()) {
+          sigCandidates.push({ r, sc, phase: 'final', invId: (r.QB_Final_Invoice_ID || '').trim(), billId: (r.QB_Final_Bill_ID || '').trim(),
+            custTotal: +(subtotal - deposit).toFixed(2), vendorCost: +(vendorCostTotal - depositVendorAmt).toFixed(2),
+            skipReason: r.Final_Bill_Skip_Reason || '' });
+        }
+      }
+      if (sigCandidates.length) {
+        const [sigInvById, sigBillById] = await Promise.all([
+          qbBatchById('Invoice', sigCandidates.map(c => c.invId)),
+          qbBatchById('Bill', sigCandidates.map(c => c.billId)),
+        ]);
+        for (const c of sigCandidates) {
+          let customerPaid = null, customerBalance = null, invNumber = '';
+          const q = sigInvById.get(c.invId);
+          if (q) { customerBalance = Number(q.Balance); customerPaid = !isNaN(customerBalance) && customerBalance <= 0.005; invNumber = q.DocNumber || ''; }
+
+          let vendorPaid = null, vendorBalance = null, billDue = '', vendorRef = '', vendorTotal = null;
+          if (c.billId) {
+            const b = sigBillById.get(c.billId);
+            if (b) { vendorBalance = Number(b.Balance); vendorTotal = Number(b.TotalAmt); vendorPaid = !isNaN(vendorBalance) && vendorBalance <= 0.005; billDue = b.DueDate || ''; vendorRef = b.DocNumber || ''; }
+          }
+
+          const vendor = vendors.find(v => String(v.ID) === String(c.sc.Vendor_ID));
+          const inHouse = scopeSigSkipIsInHouse(c.skipReason);
+          const custTotal = c.custTotal;
+          const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
+          const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
+
+          let state;
+          // A bill that SHOULD exist and doesn't (a real gap — not in-house, not simply not-yet-
+          // booked) must never fall into the same bucket as a genuinely nothing-owed job — that
+          // exact misclassification is how 1305 N Calvert St's final bill went unnoticed.
+          if (!c.billId && c.skipReason && !inHouse) state = 'vendor bill missing';
+          else if (inHouse || !c.billId)             state = 'nothing to pay';
+          else if (vendorPaid)                        state = 'vendor paid';
+          else if (customerPaid)                      state = 'PAY THE VENDOR';
+          else if (customerPartial)                   state = 'owner paid in part';
+          else if (customerPaid === false)            state = 'waiting on the owner';
+          else                                         state = 'unknown';
+
+          let possibleDuplicate = null;
+          if (state === 'PAY THE VENDOR') {
+            const amountOwed = vendorBalance != null ? vendorBalance : c.vendorCost;
+            possibleDuplicate = await qbFindLikelyUnlinkedPayment(env, token, vendor && vendor.QBO_Vendor_ID, amountOwed);
+            if (possibleDuplicate) state = 'possible duplicate';
+          }
+
+          rows.push({
+            ir_id: '', source: 'scope_signature', signature_id: c.r.ID, phase: c.phase,
+            wo_id: c.sc.WO_ID, vendor_id: c.sc.Vendor_ID || '', vendor_name: vendor ? qbVendorDisplayName(vendor) : '',
+            terms: vendorTermLabel(vendor),
+            invoice_id: c.invId, invoice_number: invNumber,
+            customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial,
+            bill_id: c.billId, vendor_ref: vendorRef, vendor_cost: c.vendorCost,
+            vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
+            bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
+          });
+        }
+      }
+    } catch (e) { /* additive only — never break the Invoice_Review-based rows above */ }
+
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
     return json({
       ok: true, count: rows.length,
