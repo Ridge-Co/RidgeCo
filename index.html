@@ -9434,7 +9434,7 @@ function renderPayablesList() {
         '<div>' + chk +
           '<b style="font-size:12.5px">' + esc(r.wo_id || '') + '</b>' +
           (r.wo_id ? ' <a href="javascript:void(0)" onclick="goToWorkOrder(\'' + esc(r.wo_id) + '\')" style="color:var(--info);font-size:10.5px;text-decoration:none">↗ open WO</a>' : '') +
-          '<span style="color:var(--muted);font-size:11.5px"> · ' + esc(r.vendor_name || 'no vendor') + '</span>' +
+          '<span style="color:var(--muted);font-size:11.5px"> · ' + esc(r.vendor_name || 'no vendor') + '</span>' + sourceBadge +
           (vref ? '<span style="color:var(--text);font-size:11px"> · vendor inv <b>' + vref + '</b></span>' : '') +
           (r.invoice_number ? '<span style="color:var(--muted);font-size:10.5px"> · cust inv #' + esc(r.invoice_number) + '</span>' : '') +
         '</div>' +
