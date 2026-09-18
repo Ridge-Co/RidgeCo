@@ -340,8 +340,60 @@ function confirmBook(btn){
     }
   }).catch(function(e){btn.disabled=false;btn.textContent='Confirm — create in QuickBooks';toast('Error: '+e.message);});
 }
-function closeModal(){document.getElementById('modal').classList.remove('open');cur=null;curMs=null;}
-function confirmModalAction(btn){ if(modalMode==='milestones') confirmMilestoneBill(btn); else confirmBook(btn); }
+function closeModal(){document.getElementById('modal').classList.remove('open');cur=null;curMs=null;curAdjust=null;}
+function confirmModalAction(btn){ if(modalMode==='milestones') confirmMilestoneBill(btn); else if(modalMode==='adjust') confirmAdjust(btn); else confirmBook(btn); }
+
+// ── Vendor-bill adjustment (Sep 18 2026) ────────────────────────────────────
+// One-off dollar correction to an already-booked deposit or final vendor bill — built for the
+// case that surfaced 1305 N Calvert St's missing-final-bill gap: a vendor asks for more than the
+// original share mid-job (unforeseen complexity), Brett decides to eat it rather than re-billing
+// the customer, and this lets him apply that straight from the row instead of going around the
+// Hub by hand in QuickBooks. Never touches the customer invoice — worker.js's
+// scopeProposalAdjustBill only ever edits the vendor's own Bill.
+var curAdjust=null;
+function adjustBill(id,phase){
+  var amtStr=prompt('Adjust the '+phase+' vendor bill by how much?\n\nA positive number raises what\'s owed (e.g. 500 to absorb a vendor cost increase). A negative number lowers it (e.g. -200).');
+  if(amtStr===null)return;
+  var amount=parseFloat(amtStr);
+  if(!amount||isNaN(amount)){toast('Enter a non-zero number');return;}
+  var reason=prompt('One line for the QuickBooks bill — why this changed:');
+  if(reason===null||!reason.trim()){toast('A reason is required');return;}
+  reason=reason.trim();
+  curAdjust={id:id,phase:phase,amount:amount,reason:reason};
+  modalMode='adjust';
+  document.getElementById('m-title').textContent='Preview — adjust vendor bill';
+  document.getElementById('m-body').innerHTML='<p class="muted"><span class="spin"></span> Building preview…</p>';
+  document.getElementById('m-confirm').classList.add('hide');
+  var mc=document.getElementById('m-cancel');mc.textContent='Cancel';mc.classList.remove('hide');
+  var mu=document.getElementById('m-undo');mu.classList.add('hide');
+  document.getElementById('modal').classList.add('open');
+  api('POST','/scope-proposal/adjust-bill',{id:id,phase:phase,amount:amount,reason:reason,preview_only:true}).then(function(r){
+    if(!r||!r.ok||!r.preview){document.getElementById('m-body').innerHTML='<div class="warn">'+esc((r&&r.error)||'Could not build preview')+'</div>';return;}
+    var p=r.preview,h='';
+    h+='<div class="line"><span>Current bill total</span><span>'+money(p.current_total)+'</span></div>';
+    h+='<div class="line"><span>Current balance owed</span><span>'+money(p.current_balance)+'</span></div>';
+    h+='<div class="line"><span>Adjustment</span><span>'+(p.adjustment>=0?'+':'')+money(p.adjustment)+'</span></div>';
+    h+='<div class="total"><span>New balance owed</span><span>'+money(p.new_balance)+'</span></div>';
+    h+='<div class="sub" style="margin-top:8px">New bill total: '+money(p.new_total)+'<br>Reason: '+esc(p.reason)+'</div>';
+    document.getElementById('m-body').innerHTML=h;
+    var b=document.getElementById('m-confirm');b.classList.remove('hide');b.textContent='Confirm — adjust in QuickBooks';b.disabled=false;
+  }).catch(function(e){document.getElementById('m-body').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
+}
+function confirmAdjust(btn){
+  if(!curAdjust)return;
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Applying…';
+  api('POST','/scope-proposal/adjust-bill',{id:curAdjust.id,phase:curAdjust.phase,amount:curAdjust.amount,reason:curAdjust.reason}).then(function(r){
+    if(r&&r.ok){
+      document.getElementById('m-body').innerHTML='<p style="font-weight:700;color:var(--green)">✓ Bill updated — new balance '+money(r.new_balance)+'</p>';
+      btn.classList.add('hide');
+      document.getElementById('m-cancel').textContent='Close';
+      toast('Vendor bill adjusted in QuickBooks');curAdjust=null;load();
+    } else {
+      btn.disabled=false;btn.textContent='Confirm — adjust in QuickBooks';
+      document.getElementById('m-body').innerHTML+='<div class="warn">⚠ '+esc((r&&r.error)||'Failed')+'</div>';
+    }
+  }).catch(function(e){btn.disabled=false;btn.textContent='Confirm — adjust in QuickBooks';toast('Error: '+e.message);});
+}
 
 // ── Milestone billing (Sep 14 2026) ─────────────────────────────────────────
 function toggleMilestone(sigId,msId,checked){
