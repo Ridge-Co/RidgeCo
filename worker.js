@@ -3352,6 +3352,73 @@ async function scopeProposalBookFinal(env, body) {
   return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
 }
 
+// POST /scope-proposal/adjust-bill (admin) { id, phase: 'deposit'|'final', amount, reason, preview_only }
+// One-off correction to an ALREADY-BOOKED Signed-Proposal vendor bill (Sep 18 2026). Built for
+// the case that surfaced 1305 N Calvert St's missing-final-bill gap: Cesar found unforeseen
+// complexity mid-job and asked for more than the original prorated share; Brett chose to eat the
+// increase himself (never re-bills the customer — this only ever touches the vendor's own Bill)
+// and had no way to adjust a bill the Hub had already created without going around it by hand.
+//
+// Adds ONE new line to the existing Bill for `amount` (positive to raise what's owed, negative
+// to reduce it) and keeps every existing line untouched — QuickBooks' sparse Bill update
+// replaces the WHOLE Line array, not just the lines you mention, so this always sends
+// [...existing lines, new line], never just the new line alone (that would silently wipe the
+// original charge). A partial payment already applied against the bill keeps applying exactly as
+// it did before; QuickBooks recomputes Balance = new Total − whatever's already been applied —
+// e.g. a $3,400 bill with $500 already applied ($2,900 balance), adjusted by +$500, becomes a
+// $3,900 bill with the same $500 applied ($3,400 balance now owed).
+//
+// Same preview-first / admin-gated / Brett-taps-Confirm shape as every other QuickBooks write in
+// this file — AUTONOMY_GUARDRAILS Rung 3 (money writes are never fired without Brett's own tap).
+async function scopeProposalAdjustBill(env, body) {
+  try {
+    const id = body && body.id, phase = String((body && body.phase) || '').trim();
+    const amount = Number(body && body.amount);
+    const reason = String((body && body.reason) || '').trim();
+    if (!id || (phase !== 'deposit' && phase !== 'final')) return json({ ok: false, error: 'id and phase (deposit|final) are required' }, 400);
+    if (!amount || isNaN(amount)) return json({ ok: false, error: 'A non-zero amount is required.' }, 400);
+    if (!reason) return json({ ok: false, error: 'A reason is required — it goes on the new bill line in QuickBooks, not just in the Hub.' }, 400);
+
+    await scopeSigTab(env);
+    const rows = await fetchTab(env, 'Scope_Signatures');
+    const row = rows.find(r => r.ID === String(id) && String(r.Active || '').toUpperCase() !== 'FALSE');
+    if (!row) return json({ ok: false, error: 'signature not found' }, 404);
+    const billId = phase === 'final' ? row.QB_Final_Bill_ID : row.QB_Bill_ID;
+    if (!billId) return json({ ok: false, error: 'No ' + phase + ' vendor bill exists yet on this signature to adjust — book it first.' }, 400);
+
+    const token = await qbAccessToken(env);
+    const got = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
+    const bill = got && got.Bill;
+    if (!bill) return json({ ok: false, error: qbFault(got) || 'Could not read that bill from QuickBooks.' }, 404);
+
+    const curTotal = Number(bill.TotalAmt) || 0;
+    const curBalance = bill.Balance != null ? Number(bill.Balance) : curTotal;
+    const newTotal = +(curTotal + amount).toFixed(2);
+    const newBalance = +(curBalance + amount).toFixed(2);
+    if (newTotal < 0) return json({ ok: false, error: 'That would make the bill total negative ($' + newTotal.toFixed(2) + ') — reduce by less.' }, 400);
+    if (newBalance < -0.005) return json({ ok: false, error: 'That would take the balance below $0 ($' + newBalance.toFixed(2) + ') — this bill already has more applied against it than that.' }, 400);
+
+    const expenseLine = (bill.Line || []).find(l => l.DetailType === 'AccountBasedExpenseLineDetail');
+    const acctRef = expenseLine && expenseLine.AccountBasedExpenseLineDetail && expenseLine.AccountBasedExpenseLineDetail.AccountRef;
+    if (!acctRef) return json({ ok: false, error: 'Could not find an expense account on the existing bill line to match.' }, 500);
+
+    const preview = { signature_id: row.ID, phase, bill_id: billId, current_total: curTotal, current_balance: curBalance,
+      adjustment: amount, new_total: newTotal, new_balance: newBalance, reason };
+    if (body.preview_only) return json({ ok: true, preview });
+
+    // Reuse the SAME expense account as the bill's existing line(s) — an adjustment belongs on
+    // the same account the original charge was coded to, never a fresh guess.
+    const newLine = { DetailType: 'AccountBasedExpenseLineDetail', Amount: +amount.toFixed(2),
+      Description: reason.slice(0, 4000), AccountBasedExpenseLineDetail: { AccountRef: acctRef } };
+    const patch = { Id: billId, SyncToken: bill.SyncToken, sparse: true, VendorRef: bill.VendorRef, Line: [...(bill.Line || []), newLine] };
+    const upd = await qbApi(env, 'bill?minorversion=73', 'POST', patch, token);
+    const updated = upd && upd.Bill;
+    if (!updated) return json({ ok: false, error: 'Update failed: ' + (qbFault(upd) || 'unknown error') }, 502);
+    return json({ ok: true, signature_id: row.ID, phase, bill_id: billId,
+      new_total: Number(updated.TotalAmt), new_balance: updated.Balance != null ? Number(updated.Balance) : null });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 // POST /scope-proposal/unbook-final (admin) { id }
 // Reverses a mistaken FINAL-BALANCE booking from scopeProposalBookFinal, above — same Undo
 // pairing as scopeProposalUnbook, for the second (final-balance) invoicing step instead of the
