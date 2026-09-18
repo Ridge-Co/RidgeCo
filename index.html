@@ -9252,9 +9252,13 @@ var _payablesRows = [];
 var _payablesRes = null;
 var _payablesLastSave = false;
 
-var PAY_STATE_ORDER = ['possible duplicate', 'PAY THE VENDOR', 'owner paid in part', 'waiting on the owner', 'unknown', 'vendor paid', 'nothing to pay'];
+var PAY_STATE_ORDER = ['possible duplicate', 'vendor bill missing', 'PAY THE VENDOR', 'owner paid in part', 'waiting on the owner', 'unknown', 'vendor paid', 'nothing to pay'];
 var PAY_STATE_GROUP = {
   'possible duplicate':   { label: '⚠ Possible duplicate — check QuickBooks', collapsible: false },
+  // Sep 18 2026: a Signed-Proposal job whose vendor bill was skipped/failed and never created —
+  // see qbPayables. Never collapsed, same as possible-duplicate — this is exactly the state of
+  // gap that left 1305 N Calvert St's vendor payable undiscovered for two weeks.
+  'vendor bill missing':  { label: '⚠ Vendor not billed — check why',         collapsible: false },
   'PAY THE VENDOR':       { label: 'Pay the vendor',                          collapsible: true,  openDefault: true },
   'owner paid in part':   { label: 'Owner paid in part',                      collapsible: true,  openDefault: true },
   'waiting on the owner': { label: 'Waiting on the owner',                    collapsible: false },
