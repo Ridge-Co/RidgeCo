@@ -489,6 +489,7 @@ export default {
         if (path === '/ar-report/pay-link')       return await arReportPayLink(env, body);
         if (path === '/ops-approve')              return await opsApprove(env, body);
         if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
+        if (path === '/ops-queue-prepare')        return await opsQueuePrepare(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
         if (path === '/invoice-review/approve-bulk') return await approveInvoiceReviewBulk(env, body);
