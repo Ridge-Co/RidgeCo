@@ -8604,6 +8604,453 @@ async function opsReviewRun(env, body) {
   return json(await runWeeklyReview(env, { days, deliver: false, trigger: 'manual' }));
 }
 
+// ── SELFTEST — Auto-verification pass (Optimizer Round 2, item #1, Sep 18 2026) ──────────
+// Root cause this closes: dozens of shipped features sit as "🟡 Built, not yet live-verified"
+// in CURRENT.md because a headless build session has no WORKER_SECRET and can't run authed
+// live checks — it falls to Brett, by hand, per feature (see CURRENT.md's running list). Fix:
+// a Worker-cron self-test, same reasoning as the existing weekly Optimizer review being a
+// Worker cron and not a Cowork task — the Worker holds its own secrets natively.
+//
+// Two assertion layers:
+//   1. Endpoint smoke checks (SELFTEST_ENDPOINT_CHECKS / selftestCallEndpoint /
+//      selftestAssertEndpoint) — 20-40 real, read-only GET routes, called as direct in-process
+//      function calls (same "no self-fetch" pattern /ops-review already uses via
+//      runWeeklyReview — no HTTP round-trip to itself), status + a couple of shape/field checks.
+//   2. Golden business-outcome paths (selftestRunGoldenChecks) — a handful of read-only checks
+//      that regression-test REAL past bugs from FEATURE_LOG: rule 182 (PIN format + portfolio-
+//      wide duplicate-PIN check), rule 162 (the WO double-tap/duplicate-ID class Void/Hide was
+//      built to guard against), rule 174 (Payment_Source column existing on Receipts), and
+//      rule 192 (Signed-Proposal vendor bills silently invisible to Who To Pay / QuickBooks
+//      lookups) — bounded to a small sample, never a full scan, never a write.
+//
+// Design discipline (per the class of bug this codebase has been burned by before — rule 6/19,
+// "a value defaults to something that looks like success"): a failed sub-check is never silently
+// counted as passed (every check function returns an explicit {ok, reason}, defaulting to a
+// THROWN/caught error being recorded as ok:false, never swallowed into a false pass), and
+// digest delivery only ever reports Digest_Sent:'yes' when gmailSendEmail actually returned
+// sent:true — never on gate-open-but-nothing-sent, matching deliverReview's own Sep 17 fix.
+
+// Layer 1 — endpoint descriptors. Deliberately just {name, path}: which real handler each name
+// dispatches to lives in selftestCallEndpoint, and how each is graded lives in
+// selftestAssertEndpoint — kept as three separate lookups (list / dispatch / assert) so the list
+// itself stays pure data, testable without touching env (see test/selftest.test.mjs).
+const SELFTEST_ENDPOINT_CHECKS = [
+  { name: 'health', path: '/health' },
+  { name: 'version', path: '/version' },
+  { name: 'config', path: '/config' },
+  { name: 'properties', path: '/properties' },
+  { name: 'units', path: '/units' },
+  { name: 'tenants', path: '/tenants' },
+  { name: 'owners', path: '/owners' },
+  { name: 'vendors', path: '/vendors' },
+  { name: 'workorders', path: '/workorders' },
+  { name: 'invoices', path: '/invoices' },
+  { name: 'templates', path: '/templates' },
+  { name: 'smslog', path: '/smslog' },
+  { name: 'wishlist', path: '/wishlist' },
+  { name: 'keys', path: '/keys' },
+  { name: 'returns', path: '/returns' },
+  { name: 'master_keys', path: '/master-keys' },
+  { name: 'vendor_requests', path: '/vendor-requests' },
+  { name: 'notification_queue', path: '/notification-queue' },
+  { name: 'message_queue', path: '/message-queue' },
+  { name: 'message_templates', path: '/message-templates' },
+  { name: 'vendor_bills', path: '/vendor-bills' },
+  { name: 'qb_ready', path: '/qb/ready' },
+  { name: 'receipt_queue', path: '/receipt-queue' },
+  { name: 'scopes', path: '/scopes' },
+  { name: 'stale_wos', path: '/stale-wos' },
+  { name: 'deliveries', path: '/deliveries' },
+  { name: 'tenant_wo_settings', path: '/tenant-wo-settings' },
+  { name: 'twilio_account_status', path: '/twilio/account-status' },
+  { name: 'ops_telemetry', path: '/ops-telemetry' },
+  { name: 'ops_review_log', path: '/ops-review-log' },
+  { name: 'ops_queue', path: '/ops-queue' },
+  { name: 'qb_payables', path: '/qb/payables' },
+  { name: 'hub_bootstrap', path: '/hub-bootstrap' },
+  { name: 'model_registry', path: '/model-registry' },
+];
+
+// PURE — given a check's name + the status/data it actually got back, decide pass/fail + why.
+// No env, no I/O — every branch is independently testable with fabricated inputs. A name with
+// no case here falls to the default (explicit fail, never an accidental pass-through).
+function selftestAssertEndpoint(name, status, data) {
+  const arrayOk = () => Array.isArray(data)
+    ? { ok: true, reason: `array (${data.length} row(s))` }
+    : { ok: false, reason: `expected an array, got ${data === null ? 'null' : typeof data}` };
+  const ARRAY_CHECKS = new Set(['properties','units','tenants','owners','vendors','workorders',
+    'invoices','templates','smslog','wishlist','keys','returns','master_keys','vendor_requests',
+    'notification_queue','message_queue','message_templates','vendor_bills','qb_ready',
+    'receipt_queue','scopes']);
+  if (ARRAY_CHECKS.has(name)) {
+    if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+    return arrayOk();
+  }
+  switch (name) {
+    case 'health':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || data.ok !== true) return { ok: false, reason: 'data.ok is not true' };
+      if (!data.sheet_tail) return { ok: false, reason: 'missing sheet_tail' };
+      if (!data.tabs || typeof data.tabs !== 'object') return { ok: false, reason: 'missing tabs object' };
+      return { ok: true, reason: `sheet_tail=${data.sheet_tail}, staging=${!!data.staging}` };
+    case 'version':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || typeof data.version !== 'string' || !data.version) return { ok: false, reason: 'missing version string' };
+      return { ok: true, reason: `version ${data.version}` };
+    case 'config':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return { ok: false, reason: 'expected a config object, not an array' };
+      return { ok: true, reason: `${Object.keys(data).length} config key(s)` };
+    case 'stale_wos':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || data.ok !== true || !Array.isArray(data.stale)) return { ok: false, reason: 'missing ok/stale array' };
+      return { ok: true, reason: `${data.stale.length} stale WO(s) over ${data.threshold_days}d` };
+    case 'deliveries':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || !Array.isArray(data.deliveries)) return { ok: false, reason: 'missing deliveries array' };
+      return { ok: true, reason: `${data.deliveries.length} deliveries` };
+    case 'tenant_wo_settings':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || !Array.isArray(data.owners) || !Array.isArray(data.properties)) return { ok: false, reason: 'missing owners/properties arrays' };
+      return { ok: true, reason: `${data.owners.length} owner(s), ${data.properties.length} propert(ies)` };
+    case 'twilio_account_status':
+      // Not-configured is a real, acceptable state (returns 503 by design) — never conflate
+      // "Twilio isn't set up in this environment" with "the endpoint is broken."
+      if (status !== 200 && status !== 503) return { ok: false, reason: `expected 200 or 503, got ${status}` };
+      if (status === 503) return { ok: true, reason: 'Twilio not configured (503) — acceptable' };
+      if (!data || !('from_number' in data)) return { ok: false, reason: 'missing from_number' };
+      return { ok: true, reason: `from_number=${data.from_number || '(unset)'}` };
+    case 'ops_telemetry':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || data.ok !== true || !data.metrics) return { ok: false, reason: 'missing ok/metrics' };
+      return { ok: true, reason: `${data.count} telemetry row(s)` };
+    case 'ops_review_log':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || data.ok !== true || !Array.isArray(data.rows)) return { ok: false, reason: 'missing ok/rows' };
+      return { ok: true, reason: `${data.rows.length} review row(s)` };
+    case 'ops_queue':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || data.ok !== true || !Array.isArray(data.queue)) return { ok: false, reason: 'missing ok/queue' };
+      return { ok: true, reason: `${data.queue.length} queue item(s)` };
+    case 'qb_payables':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}${data && data.error ? ': ' + data.error : ''}` };
+      if (!data || data.ok !== true || !Array.isArray(data.rows)) return { ok: false, reason: 'missing ok/rows' };
+      return { ok: true, reason: `${data.rows.length} payable row(s), $${data.owed_total} owed now` };
+    case 'hub_bootstrap':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || !Array.isArray(data.properties) || !Array.isArray(data.workorders)) return { ok: false, reason: 'missing properties/workorders arrays' };
+      return { ok: true, reason: `${data.properties.length} propert(ies), ${data.workorders.length} WO(s)` };
+    case 'model_registry':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || !data.tiers || !data.tiers.CHEAP) return { ok: false, reason: 'missing tiers.CHEAP' };
+      return { ok: true, reason: `tiers: ${Object.keys(data.tiers).join(',')}` };
+    default:
+      return { ok: false, reason: `no assertion defined for '${name}' — treat as a fail until one is added` };
+  }
+}
+
+// Dispatch a check name to the REAL handler function, in-process — same "call it directly,
+// never self-fetch" approach /ops-review's own runWeeklyReview already uses. A dummy internal
+// URL supplies empty searchParams for handlers that accept optional query filters; none of
+// these 34 were picked if they REQUIRE a query param (those need seeded fixture data — B-145's
+// job, not this one's).
+async function selftestCallEndpoint(env, name) {
+  const u = (p) => new URL('https://selftest.internal' + p);
+  switch (name) {
+    case 'health': return await health(env);
+    case 'version': return json({ version: BUILD_VERSION });
+    case 'config': return await getConfig(env);
+    case 'properties': return await getSheet(env, 'Properties');
+    case 'units': return await getSheet(env, 'Units');
+    case 'tenants': return await getSheet(env, 'Tenants');
+    case 'owners': return await getSheet(env, 'Owners');
+    case 'vendors': return await getSheet(env, 'Vendors');
+    case 'workorders': return await getWorkOrdersList(env, u('/workorders'));
+    case 'invoices': return await getSheet(env, 'Invoices');
+    case 'templates': return await getSheet(env, 'Recurring_Templates');
+    case 'smslog': return await getSheet(env, 'SMS_Logs');
+    case 'wishlist': return await getSheet(env, 'Wishlist');
+    case 'keys': return await getSheet(env, 'Keys');
+    case 'returns': return await getSheet(env, 'Returns');
+    case 'master_keys': return await getSheet(env, 'Master_Keys');
+    case 'vendor_requests': return await getSheet(env, VENDOR_REQ_TAB);
+    case 'notification_queue': return await getSheet(env, NOTIF_QUEUE_TAB);
+    case 'message_queue': return await listMessageQueue(env, u('/message-queue'));
+    case 'message_templates': return await listMessageTemplates(env);
+    case 'vendor_bills': return await listVendorBills(env, u('/vendor-bills'));
+    case 'qb_ready': return await qbReadyQueue(env, u('/qb/ready'));
+    case 'receipt_queue': return await listReceiptQueue(env, u('/receipt-queue'));
+    case 'scopes': return await scopeList(env, u('/scopes'));
+    case 'stale_wos': return await staleWos(env, u('/stale-wos'));
+    case 'deliveries': return await deliveriesList(env, u('/deliveries'));
+    case 'tenant_wo_settings': return await tenantWOSettingsSummary(env);
+    case 'twilio_account_status': return await twilioAccountStatus(env);
+    case 'ops_telemetry': return await opsTelemetryRead(env, u('/ops-telemetry'));
+    case 'ops_review_log': return await opsReviewLogRead(env, u('/ops-review-log'));
+    case 'ops_queue': return await opsQueueRead(env, u('/ops-queue'));
+    case 'qb_payables': return await qbPayables(env, u('/qb/payables'));
+    case 'hub_bootstrap': return await hubBootstrap(env);
+    case 'model_registry': return json(modelRegistryInfo());
+    default: throw new Error('no dispatcher for ' + name);
+  }
+}
+
+async function selftestRunEndpointChecks(env) {
+  const results = [];
+  for (const c of SELFTEST_ENDPOINT_CHECKS) {
+    const t0 = Date.now();
+    try {
+      const resp = await selftestCallEndpoint(env, c.name);
+      const status = (resp && typeof resp.status === 'number') ? resp.status : 200;
+      let data = null;
+      try { data = await resp.json(); } catch (_) { /* non-JSON body — assertion below fails honestly */ }
+      const a = selftestAssertEndpoint(c.name, status, data);
+      results.push({ name: c.name, path: c.path, status, ok: a.ok, reason: a.reason, latency_ms: Date.now() - t0 });
+    } catch (e) {
+      // A THROW is a fail, never a skip — matches "a failed sub-check must never silently
+      // count as passed."
+      results.push({ name: c.name, path: c.path, status: 0, ok: false, reason: 'threw: ' + String((e && e.message) || e), latency_ms: Date.now() - t0 });
+    }
+  }
+  return results;
+}
+
+// ── Layer 2 — golden business-outcome paths, each regression-testing a REAL past bug ──────
+
+// Rule 182 (Sep 16 2026): legacy/duplicate tenant PINs — 18 Tenants had old-format PINs, and two
+// tenants at the same property shared the IDENTICAL PIN (a real access collision). The regex
+// deliberately mirrors PIN_FORMAT_OK inline (rather than referencing that const) so this stays a
+// fully self-contained, independently testable pure function.
+function selftestCheckPinFormatAndDedup(vendors, owners, ownerUsers, tenants) {
+  const pinFormatOk = (p) => /^[A-Z]{3}\d{5}$/.test(p || '');
+  const groups = [
+    { tab: 'Vendors', rows: vendors || [] },
+    { tab: 'Owners', rows: owners || [] },
+    { tab: 'Owner_Users', rows: ownerUsers || [] },
+    { tab: 'Tenants', rows: tenants || [] },
+  ];
+  let badFormat = 0; const badRows = [];
+  const seen = new Map(); // pin -> [{tab,id}]
+  for (const g of groups) {
+    for (const r of g.rows) {
+      if (String((r && r.Active) || '').toUpperCase() === 'FALSE') continue;
+      const pin = (r && r.PIN) || '';
+      if (!pin) continue; // a blank PIN is a separate, pre-existing gap — not this check's job
+      if (!pinFormatOk(pin)) { badFormat++; badRows.push({ tab: g.tab, id: r.ID, pin }); }
+      const list = seen.get(pin) || []; list.push({ tab: g.tab, id: r.ID }); seen.set(pin, list);
+    }
+  }
+  const dupes = [...seen.entries()].filter(([, list]) => list.length > 1).map(([pin, list]) => ({ pin, holders: list }));
+  const ok = badFormat === 0 && dupes.length === 0;
+  const example = badRows[0] ? `${badRows[0].tab} ${badRows[0].id} PIN "${badRows[0].pin}"` : (dupes[0] ? `PIN "${dupes[0].pin}" shared by ${dupes[0].holders.length}` : '');
+  return {
+    ok,
+    reason: ok ? `all PINs well-formed, no duplicates across ${groups.length} tabs` : `${badFormat} malformed PIN(s), ${dupes.length} duplicate PIN(s) — e.g. ${example}`,
+    bad_format_count: badFormat, duplicate_count: dupes.length,
+  };
+}
+
+// Rule 162 (Sep 14 2026, WO-1192): a double-tap on Create Work Order produced two rows sharing
+// one WO number; every lookup resolves by ID first-match, so the second row became permanently
+// unreachable. The Void/Hide build's `findRecentDuplicate` guard prevents new ones — this check
+// confirms none exist live, so a regression would surface here before Brett hits it by hand.
+function selftestCheckWoDuplicateIds(workOrders) {
+  const seen = new Map();
+  for (const w of (workOrders || [])) {
+    if (!w || !w.ID) continue;
+    seen.set(w.ID, (seen.get(w.ID) || 0) + 1);
+  }
+  const dupes = [...seen.entries()].filter(([, n]) => n > 1);
+  const ok = dupes.length === 0;
+  return {
+    ok,
+    reason: ok ? `no duplicate WO IDs across ${(workOrders || []).length} row(s)` : `${dupes.length} WO ID(s) shared by more than one row — e.g. WO-${dupes[0][0]} (${dupes[0][1]}x)`,
+    duplicate_id_count: dupes.length,
+  };
+}
+
+// Rule 174 (Sep 16 2026): Payment_Source had NEVER existed on the live Receipts sheet since the
+// feature shipped (rule 173) — a silent catch around the write hid it completely. Cheapest
+// possible regression guard: the column is actually there.
+function selftestCheckPaymentSourceColumn(receiptsHeaders) {
+  const ok = Array.isArray(receiptsHeaders) && receiptsHeaders.includes('Payment_Source');
+  return { ok, reason: ok ? 'Payment_Source column present on Receipts' : 'Payment_Source column MISSING on Receipts (rule 174 regression)' };
+}
+
+// Rule 192 (Sep 18 2026): Signed-Proposal vendor bills existed for real in QuickBooks but were
+// structurally invisible to Who To Pay / this app's own lookups — a genuinely-existing bill that
+// this codebase's own code paths simply could never find. PURE aggregator over already-fetched
+// per-vendor /qb/find-bills results (bounded to a handful of vendors — see the orchestrator
+// below — never a full scan, per "sampled/bounded where a full scan would be slow").
+function selftestSummarizeVendorBillsQbReachable(sampleResults) {
+  const failed = (sampleResults || []).filter(r => !r.ok);
+  const ok = (sampleResults || []).length === 0 ? true : failed.length === 0;
+  const reason = (sampleResults || []).length === 0
+    ? 'no Vendor_Bills rows with a resolvable QuickBooks vendor id to sample'
+    : ok
+      ? `/qb/find-bills reachable for all ${sampleResults.length} sampled vendor(s)`
+      : `${failed.length}/${sampleResults.length} sampled vendor(s) failed /qb/find-bills — e.g. vendor ${failed[0].vendor_id}: ${failed[0].error}`;
+  return { ok, reason, sampled: (sampleResults || []).length, failed: failed.length };
+}
+
+async function selftestRunGoldenChecks(env) {
+  const results = [];
+  try {
+    const [vendors, owners, ownerUsers, tenants] = await fetchTabs(env, ['Vendors', 'Owners', 'Owner_Users', 'Tenants']);
+    results.push({ name: 'pin_format_and_dedup', ...selftestCheckPinFormatAndDedup(vendors, owners, ownerUsers, tenants) });
+  } catch (e) { results.push({ name: 'pin_format_and_dedup', ok: false, reason: 'error: ' + String((e && e.message) || e) }); }
+
+  try {
+    const workOrders = await fetchTab(env, 'Work_Orders');
+    results.push({ name: 'wo_duplicate_id_guard', ...selftestCheckWoDuplicateIds(workOrders) });
+  } catch (e) { results.push({ name: 'wo_duplicate_id_guard', ok: false, reason: 'error: ' + String((e && e.message) || e) }); }
+
+  try {
+    const data = await sheetsRequest(env, 'GET', '/values/Receipts');
+    const headers = (data && data.values && data.values[0]) || [];
+    results.push({ name: 'receipts_payment_source_column', ...selftestCheckPaymentSourceColumn(headers) });
+  } catch (e) { results.push({ name: 'receipts_payment_source_column', ok: false, reason: 'error: ' + String((e && e.message) || e) }); }
+
+  try {
+    const [bills, vendors] = await fetchTabs(env, ['Vendor_Bills', 'Vendors']);
+    const withVendor = (bills || []).filter(b => b.Active !== 'FALSE' && b.Vendor_ID);
+    const sampledVendorIds = [...new Set(withVendor.map(b => b.Vendor_ID))].slice(0, 5);
+    const sampleResults = [];
+    for (const vid of sampledVendorIds) {
+      const v = (vendors || []).find(x => x.ID === vid);
+      const qboId = v && v.QBO_Vendor_ID;
+      if (!qboId) continue; // no QBO id on file — nothing to spot-check for this vendor
+      try {
+        const resp = await qbFindBills(env, { vendor_qbo_id: qboId });
+        const data = await resp.json();
+        sampleResults.push({ vendor_id: vid, ok: !!(data && data.ok), error: data && data.error });
+      } catch (e) { sampleResults.push({ vendor_id: vid, ok: false, error: String((e && e.message) || e) }); }
+    }
+    results.push({ name: 'vendor_bills_qb_reachable', ...selftestSummarizeVendorBillsQbReachable(sampleResults) });
+  } catch (e) { results.push({ name: 'vendor_bills_qb_reachable', ok: false, reason: 'error: ' + String((e && e.message) || e) }); }
+
+  return results;
+}
+
+// PURE — combine both layers into one pass/fail tally. A failed check contributes to `failures`
+// regardless of which layer it came from; nothing here can turn a false result true.
+function selftestAggregateResults(endpointResults, goldenResults) {
+  const all = [...(endpointResults || []), ...(goldenResults || [])];
+  const passed = all.filter(r => r.ok).length;
+  const failed = all.length - passed;
+  const failures = all.filter(r => !r.ok).map(r => ({ name: r.name, reason: r.reason }));
+  return { total: all.length, passed, failed, failures };
+}
+
+// PURE — plain-English pass/fail digest, mirroring /ops-review's own report tone/format
+// (short header line, a ▶ SECTION per group, one line per item).
+function selftestComposeDigest(agg, endpointResults, goldenResults, runDateISO) {
+  const L = [];
+  L.push(`Ridge Co — Daily Selftest (${runDateISO})`);
+  L.push(`${agg.passed}/${agg.total} checks passed${agg.failed ? `, ${agg.failed} FAILING` : ' — all green'}.`);
+  if (agg.failed) {
+    L.push(''); L.push('▶ FAILING — needs a look');
+    agg.failures.forEach(f => L.push(`✗ ${f.name} — ${f.reason}`));
+  }
+  L.push(''); L.push('▶ ENDPOINTS');
+  (endpointResults || []).forEach(r => L.push(`${r.ok ? '✓' : '✗'} ${r.name} (${r.path}) — ${r.reason}`));
+  L.push(''); L.push('▶ GOLDEN PATHS');
+  (goldenResults || []).forEach(r => L.push(`${r.ok ? '✓' : '✗'} ${r.name} — ${r.reason}`));
+  return L.join('\n');
+}
+
+const SELFTEST_RESULTS_TAB = 'Selftest_Results';
+const SELFTEST_RESULTS_COLS = ['ID', 'Run_Date', 'Total_Checks', 'Passed', 'Failed', 'Failures_JSON', 'Digest_Sent'];
+
+async function selftestRecordResult(env, agg, deliverAttempted, delivered) {
+  try {
+    await ensureTab(env, SELFTEST_RESULTS_TAB, SELFTEST_RESULTS_COLS);
+    await ensureColumns(env, SELFTEST_RESULTS_TAB, SELFTEST_RESULTS_COLS);
+    await addRow(env, SELFTEST_RESULTS_TAB, {
+      Run_Date: new Date().toISOString(), Total_Checks: String(agg.total), Passed: String(agg.passed),
+      Failed: String(agg.failed), Failures_JSON: JSON.stringify(agg.failures || []),
+      Digest_Sent: !deliverAttempted ? 'no' : (delivered ? 'yes' : 'attempted:failed'),
+    });
+    return true;
+  } catch (_) { return false; } // history write is best-effort; the run itself still returns
+}
+
+// Admin-facing email recipient for THIS endpoint's own digest. Checked directly (Sep 18 2026):
+// no `admin_email` Config key exists anywhere in this file today. `digest_email_to` exists as a
+// key name, but its only consumer — `deliverDigestEmail` — is a dead stub ("adapter not yet
+// wired", always returns {skipped:...}, never actually sends) left over from a pre-Gmail
+// SendGrid/Twilio-Email plan. Reusing that key would silently do nothing, which is exactly the
+// "looks like success, isn't" class this build is supposed to avoid — so this adds a genuinely
+// new `admin_email` Config key (mirrors `admin_phone`'s existing shape: one Config row, no
+// value shipped by this build) rather than wiring a new real send onto a key whose only existing
+// meaning today is "goes nowhere." Brett: set `admin_email` via POST /config/set (or the Dev Log
+// Config editor) to receive this digest — it stays unset (and this digest stays dormant) until then.
+async function selftestDeliverDigest(env, digestText) {
+  const cfg = await fetchConfig(env);
+  if (String(cfg.selftest_digest_enabled || '').toUpperCase() !== 'TRUE') return { delivered: false, reason: 'selftest_digest_enabled not TRUE (dormant)' };
+  const to = cfg.admin_email || '';
+  if (!to) return { delivered: false, reason: 'admin_email Config key not set' };
+  try {
+    const r = await gmailSendEmail(env, { to, subject: 'Ridge Co — Daily Selftest', html: '<pre style="font-family:monospace;white-space:pre-wrap">' + _escHtml(digestText) + '</pre>' });
+    // gmailSendEmail either throws, returns {sent:true,...} (a real send that actually posted to
+    // the Gmail API and got a message id back), or {staged:true,sent:false,...} (staging stub).
+    // delivered is set from `r.sent` alone — never assumed true just because the gate was open
+    // and the call didn't throw (the exact "success:true, nothing happened" shape rule 6/19 and
+    // deliverReview's Sep 17 fix both guard against).
+    return { delivered: !!(r && r.sent), out: r };
+  } catch (e) {
+    return { delivered: false, reason: 'gmail send failed: ' + String((e && e.message) || e) };
+  }
+}
+
+async function selftestRun(env, opts) {
+  const _t0 = Date.now();
+  opts = opts || {};
+  const [endpointResults, goldenResults] = await Promise.all([
+    selftestRunEndpointChecks(env),
+    selftestRunGoldenChecks(env),
+  ]);
+  const agg = selftestAggregateResults(endpointResults, goldenResults);
+  const runDateISO = new Date().toISOString();
+  const digestText = selftestComposeDigest(agg, endpointResults, goldenResults, runDateISO);
+  let delivery = null;
+  if (opts.deliver) { try { delivery = await selftestDeliverDigest(env, digestText); } catch (_) { delivery = { delivered: false, reason: 'error' }; } }
+  const logged = await selftestRecordResult(env, agg, !!opts.deliver, !!(delivery && delivery.delivered));
+  // Self-instrument (PAT-031 pattern, same as runWeeklyReview) — the selftest is itself a
+  // measured job, and its OWN success reflects whether every check passed, not just whether the
+  // function ran without throwing.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - _t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}` }); } catch (_) {}
+  return { ok: true, total: agg.total, passed: agg.passed, failed: agg.failed, failures: agg.failures, digest: digestText, delivery, logged, endpoint_results: endpointResults, golden_results: goldenResults };
+}
+
+// POST /selftest {deliver?} — auto-verification pass, on demand. Gated EXACTLY like /ops-review:
+// no PUBLIC_PATHS entry, no narrow token — the full admin secret only (see the top auth gate).
+// Same deliver convention as /ops-review too: manual/on-demand calls default deliver:false so
+// checking this never spams a real email; only the daily cron path (maybeRunDailySelftest,
+// inside cronSweep) passes deliver:true.
+async function selftestRunEndpoint(env, body) {
+  return json(await selftestRun(env, { deliver: !!(body && body.deliver), trigger: 'manual' }));
+}
+
+// Runs selftestRun({deliver:true}) once a day, around 7am ET, from inside cronSweep — piggybacks
+// on the EXISTING periodic sweep (both the reliable Cloudflare native `*/15 * * * *` trigger and
+// the GitHub Actions cron-sweep.yml redundant path already call cronSweep) rather than claiming a
+// new Cloudflare Cron Trigger slot — all 5 are already spoken for (wrangler.toml: daily digest,
+// 2x weekly review, weekly AR report, message-queue sweep). etHour() is the same DST-aware
+// Intl-derived local-time check quiet-hours already uses elsewhere in this file. Guarded so the
+// ~every-15-min sweep cadence doesn't fire this repeatedly inside the same 7am hour, or a second
+// time later the same day if GitHub Actions' own redundant path also lands inside that hour.
+async function maybeRunDailySelftest(env) {
+  if (etHour() !== 7) return { skipped: true, reason: 'outside the ~7am ET run window' };
+  const today = etTodayISO();
+  try {
+    const rows = await fetchTab(env, SELFTEST_RESULTS_TAB);
+    const etDateOf = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    if (rows.some(r => etDateOf(r.Run_Date) === today)) return { skipped: true, reason: `already ran today (${today})` };
+  } catch (e) { /* tab doesn't exist yet on a genuine first run — fall through, selftestRun creates it */ }
+  return await selftestRun(env, { deliver: true, trigger: 'cron' });
+}
+
 // GET /ar/aging — READ-ONLY accounts-receivable aging, straight from QuickBooks (source of
 // truth for real balances/dates). Buckets open invoices by days-past-due, rolls up by
 // customer (oldest first), so Brett can see who to chase. No writes, no sends (Phase 2 =
