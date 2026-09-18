@@ -8366,7 +8366,7 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // matches AUTONOMY_GUARDRAILS_v1.0's own rule ("everything not explicitly SAFE is GATED").
 // Greenlighting an item never changes its Risk_Class — only the lens that proposed it (or
 // Brett by hand) may.
-// Build_Brief (Sep 18 2026, B-141 greenlit→prepared bridge): holds the Rung-1 Prepare agent's
+// Build_Brief (Sep 18 2026, B-240 greenlit→prepared bridge): holds the Rung-1 Prepare agent's
 // finished build-ready brief once it moves an item to 'prepared'. Sliced to 45,000 chars in
 // opsQueuePrepare — comfortably under the Sheets 50,000-char cell limit. Blank until prepared.
 const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief'];
