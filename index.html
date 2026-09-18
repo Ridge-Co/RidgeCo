@@ -7382,6 +7382,16 @@ function renderHubEstimateView(woId, estimates, holder) {
         '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve Estimate</button>' +
         '</div>';
 
+    var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+    var notVoided = !wo || wo.Voided !== 'TRUE';
+    var pushToScopeBlock = '';
+    if (notVoided) {
+      pushToScopeBlock = wo && wo.Scope_ID
+        ? '<div style="margin-top:8px"><button class="btn small secondary" onclick="openPushToScopeUI(\'' + woId + '\')">📋 Push estimate to Scope Proposal</button> ' +
+          '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="window.open(\'scope-creator.html?scope_id=' + esc(wo.Scope_ID) + '\',\'_blank\')">🔗 Open Scope #' + esc(wo.Scope_ID) + ' →</button></div>'
+        : '<div style="margin-top:8px"><button class="btn small secondary" onclick="openPushToScopeUI(\'' + woId + '\')">📋 Push estimate to Scope Proposal</button></div>';
+    }
+
     holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">' +
       '<span style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase">💲 ESTIMATE — v' + current.Version + '</span>' +
@@ -7393,6 +7403,7 @@ function renderHubEstimateView(woId, estimates, holder) {
       '<div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
       '<span>Total</span><span style="color:var(--accent2)">$' + parseFloat(current.Subtotal).toFixed(2) + '</span></div>' +
       approvalBlock +
+      pushToScopeBlock +
       histRows +
       '<div id="est-doc-' + woId + '" style="margin-top:10px"></div>' +
       '</div>';
