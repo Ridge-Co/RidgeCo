@@ -11191,20 +11191,31 @@ async function qbSyncPayments(env, body) {
   let written = 0, failed = 0, closed = 0;
   const closedWOs = [];
   for (const r of data.rows) {
-    try {
-      await updateRow(env, 'Invoice_Review', r.ir_id, {
-        Customer_Paid: r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'),
-        Vendor_Paid:   r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'),
-        Payable_State: r.state,
-        Payment_Checked: now,
-      });
-      written++;
-    } catch (e) { failed++; }
+    // Signed-Proposal rows (Sep 18 2026, see qbPayables) have no Invoice_Review row to write
+    // back to — ir_id is deliberately blank for them. Nothing to persist there; QuickBooks' own
+    // live Balance is already the source of truth for these every time this page loads.
+    if (r.source !== 'scope_signature') {
+      try {
+        await updateRow(env, 'Invoice_Review', r.ir_id, {
+          Customer_Paid: r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'),
+          Vendor_Paid:   r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'),
+          Payable_State: r.state,
+          Payment_Checked: now,
+        });
+        written++;
+      } catch (e) { failed++; }
+    }
 
     // When QuickBooks POSITIVELY reports the vendor bill paid, mark the work order Paid so it
     // drops off the active work list. Strictly === true (never on an unknown/null read), and
-    // never over a WO already in a done state — so re-running is a safe no-op.
-    if (r.vendor_paid === true && r.wo_id) {
+    // never over a WO already in a done state — so re-running is a safe no-op. For a Signed-
+    // Proposal row this is deliberately restricted to the FINAL phase only: the deposit's vendor
+    // bill gets paid early in the job, long before the work — or the invoicing — is done, and
+    // closing the WO then would be flatly wrong. This is also the concrete answer to Brett's "tie
+    // it to a WO, so I can mark complete if the vendor did not, but this final will serve as the
+    // vendor invoice" ask: the final vendor bill IS the completion signal now, exactly like every
+    // other job's vendor bill already works — no separate Vendor Bill entry needed.
+    if (r.vendor_paid === true && r.wo_id && !(r.source === 'scope_signature' && r.phase !== 'final')) {
       try {
         const wo = findWO(workorders, r.wo_id);
         const cur = wo ? String(wo.Status || '') : '';
