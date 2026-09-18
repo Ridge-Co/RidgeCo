@@ -1952,6 +1952,39 @@ function scopeCleanItems(arr) {
 }
 async function scopeFind(env, id) { const rows = await fetchTab(env, 'Scopes'); return rows.find(r => r.ID === String(id)) || null; }
 
+// ── WO → Scope conversion (Sep 18 2026, POST /wo/push-to-scope) ─────────────────────────────
+// Maps a vendor's actual submitted Estimate (Estimates tab: flat {desc, amount} line items — a
+// vendor's own numbers, one Subtotal, no options) into Scope line items (the richer
+// {id, area, trade, description, qty, note, variants:[{key,label,vendor_cost,price_override}],
+// selected_key} shape scopeCleanItems already normalizes everything else into). This is the
+// FORWARD direction of the existing scopeToWO (scope → WO); nothing here reuses or replaces that.
+// Each estimate line becomes a single-variant item (variants.length === 1, same "no options yet"
+// shape scopeCleanVariants already gives a bare-cost item) so it prices through calcTieredEstimate
+// exactly like any hand-typed scope item — Brett can still add Repair/Replace-style variants
+// afterward in scope-creator.html, this just gets the vendor's numbers in the door.
+// `existingItems` (the target scope's CURRENT Line_Items, [] for a brand-new scope) is passed so
+// fresh item ids never collide with ones already on the scope — this function only ever APPENDS.
+function scopeItemsFromEstimate(lineItems, existingItems) {
+  const existing = Array.isArray(existingItems) ? existingItems : [];
+  const usedIds = new Set(existing.map(it => it && it.id).filter(Boolean));
+  let n = existing.length;
+  const out = [];
+  for (const li of (Array.isArray(lineItems) ? lineItems : [])) {
+    const description = String((li && li.desc) || '').trim();
+    if (!description) continue; // mirrors scopeCleanItems: an item with no description is dropped
+    const amount = Math.max(0, parseFloat(li && li.amount) || 0);
+    n++;
+    let id = 'li' + n;
+    while (usedIds.has(id)) { n++; id = 'li' + n; }
+    usedIds.add(id);
+    out.push({
+      id, area: '', trade: '', description, qty: '', note: '',
+      variants: [{ key: 'v1', label: '', vendor_cost: +amount.toFixed(2), price_override: null }],
+      selected_key: 'v1',
+    });
+  }
+  return out;
+}
 // Claude text helper (mirrors generateEstimateText). media = optional image/document content block.
 async function scopeClaude(env, prompt, media, maxTokens) {
   if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
