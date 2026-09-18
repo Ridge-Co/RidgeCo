@@ -143,7 +143,9 @@ export default {
         const _nudgeOk = !!env.TRASH_NUDGE_TOKEN
           && _tok === env.TRASH_NUDGE_TOKEN
           && request.method === 'GET' && path === '/trash/unbilled';
-        // Token for the Optimizer Prepare agent (B-141 / greenlit→build bridge): accepted for
+        // Token for the Optimizer Prepare agent (B-240 / greenlit→prepared bridge; corrected
+        // Sep 18 2026 — this was previously mislabeled B-141, which is actually the unrelated
+        // smoke-test harness, DONE Aug 22): accepted for
         // GET /ops-queue — the greenlit build backlog (Title/Problem/Rank/Impact/action, no
         // money, no PII) — and, as of Sep 18 2026, POST /ops-queue-prepare, its ONE narrow
         // write: attach a finished brief and move a single item from 'greenlit' to 'prepared'
