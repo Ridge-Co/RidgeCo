@@ -2978,12 +2978,29 @@ async function scopeProposalBillMilestones(env, body) {
   const { tradeName, trade, prop, unit, owner, vendor, billTo, custDisplay, vendDisplay, vendorInHouse, addr } = await scopeSigResolveParties(env, s, row);
 
   const custTotal = +picked.reduce((sum, m) => sum + (+m.Customer_Amount || 0), 0).toFixed(2);
-  const vendTotal = +picked.reduce((sum, m) => sum + (+m.Vendor_Amount || 0), 0).toFixed(2);
+
+  // Vendor-pay-per-milestone rollover (Sep 18 2026): a milestone's own Vendor_Amount is fixed at
+  // signing time and never recomputed — what actually gets BILLED to the vendor this round is the
+  // structural payable from scopeVendorPayableSchedule (the FULL schedule, not just what's picked
+  // here), so a skipped milestone's share correctly rolls into whichever later TRUE milestone
+  // absorbs it, however these get grouped/ordered across separate bill-milestones calls.
+  const sigMilestones = allMilestones.filter(m => m.Signature_ID === String(sigId) && String(m.Active || '').toUpperCase() !== 'FALSE');
+  const payableSchedule = scopeVendorPayableSchedule(sigMilestones.map(m => ({
+    id: m.ID, sequence: +m.Sequence || 0, vendor_amount: +m.Vendor_Amount || 0,
+    vendor_paid: String(m.Vendor_Paid_At_This_Milestone || 'TRUE').toUpperCase() !== 'FALSE',
+  })));
+  const payableById = {}; payableSchedule.forEach(p => { payableById[p.id] = p.vendor_payable; });
+  const vendTotal = +picked.reduce((sum, m) => sum + (payableById[m.ID] || 0), 0).toFixed(2);
+  const pickedOwnVendorTotal = +picked.reduce((sum, m) => sum + (+m.Vendor_Amount || 0), 0).toFixed(2);
 
   let billSkipReason = '';
   if (!vendor) billSkipReason = s.Vendor_ID ? ('Vendor ' + s.Vendor_ID + ' was not found on the Vendors tab — no vendor bill will be created.') : 'No vendor is set on this scope — no vendor bill will be created.';
   else if (vendorInHouse) billSkipReason = SCOPE_BILL_SKIP_INHOUSE;
-  else if (!(vendTotal > 0)) billSkipReason = 'The selected milestone(s) carry $0 of vendor cost — there is nothing to bill.';
+  else if (!(vendTotal > 0)) {
+    billSkipReason = pickedOwnVendorTotal > 0
+      ? 'Vendor payment for the selected milestone(s) is deferred (Vendor_Paid_At_This_Milestone is off) — their share rolls forward onto a later paid milestone; nothing billed to the vendor this round.'
+      : 'The selected milestone(s) carry $0 of vendor cost — there is nothing to bill.';
+  }
 
   const labelList = picked.map(m => m.Label).join(' + ');
   const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — ' + labelList + ' (' + addr + ')').slice(0, 4000);
@@ -2994,7 +3011,11 @@ async function scopeProposalBillMilestones(env, body) {
 
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
-    milestones: picked.map(m => ({ id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0 })),
+    milestones: picked.map(m => ({
+      id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0,
+      vendor_amount: +m.Vendor_Amount || 0, vendor_payable_now: payableById[m.ID] || 0,
+      vendor_paid_this_milestone: String(m.Vendor_Paid_At_This_Milestone || 'TRUE').toUpperCase() !== 'FALSE',
+    })),
     invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
     bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName } : null,
     warnings,
@@ -3037,9 +3058,13 @@ async function scopeProposalBillMilestones(env, body) {
     try {
       const vendorQbId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token);
       if (vendorQbId) {
+        // Only milestones with an actual payable THIS round get a line — a milestone whose
+        // vendor pay was deferred (rolled forward per scopeVendorPayableSchedule) gets no $0 line.
+        const payableLines = picked.filter(m => (payableById[m.ID] || 0) > 0);
         const billPayload = {
-          Line: picked.map(m => ({ DetailType: 'AccountBasedExpenseLineDetail', Amount: +(+m.Vendor_Amount || 0).toFixed(2),
-            Description: (vendDisplay + ' — ' + tradeName + ' — ' + (s.Title || '') + ' — ' + m.Label + ' — ' + addr).slice(0, 4000),
+          Line: payableLines.map(m => ({ DetailType: 'AccountBasedExpenseLineDetail', Amount: +(payableById[m.ID] || 0).toFixed(2),
+            Description: (vendDisplay + ' — ' + tradeName + ' — ' + (s.Title || '') + ' — ' + m.Label +
+              ((payableById[m.ID] || 0) !== (+m.Vendor_Amount || 0) ? ' (includes a rolled-forward share from an earlier deferred milestone)' : '') + ' — ' + addr).slice(0, 4000),
             AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } })),
           VendorRef: { value: vendorQbId }, TxnDate: txnDate,
           PrivateNote: ('Scope proposal ' + row.Scope_ID + ' — ' + labelList + ' — ' + vendDisplay).slice(0, 1000),
@@ -3063,9 +3088,43 @@ async function scopeProposalBillMilestones(env, body) {
       QB_Bill_ID: billId, QB_Bill_Number: billNumber, Billed_Date: now,
     });
   }
-  try { if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Invoiced' }); } catch (e) {}
 
-  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, milestone_ids: picked.map(m => m.ID), warnings });
+  // 4) WO writeback (Sep 18 2026) — after a successful customer invoice, roll the running billed
+  // total and a timestamped note onto the linked Work_Orders row (Scopes.WO_ID is the link; a
+  // scope pushed here via /wo/push-to-scope, or created the old way via /scope/to-wo, both set
+  // it). Best-effort: the invoice/bill above are already committed, so a failure here is reported,
+  // never allowed to look like the whole bill failed.
+  if (invoiceId && s.WO_ID) {
+    try {
+      const wosNow = await fetchTab(env, 'Work_Orders');
+      const woRow = findWO(wosNow, s.WO_ID);
+      if (woRow) {
+        await ensureColumns(env, 'Work_Orders', ['Customer_Charge']);
+        // The FINAL milestone is "whichever bill leaves nothing else pending" — not necessarily
+        // the one tagged trigger:'completion' by label, since Brett can bill out of the label
+        // order. Mirrors scopeProposalBookFinal's own reasoning (rule 143): once nothing is left
+        // to bill, the job is already done by definition, so this must not guess/overwrite a more
+        // specific WO status the job has already moved past — extended here, not duplicated. Any
+        // INTERIM bill (something still pending afterward) keeps this function's existing
+        // behavior from before this build: mark the WO Invoiced, same as scopeProposalBook's
+        // deposit stage does.
+        const pickedIds = new Set(picked.map(m => m.ID));
+        const stillPending = sigMilestones.some(m => !pickedIds.has(m.ID) && (m.Status || 'pending') === 'pending');
+        const priorCharge = parseFloat(woRow.Customer_Charge) || 0;
+        const newCharge = +(priorCharge + custTotal).toFixed(2);
+        const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        const vendorNote = vendTotal > 0
+          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round')
+          : ('vendor not paid this round' + (billSkipReason ? (' — ' + billSkipReason) : ''));
+        const noteLine = '[' + ts + '] Scope Proposal billed — ' + labelList + ' — $' + custTotal.toFixed(2) + ' invoiced (' + (invoiceNumber || invoiceId) + '); ' + vendorNote + '.';
+        const fields = { Customer_Charge: String(newCharge), Notes: woRow.Notes ? (woRow.Notes + '\n' + noteLine) : noteLine };
+        if (stillPending) fields.Status = 'Invoiced';
+        await updateWOFields(env, s.WO_ID, fields);
+      }
+    } catch (e) { warnings.push('Invoice/bill succeeded, but updating the linked Work Order (' + s.WO_ID + ') failed: ' + (e.message || e)); }
+  }
+
+  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, milestone_ids: picked.map(m => m.ID), vendor_billed: vendTotal, warnings });
 }
 
 async function scopeProposalBook(env, body) {
