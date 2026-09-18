@@ -2295,6 +2295,159 @@ async function scopeToWO(env, body) {
   return json({ success: true, wo_id: woId, photos_moved: moved });
 }
 
+// POST /wo/push-to-scope (Sep 18 2026) — ADMIN-ONLY: zero ROLE_SCOPES entries, reachable only via
+// WORKER_SECRET / the Hub's own admin session. {wo_id, estimate_id?, apply?}
+// The FORWARD direction of scopeToWO, above (scope → WO): takes a regular Work Order's own
+// APPROVED vendor Estimate (Estimates tab — a vendor's real submitted numbers, structurally
+// different from a Scope's {area,trade,description,qty,note,variants} items) and converts it into
+// a Scope, so the job can go through the full e-signed / materials-markup / multi-milestone Scope
+// Proposal billing path instead of a single-shot WO invoice. Brett's locked decisions (do not
+// re-litigate — see context/WO_TO_SCOPE_CONVERSION_BUILD_BRIEF_v1.0.md):
+//   • Gate: exactly one Estimates row for this WO must already be Status:'Approved' (via the
+//     existing POST /estimate/approve) before this does anything — 0 or 2+ approved is a 400,
+//     never a guess at which one.
+//   • Reuse, never duplicate: Work_Orders.Scope_ID is checked FIRST. Set (e.g. WO-1186 → Scope 7,
+//     created earlier via /scope/to-wo) → the mapped items are APPENDED onto that scope's existing
+//     Line_Items, never clobbering anything Brett already added by hand. Unset → a new Scopes row
+//     is created (Property_ID/Unit_ID/Vendor_ID copied from the WO) and Work_Orders.Scope_ID is
+//     set to it.
+//   • Idempotent per estimate: the converted estimate's own id+version is recorded in the target
+//     scope's existing Source_Refs array (type:'estimate') and the Estimates row itself flips to
+//     Status:'Converted' — a second push of the SAME already-converted estimate_id is a no-op
+//     (returns the existing scope, appends nothing twice), never a duplicate append or an error.
+//   • Cleanup: once converted, Estimates gets Converted_Scope_ID/Converted_Date so it stops
+//     sitting in the UI as a phantom pending item.
+// Same preview-first (apply defaults false) / best-effort-cleanup-on-partial-failure shape as
+// moveVendorBillToNewWO, above — a failure after the new-Scope-creation step hands back its id for
+// a human to finish or clean up by hand, same documented gap as that precedent.
+async function woPushToScope(env, body) {
+  const woId = body && body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
+  const apply = !!body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
+
+  await scopesTab(env);
+  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) {}
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(workorders, woId);
+  if (!wo) return json({ error: `No work order ${woId} found` }, 404);
+  if (String(wo.Voided || '').toUpperCase() === 'TRUE') return json({ error: `WO ${woId} is voided — restore it first (POST /wo/unvoid) before pushing it to a Scope Proposal.` }, 409);
+
+  const allEstimates = await fetchTab(env, 'Estimates');
+  const woEstimates = allEstimates.filter(e => e.WO_ID === woId && String(e.Active || '').toUpperCase() !== 'FALSE');
+  if (!woEstimates.length) return json({ error: `WO ${woId} has no estimates yet — submit/add one first (POST /estimate).` }, 400);
+
+  // An explicit estimate_id that's already Converted is a no-op success, not an error — calling
+  // this a second time on the same already-converted estimate must never look like a failure.
+  const reqEstimateId = body && body.estimate_id ? String(body.estimate_id) : '';
+  if (reqEstimateId) {
+    const already = woEstimates.find(e => e.ID === reqEstimateId && String(e.Status || '') === 'Converted');
+    if (already) {
+      return json({
+        success: true, applied: true, already_converted: true, wo_id: woId, estimate_id: already.ID,
+        scope_id: already.Converted_Scope_ID || '',
+        message: `Estimate ${already.ID} (v${already.Version}) was already converted to Scope ${already.Converted_Scope_ID || '?'} on ${already.Converted_Date || 'an earlier date'} — nothing more to do.`,
+      });
+    }
+  }
+
+  const approved = woEstimates.filter(e => String(e.Status || '') === 'Approved');
+  if (approved.length !== 1) {
+    return json({
+      error: approved.length === 0
+        ? `WO ${woId} has no APPROVED estimate yet — approve one first (POST /estimate/approve), then push it to a Scope Proposal.`
+        : `WO ${woId} has ${approved.length} estimate versions marked Approved (ids ${approved.map(e => e.ID).join(', ')}) — resolve to exactly one (POST /estimate/unapprove the extras) before pushing to a Scope Proposal.`,
+    }, 400);
+  }
+  const estimate = reqEstimateId ? woEstimates.find(e => e.ID === reqEstimateId) : approved[0];
+  if (!estimate) return json({ error: `Estimate ${reqEstimateId} not found on WO ${woId}` }, 404);
+  if (estimate.ID !== approved[0].ID) {
+    return json({ error: `Estimate ${estimate.ID} (v${estimate.Version}) is not the approved estimate on this WO — the approved one is ${approved[0].ID} (v${approved[0].Version}).` }, 400);
+  }
+
+  let lineItems = []; try { lineItems = JSON.parse(estimate.Line_Items || '[]'); } catch (_) {}
+  if (!Array.isArray(lineItems) || !lineItems.length) return json({ error: `Estimate ${estimate.ID} has no line items to convert.` }, 400);
+
+  // ---- Resolve target scope: reuse Work_Orders.Scope_ID if already set, else preview a new one.
+  const scopes = await fetchTab(env, 'Scopes');
+  let targetScope = null, willCreate = false;
+  if (wo.Scope_ID) {
+    targetScope = scopes.find(x => x.ID === String(wo.Scope_ID));
+    if (!targetScope) return json({ error: `WO ${woId}'s Scope_ID (${wo.Scope_ID}) does not match any real Scope — fix the link by hand before pushing.` }, 409);
+  } else {
+    willCreate = true;
+  }
+
+  const existingItems = targetScope ? scopeParseItems(targetScope) : [];
+  const mappedItems = scopeItemsFromEstimate(lineItems, existingItems);
+  if (!mappedItems.length) return json({ error: `Estimate ${estimate.ID}'s line items all have blank descriptions — nothing to convert.` }, 400);
+
+  const preview = {
+    success: true, applied: false, wo_id: woId, estimate_id: estimate.ID, estimate_version: estimate.Version,
+    target: willCreate
+      ? { will_create: true, property_id: wo.Property_ID, unit_id: wo.Unit_ID || '' }
+      : { will_create: false, scope_id: targetScope.ID, title: targetScope.Title || '', existing_item_count: existingItems.length },
+    mapped_items: mappedItems,
+    estimate_subtotal: +(+estimate.Subtotal || 0).toFixed(2),
+  };
+  if (!apply) return json(preview);
+
+  // ---- APPLY ----
+  let scopeId = targetScope ? targetScope.ID : '';
+  if (willCreate) {
+    const now = new Date().toISOString();
+    const createResp = await addRow(env, 'Scopes', {
+      Property_ID: wo.Property_ID || '', Unit_ID: wo.Unit_ID || '', Room: wo.Room || '',
+      Title: ('WO ' + woId + ' — ' + (wo.Description || wo.Trade || 'Scope of work')).slice(0, 120),
+      Status: 'draft', Raw_Input: '', Line_Items: '[]', Source_Refs: '[]', Parent_Scope_ID: '',
+      WO_ID: woId, Vendor_ID: wo.Vendor_ID || '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '',
+      Proposal_Text: '', Created_By: (body && body.created_by) || 'admin', Created_Date: now, Updated_Date: now, Notes: '', Active: 'TRUE',
+    });
+    const createJson = await createResp.clone().json().catch(() => ({}));
+    scopeId = createJson.id;
+    if (!scopeId) return json({ error: 'Failed to create the new Scope for this WO', detail: createJson }, 500);
+    try { await updateWOFields(env, woId, { Scope_ID: scopeId }); }
+    catch (e) {
+      return json({
+        success: false, applied: true, partial: true, scope_id: scopeId, estimate_id: estimate.ID,
+        error: `Scope ${scopeId} was created, but linking it back onto WO ${woId} (Scope_ID) failed (${e.message || e}). Set Work_Orders.Scope_ID to ${scopeId} by hand, then retry — retrying this action now would create ANOTHER new scope, it would not resume this one.`,
+      }, 500);
+    }
+  }
+
+  const finalItems = existingItems.concat(mappedItems);
+  let srcs = []; try { srcs = JSON.parse((targetScope && targetScope.Source_Refs) || '[]'); } catch (_) {}
+  srcs.push({ type: 'estimate', estimate_id: estimate.ID, version: estimate.Version, wo_id: woId, ts: new Date().toISOString() });
+  try {
+    await updateRow(env, 'Scopes', scopeId, {
+      Line_Items: JSON.stringify(finalItems), Source_Refs: JSON.stringify(srcs).slice(0, 8000),
+      Vendor_ID: (targetScope && targetScope.Vendor_ID) || wo.Vendor_ID || '',
+      Updated_Date: new Date().toISOString(),
+    });
+  } catch (e) {
+    return json({
+      success: false, applied: true, partial: true, scope_id: scopeId, estimate_id: estimate.ID,
+      error: `Scope ${scopeId} exists (${willCreate ? 'newly created' : 'reused'}), but writing the converted items onto it failed (${e.message || e}). Check Scope ${scopeId} in scope-creator.html and add the items by hand — the estimate has NOT been marked Converted, so retrying this call is safe.`,
+    }, 500);
+  }
+
+  // Cleanup (point 2): mark the estimate resolved so it stops sitting as a phantom pending item.
+  // Best-effort — the scope write above already succeeded, so a failure here must not be reported
+  // as if nothing worked; it's surfaced as a warning instead.
+  let convertedMarked = false;
+  try {
+    await ensureColumns(env, 'Estimates', ['Converted_Scope_ID', 'Converted_Date']);
+    await updateRow(env, 'Estimates', estimate.ID, { Status: 'Converted', Converted_Scope_ID: scopeId, Converted_Date: new Date().toISOString() });
+    convertedMarked = true;
+  } catch (e) {}
+
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) {}
+
+  return json({
+    success: true, applied: true, wo_id: woId, scope_id: scopeId, created_new_scope: willCreate,
+    estimate_id: estimate.ID, items_added: mappedItems.length, converted_marked: convertedMarked,
+    warning: convertedMarked ? '' : `Scope ${scopeId} was updated, but marking Estimate ${estimate.ID} Converted failed — set it by hand (Status=Converted, Converted_Scope_ID=${scopeId}) so it stops showing as pending.`,
+  });
+}
+
 // POST /scope/estimate — record the vendor's estimate number(s) + amount onto the scope
 // (editable afterward, since a vendor may propose a different solution or drop an item).
 async function scopeEstimate(env, body) {
