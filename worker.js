@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-18.4';
+const BUILD_VERSION = '2026-09-18.5';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -549,6 +549,9 @@ export default {
         if (path === '/scope/split')              return await scopeSplit(env, body);
         if (path === '/scope/approve')            return await scopeApprove(env, body);
         if (path === '/scope/to-wo')              return await scopeToWO(env, body);
+        // Admin-only (zero ROLE_SCOPES entries, reachable only via WORKER_SECRET) — see
+        // woPushToScope's own header comment above for the full design.
+        if (path === '/wo/push-to-scope')         return await woPushToScope(env, body);
         if (path === '/scope/estimate')           return await scopeEstimate(env, body);
         if (path === '/scope/proposal')           return await scopeProposal(env, body);
         if (path === '/scope/payment-schedule')   return await scopeSetPaymentSchedule(env, body);
@@ -1949,6 +1952,39 @@ function scopeCleanItems(arr) {
 }
 async function scopeFind(env, id) { const rows = await fetchTab(env, 'Scopes'); return rows.find(r => r.ID === String(id)) || null; }
 
+// ── WO → Scope conversion (Sep 18 2026, POST /wo/push-to-scope) ─────────────────────────────
+// Maps a vendor's actual submitted Estimate (Estimates tab: flat {desc, amount} line items — a
+// vendor's own numbers, one Subtotal, no options) into Scope line items (the richer
+// {id, area, trade, description, qty, note, variants:[{key,label,vendor_cost,price_override}],
+// selected_key} shape scopeCleanItems already normalizes everything else into). This is the
+// FORWARD direction of the existing scopeToWO (scope → WO); nothing here reuses or replaces that.
+// Each estimate line becomes a single-variant item (variants.length === 1, same "no options yet"
+// shape scopeCleanVariants already gives a bare-cost item) so it prices through calcTieredEstimate
+// exactly like any hand-typed scope item — Brett can still add Repair/Replace-style variants
+// afterward in scope-creator.html, this just gets the vendor's numbers in the door.
+// `existingItems` (the target scope's CURRENT Line_Items, [] for a brand-new scope) is passed so
+// fresh item ids never collide with ones already on the scope — this function only ever APPENDS.
+function scopeItemsFromEstimate(lineItems, existingItems) {
+  const existing = Array.isArray(existingItems) ? existingItems : [];
+  const usedIds = new Set(existing.map(it => it && it.id).filter(Boolean));
+  let n = existing.length;
+  const out = [];
+  for (const li of (Array.isArray(lineItems) ? lineItems : [])) {
+    const description = String((li && li.desc) || '').trim();
+    if (!description) continue; // mirrors scopeCleanItems: an item with no description is dropped
+    const amount = Math.max(0, parseFloat(li && li.amount) || 0);
+    n++;
+    let id = 'li' + n;
+    while (usedIds.has(id)) { n++; id = 'li' + n; }
+    usedIds.add(id);
+    out.push({
+      id, area: '', trade: '', description, qty: '', note: '',
+      variants: [{ key: 'v1', label: '', vendor_cost: +amount.toFixed(2), price_override: null }],
+      selected_key: 'v1',
+    });
+  }
+  return out;
+}
 // Claude text helper (mirrors generateEstimateText). media = optional image/document content block.
 async function scopeClaude(env, prompt, media, maxTokens) {
   if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
@@ -2257,6 +2293,159 @@ async function scopeToWO(env, body) {
   } catch (_) {}
   await updateRow(env, 'Scopes', id, { Status: 'wo-created', WO_ID: woId, Updated_Date: new Date().toISOString() });
   return json({ success: true, wo_id: woId, photos_moved: moved });
+}
+
+// POST /wo/push-to-scope (Sep 18 2026) — ADMIN-ONLY: zero ROLE_SCOPES entries, reachable only via
+// WORKER_SECRET / the Hub's own admin session. {wo_id, estimate_id?, apply?}
+// The FORWARD direction of scopeToWO, above (scope → WO): takes a regular Work Order's own
+// APPROVED vendor Estimate (Estimates tab — a vendor's real submitted numbers, structurally
+// different from a Scope's {area,trade,description,qty,note,variants} items) and converts it into
+// a Scope, so the job can go through the full e-signed / materials-markup / multi-milestone Scope
+// Proposal billing path instead of a single-shot WO invoice. Brett's locked decisions (do not
+// re-litigate — see context/WO_TO_SCOPE_CONVERSION_BUILD_BRIEF_v1.0.md):
+//   • Gate: exactly one Estimates row for this WO must already be Status:'Approved' (via the
+//     existing POST /estimate/approve) before this does anything — 0 or 2+ approved is a 400,
+//     never a guess at which one.
+//   • Reuse, never duplicate: Work_Orders.Scope_ID is checked FIRST. Set (e.g. WO-1186 → Scope 7,
+//     created earlier via /scope/to-wo) → the mapped items are APPENDED onto that scope's existing
+//     Line_Items, never clobbering anything Brett already added by hand. Unset → a new Scopes row
+//     is created (Property_ID/Unit_ID/Vendor_ID copied from the WO) and Work_Orders.Scope_ID is
+//     set to it.
+//   • Idempotent per estimate: the converted estimate's own id+version is recorded in the target
+//     scope's existing Source_Refs array (type:'estimate') and the Estimates row itself flips to
+//     Status:'Converted' — a second push of the SAME already-converted estimate_id is a no-op
+//     (returns the existing scope, appends nothing twice), never a duplicate append or an error.
+//   • Cleanup: once converted, Estimates gets Converted_Scope_ID/Converted_Date so it stops
+//     sitting in the UI as a phantom pending item.
+// Same preview-first (apply defaults false) / best-effort-cleanup-on-partial-failure shape as
+// moveVendorBillToNewWO, above — a failure after the new-Scope-creation step hands back its id for
+// a human to finish or clean up by hand, same documented gap as that precedent.
+async function woPushToScope(env, body) {
+  const woId = body && body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
+  const apply = !!body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
+
+  await scopesTab(env);
+  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) {}
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(workorders, woId);
+  if (!wo) return json({ error: `No work order ${woId} found` }, 404);
+  if (String(wo.Voided || '').toUpperCase() === 'TRUE') return json({ error: `WO ${woId} is voided — restore it first (POST /wo/unvoid) before pushing it to a Scope Proposal.` }, 409);
+
+  const allEstimates = await fetchTab(env, 'Estimates');
+  const woEstimates = allEstimates.filter(e => e.WO_ID === woId && String(e.Active || '').toUpperCase() !== 'FALSE');
+  if (!woEstimates.length) return json({ error: `WO ${woId} has no estimates yet — submit/add one first (POST /estimate).` }, 400);
+
+  // An explicit estimate_id that's already Converted is a no-op success, not an error — calling
+  // this a second time on the same already-converted estimate must never look like a failure.
+  const reqEstimateId = body && body.estimate_id ? String(body.estimate_id) : '';
+  if (reqEstimateId) {
+    const already = woEstimates.find(e => e.ID === reqEstimateId && String(e.Status || '') === 'Converted');
+    if (already) {
+      return json({
+        success: true, applied: true, already_converted: true, wo_id: woId, estimate_id: already.ID,
+        scope_id: already.Converted_Scope_ID || '',
+        message: `Estimate ${already.ID} (v${already.Version}) was already converted to Scope ${already.Converted_Scope_ID || '?'} on ${already.Converted_Date || 'an earlier date'} — nothing more to do.`,
+      });
+    }
+  }
+
+  const approved = woEstimates.filter(e => String(e.Status || '') === 'Approved');
+  if (approved.length !== 1) {
+    return json({
+      error: approved.length === 0
+        ? `WO ${woId} has no APPROVED estimate yet — approve one first (POST /estimate/approve), then push it to a Scope Proposal.`
+        : `WO ${woId} has ${approved.length} estimate versions marked Approved (ids ${approved.map(e => e.ID).join(', ')}) — resolve to exactly one (POST /estimate/unapprove the extras) before pushing to a Scope Proposal.`,
+    }, 400);
+  }
+  const estimate = reqEstimateId ? woEstimates.find(e => e.ID === reqEstimateId) : approved[0];
+  if (!estimate) return json({ error: `Estimate ${reqEstimateId} not found on WO ${woId}` }, 404);
+  if (estimate.ID !== approved[0].ID) {
+    return json({ error: `Estimate ${estimate.ID} (v${estimate.Version}) is not the approved estimate on this WO — the approved one is ${approved[0].ID} (v${approved[0].Version}).` }, 400);
+  }
+
+  let lineItems = []; try { lineItems = JSON.parse(estimate.Line_Items || '[]'); } catch (_) {}
+  if (!Array.isArray(lineItems) || !lineItems.length) return json({ error: `Estimate ${estimate.ID} has no line items to convert.` }, 400);
+
+  // ---- Resolve target scope: reuse Work_Orders.Scope_ID if already set, else preview a new one.
+  const scopes = await fetchTab(env, 'Scopes');
+  let targetScope = null, willCreate = false;
+  if (wo.Scope_ID) {
+    targetScope = scopes.find(x => x.ID === String(wo.Scope_ID));
+    if (!targetScope) return json({ error: `WO ${woId}'s Scope_ID (${wo.Scope_ID}) does not match any real Scope — fix the link by hand before pushing.` }, 409);
+  } else {
+    willCreate = true;
+  }
+
+  const existingItems = targetScope ? scopeParseItems(targetScope) : [];
+  const mappedItems = scopeItemsFromEstimate(lineItems, existingItems);
+  if (!mappedItems.length) return json({ error: `Estimate ${estimate.ID}'s line items all have blank descriptions — nothing to convert.` }, 400);
+
+  const preview = {
+    success: true, applied: false, wo_id: woId, estimate_id: estimate.ID, estimate_version: estimate.Version,
+    target: willCreate
+      ? { will_create: true, property_id: wo.Property_ID, unit_id: wo.Unit_ID || '' }
+      : { will_create: false, scope_id: targetScope.ID, title: targetScope.Title || '', existing_item_count: existingItems.length },
+    mapped_items: mappedItems,
+    estimate_subtotal: +(+estimate.Subtotal || 0).toFixed(2),
+  };
+  if (!apply) return json(preview);
+
+  // ---- APPLY ----
+  let scopeId = targetScope ? targetScope.ID : '';
+  if (willCreate) {
+    const now = new Date().toISOString();
+    const createResp = await addRow(env, 'Scopes', {
+      Property_ID: wo.Property_ID || '', Unit_ID: wo.Unit_ID || '', Room: wo.Room || '',
+      Title: ('WO ' + woId + ' — ' + (wo.Description || wo.Trade || 'Scope of work')).slice(0, 120),
+      Status: 'draft', Raw_Input: '', Line_Items: '[]', Source_Refs: '[]', Parent_Scope_ID: '',
+      WO_ID: woId, Vendor_ID: wo.Vendor_ID || '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '',
+      Proposal_Text: '', Created_By: (body && body.created_by) || 'admin', Created_Date: now, Updated_Date: now, Notes: '', Active: 'TRUE',
+    });
+    const createJson = await createResp.clone().json().catch(() => ({}));
+    scopeId = createJson.id;
+    if (!scopeId) return json({ error: 'Failed to create the new Scope for this WO', detail: createJson }, 500);
+    try { await updateWOFields(env, woId, { Scope_ID: scopeId }); }
+    catch (e) {
+      return json({
+        success: false, applied: true, partial: true, scope_id: scopeId, estimate_id: estimate.ID,
+        error: `Scope ${scopeId} was created, but linking it back onto WO ${woId} (Scope_ID) failed (${e.message || e}). Set Work_Orders.Scope_ID to ${scopeId} by hand, then retry — retrying this action now would create ANOTHER new scope, it would not resume this one.`,
+      }, 500);
+    }
+  }
+
+  const finalItems = existingItems.concat(mappedItems);
+  let srcs = []; try { srcs = JSON.parse((targetScope && targetScope.Source_Refs) || '[]'); } catch (_) {}
+  srcs.push({ type: 'estimate', estimate_id: estimate.ID, version: estimate.Version, wo_id: woId, ts: new Date().toISOString() });
+  try {
+    await updateRow(env, 'Scopes', scopeId, {
+      Line_Items: JSON.stringify(finalItems), Source_Refs: JSON.stringify(srcs).slice(0, 8000),
+      Vendor_ID: (targetScope && targetScope.Vendor_ID) || wo.Vendor_ID || '',
+      Updated_Date: new Date().toISOString(),
+    });
+  } catch (e) {
+    return json({
+      success: false, applied: true, partial: true, scope_id: scopeId, estimate_id: estimate.ID,
+      error: `Scope ${scopeId} exists (${willCreate ? 'newly created' : 'reused'}), but writing the converted items onto it failed (${e.message || e}). Check Scope ${scopeId} in scope-creator.html and add the items by hand — the estimate has NOT been marked Converted, so retrying this call is safe.`,
+    }, 500);
+  }
+
+  // Cleanup (point 2): mark the estimate resolved so it stops sitting as a phantom pending item.
+  // Best-effort — the scope write above already succeeded, so a failure here must not be reported
+  // as if nothing worked; it's surfaced as a warning instead.
+  let convertedMarked = false;
+  try {
+    await ensureColumns(env, 'Estimates', ['Converted_Scope_ID', 'Converted_Date']);
+    await updateRow(env, 'Estimates', estimate.ID, { Status: 'Converted', Converted_Scope_ID: scopeId, Converted_Date: new Date().toISOString() });
+    convertedMarked = true;
+  } catch (e) {}
+
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) {}
+
+  return json({
+    success: true, applied: true, wo_id: woId, scope_id: scopeId, created_new_scope: willCreate,
+    estimate_id: estimate.ID, items_added: mappedItems.length, converted_marked: convertedMarked,
+    warning: convertedMarked ? '' : `Scope ${scopeId} was updated, but marking Estimate ${estimate.ID} Converted failed — set it by hand (Status=Converted, Converted_Scope_ID=${scopeId}) so it stops showing as pending.`,
+  });
 }
 
 // POST /scope/estimate — record the vendor's estimate number(s) + amount onto the scope
@@ -2602,7 +2791,24 @@ function scopeValidatePaymentSchedule(milestones, maxUpfrontPct) {
     const percent = +(+(m && m.percent)).toFixed(2);
     const trigger = ['upfront', 'manual', 'completion'].includes(m && m.trigger) ? m.trigger : 'manual';
     if (!isFinite(percent) || percent <= 0) return { error: `"${label}" needs a percent greater than 0.` };
-    clean.push({ label, percent, trigger });
+    // Vendor-pay-per-milestone (Sep 18 2026): defaults TRUE — matches today's implicit
+    // always-pay-vendor-every-milestone behavior, so no proposal already signed under the old
+    // behavior changes. See scopeVendorPayableSchedule for what FALSE actually does at bill time
+    // (rolls this milestone's vendor share forward, never drops it).
+    const vendorPaid = !(m && m.vendor_paid === false);
+    // Calc mode (Sep 18 2026): 'percent' (default — today's exact behavior, unchanged) or 'flat'
+    // — a typed CUSTOMER-facing override for this one milestone. Modeled the same way
+    // price_override already sits alongside vendor_cost on a scope item (scopeCleanVariants,
+    // above): an overlay field that never replaces the underlying percent/vendor-cost math, which
+    // is exactly why vendor-side proration stays percent-based regardless of this flag.
+    const calcMode = (m && m.calc_mode === 'flat') ? 'flat' : 'percent';
+    let flatCustomerAmount = null;
+    if (calcMode === 'flat') {
+      const fa = +(+(m && m.flat_customer_amount)).toFixed(2);
+      if (!isFinite(fa) || fa < 0) return { error: `"${label}" is set to a flat customer amount, but flat_customer_amount is missing or invalid.` };
+      flatCustomerAmount = fa;
+    }
+    clean.push({ label, percent, trigger, vendor_paid: vendorPaid, calc_mode: calcMode, flat_customer_amount: flatCustomerAmount });
   }
   const total = +clean.reduce((sum, m) => sum + m.percent, 0).toFixed(2);
   if (Math.abs(total - 100) > 0.1) return { error: `Milestone percentages must add up to 100% (currently ${total}%).` };
@@ -2620,11 +2826,57 @@ function scopeComputeMilestoneAmounts(schedule, subtotal, vendorCostTotal) {
   let custRunning = 0, vendRunning = 0;
   return schedule.map((m, i) => {
     const isLast = i === schedule.length - 1;
-    const custAmt = isLast ? +(subtotal - custRunning).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2);
+    // 'flat' overrides the CUSTOMER amount only, exactly as typed — never the vendor side (see
+    // scopeValidatePaymentSchedule's comment on why). A flat milestone never absorbs rounding
+    // drift either, last or not: "exactly Flat_Customer_Amount" means exactly that.
+    const isFlat = m.calc_mode === 'flat' && m.flat_customer_amount != null;
+    const custAmt = isFlat
+      ? +(+m.flat_customer_amount).toFixed(2)
+      : (isLast ? +(subtotal - custRunning).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2));
     const vendAmt = isLast ? +(vendorCostTotal - vendRunning).toFixed(2) : +((m.percent / 100) * vendorCostTotal).toFixed(2);
     custRunning = +(custRunning + custAmt).toFixed(2); vendRunning = +(vendRunning + vendAmt).toFixed(2);
-    return { label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: custAmt, vendor_amount: vendAmt };
+    return {
+      label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: custAmt, vendor_amount: vendAmt,
+      vendor_paid: m.vendor_paid !== false, calc_mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
+      flat_customer_amount: (m.flat_customer_amount != null ? m.flat_customer_amount : null),
+    };
   });
+}
+// Given a signature's FULL milestone schedule (any order; sorted here by `sequence`), returns the
+// ACTUAL vendor-payable amount per milestone once a Vendor_Paid_At_This_Milestone:false milestone's
+// share has rolled forward — the vendor's total across the whole schedule is always the sum of
+// every milestone's own `vendor_amount` (computed once at signing time by
+// scopeComputeMilestoneAmounts and never touched again), just concentrated into fewer/larger draws
+// per Brett's explicit requirement (rollover, not a discount). Purely structural: it depends only
+// on each milestone's fixed sequence/vendor_amount/vendor_paid, never on what has or hasn't
+// actually been billed yet — so it's safe to recompute on every call and safe even if milestones
+// end up billed out of sequence order.
+//   • vendor_paid:true  → payable = its own vendor_amount + anything carried forward from
+//     immediately-preceding vendor_paid:false milestone(s); carry resets to 0 after.
+//   • vendor_paid:false → payable = 0 (nothing billed to the vendor for this milestone THIS round);
+//     its vendor_amount is added to the carry for the next vendor_paid:true milestone to absorb.
+//   • A trailing run of vendor_paid:false milestones with no later TRUE milestone to catch it (a
+//     degenerate schedule — e.g. the FINAL milestone itself is flagged false) would otherwise
+//     strand that money forever; instead it's force-attached to the LAST milestone in the
+//     schedule regardless of that milestone's own flag, since "the vendor is never underpaid in
+//     total" (Brett's explicit requirement) outranks a strict last-TRUE-wins read. Flagged in the
+//     build brief as worth a real UI warning if it's ever actually configured this way.
+function scopeVendorPayableSchedule(milestones) {
+  const ordered = (Array.isArray(milestones) ? milestones : []).slice().sort((a, b) => (+a.sequence || 0) - (+b.sequence || 0));
+  let carry = 0;
+  const out = ordered.map(m => {
+    const own = +m.vendor_amount || 0;
+    const paid = m.vendor_paid !== false;
+    if (paid) {
+      const eff = +(own + carry).toFixed(2);
+      carry = 0;
+      return { id: m.id, sequence: m.sequence, vendor_payable: eff };
+    }
+    carry = +(carry + own).toFixed(2);
+    return { id: m.id, sequence: m.sequence, vendor_payable: 0 };
+  });
+  if (carry > 0 && out.length) out[out.length - 1].vendor_payable = +(out[out.length - 1].vendor_payable + carry).toFixed(2);
+  return out;
 }
 function scopeParsePaymentSchedule(s) {
   try { const arr = JSON.parse((s && s.Payment_Schedule_JSON) || 'null'); if (Array.isArray(arr) && arr.length) return arr; } catch (_) {}
@@ -2647,7 +2899,7 @@ async function scopeSetPaymentSchedule(env, body) {
   return json({ success: true, schedule, warnings: warnings || [] });
 }
 
-const PAYMENT_MILESTONES_HEADERS = ['ID','Scope_ID','Signature_ID','Label','Percent','Trigger','Sequence','Customer_Amount','Vendor_Amount','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Billed_Date','Created_Date','Active'];
+const PAYMENT_MILESTONES_HEADERS = ['ID','Scope_ID','Signature_ID','Label','Percent','Trigger','Sequence','Customer_Amount','Vendor_Amount','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Billed_Date','Created_Date','Active','Vendor_Paid_At_This_Milestone','Calc_Mode','Flat_Customer_Amount'];
 async function paymentMilestonesTab(env) { await ensureTab(env, 'Payment_Milestones', PAYMENT_MILESTONES_HEADERS); }
 
 // POST /scope-proposal/sign — PUBLIC (link-token gated, body.t). {t, signer_name, signature_png,
@@ -2722,12 +2974,16 @@ async function scopeProposalSign(env, body, ip, ua) {
       const clean = schedule || scopeDefaultPaymentSchedule();
       const amounts = scopeComputeMilestoneAmounts(clean, subtotal, vendorCostTotal);
       await paymentMilestonesTab(env);
+      try { await ensureColumns(env, 'Payment_Milestones', ['Vendor_Paid_At_This_Milestone', 'Calc_Mode', 'Flat_Customer_Amount']); } catch (_) {}
       for (let i = 0; i < amounts.length; i++) {
         const m = amounts[i];
         const mResp = await addRow(env, 'Payment_Milestones', {
           Scope_ID: String(s.ID), Signature_ID: String(signatureId), Label: m.label, Percent: String(m.percent),
           Trigger: m.trigger, Sequence: String(i + 1), Customer_Amount: String(m.customer_amount), Vendor_Amount: String(m.vendor_amount),
           Status: 'pending', Created_Date: now.toISOString(), Active: 'TRUE',
+          Vendor_Paid_At_This_Milestone: m.vendor_paid !== false ? 'TRUE' : 'FALSE',
+          Calc_Mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
+          Flat_Customer_Amount: (m.flat_customer_amount != null ? String(m.flat_customer_amount) : ''),
         });
         const mJson = await mResp.json().catch(() => ({}));
         milestones.push(Object.assign({ id: mJson.id }, m));
@@ -2944,12 +3200,29 @@ async function scopeProposalBillMilestones(env, body) {
   const { tradeName, trade, prop, unit, owner, vendor, billTo, custDisplay, vendDisplay, vendorInHouse, addr } = await scopeSigResolveParties(env, s, row);
 
   const custTotal = +picked.reduce((sum, m) => sum + (+m.Customer_Amount || 0), 0).toFixed(2);
-  const vendTotal = +picked.reduce((sum, m) => sum + (+m.Vendor_Amount || 0), 0).toFixed(2);
+
+  // Vendor-pay-per-milestone rollover (Sep 18 2026): a milestone's own Vendor_Amount is fixed at
+  // signing time and never recomputed — what actually gets BILLED to the vendor this round is the
+  // structural payable from scopeVendorPayableSchedule (the FULL schedule, not just what's picked
+  // here), so a skipped milestone's share correctly rolls into whichever later TRUE milestone
+  // absorbs it, however these get grouped/ordered across separate bill-milestones calls.
+  const sigMilestones = allMilestones.filter(m => m.Signature_ID === String(sigId) && String(m.Active || '').toUpperCase() !== 'FALSE');
+  const payableSchedule = scopeVendorPayableSchedule(sigMilestones.map(m => ({
+    id: m.ID, sequence: +m.Sequence || 0, vendor_amount: +m.Vendor_Amount || 0,
+    vendor_paid: String(m.Vendor_Paid_At_This_Milestone || 'TRUE').toUpperCase() !== 'FALSE',
+  })));
+  const payableById = {}; payableSchedule.forEach(p => { payableById[p.id] = p.vendor_payable; });
+  const vendTotal = +picked.reduce((sum, m) => sum + (payableById[m.ID] || 0), 0).toFixed(2);
+  const pickedOwnVendorTotal = +picked.reduce((sum, m) => sum + (+m.Vendor_Amount || 0), 0).toFixed(2);
 
   let billSkipReason = '';
   if (!vendor) billSkipReason = s.Vendor_ID ? ('Vendor ' + s.Vendor_ID + ' was not found on the Vendors tab — no vendor bill will be created.') : 'No vendor is set on this scope — no vendor bill will be created.';
   else if (vendorInHouse) billSkipReason = SCOPE_BILL_SKIP_INHOUSE;
-  else if (!(vendTotal > 0)) billSkipReason = 'The selected milestone(s) carry $0 of vendor cost — there is nothing to bill.';
+  else if (!(vendTotal > 0)) {
+    billSkipReason = pickedOwnVendorTotal > 0
+      ? 'Vendor payment for the selected milestone(s) is deferred (Vendor_Paid_At_This_Milestone is off) — their share rolls forward onto a later paid milestone; nothing billed to the vendor this round.'
+      : 'The selected milestone(s) carry $0 of vendor cost — there is nothing to bill.';
+  }
 
   const labelList = picked.map(m => m.Label).join(' + ');
   const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — ' + labelList + ' (' + addr + ')').slice(0, 4000);
@@ -2960,7 +3233,11 @@ async function scopeProposalBillMilestones(env, body) {
 
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
-    milestones: picked.map(m => ({ id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0 })),
+    milestones: picked.map(m => ({
+      id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0,
+      vendor_amount: +m.Vendor_Amount || 0, vendor_payable_now: payableById[m.ID] || 0,
+      vendor_paid_this_milestone: String(m.Vendor_Paid_At_This_Milestone || 'TRUE').toUpperCase() !== 'FALSE',
+    })),
     invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
     bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName } : null,
     warnings,
@@ -3003,9 +3280,13 @@ async function scopeProposalBillMilestones(env, body) {
     try {
       const vendorQbId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token);
       if (vendorQbId) {
+        // Only milestones with an actual payable THIS round get a line — a milestone whose
+        // vendor pay was deferred (rolled forward per scopeVendorPayableSchedule) gets no $0 line.
+        const payableLines = picked.filter(m => (payableById[m.ID] || 0) > 0);
         const billPayload = {
-          Line: picked.map(m => ({ DetailType: 'AccountBasedExpenseLineDetail', Amount: +(+m.Vendor_Amount || 0).toFixed(2),
-            Description: (vendDisplay + ' — ' + tradeName + ' — ' + (s.Title || '') + ' — ' + m.Label + ' — ' + addr).slice(0, 4000),
+          Line: payableLines.map(m => ({ DetailType: 'AccountBasedExpenseLineDetail', Amount: +(payableById[m.ID] || 0).toFixed(2),
+            Description: (vendDisplay + ' — ' + tradeName + ' — ' + (s.Title || '') + ' — ' + m.Label +
+              ((payableById[m.ID] || 0) !== (+m.Vendor_Amount || 0) ? ' (includes a rolled-forward share from an earlier deferred milestone)' : '') + ' — ' + addr).slice(0, 4000),
             AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } })),
           VendorRef: { value: vendorQbId }, TxnDate: txnDate,
           PrivateNote: ('Scope proposal ' + row.Scope_ID + ' — ' + labelList + ' — ' + vendDisplay).slice(0, 1000),
@@ -3029,9 +3310,43 @@ async function scopeProposalBillMilestones(env, body) {
       QB_Bill_ID: billId, QB_Bill_Number: billNumber, Billed_Date: now,
     });
   }
-  try { if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Invoiced' }); } catch (e) {}
 
-  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, milestone_ids: picked.map(m => m.ID), warnings });
+  // 4) WO writeback (Sep 18 2026) — after a successful customer invoice, roll the running billed
+  // total and a timestamped note onto the linked Work_Orders row (Scopes.WO_ID is the link; a
+  // scope pushed here via /wo/push-to-scope, or created the old way via /scope/to-wo, both set
+  // it). Best-effort: the invoice/bill above are already committed, so a failure here is reported,
+  // never allowed to look like the whole bill failed.
+  if (invoiceId && s.WO_ID) {
+    try {
+      const wosNow = await fetchTab(env, 'Work_Orders');
+      const woRow = findWO(wosNow, s.WO_ID);
+      if (woRow) {
+        await ensureColumns(env, 'Work_Orders', ['Customer_Charge']);
+        // The FINAL milestone is "whichever bill leaves nothing else pending" — not necessarily
+        // the one tagged trigger:'completion' by label, since Brett can bill out of the label
+        // order. Mirrors scopeProposalBookFinal's own reasoning (rule 143): once nothing is left
+        // to bill, the job is already done by definition, so this must not guess/overwrite a more
+        // specific WO status the job has already moved past — extended here, not duplicated. Any
+        // INTERIM bill (something still pending afterward) keeps this function's existing
+        // behavior from before this build: mark the WO Invoiced, same as scopeProposalBook's
+        // deposit stage does.
+        const pickedIds = new Set(picked.map(m => m.ID));
+        const stillPending = sigMilestones.some(m => !pickedIds.has(m.ID) && (m.Status || 'pending') === 'pending');
+        const priorCharge = parseFloat(woRow.Customer_Charge) || 0;
+        const newCharge = +(priorCharge + custTotal).toFixed(2);
+        const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        const vendorNote = vendTotal > 0
+          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round')
+          : ('vendor not paid this round' + (billSkipReason ? (' — ' + billSkipReason) : ''));
+        const noteLine = '[' + ts + '] Scope Proposal billed — ' + labelList + ' — $' + custTotal.toFixed(2) + ' invoiced (' + (invoiceNumber || invoiceId) + '); ' + vendorNote + '.';
+        const fields = { Customer_Charge: String(newCharge), Notes: woRow.Notes ? (woRow.Notes + '\n' + noteLine) : noteLine };
+        if (stillPending) fields.Status = 'Invoiced';
+        await updateWOFields(env, s.WO_ID, fields);
+      }
+    } catch (e) { warnings.push('Invoice/bill succeeded, but updating the linked Work Order (' + s.WO_ID + ') failed: ' + (e.message || e)); }
+  }
+
+  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, milestone_ids: picked.map(m => m.ID), vendor_billed: vendTotal, warnings });
 }
 
 async function scopeProposalBook(env, body) {

@@ -385,7 +385,27 @@ async function boot(){
     setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok');
     populateOwners(); populateVendors();
     await loadScopes();
+    await handleDeepLink();
   }catch(e){ setStatus('conn-status','⚠ '+e.message,'err'); }
+}
+
+// Deep link (Sep 18 2026) — ?scope_id=N opens that scope directly; ?wo_id=N resolves to the
+// scope linked to that Work Order (via GET /scopes' own wo_id field on each row) and opens that.
+// Lets index.html's "📋 Push estimate to Scope Proposal" flow (and anything else) hand Brett
+// straight into the right scope instead of the manual property/scope picker. Best-effort and
+// silent on failure — a bad/stale link should never block the normal picker underneath it.
+async function handleDeepLink(){
+  try{
+    var params = new URLSearchParams(window.location.search);
+    var scopeId = params.get('scope_id');
+    var woId = params.get('wo_id');
+    if(scopeId){ await openScope(scopeId); return; }
+    if(woId){
+      var match = (state.scopes||[]).find(function(s){ return String(s.wo_id)===String(woId); });
+      if(match){ await openScope(match.id); }
+      else{ setStatus('conn-status','No scope is linked to WO '+esc(woId)+' yet — push its approved estimate to a scope first (Work Order → 📋 Push estimate to Scope Proposal).','warn'); }
+    }
+  }catch(e){ /* deep link is a convenience — never blocks the normal picker on failure */ }
 }
 
 /* ---------- scope list ---------- */
