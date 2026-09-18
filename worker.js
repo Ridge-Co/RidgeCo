@@ -8428,6 +8428,33 @@ async function opsQueueUpdate(env, body) {
   return await updateRow(env, OPS_QUEUE_TAB, id, fields);
 }
 
+// POST /ops-queue-prepare {id, brief} — the Rung-1 Prepare agent's ONLY write path (B-141,
+// Sep 18 2026). Accepted via the narrow OPS_QUEUE_TOKEN (same token already used for
+// GET /ops-queue) or the full admin secret. Moves exactly one item from 'greenlit' to
+// 'prepared' and attaches its finished build-ready brief to Build_Brief. Refuses any item
+// whose current Status isn't 'greenlit' — a Rung-1 agent can never re-prepare an already-
+// prepared item, jump straight to building/done, or drop anything; those stay behind the full
+// admin secret via /ops-queue-update, reached by Brett or the future Ship cron. SAFE class:
+// internal Ops_Build_Queue metadata only — no money, PII, auth, or deploy.
+async function opsQueuePrepare(env, body) {
+  const id = body && body.id;
+  const brief = String((body && body.brief) || '');
+  if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
+  if (!brief) return json({ error: 'brief required' }, 400);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  let rows = [];
+  try {
+    const d = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const v = d.values || [];
+    if (v.length > 1) { const hs = v[0]; rows = v.slice(1).map(r => { const o = {}; hs.forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }); }
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'not found' }, 404);
+  if (row.Status !== 'greenlit') return json({ error: `item is '${row.Status}', not 'greenlit' — cannot prepare` }, 409);
+  return await updateRow(env, OPS_QUEUE_TAB, id, { Status: 'prepared', Build_Brief: brief.slice(0, 45000) });
+}
+
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
 async function opsTelemetryRead(env, url) {
   const days = parseInt(url.searchParams.get('days') || '7') || 7;
