@@ -7684,6 +7684,7 @@ async function cronSweep(env) {
   try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
   try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
+  try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
   return json(out);
 }
 
