@@ -7570,6 +7570,47 @@ function depositClearUI(woId) {
     }).catch(function(e) { toast(e.message, 'error'); });
 }
 
+// ── WO → Scope Proposal push (Sep 18 2026) ────────────────────
+// Forward direction of the existing /scope/to-wo conversion — takes this WO's own APPROVED
+// vendor Estimate and pushes it into the Scope Proposal system (new/existing Scope, per
+// worker.js's woPushToScope) so it can go through e-sign + materials markup + milestone billing.
+// Mirrors the preview → confirm → apply weight of the WO-void flow, without a full modal since
+// there's no user input to collect — the preview call itself supplies everything to confirm.
+function openPushToScopeUI(woId) {
+  var estimates = window._hubEstimates[woId] || [];
+  var approved = estimates.filter(function(e) { return e.Status === 'Approved'; });
+  if (approved.length !== 1) {
+    toast(approved.length === 0
+      ? 'Approve an estimate first (✓ Approve Estimate, above), then push it to a Scope Proposal.'
+      : (approved.length + ' estimate versions are marked Approved on this WO — resolve to exactly one first.'), 'error');
+    return;
+  }
+  var estimateId = approved[0].ID;
+  api('POST', '/wo/push-to-scope', { wo_id: woId, estimate_id: estimateId, apply: false })
+    .then(function(preview) {
+      if (!preview || preview.error) { toast((preview && preview.error) || 'Preview failed', 'error'); return; }
+      var t = preview.target || {};
+      var itemLines = (preview.mapped_items || []).map(function(it) {
+        var cost = (it.variants && it.variants[0] && it.variants[0].vendor_cost) || 0;
+        return '  • ' + it.description + ' — $' + parseFloat(cost).toFixed(2);
+      }).join('\n');
+      var msg = t.will_create
+        ? ('Create a NEW Scope Proposal for WO ' + woId + ' from estimate v' + preview.estimate_version + ' (' + (preview.mapped_items || []).length + ' item(s)):\n' + itemLines)
+        : ('Append ' + (preview.mapped_items || []).length + ' item(s) from estimate v' + preview.estimate_version + ' onto EXISTING Scope #' + t.scope_id + ' (' + (t.title || 'Untitled') + ', currently ' + t.existing_item_count + ' item(s)):\n' + itemLines);
+      if (!confirm(msg + '\n\nThis does not send anything to the customer yet — it moves the estimate into the Scope Proposal system so it can be priced, e-signed, and billed there. Continue?')) return;
+      api('POST', '/wo/push-to-scope', { wo_id: woId, estimate_id: estimateId, apply: true })
+        .then(function(res) {
+          if (!res.success) { toast(res.error || 'Push failed', 'error'); return; }
+          toast(res.already_converted ? res.message : ('✅ Pushed to Scope #' + res.scope_id + (res.created_new_scope ? ' (new)' : ' (existing)')), 'success');
+          var wo = safeArray(state.workorders).find(function(w) { return w.ID === woId; });
+          if (wo) wo.Scope_ID = res.scope_id;
+          // Re-render picks up wo.Scope_ID above, which is what makes the "🔗 Open Scope #N →"
+          // button (built into renderHubEstimateView's pushToScopeBlock) appear right away.
+          refreshHubEstimateView(woId);
+        }).catch(function(e) { toast(e.message, 'error'); });
+    }).catch(function(e) { toast(e.message, 'error'); });
+}
+
 // ── Hub Receipt Tracking ──────────────────────────────────────
 function loadHubReceiptTracking(woId, detailBody) {
   var holder = document.getElementById('receipts-' + woId);
