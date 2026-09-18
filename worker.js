@@ -2557,7 +2557,7 @@ async function scopeProposalView(env, url) {
 // contractor proposal, not a notarized legal document. Auth reuses the SAME scope-proposal link
 // token as scopeProposalView — no separate PROPOSAL_SIGN_TOKEN needed, since the token already
 // scopes access to exactly one scope's proposal.
-const SCOPE_SIG_HEADERS = ['ID','Scope_ID','Signer_Name','Signature_PNG','Selections_JSON','Subtotal','Deposit_Amount','Vendor_Cost_Total','Signed_Date','Signed_TS','IP','User_Agent','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','QB_Final_Invoice_ID','QB_Final_Invoice_Number','QB_Final_Bill_ID','QB_Final_Bill_Number','Bill_Skip_Reason','Created_Date','Active'];
+const SCOPE_SIG_HEADERS = ['ID','Scope_ID','Signer_Name','Signature_PNG','Selections_JSON','Subtotal','Deposit_Amount','Vendor_Cost_Total','Signed_Date','Signed_TS','IP','User_Agent','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','QB_Final_Invoice_ID','QB_Final_Invoice_Number','QB_Final_Bill_ID','QB_Final_Bill_Number','Bill_Skip_Reason','Final_Bill_Skip_Reason','Created_Date','Active'];
 async function scopeSigTab(env) { await ensureTab(env, 'Scope_Signatures', SCOPE_SIG_HEADERS); }
 
 // ── Payment Schedule / Milestones (Sep 14 2026) ─────────────────────────────
