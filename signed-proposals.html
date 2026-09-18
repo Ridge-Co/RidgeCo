@@ -247,7 +247,19 @@ function load(){
         if(r.kind==='scope'){
           if(r.qb_final_invoice_id){
             html+='<div class="booked">✓ Final balance: invoice'+(r.qb_final_invoice_number?(' #'+esc(r.qb_final_invoice_number)):'')+(r.qb_final_bill_number?(' · bill #'+esc(r.qb_final_bill_number)):'')+' created. '
-              +'<a href="#" onclick="undoBook(\''+esc(r.id)+'\',\''+r.kind+'\',\'final\',this);return false;" style="color:var(--red);font-weight:700;text-decoration:none">Undo</a></div>';
+              +'<a href="#" onclick="undoBook(\''+esc(r.id)+'\',\''+r.kind+'\',\'final\',this);return false;" style="color:var(--red);font-weight:700;text-decoration:none">Undo</a>'
+              +(r.qb_final_bill_id?' · <a href="#" onclick="adjustBill(\''+esc(r.id)+'\',\'final\');return false;" style="color:var(--blue);font-weight:700;text-decoration:none">Adjust vendor bill</a>':'')
+              +'</div>';
+            // Same hard-stop banner as the deposit half, above, but for the FINAL vendor bill —
+            // added Sep 18 2026. This page had no way to show a missing FINAL bill until now,
+            // exactly the gap that hid 1305 N Calvert St's.
+            if(r.final_bill_gap==='missing'){
+              html+='<div class="warn hard"><strong>⚠ Final balance invoiced — no bill.</strong> The customer was invoiced the final balance but the vendor was never billed.'
+                +(r.final_bill_skip_reason?('<br>'+esc(r.final_bill_skip_reason)):'')+'</div>'
+                +'<div style="margin-top:10px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\',\'final\')">Retry vendor bill</button></div>';
+            } else if(r.final_bill_gap==='in_house'){
+              html+='<div class="sub" style="margin-top:6px">No vendor bill on the final balance — in-house work.</div>';
+            }
           } else {
             html+='<div style="margin-top:12px"><button class="btn primary" onclick="preview(\''+esc(r.id)+'\',\''+r.kind+'\',\'final\')">Job done — invoice final balance</button></div>';
           }
