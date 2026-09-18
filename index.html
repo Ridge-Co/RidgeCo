@@ -9390,14 +9390,21 @@ function renderPayablesList() {
   var countEl = document.getElementById('pay-count');
   if (countEl) countEl.textContent = 'Showing ' + filtered.length + ' of ' + rows.length + ' payable row' + (rows.length === 1 ? '' : 's');
 
-  var stateLabel = { 'possible duplicate': '⚠ POSSIBLE DUPLICATE — CHECK QB' };
+  var stateLabel = { 'possible duplicate': '⚠ POSSIBLE DUPLICATE — CHECK QB', 'vendor bill missing': '⚠ VENDOR NOT BILLED — CHECK' };
 
   function card(r) {
     var colour = r.state === 'possible duplicate' ? 'var(--danger)'
+               : r.state === 'vendor bill missing' ? 'var(--danger)'
                : r.state === 'PAY THE VENDOR' ? 'var(--accent2)'
                : r.state === 'owner paid in part' ? 'var(--warn)'
                : r.state === 'waiting on the owner' ? 'var(--warn)'
                : r.state === 'unknown' ? 'var(--danger)' : 'var(--muted)';
+    // Signed-Proposal rows (Sep 18 2026, worker.js qbPayables) carry no Invoice_Review row — a
+    // small badge says where this one actually came from, since "open WO" and "open bill in QB"
+    // below both still work exactly the same either way.
+    var sourceBadge = r.source === 'scope_signature'
+      ? ' <span style="color:var(--info);font-size:10px;font-weight:700">· via Signed Proposal' + (r.phase ? ' (' + esc(r.phase) + ')' : '') + '</span>'
+      : '';
     var owe = r.vendor_balance != null ? r.vendor_balance : r.vendor_cost;
     // The vendor's own ref number (matches QuickBooks Pay Bills "REF NO"); when the vendor gave
     // none, QuickBooks shows the WO number too, so the WO id already lines the two views up.
