@@ -2842,6 +2842,42 @@ function scopeComputeMilestoneAmounts(schedule, subtotal, vendorCostTotal) {
     };
   });
 }
+// Given a signature's FULL milestone schedule (any order; sorted here by `sequence`), returns the
+// ACTUAL vendor-payable amount per milestone once a Vendor_Paid_At_This_Milestone:false milestone's
+// share has rolled forward — the vendor's total across the whole schedule is always the sum of
+// every milestone's own `vendor_amount` (computed once at signing time by
+// scopeComputeMilestoneAmounts and never touched again), just concentrated into fewer/larger draws
+// per Brett's explicit requirement (rollover, not a discount). Purely structural: it depends only
+// on each milestone's fixed sequence/vendor_amount/vendor_paid, never on what has or hasn't
+// actually been billed yet — so it's safe to recompute on every call and safe even if milestones
+// end up billed out of sequence order.
+//   • vendor_paid:true  → payable = its own vendor_amount + anything carried forward from
+//     immediately-preceding vendor_paid:false milestone(s); carry resets to 0 after.
+//   • vendor_paid:false → payable = 0 (nothing billed to the vendor for this milestone THIS round);
+//     its vendor_amount is added to the carry for the next vendor_paid:true milestone to absorb.
+//   • A trailing run of vendor_paid:false milestones with no later TRUE milestone to catch it (a
+//     degenerate schedule — e.g. the FINAL milestone itself is flagged false) would otherwise
+//     strand that money forever; instead it's force-attached to the LAST milestone in the
+//     schedule regardless of that milestone's own flag, since "the vendor is never underpaid in
+//     total" (Brett's explicit requirement) outranks a strict last-TRUE-wins read. Flagged in the
+//     build brief as worth a real UI warning if it's ever actually configured this way.
+function scopeVendorPayableSchedule(milestones) {
+  const ordered = (Array.isArray(milestones) ? milestones : []).slice().sort((a, b) => (+a.sequence || 0) - (+b.sequence || 0));
+  let carry = 0;
+  const out = ordered.map(m => {
+    const own = +m.vendor_amount || 0;
+    const paid = m.vendor_paid !== false;
+    if (paid) {
+      const eff = +(own + carry).toFixed(2);
+      carry = 0;
+      return { id: m.id, sequence: m.sequence, vendor_payable: eff };
+    }
+    carry = +(carry + own).toFixed(2);
+    return { id: m.id, sequence: m.sequence, vendor_payable: 0 };
+  });
+  if (carry > 0 && out.length) out[out.length - 1].vendor_payable = +(out[out.length - 1].vendor_payable + carry).toFixed(2);
+  return out;
+}
 function scopeParsePaymentSchedule(s) {
   try { const arr = JSON.parse((s && s.Payment_Schedule_JSON) || 'null'); if (Array.isArray(arr) && arr.length) return arr; } catch (_) {}
   return scopeDefaultPaymentSchedule();
