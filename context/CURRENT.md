@@ -1,4 +1,21 @@
-# WHERE THINGS STAND — Sep 18, 2026 (Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+# WHERE THINGS STAND — Sep 18, 2026 (Selftest auto-verification pass added — POST /selftest + daily 7am ET cron digest, closing the "built, not yet live-verified" gap, but not yet live-verified itself; Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+
+## 🟡 Built, not yet live-verified: Selftest auto-verification pass (`POST /selftest`)
+Optimizer Round 2 item #1 — the fix for THIS exact list: dozens of features sitting here as
+"built, not yet live-verified" because a headless build session has no `WORKER_SECRET` to check
+them itself. `POST /selftest` runs 34 endpoint smoke checks + 4 golden business-outcome checks
+that regression-test real past bugs (rule 182 PIN dedup, rule 162 WO duplicate-ID guard, rule 174
+Payment_Source column, rule 192 vendor-bills-invisible-to-QB), gated exactly like `/ops-review`
+(full `WORKER_SECRET` only). Wired into the existing `cronSweep` (no free Cloudflare cron slot
+was available) to run once daily ~7am ET with `deliver:true`, tracked in a new `Selftest_Results`
+tab, and delivered via the real `gmailSendEmail` — deliberately NOT the dead `deliverDigestEmail`
+stub. `test/selftest.test.mjs` (105 assertions) covers all the pure/helper logic; `node --check`
+clean; landed as 5 small atomic commits. Full detail FEATURE_LOG rule 193.
+**Not yet run for real** — no credential to do that from this build session, by design. Brett:
+(1) hit `POST /selftest` once by hand to see the first real digest and confirm all 38 checks pass
+live; (2) set `admin_email` + `selftest_digest_enabled=TRUE` (Config) when ready for the daily
+email — both start unset/off; (3) check `Selftest_Results` the morning after the next cron sweep
+to confirm the ~7am ET gate actually fired.
 
 ## 🟡 Open: Brett to apply the WO-1175 $500 vendor-bill adjustment himself
 Root cause found and fixed for a real incident: Cesar Diaz's (Gomez Homes Restoration) final
