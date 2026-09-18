@@ -2650,7 +2650,7 @@ async function scopeSetPaymentSchedule(env, body) {
   return json({ success: true, schedule, warnings: warnings || [] });
 }
 
-const PAYMENT_MILESTONES_HEADERS = ['ID','Scope_ID','Signature_ID','Label','Percent','Trigger','Sequence','Customer_Amount','Vendor_Amount','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Billed_Date','Created_Date','Active'];
+const PAYMENT_MILESTONES_HEADERS = ['ID','Scope_ID','Signature_ID','Label','Percent','Trigger','Sequence','Customer_Amount','Vendor_Amount','Status','QB_Invoice_ID','QB_Invoice_Number','QB_Bill_ID','QB_Bill_Number','Billed_Date','Created_Date','Active','Vendor_Paid_At_This_Milestone','Calc_Mode','Flat_Customer_Amount'];
 async function paymentMilestonesTab(env) { await ensureTab(env, 'Payment_Milestones', PAYMENT_MILESTONES_HEADERS); }
 
 // POST /scope-proposal/sign — PUBLIC (link-token gated, body.t). {t, signer_name, signature_png,
