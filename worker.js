@@ -8437,7 +8437,7 @@ async function opsQueueUpdate(env, body) {
   return await updateRow(env, OPS_QUEUE_TAB, id, fields);
 }
 
-// POST /ops-queue-prepare {id, brief} — the Rung-1 Prepare agent's ONLY write path (B-141,
+// POST /ops-queue-prepare {id, brief} — the Rung-1 Prepare agent's ONLY write path (B-240,
 // Sep 18 2026). Accepted via the narrow OPS_QUEUE_TOKEN (same token already used for
 // GET /ops-queue) or the full admin secret. Moves exactly one item from 'greenlit' to
 // 'prepared' and attaches its finished build-ready brief to Build_Brief. Refuses any item
