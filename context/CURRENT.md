@@ -1,4 +1,24 @@
-# WHERE THINGS STAND — Sep 17, 2026 (Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+# WHERE THINGS STAND — Sep 18, 2026 (Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+
+## 🟡 Open: Brett to apply the WO-1175 $500 vendor-bill adjustment himself
+Root cause found and fixed for a real incident: Cesar Diaz's (Gomez Homes Restoration) final
+vendor bill on WO-1175 (1305 N Calvert St, drywall) existed in QuickBooks (#7818, $3,400) but
+was structurally invisible on Who To Pay — Signed-Proposal bookings were tracked only on
+`Scope_Signatures`, never as `Vendor_Bills`/`Invoice_Review` rows, which is all `qbPayables` ever
+read. Fixed at the root: `qbPayables` now also builds rows from `Scope_Signatures` directly, a
+new "vendor bill missing" state flags genuine gaps instead of hiding them, a
+`Final_Bill_Skip_Reason` column mirrors rule 145's deposit-side safety net for the final phase,
+and WO auto-close-to-Paid is now tied to the final vendor bill specifically (deposit can never
+auto-close a WO). Also shipped a reusable `/scope-proposal/adjust-bill` tool + "Adjust vendor
+bill" UI link for one-off dollar corrections. `BUILD_VERSION` → `2026-09-18.3`, live-verified.
+Full detail FEATURE_LOG rule 192.
+
+**Still open — deliberately left for Brett (Rung-3, money write, never autonomous):** open
+Signed Proposals → 1305 N Calvert St → final row → "Adjust vendor bill" → enter `500` and a
+reason → Confirm. That absorbs the vendor's $500 unforeseen-complexity increase (never billed to
+the customer) and brings the balance owed from $2,900 to $3,400 so Cesar can actually be paid.
+Also worth a glance: the new "vendor bill missing" bucket on Who To Pay, in case another
+Signed-Proposal job has the same undiscovered gap.
 
 ## 🟡 Open: confirm the first Monday 8:30am ET weekly-review text actually arrives
 Weekly Optimizer review delivery was turned on this session (its own `weekly_review_enabled`
