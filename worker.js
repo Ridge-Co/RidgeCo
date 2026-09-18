@@ -3246,10 +3246,25 @@ async function scopeProposalBookFinal(env, body) {
   const { tradeName, trade, prop, unit, owner, vendor, billTo, custDisplay, vendDisplay, vendorInHouse, addr } =
     await scopeSigResolveParties(env, s, row);
 
+  // Same skip-reason discipline as the deposit half (scopeProposalBook) — decided ONCE, used by
+  // both the preview warnings and the persisted Final_Bill_Skip_Reason, so the Hub and the sheet
+  // can never drift apart. Added Sep 18 2026: the final phase had every other protection the
+  // deposit phase got in rule 145 except this one — a final vendor bill that silently failed to
+  // create had nothing recording it, the exact blind spot rule 145 fixed on the deposit side.
+  let billSkipReason = '';
+  if (!vendor) {
+    billSkipReason = s.Vendor_ID
+      ? ('Vendor ' + s.Vendor_ID + ' was not found on the Vendors tab — no vendor bill will be created.')
+      : 'No vendor is set on this scope — no vendor bill will be created.';
+  } else if (vendorInHouse) {
+    billSkipReason = SCOPE_BILL_SKIP_INHOUSE;
+  } else if (!(finalVendorAmount > 0)) {
+    billSkipReason = 'The remaining vendor balance is $0 or less — there is nothing to bill.';
+  }
+
   const warnings = [];
   if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
-  if (!vendor) warnings.push(s.Vendor_ID ? ('Vendor ' + s.Vendor_ID + ' not found — no vendor bill will be created.') : 'No vendor set on this scope — no vendor bill will be created.');
-  else if (vendorInHouse) warnings.push('Vendor is marked in-house — no vendor bill will be created.');
+  if (billSkipReason) warnings.push(billSkipReason);
   if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
   if (ratio !== 0.5) warnings.push('Deposit was ' + Math.round(ratio * 100) + '% of the signed subtotal (not the usual 50%) — the final balance is prorated to match what remains.');
   if (finalAmount <= 0) warnings.push('Nothing appears to remain — subtotal ($' + subtotal.toFixed(2) + ') is not greater than the deposit already invoiced ($' + deposit.toFixed(2) + ').');
