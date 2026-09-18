@@ -227,7 +227,9 @@ function load(){
         +'</div>';
       if(booked){
         html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created. '
-          +'<a href="#" onclick="undoBook(\''+esc(r.id)+'\',\''+r.kind+'\',\'\',this);return false;" style="color:var(--red);font-weight:700;text-decoration:none">Undo</a></div>';
+          +'<a href="#" onclick="undoBook(\''+esc(r.id)+'\',\''+r.kind+'\',\'\',this);return false;" style="color:var(--red);font-weight:700;text-decoration:none">Undo</a>'
+          +(r.kind==='scope'&&r.qb_bill_id?' · <a href="#" onclick="adjustBill(\''+esc(r.id)+'\',\'deposit\');return false;" style="color:var(--blue);font-weight:700;text-decoration:none">Adjust vendor bill</a>':'')
+          +'</div>';
         if(gap==='missing'){
           // Persistent, not a one-time toast: the reason is stored on the row, so this banner
           // survives a reload and stays until a bill actually exists. Retry re-runs the same
