@@ -549,6 +549,9 @@ export default {
         if (path === '/scope/split')              return await scopeSplit(env, body);
         if (path === '/scope/approve')            return await scopeApprove(env, body);
         if (path === '/scope/to-wo')              return await scopeToWO(env, body);
+        // Admin-only (zero ROLE_SCOPES entries, reachable only via WORKER_SECRET) — see
+        // woPushToScope's own header comment above for the full design.
+        if (path === '/wo/push-to-scope')         return await woPushToScope(env, body);
         if (path === '/scope/estimate')           return await scopeEstimate(env, body);
         if (path === '/scope/proposal')           return await scopeProposal(env, body);
         if (path === '/scope/payment-schedule')   return await scopeSetPaymentSchedule(env, body);
