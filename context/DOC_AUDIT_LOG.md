@@ -29,3 +29,12 @@ Checked commits: 232 (excluding merges/doc-audit itself)
 - `7690c84` (2026-09-16 21:45) Bump BUILD_VERSION to 2026-09-16.4 (deploy marker for the held-WO owner-contact resolution) — best single-entry match: 43%
 - `2f4f36a` (2026-09-16 18:45) docs: v1.5 -- document the add_repo cross-tier wall and the standing rule to avoid it — best single-entry match: 38%
 - `08c5698` (2026-09-16 18:42) docs: sync CLAUDE.md's private-context load instructions with CREDENTIALS_MAP.md v1.4 (applies PR #5) — best single-entry match: 44%
+
+## Run: 2026-09-18 16:54 UTC
+Since: 2026-09-17 (source: this script's own last recorded run)
+Checked commits: 93 (excluding merges/doc-audit itself)
+**4 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `7b027ba` (2026-09-17 18:18) WO Templates: add hidden tmpl-id + title/save-button ids for edit-mode reuse — best single-entry match: 25%
+- `1da1d33` (2026-09-17 13:52) OPTIMIZER_ROUND_LOG.md: note the v1.1 addendum in the governing header — best single-entry match: 40%
+- `c9bf6db` (2026-09-17 00:54) Fix garbled merge in CURRENT.md from the previous patch (dangling duplicate sentence fragment) — best single-entry match: 44%
+- `34a4220` (2026-09-17 00:41) Bump BUILD_VERSION for bulk-welcome template consistency fix — best single-entry match: 40%
