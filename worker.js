@@ -500,6 +500,8 @@ export default {
         if (path === '/ops-approve')              return await opsApprove(env, body);
         if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
         if (path === '/ops-queue-prepare')        return await opsQueuePrepare(env, body);
+        if (path === '/ops-queue-status')         return await opsQueueStatus(env, body);
+        if (path === '/ops-queue/start-build')    return await opsQueueStartBuild(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/selftest')                 return await selftestRunEndpoint(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
