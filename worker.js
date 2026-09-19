@@ -11580,7 +11580,7 @@ async function updateRow(env, tab, id, fields) {
   try { data = await sheetsRequest(env,'GET',`/values/${tab}`); }
   catch(e) { if(isMissingTabError(e)) return missingTabResponse(tab); throw e; }
   if(!data.values) return json({error:'Tab not found'},404);
-  const [headers,...rows]=data.values; const _idc=idColIndex(headers); const rowIndex=rows.findIndex(r=>r[_idc]===String(id));
+  const [headers,...rows]=data.values; const _idc=idColIndex(headers); const rowIndex=rows.findIndex(r=>String(r[_idc])===String(id));
   if(rowIndex===-1) return json({error:'Row not found'},404);
   const sheetRow=rowIndex+2, updates=[];
   for(const [field,value] of Object.entries(fields)){const colIndex=headers.indexOf(field);if(colIndex!==-1)updates.push({range:`${tab}!${col(colIndex)}${sheetRow}`,values:[[value]]});}
