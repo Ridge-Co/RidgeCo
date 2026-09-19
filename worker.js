@@ -11469,46 +11469,38 @@ async function hubTestWriteAllowed(env, path, body) {
 // re-running this is always safe and just hands back the existing IDs. Staging-only by
 // construction — refuses outright if isStaging(env, url) is false, regardless of which token
 // called it.
+// Self-heal (2026-09-19): earlier bugs in seedTestFixtures — checking/writing a "Name" column
+// these tabs don't have, then a numeric-vs-string ID mismatch in a first attempt at fixing that —
+// meant its own idempotency check could never match, so a run of debugging calls left several
+// duplicate TEST- fixture sets behind (Owners 11/12/13 and their linked rows) before landing on
+// this fix. Rather than special-case each ID that debugging happened to produce, this keeps the
+// LOWEST-ID row carrying each TEST- marker as canonical and de-identifies every other match (no
+// real delete endpoint exists for these tabs, so it clears the marker field rather than removing
+// the row). Safe to run on every call, forever — a correctly-idempotent run never has more than
+// one match per marker, so this is then just an extra read per call, not a no-op-with-risk.
+async function dedupeTestFixtures(env) {
+  const MARKERS = [
+    { tab: 'Owners', field: 'Company', value: 'TEST-OWNER-001' },
+    { tab: 'Properties', field: 'Address', value: 'TEST-PROPERTY-001' },
+    { tab: 'Units', field: 'Unit_Label', value: 'TEST-UNIT-001' },
+    { tab: 'Tenants', field: 'Last_Name', value: 'TEST-TENANT-001' },
+    { tab: 'Vendors', field: 'Name', value: 'TEST-VENDOR-001' },
+  ];
+  for (const { tab, field, value } of MARKERS) {
+    const rows = await fetchTab(env, tab);
+    const matches = rows.filter(r => r[field] === value).sort((a, b) => Number(a.ID) - Number(b.ID));
+    for (const extra of matches.slice(1)) {
+      await updateRow(env, tab, extra.ID, tab === 'Vendors' ? { Name: '', Company: '' } : { [field]: '' });
+    }
+  }
+}
+
 async function seedTestFixtures(env, url) {
   if (!isStaging(env, url)) return json({ error: 'seed-test-fixtures only runs on staging' }, 403);
   const BRETT_PHONE = '4439617927';
   const BRETT_EMAIL = 'brett@bmoremanagement.com';
+  await dedupeTestFixtures(env);
   const existingOwners = await fetchTab(env, 'Owners');
-
-  // One-time repair (2026-09-19): before the TEST_MARKER_FIELD fix above, this function wrote
-  // its marker into "Name" on every tab, a column that doesn't exist on Owners/Properties/
-  // Units/Tenants — so it silently landed nowhere, AND this function's own idempotency check
-  // below (which also checked Name) could never match, so every prior call created a fresh,
-  // fully-duplicate set of rows instead of reusing one. This repairs the exact rows that bug
-  // produced earlier today (Owner 11 / Property 69 / Unit 40 / Tenant 86 — Vendor 7 already had
-  // a correct Name+Company and needs nothing). Guarded by ID + "is it still actually blank", so
-  // it is a harmless no-op on every call from here on.
-  const legacyOwner = existingOwners.find(o => String(o.ID) === '11');
-  if (legacyOwner && !legacyOwner.Company) {
-    await updateRow(env, 'Owners', '11', { Company: 'TEST-OWNER-001' });
-    await updateRow(env, 'Properties', '69', { Address: 'TEST-PROPERTY-001' });
-    await updateRow(env, 'Units', '40', { Unit_Label: 'TEST-UNIT-001' });
-    await updateRow(env, 'Tenants', '86', { Last_Name: 'TEST-TENANT-001' });
-    legacyOwner.Company = 'TEST-OWNER-001'; // keep in-memory copy in sync for the check just below
-  }
-
-  // One-time cleanup (2026-09-19): the ID-comparison bug just above (o.ID === '11' never
-  // matching a numeric ID) meant the repair path failed silently on its first deploy and this
-  // function's still-broken-at-the-time idempotency check fell through and created a SECOND,
-  // fully-duplicate fixture set (Owner 12/Property 70/Unit 41/Tenant 87/Vendor 8) rather than
-  // repairing Owner 11. De-identifies that duplicate set in place (no real delete endpoint
-  // exists for these tabs, so this clears the TEST- markers rather than removing the rows) so
-  // Owner 11's set is the only one anything will ever match going forward. Guarded by ID +
-  // "does it still show the marker", so a no-op after it runs once.
-  const dupOwner = existingOwners.find(o => String(o.ID) === '12');
-  if (dupOwner && dupOwner.Company === 'TEST-OWNER-001') {
-    await updateRow(env, 'Owners', '12', { Company: '' });
-    await updateRow(env, 'Properties', '70', { Address: '' });
-    await updateRow(env, 'Units', '41', { Unit_Label: '' });
-    await updateRow(env, 'Tenants', '87', { Last_Name: '' });
-    await updateRow(env, 'Vendors', '8', { Name: '', Company: '' });
-  }
-
   const already = existingOwners.find(o => o.Company === 'TEST-OWNER-001');
   if (already) {
     const [props, vendors, units, tenants] = await Promise.all([
