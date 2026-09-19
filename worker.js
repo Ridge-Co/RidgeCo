@@ -8713,6 +8713,56 @@ async function opsQueuePrepare(env, body) {
   return await updateRow(env, OPS_QUEUE_TAB, id, { Status: 'prepared', Build_Brief: brief.slice(0, 45000) });
 }
 
+// POST /ops-queue-status {id, status, note?} — the narrow per-item callback a Start-Build-fired
+// session uses to report ONE item's outcome back (Sep 19 2026). Accepted via the narrow
+// OPS_QUEUE_TOKEN (same token already used for GET /ops-queue and POST /ops-queue-prepare) or the
+// full admin secret. Structurally can only ever report 'building'/'done'/'held' — never
+// 'greenlit'/'prepared'/'dropped' (validateQueueStatusReport is the hard boundary, mirroring how
+// opsQueuePrepare can only ever produce 'prepared'), so this token can never drop an item or set
+// one it didn't touch. A batch of N items fired together by Start Build each reports back
+// independently as it finishes, so one failing/held item never blocks the others from reporting
+// 'done'. SAFE class: internal Ops_Build_Queue metadata only — no money, PII, auth, or deploy.
+async function opsQueueStatus(env, body) {
+  const id = body && body.id;
+  const status = String((body && body.status) || '').toLowerCase();
+  const note = (body && body.note) || '';
+  if (id === undefined || id === null || id === '') return json({ ok: false, error: 'id required' }, 400);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  let rows = [];
+  try {
+    const d = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const v = d.values || [];
+    if (v.length > 1) { const hs = v[0]; rows = v.slice(1).map(r => { const o = {}; hs.forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }); }
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ ok: false, error: 'not_found' }, 404);
+  const verdict = validateQueueStatusReport(row, status, note);
+  if (!verdict.ok) {
+    const httpStatus = verdict.error === 'wrong_current_status' ? 409 : 400;
+    return json({ ok: false, error: verdict.error }, httpStatus);
+  }
+  const fields = { Status: status };
+  if (status === 'held') fields.Held_Note = String(note).slice(0, 500);
+  if (status === 'done') fields.Held_Note = ''; // cleanup — in case this is a retry after a prior held attempt
+  await updateRow(env, OPS_QUEUE_TAB, id, fields);
+  return json({ ok: true, id, status });
+}
+
+// PURE — given the row's CURRENT state plus what a build session wants to report, decide whether
+// the report is acceptable. No env, no I/O — every branch independently testable
+// (test/ops-queue-build-trigger.test.mjs). requestedStatus can only ever be building/done/held —
+// the hard structural boundary that keeps the narrow OPS_QUEUE_TOKEN that reaches
+// POST /ops-queue-status from ever setting greenlit/prepared/dropped, mirroring opsQueuePrepare's
+// own single-allowed-transition design. Row-not-found is handled by the HTTP handler above,
+// before this ever runs — by the time this is called, `row` is always a real row.
+function validateQueueStatusReport(row, requestedStatus, note) {
+  if (!['building', 'done', 'held'].includes(requestedStatus)) return { ok: false, error: 'invalid_status' };
+  if (!row || !['greenlit', 'prepared', 'building'].includes(row.Status)) return { ok: false, error: 'wrong_current_status' };
+  if (requestedStatus === 'held' && !(typeof note === 'string' && note.trim())) return { ok: false, error: 'held_requires_note' };
+  return { ok: true };
+}
+
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
 async function opsTelemetryRead(env, url) {
   const days = parseInt(url.searchParams.get('days') || '7') || 7;
