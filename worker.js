@@ -9949,8 +9949,24 @@ function _utf8B64url(str) {
 async function gmailSendEmail(env, { to, subject, html }) {
   if (!to) throw new Error('gmailSendEmail: to required');
   if (env.__STAGING__ ?? isStaging(env)) {
-    console.log(`🧪 STAGING — Gmail send stubbed (not sent) → ${to}: ${subject}`);
-    return { staged: true, sent: false, would_have: { to, subject }, note: '🧪 STAGING MODE — logged only, no real email sent.' };
+    // Staging Gmail policy (test-infrastructure build, Sep 19 2026): default stays fully
+    // stubbed (no real send, ever) — same behavior as before this build. Setting Config key
+    // GMAIL_STAGING_MODE to 'REDIRECT' switches this ONE staging Worker to a REAL send, but
+    // the recipient is hard-overridden to GMAIL_TEST_RECIPIENT (default: Brett's own inbox) no
+    // matter what `to` was — so verifying real formatting can never reach an actual
+    // tenant/owner/vendor. Anything other than 'REDIRECT' (including unset) stays STUB. This
+    // whole branch is unreachable outside isStaging — production Gmail behavior is untouched.
+    const cfg = await fetchConfig(env);
+    const stagingMode = String(cfg.GMAIL_STAGING_MODE || 'STUB').toUpperCase();
+    if (stagingMode !== 'REDIRECT') {
+      console.log(`🧪 STAGING — Gmail send stubbed (not sent) → ${to}: ${subject}`);
+      return { staged: true, sent: false, would_have: { to, subject }, note: '🧪 STAGING MODE — logged only, no real email sent.' };
+    }
+    const originalTo = to;
+    to = cfg.GMAIL_TEST_RECIPIENT || 'brett@bmoremanagement.com';
+    subject = `[TEST → was: ${originalTo}] ${subject}`;
+    console.log(`🧪 STAGING REDIRECT — real send to ${to} (would have gone to ${originalTo})`);
+    // falls through to a REAL send below, now targeting the test recipient only
   }
   const accessToken = await gmailAccessToken(env);
   const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
