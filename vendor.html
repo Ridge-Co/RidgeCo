@@ -19,7 +19,17 @@
      entry only exists for a page that already finished loading once. -->
 <script>
 window.addEventListener('pageshow', function(e){
-  if (e.persisted) location.reload();
+  if (!e.persisted) return;
+  // Returning from bfcache (phone backgrounded then resumed, etc.) used to force an
+  // unconditional reload here. Safe for THIS page in general (see the note above -- a
+  // bfcache entry only exists for a page that already finished loading once) but not safe
+  // for a vendor who was mid-receipt or had a modal open when they got interrupted -- a hard
+  // reload would silently wipe whatever they'd typed. Now it defers exactly like the
+  // background checks further down the page: skip the reload while busy and let those same
+  // checks (which also fire on this resume, via visibilitychange/focus) settle it in once
+  // the vendor is free instead.
+  if (typeof isVendorBusy === 'function' && isVendorBusy()) return;
+  location.reload();
 });
 </script>
 <title>Ridge Co — Vendor Portal</title>
