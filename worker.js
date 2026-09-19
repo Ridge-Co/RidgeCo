@@ -351,7 +351,7 @@ export default {
             const _allowed = await resolveTenantSubmitAccess(env, body.property_id, body.unit_id);
             if (!_allowed) return json({ error: 'Work order submission is currently turned off for your unit. Please contact your property manager.', tenant_wo_disabled: true }, 403);
           }
-          return await createWorkOrder(env, body);
+          return await callWithFailureAlert(env, 'wo_create', '/workorder', () => createWorkOrder(env, body));
         }
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
