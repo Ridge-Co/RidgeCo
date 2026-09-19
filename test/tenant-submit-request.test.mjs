@@ -62,9 +62,12 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   // be completely unaffected — this hardening is scoped strictly to callerRole === 'tenant'.
   const gate = grab(wsrc, "if (path === '/workorder') {");
   const beforeTenantBranch = gate.slice(0, gate.indexOf("if (callerRole === 'tenant')"));
-  ok(!beforeTenantBranch.includes('return await createWorkOrder'), 'createWorkOrder is only ever called once, after the (conditional) tenant branch — not duplicated per-role');
-  ok(gate.trim().endsWith('return await createWorkOrder(env, body);\n        }') || gate.includes('return await createWorkOrder(env, body);'),
-    'admin/owner callers still fall straight through to createWorkOrder with their own body untouched');
+  ok(!beforeTenantBranch.includes('createWorkOrder(env, body)'), 'createWorkOrder is only ever invoked once, after the (conditional) tenant branch — not duplicated per-role');
+  // Sep 19 2026 (Ops_Build_Queue #14): the dispatch now routes through callWithFailureAlert so
+  // an exception gets logged + optionally alerted — createWorkOrder(env, body) itself is still
+  // called with the caller's own (possibly tenant-overwritten) body, untouched by the wrapper.
+  ok(gate.includes("callWithFailureAlert(env, 'wo_create', '/workorder', () => createWorkOrder(env, body));"),
+    'admin/owner callers still fall straight through to createWorkOrder (now wrapped for failure alerting) with their own body untouched');
 }
 
 console.log(`tenant-submit-request: ${n}/${n} passing`);
