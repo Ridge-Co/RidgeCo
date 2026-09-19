@@ -519,11 +519,10 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 
 ## CAP-035 — `.btn-muted` isn't an actual defined CSS class in `vendor.html`
 - Type: cosmetic bug, very low priority
-- Status: new, found in passing (Sep 17 2026, live Playwright test of the new MY INFO screen — FEATURE_LOG rule 180 addendum), not fixed
-- Detail: the FEEDBACK button (pre-existing) and the new MY INFO button both carry `class="btn btn-sm btn-muted"`, intending a muted/secondary look distinct from the primary accent-blue `.btn`. No `.btn-muted` rule exists anywhere in `vendor.html`'s `<style>` block, so both silently fall back to the plain `.btn` default (solid accent blue) — visually indistinguishable from a primary action button. Confirmed via a real screenshot, not just a code read.
-- Not urgent: purely visual, doesn't affect function, and FEEDBACK has looked this way the whole time with nobody flagging it as wrong.
-- Fix, whenever it's worth a few minutes: add a real `.btn-muted` rule (e.g. `background:var(--surface2); color:var(--text); border:1px solid var(--border);` or similar, matching the muted/secondary treatment used elsewhere in the file) to `vendor.html`'s shared `<style>` block. Two buttons to re-check after: FEEDBACK and MY INFO.
-- Links: found during FEATURE_LOG rule 180's live-verification pass.
+- Status: **RESOLVED Sep 19 2026** — full detail FEATURE_LOG rule 195
+- Detail: the FEEDBACK button (pre-existing), the new MY INFO button, and 3 modal Cancel buttons all carried `class="btn btn-sm btn-muted"`, intending a muted/secondary look distinct from the primary accent-blue `.btn`. No `.btn-muted` rule existed anywhere in `vendor.html`'s `<style>` block, so all 5 silently fell back to the plain `.btn` default (solid accent blue) — visually indistinguishable from a primary action button.
+- Fix: added `.btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}` immediately after `.btn-blue`, a verbatim copy of the rule already live in `tenant.html`/`owner.html`/`importer.html`. Live-verified via a real vendor PIN login (test vendor "Riley Testvendor," Vendors ID 16, PIN `TST99999` — left in place for future QA) and headless Chromium: all 5 buttons now render the correct muted look, no regressions to other button classes.
+- Links: found during FEATURE_LOG rule 180's live-verification pass; fixed and verified in FEATURE_LOG rule 195.
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
 
