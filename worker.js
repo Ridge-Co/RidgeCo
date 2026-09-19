@@ -11539,6 +11539,7 @@ async function seedTestFixtures(env, url) {
   const originalOwner = preMigrationOwners.find(o => String(o.ID) === '11');
   if (originalOwner && !originalOwner.Company) {
     await updateRow(env, 'Owners', '11', { Company: 'TEST-OWNER-001' });
+    await ensureMarker(env, 'Owners', '11', 'Company', 'TEST-OWNER-001');
     await updateRow(env, 'Properties', '69', { Access_Notes: 'TEST-PROPERTY-001' });
     await updateRow(env, 'Units', '40', { Unit_Label: 'TEST-UNIT-001' });
     await updateRow(env, 'Tenants', '86', { Last_Name: 'TEST-TENANT-001' });
