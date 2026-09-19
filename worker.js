@@ -8212,10 +8212,18 @@ async function telemetryLog(env, body) {
 const MODEL_REGISTRY = {
   // tier: { provider, model, keyEnv, costPer1kIn, costPer1kOut }
   // gemini-2.0-flash was shut down by Google June 1, 2026 — DO NOT use it (verified Aug 22, 2026
-  // via web search). Gemini 2.5 Flash-Lite is the current cheapest live model ($0.10/$0.40 per 1M
-  // tokens) but Google has it scheduled for retirement Oct 16, 2026 — when that lands, bump to
-  // Gemini 3.1 Flash-Lite ($0.25/$1.50/1M) and update the costPer1k figures below to match.
-  CHEAP:  { provider: 'gemini',    model: 'gemini-2.5-flash-lite', keyEnv: 'GEMINI_API_KEY',  costPer1kIn: 0.0001,  costPer1kOut: 0.0004 },
+  // via web search). Gemini 2.5 Flash-Lite was RETIRED by Google ahead of the Oct 16, 2026 date
+  // this comment previously predicted — it started hard-failing every call by Sep 19, 2026 at
+  // the latest (Ops_Build_Queue #24: 49/49 items_summarize runs escalated because the CHEAP tier
+  // returned zero output). Root-caused Sep 19, 2026 via the /admin/items-summarize-test
+  // diagnostic: Gemini's own API error named the live replacement as gemini-3.5-flash-lite —
+  // NOT gemini-3.1-flash-lite as previously guessed here; Google's naming moved faster than
+  // expected, so don't trust a predicted future model name again without re-checking against a
+  // live API error or Google's docs at the time. Confirmed working via that same diagnostic
+  // endpoint before this swap shipped. Pricing ($0.30 in / $2.50 out per 1M tokens, cross-checked
+  // OpenRouter + explainx.ai Sep 19, 2026) is ~3x 2.5 Flash-Lite's — worth a cost-tier check if
+  // CHEAP-tier volume grows materially.
+  CHEAP:  { provider: 'gemini',    model: 'gemini-3.5-flash-lite', keyEnv: 'GEMINI_API_KEY',  costPer1kIn: 0.0003,  costPer1kOut: 0.0025 },
   REASON: { provider: 'anthropic', model: 'claude-sonnet-4-6',  keyEnv: 'ANTHROPIC_API_KEY',  costPer1kIn: 0.003,   costPer1kOut: 0.015 },
   HARD:   { provider: 'anthropic', model: 'claude-opus-4-8',    keyEnv: 'ANTHROPIC_API_KEY',  costPer1kIn: 0.015,   costPer1kOut: 0.075 },
 };
