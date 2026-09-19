@@ -1,4 +1,43 @@
-# WHERE THINGS STAND — Sep 18, 2026 (Selftest auto-verification pass added — POST /selftest + daily 7am ET cron digest, closing the "built, not yet live-verified" gap, but not yet live-verified itself; Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+# WHERE THINGS STAND — Sep 19, 2026 (Ops_Build_Queue greenlit-13 pass — admin_share_attachments 21% failure rate root-caused and fixed (Drive_File_Missing skip-list) + smoke test; failure runbook + dead-man's-switch alerting shipped, dormant behind Config flags; latency instrumentation added to wo_schedule/admin_share_attachments; items_summarize escalation diagnostic endpoint shipped, root cause still needs a live call to close out; auto wo_create from inbound triggers explicitly left out of scope. Selftest auto-verification pass added — POST /selftest + daily 7am ET cron digest, closing the "built, not yet live-verified" gap, but not yet live-verified itself; Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+
+## 🟡 Open: close out items_summarize's 100% escalation rate (Queue #24) — needs one live call
+`POST /admin/items-summarize-test` shipped this session as a read-only diagnostic (admin-secret
+gated, same shape as `/admin/drive-file-check`): it calls the CHEAP/Gemini tier directly,
+bypassing `routeAI`'s own escalation, and reports the raw model text, any API error, the real
+`routeAIValid` verdict, and the JSON-parse outcome. Static review of `routeAI`/`callGemini`/
+`MODEL_REGISTRY` didn't turn up a confident deterministic bug, and this build sandbox has no
+`WORKER_SECRET` to check further. **Brett (or a live session): call `POST
+/admin/items-summarize-test` once** (no body needed — it falls back to a built-in sample item
+list) and read back `cheap_raw_text`/`cheap_api_error`/`json_parse_error` to see the actual
+failure mode, then a real fix can land instead of another guess. Full detail FEATURE_LOG rule 194.
+
+## 🟡 Dormant, awaiting Brett's opt-in: failure-alert + dead-man's-switch (Queue #14, #10)
+Both new admin alerts reuse the existing `admin_phone`/`sendSMS` pattern (no new channel, per
+Brett's own scoping answer) and both ship OFF: set Config `failure_alert_enabled=TRUE` to start
+getting paged on a `wo_create`/`wo_status` failure (debounced to once/hour per job type), and
+`dead_man_switch_enabled=TRUE` to get paged if the Worker goes >24h with zero completed jobs
+(debounced to once/24h, piggybacks on the existing `cronSweep` ~15-min cadence — no new Cloudflare
+cron slot). Known, documented limitation: the dead-man's-switch runs inside the Worker itself, so
+it can't detect a total Worker outage — only a stuck/degraded state. Full detail FEATURE_LOG rule 194.
+
+## 🟢 Shipped: admin_share_attachments 21% failure rate fixed at the root (Queue #23) + smoke test (Queue #5)
+Root cause: a handful of Drive files were genuinely unreachable (deleted, or exists-but-invisible
+to the service account — a documented Drive-API ambiguity) and were being retried and re-failing
+on every single batch. Fixed: a confirmed 404 now marks the row `Drive_File_Missing:'TRUE'`
+(schema-safe via `ensureColumns` first) and is skipped on all future batches — the failure count
+should drop and stop recurring on the same files. Response now reports `skipped_known_missing`
+and a `failed_by_status` breakdown so a genuinely new failure is visible instead of hiding in the
+same weekly number. New `test/admin-share-attachments-smoke.test.mjs` (Queue #5) + 10 new
+assertions in `test/share-attachments-limit.test.mjs`. Full detail FEATURE_LOG rule 194.
+
+## 🟢 Shipped: latency instrumentation for wo_schedule + admin_share_attachments (Queue #27, #26)
+Timer-only, zero behavior change — `Latency_ms` now populates in `Ops_Telemetry` for both job
+types going forward, unblocking the actual latency *fixes* (Queue #28, #25, #9, #3) once real
+numbers exist. Those latency-fix items deliberately stay `greenlit`, per Brett's own answer that
+guessing at a fix without profiling data isn't worth doing. Full detail FEATURE_LOG rule 194.
+
+## Explicitly skipped this session: auto wo_create from inbound triggers (Queue #8)
+Per Brett's own scoping answer — left `greenlit`, untouched, no work done.
 
 ## 🟡 Built, not yet live-verified: Selftest auto-verification pass (`POST /selftest`)
 Optimizer Round 2 item #1 — the fix for THIS exact list: dozens of features sitting here as
