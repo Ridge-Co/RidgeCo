@@ -79,6 +79,13 @@ export default {
     // own signed session instead, so a valid tenant session can't submit a WO tagged to a
     // different property/unit/tenant than their own.
     let callerSessionId = null;
+    // Set true only when this request was authenticated via HUB_TEST_TOKEN (test-infrastructure
+    // build, Sep 19 2026) — the narrow, staging-only token that lets a Cowork session run real
+    // smoke tests without ever holding WORKER_SECRET. Declared here (outer scope) rather than
+    // inside the auth-gate block below, because the record-level test-data guard that reads it
+    // runs later, after POST body parsing, where the gate's own local `_tok` is already out of
+    // scope. Never set for a WORKER_SECRET or session-token call — those get full access as today.
+    let _viaHubTestToken = false;
     const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
