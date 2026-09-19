@@ -11485,6 +11485,25 @@ async function hubTestWriteAllowed(env, path, body) {
 // real delete endpoint exists for these tabs, so it clears the marker field rather than removing
 // the row). Safe to run on every call, forever — a correctly-idempotent run never has more than
 // one match per marker, so this is then just an extra read per call, not a no-op-with-risk.
+// Writes made in quick succession within one seedTestFixtures invocation have been observed to
+// silently drop the just-written marker field on readback (row + other fields land fine; only the
+// marker is missing), while the identical write made as a standalone request always sticks. Root
+// cause not confirmed (suspect Sheets API write-consistency under rapid sequential calls to the
+// same spreadsheet), so this makes the marker-set self-verifying and self-healing instead of
+// trusting a 200 response: pause briefly, re-read, and retry the write if it didn't take.
+async function ensureMarker(env, tab, id, field, value, attempts = 3, delayMs = 600) {
+  for (let i = 0; i < attempts; i++) {
+    await new Promise(r => setTimeout(r, delayMs));
+    const rows = await fetchTab(env, tab);
+    const row = rows.find(r => String(r.ID) === String(id));
+    if (row && row[field] === value) return true;
+    await updateRow(env, tab, id, { [field]: value });
+  }
+  const rows = await fetchTab(env, tab);
+  const row = rows.find(r => String(r.ID) === String(id));
+  return !!(row && row[field] === value);
+}
+
 async function dedupeTestFixtures(env) {
   const MARKERS = [
     { tab: 'Owners', field: 'Company', value: 'TEST-OWNER-001' },
