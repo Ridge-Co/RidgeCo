@@ -11626,7 +11626,7 @@ async function augmentContact(env, body) {
   if (!data.values) return json({ error: 'Tab not found' }, 404);
   const [headers, ...rows] = data.values;
   const idc = idColIndex(headers);
-  const rowIndex = rows.findIndex(r => r[idc] === String(id));
+  const rowIndex = rows.findIndex(r => String(r[idc]) === String(id));
   if (rowIndex === -1) return json({ error: 'Row not found', type, id }, 404);
   const sheetRow = rowIndex + 2;
   const row = rows[rowIndex];
