@@ -9725,6 +9725,47 @@ async function summarizeItemsCheap(env, items) {
   } catch (e) { return []; }
 }
 
+// GET|POST /admin/items-summarize-test — read-only diagnostic (Ops_Build_Queue #24, Sep 19
+// 2026). The Sep 17 review found items_summarize escalated 49/49 times with the cause
+// invisible in telemetry — a separate fix (see routeAI's cheapFailReason capture) now logs
+// the real reason going forward, but reading it back needs live Ops_Telemetry access this
+// build sandbox doesn't have. Static review of the CHEAP/Gemini path here didn't turn up an
+// obvious deterministic bug (JSON response mode is already enabled via
+// generationConfig.responseMimeType, the model id is current per MODEL_REGISTRY's own Aug 22
+// note) — rather than guess a fix blind, this calls the CHEAP tier directly (bypassing
+// routeAI's escalation) so the very next live check shows the real raw Gemini response, the
+// actual JSON-parse outcome, and any API error in one call. Same admin-gated, no-PUBLIC_PATHS
+// pattern as /admin/drive-file-check and /twilio/account-status. Costs a fraction of a cent
+// per call (a real Gemini request) — never call this from an automated sweep.
+async function adminItemsSummarizeTest(env, body) {
+  const items = (body && Array.isArray(body.items) && body.items.length) ? body.items
+    : ['3x 2in wood screws', 'Behr Ultra White paint 1gal', 'AA batteries 4-pack', 'PVC pipe 1/2in x 10ft'];
+  const prompt = `Given this list of purchased line items from a hardware/property-maintenance receipt, return ONLY a strict minified JSON array of short GENERALIZED category words — one per distinct item/group, e.g. "paint", "primer", "batteries", "washers", "hardware" instead of the verbatim brand/SKU/price text. Collapse near-duplicates into one entry. Items: ${JSON.stringify(items).slice(0, 2000)}`;
+  const job = { type: 'items_summarize', prompt, maxTokens: 300, schema: true, source: 'adminItemsSummarizeTest' };
+  let attempt = null, callError = null;
+  try {
+    attempt = await routeAICall(env, 'CHEAP', job);
+  } catch (e) { callError = String((e && e.message) || e); }
+  const wouldPassValidation = attempt ? routeAIValid(attempt, job) : false;
+  let parsedOk = false, parsedResult = null, parseError = null;
+  if (attempt && attempt.text) {
+    try { parsedResult = JSON.parse(String(attempt.text).replace(/^```json?/i, '').replace(/```$/, '').trim()); parsedOk = true; }
+    catch (e) { parseError = String((e && e.message) || e); }
+  }
+  return json({
+    ok: true,
+    items_used: items,
+    cheap_raw_text: attempt ? attempt.text : null,
+    cheap_api_error: (attempt && attempt.error) || callError,
+    cheap_tokens_in: attempt ? attempt.tokens_in : null,
+    cheap_tokens_out: attempt ? attempt.tokens_out : null,
+    would_pass_routeai_validation: wouldPassValidation,
+    json_parse_ok: parsedOk,
+    json_parse_error: parseError,
+    parsed_result: parsedResult,
+  });
+}
+
 // POST /receipt-recon/backfill-items-summary {limit?} — regenerates Items_Summary for
 // Receipt_Recon_Queue rows that predate it (Items populated, Items_Summary blank/empty). Cheap
 // and text-only — no image re-download. Bounded per call (subrequest-budget lesson from
