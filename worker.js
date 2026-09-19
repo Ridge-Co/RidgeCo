@@ -8763,6 +8763,156 @@ function validateQueueStatusReport(row, requestedStatus, note) {
   return { ok: true };
 }
 
+// POST /ops-queue/start-build {ids:[...]} — Brett's own "fire it" button (proposals.html, built
+// separately). WORKER_SECRET only — never the narrow OPS_QUEUE_TOKEN: this is the one /ops-queue*
+// write that actually spends (fires a real Claude Code cloud session via Anthropic's external
+// Routines API), unlike every other narrow-token-reachable write on this queue. Fires ONE routine
+// session that builds every eligible item in the batch; each item reports its own outcome back
+// independently via POST /ops-queue-status, so one failing item never blocks the rest (see
+// buildStartBuildRoutineText's embedded instructions to the fired session). 1–20 ids, same cap
+// as /ops-approve.
+async function opsQueueStartBuild(env, body) {
+  const ids = Array.isArray(body && body.ids) ? body.ids : [];
+  if (!ids.length) return json({ ok: false, error: 'ids required' }, 400);
+  if (ids.length > 20) return json({ ok: false, error: 'too many at once (max 20)' }, 400);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+
+  const data = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+  const v = data.values || [];
+  let rows = [], headers = [];
+  if (v.length > 1) { headers = v[0]; rows = v.slice(1).map(r => { const o = {}; headers.forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }); }
+
+  const eligible = [], skipped = [];
+  for (const id of ids) {
+    const row = rows.find(r => String(r.ID) === String(id));
+    const verdict = isEligibleForStartBuild(row);
+    if (verdict.eligible) eligible.push(row);
+    else skipped.push({ id, reason: verdict.reason });
+  }
+  if (!eligible.length) return json({ ok: false, fired_ids: [], skipped }, 400);
+
+  // Remember every eligible row's ORIGINAL Status before touching anything, so a
+  // routine-not-configured or fire-failure path below can roll back cleanly — items must never
+  // be left stuck at 'building' just because the fire itself never happened.
+  const originalStatus = {};
+  const statusCol = headers.indexOf('Status');
+  const heldNoteCol = headers.indexOf('Held_Note');
+  const buildUpdates = [];
+  for (const row of eligible) {
+    originalStatus[row.ID] = row.Status;
+    const rowIndex = rows.findIndex(r => r.ID === row.ID);
+    const sheetRow = rowIndex + 2;
+    if (statusCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [['building']] });
+    if (heldNoteCol !== -1 && row.Status === 'held') buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(heldNoteCol)}${sheetRow}`, values: [['']] });
+  }
+  // ONE batched write across every eligible row, not N round-trips.
+  if (buildUpdates.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: buildUpdates });
+
+  const rollbackToOriginalStatus = async () => {
+    const rbUpdates = [];
+    for (const row of eligible) {
+      if (statusCol === -1) continue;
+      const rowIndex = rows.findIndex(r => r.ID === row.ID);
+      const sheetRow = rowIndex + 2;
+      rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [[originalStatus[row.ID]]] });
+    }
+    if (rbUpdates.length) { try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: rbUpdates }); } catch (_) {} }
+  };
+
+  // Fully inert unless Brett has finished his own one-time setup at claude.ai/code/routines —
+  // must fail cleanly, not leave items stuck at 'building' forever.
+  if (!env.ROUTINE_ID || !env.ROUTINE_FIRE_TOKEN) {
+    await rollbackToOriginalStatus();
+    return json({ ok: false, error: 'routine_not_configured', fired_ids: [], skipped }, 500);
+  }
+
+  const text = buildStartBuildRoutineText(eligible, env.OPS_QUEUE_TOKEN || '');
+  let resp, respData;
+  try {
+    resp = await fetch(`https://api.anthropic.com/v1/claude_code/routines/${env.ROUTINE_ID}/fire`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.ROUTINE_FIRE_TOKEN}`,
+        'anthropic-beta': 'experimental-cc-routine-2026-04-01',
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    });
+    respData = await resp.json().catch(() => ({}));
+  } catch (e) {
+    await rollbackToOriginalStatus();
+    return json({ ok: false, error: String((e && e.message) || e), fired_ids: [], skipped }, 502);
+  }
+  if (!resp.ok) {
+    await rollbackToOriginalStatus();
+    const detail = (respData && (respData.error || respData.message)) || `routine fire failed (HTTP ${resp.status})`;
+    return json({ ok: false, error: String(detail), fired_ids: [], skipped }, resp.status || 502);
+  }
+
+  return json({
+    ok: true,
+    fired_ids: eligible.map(r => r.ID),
+    skipped,
+    session_id: respData && respData.claude_code_session_id,
+    session_url: respData && respData.claude_code_session_url,
+  });
+}
+
+// PURE — given a single Ops_Build_Queue row (or null/undefined for "not found"), decide whether
+// Start Build may fire on it. No env, no I/O — independently testable. Mirrors opsApprove's own
+// fail-closed Risk_Class convention: only the exact string 'SAFE' counts — blank, misspelled, or
+// explicitly 'GATED' all reject, never default to eligible.
+function isEligibleForStartBuild(row) {
+  if (!row) return { eligible: false, reason: 'not_found' };
+  if (row.Risk_Class !== 'SAFE') return { eligible: false, reason: 'gated' };
+  if (!['greenlit', 'prepared', 'held'].includes(row.Status)) return { eligible: false, reason: 'wrong_status:' + row.Status };
+  return { eligible: true };
+}
+
+// PURE — builds the routine-fire request's `text` field: one clearly delimited section per
+// eligible item (verbatim Build_Brief when present, else a "research from scratch" line),
+// followed by the fixed instructions block with the real OPS_QUEUE_TOKEN substituted in. No env,
+// no I/O — independently testable with a fake token (test/ops-queue-build-trigger.test.mjs).
+function buildStartBuildRoutineText(items, opsQueueToken) {
+  const sections = items.map(row => {
+    const brief = String(row.Build_Brief || '').trim();
+    const briefText = brief || 'No Build_Brief yet — research this item from scratch, to the same standard the Prepare agent would (read live repo state, confirm the real problem, do not guess), before writing any code.';
+    return [
+      `=== ITEM ${row.ID} ===`,
+      `ID: ${row.ID}`,
+      `Title: ${row.Title || ''}`,
+      `Tag: ${row.Tag || ''}`,
+      `Risk_Class: ${row.Risk_Class || ''}`,
+      `Problem: ${row.Problem || ''}`,
+      `First_Step: ${row.First_Step || ''}`,
+      `Effort: ${row.Effort || ''}`,
+      `Build_Brief:`,
+      briefText,
+    ].join('\n');
+  });
+
+  const instructions = [
+    '---',
+    'INSTRUCTIONS FOR THIS BUILD SESSION',
+    '',
+    'You are building the item(s) above for Brett\'s RidgeCo Hub (Ridge-Co/RidgeCo). Load the brett-context skill first if you have not already. Follow CLAUDE.md discipline for every item: read live repo state before writing code, node --check, run the full test suite, add/update tests for what you build, write a FEATURE_LOG.md entry (use the [FL-YYYYMMDD-HHMM-xx] tag convention, not a bare rule number), update CURRENT.md\'s "WHERE THINGS STAND" section, then push via GH Broker (commit_patch for worker.js given its size, commit_file/commit_files elsewhere).',
+    '',
+    'If this batch has more than one item, build them independently. If one item fails, hits a real blocker, or needs a design decision only Brett can make, do NOT let it block the others — hold that one item and keep going on the rest.',
+    '',
+    'As EACH item finishes (success OR failure), report it back immediately — do not wait until the whole batch is done:',
+    '- On success: POST https://maintenance-hub.brett-2f8.workers.dev/ops-queue-status',
+    `  Header: X-Auth-Token: ${opsQueueToken}`,
+    '  Body: {"id": "<the item\'s ID>", "status": "done"}',
+    '- On failure/blocker: same URL/header, Body: {"id": "<the item\'s ID>", "status": "held", "note": "<one or two sentences on what happened and what Brett needs to decide or check>"}',
+    '',
+    'Do this for every item in this batch, individually, even if some succeed and some don\'t.',
+  ].join('\n');
+
+  return sections.join('\n\n') + '\n\n' + instructions;
+}
+
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
 async function opsTelemetryRead(env, url) {
   const days = parseInt(url.searchParams.get('days') || '7') || 7;
