@@ -11492,6 +11492,23 @@ async function seedTestFixtures(env, url) {
     legacyOwner.Company = 'TEST-OWNER-001'; // keep in-memory copy in sync for the check just below
   }
 
+  // One-time cleanup (2026-09-19): the ID-comparison bug just above (o.ID === '11' never
+  // matching a numeric ID) meant the repair path failed silently on its first deploy and this
+  // function's still-broken-at-the-time idempotency check fell through and created a SECOND,
+  // fully-duplicate fixture set (Owner 12/Property 70/Unit 41/Tenant 87/Vendor 8) rather than
+  // repairing Owner 11. De-identifies that duplicate set in place (no real delete endpoint
+  // exists for these tabs, so this clears the TEST- markers rather than removing the rows) so
+  // Owner 11's set is the only one anything will ever match going forward. Guarded by ID +
+  // "does it still show the marker", so a no-op after it runs once.
+  const dupOwner = existingOwners.find(o => String(o.ID) === '12');
+  if (dupOwner && dupOwner.Company === 'TEST-OWNER-001') {
+    await updateRow(env, 'Owners', '12', { Company: '' });
+    await updateRow(env, 'Properties', '70', { Address: '' });
+    await updateRow(env, 'Units', '41', { Unit_Label: '' });
+    await updateRow(env, 'Tenants', '87', { Last_Name: '' });
+    await updateRow(env, 'Vendors', '8', { Name: '', Company: '' });
+  }
+
   const already = existingOwners.find(o => o.Company === 'TEST-OWNER-001');
   if (already) {
     const [props, vendors, units, tenants] = await Promise.all([
