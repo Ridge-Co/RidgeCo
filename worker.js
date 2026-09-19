@@ -10012,12 +10012,17 @@ async function summarizeItemsCheap(env, items) {
 // the real reason going forward, but reading it back needs live Ops_Telemetry access this
 // build sandbox doesn't have. Static review of the CHEAP/Gemini path here didn't turn up an
 // obvious deterministic bug (JSON response mode is already enabled via
-// generationConfig.responseMimeType, the model id is current per MODEL_REGISTRY's own Aug 22
-// note) — rather than guess a fix blind, this calls the CHEAP tier directly (bypassing
-// routeAI's escalation) so the very next live check shows the real raw Gemini response, the
-// actual JSON-parse outcome, and any API error in one call. Same admin-gated, no-PUBLIC_PATHS
-// pattern as /admin/drive-file-check and /twilio/account-status. Costs a fraction of a cent
-// per call (a real Gemini request) — never call this from an automated sweep.
+// generationConfig.responseMimeType) — rather than guess a fix blind, this calls the CHEAP
+// tier directly (bypassing routeAI's escalation) so a live check shows the real raw Gemini
+// response, the actual JSON-parse outcome, and any API error in one call. That live check is
+// exactly what found the real cause the same day: MODEL_REGISTRY's CHEAP-tier model id was
+// NOT current — gemini-2.5-flash-lite had been retired by Google, and this endpoint's
+// cheap_api_error field surfaced Google's own replacement name (gemini-3.5-flash-lite) that
+// fixed it (see MODEL_REGISTRY's comment). Keeping this endpoint live going forward — it's the
+// fastest way to catch the next model retirement before it silently escalates 100% of a job
+// type again. Same admin-gated, no-PUBLIC_PATHS pattern as /admin/drive-file-check and
+// /twilio/account-status. Costs a fraction of a cent per call (a real Gemini request) — never
+// call this from an automated sweep.
 async function adminItemsSummarizeTest(env, body) {
   const items = (body && Array.isArray(body.items) && body.items.length) ? body.items
     : ['3x 2in wood screws', 'Behr Ultra White paint 1gal', 'AA batteries 4-pack', 'PVC pipe 1/2in x 10ft'];
