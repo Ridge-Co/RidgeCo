@@ -159,7 +159,14 @@ export default {
           && _tok === env.OPS_QUEUE_TOKEN
           && (
             (request.method === 'GET'  && path === '/ops-queue') ||
-            (request.method === 'POST' && path === '/ops-queue-prepare')
+            (request.method === 'POST' && path === '/ops-queue-prepare') ||
+            // POST /ops-queue-status (Sep 19 2026, Start Build): the narrow per-item callback a
+            // fired build session uses to report ONE item's outcome back. Structurally can only
+            // ever report building/done/held (validateQueueStatusReport), never
+            // greenlit/prepared/dropped — same narrow-write posture as /ops-queue-prepare above.
+            // POST /ops-queue/start-build (the button that actually fires a routine, i.e. spends)
+            // deliberately stays OFF this list — full admin secret only, same tier as /ops-approve.
+            (request.method === 'POST' && path === '/ops-queue-status')
           );
         // Narrow WRITE token for the customer-facing proposal e-sign (B-076). Accepted ONLY for
         // POST /proposal/sign, which appends a signed-acceptance row to Proposal_Signatures. No
