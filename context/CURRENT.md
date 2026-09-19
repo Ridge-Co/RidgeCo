@@ -1,5 +1,65 @@
 # WHERE THINGS STAND — Sep 19, 2026 (Ops_Build_Queue greenlit-13 pass — admin_share_attachments 21% failure rate root-caused and fixed (Drive_File_Missing skip-list) + smoke test; failure runbook + dead-man's-switch alerting shipped, dormant behind Config flags; latency instrumentation added to wo_schedule/admin_share_attachments; items_summarize escalation diagnostic endpoint shipped, root cause still needs a live call to close out; auto wo_create from inbound triggers explicitly left out of scope. Selftest auto-verification pass added — POST /selftest + daily 7am ET cron digest, closing the "built, not yet live-verified" gap, but not yet live-verified itself; Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
 
+## 🟡 Built, needs Brett's one-time setup: Ops_Build_Queue → Start Build — fires a real Claude Code build session from proposals.html
+Brett's ask: press a button on a greenlit/prepared item and have it route straight into a new
+Claude Code cloud session that builds it, updates the queue live, and marks the item done as its
+own last step — batchable (1 session can build several items), and Reuse-Radar-sourced items
+treated identically to Reviewer/Product-sourced ones (they already land in the same
+`Ops_Build_Queue`, confirmed not changed — nothing there needed separate wiring).
+
+Researched what's actually available rather than guessing: Anthropic's Claude Code **Routines
+API** (`POST https://api.anthropic.com/v1/claude_code/routines/{id}/fire`, external HTTP call,
+per-routine bearer token, fires a real full agentic Claude Code session — GH Broker and all —
+returns immediately with a session URL) is a better fit than the Worker-cron path
+`AUTONOMY_RUNG2_SAFE_CLASS_BUILD_BRIEF_v1.0.md` had sketched back on Sep 17 (that brief didn't
+know this API existed yet; still the right doc for the SAFE/GATED framing this build reuses).
+
+**Shipped, worker.js (`BUILD_VERSION` → `2026-09-19.2`):**
+- `held` added to `OPS_QUEUE_STATUSES` (a failed/blocked build attempt — distinct from
+  `dropped`, which means the proposal itself was rejected), new `Held_Note` column.
+- `POST /ops-queue-status {id,status,note?}` — narrow `OPS_QUEUE_TOKEN`-or-`WORKER_SECRET`,
+  structurally can only ever set `building`/`done`/`held` (never greenlit/prepared/dropped) and
+  only from a current greenlit/prepared/building row. This is the fired session's own per-item
+  callback — added to the same narrow allowlist `/ops-queue-prepare` already lives on.
+- `POST /ops-queue/start-build {ids:[1-20]}` — `WORKER_SECRET` only (this is the one write on
+  this queue that actually spends — it fires a real cloud session). Validates every id is
+  `Risk_Class==='SAFE'` and `Status` in `{greenlit,prepared,held}` (fail-closed on Risk_Class,
+  same convention as `opsApprove`), marks eligible rows `building` in one batched Sheets write,
+  builds the routine-fire request text (one delimited section per item — verbatim `Build_Brief`
+  if present, else a "research from scratch" instruction — plus a fixed instructions block that
+  embeds the real `OPS_QUEUE_TOKEN` for the fired session's own callback), fires the routine,
+  returns `{fired_ids, skipped, session_id, session_url}`. **Rolls back every touched row's
+  original `Status` on any failure path** (routine not configured, fire fails, network error) —
+  an item can never get stuck at `building` from a fire that never actually happened.
+  `/health` gains `routine_fire_token_set`/`routine_id_set` booleans (presence only).
+  New `test/ops-queue-build-trigger.test.mjs`, 45 assertions on the three new pure helpers.
+  `node --check` clean, full suite 86/87 (same single pre-existing unrelated `trade-map.test.mjs`
+  failure as before — zero regressions from this change).
+
+**Shipped, proposals.html:** the "Greenlit — build queue" cards now show a Risk_Class chip
+(SAFE/GATED), a Build_Brief-ready indicator, and a status-aware chip (building=amber,
+held=red + the `Held_Note` shown inline, prepared=blue). Eligible rows (SAFE +
+greenlit/prepared/held) get a checkbox; GATED rows get a 🔒 in its place ("needs your own
+session, not auto-buildable"); an already-`building` row gets a ⏳. A new "Start Build (N)"
+button in the bottom bar (separated from "Approve selected", which now only shows when
+proposals are actually selected) POSTs the batch to `/ops-queue/start-build` and shows the
+returned session link + any skipped-item reasons inline.
+
+**🔴 Not yet live — needs Brett's own one-time setup, outside any repo:** create a Claude Code
+"routine" at claude.ai/code/routines (attach the GH Broker connector + `Ridge-Co/RidgeCo`),
+generate its API trigger token, then set two new Cloudflare Worker secrets on `maintenance-hub`:
+`ROUTINE_ID` and `ROUTINE_FIRE_TOKEN`. Until both are set, Start Build fails clean with
+`routine_not_configured` rather than silently doing nothing (covered by the rollback-path
+tests). Exact setup steps + the routine's own saved base prompt were handed to Brett directly
+this session; also captured in the Continuous Improvement project's
+`ridgeco-optimizer-prepare-ship-queue.md` doc. No live `WORKER_SECRET`/`ROUTINE_FIRE_TOKEN` in
+this build sandbox, so the actual endpoint round-trip and a real routine fire are unverified
+beyond static correctness + the pure-helper test suite — same standing limitation as every other
+`Ops_Build_Queue` build in this repo. First live pass once secrets are set: select one low-stakes
+SAFE greenlit item, tap Start Build, confirm the session URL opens a real session, confirm it
+reports back `done` (or `held` with a real reason) on the queue without Brett touching anything
+else.
+
 ## 🟡 Open: close out items_summarize's 100% escalation rate (Queue #24) — needs one live call
 `POST /admin/items-summarize-test` shipped this session as a read-only diagnostic (admin-secret
 gated, same shape as `/admin/drive-file-check`): it calls the CHEAP/Gemini tier directly,
