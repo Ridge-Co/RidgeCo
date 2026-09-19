@@ -6834,9 +6834,10 @@ async function adminShareAttachments(env, body) {
     // no longer reports a tautological `shared: 0` — it does a genuine read-only check per
     // considered file and reports `already_shared` / `needs_sharing`, so Brett can tell
     // whether the sweep would actually do anything before running it for real.
-    let scanned = 0, shareable = 0, skippedInternal = 0, skippedNoId = 0;
+    let scanned = 0, shareable = 0, skippedInternal = 0, skippedNoId = 0, skippedKnownMissing = 0;
     let considered = 0, alreadyShared = 0, shared = 0, failed = 0;
     const failures = [];
+    const failedByStatus = {};
     for (const r of rows) {
       scanned++;
       if (r.Active === 'FALSE') continue;
@@ -6844,6 +6845,19 @@ async function adminShareAttachments(env, body) {
       if (NON_SHARE_FILE_TYPES.includes(ft)) { skippedInternal++; continue; }
       const fileId = r.Drive_File_ID || '';
       if (!fileId) { skippedNoId++; continue; }
+      // Ops_Build_Queue #23 (Sep 19 2026) — documented root cause of the ~20% failure rate:
+      // real, permanently-unreachable Drive files (deleted, or moved somewhere this service
+      // account can no longer see — /admin/drive-file-check tells the two apart), not a
+      // transient auth/path bug. Without this, the same handful of files fail on every single
+      // batch forever. A file gets marked here the first time a REAL (non-dry-run) share call
+      // comes back 404 — one call already includes driveShareAnyoneVerbose's own 2-attempt
+      // retry, so a 404 surviving that is a real signal, not noise (a judgment call, not a
+      // Brett-specified threshold — easy to raise if a false-positive ever turns up). Once
+      // marked, future batches skip it instead of re-failing on it — it stops counting toward
+      // shareable/failed and shows up in its own skipped_known_missing count instead, so Brett
+      // can see how many attachments genuinely need re-uploading vs. how many are still a real,
+      // retryable failure.
+      if (r.Drive_File_Missing === 'TRUE') { skippedKnownMissing++; continue; }
       shareable++;
       if (shareable <= offset) continue;         // already handled by an earlier batch
       if (limit && considered >= limit) continue; // this batch's window is full
@@ -6854,11 +6868,22 @@ async function adminShareAttachments(env, body) {
         continue;
       }
       const shareResult = await driveShareAnyoneVerbose(token, fileId);
-      if (shareResult.ok) shared++; else { failed++; if (failures.length < 25) failures.push({ wo: r.WO_ID || '', file: r.File_Name || '', id: fileId, status: shareResult.status, error: shareResult.error }); }
+      if (shareResult.ok) { shared++; continue; }
+      failed++;
+      const statusKey = String(shareResult.status || 'unknown');
+      failedByStatus[statusKey] = (failedByStatus[statusKey] || 0) + 1;
+      if (failures.length < 25) failures.push({ wo: r.WO_ID || '', file: r.File_Name || '', id: fileId, status: shareResult.status, error: shareResult.error });
+      if (shareResult.status === 404) {
+        try {
+          await ensureColumns(env, 'Attachments', ['Drive_File_Missing']);
+          await updateRow(env, 'Attachments', r.ID, { Drive_File_Missing: 'TRUE' });
+        } catch (_) { /* best-effort — a failed mark just means it's re-tried (and re-marked) next batch, not silently lost */ }
+      }
     }
     const remainingAfterBatch = Math.max(0, shareable - offset - considered);
     const nextOffset = offset + considered;
-    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Latency_ms: Date.now()-_t0, Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}` }); } catch(_){}
+    const statusBreakdown = Object.entries(failedByStatus).map(([s, c]) => `${s}:${c}`).join(',');
+    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Latency_ms: Date.now()-_t0, Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}${statusBreakdown ? ' failed_by_status=' + statusBreakdown : ''} known_missing=${skippedKnownMissing}` }); } catch(_){}
     const out = {
       success: true,
       dry_run: dryRun,
@@ -6871,7 +6896,9 @@ async function adminShareAttachments(env, body) {
       remaining_after_this_batch: remainingAfterBatch,
       skipped_internal: skippedInternal,
       skipped_no_id: skippedNoId,
+      skipped_known_missing: skippedKnownMissing,
       failed,
+      failed_by_status: failedByStatus,
       failures,
     };
     if (dryRun) {
