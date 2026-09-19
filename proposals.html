@@ -107,8 +107,9 @@
     <a class="back" href="command-center.html">← Command Center</a></header>
   <div id="body"><div class="spin">Loading…</div></div>
 </div>
-<div class="bar" id="bar" style="display:none"><div class="wrap">
-  <button class="go" id="go" onclick="approveSel()" disabled>Approve selected</button>
+<div class="bar" id="bar" style="display:none"><div class="wrap" style="display:flex;gap:8px">
+  <button class="go" id="go" onclick="approveSel()" disabled style="display:none">Approve selected</button>
+  <button class="go" id="buildGo" onclick="startBuild()" disabled style="display:none;background:var(--green)">Start Build</button>
 </div></div>
 <div class="modal" id="modal" onclick="if(event.target.id==='modal')closeModal()"><div class="box">
   <div class="prow" style="justify-content:space-between;align-items:center"><b id="mtitle">Build brief</b><button class="mini" onclick="closeModal()">Close</button></div>
