@@ -11567,6 +11567,7 @@ async function seedTestFixtures(env, url) {
   // "Name" for Owners/Tenants/Units, and NOT "Address" for Properties (see TEST_MARKER_FIELD
   // comment above for why Address can't be used).
   const ownerRes  = await (await addRow(env, 'Owners',     { Company: 'TEST-OWNER-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL })).json();
+  await ensureMarker(env, 'Owners', ownerRes.id, 'Company', 'TEST-OWNER-001');
   const propRes   = await (await addRow(env, 'Properties', { Access_Notes: 'TEST-PROPERTY-001', Owner_ID: ownerRes.id })).json();
   const unitRes   = await (await addRow(env, 'Units',      { Unit_Label: 'TEST-UNIT-001', Property_ID: propRes.id })).json();
   const vendorRes = await (await addRow(env, 'Vendors',    { Name: 'TEST-VENDOR-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Company: 'TEST-VENDOR-001' })).json();
