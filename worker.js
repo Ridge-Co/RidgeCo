@@ -11569,6 +11569,7 @@ async function seedTestFixtures(env, url) {
   const ownerRes  = await (await addRow(env, 'Owners',     { Company: 'TEST-OWNER-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL })).json();
   await ensureMarker(env, 'Owners', ownerRes.id, 'Company', 'TEST-OWNER-001');
   const propRes   = await (await addRow(env, 'Properties', { Access_Notes: 'TEST-PROPERTY-001', Owner_ID: ownerRes.id })).json();
+  await ensureMarker(env, 'Properties', propRes.id, 'Access_Notes', 'TEST-PROPERTY-001');
   const unitRes   = await (await addRow(env, 'Units',      { Unit_Label: 'TEST-UNIT-001', Property_ID: propRes.id })).json();
   const vendorRes = await (await addRow(env, 'Vendors',    { Name: 'TEST-VENDOR-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Company: 'TEST-VENDOR-001' })).json();
   const tenantRes = await (await addRow(env, 'Tenants',    { Last_Name: 'TEST-TENANT-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Unit_ID: unitRes.id, Property_ID: propRes.id })).json();
