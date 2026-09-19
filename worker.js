@@ -11500,6 +11500,32 @@ async function seedTestFixtures(env, url) {
   const BRETT_PHONE = '4439617927';
   const BRETT_EMAIL = 'brett@bmoremanagement.com';
   await dedupeTestFixtures(env);
+
+  // One-time migration (2026-09-19): earlier debugging of this endpoint left the original,
+  // already-linked fixture chain (Owner 11 / Property 69 / Unit 40 / Tenant 86 — sharing Vendor
+  // 7's contact info) with its TEST- markers blanked out, and no other Owner/Property/Unit/Tenant
+  // row carries one either. Without this, the idempotency check just below would find nothing,
+  // and every future call would build a brand-new chain on top of the vendor duplicates
+  // dedupeTestFixtures() just cleaned up — recreating the exact row-bloat this fix is for.
+  // Guarded by ID + "is it still blank", so a no-op after it runs once.
+  const preMigrationOwners = await fetchTab(env, 'Owners');
+  const originalOwner = preMigrationOwners.find(o => String(o.ID) === '11');
+  if (originalOwner && !originalOwner.Company) {
+    await updateRow(env, 'Owners', '11', { Company: 'TEST-OWNER-001' });
+    await updateRow(env, 'Properties', '69', { Address: 'TEST-PROPERTY-001' });
+    await updateRow(env, 'Units', '40', { Unit_Label: 'TEST-UNIT-001' });
+    await updateRow(env, 'Tenants', '86', { Last_Name: 'TEST-TENANT-001' });
+  }
+  // Same cleanup, for the two orphaned duplicate Property rows (linked to now-blank Owners 12/13)
+  // that were never actually written with the TEST- marker, so the generic dedupe above can't see
+  // them. Guarded by exact stale value, so a no-op once they're cleared.
+  const staleProperties = (await fetchTab(env, 'Properties')).filter(
+    p => ['70', '71'].includes(String(p.ID)) && p.Address === '1 Test Way, Testville, MD 00000'
+  );
+  for (const p of staleProperties) {
+    await updateRow(env, 'Properties', p.ID, { Address: '' });
+  }
+
   const existingOwners = await fetchTab(env, 'Owners');
   const already = existingOwners.find(o => o.Company === 'TEST-OWNER-001');
   if (already) {
