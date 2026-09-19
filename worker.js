@@ -11575,6 +11575,7 @@ async function seedTestFixtures(env, url) {
   const vendorRes = await (await addRow(env, 'Vendors',    { Name: 'TEST-VENDOR-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Company: 'TEST-VENDOR-001' })).json();
   await ensureMarker(env, 'Vendors', vendorRes.id, 'Name', 'TEST-VENDOR-001');
   const tenantRes = await (await addRow(env, 'Tenants',    { Last_Name: 'TEST-TENANT-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Unit_ID: unitRes.id, Property_ID: propRes.id })).json();
+  await ensureMarker(env, 'Tenants', tenantRes.id, 'Last_Name', 'TEST-TENANT-001');
   return json({
     success: true,
     owner_id: ownerRes.id, property_id: propRes.id, unit_id: unitRes.id, vendor_id: vendorRes.id, tenant_id: tenantRes.id,
