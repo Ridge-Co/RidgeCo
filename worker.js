@@ -11414,9 +11414,16 @@ async function addRow(env, tab, body) {
 // has "Name". Checking row.Name on the others silently always returned false, so isTestRecord
 // could never pass for a Properties/Owners/Tenants row, and every /workorder or /status
 // hub_test_post 403'd regardless of whether the record really was a seeded fixture.
+// Properties uses Access_Notes, not Address, as its TEST- marker: Address on this tab is not a
+// stable/writable field — a freshly-created test property was observed coming back with a fixed
+// generic placeholder address instead of the literal value addRow just wrote (almost certainly a
+// sheet-side formula/lookup on that column, outside this code's control) — so isTestRecord could
+// never actually recognize a test Property if it depended on Address. Access_Notes is a genuinely
+// plain free-text column (confirmed by real per-row values already in use, e.g. "Contact tenant
+// for access") and is otherwise unused for Properties test fixtures, so it's safe as a marker.
 const TEST_MARKER_FIELD = {
   Vendors: 'Name',
-  Properties: 'Address',
+  Properties: 'Access_Notes',
   Owners: 'Company',
   Tenants: 'Last_Name',
   Units: 'Unit_Label',
