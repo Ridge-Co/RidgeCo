@@ -79,6 +79,13 @@ export default {
     // own signed session instead, so a valid tenant session can't submit a WO tagged to a
     // different property/unit/tenant than their own.
     let callerSessionId = null;
+    // Set true only when this request was authenticated via HUB_TEST_TOKEN (test-infrastructure
+    // build, Sep 19 2026) — the narrow, staging-only token that lets a Cowork session run real
+    // smoke tests without ever holding WORKER_SECRET. Declared here (outer scope) rather than
+    // inside the auth-gate block below, because the record-level test-data guard that reads it
+    // runs later, after POST body parsing, where the gate's own local `_tok` is already out of
+    // scope. Never set for a WORKER_SECRET or session-token call — those get full access as today.
+    let _viaHubTestToken = false;
     const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
@@ -189,7 +196,29 @@ export default {
         const _cronSweepOk = !!env.CRON_SWEEP_TOKEN
           && _tok === env.CRON_SWEEP_TOKEN
           && request.method === 'POST' && path === '/cron/sweep';
-        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk) {
+        // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
+        // a Cowork session run real read+write+read-back checks against
+        // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
+        // (isStaging check below) even though the token itself is a distinct env var — belt-
+        // and-suspenders on top of "this secret is only ever set on the staging Worker, never
+        // on production." Reads: the same list test-verified-builds already checks. Writes:
+        // only the routes named in HUB_TEST_WRITE_PATHS, and every one of those is re-checked
+        // against the actual target record by hubTestWriteAllowed() after body parsing below —
+        // this token can never touch a real (non-"TEST-") vendor/owner/tenant/property/WO, even
+        // though the path itself is shared with the real, WORKER_SECRET-authenticated route.
+        // Fully inert unless env.HUB_TEST_TOKEN is set, so deploying this has zero effect until
+        // the secret exists — and it never exists on production's env at all.
+        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status'];
+        const _hubTestOk = !!env.HUB_TEST_TOKEN
+          && _tok === env.HUB_TEST_TOKEN
+          && isStaging(env, url)
+          && (
+            (request.method === 'GET'  && HUB_TEST_READ_PATHS.includes(path)) ||
+            (request.method === 'POST' && HUB_TEST_WRITE_PATHS.includes(path))
+          );
+        if (_hubTestOk) _viaHubTestToken = true;
+        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -321,6 +350,15 @@ export default {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
+        // HUB_TEST_TOKEN record-level guard (test-infrastructure build, Sep 19 2026): the path
+        // allow-list in the auth gate above only proves the ROUTE is test-safe — this proves the
+        // actual DATA being touched is too. Runs only for requests authenticated via
+        // HUB_TEST_TOKEN; every other auth path (WORKER_SECRET, session token) is unaffected.
+        if (_viaHubTestToken) {
+          const _hubTestAllowed = await hubTestWriteAllowed(env, path, body);
+          if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing' }, 403);
+        }
+        if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
         // captured once here, harmlessly unused by every other POST route.
         const _clientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
@@ -9911,8 +9949,24 @@ function _utf8B64url(str) {
 async function gmailSendEmail(env, { to, subject, html }) {
   if (!to) throw new Error('gmailSendEmail: to required');
   if (env.__STAGING__ ?? isStaging(env)) {
-    console.log(`🧪 STAGING — Gmail send stubbed (not sent) → ${to}: ${subject}`);
-    return { staged: true, sent: false, would_have: { to, subject }, note: '🧪 STAGING MODE — logged only, no real email sent.' };
+    // Staging Gmail policy (test-infrastructure build, Sep 19 2026): default stays fully
+    // stubbed (no real send, ever) — same behavior as before this build. Setting Config key
+    // GMAIL_STAGING_MODE to 'REDIRECT' switches this ONE staging Worker to a REAL send, but
+    // the recipient is hard-overridden to GMAIL_TEST_RECIPIENT (default: Brett's own inbox) no
+    // matter what `to` was — so verifying real formatting can never reach an actual
+    // tenant/owner/vendor. Anything other than 'REDIRECT' (including unset) stays STUB. This
+    // whole branch is unreachable outside isStaging — production Gmail behavior is untouched.
+    const cfg = await fetchConfig(env);
+    const stagingMode = String(cfg.GMAIL_STAGING_MODE || 'STUB').toUpperCase();
+    if (stagingMode !== 'REDIRECT') {
+      console.log(`🧪 STAGING — Gmail send stubbed (not sent) → ${to}: ${subject}`);
+      return { staged: true, sent: false, would_have: { to, subject }, note: '🧪 STAGING MODE — logged only, no real email sent.' };
+    }
+    const originalTo = to;
+    to = cfg.GMAIL_TEST_RECIPIENT || 'brett@bmoremanagement.com';
+    subject = `[TEST → was: ${originalTo}] ${subject}`;
+    console.log(`🧪 STAGING REDIRECT — real send to ${to} (would have gone to ${originalTo})`);
+    // falls through to a REAL send below, now targeting the test recipient only
   }
   const accessToken = await gmailAccessToken(env);
   const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
@@ -11345,6 +11399,89 @@ async function addRow(env, tab, body) {
   const newRow=headers.map(h=>{if(h==='ID')return String(nextId);if(h==='Active'&&body[h]===undefined)return 'TRUE';return body[h]!==undefined?String(body[h]):'';});
   await sheetsRequest(env,'POST',`/values/${tab}:append?valueInputOption=RAW`,{values:[newRow]});
   return json({success:true,id:String(nextId),pin:body.PIN||null});
+}
+
+// ── Test-infrastructure build (Sep 19 2026) ─────────────────────────────────
+// Everything below exists ONLY to let the HUB_TEST_TOKEN gate (top of fetch, above) run real,
+// data-scoped tests against maintenance-hub-staging. None of this is reachable via
+// WORKER_SECRET or any other auth path costing a real admin call anything extra.
+
+// True only when `id`'s row in `tab` is itself a seeded test record (Name starts with
+// 'TEST-'). Used exclusively by hubTestWriteAllowed below.
+async function isTestRecord(env, tab, id) {
+  if (!id) return false;
+  try {
+    const rows = await fetchTab(env, tab);
+    const row = rows.find(r => String(r.ID) === String(id));
+    return !!(row && String(row.Name || '').startsWith('TEST-'));
+  } catch (e) { return false; }
+}
+
+// The record-level half of the HUB_TEST_TOKEN guard (the path/method half lives in the auth
+// gate as HUB_TEST_WRITE_PATHS). Deny-by-default: any path not explicitly handled here returns
+// false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
+async function hubTestWriteAllowed(env, path, body) {
+  if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  if (['/property/add', '/owner/add', '/vendor/add', '/tenant/add', '/unit/add'].includes(path)) {
+    // Creating a brand-new row: the token may only ever create rows that self-identify as
+    // test data by name — never anything that could pass as a real record.
+    return String((body && body.Name) || '').startsWith('TEST-');
+  }
+  if (path === '/workorder') {
+    const propOk = await isTestRecord(env, 'Properties', body && body.property_id);
+    if (!propOk) return false;
+    if (body && body.tenant_id) return await isTestRecord(env, 'Tenants', body.tenant_id);
+    return true;
+  }
+  if (path === '/assign') {
+    return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
+  if (path === '/status') {
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  return false;
+}
+
+// POST /admin/seed-test-fixtures — creates (or, if already present, just returns) one
+// TEST-prefixed Owner/Property/Unit/Vendor/Tenant so every test run has known-safe records to
+// exercise instead of ever touching a real one. Every contact field is Brett's own phone/email,
+// so any notification a test run triggers lands only on him (see smsGatedSend's
+// TWILIO_TEST_MODE default and gmailSendEmail's GMAIL_STAGING_MODE below). Idempotent:
+// re-running this is always safe and just hands back the existing IDs. Staging-only by
+// construction — refuses outright if isStaging(env, url) is false, regardless of which token
+// called it.
+async function seedTestFixtures(env, url) {
+  if (!isStaging(env, url)) return json({ error: 'seed-test-fixtures only runs on staging' }, 403);
+  const BRETT_PHONE = '4439617927';
+  const BRETT_EMAIL = 'brett@bmoremanagement.com';
+  const existingOwners = await fetchTab(env, 'Owners');
+  const already = existingOwners.find(o => o.Name === 'TEST-OWNER-001');
+  if (already) {
+    const [props, vendors, units, tenants] = await Promise.all([
+      fetchTab(env, 'Properties'), fetchTab(env, 'Vendors'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'),
+    ]);
+    return json({
+      success: true, already_seeded: true,
+      owner_id: already.ID,
+      property_id: (props.find(p => p.Name === 'TEST-PROPERTY-001') || {}).ID,
+      unit_id: (units.find(u => u.Name === 'TEST-UNIT-001') || {}).ID,
+      vendor_id: (vendors.find(v => v.Name === 'TEST-VENDOR-001') || {}).ID,
+      tenant_id: (tenants.find(t => t.Name === 'TEST-TENANT-001') || {}).ID,
+    });
+  }
+  const ownerRes  = await (await addRow(env, 'Owners',     { Name: 'TEST-OWNER-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL })).json();
+  const propRes   = await (await addRow(env, 'Properties', { Name: 'TEST-PROPERTY-001', Owner_ID: ownerRes.id, Address: '1 Test Way, Testville, MD 00000' })).json();
+  const unitRes   = await (await addRow(env, 'Units',      { Name: 'TEST-UNIT-001', Property_ID: propRes.id })).json();
+  const vendorRes = await (await addRow(env, 'Vendors',    { Name: 'TEST-VENDOR-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Company: 'TEST-VENDOR-001' })).json();
+  const tenantRes = await (await addRow(env, 'Tenants',    { Name: 'TEST-TENANT-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Unit_ID: unitRes.id, Property_ID: propRes.id })).json();
+  return json({
+    success: true,
+    owner_id: ownerRes.id, property_id: propRes.id, unit_id: unitRes.id, vendor_id: vendorRes.id, tenant_id: tenantRes.id,
+    note: 'Re-run this endpoint anytime — idempotent, hands back the same IDs once seeded.',
+  });
 }
 
 // POST /property/update wrapper — the plain `updateRow` call it replaces only ever wrote to
