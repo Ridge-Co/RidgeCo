@@ -7682,12 +7682,102 @@ async function processQuietHoursQueue(env) {
 //      (Sep 14 2026). This closes the exact open question flagged when the sweep was first
 //      built (CURRENT.md, rule 166) — no new scheduling mechanism needed, it just plugs in here.
 // Each step is independently try/caught so one failing step never blocks the others.
+// ── Admin failure alerting (Ops_Build_Queue #14, #10 — Sep 19 2026) ────────────────────────
+// Two related, deliberately dormant-by-default alerting features, both reusing the existing
+// admin-alert delivery shape (config.admin_phone + sendSMS — the same pattern every other
+// admin notification in this file already uses, e.g. line ~3997/5714/7199/7302) rather than
+// building a new channel. Both start OFF (Config flag unset) — same convention as
+// weekly_review_enabled/selftest_digest_enabled — so nothing pages Brett until he opts in.
+//
+// 1. callWithFailureAlert wraps the two most critical direct API entry points (wo_create,
+//    wo_status) so an exception that used to vanish silently (never reaching a logTelemetry
+//    call at all — confirmed live: createWorkOrder/updateStatus only ever log on the SUCCESS
+//    path) now gets a real telemetry row (Success:'FALSE', the real error message) and an
+//    optional admin SMS, then re-throws so the outer handler's existing 500-response behavior
+//    to the caller is completely unchanged — this only adds observability, never changes what
+//    a failing request returns.
+// 2. checkDeadManSwitch runs every cronSweep pass (piggybacking the existing ~15-min cadence,
+//    no new Cloudflare Cron Trigger slot needed) and alerts if NO telemetry row of any
+//    Job_Type has been logged in the last 24h. Known, honest limitation (not hidden): a
+//    self-check that runs *inside* this Worker can't detect the Worker being totally down —
+//    if nothing is running, this can't run either. It DOES catch a real, common failure class
+//    (the Worker is up, cron is firing, but something upstream silently stopped completing
+//    jobs). Total-outage coverage already exists separately via cron-sweep.yml's own
+//    GitHub-Actions-level failure email (non-200 -> exit 1 -> GitHub notifies watchers) — the
+//    two are complementary, not redundant.
+
+// Pure: has an alert for this debounce `key` already fired within `windowMs`? No I/O — easy to
+// test in isolation. Shared by both features below so a real, ongoing problem doesn't re-page
+// Brett every ~15 minutes for the same underlying issue.
+function alertDebounceOk(cfg, key, nowMs, windowMs) {
+  const lastSent = cfg[key] ? Date.parse(cfg[key]) : NaN;
+  return isNaN(lastSent) || (nowMs - lastSent) >= windowMs;
+}
+
+// Pure: given the most recent telemetry activity timestamp (ms since epoch, or null if none
+// seen in the lookback window) and now, is the dead-man's-switch tripped (>24h gap)?
+function isDeadManSwitchTripped(lastActivityMs, nowMs) {
+  if (lastActivityMs === null || isNaN(lastActivityMs)) return true;
+  return (nowMs - lastActivityMs) > 24 * 3600000;
+}
+
+async function alertAdminOnFailure(env, jobType, errMsg) {
+  const cfg = await fetchConfig(env);
+  if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') return { skipped: true, reason: 'failure_alert_enabled not TRUE (dormant)' };
+  if (!cfg.admin_phone) return { skipped: true, reason: 'admin_phone not set' };
+  const key = `failure_alert_last_sent_${jobType}`;
+  if (!alertDebounceOk(cfg, key, Date.now(), 3600000)) return { skipped: true, reason: 'already alerted within the last hour' };
+  try { await sendSMS(env, cfg.admin_phone, `🔴 ${jobType} failed: ${String(errMsg).slice(0, 200)}`); } catch (_) {}
+  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (_) {}
+  return { sent: true };
+}
+
+// Wraps a router-dispatched call so an otherwise-silent exception gets a structured telemetry
+// row + a rate-limited admin SMS, then re-throws unchanged (same external behavior as before —
+// the outer handler's own catch still returns the same 500 it always has).
+async function callWithFailureAlert(env, jobType, skillOrEndpoint, fn) {
+  const _t0 = Date.now();
+  try {
+    return await fn();
+  } catch (e) {
+    const errMsg = String((e && e.message) || e);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: jobType, Skill_Or_Endpoint: skillOrEndpoint, Success: 'FALSE', Latency_ms: Date.now() - _t0, Notes: `unhandled error: ${errMsg}`.slice(0, 500) }); } catch (_) {}
+    try { await alertAdminOnFailure(env, jobType, errMsg); } catch (_) {}
+    throw e;
+  }
+}
+
+// POST-free — runs from inside cronSweep only. 2-day lookback (readTelemetryRows already
+// filters by Timestamp) is plenty of margin to establish a 24h gap without reading the whole
+// history table.
+async function checkDeadManSwitch(env) {
+  const cfg = await fetchConfig(env);
+  if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') return { skipped: true, reason: 'dead_man_switch_enabled not TRUE (dormant)' };
+  const rows = await readTelemetryRows(env, 2);
+  const timestamps = rows.map(r => Date.parse(r.Timestamp || '')).filter(t => !isNaN(t));
+  const lastActivityMs = timestamps.length ? Math.max(...timestamps) : null;
+  const lastActivityISO = lastActivityMs ? new Date(lastActivityMs).toISOString() : null;
+  if (!isDeadManSwitchTripped(lastActivityMs, Date.now())) return { ok: true, tripped: false, last_activity: lastActivityISO };
+  if (!cfg.admin_phone) return { ok: true, tripped: true, alerted: false, reason: 'admin_phone not set', last_activity: lastActivityISO };
+  const key = 'dead_man_switch_last_alert_ts';
+  if (!alertDebounceOk(cfg, key, Date.now(), 24 * 3600000)) return { ok: true, tripped: true, alerted: false, reason: 'already alerted within the last 24h', last_activity: lastActivityISO };
+  const gapHrs = lastActivityMs ? Math.round((Date.now() - lastActivityMs) / 3600000) : null;
+  const msg = gapHrs !== null
+    ? `🔴 RidgeCo Hub: no worker job has completed in ~${gapHrs}h — something may be stuck or down.`
+    : `🔴 RidgeCo Hub: no worker activity recorded in the last 2 days — something may be stuck or down.`;
+  try { await sendSMS(env, cfg.admin_phone, msg); } catch (_) {}
+  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'dead_man_switch', Skill_Or_Endpoint: 'checkDeadManSwitch', Success: 'FALSE', Notes: `zero-activity gap; last_activity=${lastActivityISO || 'none in 2d window'}` }); } catch (_) {}
+  return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
+}
+
 async function cronSweep(env) {
   const out = { ok: true, ts: new Date().toISOString() };
   try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
   try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
   try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
+  try { out.dead_man_switch = await checkDeadManSwitch(env); } catch (e) { out.dead_man_switch = { error: String((e && e.message) || e) }; }
   return json(out);
 }
 
