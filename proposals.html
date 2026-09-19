@@ -187,12 +187,28 @@ function render(rev,q){
   const queue=activeQ;
   if(queue.length){
     html+='<div class="card"><div class="prow" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Greenlit — build queue ('+queue.length+')</h2><button class="mini" onclick="copyAll()">📋 Copy all</button></div>'
-      +'<div class="sub" style="margin:4px 0 0">Full detail below. Tap <b>Copy build brief</b>, paste it into a Claude session, and it builds from that — no worker secret needed. Mark items <b>building</b> / <b>done</b> to keep the list live.</div></div>';
+      +'<div class="sub" style="margin:4px 0 0">Check one or more <b>SAFE</b> items (🔒 = GATED, needs your own session) and tap <b>Start Build</b> below to fire one live build session for the whole batch — it reports each item back here as building/done/held on its own. Or tap <b>Copy build brief</b> to paste into a session yourself.</div></div>'
+      +'<div id="buildResult"></div>';
     queue.forEach((x,qi)=>{
       const st=(x.Status||'greenlit').toLowerCase();
-      html+='<div class="qcard" id="qc'+qi+'">'
+      const rc=(x.Risk_Class||'GATED').toUpperCase();
+      const isSafe=rc==='SAFE';
+      const eligible=isSafe && (st==='greenlit'||st==='prepared'||st==='held');
+      const hasBrief=!!(x.Build_Brief&&String(x.Build_Brief).trim());
+      const riskChip='<span class="chip '+(isSafe?'safe':'gated')+'">'+(isSafe?'SAFE':'GATED')+'</span>';
+      const briefChip=hasBrief?'<span class="chip eff">📋 brief ready</span>':'<span class="chip eff" style="opacity:.6">no brief yet</span>';
+      const stCls=(st==='building')?'building':(st==='held')?'held':(st==='prepared')?'prepared':'';
+      const stChip='<span class="qs'+(stCls?' '+stCls:'')+'">'+h(st)+'</span>';
+      const heldNote=(st==='held'&&x.Held_Note)?'<div class="pimp" style="color:var(--red);font-weight:700">⚠ '+h(x.Held_Note)+'</div>':'';
+      const leftCtrl=eligible
+        ?'<input type="checkbox" class="qsel" data-qi="'+qi+'" onchange="syncBuildSel()">'
+        :'<span title="'+(isSafe?'Already in progress':'GATED — needs your own session, not auto-buildable')+'" style="font-size:18px;line-height:1;margin-top:2px">'+(isSafe?'⏳':'🔒')+'</span>';
+      html+='<div class="qcard'+(eligible?'':' locked')+'" id="qc'+qi+'" style="display:flex;gap:10px;align-items:flex-start">'
+        +leftCtrl
+        +'<div style="flex:1;min-width:0">'
         +'<div class="prow"><span class="rank">#'+h(x.Rank||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-        +'<div class="prow" style="margin-top:4px"><span class="qs">'+h(st)+'</span>'+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+'</div>'
+        +'<div class="prow" style="margin-top:4px">'+stChip+riskChip+briefChip+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+'</div>'
+        +heldNote
         +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
         +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
         +(x.Impact?'<div class="pimp">Impact: '+h(x.Impact)+'</div>':'')
@@ -201,7 +217,7 @@ function render(rev,q){
         +(st!=='building'?'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'building\')">▶ Building</button>':'')
         +'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'done\')">✓ Done</button>'
         +'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'dropped\')">✕ Drop</button>'
-        +'</div></div>';
+        +'</div></div></div>';
     });
   }
   document.getElementById('body').innerHTML=html;
