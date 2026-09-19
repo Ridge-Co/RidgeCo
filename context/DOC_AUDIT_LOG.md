@@ -38,3 +38,12 @@ Checked commits: 93 (excluding merges/doc-audit itself)
 - `1da1d33` (2026-09-17 13:52) OPTIMIZER_ROUND_LOG.md: note the v1.1 addendum in the governing header — best single-entry match: 40%
 - `c9bf6db` (2026-09-17 00:54) Fix garbled merge in CURRENT.md from the previous patch (dangling duplicate sentence fragment) — best single-entry match: 44%
 - `34a4220` (2026-09-17 00:41) Bump BUILD_VERSION for bulk-welcome template consistency fix — best single-entry match: 40%
+
+## Run: 2026-09-19 16:11 UTC
+Since: 2026-09-18 (source: this script's own last recorded run)
+Checked commits: 99 (excluding merges/doc-audit itself)
+**4 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `cfc98f0` (2026-09-19 16:05) One-time cleanup: de-identify the duplicate fixture set the ID-comparison bug created — best single-entry match: 38%
+- `9d4fb7a` (2026-09-19 13:48) Add HUB_TEST_TOKEN helpers: isTestRecord, hubTestWriteAllowed, seedTestFixtures — best single-entry match: 20%
+- `bcfe74f` (2026-09-19 13:46) Declare _viaHubTestToken (outer-scope flag for the new staging test-token gate) — best single-entry match: 43%
+- `e87d218` (2026-09-18 20:25) Fix backlog id B-141 -> B-240 in OPS_QUEUE_STATUSES comment — best single-entry match: 33%
