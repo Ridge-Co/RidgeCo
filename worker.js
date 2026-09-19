@@ -11517,6 +11517,7 @@ async function dedupeTestFixtures(env) {
     const matches = rows.filter(r => r[field] === value).sort((a, b) => Number(a.ID) - Number(b.ID));
     for (const extra of matches.slice(1)) {
       await updateRow(env, tab, extra.ID, tab === 'Vendors' ? { Name: '', Company: '' } : { [field]: '' });
+      await ensureMarker(env, tab, extra.ID, field, '');
     }
   }
 }
