@@ -1375,6 +1375,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
       setTimeout(function() { _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, attempt+1); }, attempt * 1200);
       return;
     }
+    _activeUploads--; // terminal failure -- no longer actively transmitting until the vendor taps Retry
     card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
     card.innerHTML = '\u26a0 ' + esc(msg) + ' <span data-retry-btn style="text-decoration:underline;cursor:pointer">Retry</span>';
     var retryEl = card.querySelector('[data-retry-btn]');
