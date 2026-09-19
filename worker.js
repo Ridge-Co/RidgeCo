@@ -11483,7 +11483,7 @@ async function seedTestFixtures(env, url) {
   // produced earlier today (Owner 11 / Property 69 / Unit 40 / Tenant 86 — Vendor 7 already had
   // a correct Name+Company and needs nothing). Guarded by ID + "is it still actually blank", so
   // it is a harmless no-op on every call from here on.
-  const legacyOwner = existingOwners.find(o => o.ID === '11');
+  const legacyOwner = existingOwners.find(o => String(o.ID) === '11');
   if (legacyOwner && !legacyOwner.Company) {
     await updateRow(env, 'Owners', '11', { Company: 'TEST-OWNER-001' });
     await updateRow(env, 'Properties', '69', { Address: 'TEST-PROPERTY-001' });
