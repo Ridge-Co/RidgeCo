@@ -11488,7 +11488,7 @@ async function hubTestWriteAllowed(env, path, body) {
 async function dedupeTestFixtures(env) {
   const MARKERS = [
     { tab: 'Owners', field: 'Company', value: 'TEST-OWNER-001' },
-    { tab: 'Properties', field: 'Address', value: 'TEST-PROPERTY-001' },
+    { tab: 'Properties', field: 'Access_Notes', value: 'TEST-PROPERTY-001' },
     { tab: 'Units', field: 'Unit_Label', value: 'TEST-UNIT-001' },
     { tab: 'Tenants', field: 'Last_Name', value: 'TEST-TENANT-001' },
     { tab: 'Vendors', field: 'Name', value: 'TEST-VENDOR-001' },
