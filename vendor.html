@@ -2921,26 +2921,14 @@ function isVendorBusy(){
     window.scrollTo(0, savedScrollY);
   }
 
-  function armWatch() {
-    if (watchTimer) return;
-    watchTimer = setInterval(function(){
-      if (!pendingWos) { clearInterval(watchTimer); watchTimer = null; return; }
-      if (!isVendorBusy()) {
-        var wos = pendingWos; pendingWos = null;
-        clearInterval(watchTimer); watchTimer = null;
-        applyNow(wos);
-      }
-    }, WATCH_MS);
-  }
-
   function check() {
     if (!session) return;
     var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
     api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed).then(function(wos) {
       if (!session) return; // logged out while the request was in flight
       if (woSignature(wos) === woSignature(window._wos)) return; // nothing changed -- leave the DOM alone
-      if (isVendorBusy()) { pendingWos = wos; armWatch(); }
-      else { applyNow(wos); }
+      if (isVendorBusy()) { pendingWos = wos; } // wait -- see the backgrounding handler below
+      else { pendingWos = null; applyNow(wos); }
     }).catch(function(){}); // silent -- this is a background check; a manual loadWorkOrders() still surfaces real errors
   }
 
@@ -2948,11 +2936,26 @@ function isVendorBusy(){
   // was waiting on the vendor -- exposed so loadWorkOrders() can clear stale pending data.
   window._resetWOWatch = function(){
     pendingWos = null;
-    if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
   };
 
   setInterval(check, CHECK_MS);
-  document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) {
+      // The vendor just backgrounded the tab -- to take a photo, take a call, whatever.
+      // Nothing on screen is visible right now, so this is the safest possible moment to
+      // apply a held-back update: no scroll jump, no collapsed card, nothing to notice.
+      // Deliberately does NOT re-check isVendorBusy() here -- a focused input or an open
+      // modal only matters while the vendor can see it, and they can't right now. Still
+      // guarded on hasActiveAsyncWork(), since a save/upload in flight would get silently
+      // orphaned by a DOM rebuild regardless of visibility.
+      if (pendingWos && !hasActiveAsyncWork()) {
+        var wos = pendingWos; pendingWos = null;
+        applyNow(wos);
+      }
+    } else {
+      check(); // back in the foreground -- see if anything changed while away
+    }
+  });
   window.addEventListener('focus', check);
 })();
 </script>
