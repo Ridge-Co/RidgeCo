@@ -2858,8 +2858,9 @@ function isVendorBusy(){
 <!-- Work-order background refresh (Sep 19 2026, Brett's ask -- vendors kept having to be
      told to manually refresh to see new/updated jobs). Polls the same endpoint
      loadWorkOrders() uses, but never force-reloads and never touches the screen while
-     isVendorBusy() is true -- it just waits (checking every WATCH_MS) and applies the
-     moment the vendor is free, same idle/busy split as the version-poller above. When it
+     isVendorBusy() is true -- it just holds the update and applies it the moment the tab
+     is backgrounded (or the vendor is next found idle), same idle/busy split as the
+     version-poller above but resolved by an event instead of a fast poll loop. When it
      does apply, it restores scroll position and which cards were expanded (renderWOs()
      otherwise always collapses everything back to default on any rebuild) so a vendor who
      was just reading something doesn't get yanked back to the top of a closed list. A
