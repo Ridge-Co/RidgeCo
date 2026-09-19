@@ -1357,6 +1357,7 @@ function esc(str) {
 // upload session each retry -- simpler and always correct vs. resuming a partial byte
 // range), short backoff between, and a manual "Retry" tap if all 3 still fail.
 var MAX_UPLOAD_ATTEMPTS = 3;
+var _activeUploads = 0; // count of files currently transmitting or awaiting retry-backoff; used to defer background refreshes mid-upload
 function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attempt) {
   attempt = attempt || 1;
   var reqBody = {
