@@ -6945,7 +6945,7 @@ async function scheduleWO(env, body) {
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
     }
   }
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_schedule', Skill_Or_Endpoint:'/schedule', Success:'TRUE', Notes:`window=${body.window||''} new_status=${updates.Status||wo.Status||''}` }); } catch(_){}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_schedule', Skill_Or_Endpoint:'/schedule', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`window=${body.window||''} new_status=${updates.Status||wo.Status||''}` }); } catch(_){}
   return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,owner_sms:ownerSMSSent,new_status:updates.Status||wo.Status});
 }
 
