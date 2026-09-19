@@ -196,7 +196,29 @@ export default {
         const _cronSweepOk = !!env.CRON_SWEEP_TOKEN
           && _tok === env.CRON_SWEEP_TOKEN
           && request.method === 'POST' && path === '/cron/sweep';
-        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk) {
+        // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
+        // a Cowork session run real read+write+read-back checks against
+        // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
+        // (isStaging check below) even though the token itself is a distinct env var — belt-
+        // and-suspenders on top of "this secret is only ever set on the staging Worker, never
+        // on production." Reads: the same list test-verified-builds already checks. Writes:
+        // only the routes named in HUB_TEST_WRITE_PATHS, and every one of those is re-checked
+        // against the actual target record by hubTestWriteAllowed() after body parsing below —
+        // this token can never touch a real (non-"TEST-") vendor/owner/tenant/property/WO, even
+        // though the path itself is shared with the real, WORKER_SECRET-authenticated route.
+        // Fully inert unless env.HUB_TEST_TOKEN is set, so deploying this has zero effect until
+        // the secret exists — and it never exists on production's env at all.
+        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status'];
+        const _hubTestOk = !!env.HUB_TEST_TOKEN
+          && _tok === env.HUB_TEST_TOKEN
+          && isStaging(env, url)
+          && (
+            (request.method === 'GET'  && HUB_TEST_READ_PATHS.includes(path)) ||
+            (request.method === 'POST' && HUB_TEST_WRITE_PATHS.includes(path))
+          );
+        if (_hubTestOk) _viaHubTestToken = true;
+        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
