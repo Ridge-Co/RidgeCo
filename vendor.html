@@ -2867,15 +2867,27 @@ function isVendorBusy(){
      NEW_BADGE_MS. -->
 <script>
 (function(){
-  var CHECK_MS = 180000;        // ~3 min -- matches the cadence Brett asked for
-  var WATCH_MS = 5000;          // once an update is waiting on a busy vendor, re-check this often
+  var CHECK_MS = 300000;         // 5 min -- Brett's call: vendors don't typically sit idle
+                                  // with the tab open and foregrounded, so a short poll adds
+                                  // risk (see hasActiveAsyncWork below) for little real benefit
   var NEW_BADGE_MS = 10 * 60000; // how long the NEW badge stays on a card
-  var pendingWos = null, watchTimer = null;
+  var pendingWos = null;
 
   function woSignature(wos) {
     return (wos || []).map(function(w){
       return [w.ID, w.Status, w.Priority, w.Scheduled_Date, w.Notes, w.Description, w.access_gated].join('|F|');
     }).sort().join('|W|');
+  }
+
+  // A narrower check than isVendorBusy(): true only for actual async work in flight (a save
+  // POST, an upload) that a full list rebuild would silently orphan mid-request -- the DOM
+  // node it's updating would get replaced out from under it. Unlike a focused input or an
+  // open modal, this matters even while the tab is backgrounded and nothing is visible, so
+  // it's the one thing still allowed to block the backgrounding-triggered apply below.
+  function hasActiveAsyncWork() {
+    if (typeof _inflight !== 'undefined' && Object.keys(_inflight).length) return true;
+    if (typeof _activeUploads !== 'undefined' && _activeUploads > 0) return true;
+    return false;
   }
 
   function applyNow(wos) {
