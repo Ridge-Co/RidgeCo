@@ -6858,7 +6858,7 @@ async function adminShareAttachments(env, body) {
     }
     const remainingAfterBatch = Math.max(0, shareable - offset - considered);
     const nextOffset = offset + considered;
-    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}` }); } catch(_){}
+    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Latency_ms: Date.now()-_t0, Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}` }); } catch(_){}
     const out = {
       success: true,
       dry_run: dryRun,
