@@ -442,6 +442,7 @@ export default {
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
+        if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
         if (path === '/estimate/unapprove')       return await unapproveEstimate(env, body);
