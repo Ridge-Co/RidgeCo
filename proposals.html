@@ -222,6 +222,7 @@ function render(rev,q){
   }
   document.getElementById('body').innerHTML=html;
   syncSel();
+  syncBuildSel();
 }
 function pct(x){const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';}
 function pick(n){document.querySelectorAll('#body input[type=checkbox]:not(.qsel)').forEach(cb=>{const i=+cb.getAttribute('data-i');cb.checked=(n>=99)?true:(n===0?false:(PROPOSALS[i]&&(PROPOSALS[i].rank||i+1)<=n));});syncSel();}
