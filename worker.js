@@ -11385,6 +11385,89 @@ async function addRow(env, tab, body) {
   return json({success:true,id:String(nextId),pin:body.PIN||null});
 }
 
+// ── Test-infrastructure build (Sep 19 2026) ─────────────────────────────────
+// Everything below exists ONLY to let the HUB_TEST_TOKEN gate (top of fetch, above) run real,
+// data-scoped tests against maintenance-hub-staging. None of this is reachable via
+// WORKER_SECRET or any other auth path costing a real admin call anything extra.
+
+// True only when `id`'s row in `tab` is itself a seeded test record (Name starts with
+// 'TEST-'). Used exclusively by hubTestWriteAllowed below.
+async function isTestRecord(env, tab, id) {
+  if (!id) return false;
+  try {
+    const rows = await fetchTab(env, tab);
+    const row = rows.find(r => String(r.ID) === String(id));
+    return !!(row && String(row.Name || '').startsWith('TEST-'));
+  } catch (e) { return false; }
+}
+
+// The record-level half of the HUB_TEST_TOKEN guard (the path/method half lives in the auth
+// gate as HUB_TEST_WRITE_PATHS). Deny-by-default: any path not explicitly handled here returns
+// false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
+async function hubTestWriteAllowed(env, path, body) {
+  if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  if (['/property/add', '/owner/add', '/vendor/add', '/tenant/add', '/unit/add'].includes(path)) {
+    // Creating a brand-new row: the token may only ever create rows that self-identify as
+    // test data by name — never anything that could pass as a real record.
+    return String((body && body.Name) || '').startsWith('TEST-');
+  }
+  if (path === '/workorder') {
+    const propOk = await isTestRecord(env, 'Properties', body && body.property_id);
+    if (!propOk) return false;
+    if (body && body.tenant_id) return await isTestRecord(env, 'Tenants', body.tenant_id);
+    return true;
+  }
+  if (path === '/assign') {
+    return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
+  if (path === '/status') {
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  return false;
+}
+
+// POST /admin/seed-test-fixtures — creates (or, if already present, just returns) one
+// TEST-prefixed Owner/Property/Unit/Vendor/Tenant so every test run has known-safe records to
+// exercise instead of ever touching a real one. Every contact field is Brett's own phone/email,
+// so any notification a test run triggers lands only on him (see smsGatedSend's
+// TWILIO_TEST_MODE default and gmailSendEmail's GMAIL_STAGING_MODE below). Idempotent:
+// re-running this is always safe and just hands back the existing IDs. Staging-only by
+// construction — refuses outright if isStaging(env, url) is false, regardless of which token
+// called it.
+async function seedTestFixtures(env, url) {
+  if (!isStaging(env, url)) return json({ error: 'seed-test-fixtures only runs on staging' }, 403);
+  const BRETT_PHONE = '4439617927';
+  const BRETT_EMAIL = 'brett@bmoremanagement.com';
+  const existingOwners = await fetchTab(env, 'Owners');
+  const already = existingOwners.find(o => o.Name === 'TEST-OWNER-001');
+  if (already) {
+    const [props, vendors, units, tenants] = await Promise.all([
+      fetchTab(env, 'Properties'), fetchTab(env, 'Vendors'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'),
+    ]);
+    return json({
+      success: true, already_seeded: true,
+      owner_id: already.ID,
+      property_id: (props.find(p => p.Name === 'TEST-PROPERTY-001') || {}).ID,
+      unit_id: (units.find(u => u.Name === 'TEST-UNIT-001') || {}).ID,
+      vendor_id: (vendors.find(v => v.Name === 'TEST-VENDOR-001') || {}).ID,
+      tenant_id: (tenants.find(t => t.Name === 'TEST-TENANT-001') || {}).ID,
+    });
+  }
+  const ownerRes  = await (await addRow(env, 'Owners',     { Name: 'TEST-OWNER-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL })).json();
+  const propRes   = await (await addRow(env, 'Properties', { Name: 'TEST-PROPERTY-001', Owner_ID: ownerRes.id, Address: '1 Test Way, Testville, MD 00000' })).json();
+  const unitRes   = await (await addRow(env, 'Units',      { Name: 'TEST-UNIT-001', Property_ID: propRes.id })).json();
+  const vendorRes = await (await addRow(env, 'Vendors',    { Name: 'TEST-VENDOR-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Company: 'TEST-VENDOR-001' })).json();
+  const tenantRes = await (await addRow(env, 'Tenants',    { Name: 'TEST-TENANT-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Unit_ID: unitRes.id, Property_ID: propRes.id })).json();
+  return json({
+    success: true,
+    owner_id: ownerRes.id, property_id: propRes.id, unit_id: unitRes.id, vendor_id: vendorRes.id, tenant_id: tenantRes.id,
+    note: 'Re-run this endpoint anytime — idempotent, hands back the same IDs once seeded.',
+  });
+}
+
 // POST /property/update wrapper — the plain `updateRow` call it replaces only ever wrote to
 // EXISTING header columns (silently drops anything else), so the new "referred by" fields
 // (Aug 19, realtor-sourced-job billing gate: the realtor is not the payor, tracked separately
