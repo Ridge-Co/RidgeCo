@@ -11474,7 +11474,25 @@ async function seedTestFixtures(env, url) {
   const BRETT_PHONE = '4439617927';
   const BRETT_EMAIL = 'brett@bmoremanagement.com';
   const existingOwners = await fetchTab(env, 'Owners');
-  const already = existingOwners.find(o => o.Name === 'TEST-OWNER-001');
+
+  // One-time repair (2026-09-19): before the TEST_MARKER_FIELD fix above, this function wrote
+  // its marker into "Name" on every tab, a column that doesn't exist on Owners/Properties/
+  // Units/Tenants — so it silently landed nowhere, AND this function's own idempotency check
+  // below (which also checked Name) could never match, so every prior call created a fresh,
+  // fully-duplicate set of rows instead of reusing one. This repairs the exact rows that bug
+  // produced earlier today (Owner 11 / Property 69 / Unit 40 / Tenant 86 — Vendor 7 already had
+  // a correct Name+Company and needs nothing). Guarded by ID + "is it still actually blank", so
+  // it is a harmless no-op on every call from here on.
+  const legacyOwner = existingOwners.find(o => o.ID === '11');
+  if (legacyOwner && !legacyOwner.Company) {
+    await updateRow(env, 'Owners', '11', { Company: 'TEST-OWNER-001' });
+    await updateRow(env, 'Properties', '69', { Address: 'TEST-PROPERTY-001' });
+    await updateRow(env, 'Units', '40', { Unit_Label: 'TEST-UNIT-001' });
+    await updateRow(env, 'Tenants', '86', { Last_Name: 'TEST-TENANT-001' });
+    legacyOwner.Company = 'TEST-OWNER-001'; // keep in-memory copy in sync for the check just below
+  }
+
+  const already = existingOwners.find(o => o.Company === 'TEST-OWNER-001');
   if (already) {
     const [props, vendors, units, tenants] = await Promise.all([
       fetchTab(env, 'Properties'), fetchTab(env, 'Vendors'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'),
@@ -11482,17 +11500,19 @@ async function seedTestFixtures(env, url) {
     return json({
       success: true, already_seeded: true,
       owner_id: already.ID,
-      property_id: (props.find(p => p.Name === 'TEST-PROPERTY-001') || {}).ID,
-      unit_id: (units.find(u => u.Name === 'TEST-UNIT-001') || {}).ID,
+      property_id: (props.find(p => p.Address === 'TEST-PROPERTY-001') || {}).ID,
+      unit_id: (units.find(u => u.Unit_Label === 'TEST-UNIT-001') || {}).ID,
       vendor_id: (vendors.find(v => v.Name === 'TEST-VENDOR-001') || {}).ID,
-      tenant_id: (tenants.find(t => t.Name === 'TEST-TENANT-001') || {}).ID,
+      tenant_id: (tenants.find(t => t.Last_Name === 'TEST-TENANT-001') || {}).ID,
     });
   }
-  const ownerRes  = await (await addRow(env, 'Owners',     { Name: 'TEST-OWNER-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL })).json();
-  const propRes   = await (await addRow(env, 'Properties', { Name: 'TEST-PROPERTY-001', Owner_ID: ownerRes.id, Address: '1 Test Way, Testville, MD 00000' })).json();
-  const unitRes   = await (await addRow(env, 'Units',      { Name: 'TEST-UNIT-001', Property_ID: propRes.id })).json();
+  // Marker goes into whichever column TEST_MARKER_FIELD says actually exists on that tab — NOT
+  // "Name" for Owners/Properties/Tenants/Units, since none of them have that column.
+  const ownerRes  = await (await addRow(env, 'Owners',     { Company: 'TEST-OWNER-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL })).json();
+  const propRes   = await (await addRow(env, 'Properties', { Address: 'TEST-PROPERTY-001', Owner_ID: ownerRes.id })).json();
+  const unitRes   = await (await addRow(env, 'Units',      { Unit_Label: 'TEST-UNIT-001', Property_ID: propRes.id })).json();
   const vendorRes = await (await addRow(env, 'Vendors',    { Name: 'TEST-VENDOR-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Company: 'TEST-VENDOR-001' })).json();
-  const tenantRes = await (await addRow(env, 'Tenants',    { Name: 'TEST-TENANT-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Unit_ID: unitRes.id, Property_ID: propRes.id })).json();
+  const tenantRes = await (await addRow(env, 'Tenants',    { Last_Name: 'TEST-TENANT-001', Phone: BRETT_PHONE, Email: BRETT_EMAIL, Unit_ID: unitRes.id, Property_ID: propRes.id })).json();
   return json({
     success: true,
     owner_id: ownerRes.id, property_id: propRes.id, unit_id: unitRes.id, vendor_id: vendorRes.id, tenant_id: tenantRes.id,
