@@ -11693,7 +11693,7 @@ async function logAugment(env, type, id, field, oldVal, newVal) {
 
 async function updateWOFields(env, woId, fields) {
   const data=await sheetsRequest(env,'GET',`/values/Work_Orders`); if(!data.values) return;
-  const [headers,...rows]=data.values; const _idc=idColIndex(headers); const rowIndex=rows.findIndex(r=>r[_idc]===woId);
+  const [headers,...rows]=data.values; const _idc=idColIndex(headers); const rowIndex=rows.findIndex(r=>String(r[_idc])===String(woId));
   if(rowIndex===-1) return; const sheetRow=rowIndex+2, updates=[];
   for(const [field,value] of Object.entries(fields)){const ci=headers.indexOf(field);if(ci!==-1)updates.push({range:`Work_Orders!${col(ci)}${sheetRow}`,values:[[value]]});}
   if(updates.length) await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:updates});
