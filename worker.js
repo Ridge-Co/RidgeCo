@@ -11408,12 +11408,28 @@ async function addRow(env, tab, body) {
 
 // True only when `id`'s row in `tab` is itself a seeded test record (Name starts with
 // 'TEST-'). Used exclusively by hubTestWriteAllowed below.
+// Which column actually carries the "TEST-" marker on a given tab. Confirmed live 2026-09-19:
+// Properties/Owners/Tenants/Units have NO "Name" column at all (they use Address,
+// First_Name/Last_Name/Company, and Unit_Label instead) — Vendors is the only tab that genuinely
+// has "Name". Checking row.Name on the others silently always returned false, so isTestRecord
+// could never pass for a Properties/Owners/Tenants row, and every /workorder or /status
+// hub_test_post 403'd regardless of whether the record really was a seeded fixture.
+const TEST_MARKER_FIELD = {
+  Vendors: 'Name',
+  Properties: 'Address',
+  Owners: 'Company',
+  Tenants: 'Last_Name',
+  Units: 'Unit_Label',
+};
+
 async function isTestRecord(env, tab, id) {
   if (!id) return false;
   try {
     const rows = await fetchTab(env, tab);
     const row = rows.find(r => String(r.ID) === String(id));
-    return !!(row && String(row.Name || '').startsWith('TEST-'));
+    if (!row) return false;
+    const field = TEST_MARKER_FIELD[tab] || 'Name';
+    return String(row[field] || '').startsWith('TEST-');
   } catch (e) { return false; }
 }
 
