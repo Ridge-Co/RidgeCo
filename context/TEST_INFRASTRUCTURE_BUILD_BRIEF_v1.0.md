@@ -1,6 +1,18 @@
 # Test Infrastructure Build Brief — v1.0
 
-**Status:** Design — pending Brett's go-ahead to build (Sep 19, 2026)
+**Status:** Built, staged as two PRs, pending Brett's secret setup + merge (Sep 19, 2026):
+- [Ridge-Co/RidgeCo#7](https://github.com/Ridge-Co/RidgeCo/pull/7) — `HUB_TEST_TOKEN` gate, record-level write guard, `/admin/seed-test-fixtures`, Gmail staging redirect.
+- [brett332/gh-broker#1](https://github.com/brett332/gh-broker/pull/1) — `hub_test_get`/`hub_test_post`/`hub_test_seed` tools on the existing connector.
+
+**To finish (Brett only — none of this can be done from a session):**
+1. Generate a random secret value for `HUB_TEST_TOKEN` (any long random string).
+2. Set it as a Cloudflare secret on **`maintenance-hub-staging`** — never on production `maintenance-hub`.
+3. Set the SAME value as a secret on the `gh-broker` Worker, plus `HUB_STAGING_URL` (a plain var — the staging Worker's URL) on `gh-broker`.
+4. Review and merge both PRs (or ask Claude to merge once satisfied — `merge_pull_request` is available).
+5. Ask Claude to refresh the GH Broker connector's tool list (`RefreshMcpTools`) so `hub_test_get`/`hub_test_post`/`hub_test_seed` become callable.
+6. Optionally set `GMAIL_STAGING_MODE=REDIRECT` on staging's Config sheet when a real-send email check is wanted.
+
+Once that's done, any session can run: `hub_test_seed()` → `hub_test_get('/workorders')` → `hub_test_post('/workorder', {...})` → `hub_test_post('/assign', {...})` → `hub_test_post('/status', {...})` → read-back via `hub_test_get`, all against staging, all on `TEST-` records, with zero standing access to `WORKER_SECRET` or production.
 **Governs:** how sessions run real smoke tests against the Hub without ever holding `WORKER_SECRET`, and how testing stays structurally confined to staging + dedicated test records. Read `AUTONOMY_GUARDRAILS_v1.0.md` first — this brief is designed to close a real gap without loosening that file's Rung-3 lock on `WORKER_SECRET`/auth changes.
 
 ## Problem
