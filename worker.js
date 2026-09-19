@@ -11543,6 +11543,7 @@ async function seedTestFixtures(env, url) {
     await updateRow(env, 'Properties', '69', { Access_Notes: 'TEST-PROPERTY-001' });
     await ensureMarker(env, 'Properties', '69', 'Access_Notes', 'TEST-PROPERTY-001');
     await updateRow(env, 'Units', '40', { Unit_Label: 'TEST-UNIT-001' });
+    await ensureMarker(env, 'Units', '40', 'Unit_Label', 'TEST-UNIT-001');
     await updateRow(env, 'Tenants', '86', { Last_Name: 'TEST-TENANT-001' });
   }
 
