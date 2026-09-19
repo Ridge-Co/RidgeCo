@@ -6810,6 +6810,7 @@ async function adminEnsureReceiptsPaymentSource(env) {
 }
 
 async function adminShareAttachments(env, body) {
+  const _t0 = Date.now();
   body = body || {};
   const dryRun = body.dry_run === true;
   const limit = Number.isInteger(body.limit) && body.limit > 0 ? body.limit : 0;
