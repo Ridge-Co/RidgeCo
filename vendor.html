@@ -1431,6 +1431,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
 function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
   var files = Array.from(input.files);
   if (!files.length) return;
+  _activeUploads += files.length; // each settles (success or terminal failure) inside _uploadOneFile
   var container = document.getElementById(containerId || ('uploads-' + fileType + '-' + woId));
   if (!container) container = document.getElementById('wo-uploads-' + woId);
 
