@@ -2768,16 +2768,50 @@ function applyTranslations() {
   document.title = 'Ridge Co — Portal de Contratistas';
 }
 </script>
+<!-- Shared "is the vendor mid-task right now" check (Sep 19 2026) -- used by both the
+     B-093 version-poller below and the new work-order background-refresh poller further
+     down, so there's exactly one definition of "busy" instead of two that could drift apart. -->
+<script>
+function isVendorBusy(){
+  // Actively typing right now -- a focused, non-empty field.
+  var el = document.activeElement;
+  if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
+  // Explicit opt-in hook for any future form to flag itself busy without touching this function.
+  if (document.querySelector('[data-unsaved="1"]')) return true;
+  // Any modal is open -- Bill/Invoice, Schedule, Feedback, My Info all use the same
+  // .modal-overlay convention and are shown/hidden via style.display directly, so this one
+  // check covers all of them (present and future) without listing each by id.
+  var modals = document.querySelectorAll('.modal-overlay');
+  for (var m = 0; m < modals.length; m++) { if (modals[m].style.display === 'flex') return true; }
+  // Typed-but-unsaved content in a receipt/time-entry row or the status-notes box, even if
+  // focus moved away (e.g. the vendor tapped out to the camera app and hasn't come back
+  // yet). Deliberately excludes the date inputs (vr-date-*/vt-date-*) and the entry-type
+  // select (vt-type-*) -- those always carry a pre-filled default value, so treating them as
+  // "unsaved" would make this permanently true any time a work order with a receipt/time
+  // section is on screen at all.
+  var list = document.getElementById('woList');
+  if (list) {
+    var fields = list.querySelectorAll(
+      'input[id^="vr-amt-"], input[id^="vr-store-"], textarea[id^="vr-desc-"], ' +
+      'input[id^="vt-start-"], input[id^="vt-end-"], textarea[id^="vt-invdesc-"], ' +
+      'textarea[id^="vt-notes-"], textarea[id^="notes-"]'
+    );
+    for (var i = 0; i < fields.length; i++) {
+      if (fields[i].value && String(fields[i].value).trim() !== '') return true;
+    }
+  }
+  // A save is actively mid-flight (any claimSubmit-guarded button).
+  if (typeof _inflight !== 'undefined' && Object.keys(_inflight).length) return true;
+  // A photo/receipt/invoice upload is actively transmitting or awaiting retry-backoff.
+  if (typeof _activeUploads !== 'undefined' && _activeUploads > 0) return true;
+  return false;
+}
+</script>
 <!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner) -->
 <script>
 (function(){
   var VER_URL = WORKER + '/version', booted = null;
   var LAST_KEY = 'rc_build_ver';
-  function dirty(){
-    var el = document.activeElement;
-    if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
-    return !!document.querySelector('[data-unsaved="1"]');
-  }
   function reloadFresh(){
     // Only THIS reload (a confirmed real staleness case) pays for a network-forced
     // re-fetch — routine loads are left alone so a flaky connection never has to
@@ -2809,14 +2843,103 @@ function applyTranslations() {
         // end of <body>) — if the version we booted with is already behind what the
         // server has right now, THIS load was a stale cached copy. Catch it here, after
         // everything already works, instead of gating the page load on it.
-        if (last && last !== d.version) { dirty() ? banner() : reloadFresh(); }
+        if (last && last !== d.version) { isVendorBusy() ? banner() : reloadFresh(); }
         return;
       }
-      if (d.version !== booted){ dirty() ? banner() : reloadFresh(); }
+      if (d.version !== booted){ isVendorBusy() ? banner() : reloadFresh(); }
     }).catch(function(){});
   }
   check();
   setInterval(check, 60000);
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
+})();
+</script>
+<!-- Work-order background refresh (Sep 19 2026, Brett's ask -- vendors kept having to be
+     told to manually refresh to see new/updated jobs). Polls the same endpoint
+     loadWorkOrders() uses, but never force-reloads and never touches the screen while
+     isVendorBusy() is true -- it just waits (checking every WATCH_MS) and applies the
+     moment the vendor is free, same idle/busy split as the version-poller above. When it
+     does apply, it restores scroll position and which cards were expanded (renderWOs()
+     otherwise always collapses everything back to default on any rebuild) so a vendor who
+     was just reading something doesn't get yanked back to the top of a closed list. A
+     newly-appeared or reassigned work order gets a small NEW badge that clears itself after
+     NEW_BADGE_MS. -->
+<script>
+(function(){
+  var CHECK_MS = 180000;        // ~3 min -- matches the cadence Brett asked for
+  var WATCH_MS = 5000;          // once an update is waiting on a busy vendor, re-check this often
+  var NEW_BADGE_MS = 10 * 60000; // how long the NEW badge stays on a card
+  var pendingWos = null, watchTimer = null;
+
+  function woSignature(wos) {
+    return (wos || []).map(function(w){
+      return [w.ID, w.Status, w.Priority, w.Scheduled_Date, w.Notes, w.Description, w.access_gated].join('|F|');
+    }).sort().join('|W|');
+  }
+
+  function applyNow(wos) {
+    var prevIds = {};
+    (window._wos || []).forEach(function(w){ prevIds[w.ID] = true; });
+    var expandedIds = {};
+    (window._wos || []).forEach(function(w, idx){
+      var card = document.getElementById('card-' + idx);
+      if (card && card.classList.contains('expanded')) expandedIds[w.ID] = true;
+    });
+    var savedScrollY = window.scrollY;
+
+    renderWOs(wos);
+
+    wos.forEach(function(w, idx){
+      var card = document.getElementById('card-' + idx);
+      if (!card) return;
+      if (expandedIds[w.ID]) card.classList.add('expanded');
+      if (!prevIds[w.ID]) {
+        var headerRight = card.querySelector('.wo-header-right');
+        if (headerRight && !headerRight.querySelector('.wo-badge-new')) {
+          var b = document.createElement('span');
+          b.className = 'wo-badge-new';
+          b.textContent = 'NEW';
+          b.style.cssText = 'background:var(--accent2);color:#fff;font-size:9px;font-weight:bold;letter-spacing:.06em;padding:2px 6px;border-radius:10px';
+          headerRight.insertBefore(b, headerRight.firstChild);
+          setTimeout(function(){ if (b && b.parentNode) b.parentNode.removeChild(b); }, NEW_BADGE_MS);
+        }
+      }
+    });
+    window.scrollTo(0, savedScrollY);
+  }
+
+  function armWatch() {
+    if (watchTimer) return;
+    watchTimer = setInterval(function(){
+      if (!pendingWos) { clearInterval(watchTimer); watchTimer = null; return; }
+      if (!isVendorBusy()) {
+        var wos = pendingWos; pendingWos = null;
+        clearInterval(watchTimer); watchTimer = null;
+        applyNow(wos);
+      }
+    }, WATCH_MS);
+  }
+
+  function check() {
+    if (!session) return;
+    var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
+    api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed).then(function(wos) {
+      if (!session) return; // logged out while the request was in flight
+      if (woSignature(wos) === woSignature(window._wos)) return; // nothing changed -- leave the DOM alone
+      if (isVendorBusy()) { pendingWos = wos; armWatch(); }
+      else { applyNow(wos); }
+    }).catch(function(){}); // silent -- this is a background check; a manual loadWorkOrders() still surfaces real errors
+  }
+
+  // A manual reload (tab switch, fresh login) always supersedes a background update that
+  // was waiting on the vendor -- exposed so loadWorkOrders() can clear stale pending data.
+  window._resetWOWatch = function(){
+    pendingWos = null;
+    if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+  };
+
+  setInterval(check, CHECK_MS);
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
   window.addEventListener('focus', check);
 })();
