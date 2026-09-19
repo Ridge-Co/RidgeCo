@@ -30,9 +30,10 @@ function grab(name) {
 let pass = 0, fail = 0;
 const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? ('got ' + JSON.stringify(got)) : ''); } };
 
-function makeSandbox({ fetchTabRows, alreadySharedIds, shareOkIds, shareErrors, telemetryCalls }) {
+function makeSandbox({ fetchTabRows, alreadySharedIds, shareOkIds, shareErrors, telemetryCalls, ensureColumnsCalls, markedMissingIds }) {
   const factory = new Function(
     'fetchTab', 'getAccessToken', 'logTelemetry', 'json', 'driveShareAnyoneVerbose', 'driveIsSharedAnyone',
+    'ensureColumns', 'updateRow',
     "const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice'];\n" +
     grab('adminShareAttachments') +
     '\nreturn { adminShareAttachments };'
@@ -51,6 +52,11 @@ function makeSandbox({ fetchTabRows, alreadySharedIds, shareOkIds, shareErrors, 
       return { ok: false, status: detail.status, error: detail.error };
     },
     async (token, fileId) => alreadySharedIds.has(fileId),
+    // Ops_Build_Queue #23 (Sep 19 2026): known-missing marking calls ensureColumns then
+    // updateRow — mocked here so section 8 below can assert on exactly which rows got marked,
+    // without needing a real Sheets round-trip.
+    async (env, tab, cols) => { if (ensureColumnsCalls) ensureColumnsCalls.push({ tab, cols }); },
+    async (env, tab, id, fields) => { if (markedMissingIds && fields && fields.Drive_File_Missing === 'TRUE') markedMissingIds.add(id); },
   );
 }
 
@@ -58,9 +64,11 @@ function rowsOf(n, opts = {}) {
   const rows = [];
   for (let i = 1; i <= n; i++) {
     rows.push({
+      ID: `att-${i}`,
       Active: 'TRUE',
       File_Type: (opts.internalIds || []).includes(i) ? 'receipt' : 'before',
       Drive_File_ID: (opts.noIdIds || []).includes(i) ? '' : `file-${i}`,
+      Drive_File_Missing: (opts.knownMissingIds || []).includes(i) ? 'TRUE' : '',
       WO_ID: `WO-${i}`,
       File_Name: `photo-${i}.jpg`,
     });
@@ -181,6 +189,44 @@ function rowsOf(n, opts = {}) {
   const S8 = makeSandbox({ fetchTabRows: rowsOf(12), alreadySharedIds: new Set(), telemetryCalls: [] });
   const noOffset = (await S8.adminShareAttachments({}, { dry_run: true, limit: 5 })).data;
   t('omitting offset defaults to 0 (starts from the beginning)', noOffset.offset === 0 && noOffset.considered_this_batch === 5);
+
+  // ── 8. Ops_Build_Queue #23 (Sep 19 2026): a real 404 marks the file Drive_File_Missing so
+  // future batches stop re-failing on it forever; already-marked rows are skipped entirely
+  // and never re-counted as a fresh failure ──
+  {
+    const rows5 = rowsOf(5);
+    const shareErrors = { 'file-2': { status: 404, error: 'File not found: file-2.' }, 'file-4': { status: 500, error: 'transient' } };
+    const markedMissingIds = new Set();
+    const ensureColumnsCalls = [];
+    const tc8 = [];
+    const S9 = makeSandbox({
+      fetchTabRows: rows5, alreadySharedIds: new Set(),
+      shareOkIds: new Set(['file-1', 'file-3', 'file-5']),
+      shareErrors, telemetryCalls: tc8, ensureColumnsCalls, markedMissingIds,
+    });
+    const real1 = (await S9.adminShareAttachments({}, { dry_run: false })).data;
+    t('3 real shares succeed, 2 fail (one 404, one 500)', real1.shared === 3 && real1.failed === 2, real1);
+    t('failed_by_status breaks the 2 failures down by real HTTP status, not just a bare count', real1.failed_by_status['404'] === 1 && real1.failed_by_status['500'] === 1, real1.failed_by_status);
+    t('only the 404 file gets marked Drive_File_Missing — a 500 (plausibly transient) is left retryable', markedMissingIds.has('att-2') && !markedMissingIds.has('att-4'), [...markedMissingIds]);
+    t('marking a file goes through ensureColumns first, so the write can never silently no-op onto a column that was never created (the exact rule-174 class of bug)', ensureColumnsCalls.some(c => c.tab === 'Attachments' && c.cols.includes('Drive_File_Missing')));
+    t('the telemetry Notes for this run include the failed_by_status breakdown as readable text', /failed_by_status=/.test(tc8[0].Notes) && /404:1/.test(tc8[0].Notes) && /500:1/.test(tc8[0].Notes), tc8[0].Notes);
+
+    // A second batch over the same table: the now-marked file is skipped outright — it no
+    // longer counts toward shareable or gets re-attempted, and the still-transient 500 file is
+    // retried again (this mock has it fail 500 again, simulating "still broken, not yet fixed").
+    const rows5Marked = rowsOf(5, { knownMissingIds: [2] });
+    const tc8b = [];
+    const S10 = makeSandbox({
+      fetchTabRows: rows5Marked, alreadySharedIds: new Set(),
+      shareOkIds: new Set(['file-1', 'file-3', 'file-5']),
+      shareErrors: { 'file-4': { status: 500, error: 'still transient' } },
+      telemetryCalls: tc8b, ensureColumnsCalls: [], markedMissingIds: new Set(),
+    });
+    const real2 = (await S10.adminShareAttachments({}, { dry_run: false })).data;
+    t('a known-missing file is excluded from shareable entirely on the next batch', real2.shareable === 4, real2.shareable);
+    t('skipped_known_missing reports the 1 previously-marked file', real2.skipped_known_missing === 1, real2.skipped_known_missing);
+    t('the known-missing file is never re-attempted (only 1 real failure this batch, not the file-2 404 again)', real2.failed === 1 && real2.failed_by_status['500'] === 1 && !real2.failed_by_status['404'], real2);
+  }
 
   console.log(`\nshare-attachments-limit: ${pass} passed, ${fail} failed`);
   if (fail) process.exit(1);
