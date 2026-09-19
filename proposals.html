@@ -224,8 +224,35 @@ function render(rev,q){
   syncSel();
 }
 function pct(x){const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';}
-function pick(n){document.querySelectorAll('#body input[type=checkbox]').forEach(cb=>{const i=+cb.getAttribute('data-i');cb.checked=(n>=99)?true:(n===0?false:(PROPOSALS[i]&&(PROPOSALS[i].rank||i+1)<=n));});syncSel();}
-function syncSel(){let n=0;document.querySelectorAll('#body input[type=checkbox]').forEach(cb=>{const card=document.getElementById('pc'+cb.getAttribute('data-i'));if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const g=document.getElementById('go');g.disabled=!n;g.textContent=n?('Approve '+n+' → queue for build'):'Approve selected';}
+function pick(n){document.querySelectorAll('#body input[type=checkbox]:not(.qsel)').forEach(cb=>{const i=+cb.getAttribute('data-i');cb.checked=(n>=99)?true:(n===0?false:(PROPOSALS[i]&&(PROPOSALS[i].rank||i+1)<=n));});syncSel();}
+function syncSel(){let n=0;document.querySelectorAll('#body input[type=checkbox]:not(.qsel)').forEach(cb=>{const card=document.getElementById('pc'+cb.getAttribute('data-i'));if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const g=document.getElementById('go');g.disabled=!n;g.style.display=n?'block':'none';g.textContent=n?('Approve '+n+' → queue for build'):'Approve selected';updateBar();}
+function syncBuildSel(){let n=0;document.querySelectorAll('#body input.qsel').forEach(cb=>{const qi=+cb.getAttribute('data-qi');const card=document.getElementById('qc'+qi);if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const bg=document.getElementById('buildGo');bg.disabled=!n;bg.style.display=n?'block':'none';bg.textContent=n?('🚀 Start Build ('+n+')'):'Start Build';updateBar();}
+function updateBar(){const g=document.getElementById('go'),bg=document.getElementById('buildGo');const show=(g&&g.style.display==='block')||(bg&&bg.style.display==='block');document.getElementById('bar').style.display=show?'block':'none';}
+function selectedQueueIds(){const out=[];document.querySelectorAll('#body input.qsel:checked').forEach(cb=>{const x=(window.__queue||[])[+cb.getAttribute('data-qi')];if(x&&x.ID)out.push(x.ID);});return out;}
+async function startBuild(){
+  const ids=selectedQueueIds(); if(!ids.length)return;
+  const bg=document.getElementById('buildGo'); bg.disabled=true; bg.textContent='Starting…';
+  const rEl=document.getElementById('buildResult');
+  try{
+    const r=await fetch(WORKER+'/ops-queue/start-build',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({ids:ids})});
+    const d=await r.json().catch(function(){return null;});
+    if(!r.ok||!d||d.ok!==true){
+      const msg=(d&&d.error)||('HTTP '+r.status);
+      if(rEl)rEl.innerHTML='<div class="banner">✕ Start Build failed — '+h(msg)+(d&&d.skipped&&d.skipped.length?'<br>Skipped: '+d.skipped.map(function(s){return h(s.id)+' ('+h(s.reason)+')';}).join(', '):'')+'</div>';
+      bg.disabled=false; bg.textContent='Start Build';
+      return;
+    }
+    let msg='<div class="banner" style="background:var(--greenbg);color:var(--green);border-color:#bfe3cc">✓ Fired '+d.fired_ids.length+' item(s).';
+    if(d.session_url) msg+=' <a href="'+h(d.session_url)+'" target="_blank" style="color:var(--green);font-weight:800">▶ Watch build session</a>';
+    if(d.skipped&&d.skipped.length) msg+='<br>Skipped: '+d.skipped.map(function(s){return h(s.id)+' ('+h(s.reason)+')';}).join(', ');
+    msg+='</div>';
+    if(rEl)rEl.innerHTML=msg;
+    setTimeout(load,700);
+  }catch(e){
+    if(rEl)rEl.innerHTML='<div class="banner">✕ Start Build failed — '+h(e&&e.message||e)+'</div>';
+    bg.disabled=false; bg.textContent='Start Build';
+  }
+}
 function selected(){const out=[];document.querySelectorAll('#body input[type=checkbox]:checked').forEach(cb=>{const it=PROPOSALS[+cb.getAttribute('data-i')];if(it)out.push(it);});return out;}
 async function approveSel(){
   const items=selected(); if(!items.length)return;
