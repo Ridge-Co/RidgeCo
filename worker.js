@@ -8601,12 +8601,22 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // Build_Brief (Sep 18 2026, B-240 greenlit→prepared bridge): holds the Rung-1 Prepare agent's
 // finished build-ready brief once it moves an item to 'prepared'. Sliced to 45,000 chars in
 // opsQueuePrepare — comfortably under the Sheets 50,000-char cell limit. Blank until prepared.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief'];
+// Held_Note (Sep 19 2026, Start Build / ops-queue-status): the one/two-sentence why, written
+// whenever a fired build session reports an item back as 'held' (real blocker, or a decision
+// only Brett can make). Cleared back to blank on a 'done' report — cleanup in case that report
+// is a retry after a prior held attempt on the same item.
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note'];
 // 'prepared' (Sep 18 2026, B-240) sits between greenlit and building: the Rung-1 Prepare agent's
 // ONLY allowed transition (via the narrow OPS_QUEUE_TOKEN, see opsQueuePrepare). It can never
 // set building/done/dropped — those stay behind the full admin secret (opsQueueUpdate), reached
 // by Brett or, later, the Ship cron.
-const OPS_QUEUE_STATUSES = ['greenlit', 'prepared', 'building', 'done', 'dropped'];
+// 'held' (Sep 19 2026, Start Build): a fired build session hit a real blocker or a decision only
+// Brett can make on ONE item, without stalling the rest of its batch — set via the narrow
+// OPS_QUEUE_TOKEN through POST /ops-queue-status (see validateQueueStatusReport), the same token
+// tier that already reaches 'prepared' via opsQueuePrepare. Distinct from 'dropped' (Brett killed
+// the idea outright): a held item is expected to be retried once the blocker clears, typically by
+// firing Start Build again on just that one item.
+const OPS_QUEUE_STATUSES = ['greenlit', 'prepared', 'building', 'done', 'dropped', 'held'];
 
 async function opsApprove(env, body) {
   const items = Array.isArray(body && body.items) ? body.items : [];
