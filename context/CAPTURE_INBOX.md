@@ -42,7 +42,7 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - CAP-032 — Cabin maintenance punch list, pulled from ClickUp before disconnect (Cabin — reference list, 21 items) → B-230
 - CAP-033 — Reviewed a "4 Claude upgrades" video (Aug 22) against what Brett already runs (see full entry below)
 - CAP-034 — Scope→estimate→signature→invoice workflow is split across 2 pages, needs consolidating (Ridge Co Hub — UX debt, NEW)
-- CAP-035 — `.btn-muted` isn't an actual defined CSS class in `vendor.html` (cosmetic, very low priority, NEW)
+- CAP-035 — `.btn-muted` isn't an actual defined CSS class in `vendor.html` (cosmetic, RESOLVED Sep 19 2026, FEATURE_LOG rule 195)
 <!-- QUICK-INDEX:END -->
 
 
