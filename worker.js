@@ -364,7 +364,7 @@ export default {
         if (path === '/receipt/delete')           return await updateRow(env, 'Receipts', body.id, { Active: 'FALSE' });
         if (path === '/tenant/move-out')          return await processMoveOut(env, body);
         if (path === '/assign')                   return await assignVendor(env, body);
-        if (path === '/status')                   return await updateStatus(env, body);
+        if (path === '/status')                   return await callWithFailureAlert(env, 'wo_status', '/status', () => updateStatus(env, body));
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
         if (path === '/cron/sweep')                return await cronSweep(env);
