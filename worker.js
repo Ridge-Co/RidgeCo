@@ -350,6 +350,15 @@ export default {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
+        // HUB_TEST_TOKEN record-level guard (test-infrastructure build, Sep 19 2026): the path
+        // allow-list in the auth gate above only proves the ROUTE is test-safe — this proves the
+        // actual DATA being touched is too. Runs only for requests authenticated via
+        // HUB_TEST_TOKEN; every other auth path (WORKER_SECRET, session token) is unaffected.
+        if (_viaHubTestToken) {
+          const _hubTestAllowed = await hubTestWriteAllowed(env, path, body);
+          if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing' }, 403);
+        }
+        if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
         // captured once here, harmlessly unused by every other POST route.
         const _clientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
