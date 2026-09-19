@@ -6886,6 +6886,7 @@ async function adminShareAttachments(env, body) {
 // ── SCHEDULING ───────────────────────────────────────────────
 
 async function scheduleWO(env, body) {
+  const _t0 = Date.now();
   const workorders=await fetchTab(env,'Work_Orders'); const wo=workorders.find(w=>w.ID===body.wo_id); if(!wo) return json({error:'WO not found'},404);
   const isWithinHour=body.window==='Within 1 hour', today=new Date().toISOString().split('T')[0], schedDate=body.date||today;
   const updates={Scheduled_Date:schedDate,Scheduled_Window:body.window||''};
