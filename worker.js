@@ -5695,20 +5695,44 @@ async function logWOAudit(env, woId, changedBy, changedByRole, field, oldValue, 
 // N re-reads of the SAME WO_Audit tab for one save (each read racing the one the previous
 // loop iteration had just written seconds — sometimes milliseconds — earlier). This is one of
 // the concrete contributors to the "quota exceeded" error Brett hit after an ordinary WO edit.
+// Message-audit columns (Sep 20 2026) — added to WO_Audit so every outbound SMS/email tied to a
+// WO logs recipient/channel/full-text/outcome alongside the existing field-edit history, not
+// just a 100-char truncated Notes string (see the old Tenant_Manual_SMS precedent). Additive
+// only — self-provisioned lazily below, existing field-edit-only callers never touch these.
+const WO_AUDIT_MSG_COLS = ['Channel', 'Recipient_Name', 'Recipient_Type', 'Message_Type', 'Message_Body', 'Outcome'];
+
 async function logWOAuditMany(env, entries) {
   if (!entries || !entries.length) return;
   try {
+    if (entries.some(e => e.channel || e.messageType || e.messageBody)) {
+      try { await ensureColumns(env, 'WO_Audit', WO_AUDIT_MSG_COLS); } catch (e) {}
+    }
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
     const rows = data.values||[]; if (!rows.length) return;
     const headers = rows[0], now = new Date().toISOString();
     let nextId = nextSafeId(rows);
     const newRows = entries.map(e => {
-      const row = headers.map(h => ({ ID:String(nextId), WO_ID:e.woId||'', Changed_By:e.changedBy||'unknown', Changed_By_Role:e.changedByRole||'unknown', Field:e.field||'', Old_Value:String(e.oldValue??''), New_Value:String(e.newValue??''), Timestamp:now, Notes:e.notes||'' }[h]??''));
+      const row = headers.map(h => ({
+        ID:String(nextId), WO_ID:e.woId||'', Changed_By:e.changedBy||'unknown', Changed_By_Role:e.changedByRole||'unknown',
+        Field:e.field||'', Old_Value:String(e.oldValue??''), New_Value:String(e.newValue??''), Timestamp:now, Notes:e.notes||'',
+        Channel:e.channel||'', Recipient_Name:e.recipientName||'', Recipient_Type:e.recipientType||'',
+        Message_Type:e.messageType||'', Message_Body:e.messageBody||'', Outcome:e.outcome||'',
+      }[h]??''));
       nextId += 1;
       return row;
     });
     await sheetsRequest(env, 'POST', `/values/WO_Audit:append?valueInputOption=RAW`, { values:newRows });
   } catch(e) { /* never break main operation */ }
+}
+
+// Thin wrapper matching logWOAudit's shape, for the message-send call sites (smsGatedSend,
+// sendVendorInvoiceConfirmationEmail) instead of the field-edit shape.
+async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, recipientName, recipientType, messageType, messageBody, outcome, notes }) {
+  return logWOAuditMany(env, [{
+    woId, changedBy: changedBy || 'System', changedByRole: changedByRole || 'system',
+    field: channel === 'email' ? 'Email' : 'SMS', oldValue: '', newValue: '',
+    notes: notes || '', channel, recipientName, recipientType, messageType, messageBody, outcome,
+  }]);
 }
 
 async function getWOAudit(env, url) {
