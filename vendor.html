@@ -1897,6 +1897,14 @@ var _schedWOId = null;
 function todayStr() {
   return new Date().toISOString().split('T')[0];
 }
+// vendor.html's own modal convention (unlike index.html/owner.html, which toggle a shared
+// ".open" CSS class) is a direct style.display flip per modal -- every other modal on this
+// page (Bill, Feedback, My Info) already works this way. openModal/closeModal were simply
+// never defined here, which silently broke openSchedModal/closeSchedModal below with a dead
+// ReferenceError -- never caught because nothing in vendor.html ever actually called
+// openSchedModal until the Schedule button was wired up (see the WO card template).
+function openModal(id) { var el = document.getElementById(id); if (el) el.style.display = 'flex'; }
+function closeModal(id) { var el = document.getElementById(id); if (el) el.style.display = 'none'; }
 function openSchedModal(modalId, woId) {
   _schedWOId = woId;
   document.getElementById(modalId+'-date').value = todayStr();
