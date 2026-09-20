@@ -2205,6 +2205,23 @@ function openWODetail(woId) {
     tenantToggle('Tenant_Notify_Updates',wo.Tenant_Notify_Updates,'Notify on Updates',woId) +
     '</div></div>';
 
+  // Completion notifications — persistent per-WO on/off for owner and vendor (tenant already
+  // covered by Tenant_Notify_Updates above). Owner uses the pre-existing (previously dead)
+  // Owner_Notify_Override tier field — 'off' blocks every owner-notify event for this WO,
+  // '' clears the override back to normal tiered behavior. Vendor uses the new
+  // Vendor_Notify_Updates column, read by updateStatus's completion bundle and by
+  // processVendorNudges (Sep 20 2026, Brett — "I also need a way to block all notifications
+  // on a new work order... need the same option for vendors because they don't always need
+  // notifications").
+  var ownerNotifyOn = wo.Owner_Notify_Override !== 'off';
+  var vendorNotifyOn = wo.Vendor_Notify_Updates !== 'FALSE';
+  var notifySection = '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">COMPLETION NOTIFICATIONS</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+    notifyToggle('Owner_Notify_Override',ownerNotifyOn,'Notify Owner',woId,'','off') +
+    notifyToggle('Vendor_Notify_Updates',vendorNotifyOn,'Notify Vendor',woId,'TRUE','FALSE') +
+    '</div></div>';
+
   // Vendor access control — show/hide lockbox codes from vendor portal
   var vendorAccessVal = wo.Vendor_Needs_Access || 'auto';
   var accessLabel = vendorAccessVal === 'TRUE' ? '🔓 Access: ON' : vendorAccessVal === 'FALSE' ? '🔒 Access: OFF' : '🔑 Access: Auto (trade default)';
