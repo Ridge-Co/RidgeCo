@@ -2198,6 +2198,30 @@ function openBillModal(woId, vendorName) {
 
   setBillType('hourly');
   calcBillTotal();
+
+  // Existing-bill notice + prefill (Sep 20 2026, Brett's ask) — a vendor who already submitted
+  // an invoice for this WO (per the header badge/button-label change above) sees that clearly
+  // here too, with the form pre-filled from what they already sent, instead of a blank form that
+  // makes it look like nothing was recorded. Submitting again still goes through addVendorBill's
+  // existing same-day/same-values dedup, so an unchanged resubmit is a no-op, not a second bill.
+  // Covers the core fields (hours/flat/notes/invoice #/date) — truck stock and receipts still
+  // need re-entry if changed.
+  var _existingBill = (window._vendorBillCache && window._vendorBillCache[woId]) || null;
+  if (_existingBill) {
+    document.getElementById('bill-msg').innerHTML = '<div style="background:var(--surface2);border:1px solid var(--accent2);border-radius:6px;padding:8px;margin-bottom:8px;font-size:11px;color:var(--text)">You already submitted an invoice for this job — $' + parseFloat(_existingBill.Total||0).toFixed(2) + '. This form is pre-filled from it; submitting again updates it rather than creating a second one.</div>';
+    if (_existingBill.Bill_Type === 'flat') {
+      setBillType('flat');
+      document.getElementById('bill-flat').value = _existingBill.Flat_Rate || '';
+    } else {
+      document.getElementById('bill-hours').value = _existingBill.Hours || '';
+    }
+    document.getElementById('bill-notes').value = _existingBill.Notes || '';
+    document.getElementById('bill-invdesc').value = _existingBill.Invoice_Description || '';
+    document.getElementById('bill-invoice-no').value = _existingBill.Vendor_Invoice_No || '';
+    document.getElementById('bill-invoice-date').value = _existingBill.Vendor_Invoice_Date || '';
+    calcBillTotal();
+  }
+
   document.getElementById('modal-vendor-bill').style.display = 'flex';
 }
 
