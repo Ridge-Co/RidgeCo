@@ -8687,7 +8687,25 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // whenever a fired build session reports an item back as 'held' (real blocker, or a decision
 // only Brett can make). Cleared back to blank on a 'done' report — cleanup in case that report
 // is a retry after a prior held attempt on the same item.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note'];
+// Lens/Requires_Spend/Spend_Note/Workaround (Sep 20 2026, Optimizer Scout & Reuse-Radar,
+// opsQueueScoutSubmit): additive columns for a system-generated 'proposed' row — the same
+// additive-schema move already treated as SAFE when Drop_Reason/Superseded_By were added to this
+// same tab (ensureColumns handles it, nothing renamed or removed). Lens is which review angle
+// produced the finding (Outward/Inward/Product). Requires_Spend/Spend_Note mirror this codebase's
+// existing boolean-as-string convention ('TRUE'/'FALSE', see PHONE_TABS/PIN_TABS etc.) so Brett
+// can see at a glance whether a proposed item costs anything before he greenlights it. Workaround
+// is the free/cheap alternative, when one exists, so a paid idea always ships with its cheap
+// sibling right next to it. Blank on every row created by opsApprove/opsQueuePrepare — only
+// opsQueueScoutSubmit ever populates these.
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround'];
+// 'proposed' (Sep 20 2026, Optimizer Scout & Reuse-Radar): a SYSTEM-generated backlog candidate
+// awaiting Brett's own review — distinct from 'greenlit', which means Brett has explicitly
+// approved it to build. The ONLY status opsQueueScoutSubmit can ever write (see
+// buildScoutQueueRow) — it can never reach greenlit/prepared/building/done/dropped/held itself.
+// Sits first/earliest in this list: a proposed item that survives Brett's review becomes
+// 'greenlit' via the existing /ops-queue-update flow (proposals.html), same as any other
+// proposal — scout-sourced items just start one stage earlier than Brett hand-picking from
+// Ops_Review_Log.
 // 'prepared' (Sep 18 2026, B-240) sits between greenlit and building: the Rung-1 Prepare agent's
 // ONLY allowed transition (via the narrow OPS_QUEUE_TOKEN, see opsQueuePrepare). It can never
 // set building/done/dropped — those stay behind the full admin secret (opsQueueUpdate), reached
@@ -8698,7 +8716,7 @@ const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effo
 // tier that already reaches 'prepared' via opsQueuePrepare. Distinct from 'dropped' (Brett killed
 // the idea outright): a held item is expected to be retried once the blocker clears, typically by
 // firing Start Build again on just that one item.
-const OPS_QUEUE_STATUSES = ['greenlit', 'prepared', 'building', 'done', 'dropped', 'held'];
+const OPS_QUEUE_STATUSES = ['proposed', 'greenlit', 'prepared', 'building', 'done', 'dropped', 'held'];
 
 async function opsApprove(env, body) {
   const items = Array.isArray(body && body.items) ? body.items : [];
