@@ -1840,8 +1840,16 @@ function renderWOPage() {
   });
 
   var PRI = {urgent:0,high:1,normal:2,low:3};
-  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
+  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoice Submitted':7,'Invoiced':8,'Paid':9,'Declined':10,'Cancelled':11};
+  // Default: completed/awaiting-review work orders sink to the bottom of the list regardless
+  // of the chosen sort (Brett, Sep 20 2026) — checked first, before falling through to
+  // whatever the sort dropdown asked for, so it composes with every existing sort option
+  // rather than being its own separate mode.
+  var DONE_BUCKET = {'Complete':1,'Pending Invoice':1,'Invoice Submitted':1,'Invoiced':2,'Paid':2,'Declined':3,'Cancelled':3};
+  function doneBucket(s) { return DONE_BUCKET[s] || 0; }
   wos.sort(function(a,b){
+    var db = doneBucket(a.Status) - doneBucket(b.Status);
+    if (db !== 0) return db;
     if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
     if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
     if (sort==='status') return (STA[a.Status]??99)-(STA[b.Status]??99);
