@@ -4878,6 +4878,10 @@ async function addVendorBill(env, body) {
   // out before the row is written and get stamped onto the time rows afterwards instead.
   const timeIds = parseIdList(body.time_entry_ids);
   delete body.time_entry_ids;
+  // Per-audience notify overrides for the status transition below — not Vendor_Bills columns,
+  // stripped before addRow so they never land as stray fields on the bill row itself.
+  const notifyTenant = body.notify_tenant, notifyOwner = body.notify_owner, notifyVendor = body.notify_vendor;
+  delete body.notify_tenant; delete body.notify_owner; delete body.notify_vendor;
 
   const res = await addRow(env, 'Vendor_Bills', body);
   if (timeIds.length) {
