@@ -359,7 +359,7 @@ function loadWOs() {
     .then(function(data) {
       allWOs = Array.isArray(data) ? data : [];
       var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
-      var done = allWOs.filter(function(w){ return ['Complete','Invoiced','Paid'].includes(w.Status); });
+      var done = allWOs.filter(function(w){ return ['Complete','Invoice Submitted','Invoiced','Paid'].includes(w.Status); });
       document.getElementById('statOpen').textContent = open.length;
       document.getElementById('statDone').textContent = done.length;
       renderWOs();
