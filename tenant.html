@@ -394,7 +394,7 @@ function renderWOs() {
   if (status === 'open') wos = wos.filter(function(w){ return OPEN_STATUSES.includes(w.Status) || w.Status==='Complete'; });
   // "Completed" is the only done-state filter tenants see — folds Pending Invoice/Invoiced/Paid
   // in too, so nothing quietly disappears now that the separate Closed/Paid filter is gone.
-  else if (status === 'Complete') wos = wos.filter(function(w){ return ['Complete','Pending Invoice','Invoiced','Paid'].includes(w.Status); });
+  else if (status === 'Complete') wos = wos.filter(function(w){ return ['Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid'].includes(w.Status); });
   else if (status !== 'all') wos = wos.filter(function(w){ return w.Status === status; });
   if (search) wos = wos.filter(function(w){
     return (w.ID||'').toLowerCase().includes(search) ||
