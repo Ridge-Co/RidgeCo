@@ -4310,7 +4310,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; }
   // Owners see WHO is on the job (name+trade) but not a direct line to the vendor — keeps
   // the vendor relationship mediated through Brett rather than owners going around him.
-  if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; base.vendor_phone = ''; }
+  if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = ['Pending Invoice','Invoice Submitted'].includes(base.Status) ? 'Complete' : base.Status; base.vendor_phone = ''; }
   return base;
 }
 
