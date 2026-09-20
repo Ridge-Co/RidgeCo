@@ -3949,7 +3949,7 @@ async function assignVendor(env, body) {
   // `accessInfo`/`getWOLockboxes` computation that used to run here and go nowhere (Aug 24,
   // 2026) — real access info flows through enrichWO's vendorView, gated on accessGated.
   let vendorSMSSent = false, tenantSMSSent = false;
-  if (notify && vendor.Phone) {
+  if (notifyVendor && vendor.Phone) {
     const isSpanish = vendor.Language === 'es';
     // Access-gate: the lockbox code + tenant contact are NOT sent on dispatch — they unlock
     // once the vendor accepts in the portal. Accepting moves the status, which is what lets
