@@ -26,7 +26,7 @@ const CORS = {
 };
 const PIN_MAX_ATTEMPTS = 4;
 const PIN_LOCKOUT_MIN  = 5;
-const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoice Submitted'];
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
