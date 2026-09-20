@@ -964,7 +964,28 @@ function loadVendorBillSummary(woId, idx) {
   if (!wrap) return;
   var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
   api('/vendor-bills?wo_id=' + woId + '&vendor_id=' + vendorId).then(function(bills) {
-    if (!Array.isArray(bills) || !bills.length) { wrap.innerHTML = ''; return; }
+    var badge = document.getElementById('bill-badge-' + idx);
+    var btn = document.getElementById('bill-btn-' + idx);
+    if (!Array.isArray(bills) || !bills.length) {
+      wrap.innerHTML = '';
+      if (badge) badge.innerHTML = '';
+      if (btn) btn.textContent = '💰 Bill';
+      window._vendorBillCache = window._vendorBillCache || {};
+      delete window._vendorBillCache[woId];
+      return;
+    }
+    // Persistent confirmation (Sep 20 2026, Brett's ask) — visible on the COLLAPSED card, not
+    // just inside the expanded detail panel, so a vendor never has reason to think a submitted
+    // invoice vanished and resubmit (the exact problem Eddie Smith hit on WO-1195).
+    var latestBill = bills[bills.length - 1];
+    if (badge) {
+      var subDate = latestBill.Submitted_At ? new Date(latestBill.Submitted_At) : (latestBill.Created_Date ? new Date(latestBill.Created_Date) : null);
+      var subDateStr = subDate && !isNaN(subDate.getTime()) ? subDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      badge.innerHTML = '<div style="display:inline-block;margin-top:4px;background:var(--accent2);color:#fff;font-size:10px;font-weight:bold;letter-spacing:.04em;padding:2px 8px;border-radius:10px">✓ INVOICE SUBMITTED' + (subDateStr ? ' ' + subDateStr : '') + ' — $' + parseFloat(latestBill.Total||0).toFixed(2) + '</div>';
+    }
+    if (btn) btn.textContent = '✏️ Update invoice';
+    window._vendorBillCache = window._vendorBillCache || {};
+    window._vendorBillCache[woId] = latestBill;
     var html = bills.map(function(bill) {
       var typeLabel = bill.Bill_Type === 'hourly'
         ? (parseFloat(bill.Hours||0) + ' hrs × $' + parseFloat(bill.Rate||0).toFixed(0) + '/hr')
