@@ -4013,7 +4013,7 @@ async function updateStatus(env, body) {
     fields.Notes = statusNote;
   }
   if (body.scheduled_date) fields.Scheduled_Date = body.scheduled_date;
-  if (body.status === 'Complete' || body.status === 'Pending Invoice')
+  if (body.status === 'Complete' || body.status === 'Pending Invoice' || body.status === 'Invoice Submitted')
     fields.Completed_Date = wo.Completed_Date || new Date().toISOString();
   if (body.status === 'On Hold') {
     try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (_) {}
