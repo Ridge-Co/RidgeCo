@@ -3984,7 +3984,18 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     tenantSMSSent = r.sent;
   }
-  await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
+  const assignFields = { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' };
+  // Persist an explicit notify_vendor/notify_tenant choice onto the WO itself (not just this
+  // one SMS) so it's the standing preference for this WO going forward — read by
+  // processVendorNudges (vendor side) and by every later notification check (tenant side).
+  // An ordinary Reassign Vendor call that doesn't send these params leaves the WO's existing
+  // preference alone, rather than silently resetting it back to "on".
+  if (body.notify_vendor !== undefined) {
+    try { await ensureColumns(env, 'Work_Orders', ['Vendor_Notify_Updates']); } catch (_) {}
+    assignFields.Vendor_Notify_Updates = notifyVendor ? 'TRUE' : 'FALSE';
+  }
+  if (body.notify_tenant !== undefined) assignFields.Tenant_Notify_Updates = notifyTenant ? 'TRUE' : 'FALSE';
+  await updateWOFields(env, body.wo_id, assignFields);
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
