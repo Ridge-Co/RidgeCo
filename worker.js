@@ -11495,6 +11495,15 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/schedule') {
+    // Same gate as /status: /schedule only ever touches an existing Work_Orders row (never
+    // creates one), so the only thing to check is that the WO it's targeting is itself a
+    // TEST- record via its linked Property.
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
   return false;
 }
 
