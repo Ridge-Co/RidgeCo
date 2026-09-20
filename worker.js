@@ -5892,7 +5892,7 @@ const TURNOVER_DESC_BY_ROLE = {
 };
 // "Done" for the purposes of unblocking Cleaning — Cancelled counts too, so one dead/void
 // leg of a turnover can't permanently wedge the cleaner behind a job that will never finish.
-const TURNOVER_RELEASE_DONE_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Closed'];
+const TURNOVER_RELEASE_DONE_STATUSES = ['Complete', 'Pending Invoice', 'Invoice Submitted', 'Invoiced', 'Paid', 'Cancelled', 'Closed'];
 
 function dayBefore(dateStr) {
   if (!dateStr) return '';
