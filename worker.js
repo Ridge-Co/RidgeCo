@@ -11444,13 +11444,11 @@ const TEST_MARKER_FIELD = {
 
 async function isTestRecord(env, tab, id) {
   if (!id) return false;
-  try {
-    const rows = await fetchTab(env, tab);
-    const row = rows.find(r => String(r.ID) === String(id));
-    if (!row) return false;
-    const field = TEST_MARKER_FIELD[tab] || 'Name';
-    return String(row[field] || '').startsWith('TEST-');
-  } catch (e) { return false; }
+  const rows = await fetchTab(env, tab);
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return false;
+  const field = TEST_MARKER_FIELD[tab] || 'Name';
+  return String(row[field] || '').startsWith('TEST-');
 }
 
 // The record-level half of the HUB_TEST_TOKEN guard (the path/method half lives in the auth
