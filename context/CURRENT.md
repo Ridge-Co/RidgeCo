@@ -42,11 +42,13 @@ Three things shipped on this branch:
    same-day/same-values dedup, so an unchanged resubmit stays a no-op, not a second bill.
 
 `node --check` clean on worker.js and every inline `<script>` block in index.html/vendor.html.
-No live Sheets/staging credentials in this build session — **needs Brett's live pass**: confirm
-`WO_Audit`'s new columns actually appear after a real SMS fires; open a WO with vendor-nudge
-history and confirm the collapsed-by-default/expand UI and message text toggle render correctly;
-have a vendor with an existing bill reload their portal and confirm the badge/button/prefill
-all show up.
+Merged to `main` and auto-deploying via Cloudflare Workers Builds (Sep 20 2026) — no live
+Sheets/staging credentials were used in this build session, so it still **needs Brett's live
+pass**: confirm `WO_Audit`'s new columns actually appear after a real SMS fires; open a WO with
+vendor-nudge history and confirm the collapsed-by-default/expand UI and message text toggle
+render correctly; have a vendor with an existing bill reload their portal and confirm the
+badge/button/prefill all show up; and confirm no vendor nudge double-fires on the next `*/15 * *
+* *` tick now that GitHub Actions' redundant schedule trigger is gone.
 
 ## 🟡 Open PR: Invoice Submitted vendor-bill status (PR #9, `feature/invoice-submitted-status`)
 Started from two vendor-portal bugs Brett flagged: Open Work Orders not sorting completed jobs
