@@ -233,7 +233,7 @@ export default {
             (request.method === 'POST' && HUB_TEST_WRITE_PATHS.includes(path))
           );
         if (_hubTestOk) _viaHubTestToken = true;
-        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk) {
+        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
