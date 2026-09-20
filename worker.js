@@ -4893,15 +4893,27 @@ async function addVendorBill(env, body) {
       if (created && created.id) await linkTimeEntriesToBill(env, timeIds, String(created.id), body.WO_ID || body.wo_id);
     } catch (e) { /* the bill is saved; the link is not worth losing it over */ }
   }
-  // Automation: entering a bill moves the WO to Complete (if still pre-complete).
+  // Automation: entering a bill moves the WO to 'Invoice Submitted' (Sep 20 2026) — a bill
+  // landing means the vendor is done AND has billed, which is a distinct, later state than a
+  // bare 'Complete' (done, not yet billed). Routed through addVendorBillStatusTransition (→
+  // updateStatus) rather than a direct updateWOFields, so this path fires the exact same
+  // dedup'd completion-notification bundle a manual Mark Complete does — whichever of the two
+  // reaches "done" first is the only one that actually notifies anyone (Completion_Notified
+  // gate lives inside updateStatus). Eligible from any pre-review status, including an
+  // already-Complete or already-Pending-Invoice job — a bill can arrive well after the work
+  // was marked done, and should still move it into the review queue.
   try {
     const woKey = body.WO_ID || body.wo_id;
     if (woKey) {
       const wos = await fetchTab(env, 'Work_Orders');
       const wo = findWO(wos, woKey);
-      const preComplete = ['New','Assigned','Accepted','In Progress','On Hold'];
-      if (wo && preComplete.includes(wo.Status)) {
-        await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
+      const preReview = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+      if (wo && preReview.includes(wo.Status)) {
+        const statusBody = { wo_id: woKey, status: 'Invoice Submitted', updated_by: body.Entered_By === 'hub' ? 'hub-bill' : (body.Vendor_Name || 'vendor-bill'), updated_by_role: body.Entered_By === 'hub' ? 'admin' : 'vendor' };
+        if (notifyTenant !== undefined) statusBody.notify_tenant = notifyTenant;
+        if (notifyOwner !== undefined) statusBody.notify_owner = notifyOwner;
+        if (notifyVendor !== undefined) statusBody.notify_vendor = notifyVendor;
+        await addVendorBillStatusTransition(env, wo, statusBody);
       }
     }
   } catch(e) { /* non-fatal: bill is still saved */ }
