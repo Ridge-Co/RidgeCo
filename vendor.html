@@ -555,6 +555,7 @@ function renderWOs(wos) {
             '<button class="btn btn-sm" style="background:var(--accent2);color:#fff" onclick="acceptWO(\'' + wo.ID + '\',' + idx + ')">✓ Accept work order</button>' +
             '<button class="btn btn-sm" style="background:var(--danger);color:#fff" onclick="declineWO(\'' + wo.ID + '\',' + idx + ')">Decline</button>' +
           '</div></div>' : '') +
+        (!gated ? '<div style="margin-bottom:12px"><button class="btn btn-sm" style="background:var(--info);color:#fff" onclick="openSchedModal(\'modalSched\',\'' + wo.ID + '\')">📅 Schedule</button></div>' : '') +
         '<div class="detail-row"><span class="detail-label">Address</span><span class="detail-val">' + esc(wo.property_address) + (wo.unit_label ? ' Unit ' + esc(wo.unit_label) : '') + '</span></div>' +
         (wo.Room ? '<div class="detail-row"><span class="detail-label">Room / Area</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Room) + '</span></div>' : '') +
         (wo.Owner_WO_Ref ? '<div class="detail-row"><span class="detail-label">Owner Ref #</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Owner_WO_Ref) + '</span></div>' : '') +
