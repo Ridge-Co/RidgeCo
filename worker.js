@@ -8776,6 +8776,16 @@ async function opsQueueUpdate(env, body) {
   const fields = { Status: status };
   if (body && body.reason) fields.Drop_Reason = String(body.reason).slice(0, 500);
   if (body && body.superseded_by) fields.Superseded_By = String(body.superseded_by).slice(0, 200);
+  // Risk_Class (Sep 20 2026, "Proposed" review lane, proposals.html): optional — sent only when
+  // Brett is explicitly approving a scout-proposed item (Risk_Class starts '' on those rows, see
+  // buildScoutQueueRow) up to 'greenlit' and picking its risk class in the same step. Same
+  // fail-closed convention as opsApprove/isEligibleForStartBuild: only the exact string 'SAFE'
+  // counts — anything else sent here ('GATED', misspelled, blank) stores as GATED, never
+  // defaults to eligible. Omitted entirely on any other /ops-queue-update call, so this never
+  // changes existing greenlit/prepared/etc. transitions that don't pass it.
+  if (body && body.risk_class !== undefined && body.risk_class !== null && body.risk_class !== '') {
+    fields.Risk_Class = String(body.risk_class).toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
+  }
   return await updateRow(env, OPS_QUEUE_TAB, id, fields);
 }
 
