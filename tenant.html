@@ -460,7 +460,7 @@ function buildDetail(wo, idx) {
   if (['Accepted'].includes(wo.Status)) curIdx = 2; // In Progress equivalent
   // Completed is the last stage a tenant sees — any later billing status (Pending Invoice,
   // Invoiced, Paid) just lands on the same final "Complete" step, not a step of its own.
-  if (['Pending Invoice','Invoiced','Paid'].includes(wo.Status)) curIdx = 3;
+  if (['Pending Invoice','Invoice Submitted','Invoiced','Paid'].includes(wo.Status)) curIdx = 3;
   tlSteps.forEach(function(s, i) {
     var cls = i < curIdx ? 'done' : i === curIdx ? 'current' : 'future';
     var labels = {New:'Request received',Assigned:'Technician assigned','In Progress':'Work in progress',Complete:'Work complete'};
