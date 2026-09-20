@@ -566,7 +566,7 @@ function renderWOs() {
   var sort     = (document.getElementById('filterSort')||{}).value||'date-desc';
   var search   = (document.getElementById('filterSearch').value||'').toLowerCase();
   var PRI = {urgent:0,high:1,normal:2,low:3};
-  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8};
+  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoice Submitted':7,'Invoiced':8,'Paid':9};
 
   var wos = allWOs.slice();
   if (propId)   wos = wos.filter(function(w){ return w.Property_ID === propId; });
