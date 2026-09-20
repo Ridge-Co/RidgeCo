@@ -355,8 +355,13 @@ export default {
         // actual DATA being touched is too. Runs only for requests authenticated via
         // HUB_TEST_TOKEN; every other auth path (WORKER_SECRET, session token) is unaffected.
         if (_viaHubTestToken) {
-          const _hubTestAllowed = await hubTestWriteAllowed(env, path, body);
-          if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing' }, 403);
+          let _hubTestAllowed = false, _hubTestErr = null;
+          try {
+            _hubTestAllowed = await hubTestWriteAllowed(env, path, body);
+          } catch (e) {
+            _hubTestErr = e.message || String(e);
+          }
+          if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing', debug: _hubTestErr || undefined }, 403);
         }
         if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
@@ -11444,13 +11449,11 @@ const TEST_MARKER_FIELD = {
 
 async function isTestRecord(env, tab, id) {
   if (!id) return false;
-  try {
-    const rows = await fetchTab(env, tab);
-    const row = rows.find(r => String(r.ID) === String(id));
-    if (!row) return false;
-    const field = TEST_MARKER_FIELD[tab] || 'Name';
-    return String(row[field] || '').startsWith('TEST-');
-  } catch (e) { return false; }
+  const rows = await fetchTab(env, tab);
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return false;
+  const field = TEST_MARKER_FIELD[tab] || 'Name';
+  return String(row[field] || '').startsWith('TEST-');
 }
 
 // The record-level half of the HUB_TEST_TOKEN guard (the path/method half lives in the auth
