@@ -2236,7 +2236,7 @@ function openWODetail(woId) {
   qsDiv.innerHTML = '<span style="color:var(--muted);font-size:11px">Quick status:</span>' +
     '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:5px 8px;border-radius:var(--radius)">' +
     '<option value="">' + (wo.Status||'Current') + ' ▾</option>' +
-    ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'].map(function(s){
+    ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid','Cancelled'].map(function(s){
       return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>';
     }).join('') +
     '</select>';
