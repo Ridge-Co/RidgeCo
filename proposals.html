@@ -183,8 +183,36 @@ function render(rev,q){
     // older review or parse fallback — show the full text
     html+='<div class="card"><h2>Proposal</h2><div class="sub" style="white-space:pre-wrap;color:var(--ink);font-size:13.5px">'+h(row.Proposal||'(none)')+'</div><div class="sub" style="margin-top:8px">This review isn’t in the selectable format yet — run a fresh review from the Command Center to get checkboxes.</div></div>';
   }
-  // Greenlit build queue — full detail, copyable brief, status control. Active items only (done/dropped filtered).
-  const queue=activeQ;
+  // Proposed — Scout & Reuse-Radar findings awaiting Brett's review (Sep 20 2026). Split out of
+  // activeQ BEFORE the greenlit build queue below, so a 'proposed' row shows here — with its own
+  // Approve/Drop actions — never mixed into the greenlit lifecycle list.
+  const proposedQ=activeQ.filter(x=>(x.Status||'').toLowerCase()==='proposed');
+  window.__proposedQueue=proposedQ;
+  if(proposedQ.length){
+    html+='<div class="card"><h2 style="margin:0">Proposed — from Scout &amp; Reuse-Radar (needs your review) ('+proposedQ.length+')</h2>'
+      +'<div class="sub" style="margin:4px 0 0">System-generated findings, not yet approved. <b>Approve → Greenlit</b> queues it for build like any other proposal; <b>Drop</b> declines it.</div></div>';
+    proposedQ.forEach((x,pi)=>{
+      const lensChip=x.Lens?'<span class="chip eff">'+h(x.Lens)+'</span>':'';
+      const requiresSpend=String(x.Requires_Spend||'').toUpperCase()==='TRUE';
+      const spendChip=requiresSpend?'<span class="chip fix">💰 '+h(x.Spend_Note||'costs something')+'</span>':'';
+      html+='<div class="qcard" id="pq'+pi+'" style="display:flex;gap:10px;align-items:flex-start">'
+        +'<span style="font-size:18px;line-height:1;margin-top:2px">🆕</span>'
+        +'<div style="flex:1;min-width:0">'
+        +'<div class="prow"><span class="rank">#'+h(x.Rank||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
+        +'<div class="prow" style="margin-top:4px">'+lensChip+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+spendChip+'</div>'
+        +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
+        +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
+        +(x.Impact?'<div class="pimp">Impact: '+h(x.Impact)+'</div>':'')
+        +(requiresSpend&&x.Workaround?'<div class="pimp">Workaround: '+h(x.Workaround)+'</div>':'')
+        +'<div class="ctrls" style="margin-top:9px">'
+        +'<button class="mini" onclick="approveProposed('+pi+')">✓ Approve → Greenlit</button>'
+        +'<button class="mini" onclick="dropProposed('+pi+')">✕ Drop</button>'
+        +'</div></div></div>';
+    });
+  }
+  // Greenlit build queue — full detail, copyable brief, status control. Active items only
+  // (done/dropped/proposed filtered — proposed rows render in their own lane above).
+  const queue=activeQ.filter(x=>(x.Status||'').toLowerCase()!=='proposed');
   if(queue.length){
     html+='<div class="card"><div class="prow" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Greenlit — build queue ('+queue.length+')</h2><button class="mini" onclick="copyAll()">📋 Copy all</button></div>'
       +'<div class="sub" style="margin:4px 0 0">Check one or more <b>SAFE</b> items (🔒 = GATED, needs your own session) and tap <b>Start Build</b> below to fire one live build session for the whole batch — it reports each item back here as building/done/held on its own. Or tap <b>Copy build brief</b> to paste into a session yourself.</div></div>'
@@ -286,6 +314,33 @@ function openModal(title,text,msg){document.getElementById('mtitle').textContent
 function closeModal(){document.getElementById('modal').style.display='none';}
 function tryCopy(text){try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){var m=document.getElementById('mmsg');if(m)m.textContent='✓ Copied to clipboard. (Or select the text below to copy manually.)';},function(){});}}catch(e){}}
 function copyFromModal(){const t=document.getElementById('mtext');t.focus();t.select();try{document.execCommand('copy')}catch(e){}tryCopy(t.value);document.getElementById('mmsg').textContent='✓ Copied (or long-press the text → Copy).';}
+// ── Proposed → Greenlit / Drop (Scout & Reuse-Radar review lane, Sep 20 2026) ───────────────
+// A 'proposed' row is a system-generated candidate — Brett hasn't approved it yet. Approving it
+// sets Risk_Class in the same step (opsQueueUpdate defaults to GATED unless he explicitly types
+// SAFE), same fail-closed convention as everywhere else this queue reads Risk_Class.
+async function approveProposed(pi){
+  const x=(window.__proposedQueue||[])[pi]; if(!x)return;
+  const pick=prompt('Risk class for this item — type SAFE or leave as GATED:','GATED');
+  if(pick===null)return; // cancelled
+  const risk=(String(pick||'').trim().toUpperCase()==='SAFE')?'SAFE':'GATED';
+  try{
+    const r=await fetch(WORKER+'/ops-queue-update',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({id:x.ID,status:'greenlit',risk_class:risk})});
+    const d=await r.json().catch(function(){return null;});
+    if(!r.ok||!d||(d.success!==true&&d.ok!==true)) throw new Error((d&&d.error)||('HTTP '+r.status));
+    load();
+  }catch(e){ alert('Approve failed — '+(e&&e.message||e)); }
+}
+async function dropProposed(pi){
+  const x=(window.__proposedQueue||[])[pi]; if(!x)return;
+  const reason=prompt('One-line reason (optional):','declined at proposed stage');
+  if(reason===null)return; // cancelled
+  try{
+    const r=await fetch(WORKER+'/ops-queue-update',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({id:x.ID,status:'dropped',reason:(reason||'declined at proposed stage')})});
+    const d=await r.json().catch(function(){return null;});
+    if(!r.ok||!d||(d.success!==true&&d.ok!==true)) throw new Error((d&&d.error)||('HTTP '+r.status));
+    load();
+  }catch(e){ alert('Drop failed — '+(e&&e.message||e)); }
+}
 // Lifecycle: greenlit → building → done | dropped. Keeps the queue live (done/dropped drop off).
 async function setStatus(id,status){
   if(status==='dropped'&&!confirm('Drop this item from the build queue?'))return;
