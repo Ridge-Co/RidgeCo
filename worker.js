@@ -209,7 +209,7 @@ export default {
         // Fully inert unless env.HUB_TEST_TOKEN is set, so deploying this has zero effect until
         // the secret exists — and it never exists on production's env at all.
         const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
@@ -11490,6 +11490,15 @@ async function hubTestWriteAllowed(env, path, body) {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
   if (path === '/status') {
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/schedule') {
+    // Same gate as /status: /schedule only ever touches an existing Work_Orders row (never
+    // creates one), so the only thing to check is that the WO it's targeting is itself a
+    // TEST- record via its linked Property.
     const wos = await fetchTab(env, 'Work_Orders');
     const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
     if (!wo) return false;
