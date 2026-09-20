@@ -4030,7 +4030,13 @@ async function updateStatus(env, body) {
   const unit = units.find(u => u.ID === wo.Unit_ID), property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
-  if (body.status === 'Complete') {
+  // Completion-notification bundle (tenant SMS, admin SMS, owner SMS, turnover release) fires
+  // for the FIRST transition that reaches "the job is done" — either a manual Complete, or
+  // 'Invoice Submitted' when a bill lands on a WO that skipped a manual Complete. Whichever
+  // gets here first fires this once; Completion_Notified stops the other path firing it again
+  // (Brett, Sep 20 2026 — bill submission used to skip this bundle entirely; see addVendorBill).
+  const COMPLETION_NOTIFY_STATUSES = ['Complete', 'Invoice Submitted'];
+  if (COMPLETION_NOTIFY_STATUSES.includes(body.status) && wo.Completion_Notified !== 'TRUE') {
     const tenant = currentTenantForDispatch(tenants, unit, wo);
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
@@ -4042,8 +4048,37 @@ async function updateStatus(env, body) {
       const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-    if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
+    if (config.admin_phone) {
+      const adminTail = body.status === 'Invoice Submitted' ? ' Bill in — ready to review.' : ' Pending invoice.';
+      await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked ${body.status}${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}.${adminTail}`);
+    }
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
+
+    // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
+    // each other, but Cleaning is created On Hold and must wait until BOTH finish (or the
+    // date-fallback sweep in scheduled() releases it first). This only ever fires for a WO
+    // that's actually part of a turnover group and just reached "done" — everything else is a
+    // no-op single extra field read.
+    if (wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
+      try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { /* non-fatal */ }
+    }
+
+    // Owner notifications (Sep 14 2026 rebuild, folded into the completion dedup gate Sep 20
+    // 2026) — routed through the real gated pipeline (Global+Property+Customer, Test Mode,
+    // Message_Queue), not the old raw sendSMS — the old path bypassed Test Mode entirely, so a
+    // real owner could receive a live text about a WO created purely for testing.
+    if (owner?.Phone) {
+      const notify = await shouldNotifyOwner(env, wo, 'Complete');
+      if (notify) {
+        const msg2 = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is complete. Ref: ${body.wo_id}.`;
+        const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_complete', recipient_type: 'owner', owner, property, message_body: msg2 });
+        if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
+      }
+    }
+
+    try { await ensureColumns(env, 'Work_Orders', ['Completion_Notified']); } catch (_) {}
+    await updateWOFields(env, body.wo_id, { Completion_Notified: 'TRUE' });
+    wo.Completion_Notified = 'TRUE';
   }
   // Vendor accepted → notify the tenant that a technician has accepted and will reach out.
   // This is the automation the acceptance gate exists to enable: the status moving to
@@ -4055,36 +4090,22 @@ async function updateStatus(env, body) {
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
   }
-  // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
-  // each other, but Cleaning is created On Hold and must wait until BOTH finish (or the
-  // date-fallback sweep in scheduled() releases it first). This only ever fires for a WO
-  // that's actually part of a turnover group and just went Complete — everything else is a
-  // no-op single extra field read.
-  if (body.status === 'Complete' && wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
-    try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { /* non-fatal */ }
-  }
-  // Owner notifications (Sep 14 2026 rebuild) — Received/Complete/On_Hold here; Scheduled
-  // moved to scheduleWO itself (Sep 15 2026 — real gap found live-testing: nothing in this
-  // codebase ever actually sets Status to the literal 'Scheduled', so the mapping that used to
-  // live here could never fire; see scheduleWO's own comment). Deliberately NOT kept as a
-  // dead/defensive entry here too — leaving it would risk a double-send if some future code
-  // path ever did set status:'Scheduled' via this endpoint.
-  // 'Assigned' and 'Invoiced' retired per Brett's own call (see NOTIFY_TIERS comment). Routed
-  // through the real gated pipeline now (Global+Property+Customer, Test Mode, Message_Queue),
-  // not the old raw sendSMS — the old path bypassed Test Mode entirely, so a real owner could
-  // receive a live text about a WO created purely for testing. This closes that gap.
+  // Owner On-Hold notification — separate from the completion bundle above and deliberately
+  // NOT dedup-gated: a WO can legitimately go On Hold more than once, and each one should
+  // notify. Scheduled moved to scheduleWO itself (Sep 15 2026 — nothing in this codebase ever
+  // actually sets Status to the literal 'Scheduled' via this endpoint; see scheduleWO's own
+  // comment) — OWNER_STATUS_EVENTS deliberately does NOT map 'Scheduled', to avoid a future
+  // double-send if something ever did post status:'Scheduled'. 'Assigned' and 'Invoiced'
+  // retired per Brett's own call (see NOTIFY_TIERS comment). Complete used to be routed through
+  // this same map too; it's now handled in the dedup'd completion bundle above instead (Sep 20
+  // 2026), but the mapping stays here for the On-Hold lookup and as the historical record of
+  // which status→event pairs are (and aren't) wired up.
   const OWNER_STATUS_EVENTS = { Complete: 'Complete', 'On Hold': 'On_Hold' };
-  const ownerEvent = OWNER_STATUS_EVENTS[body.status];
-  if (ownerEvent && owner?.Phone) {
-    const notify = await shouldNotifyOwner(env, wo, ownerEvent);
+  if (body.status === 'On Hold' && owner?.Phone) {
+    const notify = await shouldNotifyOwner(env, wo, OWNER_STATUS_EVENTS['On Hold']);
     if (notify) {
-      const ownerMsgs = {
-        Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is complete. Ref: ${body.wo_id}.`,
-        On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
-      };
-      const msg = ownerMsgs[ownerEvent];
-      const msgType = ownerEvent === 'On_Hold' ? 'owner_job_on_hold' : `owner_job_${ownerEvent.toLowerCase()}`;
-      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: msgType, recipient_type: 'owner', owner, property, message_body: msg });
+      const msg = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`;
+      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_on_hold', recipient_type: 'owner', owner, property, message_body: msg });
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
     }
   }
