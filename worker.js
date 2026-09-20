@@ -4247,7 +4247,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   // Accept-gate (vendor portal only): the lockbox code + tenant contact are withheld until
   // the vendor has ACCEPTED the work order. Accepting is what unlocks them — and accepting
   // moves the status, which lets the tenant-notification automation fire. New/Assigned = gated.
-  const ACCEPTED_OR_LATER = ['Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid'];
+  const ACCEPTED_OR_LATER = ['Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid'];
   const accessGated = !!opts.vendorView && !ACCEPTED_OR_LATER.includes((wo.Status||'').trim());
   // Resolve the assigned vendor's name/phone/trade/in-house status when a vendor directory
   // was handed in. This never happened before — tenant.html and owner.html both had a
