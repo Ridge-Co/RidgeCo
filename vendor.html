@@ -475,12 +475,19 @@ function loadWorkOrders() {
     });
 }
 
+var WO_DONE_BUCKET = {'Complete':1,'Pending Invoice':1,'Invoice Submitted':1,'Invoiced':2,'Paid':2,'Declined':3,'Cancelled':3};
+function woDoneBucket(status) { return WO_DONE_BUCKET[status] || 0; }
+
 function renderWOs(wos) {
   var list = document.getElementById('woList');
   if (!wos || !wos.length) {
     list.innerHTML = '<div class="empty"><div class="icon">✓</div>No ' + (currentTab === 'open' ? 'open ' : '') + 'work orders.</div>';
     return;
   }
+  // Default: completed/awaiting-review work orders sink to the bottom of the list rather
+  // than mixing in with active jobs (Brett, Sep 20 2026) — stable sort so it only changes
+  // ordering between done/not-done buckets, never reorders within either bucket.
+  wos = wos.slice().sort(function(a, b) { return woDoneBucket(a.Status) - woDoneBucket(b.Status); });
 
   var html = '<div class="wo-count">' + wos.length + ' work order' + (wos.length !== 1 ? 's' : '') + '</div>';
   wos.forEach(function(wo, idx) {
