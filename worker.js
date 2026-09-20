@@ -26,7 +26,7 @@ const CORS = {
 };
 const PIN_MAX_ATTEMPTS = 4;
 const PIN_LOCKOUT_MIN  = 5;
-const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoice Submitted'];
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
@@ -1564,7 +1564,7 @@ function matchReceiptProperty(po, properties) {
   return bestScore >= 2 ? { property: best, score: bestScore } : null;
 }
 
-const RECEIPT_OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
+const RECEIPT_OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete','Invoice Submitted'];
 const RECEIPT_STOP = new Set(['the','and','for','with','apt','ste','unit','street','saint','st','ave','rd','ln','pl','n','s','e','w','2x','x']);
 
 // PURE — rank a property's work orders by keyword overlap between the receipt (items + PO) and each
@@ -3754,6 +3754,7 @@ async function createWorkOrder(env, body) {
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
   // header row — otherwise the field maps to a non-existent header and is silently dropped.
   if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
+  try { await ensureColumns(env, 'Work_Orders', ['Owner_Notify_Override', 'Vendor_Notify_Updates']); } catch(_){}
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
@@ -3769,7 +3770,7 @@ async function createWorkOrder(env, body) {
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
   const woId = `WO-${nextWONum}`, now = new Date().toISOString();
-  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'' }[h] ?? ''));
+  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'', Owner_Notify_Override: body.owner_notify === false || body.owner_notify === 'FALSE' ? 'off' : '', Vendor_Notify_Updates: body.vendor_notify === false || body.vendor_notify === 'FALSE' ? 'FALSE' : 'TRUE' }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   try {
     const tenants = await fetchTab(env, 'Tenants');
@@ -3788,7 +3789,7 @@ async function createWorkOrder(env, body) {
     const unit = units.find(u => u.ID === body.unit_id);
     const property = properties.find(p => p.ID === body.property_id);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const woLike = { ID: woId, Unit_ID: body.unit_id||'', Property_ID: body.property_id||'', Tenant_ID: body.tenant_id||'', Trade: body.trade||'', Description: body.description||'', Created_Date: now };
+    const woLike = { ID: woId, Unit_ID: body.unit_id||'', Property_ID: body.property_id||'', Tenant_ID: body.tenant_id||'', Trade: body.trade||'', Description: body.description||'', Created_Date: now, Owner_Notify_Override: body.owner_notify === false || body.owner_notify === 'FALSE' ? 'off' : '' };
     // Owner Received: ONLY for tenant-portal-submitted WOs (Type='tenant') — Brett was
     // explicit an admin-created manual WO should NOT trigger this (the admin creating it
     // already knows about it; a tenant-submitted request is the one case the owner genuinely
@@ -3916,12 +3917,16 @@ async function getWorkOrdersList(env, url) {
 async function assignVendor(env, body) {
   const _t0 = Date.now();
   // notify defaults TRUE — preserves existing behavior for the Assign/Reassign Vendor modal
-  // (which always says "Assign + Send SMS" and should keep meaning that). Pass notify:false
-  // only from the New Work Order creation flow's "Notify vendor + tenant now" checkbox, for
-  // cases like a WO created purely to record billing for work already done by phone weeks
-  // ago — the vendor is assigned (Vendor_ID/Status still update normally) but no message is
-  // composed or queued at all, since none was ever meant to exist for that case.
-  const notify = body.notify !== false;
+  // (which always says "Assign + Send SMS" and should keep meaning that). Vendor and tenant
+  // notification are independently controllable via notify_vendor/notify_tenant (Sep 20 2026,
+  // Brett) — either can be silenced on its own, e.g. a vendor who doesn't want SMS reminders
+  // but a tenant who still needs the assignment text, or vice versa. The legacy `notify` param
+  // still works as a combined fallback (both audiences together) for any caller that hasn't
+  // been updated to send the split params yet — e.g. a WO created purely to record billing for
+  // work already done by phone weeks ago, where neither audience should get anything.
+  const notifyVendor = body.notify_vendor !== undefined ? body.notify_vendor !== false : (body.notify !== false);
+  const notifyTenant = body.notify_tenant !== undefined ? body.notify_tenant !== false : (body.notify !== false);
+  const notify = notifyVendor || notifyTenant; // legacy telemetry/response field, kept for continuity
   const [workorders, vendors, tenants, units, properties, owners] = await fetchTabs(env, [
     'Work_Orders','Vendors','Tenants','Units','Properties','Owners',
   ]);
@@ -3944,7 +3949,7 @@ async function assignVendor(env, body) {
   // `accessInfo`/`getWOLockboxes` computation that used to run here and go nowhere (Aug 24,
   // 2026) — real access info flows through enrichWO's vendorView, gated on accessGated.
   let vendorSMSSent = false, tenantSMSSent = false;
-  if (notify && vendor.Phone) {
+  if (notifyVendor && vendor.Phone) {
     const isSpanish = vendor.Language === 'es';
     // Access-gate: the lockbox code + tenant contact are NOT sent on dispatch — they unlock
     // once the vendor accepts in the portal. Accepting moves the status, which is what lets
@@ -3968,7 +3973,7 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
-  if (notify && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
+  if (notifyTenant && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface),
     // and a short job label (woJobLabel) so two same-trade/same-address jobs never read
@@ -3979,7 +3984,18 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     tenantSMSSent = r.sent;
   }
-  await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
+  const assignFields = { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' };
+  // Persist an explicit notify_vendor/notify_tenant choice onto the WO itself (not just this
+  // one SMS) so it's the standing preference for this WO going forward — read by
+  // processVendorNudges (vendor side) and by every later notification check (tenant side).
+  // An ordinary Reassign Vendor call that doesn't send these params leaves the WO's existing
+  // preference alone, rather than silently resetting it back to "on".
+  if (body.notify_vendor !== undefined) {
+    try { await ensureColumns(env, 'Work_Orders', ['Vendor_Notify_Updates']); } catch (_) {}
+    assignFields.Vendor_Notify_Updates = notifyVendor ? 'TRUE' : 'FALSE';
+  }
+  if (body.notify_tenant !== undefined) assignFields.Tenant_Notify_Updates = notifyTenant ? 'TRUE' : 'FALSE';
+  await updateWOFields(env, body.wo_id, assignFields);
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
@@ -4013,7 +4029,7 @@ async function updateStatus(env, body) {
     fields.Notes = statusNote;
   }
   if (body.scheduled_date) fields.Scheduled_Date = body.scheduled_date;
-  if (body.status === 'Complete' || body.status === 'Pending Invoice')
+  if (body.status === 'Complete' || body.status === 'Pending Invoice' || body.status === 'Invoice Submitted')
     fields.Completed_Date = wo.Completed_Date || new Date().toISOString();
   if (body.status === 'On Hold') {
     try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (_) {}
@@ -4030,7 +4046,13 @@ async function updateStatus(env, body) {
   const unit = units.find(u => u.ID === wo.Unit_ID), property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
-  if (body.status === 'Complete') {
+  // Completion-notification bundle (tenant SMS, admin SMS, owner SMS, turnover release) fires
+  // for the FIRST transition that reaches "the job is done" — either a manual Complete, or
+  // 'Invoice Submitted' when a bill lands on a WO that skipped a manual Complete. Whichever
+  // gets here first fires this once; Completion_Notified stops the other path firing it again
+  // (Brett, Sep 20 2026 — bill submission used to skip this bundle entirely; see addVendorBill).
+  const COMPLETION_NOTIFY_STATUSES = ['Complete', 'Invoice Submitted'];
+  if (COMPLETION_NOTIFY_STATUSES.includes(body.status) && wo.Completion_Notified !== 'TRUE') {
     const tenant = currentTenantForDispatch(tenants, unit, wo);
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
@@ -4042,8 +4064,37 @@ async function updateStatus(env, body) {
       const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-    if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
+    if (config.admin_phone) {
+      const adminTail = body.status === 'Invoice Submitted' ? ' Bill in — ready to review.' : ' Pending invoice.';
+      await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked ${body.status}${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}.${adminTail}`);
+    }
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
+
+    // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
+    // each other, but Cleaning is created On Hold and must wait until BOTH finish (or the
+    // date-fallback sweep in scheduled() releases it first). This only ever fires for a WO
+    // that's actually part of a turnover group and just reached "done" — everything else is a
+    // no-op single extra field read.
+    if (wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
+      try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { /* non-fatal */ }
+    }
+
+    // Owner notifications (Sep 14 2026 rebuild, folded into the completion dedup gate Sep 20
+    // 2026) — routed through the real gated pipeline (Global+Property+Customer, Test Mode,
+    // Message_Queue), not the old raw sendSMS — the old path bypassed Test Mode entirely, so a
+    // real owner could receive a live text about a WO created purely for testing.
+    if (owner?.Phone) {
+      const notify = await shouldNotifyOwner(env, wo, 'Complete');
+      if (notify) {
+        const msg2 = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is complete. Ref: ${body.wo_id}.`;
+        const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_complete', recipient_type: 'owner', owner, property, message_body: msg2 });
+        if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
+      }
+    }
+
+    try { await ensureColumns(env, 'Work_Orders', ['Completion_Notified']); } catch (_) {}
+    await updateWOFields(env, body.wo_id, { Completion_Notified: 'TRUE' });
+    wo.Completion_Notified = 'TRUE';
   }
   // Vendor accepted → notify the tenant that a technician has accepted and will reach out.
   // This is the automation the acceptance gate exists to enable: the status moving to
@@ -4055,36 +4106,22 @@ async function updateStatus(env, body) {
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
   }
-  // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
-  // each other, but Cleaning is created On Hold and must wait until BOTH finish (or the
-  // date-fallback sweep in scheduled() releases it first). This only ever fires for a WO
-  // that's actually part of a turnover group and just went Complete — everything else is a
-  // no-op single extra field read.
-  if (body.status === 'Complete' && wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
-    try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { /* non-fatal */ }
-  }
-  // Owner notifications (Sep 14 2026 rebuild) — Received/Complete/On_Hold here; Scheduled
-  // moved to scheduleWO itself (Sep 15 2026 — real gap found live-testing: nothing in this
-  // codebase ever actually sets Status to the literal 'Scheduled', so the mapping that used to
-  // live here could never fire; see scheduleWO's own comment). Deliberately NOT kept as a
-  // dead/defensive entry here too — leaving it would risk a double-send if some future code
-  // path ever did set status:'Scheduled' via this endpoint.
-  // 'Assigned' and 'Invoiced' retired per Brett's own call (see NOTIFY_TIERS comment). Routed
-  // through the real gated pipeline now (Global+Property+Customer, Test Mode, Message_Queue),
-  // not the old raw sendSMS — the old path bypassed Test Mode entirely, so a real owner could
-  // receive a live text about a WO created purely for testing. This closes that gap.
+  // Owner On-Hold notification — separate from the completion bundle above and deliberately
+  // NOT dedup-gated: a WO can legitimately go On Hold more than once, and each one should
+  // notify. Scheduled moved to scheduleWO itself (Sep 15 2026 — nothing in this codebase ever
+  // actually sets Status to the literal 'Scheduled' via this endpoint; see scheduleWO's own
+  // comment) — OWNER_STATUS_EVENTS deliberately does NOT map 'Scheduled', to avoid a future
+  // double-send if something ever did post status:'Scheduled'. 'Assigned' and 'Invoiced'
+  // retired per Brett's own call (see NOTIFY_TIERS comment). Complete used to be routed through
+  // this same map too; it's now handled in the dedup'd completion bundle above instead (Sep 20
+  // 2026), but the mapping stays here for the On-Hold lookup and as the historical record of
+  // which status→event pairs are (and aren't) wired up.
   const OWNER_STATUS_EVENTS = { Complete: 'Complete', 'On Hold': 'On_Hold' };
-  const ownerEvent = OWNER_STATUS_EVENTS[body.status];
-  if (ownerEvent && owner?.Phone) {
-    const notify = await shouldNotifyOwner(env, wo, ownerEvent);
+  if (body.status === 'On Hold' && owner?.Phone) {
+    const notify = await shouldNotifyOwner(env, wo, OWNER_STATUS_EVENTS['On Hold']);
     if (notify) {
-      const ownerMsgs = {
-        Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is complete. Ref: ${body.wo_id}.`,
-        On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
-      };
-      const msg = ownerMsgs[ownerEvent];
-      const msgType = ownerEvent === 'On_Hold' ? 'owner_job_on_hold' : `owner_job_${ownerEvent.toLowerCase()}`;
-      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: msgType, recipient_type: 'owner', owner, property, message_body: msg });
+      const msg = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`;
+      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_on_hold', recipient_type: 'owner', owner, property, message_body: msg });
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
     }
   }
@@ -4247,7 +4284,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   // Accept-gate (vendor portal only): the lockbox code + tenant contact are withheld until
   // the vendor has ACCEPTED the work order. Accepting is what unlocks them — and accepting
   // moves the status, which lets the tenant-notification automation fire. New/Assigned = gated.
-  const ACCEPTED_OR_LATER = ['Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid'];
+  const ACCEPTED_OR_LATER = ['Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid'];
   const accessGated = !!opts.vendorView && !ACCEPTED_OR_LATER.includes((wo.Status||'').trim());
   // Resolve the assigned vendor's name/phone/trade/in-house status when a vendor directory
   // was handed in. This never happened before — tenant.html and owner.html both had a
@@ -4310,7 +4347,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; }
   // Owners see WHO is on the job (name+trade) but not a direct line to the vendor — keeps
   // the vendor relationship mediated through Brett rather than owners going around him.
-  if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; base.vendor_phone = ''; }
+  if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = ['Pending Invoice','Invoice Submitted'].includes(base.Status) ? 'Complete' : base.Status; base.vendor_phone = ''; }
   return base;
 }
 
@@ -4761,6 +4798,27 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') });
 }
 
+// Persists any per-audience notify overrides sent alongside a billing-triggered status change
+// (from the Hub's billing-panel checkboxes) onto the WO BEFORE calling updateStatus — updateStatus
+// itself has no separate override parameter, it just reads whatever's currently persisted on the
+// WO, so the write has to land first for the same call's notification bundle to see it. This is
+// also the single path (manual Mark Complete goes straight to updateStatus; a submitted bill goes
+// through here) by which a bill landing on a WO ever reaches 'Invoice Submitted', so both routes
+// converge on updateStatus's own Completion_Notified dedup — whichever gets there first is the
+// only one that actually sends.
+async function addVendorBillStatusTransition(env, wo, statusBody) {
+  const overrideFields = {};
+  if (statusBody.notify_tenant !== undefined) overrideFields.Tenant_Notify_Updates = statusBody.notify_tenant ? 'TRUE' : 'FALSE';
+  if (statusBody.notify_owner !== undefined) overrideFields.Owner_Notify_Override = statusBody.notify_owner ? '' : 'off';
+  if (statusBody.notify_vendor !== undefined) {
+    try { await ensureColumns(env, 'Work_Orders', ['Vendor_Notify_Updates']); } catch (_) {}
+    overrideFields.Vendor_Notify_Updates = statusBody.notify_vendor ? 'TRUE' : 'FALSE';
+  }
+  if (Object.keys(overrideFields).length) await updateWOFields(env, wo.ID, overrideFields);
+  delete statusBody.notify_tenant; delete statusBody.notify_owner; delete statusBody.notify_vendor;
+  return await updateStatus(env, statusBody);
+}
+
 async function addVendorBill(env, body) {
   // Vendor_Bills stores Created_Date as a date only, so the finest duplicate window
   // available here is the same day: same job, same vendor, same total, same day, still
@@ -4820,6 +4878,10 @@ async function addVendorBill(env, body) {
   // out before the row is written and get stamped onto the time rows afterwards instead.
   const timeIds = parseIdList(body.time_entry_ids);
   delete body.time_entry_ids;
+  // Per-audience notify overrides for the status transition below — not Vendor_Bills columns,
+  // stripped before addRow so they never land as stray fields on the bill row itself.
+  const notifyTenant = body.notify_tenant, notifyOwner = body.notify_owner, notifyVendor = body.notify_vendor;
+  delete body.notify_tenant; delete body.notify_owner; delete body.notify_vendor;
 
   const res = await addRow(env, 'Vendor_Bills', body);
   if (timeIds.length) {
@@ -4831,15 +4893,27 @@ async function addVendorBill(env, body) {
       if (created && created.id) await linkTimeEntriesToBill(env, timeIds, String(created.id), body.WO_ID || body.wo_id);
     } catch (e) { /* the bill is saved; the link is not worth losing it over */ }
   }
-  // Automation: entering a bill moves the WO to Complete (if still pre-complete).
+  // Automation: entering a bill moves the WO to 'Invoice Submitted' (Sep 20 2026) — a bill
+  // landing means the vendor is done AND has billed, which is a distinct, later state than a
+  // bare 'Complete' (done, not yet billed). Routed through addVendorBillStatusTransition (→
+  // updateStatus) rather than a direct updateWOFields, so this path fires the exact same
+  // dedup'd completion-notification bundle a manual Mark Complete does — whichever of the two
+  // reaches "done" first is the only one that actually notifies anyone (Completion_Notified
+  // gate lives inside updateStatus). Eligible from any pre-review status, including an
+  // already-Complete or already-Pending-Invoice job — a bill can arrive well after the work
+  // was marked done, and should still move it into the review queue.
   try {
     const woKey = body.WO_ID || body.wo_id;
     if (woKey) {
       const wos = await fetchTab(env, 'Work_Orders');
       const wo = findWO(wos, woKey);
-      const preComplete = ['New','Assigned','Accepted','In Progress','On Hold'];
-      if (wo && preComplete.includes(wo.Status)) {
-        await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
+      const preReview = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+      if (wo && preReview.includes(wo.Status)) {
+        const statusBody = { wo_id: woKey, status: 'Invoice Submitted', updated_by: body.Entered_By === 'hub' ? 'hub-bill' : (body.Vendor_Name || 'vendor-bill'), updated_by_role: body.Entered_By === 'hub' ? 'admin' : 'vendor' };
+        if (notifyTenant !== undefined) statusBody.notify_tenant = notifyTenant;
+        if (notifyOwner !== undefined) statusBody.notify_owner = notifyOwner;
+        if (notifyVendor !== undefined) statusBody.notify_vendor = notifyVendor;
+        await addVendorBillStatusTransition(env, wo, statusBody);
       }
     }
   } catch(e) { /* non-fatal: bill is still saved */ }
@@ -5892,7 +5966,7 @@ const TURNOVER_DESC_BY_ROLE = {
 };
 // "Done" for the purposes of unblocking Cleaning — Cancelled counts too, so one dead/void
 // leg of a turnover can't permanently wedge the cleaner behind a job that will never finish.
-const TURNOVER_RELEASE_DONE_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Closed'];
+const TURNOVER_RELEASE_DONE_STATUSES = ['Complete', 'Pending Invoice', 'Invoice Submitted', 'Invoiced', 'Paid', 'Cancelled', 'Closed'];
 
 function dayBefore(dateStr) {
   if (!dateStr) return '';
@@ -7116,7 +7190,7 @@ const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a
 // nudge is answered the moment the WO reaches Complete or later; the invoice nudge is a
 // separate, later-starting ask that isn't answered until the WO actually reaches Invoiced or
 // later. Cancelled/Declined already short-circuit BOTH types earlier in the sweep, unchanged.
-const WO_STATUS_COMPLETE_OR_LATER = ['Complete','Pending Invoice','Invoiced','Paid','Closed'];
+const WO_STATUS_COMPLETE_OR_LATER = ['Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid','Closed'];
 const WO_STATUS_INVOICED_OR_LATER = ['Invoiced','Paid'];
 let _vendorReqReady = false;
 async function ensureVendorReqTab(env) {
@@ -7225,6 +7299,9 @@ async function processVendorNudges(env) {
     const vendor = vendors.find(v => v.ID === row.Vendor_ID);
     // WO gone, voided, or vendor gone — nothing left to chase.
     if (!wo || wo.Voided === 'TRUE' || !vendor) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_missing' }); continue; }
+    // Vendor opted out of notifications for this WO (Vendor_Notify_Updates='FALSE') — stop
+    // chasing them entirely rather than continuing to queue reminders they asked not to get.
+    if (wo.Vendor_Notify_Updates === 'FALSE') { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_notify_off' }); continue; }
     // Cancelled/Declined stop ALL open request types for this WO outright — nothing left worth
     // chasing a vendor for on a job that isn't happening (per Brett, Sep 16 2026).
     if (['Cancelled','Declined'].includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }

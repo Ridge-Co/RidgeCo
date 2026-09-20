@@ -706,7 +706,8 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
       <div class="form-group full"><label>Description</label><textarea id="wo-desc" placeholder="Describe the issue..."></textarea></div>
       <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" onchange="woVendorOptChanged()" style="width:100%"><option value="">Assign after creation</option></select></div>
-      <div class="form-group" id="wo-vendor-notify-group" style="display:none"><label style="cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" id="wo-vendor-notify" checked style="width:auto"> Notify vendor + tenant now</label></div>
+      <div class="form-group" id="wo-vendor-notify-group" style="display:none"><label style="cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" id="wo-vendor-notify" checked style="width:auto"> Notify vendor now</label></div>
+      <div class="form-group full"><label style="cursor:pointer;display:flex;align-items:center;gap:6px"><input type="checkbox" id="wo-owner-notify" checked style="width:auto"> Notify owner</label><span style="color:var(--muted);font-size:11px;margin-left:0;display:block;margin-top:2px">Uncheck any of these if this WO is just to capture billing rather than actually alert someone — vendor/owner here, tenant via the notify-on-creation setting below.</span></div>
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
       <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
       <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
@@ -1840,8 +1841,16 @@ function renderWOPage() {
   });
 
   var PRI = {urgent:0,high:1,normal:2,low:3};
-  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
+  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoice Submitted':7,'Invoiced':8,'Paid':9,'Declined':10,'Cancelled':11};
+  // Default: completed/awaiting-review work orders sink to the bottom of the list regardless
+  // of the chosen sort (Brett, Sep 20 2026) — checked first, before falling through to
+  // whatever the sort dropdown asked for, so it composes with every existing sort option
+  // rather than being its own separate mode.
+  var DONE_BUCKET = {'Complete':1,'Pending Invoice':1,'Invoice Submitted':1,'Invoiced':2,'Paid':2,'Declined':3,'Cancelled':3};
+  function doneBucket(s) { return DONE_BUCKET[s] || 0; }
   wos.sort(function(a,b){
+    var db = doneBucket(a.Status) - doneBucket(b.Status);
+    if (db !== 0) return db;
     if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
     if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
     if (sort==='status') return (STA[a.Status]??99)-(STA[b.Status]??99);
@@ -1915,7 +1924,7 @@ function openWODetail(woId) {
   '</div>';
   // Sticky action bar — Edit + quick status stay reachable at the top of the WO while you scroll,
   // so you never have to scroll to the bottom to edit or change status (6A).
-  var _stStatuses = ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'];
+  var _stStatuses = ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid','Cancelled'];
   var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:-24px -24px 14px;padding:12px 24px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<button class="btn small" onclick="openEditWOModal(\''+woId+'\')">✏️ Edit</button>' +
     '<button class="btn small secondary" onclick="sendTenantManualUpdate(\''+woId+'\')">📱 Send update</button>' +
@@ -2197,6 +2206,23 @@ function openWODetail(woId) {
     tenantToggle('Tenant_Notify_Updates',wo.Tenant_Notify_Updates,'Notify on Updates',woId) +
     '</div></div>';
 
+  // Completion notifications — persistent per-WO on/off for owner and vendor (tenant already
+  // covered by Tenant_Notify_Updates above). Owner uses the pre-existing (previously dead)
+  // Owner_Notify_Override tier field — 'off' blocks every owner-notify event for this WO,
+  // '' clears the override back to normal tiered behavior. Vendor uses the new
+  // Vendor_Notify_Updates column, read by updateStatus's completion bundle and by
+  // processVendorNudges (Sep 20 2026, Brett — "I also need a way to block all notifications
+  // on a new work order... need the same option for vendors because they don't always need
+  // notifications").
+  var ownerNotifyOn = wo.Owner_Notify_Override !== 'off';
+  var vendorNotifyOn = wo.Vendor_Notify_Updates !== 'FALSE';
+  var notifySection = '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">COMPLETION NOTIFICATIONS</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+    notifyToggle('Owner_Notify_Override',ownerNotifyOn,'Notify Owner',woId,'','off') +
+    notifyToggle('Vendor_Notify_Updates',vendorNotifyOn,'Notify Vendor',woId,'TRUE','FALSE') +
+    '</div></div>';
+
   // Vendor access control — show/hide lockbox codes from vendor portal
   var vendorAccessVal = wo.Vendor_Needs_Access || 'auto';
   var accessLabel = vendorAccessVal === 'TRUE' ? '🔓 Access: ON' : vendorAccessVal === 'FALSE' ? '🔒 Access: OFF' : '🔑 Access: Auto (trade default)';
@@ -2214,7 +2240,7 @@ function openWODetail(woId) {
     '<div style="font-size:10px;color:var(--muted);margin-top:8px">Trade defaults are set in Config → Access_Trade_Defaults. Trades not listed default to YES.</div>' +
     '</div>';
 
-  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + notifySection + vaSection);
 
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
@@ -2228,7 +2254,7 @@ function openWODetail(woId) {
   qsDiv.innerHTML = '<span style="color:var(--muted);font-size:11px">Quick status:</span>' +
     '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:5px 8px;border-radius:var(--radius)">' +
     '<option value="">' + (wo.Status||'Current') + ' ▾</option>' +
-    ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'].map(function(s){
+    ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid','Cancelled'].map(function(s){
       return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>';
     }).join('') +
     '</select>';
@@ -2242,7 +2268,7 @@ function openWODetail(woId) {
   if (['Assigned','Accepted'].includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
   if (['In Progress','Accepted','On Hold'].includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
   if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
-  if (['Complete','Pending Invoice'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
+  if (['Complete','Pending Invoice','Invoice Submitted'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   if (wo.Voided==='TRUE') addBtn('↩ Restore','secondary',function(){unvoidWO(woId);});
@@ -2551,6 +2577,7 @@ function openNewWOModal() {
   // when nothing's being assigned yet.
   var notifyCb = document.getElementById('wo-vendor-notify'); if (notifyCb) notifyCb.checked = true;
   var notifyGroup = document.getElementById('wo-vendor-notify-group'); if (notifyGroup) notifyGroup.style.display = 'none';
+  var ownerNotifyCb = document.getElementById('wo-owner-notify'); if (ownerNotifyCb) ownerNotifyCb.checked = true;
   // Populate schedule time window options
   var sw = document.getElementById('wo-sched-window-opt');
   if (sw) sw.innerHTML = buildTimeWindowOpts();
@@ -2630,6 +2657,8 @@ function submitNewWO() {
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
+    owner_notify: document.getElementById('wo-owner-notify') ? document.getElementById('wo-owner-notify').checked : true,
+    vendor_notify: document.getElementById('wo-vendor-notify') ? document.getElementById('wo-vendor-notify').checked : true,
     created_by:'admin'
   }).then(function(res){
     if (res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
@@ -2639,7 +2668,10 @@ function submitNewWO() {
     var schedDate = (document.getElementById('wo-sched-date-opt')||{}).value||'';
     var schedWin  = (document.getElementById('wo-sched-window-opt')||{}).value||'';
     var chain = Promise.resolve();
-    if (vendorId) chain = chain.then(function(){ return api('POST','/assign',{wo_id:woId,vendor_id:vendorId,notify:notifyOnAssign}); });
+    // Wire vendor and tenant notification independently — the vendor checkbox on this
+    // modal, tenant from the already-chosen tenant-safety setting — rather than one flag
+    // controlling both, now that assignVendor supports notify_vendor/notify_tenant separately.
+    if (vendorId) chain = chain.then(function(){ return api('POST','/assign',{wo_id:woId,vendor_id:vendorId,notify_vendor:notifyOnAssign,notify_tenant:tvUpdates}); });
     if (schedDate && schedWin) chain = chain.then(function(){
       return api('POST','/schedule',{wo_id:woId,date:schedDate,window:schedWin,notify_tenant:tvCreated,updated_by:'Admin',updated_by_role:'admin'});
     });
@@ -3682,6 +3714,22 @@ function toggleTenantField(woId, field, newVal) {
     if (res.success) { toast(field.replace('Tenant_','')+' → '+newVal,'success'); loadAll().then(function(){ openWODetail(woId); }); }
     else toast('Error: '+(res.error||''),'error');
   });
+}
+
+function notifyToggle(field, isOn, label, woId, onVal, offVal) {
+  var color = isOn ? "var(--accent2)" : "var(--danger)";
+  var icon = isOn ? "✓" : "✗";
+  return '<button onclick="toggleNotifyField(\''+ woId +'\',\''+ field +'\',\'' + (isOn?offVal:onVal) + '\')"' +
+    ' style="background:var(--surface);border:1px solid '+ color +';border-radius:6px;color:'+ color +';font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;white-space:nowrap">' +
+    icon + ' '+ label +'</button>';
+}
+
+function toggleNotifyField(woId, field, newVal) {
+  var fields = {}; fields[field] = newVal;
+  api('POST','/workorder/update',{id:woId, fields:fields}).then(function(res){
+    if (res && res.error) { toast('Error: '+res.error,'error'); return; }
+    toast(field.replace(/_/g,' ')+' updated','success'); loadAll().then(function(){ openWODetail(woId); });
+  }).catch(function(e){ toast('Error: '+e.message,'error'); });
 }
 
 function setVendorAccess(woId, value) {
@@ -5698,6 +5746,21 @@ function hubBillHtml(k, woId, wo) {
           '<span>Bill total</span><span id="hb-total-' + k + '" style="color:var(--warn)">$0.00</span></div>' +
       '</div>' +
 
+      // This bill moves the WO to Invoice Submitted, which fires the same completion-notify
+      // bundle a manual Mark Complete does (if it hasn't already fired for this WO) — these
+      // checkboxes are the one-time override for THIS transition, pre-checked from whatever's
+      // currently persisted on the WO so an already-silenced audience stays silenced by default
+      // (Brett, Sep 20 2026: "inherit selections from previous steps but give me the option to
+      // uncheck").
+      '<div style="margin-top:10px;padding:10px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">' +
+        '<div style="font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">NOTIFY ON THIS BILL</div>' +
+        '<div style="display:flex;gap:14px;flex-wrap:wrap">' +
+          '<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="hb-notify-tenant-' + k + '"' + (wo.Tenant_Notify_Updates === 'FALSE' ? '' : ' checked') + ' style="width:auto"> Tenant</label>' +
+          '<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="hb-notify-owner-' + k + '"' + (wo.Owner_Notify_Override === 'off' ? '' : ' checked') + ' style="width:auto"> Owner</label>' +
+          '<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="hb-notify-vendor-' + k + '"' + (wo.Vendor_Notify_Updates === 'FALSE' ? '' : ' checked') + ' style="width:auto"> Vendor</label>' +
+        '</div>' +
+      '</div>' +
+
       '<button class="btn" id="hb-submit-' + k + '" onclick="hubBillSubmit(\'' + k + '\',\'' + esc(String(woId)) + '\')" ' +
         'style="width:100%;margin-top:10px;background:var(--accent);color:#fff;font-size:13px;font-weight:bold;padding:9px">Save this bill</button>' +
       '<div id="hb-msg-' + k + '" style="margin-top:6px"></div>' +
@@ -5988,6 +6051,11 @@ function hubBillSubmit(k, woId) {
     // with the new bill's id, so the hours count as this bill's labour and stop being
     // offered as supervision to charge on top. Only sent when the hours were pulled in.
     time_entry_ids: safeArray(st.timeIds),
+    // Per-audience overrides for the resulting Invoice Submitted transition — read by
+    // addVendorBillStatusTransition, not written to the Vendor_Bills row itself.
+    notify_tenant: !!(document.getElementById('hb-notify-tenant-' + k) || {}).checked,
+    notify_owner: !!(document.getElementById('hb-notify-owner-' + k) || {}).checked,
+    notify_vendor: !!(document.getElementById('hb-notify-vendor-' + k) || {}).checked,
   };
 
   var woNow = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });

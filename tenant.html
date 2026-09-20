@@ -250,7 +250,7 @@ var session = null;
 var allWOs = [];
 var activeNoteWOId = null;
 
-var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice'];
+var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Invoice Submitted'];
 // Sep 17 2026 (Brett): tenants don't need or want billing-lifecycle stages exposed — Completed
 // is the last stage a tenant should ever see. STATUS_TIMELINE stops there (kept only for the
 // STATUS_LABELS lookup below; the per-WO detail view computes its own steps in buildDetail).
@@ -265,6 +265,7 @@ var STATUS_LABELS = {
   'On Hold':'On hold',
   'Complete':'Completed',
   'Pending Invoice':'Completed',
+  'Invoice Submitted':'Completed',
   'Invoiced':'Completed',
   'Paid':'Completed',
   'Declined':'Request declined',
@@ -358,7 +359,7 @@ function loadWOs() {
     .then(function(data) {
       allWOs = Array.isArray(data) ? data : [];
       var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
-      var done = allWOs.filter(function(w){ return ['Complete','Invoiced','Paid'].includes(w.Status); });
+      var done = allWOs.filter(function(w){ return ['Complete','Invoice Submitted','Invoiced','Paid'].includes(w.Status); });
       document.getElementById('statOpen').textContent = open.length;
       document.getElementById('statDone').textContent = done.length;
       renderWOs();
@@ -393,7 +394,7 @@ function renderWOs() {
   if (status === 'open') wos = wos.filter(function(w){ return OPEN_STATUSES.includes(w.Status) || w.Status==='Complete'; });
   // "Completed" is the only done-state filter tenants see — folds Pending Invoice/Invoiced/Paid
   // in too, so nothing quietly disappears now that the separate Closed/Paid filter is gone.
-  else if (status === 'Complete') wos = wos.filter(function(w){ return ['Complete','Pending Invoice','Invoiced','Paid'].includes(w.Status); });
+  else if (status === 'Complete') wos = wos.filter(function(w){ return ['Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid'].includes(w.Status); });
   else if (status !== 'all') wos = wos.filter(function(w){ return w.Status === status; });
   if (search) wos = wos.filter(function(w){
     return (w.ID||'').toLowerCase().includes(search) ||
@@ -459,7 +460,7 @@ function buildDetail(wo, idx) {
   if (['Accepted'].includes(wo.Status)) curIdx = 2; // In Progress equivalent
   // Completed is the last stage a tenant sees — any later billing status (Pending Invoice,
   // Invoiced, Paid) just lands on the same final "Complete" step, not a step of its own.
-  if (['Pending Invoice','Invoiced','Paid'].includes(wo.Status)) curIdx = 3;
+  if (['Pending Invoice','Invoice Submitted','Invoiced','Paid'].includes(wo.Status)) curIdx = 3;
   tlSteps.forEach(function(s, i) {
     var cls = i < curIdx ? 'done' : i === curIdx ? 'current' : 'future';
     var labels = {New:'Request received',Assigned:'Technician assigned','In Progress':'Work in progress',Complete:'Work complete'};
