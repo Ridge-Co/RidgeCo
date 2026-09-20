@@ -2250,7 +2250,7 @@ function openWODetail(woId) {
   if (['Assigned','Accepted'].includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
   if (['In Progress','Accepted','On Hold'].includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
   if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
-  if (['Complete','Pending Invoice'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
+  if (['Complete','Pending Invoice','Invoice Submitted'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   if (wo.Voided==='TRUE') addBtn('↩ Restore','secondary',function(){unvoidWO(woId);});
