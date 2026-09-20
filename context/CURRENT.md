@@ -14,15 +14,15 @@ Three things shipped on this branch:
    TTL) before doing any work — a second overlapping call sees the claim and skips. Not a true
    atomic primitive (this Worker has no KV/Durable Object binding), so it narrows the race rather
    than eliminating it outright.
-2. **🔴 Needs Brett's own one-time edit — GH Broker's GitHub App has no `workflows` permission,
-   so it could not touch `.github/workflows/cron-sweep.yml` itself.** The actual fix for the
-   collision is removing that workflow's own `schedule:` trigger (keeping `workflow_dispatch:`
-   only) so the Cloudflare Cron Trigger is the sole automatic caller — GitHub's own schedule
-   firing at nearly the same wall-clock minute as the Cloudflare trigger is exactly the scenario
-   the Sheets-based lock above can't fully close (both could pass the claim check within the same
-   sub-second window). Until that one edit is made by hand (or the GitHub App is granted
-   `workflows` permission), the lock is a meaningful mitigation but not a complete fix. The exact
-   diff needed is in this PR's description.
+2. **✅ Duplicate trigger removed** — `.github/workflows/cron-sweep.yml`'s own `schedule:` block
+   is gone (commit `1381355`, same branch); only `workflow_dispatch:` remains, so the Cloudflare
+   Cron Trigger in `wrangler.toml` is now the sole automatic caller of `/cron/sweep`. This closes
+   the collision at the root rather than just narrowing it — the two-trigger race that could let
+   both sweeps pass the Sheets-Config claim within the same sub-second window can't happen
+   anymore, since there's only one automatic trigger left. (GH Broker's GitHub App was missing
+   `workflows` permission when this was first attempted on Sep 20 2026; Brett added that scope to
+   the App and accepted it on the Ridge-Co installation the same day, so this and any future
+   `.github/workflows/` edit can go through GH Broker directly — see `gh-write-broker` notes.)
 3. **Per-WO communication audit** — `WO_Audit` (the existing "AUDIT TRAIL" on a WO's detail
    screen) gains message-logging columns (`Channel`, `Recipient_Name`, `Recipient_Type`,
    `Message_Type`, `Message_Body`, `Outcome`), additive/self-provisioned via `ensureColumns`.
