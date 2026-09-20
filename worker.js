@@ -3917,12 +3917,16 @@ async function getWorkOrdersList(env, url) {
 async function assignVendor(env, body) {
   const _t0 = Date.now();
   // notify defaults TRUE — preserves existing behavior for the Assign/Reassign Vendor modal
-  // (which always says "Assign + Send SMS" and should keep meaning that). Pass notify:false
-  // only from the New Work Order creation flow's "Notify vendor + tenant now" checkbox, for
-  // cases like a WO created purely to record billing for work already done by phone weeks
-  // ago — the vendor is assigned (Vendor_ID/Status still update normally) but no message is
-  // composed or queued at all, since none was ever meant to exist for that case.
-  const notify = body.notify !== false;
+  // (which always says "Assign + Send SMS" and should keep meaning that). Vendor and tenant
+  // notification are independently controllable via notify_vendor/notify_tenant (Sep 20 2026,
+  // Brett) — either can be silenced on its own, e.g. a vendor who doesn't want SMS reminders
+  // but a tenant who still needs the assignment text, or vice versa. The legacy `notify` param
+  // still works as a combined fallback (both audiences together) for any caller that hasn't
+  // been updated to send the split params yet — e.g. a WO created purely to record billing for
+  // work already done by phone weeks ago, where neither audience should get anything.
+  const notifyVendor = body.notify_vendor !== undefined ? body.notify_vendor !== false : (body.notify !== false);
+  const notifyTenant = body.notify_tenant !== undefined ? body.notify_tenant !== false : (body.notify !== false);
+  const notify = notifyVendor || notifyTenant; // legacy telemetry/response field, kept for continuity
   const [workorders, vendors, tenants, units, properties, owners] = await fetchTabs(env, [
     'Work_Orders','Vendors','Tenants','Units','Properties','Owners',
   ]);
