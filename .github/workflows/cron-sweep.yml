@@ -17,10 +17,17 @@ name: Message Queue Sweep
 #      but was never wired to anything automatic; this workflow is what actually fires it now.
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'   # every 15 minutes. GitHub may delay scheduled runs, especially at
-                              # busy :00/:15/:30/:45 marks — fine here, nothing is minute-critical.
-  workflow_dispatch:          # manual/on-demand trigger — useful right after deploying a change
+  # Sep 20 2026: this used to ALSO fire on a schedule (every 15 min), racing the Cloudflare
+  # Cron Trigger in wrangler.toml, which independently calls the same /cron/sweep endpoint on
+  # the same cadence. Both firing within seconds of each other caused a real incident: a vendor
+  # (Eddie Smith, WO-1195) got the same "please submit your invoice" SMS twice in one afternoon
+  # because two overlapping sweeps both read the vendor-nudge state as "not yet sent" before
+  # either had a chance to mark it sent. Fixed properly in cronSweep() (worker.js) with a
+  # Sheets-Config single-flight claim that makes any second sweep within the claim window a
+  # no-op — but the redundant trigger itself served no purpose once the Cloudflare Cron Trigger
+  # covers the schedule, so it's removed here rather than left as a harmless-but-wasteful ping.
+  workflow_dispatch:          # manual/on-demand only — the Cloudflare Cron Trigger (wrangler.toml)
+                              # is now the only automatic caller of /cron/sweep.
 
 jobs:
   sweep:

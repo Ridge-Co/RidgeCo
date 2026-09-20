@@ -4769,7 +4769,12 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
     `<p style="color:#888;font-size:11px">Ridge Co — this is an automated confirmation, no reply needed.</p>`,
   ];
   const subject = isEs ? `Hemos recibido su factura — OT ${woId}` : `We've received your invoice — WO ${woId}`;
-  await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') });
+  let emailOutcome = 'failed';
+  try { await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') }); emailOutcome = 'sent'; } catch (e) { emailOutcome = 'failed'; throw e; }
+  finally {
+    // Per-WO communication audit (Sep 20 2026) — same visibility as the SMS side (smsGatedSend).
+    try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_invoice_confirmation', messageBody: subject + '\n\n' + html.filter(Boolean).join('\n'), outcome: emailOutcome }); } catch (e) {}
+  }
 }
 
 async function addVendorBill(env, body) {
@@ -5695,20 +5700,44 @@ async function logWOAudit(env, woId, changedBy, changedByRole, field, oldValue, 
 // N re-reads of the SAME WO_Audit tab for one save (each read racing the one the previous
 // loop iteration had just written seconds — sometimes milliseconds — earlier). This is one of
 // the concrete contributors to the "quota exceeded" error Brett hit after an ordinary WO edit.
+// Message-audit columns (Sep 20 2026) — added to WO_Audit so every outbound SMS/email tied to a
+// WO logs recipient/channel/full-text/outcome alongside the existing field-edit history, not
+// just a 100-char truncated Notes string (see the old Tenant_Manual_SMS precedent). Additive
+// only — self-provisioned lazily below, existing field-edit-only callers never touch these.
+const WO_AUDIT_MSG_COLS = ['Channel', 'Recipient_Name', 'Recipient_Type', 'Message_Type', 'Message_Body', 'Outcome'];
+
 async function logWOAuditMany(env, entries) {
   if (!entries || !entries.length) return;
   try {
+    if (entries.some(e => e.channel || e.messageType || e.messageBody)) {
+      try { await ensureColumns(env, 'WO_Audit', WO_AUDIT_MSG_COLS); } catch (e) {}
+    }
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
     const rows = data.values||[]; if (!rows.length) return;
     const headers = rows[0], now = new Date().toISOString();
     let nextId = nextSafeId(rows);
     const newRows = entries.map(e => {
-      const row = headers.map(h => ({ ID:String(nextId), WO_ID:e.woId||'', Changed_By:e.changedBy||'unknown', Changed_By_Role:e.changedByRole||'unknown', Field:e.field||'', Old_Value:String(e.oldValue??''), New_Value:String(e.newValue??''), Timestamp:now, Notes:e.notes||'' }[h]??''));
+      const row = headers.map(h => ({
+        ID:String(nextId), WO_ID:e.woId||'', Changed_By:e.changedBy||'unknown', Changed_By_Role:e.changedByRole||'unknown',
+        Field:e.field||'', Old_Value:String(e.oldValue??''), New_Value:String(e.newValue??''), Timestamp:now, Notes:e.notes||'',
+        Channel:e.channel||'', Recipient_Name:e.recipientName||'', Recipient_Type:e.recipientType||'',
+        Message_Type:e.messageType||'', Message_Body:e.messageBody||'', Outcome:e.outcome||'',
+      }[h]??''));
       nextId += 1;
       return row;
     });
     await sheetsRequest(env, 'POST', `/values/WO_Audit:append?valueInputOption=RAW`, { values:newRows });
   } catch(e) { /* never break main operation */ }
+}
+
+// Thin wrapper matching logWOAudit's shape, for the message-send call sites (smsGatedSend,
+// sendVendorInvoiceConfirmationEmail) instead of the field-edit shape.
+async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, recipientName, recipientType, messageType, messageBody, outcome, notes }) {
+  return logWOAuditMany(env, [{
+    woId, changedBy: changedBy || 'System', changedByRole: changedByRole || 'system',
+    field: channel === 'email' ? 'Email' : 'SMS', oldValue: '', newValue: '',
+    notes: notes || '', channel, recipientName, recipientType, messageType, messageBody, outcome,
+  }]);
 }
 
 async function getWOAudit(env, url) {
@@ -7606,7 +7635,7 @@ async function smsGatedSend(env, opts) {
   const newRow = headers.map(h => rowObj[h] ?? '');
   await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
 
-  let sent = false, deliveredTo = '';
+  let sent = false, deliveredTo = '', outcome = 'blocked';
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
@@ -7619,11 +7648,13 @@ async function smsGatedSend(env, opts) {
     if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours) {
       const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
+      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
       return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot };
     }
     deliveredTo = testMode ? testRecipient : recipientPhone;
     const result = await sendSMSRaw(env, deliveredTo, opts.message_body);
     sent = !!(result && result.sid);
+    outcome = sent ? 'sent' : 'failed';
     await updateMessageQueueRow(env, id, {
       Status: sent ? 'sent' : 'failed',
       Delivered_To: deliveredTo,
@@ -7631,7 +7662,22 @@ async function smsGatedSend(env, opts) {
       Twilio_Message_SID: (result && result.sid) || '',
     });
   } else if (sendOk && !recipientPhone) {
+    outcome = 'failed_no_phone';
     await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' });
+  }
+  // Per-WO communication audit (Sep 20 2026) — every outbound SMS tied to a work order lands in
+  // that WO's own audit trail (WO_Audit), the same place status/field edits already log to, so
+  // "who was texted, what, and when" is visible on the WO detail screen, not only in the separate
+  // Message_Queue review tool. Instrumenting this shared chokepoint covers every smsGatedSend
+  // call site (vendor nudges, tenant/owner status updates, etc.) at once.
+  if (opts.wo_id) {
+    try {
+      await logMessageAudit(env, {
+        woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind,
+        messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome,
+        notes: outcome === 'blocked' ? gateSnapshot : '',
+      });
+    } catch (e) {}
   }
   return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot };
 }
@@ -7857,8 +7903,35 @@ async function checkDeadManSwitch(env) {
   return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
 }
 
+// Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
+// independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
+// `schedule:` (now removed, see that file — it's manual/workflow_dispatch-only going forward)
+// and the Cloudflare Cron Trigger in scheduled() below. Both called cronSweep() on the
+// assumption it was idempotent to fire twice. It wasn't: processVendorNudges (and the other two
+// sub-sweeps) read a row as "due," act on it, and only mark it done AFTERWARD — no claim step.
+// Real result: a vendor (Eddie Smith, WO-1195) got the same invoice-nudge SMS twice, 2.5 hours
+// apart. Removing the duplicate automatic trigger kills that exact collision; this claim is
+// defense-in-depth against a stray manual re-trigger (or any future second caller) landing close
+// to a real scheduled run. NOT a true atomic lock — this Worker has no KV/Durable Object binding
+// — just a Sheets-backed Config key, same class of check-then-write primitive as
+// checkPinLockout/findRecentDuplicate elsewhere in this file. Good enough to turn a 2.5-hour
+// collision window into a sub-second one.
+const CRON_SWEEP_LOCK_KEY = 'Cron_Sweep_Claimed_Until';
+const CRON_SWEEP_LOCK_TTL_MS = 2 * 60 * 1000; // comfortably longer than a normal sweep run; short enough to self-heal within one cycle if a run ever dies mid-flight without clearing it
+
 async function cronSweep(env) {
-  const out = { ok: true, ts: new Date().toISOString() };
+  const now = new Date();
+  let cfg;
+  try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
+  const claimedUntil = cfg[CRON_SWEEP_LOCK_KEY] ? new Date(cfg[CRON_SWEEP_LOCK_KEY]) : null;
+  if (claimedUntil && !isNaN(claimedUntil.getTime()) && claimedUntil > now) {
+    return json({ ok: true, skipped: 'already claimed', claimed_until: claimedUntil.toISOString() });
+  }
+  try {
+    await setConfigKey(env, { key: CRON_SWEEP_LOCK_KEY, value: new Date(now.getTime() + CRON_SWEEP_LOCK_TTL_MS).toISOString() });
+  } catch (e) { /* best-effort — if the claim write itself fails, still proceed rather than silently never sweeping again */ }
+
+  const out = { ok: true, ts: now.toISOString() };
   try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
   try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
