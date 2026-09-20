@@ -7630,7 +7630,7 @@ async function smsGatedSend(env, opts) {
   const newRow = headers.map(h => rowObj[h] ?? '');
   await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
 
-  let sent = false, deliveredTo = '';
+  let sent = false, deliveredTo = '', outcome = 'blocked';
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
@@ -7643,11 +7643,13 @@ async function smsGatedSend(env, opts) {
     if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours) {
       const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
+      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
       return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot };
     }
     deliveredTo = testMode ? testRecipient : recipientPhone;
     const result = await sendSMSRaw(env, deliveredTo, opts.message_body);
     sent = !!(result && result.sid);
+    outcome = sent ? 'sent' : 'failed';
     await updateMessageQueueRow(env, id, {
       Status: sent ? 'sent' : 'failed',
       Delivered_To: deliveredTo,
@@ -7655,7 +7657,22 @@ async function smsGatedSend(env, opts) {
       Twilio_Message_SID: (result && result.sid) || '',
     });
   } else if (sendOk && !recipientPhone) {
+    outcome = 'failed_no_phone';
     await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' });
+  }
+  // Per-WO communication audit (Sep 20 2026) — every outbound SMS tied to a work order lands in
+  // that WO's own audit trail (WO_Audit), the same place status/field edits already log to, so
+  // "who was texted, what, and when" is visible on the WO detail screen, not only in the separate
+  // Message_Queue review tool. Instrumenting this shared chokepoint covers every smsGatedSend
+  // call site (vendor nudges, tenant/owner status updates, etc.) at once.
+  if (opts.wo_id) {
+    try {
+      await logMessageAudit(env, {
+        woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind,
+        messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome,
+        notes: outcome === 'blocked' ? gateSnapshot : '',
+      });
+    } catch (e) {}
   }
   return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot };
 }
