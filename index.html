@@ -2657,6 +2657,8 @@ function submitNewWO() {
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
+    owner_notify: document.getElementById('wo-owner-notify') ? document.getElementById('wo-owner-notify').checked : true,
+    vendor_notify: document.getElementById('wo-vendor-notify') ? document.getElementById('wo-vendor-notify').checked : true,
     created_by:'admin'
   }).then(function(res){
     if (res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
@@ -2666,7 +2668,10 @@ function submitNewWO() {
     var schedDate = (document.getElementById('wo-sched-date-opt')||{}).value||'';
     var schedWin  = (document.getElementById('wo-sched-window-opt')||{}).value||'';
     var chain = Promise.resolve();
-    if (vendorId) chain = chain.then(function(){ return api('POST','/assign',{wo_id:woId,vendor_id:vendorId,notify:notifyOnAssign}); });
+    // Wire vendor and tenant notification independently — the vendor checkbox on this
+    // modal, tenant from the already-chosen tenant-safety setting — rather than one flag
+    // controlling both, now that assignVendor supports notify_vendor/notify_tenant separately.
+    if (vendorId) chain = chain.then(function(){ return api('POST','/assign',{wo_id:woId,vendor_id:vendorId,notify_vendor:notifyOnAssign,notify_tenant:tvUpdates}); });
     if (schedDate && schedWin) chain = chain.then(function(){
       return api('POST','/schedule',{wo_id:woId,date:schedDate,window:schedWin,notify_tenant:tvCreated,updated_by:'Admin',updated_by_role:'admin'});
     });
