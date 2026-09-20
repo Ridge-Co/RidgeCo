@@ -1564,7 +1564,7 @@ function matchReceiptProperty(po, properties) {
   return bestScore >= 2 ? { property: best, score: bestScore } : null;
 }
 
-const RECEIPT_OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
+const RECEIPT_OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete','Invoice Submitted'];
 const RECEIPT_STOP = new Set(['the','and','for','with','apt','ste','unit','street','saint','st','ave','rd','ln','pl','n','s','e','w','2x','x']);
 
 // PURE — rank a property's work orders by keyword overlap between the receipt (items + PO) and each
