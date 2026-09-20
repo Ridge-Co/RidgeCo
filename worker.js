@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-19.4';
+const BUILD_VERSION = '2026-09-20.1-diag4';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -11245,7 +11245,7 @@ async function health(env) {
   // without a browser or auth. Row counts per key tab + which sheet it points at
   // (last 6 chars of SHEET_ID, so staging vs prod is visible without leaking it).
   // `staging: true` also means QB writes/SMS/Gmail are stubbed — see isStaging().
-  const out = { ok: true, sheet_tail: (env.SHEET_ID || '').slice(-6), staging: !!env.__STAGING__, tabs: {}, ts: Date.now() };
+  const out = { ok: true, sheet_tail: (env.SHEET_ID || '').slice(-6), staging: !!env.__STAGING__, build_version: BUILD_VERSION, tabs: {}, ts: Date.now() };
   for (const t of ['Work_Orders','Vendors','Invoices','Config']) {
     try { const rows = await fetchTab(env, t); out.tabs[t] = rows.length; }
     catch (e) { out.ok = false; out.tabs[t] = 'ERROR: ' + (e && e.message ? e.message : String(e)); }
