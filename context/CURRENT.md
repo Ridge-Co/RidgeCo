@@ -1,5 +1,34 @@
 # WHERE THINGS STAND — Sep 20, 2026 (Invoice Submitted vendor-bill status + notify-tier controls shipped as PR #9 (open, awaiting Brett's staging verify + merge — not yet live); HUB_TEST_TOKEN staging test-infra fully unblocked — the real root cause of the day-long "/workorder always 403s" mystery was never the guard code (isTestRecord/hubTestWriteAllowed were correct throughout), it was that maintenance-hub-staging's Cloudflare Build only auto-deploys from a `staging` git branch that had drifted 457 commits behind `main` since the original Sep 19 setup, so every merge to main all day built as an unpromoted Cloudflare "version" but never reached live traffic; fixed via a one-time `git push origin main:staging --force` (Brett, via GitHub Codespaces, since GH Broker's git tools are intentionally fast-forward-only); full /workorder → /assign → /status write lifecycle now verified working end-to-end against staging — see context/... doc and the "THE ACTUAL ROOT CAUSE" section for the full diagnosis; open follow-up: decide whether to point maintenance-hub-staging's production branch directly at `main` to remove the manual-sync step permanently; Ops_Build_Queue greenlit-13 pass — admin_share_attachments 21% failure rate root-caused and fixed (Drive_File_Missing skip-list) + smoke test; failure runbook + dead-man's-switch alerting shipped, dormant behind Config flags; latency instrumentation added to wo_schedule/admin_share_attachments; items_summarize escalation root-caused and fixed same day — Google retired the CHEAP-tier model (gemini-2.5-flash-lite), swapped to gemini-3.5-flash-lite, live-verified via /admin/items-summarize-test; auto wo_create from inbound triggers explicitly left out of scope. Selftest auto-verification pass added — POST /selftest + daily 7am ET cron digest, closing the "built, not yet live-verified" gap, but not yet live-verified itself; Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window; CAP-035 vendor.html `.btn-muted` cosmetic fix shipped and live-verified via a real test-vendor login)
 
+## 🟡 Open PR: Invoice Submitted vendor-bill status (PR #9, `feature/invoice-submitted-status`)
+Started from two vendor-portal bugs Brett flagged: Open Work Orders not sorting completed jobs
+to the bottom, and no interim WO status when a vendor submits a bill. Expanded into a full
+feature after clarifying questions: a new "Invoice Submitted" status, notification dedup, and
+per-audience (tenant/owner/vendor) notify controls at 3 decision points, plus default
+sort-completed-to-bottom in both vendor.html and index.html. Fully implemented and verified
+(node --check, full test suite). **Open, unmerged — correctly, merging is Brett's call per
+PAT-033.** https://github.com/Ridge-Co/RidgeCo/pull/9
+
+## 🟢 Fixed: HUB_TEST_TOKEN staging deploys weren't reaching live traffic
+Not a worker.js bug. `maintenance-hub-staging`'s Cloudflare Workers Build treats a `staging` git
+branch (not `main`) as its production branch — pushes to `staging` run the real
+`wrangler deploy`; pushes to `main` (or any other branch) only run `wrangler versions upload`,
+which builds a version but never promotes it to serve traffic. The `staging` branch had been
+frozen since the original test-infra build (~457 commits behind `main`), so every merge to
+`main` today — including four "diagnostic" patches chasing what looked like a guard-logic bug
+in `isTestRecord`/`hubTestWriteAllowed` — built successfully but never actually deployed.
+Diagnosed by adding a `build_version` field to `/health` and confirming via `hub_test_get` that
+it never changed no matter what was merged to main. Fixed with a one-time
+`git push origin main:staging --force` (run by Brett). The guard logic itself was correct the
+whole time — no code changes were needed there, though the diagnostic scaffolding (an
+`{ok, debug}` return contract on the `/workorder` guard check, still staging-only) is now live
+and harmless to keep. Full detail in the project doc `ridgeco-gh-broker-hub-test-infra.md`.
+**Open follow-up:** decide whether to point `maintenance-hub-staging`'s production branch at
+`main` directly instead of maintaining a separately-synced `staging` branch — would remove the
+need for this manual sync step going forward. Until that's decided, any session that needs a
+real staging smoke test after merging to `main` needs `staging` re-synced first, or it will look
+broken again for the same reason.
+
 ## 🟢 Shipped: Ops_Build_Queue #24 — items_summarize 100% escalation root-caused and fixed
 The Sep 19 greenlit-13 pass shipped a read-only diagnostic (`/admin/items-summarize-test`) for
 this but left the root cause open — static review of `routeAI`/`callGemini`/`MODEL_REGISTRY`
