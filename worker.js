@@ -4798,6 +4798,27 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') });
 }
 
+// Persists any per-audience notify overrides sent alongside a billing-triggered status change
+// (from the Hub's billing-panel checkboxes) onto the WO BEFORE calling updateStatus — updateStatus
+// itself has no separate override parameter, it just reads whatever's currently persisted on the
+// WO, so the write has to land first for the same call's notification bundle to see it. This is
+// also the single path (manual Mark Complete goes straight to updateStatus; a submitted bill goes
+// through here) by which a bill landing on a WO ever reaches 'Invoice Submitted', so both routes
+// converge on updateStatus's own Completion_Notified dedup — whichever gets there first is the
+// only one that actually sends.
+async function addVendorBillStatusTransition(env, wo, statusBody) {
+  const overrideFields = {};
+  if (statusBody.notify_tenant !== undefined) overrideFields.Tenant_Notify_Updates = statusBody.notify_tenant ? 'TRUE' : 'FALSE';
+  if (statusBody.notify_owner !== undefined) overrideFields.Owner_Notify_Override = statusBody.notify_owner ? '' : 'off';
+  if (statusBody.notify_vendor !== undefined) {
+    try { await ensureColumns(env, 'Work_Orders', ['Vendor_Notify_Updates']); } catch (_) {}
+    overrideFields.Vendor_Notify_Updates = statusBody.notify_vendor ? 'TRUE' : 'FALSE';
+  }
+  if (Object.keys(overrideFields).length) await updateWOFields(env, wo.ID, overrideFields);
+  delete statusBody.notify_tenant; delete statusBody.notify_owner; delete statusBody.notify_vendor;
+  return await updateStatus(env, statusBody);
+}
+
 async function addVendorBill(env, body) {
   // Vendor_Bills stores Created_Date as a date only, so the finest duplicate window
   // available here is the same day: same job, same vendor, same total, same day, still
