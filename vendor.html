@@ -19,7 +19,17 @@
      entry only exists for a page that already finished loading once. -->
 <script>
 window.addEventListener('pageshow', function(e){
-  if (e.persisted) location.reload();
+  if (!e.persisted) return;
+  // Returning from bfcache (phone backgrounded then resumed, etc.) used to force an
+  // unconditional reload here. Safe for THIS page in general (see the note above -- a
+  // bfcache entry only exists for a page that already finished loading once) but not safe
+  // for a vendor who was mid-receipt or had a modal open when they got interrupted -- a hard
+  // reload would silently wipe whatever they'd typed. Now it defers exactly like the
+  // background checks further down the page: skip the reload while busy and let those same
+  // checks (which also fire on this resume, via visibilitychange/focus) settle it in once
+  // the vendor is free instead.
+  if (typeof isVendorBusy === 'function' && isVendorBusy()) return;
+  location.reload();
 });
 </script>
 <title>Ridge Co — Vendor Portal</title>
@@ -450,6 +460,7 @@ function switchTab(tab) {
 
 function loadWorkOrders() {
   if (!session) return;
+  if (window._resetWOWatch) window._resetWOWatch(); // a manual/tab-switch load supersedes any background refresh that was waiting on the vendor
   var list = document.getElementById('woList');
   list.innerHTML = '<div class="spinner">Loading…</div>';
   document.getElementById('woSearch').value = '';
@@ -544,6 +555,7 @@ function renderWOs(wos) {
             '<button class="btn btn-sm" style="background:var(--accent2);color:#fff" onclick="acceptWO(\'' + wo.ID + '\',' + idx + ')">✓ Accept work order</button>' +
             '<button class="btn btn-sm" style="background:var(--danger);color:#fff" onclick="declineWO(\'' + wo.ID + '\',' + idx + ')">Decline</button>' +
           '</div></div>' : '') +
+        (!gated ? '<div style="margin-bottom:12px"><button class="btn btn-sm" style="background:var(--info);color:#fff" onclick="openSchedModal(\'modalSched\',\'' + wo.ID + '\')">📅 Schedule</button></div>' : '') +
         '<div class="detail-row"><span class="detail-label">Address</span><span class="detail-val">' + esc(wo.property_address) + (wo.unit_label ? ' Unit ' + esc(wo.unit_label) : '') + '</span></div>' +
         (wo.Room ? '<div class="detail-row"><span class="detail-label">Room / Area</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Room) + '</span></div>' : '') +
         (wo.Owner_WO_Ref ? '<div class="detail-row"><span class="detail-label">Owner Ref #</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Owner_WO_Ref) + '</span></div>' : '') +
@@ -1346,6 +1358,7 @@ function esc(str) {
 // upload session each retry -- simpler and always correct vs. resuming a partial byte
 // range), short backoff between, and a manual "Retry" tap if all 3 still fail.
 var MAX_UPLOAD_ATTEMPTS = 3;
+var _activeUploads = 0; // count of files currently transmitting or awaiting retry-backoff; used to defer background refreshes mid-upload
 function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attempt) {
   attempt = attempt || 1;
   var reqBody = {
@@ -1363,10 +1376,11 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
       setTimeout(function() { _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, attempt+1); }, attempt * 1200);
       return;
     }
+    _activeUploads--; // terminal failure -- no longer actively transmitting until the vendor taps Retry
     card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
     card.innerHTML = '\u26a0 ' + esc(msg) + ' <span data-retry-btn style="text-decoration:underline;cursor:pointer">Retry</span>';
     var retryEl = card.querySelector('[data-retry-btn]');
-    if (retryEl) retryEl.onclick = function(ev) { ev.stopPropagation(); _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, 1); };
+    if (retryEl) retryEl.onclick = function(ev) { ev.stopPropagation(); _activeUploads++; _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, 1); };
   }
 
   return api('POST', '/create-upload-session', reqBody).then(function(res) {
@@ -1400,6 +1414,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
                  isVideo ? '🎥' : '📷';
       card.style.borderColor = 'var(--accent2)'; card.style.color = 'var(--text)';
       card.innerHTML = icon + ' <a href="' + esc(fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,16)) + '</a>';
+      _activeUploads--; // reached a terminal (success) state
       return nextFolder;
     })
     .catch(function(e) {
@@ -1417,6 +1432,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
 function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
   var files = Array.from(input.files);
   if (!files.length) return;
+  _activeUploads += files.length; // each settles (success or terminal failure) inside _uploadOneFile
   var container = document.getElementById(containerId || ('uploads-' + fileType + '-' + woId));
   if (!container) container = document.getElementById('wo-uploads-' + woId);
 
@@ -1882,6 +1898,14 @@ var _schedWOId = null;
 function todayStr() {
   return new Date().toISOString().split('T')[0];
 }
+// vendor.html's own modal convention (unlike index.html/owner.html, which toggle a shared
+// ".open" CSS class) is a direct style.display flip per modal -- every other modal on this
+// page (Bill, Feedback, My Info) already works this way. openModal/closeModal were simply
+// never defined here, which silently broke openSchedModal/closeSchedModal below with a dead
+// ReferenceError -- never caught because nothing in vendor.html ever actually called
+// openSchedModal until the Schedule button was wired up (see the WO card template).
+function openModal(id) { var el = document.getElementById(id); if (el) el.style.display = 'flex'; }
+function closeModal(id) { var el = document.getElementById(id); if (el) el.style.display = 'none'; }
 function openSchedModal(modalId, woId) {
   _schedWOId = woId;
   document.getElementById(modalId+'-date').value = todayStr();
@@ -2753,16 +2777,50 @@ function applyTranslations() {
   document.title = 'Ridge Co — Portal de Contratistas';
 }
 </script>
+<!-- Shared "is the vendor mid-task right now" check (Sep 19 2026) -- used by both the
+     B-093 version-poller below and the new work-order background-refresh poller further
+     down, so there's exactly one definition of "busy" instead of two that could drift apart. -->
+<script>
+function isVendorBusy(){
+  // Actively typing right now -- a focused, non-empty field.
+  var el = document.activeElement;
+  if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
+  // Explicit opt-in hook for any future form to flag itself busy without touching this function.
+  if (document.querySelector('[data-unsaved="1"]')) return true;
+  // Any modal is open -- Bill/Invoice, Schedule, Feedback, My Info all use the same
+  // .modal-overlay convention and are shown/hidden via style.display directly, so this one
+  // check covers all of them (present and future) without listing each by id.
+  var modals = document.querySelectorAll('.modal-overlay');
+  for (var m = 0; m < modals.length; m++) { if (modals[m].style.display === 'flex') return true; }
+  // Typed-but-unsaved content in a receipt/time-entry row or the status-notes box, even if
+  // focus moved away (e.g. the vendor tapped out to the camera app and hasn't come back
+  // yet). Deliberately excludes the date inputs (vr-date-*/vt-date-*) and the entry-type
+  // select (vt-type-*) -- those always carry a pre-filled default value, so treating them as
+  // "unsaved" would make this permanently true any time a work order with a receipt/time
+  // section is on screen at all.
+  var list = document.getElementById('woList');
+  if (list) {
+    var fields = list.querySelectorAll(
+      'input[id^="vr-amt-"], input[id^="vr-store-"], textarea[id^="vr-desc-"], ' +
+      'input[id^="vt-start-"], input[id^="vt-end-"], textarea[id^="vt-invdesc-"], ' +
+      'textarea[id^="vt-notes-"], textarea[id^="notes-"]'
+    );
+    for (var i = 0; i < fields.length; i++) {
+      if (fields[i].value && String(fields[i].value).trim() !== '') return true;
+    }
+  }
+  // A save is actively mid-flight (any claimSubmit-guarded button).
+  if (typeof _inflight !== 'undefined' && Object.keys(_inflight).length) return true;
+  // A photo/receipt/invoice upload is actively transmitting or awaiting retry-backoff.
+  if (typeof _activeUploads !== 'undefined' && _activeUploads > 0) return true;
+  return false;
+}
+</script>
 <!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner) -->
 <script>
 (function(){
   var VER_URL = WORKER + '/version', booted = null;
   var LAST_KEY = 'rc_build_ver';
-  function dirty(){
-    var el = document.activeElement;
-    if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
-    return !!document.querySelector('[data-unsaved="1"]');
-  }
   function reloadFresh(){
     // Only THIS reload (a confirmed real staleness case) pays for a network-forced
     // re-fetch — routine loads are left alone so a flaky connection never has to
@@ -2794,15 +2852,120 @@ function applyTranslations() {
         // end of <body>) — if the version we booted with is already behind what the
         // server has right now, THIS load was a stale cached copy. Catch it here, after
         // everything already works, instead of gating the page load on it.
-        if (last && last !== d.version) { dirty() ? banner() : reloadFresh(); }
+        if (last && last !== d.version) { isVendorBusy() ? banner() : reloadFresh(); }
         return;
       }
-      if (d.version !== booted){ dirty() ? banner() : reloadFresh(); }
+      if (d.version !== booted){ isVendorBusy() ? banner() : reloadFresh(); }
     }).catch(function(){});
   }
   check();
   setInterval(check, 60000);
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
+})();
+</script>
+<!-- Work-order background refresh (Sep 19 2026, Brett's ask -- vendors kept having to be
+     told to manually refresh to see new/updated jobs). Polls the same endpoint
+     loadWorkOrders() uses, but never force-reloads and never touches the screen while
+     isVendorBusy() is true -- it just holds the update and applies it the moment the tab
+     is backgrounded (or the vendor is next found idle), same idle/busy split as the
+     version-poller above but resolved by an event instead of a fast poll loop. When it
+     does apply, it restores scroll position and which cards were expanded (renderWOs()
+     otherwise always collapses everything back to default on any rebuild) so a vendor who
+     was just reading something doesn't get yanked back to the top of a closed list. A
+     newly-appeared or reassigned work order gets a small NEW badge that clears itself after
+     NEW_BADGE_MS. -->
+<script>
+(function(){
+  var CHECK_MS = 300000;         // 5 min -- Brett's call: vendors don't typically sit idle
+                                  // with the tab open and foregrounded, so a short poll adds
+                                  // risk (see hasActiveAsyncWork below) for little real benefit
+  var NEW_BADGE_MS = 10 * 60000; // how long the NEW badge stays on a card
+  var pendingWos = null;
+
+  function woSignature(wos) {
+    return (wos || []).map(function(w){
+      return [w.ID, w.Status, w.Priority, w.Scheduled_Date, w.Notes, w.Description, w.access_gated].join('|F|');
+    }).sort().join('|W|');
+  }
+
+  // A narrower check than isVendorBusy(): true only for actual async work in flight (a save
+  // POST, an upload) that a full list rebuild would silently orphan mid-request -- the DOM
+  // node it's updating would get replaced out from under it. Unlike a focused input or an
+  // open modal, this matters even while the tab is backgrounded and nothing is visible, so
+  // it's the one thing still allowed to block the backgrounding-triggered apply below.
+  function hasActiveAsyncWork() {
+    if (typeof _inflight !== 'undefined' && Object.keys(_inflight).length) return true;
+    if (typeof _activeUploads !== 'undefined' && _activeUploads > 0) return true;
+    return false;
+  }
+
+  function applyNow(wos) {
+    var prevIds = {};
+    (window._wos || []).forEach(function(w){ prevIds[w.ID] = true; });
+    var expandedIds = {};
+    (window._wos || []).forEach(function(w, idx){
+      var card = document.getElementById('card-' + idx);
+      if (card && card.classList.contains('expanded')) expandedIds[w.ID] = true;
+    });
+    var savedScrollY = window.scrollY;
+
+    renderWOs(wos);
+
+    wos.forEach(function(w, idx){
+      var card = document.getElementById('card-' + idx);
+      if (!card) return;
+      if (expandedIds[w.ID]) card.classList.add('expanded');
+      if (!prevIds[w.ID]) {
+        var headerRight = card.querySelector('.wo-header-right');
+        if (headerRight && !headerRight.querySelector('.wo-badge-new')) {
+          var b = document.createElement('span');
+          b.className = 'wo-badge-new';
+          b.textContent = 'NEW';
+          b.style.cssText = 'background:var(--accent2);color:#fff;font-size:9px;font-weight:bold;letter-spacing:.06em;padding:2px 6px;border-radius:10px';
+          headerRight.insertBefore(b, headerRight.firstChild);
+          setTimeout(function(){ if (b && b.parentNode) b.parentNode.removeChild(b); }, NEW_BADGE_MS);
+        }
+      }
+    });
+    window.scrollTo(0, savedScrollY);
+  }
+
+  function check() {
+    if (!session) return;
+    var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
+    api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed).then(function(wos) {
+      if (!session) return; // logged out while the request was in flight
+      if (woSignature(wos) === woSignature(window._wos)) return; // nothing changed -- leave the DOM alone
+      if (isVendorBusy()) { pendingWos = wos; } // wait -- see the backgrounding handler below
+      else { pendingWos = null; applyNow(wos); }
+    }).catch(function(){}); // silent -- this is a background check; a manual loadWorkOrders() still surfaces real errors
+  }
+
+  // A manual reload (tab switch, fresh login) always supersedes a background update that
+  // was waiting on the vendor -- exposed so loadWorkOrders() can clear stale pending data.
+  window._resetWOWatch = function(){
+    pendingWos = null;
+  };
+
+  setInterval(check, CHECK_MS);
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) {
+      // The vendor just backgrounded the tab -- to take a photo, take a call, whatever.
+      // Nothing on screen is visible right now, so this is the safest possible moment to
+      // apply a held-back update: no scroll jump, no collapsed card, nothing to notice.
+      // Deliberately does NOT re-check isVendorBusy() here -- a focused input or an open
+      // modal only matters while the vendor can see it, and they can't right now. Still
+      // guarded on hasActiveAsyncWork(), since a save/upload in flight would get silently
+      // orphaned by a DOM rebuild regardless of visibility.
+      if (pendingWos && !hasActiveAsyncWork()) {
+        var wos = pendingWos; pendingWos = null;
+        applyNow(wos);
+      }
+    } else {
+      check(); // back in the foreground -- see if anything changed while away
+    }
+  });
   window.addEventListener('focus', check);
 })();
 </script>
