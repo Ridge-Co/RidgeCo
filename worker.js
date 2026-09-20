@@ -7262,6 +7262,9 @@ async function processVendorNudges(env) {
     const vendor = vendors.find(v => v.ID === row.Vendor_ID);
     // WO gone, voided, or vendor gone — nothing left to chase.
     if (!wo || wo.Voided === 'TRUE' || !vendor) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_missing' }); continue; }
+    // Vendor opted out of notifications for this WO (Vendor_Notify_Updates='FALSE') — stop
+    // chasing them entirely rather than continuing to queue reminders they asked not to get.
+    if (wo.Vendor_Notify_Updates === 'FALSE') { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_notify_off' }); continue; }
     // Cancelled/Declined stop ALL open request types for this WO outright — nothing left worth
     // chasing a vendor for on a job that isn't happening (per Brett, Sep 16 2026).
     if (['Cancelled','Declined'].includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
