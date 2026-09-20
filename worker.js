@@ -357,7 +357,13 @@ export default {
         if (_viaHubTestToken) {
           let _hubTestAllowed = false, _hubTestErr = null;
           try {
-            _hubTestAllowed = await hubTestWriteAllowed(env, path, body);
+            const _r = await hubTestWriteAllowed(env, path, body);
+            if (_r && typeof _r === 'object') {
+              _hubTestAllowed = !!_r.ok;
+              _hubTestErr = _r.debug || null;
+            } else {
+              _hubTestAllowed = !!_r;
+            }
           } catch (e) {
             _hubTestErr = e.message || String(e);
           }
