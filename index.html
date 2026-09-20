@@ -2239,7 +2239,7 @@ function openWODetail(woId) {
     '<div style="font-size:10px;color:var(--muted);margin-top:8px">Trade defaults are set in Config → Access_Trade_Defaults. Trades not listed default to YES.</div>' +
     '</div>';
 
-  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + notifySection + vaSection);
 
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
