@@ -2577,6 +2577,7 @@ function openNewWOModal() {
   // when nothing's being assigned yet.
   var notifyCb = document.getElementById('wo-vendor-notify'); if (notifyCb) notifyCb.checked = true;
   var notifyGroup = document.getElementById('wo-vendor-notify-group'); if (notifyGroup) notifyGroup.style.display = 'none';
+  var ownerNotifyCb = document.getElementById('wo-owner-notify'); if (ownerNotifyCb) ownerNotifyCb.checked = true;
   // Populate schedule time window options
   var sw = document.getElementById('wo-sched-window-opt');
   if (sw) sw.innerHTML = buildTimeWindowOpts();
