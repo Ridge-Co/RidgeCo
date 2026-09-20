@@ -47,3 +47,15 @@ Checked commits: 99 (excluding merges/doc-audit itself)
 - `9d4fb7a` (2026-09-19 13:48) Add HUB_TEST_TOKEN helpers: isTestRecord, hubTestWriteAllowed, seedTestFixtures — best single-entry match: 20%
 - `bcfe74f` (2026-09-19 13:46) Declare _viaHubTestToken (outer-scope flag for the new staging test-token gate) — best single-entry match: 43%
 - `e87d218` (2026-09-18 20:25) Fix backlog id B-141 -> B-240 in OPS_QUEUE_STATUSES comment — best single-entry match: 33%
+
+## Run: 2026-09-20 16:40 UTC
+Since: 2026-09-19 (source: this script's own last recorded run)
+Checked commits: 75 (excluding merges/doc-audit itself)
+**7 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `98bd310` (2026-09-19 19:00) Fix CHEAP tier: gemini-2.5-flash-lite retired, swap to gemini-3.5-flash-lite — best single-entry match: 38%
+- `6e42d51` (2026-09-19 16:54) seedTestFixtures: verify+retry Unit 40 migration marker write — best single-entry match: 43%
+- `33546bd` (2026-09-19 16:53) Add ensureMarker: self-verifying/self-healing marker writes for test fixtures — best single-entry match: 29%
+- `3be8195` (2026-09-19 16:13) Replace hardcoded per-ID repair/cleanup hacks in seedTestFixtures with a generic dedupeTestFixtures() helper that de-duplicates any TEST- marker set by keeping the lowest ID, so debugging-induced duplicates (Owners 11/12/13 etc) self-heal on every call instead of needing one-off patches — best single-entry match: 39%
+- `cfc98f0` (2026-09-19 16:05) One-time cleanup: de-identify the duplicate fixture set the ID-comparison bug created — best single-entry match: 38%
+- `9d4fb7a` (2026-09-19 13:48) Add HUB_TEST_TOKEN helpers: isTestRecord, hubTestWriteAllowed, seedTestFixtures — best single-entry match: 20%
+- `bcfe74f` (2026-09-19 13:46) Declare _viaHubTestToken (outer-scope flag for the new staging test-token gate) — best single-entry match: 43%
