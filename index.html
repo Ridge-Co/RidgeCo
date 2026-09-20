@@ -1923,7 +1923,7 @@ function openWODetail(woId) {
   '</div>';
   // Sticky action bar — Edit + quick status stay reachable at the top of the WO while you scroll,
   // so you never have to scroll to the bottom to edit or change status (6A).
-  var _stStatuses = ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'];
+  var _stStatuses = ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid','Cancelled'];
   var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:-24px -24px 14px;padding:12px 24px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<button class="btn small" onclick="openEditWOModal(\''+woId+'\')">✏️ Edit</button>' +
     '<button class="btn small secondary" onclick="sendTenantManualUpdate(\''+woId+'\')">📱 Send update</button>' +
