@@ -3709,6 +3709,22 @@ function toggleTenantField(woId, field, newVal) {
   });
 }
 
+function notifyToggle(field, isOn, label, woId, onVal, offVal) {
+  var color = isOn ? "var(--accent2)" : "var(--danger)";
+  var icon = isOn ? "✓" : "✗";
+  return '<button onclick="toggleNotifyField(\''+ woId +'\',\''+ field +'\',\'' + (isOn?offVal:onVal) + '\')"' +
+    ' style="background:var(--surface);border:1px solid '+ color +';border-radius:6px;color:'+ color +';font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;white-space:nowrap">' +
+    icon + ' '+ label +'</button>';
+}
+
+function toggleNotifyField(woId, field, newVal) {
+  var fields = {}; fields[field] = newVal;
+  api('POST','/workorder/update',{id:woId, fields:fields}).then(function(res){
+    if (res && res.error) { toast('Error: '+res.error,'error'); return; }
+    toast(field.replace(/_/g,' ')+' updated','success'); loadAll().then(function(){ openWODetail(woId); });
+  }).catch(function(e){ toast('Error: '+e.message,'error'); });
+}
+
 function setVendorAccess(woId, value) {
   // value: 'TRUE' | 'FALSE' | 'auto'
   api('POST','/workorder/update',{id:woId, fields:{Vendor_Needs_Access:value}}).then(function(res){
