@@ -46,8 +46,7 @@ No live Sheets/staging credentials in this build session — **needs Brett's liv
 `WO_Audit`'s new columns actually appear after a real SMS fires; open a WO with vendor-nudge
 history and confirm the collapsed-by-default/expand UI and message text toggle render correctly;
 have a vendor with an existing bill reload their portal and confirm the badge/button/prefill
-all show up; and — separately — make the one-line `cron-sweep.yml` edit described in point 2
-above (or grant GH Broker's GitHub App `workflows` permission so a future session can do it).
+all show up.
 
 ## 🟡 Open PR: Invoice Submitted vendor-bill status (PR #9, `feature/invoice-submitted-status`)
 Started from two vendor-portal bugs Brett flagged: Open Work Orders not sorting completed jobs
