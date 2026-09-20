@@ -3973,7 +3973,7 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
-  if (notify && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
+  if (notifyTenant && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface),
     // and a short job label (woJobLabel) so two same-trade/same-address jobs never read
