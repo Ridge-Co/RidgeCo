@@ -175,6 +175,21 @@ export default {
             // deliberately stays OFF this list — full admin secret only, same tier as /ops-approve.
             (request.method === 'POST' && path === '/ops-queue-status')
           );
+        // Narrow WRITE token for the Optimizer Scout & Reuse-Radar scheduled task (new, Sep 20
+        // 2026): accepted ONLY for POST /ops-queue/scout-submit, which inserts the task's ranked
+        // findings as 'proposed' Ops_Build_Queue rows for Brett to review — never 'greenlit'
+        // (Brett has explicitly approved it to build), and structurally incapable of reaching
+        // greenlit/prepared/building/done/dropped (see opsQueueScoutSubmit/buildScoutQueueRow —
+        // Status and Risk_Class are hardcoded there, never taken from the request). Deliberately
+        // a DISTINCT token from OPS_QUEUE_TOKEN above: that one reaches 'prepared' and can report
+        // building/done/held; this scheduled task needs neither, so it never carries write access
+        // it doesn't use. Classified SAFE for this narrow purpose per Brett's own explicit
+        // sign-off (Sep 20, 2026) — narrow, insert-only, no money/PII/auth touched, capped at 20
+        // items/call, same cap as opsApprove. Fully inert unless env.SCOUT_QUEUE_TOKEN is set, so
+        // deploying this has zero effect until the secret exists.
+        const _scoutOk = !!env.SCOUT_QUEUE_TOKEN
+          && _tok === env.SCOUT_QUEUE_TOKEN
+          && request.method === 'POST' && path === '/ops-queue/scout-submit';
         // Narrow WRITE token for the customer-facing proposal e-sign (B-076). Accepted ONLY for
         // POST /proposal/sign, which appends a signed-acceptance row to Proposal_Signatures. No
         // money, no QuickBooks, no PII beyond the signer's own name + signature image. The QB
