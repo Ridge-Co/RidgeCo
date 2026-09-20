@@ -7116,7 +7116,7 @@ const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a
 // nudge is answered the moment the WO reaches Complete or later; the invoice nudge is a
 // separate, later-starting ask that isn't answered until the WO actually reaches Invoiced or
 // later. Cancelled/Declined already short-circuit BOTH types earlier in the sweep, unchanged.
-const WO_STATUS_COMPLETE_OR_LATER = ['Complete','Pending Invoice','Invoiced','Paid','Closed'];
+const WO_STATUS_COMPLETE_OR_LATER = ['Complete','Pending Invoice','Invoice Submitted','Invoiced','Paid','Closed'];
 const WO_STATUS_INVOICED_OR_LATER = ['Invoiced','Paid'];
 let _vendorReqReady = false;
 async function ensureVendorReqTab(env) {
