@@ -11467,8 +11467,14 @@ async function hubTestWriteAllowed(env, path, body) {
     return String((body && body.Name) || '').startsWith('TEST-');
   }
   if (path === '/workorder') {
-    const propOk = await isTestRecord(env, 'Properties', body && body.property_id);
-    if (!propOk) return false;
+    const _pid = body && body.property_id;
+    const _prows = await fetchTab(env, 'Properties');
+    const _prow = _prows.find(r => String(r.ID) === String(_pid));
+    const _pmarker = _prow ? String(_prow.Access_Notes || '') : null;
+    const propOk = !!_prow && _pmarker.startsWith('TEST-');
+    if (!propOk) {
+      throw new Error(`workorder-guard: property_id=${JSON.stringify(_pid)} rowsFetched=${_prows.length} rowFound=${!!_prow} marker=${JSON.stringify(_pmarker)}`);
+    }
     if (body && body.tenant_id) return await isTestRecord(env, 'Tenants', body.tenant_id);
     return true;
   }
