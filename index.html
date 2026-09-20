@@ -2162,20 +2162,44 @@ function openWODetail(woId) {
     var el = document.getElementById('auditTrailBody');
     if (!el) return;
     if (!entries || !entries.length) { el.innerHTML='<span style="color:var(--muted)">No changes recorded yet.</span>'; return; }
-    var rows = entries.slice().reverse().map(function(a){
+    function escAuditHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    var ordered = entries.slice().reverse();
+    function renderAuditEntry(a, i){
       var roleColor = {admin:'var(--accent)',owner:'var(--info)',vendor:'var(--accent2)',system:'var(--muted)'}[a.Changed_By_Role||'system']||'var(--muted)';
       var ts = (a.Timestamp||'').replace('T',' ').split('.')[0];
+      var isMsg = a.Field==='SMS' || a.Field==='Email';
       var change = '';
-      if (a.Field==='Description'||a.Field==='Notes') { change = 'content appended'; }
+      if (isMsg) {
+        var chan = a.Field==='Email' ? '✉️' : '💬';
+        var to = a.Recipient_Name ? (a.Recipient_Name+(a.Recipient_Type?' ('+a.Recipient_Type+')':'')) : (a.Recipient_Type||'recipient');
+        var outcomeColor = {sent:'var(--accent2)',held_quiet_hours:'var(--info)',failed:'var(--danger)',failed_no_phone:'var(--danger)',blocked:'var(--muted)'}[a.Outcome]||'var(--muted)';
+        var outcomeLabel = {sent:'sent',held_quiet_hours:'held (quiet hours)',failed:'failed',failed_no_phone:'no phone on file',blocked:'blocked'}[a.Outcome]||(a.Outcome||'');
+        var bodyId = 'msgbody-'+woId+'-'+i;
+        change = chan+' <b>'+(a.Message_Type||(a.Field==='Email'?'Email':'SMS'))+'</b> → '+escAuditHtml(to)+
+          ' <span style="color:'+outcomeColor+'">('+outcomeLabel+')</span>' +
+          (a.Message_Body ? ' <a href="#" onclick="var b=document.getElementById(\''+bodyId+'\');b.style.display=(b.style.display===\'none\'?\'block\':\'none\');return false;" style="color:var(--info);font-size:10px">view text</a>' +
+            '<div id="'+bodyId+'" style="display:none;max-height:120px;overflow-y:auto;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:6px;margin-top:4px;white-space:pre-wrap">'+escAuditHtml(a.Message_Body)+'</div>' : '') +
+          (a.Notes ? ' <span style="color:var(--muted)">— '+escAuditHtml(a.Notes)+'</span>' : '');
+      }
+      else if (a.Field==='Description'||a.Field==='Notes') { change = 'content appended'; }
       else { change = '<span style="color:var(--danger);text-decoration:line-through">'+(a.Old_Value||'—').substring(0,40)+'</span> → <span style="color:var(--accent2)">'+(a.New_Value||'—').substring(0,40)+'</span>'; }
       return '<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:11px">' +
         '<span style="color:var(--muted);flex-shrink:0;min-width:100px">'+ts+'</span>' +
         '<span style="flex-shrink:0;color:'+roleColor+'">'+a.Changed_By+'</span>' +
         '<span style="color:var(--muted);flex-shrink:0">('+a.Changed_By_Role+')</span>' +
-        '<span><b>'+a.Field+'</b> '+change+'</span>' +
+        '<span>'+(isMsg?'':'<b>'+a.Field+'</b> ')+change+'</span>' +
       '</div>';
-    }).join('');
-    el.innerHTML = rows;
+    }
+    // Last-5/expand (Sep 20 2026, Brett's ask) — Hub only, not vendor/tenant/owner portals.
+    var visibleHtml = ordered.slice(0,5).map(renderAuditEntry).join('');
+    var html = visibleHtml;
+    if (ordered.length > 5) {
+      var restHtml = ordered.slice(5).map(function(a,i){ return renderAuditEntry(a, i+5); }).join('');
+      var extra = ordered.length - 5;
+      html += '<div style="padding-top:6px"><a href="#" id="auditTrailToggle" style="color:var(--info);font-size:11px" onclick="var r=document.getElementById(\'auditTrailRest\');var t=document.getElementById(\'auditTrailToggle\');if(r.style.display===\'none\'){r.style.display=\'block\';t.textContent=\'Show fewer\';}else{r.style.display=\'none\';t.textContent=\'Show '+extra+' more\';}return false;">Show '+extra+' more</a></div>' +
+        '<div id="auditTrailRest" style="display:none">'+restHtml+'</div>';
+    }
+    el.innerHTML = html;
   }).catch(function(){ var el=document.getElementById('auditTrailBody'); if(el) el.innerHTML='<span style="color:var(--muted)">Unavailable</span>'; });
 
   // Tenant visibility controls in detail. Label names the actual current tenant (when known)
