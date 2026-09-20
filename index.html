@@ -5746,6 +5746,21 @@ function hubBillHtml(k, woId, wo) {
           '<span>Bill total</span><span id="hb-total-' + k + '" style="color:var(--warn)">$0.00</span></div>' +
       '</div>' +
 
+      // This bill moves the WO to Invoice Submitted, which fires the same completion-notify
+      // bundle a manual Mark Complete does (if it hasn't already fired for this WO) — these
+      // checkboxes are the one-time override for THIS transition, pre-checked from whatever's
+      // currently persisted on the WO so an already-silenced audience stays silenced by default
+      // (Brett, Sep 20 2026: "inherit selections from previous steps but give me the option to
+      // uncheck").
+      '<div style="margin-top:10px;padding:10px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">' +
+        '<div style="font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">NOTIFY ON THIS BILL</div>' +
+        '<div style="display:flex;gap:14px;flex-wrap:wrap">' +
+          '<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="hb-notify-tenant-' + k + '"' + (wo.Tenant_Notify_Updates === 'FALSE' ? '' : ' checked') + ' style="width:auto"> Tenant</label>' +
+          '<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="hb-notify-owner-' + k + '"' + (wo.Owner_Notify_Override === 'off' ? '' : ' checked') + ' style="width:auto"> Owner</label>' +
+          '<label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="hb-notify-vendor-' + k + '"' + (wo.Vendor_Notify_Updates === 'FALSE' ? '' : ' checked') + ' style="width:auto"> Vendor</label>' +
+        '</div>' +
+      '</div>' +
+
       '<button class="btn" id="hb-submit-' + k + '" onclick="hubBillSubmit(\'' + k + '\',\'' + esc(String(woId)) + '\')" ' +
         'style="width:100%;margin-top:10px;background:var(--accent);color:#fff;font-size:13px;font-weight:bold;padding:9px">Save this bill</button>' +
       '<div id="hb-msg-' + k + '" style="margin-top:6px"></div>' +
