@@ -6051,6 +6051,11 @@ function hubBillSubmit(k, woId) {
     // with the new bill's id, so the hours count as this bill's labour and stop being
     // offered as supervision to charge on top. Only sent when the hours were pulled in.
     time_entry_ids: safeArray(st.timeIds),
+    // Per-audience overrides for the resulting Invoice Submitted transition — read by
+    // addVendorBillStatusTransition, not written to the Vendor_Bills row itself.
+    notify_tenant: !!(document.getElementById('hb-notify-tenant-' + k) || {}).checked,
+    notify_owner: !!(document.getElementById('hb-notify-owner-' + k) || {}).checked,
+    notify_vendor: !!(document.getElementById('hb-notify-vendor-' + k) || {}).checked,
   };
 
   var woNow = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
