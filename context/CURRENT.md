@@ -1,5 +1,54 @@
 # WHERE THINGS STAND — Sep 20, 2026 (Invoice Submitted vendor-bill status + notify-tier controls shipped as PR #9 (open, awaiting Brett's staging verify + merge — not yet live); HUB_TEST_TOKEN staging test-infra fully unblocked — the real root cause of the day-long "/workorder always 403s" mystery was never the guard code (isTestRecord/hubTestWriteAllowed were correct throughout), it was that maintenance-hub-staging's Cloudflare Build only auto-deploys from a `staging` git branch that had drifted 457 commits behind `main` since the original Sep 19 setup, so every merge to main all day built as an unpromoted Cloudflare "version" but never reached live traffic; fixed via a one-time `git push origin main:staging --force` (Brett, via GitHub Codespaces, since GH Broker's git tools are intentionally fast-forward-only); full /workorder → /assign → /status write lifecycle now verified working end-to-end against staging — see context/... doc and the "THE ACTUAL ROOT CAUSE" section for the full diagnosis; open follow-up: decide whether to point maintenance-hub-staging's production branch directly at `main` to remove the manual-sync step permanently; Ops_Build_Queue greenlit-13 pass — admin_share_attachments 21% failure rate root-caused and fixed (Drive_File_Missing skip-list) + smoke test; failure runbook + dead-man's-switch alerting shipped, dormant behind Config flags; latency instrumentation added to wo_schedule/admin_share_attachments; items_summarize escalation root-caused and fixed same day — Google retired the CHEAP-tier model (gemini-2.5-flash-lite), swapped to gemini-3.5-flash-lite, live-verified via /admin/items-summarize-test; auto wo_create from inbound triggers explicitly left out of scope. Selftest auto-verification pass added — POST /selftest + daily 7am ET cron digest, closing the "built, not yet live-verified" gap, but not yet live-verified itself; Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window; CAP-035 vendor.html `.btn-muted` cosmetic fix shipped and live-verified via a real test-vendor login)
 
+## 🟡 Open PR: Sweep single-flight lock + per-WO communication audit + vendor invoice confirmation (`feature/sweep-lock-and-message-audit`)
+Real incident, same day: a vendor (Eddie Smith, WO-1195) got the identical "please submit your
+invoice" nudge SMS twice, 2.5 hours apart (2:50pm/5:18pm ET). Root cause: two independent
+automatic triggers — GitHub Actions `cron-sweep.yml`'s own `schedule:` and the Cloudflare Cron
+Trigger in `scheduled()` — both call `cronSweep()` on the same `*/15 * * * *` cadence, on the
+false assumption (stated directly in a comment) that it was harmless/idempotent to fire twice.
+It wasn't: `processVendorNudges`/`processQuietHoursQueue`/`processPendingNotifications` all
+read-a-row-as-due → act → mark-done-afterward, with zero claim step.
+
+Three things shipped on this branch:
+1. **`cronSweep()` now claims a short-lived lock** (Config key `Cron_Sweep_Claimed_Until`, 2 min
+   TTL) before doing any work — a second overlapping call sees the claim and skips. Not a true
+   atomic primitive (this Worker has no KV/Durable Object binding), so it narrows the race rather
+   than eliminating it outright.
+2. **🔴 Needs Brett's own one-time edit — GH Broker's GitHub App has no `workflows` permission,
+   so it could not touch `.github/workflows/cron-sweep.yml` itself.** The actual fix for the
+   collision is removing that workflow's own `schedule:` trigger (keeping `workflow_dispatch:`
+   only) so the Cloudflare Cron Trigger is the sole automatic caller — GitHub's own schedule
+   firing at nearly the same wall-clock minute as the Cloudflare trigger is exactly the scenario
+   the Sheets-based lock above can't fully close (both could pass the claim check within the same
+   sub-second window). Until that one edit is made by hand (or the GitHub App is granted
+   `workflows` permission), the lock is a meaningful mitigation but not a complete fix. The exact
+   diff needed is in this PR's description.
+3. **Per-WO communication audit** — `WO_Audit` (the existing "AUDIT TRAIL" on a WO's detail
+   screen) gains message-logging columns (`Channel`, `Recipient_Name`, `Recipient_Type`,
+   `Message_Type`, `Message_Body`, `Outcome`), additive/self-provisioned via `ensureColumns`.
+   Every WO-tied SMS is now logged from the `smsGatedSend` chokepoint (covers every call site —
+   vendor nudges, tenant/owner status updates — in one place), and the vendor invoice-
+   confirmation email is logged from `sendVendorInvoiceConfirmationEmail`. `index.html`'s audit
+   trail renderer shows the full sent text collapsed behind a "view text" toggle, and now shows
+   only the last 5 entries by default with a "Show N more" expand — Hub only, per Brett's ask,
+   vendor/tenant/owner portals untouched.
+4. **Vendor invoice-submitted confirmation** (`vendor.html`) — directly answers Eddie's exact
+   confusion (he said he submitted "several times" because it wasn't clear it had gone through):
+   a persistent "✓ INVOICE SUBMITTED $X" badge now shows on the COLLAPSED work-order card (not
+   just inside the expanded detail panel, which is all that existed before), the Bill button
+   relabels to "Update invoice," and reopening the bill modal shows a notice + pre-fills the core
+   fields from the existing submission. Uses the `/vendor-bills` data `loadVendorBillSummary`
+   already fetches — no new API call. Resubmitting still goes through `addVendorBill`'s existing
+   same-day/same-values dedup, so an unchanged resubmit stays a no-op, not a second bill.
+
+`node --check` clean on worker.js and every inline `<script>` block in index.html/vendor.html.
+No live Sheets/staging credentials in this build session — **needs Brett's live pass**: confirm
+`WO_Audit`'s new columns actually appear after a real SMS fires; open a WO with vendor-nudge
+history and confirm the collapsed-by-default/expand UI and message text toggle render correctly;
+have a vendor with an existing bill reload their portal and confirm the badge/button/prefill
+all show up; and — separately — make the one-line `cron-sweep.yml` edit described in point 2
+above (or grant GH Broker's GitHub App `workflows` permission so a future session can do it).
+
 ## 🟡 Open PR: Invoice Submitted vendor-bill status (PR #9, `feature/invoice-submitted-status`)
 Started from two vendor-portal bugs Brett flagged: Open Work Orders not sorting completed jobs
 to the bottom, and no interim WO status when a vendor submits a bill. Expanded into a full
