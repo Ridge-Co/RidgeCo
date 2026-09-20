@@ -587,7 +587,7 @@ function renderWOs(wos) {
           '<textarea id="notes-' + idx + '" placeholder="Add notes (optional)…"></textarea>' +
           '<div class="btn-row">' +
             '<button class="btn btn-sm btn-green" onclick="submitStatus(\'' + wo.ID + '\',' + idx + ')">SAVE STATUS</button>' +
-            '<button class="btn btn-sm" style="background:var(--accent2);color:#fff" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
+            '<button class="btn btn-sm" id="bill-btn-' + idx + '" style="background:var(--accent2);color:#fff" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
           '</div>' +
           '<div id="action-msg-' + idx + '"></div>' +
           '<div id="bill-summary-' + idx + '" style="margin-top:8px"></div>' +
