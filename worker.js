@@ -3789,7 +3789,7 @@ async function createWorkOrder(env, body) {
     const unit = units.find(u => u.ID === body.unit_id);
     const property = properties.find(p => p.ID === body.property_id);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const woLike = { ID: woId, Unit_ID: body.unit_id||'', Property_ID: body.property_id||'', Tenant_ID: body.tenant_id||'', Trade: body.trade||'', Description: body.description||'', Created_Date: now };
+    const woLike = { ID: woId, Unit_ID: body.unit_id||'', Property_ID: body.property_id||'', Tenant_ID: body.tenant_id||'', Trade: body.trade||'', Description: body.description||'', Created_Date: now, Owner_Notify_Override: body.owner_notify === false || body.owner_notify === 'FALSE' ? 'off' : '' };
     // Owner Received: ONLY for tenant-portal-submitted WOs (Type='tenant') — Brett was
     // explicit an admin-created manual WO should NOT trigger this (the admin creating it
     // already knows about it; a tenant-submitted request is the one case the owner genuinely
