@@ -357,7 +357,13 @@ export default {
         if (_viaHubTestToken) {
           let _hubTestAllowed = false, _hubTestErr = null;
           try {
-            _hubTestAllowed = await hubTestWriteAllowed(env, path, body);
+            const _r = await hubTestWriteAllowed(env, path, body);
+            if (_r && typeof _r === 'object') {
+              _hubTestAllowed = !!_r.ok;
+              _hubTestErr = _r.debug || null;
+            } else {
+              _hubTestAllowed = !!_r;
+            }
           } catch (e) {
             _hubTestErr = e.message || String(e);
           }
@@ -11472,11 +11478,13 @@ async function hubTestWriteAllowed(env, path, body) {
     const _prow = _prows.find(r => String(r.ID) === String(_pid));
     const _pmarker = _prow ? String(_prow.Access_Notes || '') : null;
     const propOk = !!_prow && _pmarker.startsWith('TEST-');
-    if (!propOk) {
-      throw new Error(`workorder-guard: property_id=${JSON.stringify(_pid)} rowsFetched=${_prows.length} rowFound=${!!_prow} marker=${JSON.stringify(_pmarker)}`);
+    const _debug = `workorder-guard: property_id=${JSON.stringify(_pid)} rowsFetched=${_prows.length} rowFound=${!!_prow} marker=${JSON.stringify(_pmarker)}`;
+    if (!propOk) return { ok: false, debug: _debug };
+    if (body && body.tenant_id) {
+      const tOk = await isTestRecord(env, 'Tenants', body.tenant_id);
+      return { ok: tOk, debug: tOk ? undefined : `workorder-guard: tenant_id=${JSON.stringify(body.tenant_id)} failed isTestRecord (propOk was true: ${_debug})` };
     }
-    if (body && body.tenant_id) return await isTestRecord(env, 'Tenants', body.tenant_id);
-    return true;
+    return { ok: true, debug: _debug };
   }
   if (path === '/assign') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
