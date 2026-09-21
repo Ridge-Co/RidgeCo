@@ -30,6 +30,13 @@ intent).
    `/qb/setup-trades`, and the reserved-but-unimplemented `/qb/connect`,
    `/qb/callback`, `/qb/webhook` (these 3 fall through to 404 — no handler yet).
    Note: `/public/entities-feed` is **behind** the secret despite the name.
+4. **`Ops_Build_Queue` and its whole endpoint family postdate this map (built
+   after the July 21 generation date) and were never backfilled** — `/ops-queue`,
+   `/ops-queue-prepare`, `/ops-queue-update`, `/ops-review`,
+   `/ops-queue/start-build`, `/ops-queue-status` don't appear below. Added Sep 20
+   as a targeted edit: the new `POST /ops-queue/scout-submit` route (PR #14) and
+   an `Ops_Build_Queue` reverse-index row — the rest of this tab's surface is
+   still owed a real backfill on the next full `ridgeco-map` refresh.
 
 Confirmed consistent with FEATURE_LOG: WO identity resolves by header-named `ID`
 via `findWO` (`w.ID === woId`) / `idColIndex` (finds `ID` header, which sits at
@@ -175,6 +182,7 @@ secret gate at ≈38 (`if (!PUBLIC_PATHS.includes(path))`), then method +
 | POST /config/set | setConfigKey | Set config key | Config · W | secret | ≈1706 |
 | POST /invoice-review/approve | approveInvoiceReview | Approve markup → Invoice_Review log | Vendor_Bills · W, Invoice_Review · W | secret | ≈1006 |
 | POST /qb/send-invoice | qbSendInvoice | Push invoice+bill to QuickBooks (preview-first) | Work_Orders · W, Invoice_Review · W; Properties/Owners/Vendors/Vendor_Bills · R; QB API | secret | ≈2137 |
+| POST /ops-queue/scout-submit | opsQueueScoutSubmit | Insert Scout & Reuse-Radar findings as `Status:'proposed'` backlog rows (max 20/call); best-effort logs a summary to Ops_Review_Log | Ops_Build_Queue · W; Ops_Review_Log · W (best-effort) | secret, narrow (`SCOUT_QUEUE_TOKEN` via `X-Auth-Token` — not `WORKER_SECRET`) | new, PR #14 (unmerged) |
 
 Unmatched method/path → `json({error:'Not found'}, 404)` at ≈175.
 `PUBLIC_PATHS` (worker.js ≈37): `/sms-inbound`, `/qb/test`, `/qb/accounts`,
@@ -327,6 +335,7 @@ their route.)
 | **Config** | /config | /config/set | QB refresh-token persisted here (FL rule 8) |
 | **Troubleshooting_Cache** | /cache | /cache/save, /cache/flag, /cache/refresh | |
 | **Wishlist** | /wishlist | /wishlist/add, /wishlist/delete | Dev Log tab (PAT-008) |
+| **Ops_Build_Queue** | /ops-queue, /ops-review (not indexed above — tab postdates this map) | /ops-queue-update, /ops-queue-prepare, /ops-queue/start-build, /ops-queue-status (not indexed above — predate this map), **+ /ops-queue/scout-submit** (new, PR #14, Sep 20 — narrow `SCOUT_QUEUE_TOKEN`-gated insert-only path) | New Sep 20 (PR #14): `Lens`, `Requires_Spend`, `Spend_Note`, `Workaround` columns; `Status` lifecycle gains `'proposed'` (scout-submit only, sits before `greenlit`). This tab's full endpoint/column history predates this map (July 21) and is only partially backfilled here — see doc-drift flag 4. |
 
 ---
 

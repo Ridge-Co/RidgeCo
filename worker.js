@@ -175,6 +175,21 @@ export default {
             // deliberately stays OFF this list — full admin secret only, same tier as /ops-approve.
             (request.method === 'POST' && path === '/ops-queue-status')
           );
+        // Narrow WRITE token for the Optimizer Scout & Reuse-Radar scheduled task (new, Sep 20
+        // 2026): accepted ONLY for POST /ops-queue/scout-submit, which inserts the task's ranked
+        // findings as 'proposed' Ops_Build_Queue rows for Brett to review — never 'greenlit'
+        // (Brett has explicitly approved it to build), and structurally incapable of reaching
+        // greenlit/prepared/building/done/dropped (see opsQueueScoutSubmit/buildScoutQueueRow —
+        // Status and Risk_Class are hardcoded there, never taken from the request). Deliberately
+        // a DISTINCT token from OPS_QUEUE_TOKEN above: that one reaches 'prepared' and can report
+        // building/done/held; this scheduled task needs neither, so it never carries write access
+        // it doesn't use. Classified SAFE for this narrow purpose per Brett's own explicit
+        // sign-off (Sep 20, 2026) — narrow, insert-only, no money/PII/auth touched, capped at 20
+        // items/call, same cap as opsApprove. Fully inert unless env.SCOUT_QUEUE_TOKEN is set, so
+        // deploying this has zero effect until the secret exists.
+        const _scoutOk = !!env.SCOUT_QUEUE_TOKEN
+          && _tok === env.SCOUT_QUEUE_TOKEN
+          && request.method === 'POST' && path === '/ops-queue/scout-submit';
         // Narrow WRITE token for the customer-facing proposal e-sign (B-076). Accepted ONLY for
         // POST /proposal/sign, which appends a signed-acceptance row to Proposal_Signatures. No
         // money, no QuickBooks, no PII beyond the signer's own name + signature image. The QB
@@ -218,7 +233,7 @@ export default {
             (request.method === 'POST' && HUB_TEST_WRITE_PATHS.includes(path))
           );
         if (_hubTestOk) _viaHubTestToken = true;
-        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk) {
+        if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -551,6 +566,7 @@ export default {
         if (path === '/ops-queue-prepare')        return await opsQueuePrepare(env, body);
         if (path === '/ops-queue-status')         return await opsQueueStatus(env, body);
         if (path === '/ops-queue/start-build')    return await opsQueueStartBuild(env, body);
+        if (path === '/ops-queue/scout-submit')   return await opsQueueScoutSubmit(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/selftest')                 return await selftestRunEndpoint(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
@@ -8744,7 +8760,25 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // whenever a fired build session reports an item back as 'held' (real blocker, or a decision
 // only Brett can make). Cleared back to blank on a 'done' report — cleanup in case that report
 // is a retry after a prior held attempt on the same item.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note'];
+// Lens/Requires_Spend/Spend_Note/Workaround (Sep 20 2026, Optimizer Scout & Reuse-Radar,
+// opsQueueScoutSubmit): additive columns for a system-generated 'proposed' row — the same
+// additive-schema move already treated as SAFE when Drop_Reason/Superseded_By were added to this
+// same tab (ensureColumns handles it, nothing renamed or removed). Lens is which review angle
+// produced the finding (Outward/Inward/Product). Requires_Spend/Spend_Note mirror this codebase's
+// existing boolean-as-string convention ('TRUE'/'FALSE', see PHONE_TABS/PIN_TABS etc.) so Brett
+// can see at a glance whether a proposed item costs anything before he greenlights it. Workaround
+// is the free/cheap alternative, when one exists, so a paid idea always ships with its cheap
+// sibling right next to it. Blank on every row created by opsApprove/opsQueuePrepare — only
+// opsQueueScoutSubmit ever populates these.
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround'];
+// 'proposed' (Sep 20 2026, Optimizer Scout & Reuse-Radar): a SYSTEM-generated backlog candidate
+// awaiting Brett's own review — distinct from 'greenlit', which means Brett has explicitly
+// approved it to build. The ONLY status opsQueueScoutSubmit can ever write (see
+// buildScoutQueueRow) — it can never reach greenlit/prepared/building/done/dropped/held itself.
+// Sits first/earliest in this list: a proposed item that survives Brett's review becomes
+// 'greenlit' via the existing /ops-queue-update flow (proposals.html), same as any other
+// proposal — scout-sourced items just start one stage earlier than Brett hand-picking from
+// Ops_Review_Log.
 // 'prepared' (Sep 18 2026, B-240) sits between greenlit and building: the Rung-1 Prepare agent's
 // ONLY allowed transition (via the narrow OPS_QUEUE_TOKEN, see opsQueuePrepare). It can never
 // set building/done/dropped — those stay behind the full admin secret (opsQueueUpdate), reached
@@ -8755,7 +8789,7 @@ const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effo
 // tier that already reaches 'prepared' via opsQueuePrepare. Distinct from 'dropped' (Brett killed
 // the idea outright): a held item is expected to be retried once the blocker clears, typically by
 // firing Start Build again on just that one item.
-const OPS_QUEUE_STATUSES = ['greenlit', 'prepared', 'building', 'done', 'dropped', 'held'];
+const OPS_QUEUE_STATUSES = ['proposed', 'greenlit', 'prepared', 'building', 'done', 'dropped', 'held'];
 
 async function opsApprove(env, body) {
   const items = Array.isArray(body && body.items) ? body.items : [];
@@ -8815,6 +8849,16 @@ async function opsQueueUpdate(env, body) {
   const fields = { Status: status };
   if (body && body.reason) fields.Drop_Reason = String(body.reason).slice(0, 500);
   if (body && body.superseded_by) fields.Superseded_By = String(body.superseded_by).slice(0, 200);
+  // Risk_Class (Sep 20 2026, "Proposed" review lane, proposals.html): optional — sent only when
+  // Brett is explicitly approving a scout-proposed item (Risk_Class starts '' on those rows, see
+  // buildScoutQueueRow) up to 'greenlit' and picking its risk class in the same step. Same
+  // fail-closed convention as opsApprove/isEligibleForStartBuild: only the exact string 'SAFE'
+  // counts — anything else sent here ('GATED', misspelled, blank) stores as GATED, never
+  // defaults to eligible. Omitted entirely on any other /ops-queue-update call, so this never
+  // changes existing greenlit/prepared/etc. transitions that don't pass it.
+  if (body && body.risk_class !== undefined && body.risk_class !== null && body.risk_class !== '') {
+    fields.Risk_Class = String(body.risk_class).toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
+  }
   return await updateRow(env, OPS_QUEUE_TAB, id, fields);
 }
 
@@ -9043,6 +9087,97 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
   ].join('\n');
 
   return sections.join('\n\n') + '\n\n' + instructions;
+}
+
+// PURE — validates a POST /ops-queue/scout-submit body's `items` array before any I/O runs.
+// Same 1–20 shape/cap and error wording as opsApprove, kept in one place so
+// opsQueueScoutSubmit and its tests share the exact same strings. No env, no I/O —
+// independently testable (test/ops-queue-scout-submit.test.mjs).
+function validateScoutSubmitItems(items) {
+  if (!Array.isArray(items) || !items.length) return { ok: false, error: 'items required' };
+  if (items.length > 20) return { ok: false, error: 'too many at once (max 20)' };
+  return { ok: true };
+}
+
+// PURE — shapes ONE Scout & Reuse-Radar finding into the exact Ops_Build_Queue row fields
+// opsQueueScoutSubmit writes via addRow. Status/Approved_By/Risk_Class are HARDCODED here, never
+// read from the item — this is what makes it structurally impossible for this endpoint to ever
+// produce a greenlit row (mirrors how opsQueuePrepare can only ever produce 'prepared', and
+// validateQueueStatusReport can only ever produce building/done/held). Requires_Spend follows
+// this codebase's existing boolean-as-string convention. No env, no I/O — independently testable
+// (test/ops-queue-scout-submit.test.mjs).
+function buildScoutQueueRow(it, now, reviewTs) {
+  it = it || {};
+  return {
+    Timestamp: now,
+    Title: String(it.title || '').slice(0, 200),
+    Rank: String(it.rank || ''),
+    Problem: String(it.problem || '').slice(0, 600),
+    Impact: String(it.impact || '').slice(0, 300),
+    Effort: String(it.effort || ''),
+    Tag: String(it.tag || ''),
+    First_Step: String(it.action || it.first_step || '').slice(0, 500),
+    Review_TS: reviewTs,
+    Status: 'proposed',
+    Approved_By: 'scout-reuse-radar',
+    Risk_Class: '',
+    Lens: String(it.lens || ''),
+    Requires_Spend: it.requires_spend ? 'TRUE' : 'FALSE',
+    Spend_Note: String(it.spend_note || '').slice(0, 300),
+    Workaround: String(it.workaround || '').slice(0, 300),
+  };
+}
+
+// POST /ops-queue/scout-submit {round, summary, review_ts, items:[...]} — the Optimizer Scout &
+// Reuse-Radar scheduled task's ONE write path into Ops_Build_Queue (new, Sep 20 2026), so its
+// ranked research findings land as real backlog rows Brett can browse and approve instead of a
+// chat message he has to retype by hand. Every row lands as Status:'proposed' — a
+// system-generated candidate awaiting Brett's own review, distinct from 'greenlit' (Brett has
+// explicitly approved it to build) — via buildScoutQueueRow, which hardcodes
+// Status/Approved_By/Risk_Class, so this endpoint can never itself produce a greenlit row; the
+// existing /ops-queue-update flow (proposals.html, full admin secret) is still the only path from
+// 'proposed' to 'greenlit'. Also writes ONE best-effort summary row into the same Ops_Review_Log
+// tab runWeeklyReview already writes to (same columns, reused exactly — see OPS_REVIEW_COLS),
+// wrapped in try/catch so a history-write failure never breaks the main queue insert above (same
+// best-effort posture as runWeeklyReview's own history write). Accepted ONLY via the narrow
+// SCOUT_QUEUE_TOKEN (see the auth gate near the top of fetch()) — never the full admin secret,
+// and this token is structurally incapable of reaching anything but 'proposed'. Insert-only: it
+// never builds, deploys, or spends real money, and touches no money/PII/auth field. 1–20 items
+// per call, same cap as opsApprove. Reuses the exact additive-schema move (ensureColumns,
+// additive-only) already classified SAFE for Drop_Reason/Superseded_By on this same tab — the
+// four new Lens/Requires_Spend/Spend_Note/Workaround columns are added the same way. Classified
+// SAFE for this narrow purpose per Brett's own explicit sign-off (Sep 20, 2026): he reviewed and
+// approved this exact design — narrow, insert-only, no money/PII/auth touched, capped at 20
+// items/call — before this was built.
+async function opsQueueScoutSubmit(env, body) {
+  const items = Array.isArray(body && body.items) ? body.items : [];
+  const verdict = validateScoutSubmitItems(items);
+  if (!verdict.ok) return json({ error: verdict.error }, 400);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  const now = new Date().toISOString();
+  const reviewTs = String((body && body.review_ts) || now);
+  let queued = 0;
+  for (const it of items) {
+    await addRow(env, OPS_QUEUE_TAB, buildScoutQueueRow(it, now, reviewTs));
+    queued++;
+  }
+  // Best-effort history row in Ops_Review_Log — never let a failure here undo or fail the
+  // request for the queue rows already written above (same posture as runWeeklyReview's own
+  // history write, and rule 174/CLAUDE.md: this really is non-fatal to the caller, since the
+  // thing the caller asked for — the queue insert — has already succeeded by the time this runs).
+  try {
+    await ensureTab(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
+    await ensureColumns(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
+    await addRow(env, OPS_REVIEW_TAB, {
+      Timestamp: now, Window_Days: '', Total_Jobs: '', Success_Rate: '', Escalation_Rate: '',
+      Human_Corrected: '', Est_Cost: '', Stuck_Patterns: '',
+      Proposal: String((body && body.summary) || '').slice(0, 2000),
+      Proposal_JSON: JSON.stringify(items),
+      Trigger: 'scout_reuse_radar', Delivered: 'no',
+    });
+  } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
+  return json({ ok: true, queued });
 }
 
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
