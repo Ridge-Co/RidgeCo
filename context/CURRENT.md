@@ -224,3 +224,229 @@ was available) to run once daily ~7am ET with `deliver:true`, tracked in a new `
 tab, and delivered via the real `gmailSendEmail` — deliberately NOT the dead `deliverDigestEmail`
 stub. `test/selftest.test.mjs` (105 assertions) covers all the pure/helper logic; `node --check`
 clean; landed as 5 small atomic commits. Full detail FEATURE_LOG rule 193.
+
+**Not yet run for real** — no credential to do that from this build session, by design. Brett:
+(1) hit `POST /selftest` once by hand to see the first real digest and confirm all 38 checks pass
+live; (2) set `admin_email` + `selftest_digest_enabled=TRUE` (Config) when ready for the daily
+email — both start unset/off; (3) check `Selftest_Results` the morning after the next cron sweep
+to confirm the ~7am ET gate actually fired.
+
+## 🟡 Open: Brett to apply the WO-1175 $500 vendor-bill adjustment himself
+Root cause found and fixed for a real incident: Cesar Diaz's (Gomez Homes Restoration) final
+vendor bill on WO-1175 (1305 N Calvert St, drywall) existed in QuickBooks (#7818, $3,400) but
+was structurally invisible on Who To Pay — Signed-Proposal bookings were tracked only on
+`Scope_Signatures`, never as `Vendor_Bills`/`Invoice_Review` rows, which is all `qbPayables` ever
+read. Fixed at the root: `qbPayables` now also builds rows from `Scope_Signatures` directly, a
+new "vendor bill missing" state flags genuine gaps instead of hiding them, a
+`Final_Bill_Skip_Reason` column mirrors rule 145's deposit-side safety net for the final phase,
+and WO auto-close-to-Paid is now tied to the final vendor bill specifically (deposit can never
+auto-close a WO). Also shipped a reusable `/scope-proposal/adjust-bill` tool + "Adjust vendor
+bill" UI link for one-off dollar corrections. `BUILD_VERSION` → `2026-09-18.3`, live-verified.
+Full detail FEATURE_LOG rule 192.
+
+**Still open — deliberately left for Brett (Rung-3, money write, never autonomous):** open
+Signed Proposals → 1305 N Calvert St → final row → "Adjust vendor bill" → enter `500` and a
+reason → Confirm. That absorbs the vendor's $500 unforeseen-complexity increase (never billed to
+the customer) and brings the balance owed from $2,900 to $3,400 so Cesar can actually be paid.
+Also worth a glance: the new "vendor bill missing" bucket on Who To Pay, in case another
+Signed-Proposal job has the same undiscovered gap.
+
+## 🟡 Open: confirm the first Monday 8:30am ET weekly-review text actually arrives
+Weekly Optimizer review delivery was turned on this session (its own `weekly_review_enabled`
+Config flag, separate from the still-dormant daily digest `digest_enabled`) — recipient is
+`admin_phone` (410-259-2314, reused from the existing admin-alert pattern), cron moved to `30 12
+* * 1` (8:30am ET). **Not live-verified with an actual sent SMS** — `POST /ops-review`
+deliberately hardcodes `deliver:false` for manual/on-demand runs (an existing reviewer note,
+"don't let checking the review spam a real send"), so there's no way to force a real test short
+of the actual cron firing. First real send is the next Monday. Full detail FEATURE_LOG rule 189.
+
+## 🟢 Shipped: greenlit Ops_Build_Queue batch (telemetry + digest health) — full detail FEATURE_LOG rule 188
+Brett handed over the live 18-item greenlit queue and asked for relevance-checked builds, not a
+blind pass. Every item was checked against live `/ops-telemetry` first. Root-caused two items
+that the queue itself had mis-described: receipt_parse's "73% failure rate" was one permanently
+corrupt file retrying forever (a hard 0-token Claude vision API rejection, not an OCR-quality
+problem) — fixed with a 3-attempt cap tracked in Config; items_summarize's "100% escalation" had
+zero diagnosable cause in telemetry because `routeAI` silently discarded the CHEAP-tier failure
+reason before escalating — now captured and logged. Also shipped: latency timers on the four
+job types that had none, per-job-type cost breakdown in `computeTelemetryMetrics`, and a digest
+`SYSTEM HEALTH` section (job types with ≥3 runs and <95% success in 24h). Queue itself updated to
+match reality: 9 items marked `done`/`dropped` with traceable reasons (via the `Drop_Reason`/
+`Superseded_By` columns rule 187 added), 6 left `greenlit` with reasons why (2 need real
+profiling data first, not a blind fix; 1 is architecturally impossible to build as a pure
+self-check; 1 touches auto-SMS to real owners and needs its own design pass, not a freehand
+build). `BUILD_VERSION` → `2026-09-17.2`.
+
+## 🟢 Shipped: Optimizer v1.1 — product/UX lens + Ops_Build_Queue integrity self-check — full detail FEATURE_LOG rule 187
+Concurrent session (landed mid-build on the item above, no conflict): widened the Optimizer
+beyond telemetry-reactive fixes to also surface UI/functionality/usability opportunities via the
+existing Scout & Reuse-Radar task, and gave `Ops_Build_Queue` real `Drop_Reason`/`Superseded_By`
+columns so a dropped/superseded item carries its own evidence instead of just vanishing.
+`BUILD_VERSION` → `2026-09-17.1`.
+
+## 🟡 Open: confirm the GitHub Actions `CRON_SWEEP_TOKEN` repo secret is actually set
+Brett ran a live bulk-welcome test into quiet hours and asked whether it should have gone out
+yet. It's correctly queued (`Message_Queue`, `Send_After` = next 9am ET) — that part is working
+— but this session couldn't confirm the *scheduled* GitHub Actions side of `cron-sweep.yml`
+actually fires every 15 minutes. A Cloudflare Worker secret of the same name being set
+(confirmed via `/health` → `cron_sweep.token_set: true`) does NOT mean the separate GitHub
+Actions repo secret is also set — and this exact failure mode (Cloudflare secret set, GitHub
+Actions secret never was, workflow "succeeds" every run while silently no-op'ing) is already a
+confirmed, documented problem in this same repo for a different workflow (`SELFTEST_TOKEN`, PR
+#3). Two ways to close this out: Brett confirms `CRON_SWEEP_TOKEN` is listed under repo Settings
+→ Secrets and variables → Actions, or a future session checks back after 9am ET and manually
+fires `POST /cron/sweep` (admin-token-gated, confirmed working when called directly) if nothing
+went out on its own.
+
+## 🟢 Shipped + LIVE ROLLOUT UNDERWAY: editable Message Templates + property-wide notices — full detail FEATURE_LOG rules 181, 186
+Brett wanted to release SMS to tenants/vendors for real, then — before anything actually went to
+a real person — caught that the copy was wrong: generic "Ridge Co. Property Management," no
+landlord reference, no acknowledgment of the new number, named Brett personally instead of an
+assistant persona, and no way to edit any of it without a code push. Built a real
+`Message_Templates` tab (self-seeding, editable via a new Messaging page with a live
+character/segment counter that flags stray em dashes/curly quotes silently forcing Unicode
+encoding), an assistant persona (`Riley`, one Config key), `{Owner}` interpolation pulling the
+real `Owners.Company`, and outbound-only language on every template (inbound is fully routed
+through a Twilio Studio Flow today, not this codebase — Brett is handling that side himself).
+Also built `POST /property/notice` — a property-wide SMS+email broadcast (water shutoffs, power
+outages) that deliberately bypasses the quiet-hours hold while still honoring
+Global/Test-Mode/`SMS_OptOut` (wired into the send gate for the first time this session).
+
+Found and fixed same day (rule 186): the bulk-welcome-send textarea was pre-filling from a
+hardcoded Sep-14 snapshot that had drifted completely from the live template, AND the actual
+send applied zero token substitution to a custom message — a batch would either send everyone
+the identical unpersonalized line, or the literal text "{FirstName}" if the template's own
+tokens were left in the box. Both fixed; live-verified end to end (a real send with tokens to
+Brett's own test tenant record came back fully substituted, no leftover braces).
+
+**Live status**: `TWILIO_ENABLED = TRUE`, `TWILIO_TEST_MODE = FALSE` — Brett is actively rolling
+out. Plan: Goldszmidt Properties tenants first (smaller, controlled batch), the rest of the
+portfolio staggered over the following days via the new Owner-filter/exclude tool (rule 184) to
+manage volume. `BUILD_VERSION` → `2026-09-16.15`, confirmed live.
+
+## 🟢 Shipped: legacy/duplicate tenant PIN bug — full detail FEATURE_LOG rule 182
+Brett, right before the rollout above: many tenants still had old 5-digit numeric PINs instead
+of the 3-letter+5-digit scheme. Live audit found 18 such Tenants (0 on Vendors/Owners) —
+regenerated off each tenant's own phone. Caught in the process: two tenants at the same property
+(James/Kelsey, 20 E Eager St) shared the **identical** PIN, and James's didn't even match his own
+phone — a real access collision, not just an old-format cosmetic issue. Root cause: the "Backfill
+PINs" admin tool only ever filled in a *blank* PIN, never checked an existing malformed one — the
+only prior defense was two hardcoded name checks on two specific Owners rows, itself a past
+one-off patch for this same problem that never generalized. Replaced with a real format check
+(`PIN_FORMAT_OK`) applied across Vendors/Owners/Owner_Users/Tenants, so this is now caught
+automatically going forward, not just today. Verified live: 0 bad-format PINs, 0 duplicates,
+anywhere, after the fix.
+
+## 🟢 Shipped: tenant portal — Completed is the last stage a tenant sees — full detail FEATURE_LOG rule 183
+Removed the Closed/Paid filter option from `tenant.html` entirely; folded Pending
+Invoice/Invoiced/Paid into a plain "Completed" label everywhere a tenant sees status (badge,
+filter, per-job timeline) — billing-lifecycle jargon a tenant never needed. The "Completed"
+filter itself was widened to still catch anything that's progressed to those billing statuses
+internally, so nothing became invisible just because the separate Paid filter was removed.
+
+## 🟢 Shipped: Owner filter + cross-page checkbox-bleed fix on bulk sends — full detail FEATURE_LOG rules 184-185
+Two related fixes so Brett can actually run a segmented, owner-scoped rollout: (1) a new Owner
+filter (show-only or exclude) on the Tenants page, so "everyone but Goldszmidt" is a two-click
+selection instead of hand-picking ~100 rows; (2) a real, pre-existing bug where Tenants/Vendors/
+Owners all shared the exact same document-wide checkbox-selection code — a box checked on one
+page (even one no longer visible) silently rode along on a send from a different page, with no
+way to even see it to deselect. Each of the three pages' select-all/action-bar/bulk-send is now
+scoped to its own list container only.
+
+## 🟢 Shipped: vendor self-service contact-info update ("My Info") — full detail FEATURE_LOG rule 180 (+ addendum)
+Follow-on to the vendor confirmation email work: a real "👤 MY INFO" screen in `vendor.html` so a
+vendor can update their own Phone/Email/Company. Old values are captured in a new
+`Vendor_Contact_History` tab (old + new value, one row per changed field) BEFORE the `Vendors`
+row is overwritten — live-verified at BOTH layers: the backend (real Sheets round-trip) and,
+per Brett's direct follow-up, a real headless-Chromium pass against the actual live page
+(real PIN login, real save/reopen/revert, a full page reload to confirm the save was genuinely
+server-side, zero console errors — not just a code read-through). One pre-existing, unrelated
+cosmetic quirk found in passing (MY INFO/FEEDBACK buttons render solid blue instead of muted —
+`.btn-muted` isn't an actual defined class) and logged to `CAPTURE_INBOX.md`, not fixed inline.
+Name is deliberately NOT self-editable (would risk breaking the vendor's own PIN-login name
+match) — stays an admin edit. `BUILD_VERSION` → `2026-09-16.14`, confirmed live. Nothing pending
+— built to spec and verified, no open decision needed from Brett.
+
+## 🟢 Shipped: vendor invoice confirmation email on bill submission — full detail FEATURE_LOG rule 179, `context/VENDOR_INVOICE_CONFIRMATION_EMAIL_BUILD_BRIEF_v1.0.md`
+Brett (voice memo): auto-email a vendor everything they submitted on a bill — job description,
+WO#, invoice #, invoice file + reimbursable receipts as links, real timestamp, a 14-day
+payment-window reminder that skips weekends AND holidays (`Config.US_HOLIDAYS`, Brett-maintained
+list). QuickBooks bills stay "due on receipt" unchanged — the 14 days is a vendor-communicated
+policy tracked separately, by design. Spanish vendors get the email in Spanish. A vendor with no
+email gets a one-time SMS asking them to add one, not a silent skip. Files are linked via signed
+`/vendor-file/view` links (reusing the same token shape a normal vendor PIN login already mints)
+— NOT a raw Drive link, which would have silently reproduced the WO-1071 black-page bug (rules
+142/176/178) since these files are deliberately never Drive-shared.
+
+Soft-launched behind `Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS` — currently just Alex Busey
+(Vendor_ID 2) — widen by editing that one Config value once Brett's confirmed a real send looks
+right. `BUILD_VERSION` → `2026-09-16.13`, confirmed live via `/version`. Full suite 80/80 against
+a fresh clone (`test/vendor-invoice-confirmation-email.test.mjs`, 21 new assertions on the
+business-day/holiday logic — the piece most likely to have an off-by-one).
+
+**Needs Brett's first live pass**: no real bill was submitted this session to trigger an actual
+send — flagged rather than triggered unasked, since it emails a real vendor and writes a real
+Vendor_Bills row (which can auto-flip a real WO to Complete). Submit one real bill for Alex Busey
+(or ask for it to be triggered) to confirm the email formats correctly, the file links open, and
+the due date reads right, before widening the Config allow-list past Vendor_ID 2.
+
+## 🟢 Shipped: owner-facing receipt viewer + Hub Photos & Files receipt-viewing fix — full detail FEATURE_LOG rules 176-178
+Brett's policy confirmed and enforced: receipts should be visible to the property owner; vendor
+invoices/bills stay hidden from them (that half was already correctly true). New `GET
+/owner-file/view` (rule 177) refuses anything but `File_Type=receipt` and checks the requesting
+owner's session actually owns the WO's property — live-tested with a real owner PIN login
+(Jennifer Goldszmidt), including a genuine cross-owner refusal against another owner's WO, not
+just a code read-through. `owner.html`'s receipt links now route through it.
+
+Also found and fixed: the receipt "View" link fix shipped earlier this session (rule 176, on
+`vendor.html`'s bill-summary and `index.html`'s Review Bills view) didn't cover a THIRD, separate
+render path — `index.html`'s own WO-detail "Photos & Files" thumbnail grid + lightbox is a
+byte-duplicated copy of vendor.html's code (see rule 134) that never got rule 142's original
+Sep 15 proxy fix. That was the actual spot Brett was clicking when he said receipts still didn't
+show after a hard refresh. Fixed (rule 178) — same `internalFileUrl` proxy pattern, both the
+thumbnail/link rendering and the full-size lightbox.
+
+Live data fix, same session: WO-1091's Vendor_Bills row (Alex Busey, 2930 St Paul) was missing 2
+of 3 uploaded receipts ($174.74 + $51.79) — added from the actual receipt photos via the now-working
+proxy. All 3 receipts share one card with no way to confirm it's Alex's own vs. a company card, so
+all stay non-reimbursed per Brett's explicit "don't reimburse without confirming the card"
+instruction — flagged in the bill's own Notes so it isn't lost. `Receipts_Total` now correctly
+reads $230.54 (customer materials billing); vendor payout (`Total`) unchanged at $175 pending that
+confirmation — nothing silently paid out, nothing silently dropped either way. Bill still shows in
+Review Bills, ready once the card question is settled.
+
+`BUILD_VERSION` → `2026-09-16.9`, confirmed live. `node --check` clean throughout (all inline
+`<script>` blocks in both `owner.html` and `index.html`, checked against the actual live-deployed
+GitHub Pages copy, not just the repo commit).
+
+**Needs Brett's first live pass**: confirm the receipt thumbnails/lightbox actually render in a
+real WO detail view now; confirm with Alex Busey whether card ...7508 is his own or a company
+card, then flip the right receipt(s) to reimbursable on WO-1091's bill.
+
+
+## 🟢 Shipped: Owners/Properties tenant-WO settings UI + admin Managed_By control — full detail FEATURE_LOG [FL-20260916-2234-b6]
+Both parts of the build brief are now done. Folded into the existing Owners and Properties edit
+modals (Brett's answer — no standalone settings page): a Tenant Work Order Submission toggle +
+scope + resolved-effective-state line on each, plus a held-contact-note field on Owner. The WO
+detail modal gets a "WHO'S HANDLING THIS JOB" section with a confirm-gated admin toggle matching
+owner.html's own weight; `adminUpdateWO` now texts the owner (via `smsGatedSend`, unconditionally)
+whenever Brett changes `Managed_By` either direction, per his "notify owner" answer. `node --check`
+clean, full suite 78/78 (new `test/tenant-wo-settings-ui.test.mjs` 26/26, `managed-by.test.mjs`
+grown to 12/12), zero regressions. Pushed as 9 small GH-Broker commits, deployed, confirmed via
+`/version` (`2026-09-16.8`) and a fresh anonymous clone.
+
+**Not verified live** — no live Hub session in the build sandbox. Needs Brett's first live pass:
+set a real Owner/Property's toggle and confirm the resolved state; flip a real WO's `Managed_By`
+from the admin side and confirm both the confirm-dialog wording and the actual owner text land;
+confirm an unrelated Edit Owner/Edit Property save still works cleanly with the new fields present
+but untouched.
+
+# WHERE THINGS STAND — Sep 16, 2026 (TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part A shipped)
+
+## 🟢 Shipped: /workorder tenant-submission session-identity hardening — full detail FEATURE_LOG [FL-20260916-2210-p3]
+Closes the gap flagged at the end of today's 3-part access-control build. The tenant-submission
+gate used to trust body.property_id/unit_id/tenant_id as sent by the client; it now resolves the
+caller's real Tenants row from their verified session id and overwrites all three before the
+access check or WO creation run — a tenant session can no longer be used to submit a WO tagged to
+a different property/unit/tenant. Scoped strictly to callerRole === 'tenant'; admin/owner paths
+untouched. `test/tenant-submit-request.test.mjs` +8 assertions, full suite 76/76, zero
+regressions. Deployed (`2026-09-16.5`), confirmed via `/version` and a fresh anonymous clone.
