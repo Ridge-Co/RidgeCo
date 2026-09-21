@@ -903,3 +903,229 @@ a business can be fully approved while its specific messaging campaign is still 
 vetting. New `GET /twilio/account-status` checks the sending number, every A2P Brand
 Registration's status, and — the part that actually matters for carrier delivery — every
 Messaging Service's Campaign compliance status plus whether `TWILIO_FROM` is actually in that
+service's sender pool. `node --check` clean, full suite green. **Not yet run against the real
+account — needs this patch deployed first.**
+
+
+## 🔴 Live-testing found a real delivery gap: Twilio accepts the message (real SID), Brett's phone gets nothing — rule 159a
+Confirmed via live `Message_Queue` — 3 of Brett's own test sends all show `Status:'sent'` with
+real Twilio SIDs, redirected correctly to his phone via Test Mode, all gates correctly open.
+That was always the honest limit of `Status:'sent'` (Twilio-accepted, not delivery-confirmed —
+webhooks were out of scope for rule 157) — now a live symptom, not a theoretical one. New
+`GET /twilio/message-status?sid=...` queries Twilio directly for the real status/error code.
+**Fastest unblock, no deploy needed**: Brett can check Twilio Console → Monitor → Logs →
+Messaging right now for these 3 sends and read the actual status/error there.
+
+## 🟡 Built, not yet live-verified: Two fixes found mid-test on the Twilio build — rule 159
+Full detail: FEATURE_LOG rule 159. Brett started testing rule 157 and immediately hit two
+real gaps: (1) assigning a vendor at WO creation always sent the dispatch text with no way
+to skip it (needed for a WO created just to record billing for work already arranged by
+phone) — fixed with a "Notify vendor + tenant now" checkbox, default on, only shown once a
+vendor is picked; the Reassign-Vendor modal and bulk-reassign are untouched, still always
+notify. (2) The Work Orders bulk-edit checkbox rendered on the right side of each card,
+confusing to select — moved to the far left. `node --check` clean, full suite unchanged/
+green. **Not pushed yet** — same patch-file hand-off as everything else in the queue.
+**Needs Brett's live pass**: assign-with-notify-on (unchanged), assign-with-notify-off (no
+text, no Message Queue row), and confirm the bulk checkboxes now sit on the left.
+
+# WHERE THINGS STAND — Sep 14, 2026 (later)
+
+## 🟡 Built, not yet live-verified: Twilio SMS integration, end-to-end — rule 157
+Full detail: FEATURE_LOG rule 157, live-verify checklist at the end of that entry.
+Per `TWILIO_SMS_BUILD_BRIEF_v1.0.md` — all 6 message types (tenant assigned/scheduled/
+completed/manual, vendor assigned/paid), the full Global/Property/Customer/Tenant/Vendor
+gate, Test Mode redirect, `Message_Queue` review/release screen (`message-queue.html`,
+new), `/health` Twilio flags.
+
+**Load-bearing catch made mid-build**: live worker.js already had ~10 unconditional
+`sendSMS` call sites from earlier sessions (tenant/owner/admin/vendor-reply), all silently
+broken (wrong Twilio auth var). Fixing the auth alone would have made all of them go live,
+ungated, the moment this deployed. Fixed by making the shared `sendSMS` chokepoint honor
+the same `TWILIO_ENABLED` kill switch as the new gated pipeline — so Global OFF (the
+default) means nothing sends anywhere in the file, not just the 6 new types.
+
+`node --check` clean everywhere touched (worker.js + all `index.html` + `message-queue.html`
+inline scripts); full test suite 53/53 files, no regressions; 28 new pure-helper assertions
+(`test/message-queue.test.mjs`) plus a real headless-Chromium pass on the review screen's
+bulk-select behavior (`test/manual-verify-message-queue-ui.mjs`, 11/11) — the part that
+protects Brett from a real mass-send mistake.
+
+**Not pushed yet** — sitting locally, prepared for Brett's push (Basic-auth PAT method per
+the standing rule in `ridgeco-git-push-proxy-bug.md`, or the patch-file handoff if no PAT is
+available in whatever session does the push). No live Sheets/Twilio-send credentials in this
+build sandbox, so the actual `Message_Queue` tab creation, the 4 new `SMS_Enabled` columns,
+and a real Twilio send (even in Test Mode) are all unverified — see rule 157's 6-step live-
+pass list. The 3 new Config keys (`TWILIO_ENABLED`/`TWILIO_TEST_MODE`/`TWILIO_TEST_RECIPIENT`)
+don't exist as literal Sheet rows yet — code defaults are correct without them, so this is
+optional, not blocking.
+
+# WHERE THINGS STAND — Sep 14, 2026
+
+## 🟡 Built, not yet live-verified: Invoice descriptions now compile from what was actually logged — rule 158
+Full detail: FEATURE_LOG rule 158. Fixed the gap where per-entry hour details (and a vendor's own
+bill notes) never reached the customer invoice — only a single hand-typed WO-level field did.
+New `Invoice_Description` column (customer-facing) added alongside the existing `Notes` (now
+clearly private) on `Time_Entries` and `Vendor_Bills`, everywhere a note gets typed (index.html,
+vendor.html, wo.html). New `buildLaborDescription()` compiles the labor line from every time
+entry linked to that bill, date-ordered, wired into all four invoice-building call sites. One
+combined labor line (not per-entry lines) — Brett's explicit call, avoids leaking vendor markup
+on marked-up bills. Invoice Review memo box now pre-fills from the same compiled text, still
+fully editable. Spanish-speaking vendors' Invoice_Description translates straight to English
+(customer-facing), unlike their private Notes (kept bilingual).
+
+`node --check` clean everywhere touched. Full test suite 59/59 (fixed 2 tests that eval-extract
+`buildInvoiceLines` in isolation and needed the new helper grabbed alongside it; added 8 new
+assertions in `test/labor-description.test.mjs`). The previously-noted `pricing-model`/
+`scope-core` baseline failures are confirmed gone as of this session.
+
+**Not pushed yet** — sitting locally, prepared for Brett's push (Basic-auth PAT method, or the
+patch-file handoff if no PAT is available this session). No live Sheets/QuickBooks credentials
+in this build sandbox — see rule 158's 4-step live-pass list.
+
+**Related, raised but explicitly not built this round**: Brett wants the 5% pass-through card fee
+to cover truck-stock materials by default without necessarily applying it to labor — current
+mechanism is a single whole-invoice toggle, no per-line fee exists. Locked as "leave as-is" for
+now; also flagged a real future topic (his own words) on recovering more cost from price-sensitive
+$75/hr customers without stacking visible fees — not started, his call on when to revisit.
+
+# WHERE THINGS STAND — Sep 14, 2026 (earlier)
+
+## 🟡 Built, not yet live-verified: Configurable multi-milestone payment schedules for Scope Proposals — rule 156
+Full detail: FEATURE_LOG rule 156. Replaces the fixed 50% deposit/50% final split with a
+configurable N-way milestone schedule (presets 1/3, 1/4, custom — e.g. 50% upfront + 25%
+progress + 25% final) across worker.js + scope-creator.html + scope-proposal.html +
+signed-proposals.html. New `Payment_Milestones` tab, fully backward-compatible with every
+already-signed proposal (those keep using the old book/book-final path untouched). Vendor side
+of each milestone is prorated off the VENDOR's own original estimate, never the customer's
+marked-up price, so Ridge Co's markup stays separate at every draw. Grouped billing (several
+milestones in one QB invoice+bill) built for Brett's "jobs move faster than I can check" case.
+Maryland's 1/3 deposit-before-work-starts cap (Md. Bus. Reg. §8-617(b)) is enforced as a WARNING
+only, never a hard block — Brett's explicit call, informational not legal advice.
+
+`node --check` clean everywhere touched; full test suite 51/51 (no regressions — the
+previously-noted `pricing-model`/`scope-core` failures are no longer present in this baseline).
+24 new pure-helper assertions (`test/payment-schedule.test.mjs`) plus two real-browser Playwright
+verifications with mocked Worker responses (`test/manual-verify-payment-schedule.mjs`,
+`test/manual-verify-milestone-billing-ui.mjs`, 13 checks each) — schedule rendering, live
+variant-toggle recalculation, the old "50% deposit" text confirmed gone, milestone checklist
+state, and the exact billing payload sent on confirm.
+
+**Not pushed yet** — sitting locally, prepared for Brett's push (Basic-auth PAT method per the
+standing rule in `ridgeco-git-push-proxy-bug.md`). No live Sheets/QuickBooks credentials in this
+build sandbox, so the actual tab creation, a real signature producing milestone rows, and a real
+grouped QB invoice+bill are all unverified — see rule 156's 5-step live-pass list.
+
+**Still open, out of scope for this build (Brett's own phased plan):** vendor draw requests with
+required photo evidence (email now, SMS-ready), and the Owner Change / Vendor Change order system.
+
+# WHERE THINGS STAND — Sep 10, 2026 (later)
+
+## 🟢 Live-verified: Receipt Reconciler — materials descriptions, bill-on-match, business-expense receipts, QB-email forwarding — rules 155/155a
+Brett provided `WORKER_SECRET` and `qb_receipts_email`. Live-verified in order: `/health` (Gmail
+fully configured — client_id/secret/refresh_token/sender all set), added **1864 Kerns School Rd
+(Milam Ridge) as Property ID 85** (no `Owner_ID`/`QBO_Customer_ID` — confirmed read-back), set
+`Config.qb_receipts_email` (confirmed read-back), then ran the actual email-forward sweep against
+production. Caught and fixed a real bug live: the rule-155 default batch size (25) blew through
+Cloudflare's per-invocation subrequest budget partway through — 15 sent, then 10 failed with
+"Too many subrequests." Nothing lost (failed rows retry cleanly, same design as always worked).
+Dropped the batch size to 8/max 10 (rule 155a), redeployed, verified via `/version`, then cleared
+the **entire pre-existing backlog — 45 receipts, 0 failures** across several bounded sweeps.
+Worth knowing: most of that backlog (roughly two-thirds) went out **without an attached image** —
+older rows that predate `Source_File_ID` tracking and have no recoverable `Receipt_Recon_Queue`
+origin to match back to. Still useful for reconciliation (vendor/date/amount/description all
+there), just not the scanned image. `BUILD_VERSION` → `2026-09-10.2`.
+
+**Still to verify live** (all lower-stakes than what's already confirmed): a receipt actually
+appearing in QuickBooks' Receipts inbox with the right details (only confirmed the send succeeded
+from this end, not the QuickBooks-side landing); the description-cleanup on a freshly scanned
+receipt; a business-expense confirm with `no_wo:true`; and the repair-flag path on a WO whose
+invoice was already sent (needs a real matching live scenario to trigger).
+
+# WHERE THINGS STAND — Sep 10, 2026
+
+## 🟡 Built, not yet live-verified: Receipt Reconciler — materials descriptions, bill-on-match, business-expense receipts, QB-email forwarding — rule 155
+Full detail: FEATURE_LOG rule 155. Confirmed live (via fresh anonymous clone) that the Aug
+31/Sep 2 description-fix patch (rule 140) was never actually pushed — this build redoes it plus
+three new asks: appending a newly-matched receipt onto a WO's *existing* Invoice_Review/QB
+invoice instead of creating a second one (flags already-sent invoices for the existing
+Repairable-Invoices path rather than touching QuickBooks directly); a no-work-order confirm path
+for business-expense ("company" category) receipts; and forwarding every Receipts-tab row —
+new and backfilled — to Brett's QuickBooks receipts-capture email for bank/CC reconciliation.
+`node --check` clean, full suite 50/50. Blocked on Brett supplying `qb_receipts_email` (from
+QuickBooks' own Receipts → Forward from email page) and authorizing `ridgecomaintenance@gmail.com`
+as the sending address there — QuickBooks bounces forwarded mail from an unregistered sender.
+🔴 Needs Brett's first live pass per the 5-step checklist at the end of rule 155 before this is
+trusted against real data. `BUILD_VERSION` bumped to `2026-09-10.1`.
+
+Also still outstanding, unrelated to this build: 1864 Kerns School Rd (Milam Ridge) still needs
+to be added as a Property via the existing `/property/add` (no Owner_ID — it has no owner to
+bill) — that's a one-time live data call, not a code change, and needs a working `WORKER_SECRET`
+or the Hub's own admin UI to actually run.
+
+# WHERE THINGS STAND — Sep 9, 2026 (later)
+
+## 🟢 Live-verified against real QuickBooks: Who To Pay grouping/search/filter + auto-check + batched QB reads — rule 154
+Brett provided `WORKER_SECRET` and asked for a real check post-deploy. `GET /qb/payables?days=90`
+against live QuickBooks: **70 rows in 6 seconds, zero errors** — 22 vendor paid / 31 nothing to pay
+/ 9 waiting on the owner / 8 PAY THE VENDOR, 0 unknown, 0 possible-duplicate. Confirms the batched
+`WHERE Id IN (...)` rewrite genuinely works against production QuickBooks, not just offline mocks —
+6 seconds for 70 jobs is what the whole point of the batching was for (previously up to ~140
+sequential single-entity calls). One pre-existing data quirk noticed, unrelated to this build: WO-
+1115's `QB_Invoice_ID` (7600) isn't returned by the batch query (likely a stale/deleted invoice id,
+same family as the Oscar Padilla WO-1115 duplicate-cleanup already handled elsewhere) — falls
+through to `customer_balance: null` exactly the way a failed single GET always has for a bad id
+(the row's own vendor-paid status still resolves correctly regardless, so nothing is hidden or
+wrong, just one field unknown). Worth a look if anyone's ever confused why that one row's owner-
+billed status shows blank, but not urgent and not new.
+
+## 🟢 RESOLVED: WO-1025 / Alex Busey / Bill 7578 — QuickBooks now shows it genuinely paid
+Live pull confirms **Bill 7578 has a $0 balance and `vendor_paid: true`** — state is plain "vendor
+paid," no "possible duplicate" flag (that check only ever runs on a bill QuickBooks still shows
+open, and this one no longer does). Whatever needed to happen on the QuickBooks side to link the
+payment already happened. The double-pay guard (rule 153) never had to fire, and nothing in the
+current data suggests he's at risk of paying this vendor twice. No further action needed on this
+specific bill — the guard stays in place going forward for the next time this pattern shows up.
+
+# WHERE THINGS STAND — Sep 9, 2026
+
+## 🟢 Built (not yet live-verified): Who To Pay grouping/search/filter + auto-check + batched QB reads — rule 154
+Brett asked for "nothing to pay"/"vendor paid" collapsed-but-searchable, the same search/filter
+bar Work Orders has, and auto-check on page open. Built all three, plus cut QuickBooks reads from
+one-per-job to two total (a batched `WHERE Id IN (...)` query per entity instead of one GET per
+invoice/bill) — checked Intuit's actual metering/rate-limit docs first: at this account's volume,
+cost/limits were never really the constraint, round-trip time was, and batching fixes that anyway.
+Full detail: FEATURE_LOG rule 154. `node --check` clean, full suite 50/50, 23/23 on a new headless
+verification pass (`test/manual-verify-payables-filters.mjs`) after fixing two real bugs in the
+test itself (missing login-gate bypass, a case-sensitivity assumption on CSS-styled header text —
+not the app). **Superseded above — now live-verified.**
+
+# WHERE THINGS STAND — Sep 8, 2026 (later)
+
+## 🟢 RESOLVED (see Sep 9 later entry above) — WO-1025 / Alex Busey / Bill 7578
+Brett flagged a live double-pay risk: Who To Pay showed this bill as "PAY THE VENDOR" ($297.50
+owed) while the actual QuickBooks bill note said "paid by venmo." **Do this now, don't wait for
+deploy**: open https://app.qbo.intuit.com/app/bill?txnId=7578 directly and check whether it shows
+a real open balance or a linked payment. Separately, search QuickBooks Expenses for a ~$297.50
+transaction to Alex Busey around early Sep 2026 that mentions Venmo — if one exists and isn't
+linked to Bill 7578, that's very likely the actual payment, just never applied against the bill
+(classic "paid outside Pay Bills, hand-entered as an Expense" gap — same pattern as the Andreas
+Cleaning $110 case). **Do NOT pay Alex Busey again until this is confirmed either way.**
+
+## 🟢 Built (not yet live-verified): Who To Pay double-pay guard — rule 153
+Same underlying issue, fixed at the Hub level going forward: `qbPayables` now cross-checks
+QuickBooks for a payment that may have gone out Venmo/Zelle/check and gotten hand-entered as a
+plain Expense instead of a proper Bill Payment — before ever telling Brett a bill is ready to pay.
+A match flags the row "⚠ POSSIBLE DUPLICATE — CHECK QB" (sorts to the very top, red, excluded from
+the bulk-pay total, and can never be batch-marked-paid) instead of "PAY THE VENDOR." Fails open on
+any error — can only ever add a warning, never hide the real state. Full detail: FEATURE_LOG rule
+153. Built and offline-tested against Brett's exact WO-1025 numbers (21 new assertions), but **not
+yet run against live QuickBooks** — no `WORKER_SECRET` in this session. 🔴 **First live check**:
+once deployed, open Who To Pay and confirm the WO-1025/Alex Busey row now shows the duplicate
+warning (assuming the QuickBooks-side facts match what's suspected above) — and separately spot-
+check a few genuinely-owed bills still show plain "PAY THE VENDOR" with no false alarms.
+
+## 🟢 Test suite is fully green — 50/50 — rules 152/153
+`pricing-model`/`scope-core` fixed same day (rule 152); the two new tests for rule 153 bring it to
+50/50. No known failures remain.
+
+# WHERE THINGS STAND — Sep 8, 2026
