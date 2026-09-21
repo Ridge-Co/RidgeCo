@@ -59,3 +59,13 @@ Checked commits: 75 (excluding merges/doc-audit itself)
 - `cfc98f0` (2026-09-19 16:05) One-time cleanup: de-identify the duplicate fixture set the ID-comparison bug created — best single-entry match: 38%
 - `9d4fb7a` (2026-09-19 13:48) Add HUB_TEST_TOKEN helpers: isTestRecord, hubTestWriteAllowed, seedTestFixtures — best single-entry match: 20%
 - `bcfe74f` (2026-09-19 13:46) Declare _viaHubTestToken (outer-scope flag for the new staging test-token gate) — best single-entry match: 43%
+
+## Run: 2026-09-21 18:26 UTC
+Since: 2026-09-20 (source: this script's own last recorded run)
+Checked commits: 65 (excluding merges/doc-audit itself)
+**5 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `b5631fd` (2026-09-21 01:20) Fix transcription slip: restore trailing newline at end of file — best single-entry match: 43%
+- `7fe1c59` (2026-09-21 01:20) Fix transcription slip: bold-marker placement in the 828 S Charles St Verify line — best single-entry match: 43%
+- `ba3b4e4` (2026-09-21 00:22) Merge main (PR #17) into PR #14 branch: restore WO_Audit message-audit columns, logWOAuditMany extended shape, and logMessageAudit wrapper — best single-entry match: 42%
+- `e1ca3fe` (2026-09-20 22:56) Add collapsed-card badge slot for invoice-submitted confirmation — best single-entry match: 40%
+- `a58f7d3` (2026-09-20 20:26) Stop swallowing exceptions in isTestRecord; surface via debug field — best single-entry match: 43%
