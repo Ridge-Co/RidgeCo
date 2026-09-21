@@ -915,6 +915,38 @@ async function tenantByPin(env, url) {
   });
 }
 
+// Lightweight re-derive of the tenant-by-pin payload for an ALREADY-logged-in tenant, off the
+// verified session token instead of PIN+name -- see the router comment above for why this
+// exists (can_submit_wo and friends going stale in the client's cached mh_tenant_sess). No new
+// token is issued; the existing one keeps working until it expires on its own. Deliberately
+// resolves the tenant from callerSessionId (the id baked into the signed token), never a
+// query-string tenant_id, so a tenant can only ever re-check their own record.
+async function tenantSessionRefresh(env, callerRole, callerSessionId) {
+  if (callerRole !== 'tenant' || !callerSessionId) return json({ error: 'Unauthorized' }, 401);
+  const [tenants, props, units, owners] = await fetchTabs(env, ['Tenants', 'Properties', 'Units', 'Owners']);
+  const tenant = tenants.find(t => t.ID === callerSessionId && t.Active !== 'FALSE');
+  // Deactivated or deleted since login (e.g. moved out and the record was archived) -- the
+  // client should treat this like any other expired session and send them back to the PIN
+  // screen rather than silently keep showing whatever was cached at login.
+  if (!tenant) return json({ error: 'Tenant session no longer active', session_invalid: true }, 403);
+  if (tenant.Move_Out_Date) {
+    const moveOut = new Date(tenant.Move_Out_Date + 'T23:59:59');
+    if (moveOut < new Date()) return json({ error: 'Tenant session no longer active', session_invalid: true }, 403);
+  }
+  const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
+  const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
+  const owner = prop.Owner_ID ? owners.find(o => o.ID === prop.Owner_ID) : null;
+  return json({
+    tenant_name:      `${tenant.First_Name} ${tenant.Last_Name||''}`.trim(),
+    property_id:      prop.ID||'',
+    property_address: prop.Address||'',
+    unit_id:          tenant.Unit_ID||'',
+    unit_label:       unit.Unit_Label||'',
+    owner_id:         prop.Owner_ID||'',
+    can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
+  });
+}
+
 async function ownerByPin(env, url) {
   const pin = url.searchParams.get('pin') || '';
   const _ownerName = (url.searchParams.get('name') || '').trim();
