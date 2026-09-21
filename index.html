@@ -499,6 +499,14 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="bulkSendPinFromTab('owners-list')">📱 Send PIN to Selected</button>
       <button class="btn small secondary" onclick="clearPinChecks('owners-list')">Deselect All</button>
     </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <input type="text" id="owner-search" placeholder="Search name or company…" oninput="renderOwnersPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 10px;border-radius:var(--radius);min-width:220px;flex:1;max-width:320px">
+      <select id="owner-filter-status" onchange="renderOwnersPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 10px;border-radius:var(--radius)">
+        <option value="all" selected>All Owners</option>
+        <option value="active">Active Only</option>
+        <option value="inactive">Inactive Only</option>
+      </select>
+    </div>
     <div id="owners-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 
