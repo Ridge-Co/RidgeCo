@@ -7996,6 +7996,68 @@ async function tenantManualUpdate(env, body) {
   return json({ success: true, sent: r.sent, send_ok: r.send_ok, queued_id: r.queued_id, gate_snapshot: r.gate_snapshot });
 }
 
+// -- Custom one-off message to a single tenant/owner/vendor (Sep 21 2026) --------------------
+// Brett's ask: a way to type a free-text message to one specific person, either from a work
+// order's own detail view (logged to that WO's audit trail via smsGatedSend's built-in
+// logMessageAudit, e.g. "is this the same faucet as the shower?") or directly from that
+// person's row on the Tenants/Owners/Vendors list (no WO context -- general one-off outreach).
+// Generalizes the existing tenant-only /wo/tenant-update-manual (tenantManualUpdate, left
+// completely untouched below) to all three roles and to the no-WO case. Always routes through
+// smsGatedSend -- same Global/Property/Customer/Tenant-or-Vendor gate, Test Mode redirect,
+// quiet-hours hold, and Message_Queue logging every other real send in this file gets; nothing
+// here bypasses that.
+async function sendCustomMessage(env, body) {
+  const kind = body.recipient_type;
+  if (!['tenant', 'owner', 'vendor'].includes(kind)) return json({ error: "recipient_type must be 'tenant', 'owner', or 'vendor'" }, 400);
+  if (!body.recipient_id) return json({ error: 'Missing recipient_id' }, 400);
+  const message = String(body.message || '').trim();
+  if (!message) return json({ error: 'Missing message text' }, 400);
+
+  const tabName = kind === 'tenant' ? 'Tenants' : kind === 'owner' ? 'Owners' : 'Vendors';
+  const tabsNeeded = Array.from(new Set([tabName, 'Properties', 'Work_Orders', 'Owners']));
+  const fetched = await fetchTabs(env, tabsNeeded);
+  const records    = fetched[tabsNeeded.indexOf(tabName)];
+  const properties = fetched[tabsNeeded.indexOf('Properties')];
+  const workorders = fetched[tabsNeeded.indexOf('Work_Orders')];
+  const owners     = fetched[tabsNeeded.indexOf('Owners')];
+
+  const recipient = records.find(r => r.ID === body.recipient_id && r.Active !== 'FALSE');
+  if (!recipient) return json({ error: `${kind.charAt(0).toUpperCase()}${kind.slice(1)} not found or inactive` }, 404);
+  if (!recipient.Phone) return json({ error: `No phone number on file for this ${kind}` }, 400);
+
+  let wo = null, property = null;
+  if (body.wo_id) {
+    wo = findWO(workorders, body.wo_id);
+    if (!wo) return json({ error: 'WO not found' }, 404);
+    property = properties.find(p => p.ID === wo.Property_ID) || null;
+  }
+  if (!property) {
+    if (kind === 'tenant') property = properties.find(p => p.ID === (recipient.Property_ID || '')) || null;
+    if (kind === 'owner') property = properties.find(p => p.Owner_ID === recipient.ID) || null;
+  }
+  const owner = kind === 'owner' ? recipient : (property && property.Owner_ID ? owners.find(o => o.ID === property.Owner_ID) : null);
+
+  const firstName = recipient.First_Name || recipient.Company || 'there';
+  const msg = body.wo_id ? `Hi ${firstName}, ${message} Ref: ${body.wo_id}.` : `Hi ${firstName}, ${message}`;
+
+  const sendArgs = { wo_id: body.wo_id || '', message_type: 'custom_admin_message', recipient_type: kind, message_body: msg, property: property || undefined };
+  sendArgs[kind] = recipient;
+  if (kind !== 'owner' && owner) sendArgs.owner = owner;
+  const r = await smsGatedSend(env, sendArgs);
+
+  // smsGatedSend already writes a full WO_Audit row (Channel/Recipient/Message/Outcome) whenever
+  // wo_id is set -- see logMessageAudit inside it. With no wo_id (a list-page message, not tied
+  // to any work order) there's no WO_Audit row possible, so log to SMS_Logs instead as the
+  // durable record of the send attempt.
+  if (!body.wo_id) { try { await logSMS(env, '', kind, recipient.ID, recipient.Phone, msg); } catch (_) {} }
+
+  return json({
+    success: true, sent: r.sent, send_ok: r.send_ok, held_for_quiet_hours: !!r.held_for_quiet_hours,
+    queued_id: r.queued_id, gate_snapshot: r.gate_snapshot,
+    recipient_name: kind === 'owner' ? ((`${recipient.First_Name||''} ${recipient.Last_Name||''}`.trim()) || recipient.Company || '') : `${recipient.First_Name||''} ${recipient.Last_Name||''}`.trim(),
+  });
+}
+
 async function logSMS(env, woId, recipientType, recipientId, phone, message) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/SMS_Logs`);const rows=data.values||[[]];const headers=rows[0];const now=new Date().toISOString();
