@@ -547,29 +547,71 @@ function renderDescription(desc) {
 }
 
 // ── Note ──────────────────────────────────────────────────────
+// Sep 21 2026 (Brett): a note stays append-only and attributed (see /wo/add-note server-side —
+// it timestamps + tags every entry "[<ts> — <author> (<role>)]" and never lets a tenant edit or
+// remove an existing entry), so a tenant can add new information to a job — e.g. clarifying which
+// of two vanity faucets is leaking — without being able to rewrite the work order itself, which
+// matters since they may be billed for repairs tied to what the WO actually says. Photos here are
+// optional, matching "Submit a New Request"; they upload as file_type 'report' (same bucket a
+// tenant can already view, per buildDetail's canReport:true) once the note itself is saved.
+var noteFiles = [];
 function openNote(woId) {
   activeNoteWOId = woId;
   document.getElementById('noteText').value = '';
   document.getElementById('noteMsg').innerHTML = '';
+  document.getElementById('noteFiles').value = '';
+  document.getElementById('notePreview').innerHTML = '';
+  noteFiles = [];
   openModal('modalNote');
 }
+function noteHandleFiles(fileList) {
+  Array.from(fileList).forEach(function(f) { if (noteFiles.length < 6) noteFiles.push(f); });
+  renderNotePreview();
+}
+function renderNotePreview() {
+  document.getElementById('notePreview').innerHTML = noteFiles.map(function(f, i) {
+    var url = URL.createObjectURL(f);
+    var isVideo = f.type.startsWith('video/');
+    return '<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;background:var(--surface2)">' +
+      (isVideo ? '<video src="' + url + '" muted style="width:100%;height:100%;object-fit:cover"></video>' : '<img src="' + url + '" style="width:100%;height:100%;object-fit:cover">') +
+      '<button onclick="noteRemoveFile(' + i + ')" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,.8);color:#fff;border:none;border-radius:50%;width:16px;height:16px;font-size:9px;cursor:pointer">&#x2715;</button>' +
+      '</div>';
+  }).join('');
+}
+function noteRemoveFile(i) { noteFiles.splice(i, 1); renderNotePreview(); }
 
 function submitNote() {
   var text = document.getElementById('noteText').value.trim();
   if (!text) return;
   document.getElementById('noteBtn').disabled = true;
+  var woId = activeNoteWOId;
+  var filesToUpload = noteFiles.slice();
+  var noteToSend = text + (filesToUpload.length ? ' (' + filesToUpload.length + ' photo' + (filesToUpload.length===1?'':'s') + ' attached)' : '');
   api('/wo/add-note', { method:'POST', body: {
-    wo_id: activeNoteWOId, note: text,
+    wo_id: woId, note: noteToSend,
     author: session.tenant_name, author_role: 'tenant',
   }}).then(function(res) {
-    document.getElementById('noteBtn').disabled = false;
-    if (res.success) {
-      document.getElementById('noteMsg').innerHTML = '<div class="msg success">✓ Sent to your property manager.</div>';
-      setTimeout(function(){ closeModal('modalNote'); loadWOs(); }, 1500);
-    } else {
+    if (!res.success) {
+      document.getElementById('noteBtn').disabled = false;
       document.getElementById('noteMsg').innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>';
+      return;
     }
-  }).catch(function(){ document.getElementById('noteBtn').disabled = false; });
+    var uploadNext = function(i) {
+      if (i >= filesToUpload.length) {
+        document.getElementById('noteBtn').disabled = false;
+        document.getElementById('noteMsg').innerHTML = '<div class="msg success">✓ Sent to your property manager.</div>';
+        setTimeout(function(){ closeModal('modalNote'); loadWOs(); }, 1500);
+        return;
+      }
+      var fd = new FormData();
+      fd.append('file', filesToUpload[i]);
+      fd.append('wo_id', woId);
+      fd.append('file_type', 'report');
+      fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
+        .then(function(){ uploadNext(i + 1); }).catch(function(){ uploadNext(i + 1); });
+    };
+    uploadNext(0);
+  }).catch(function(){ document.getElementById('noteBtn').disabled = false; document.getElementById('noteMsg').innerHTML = '<div class="msg error">Connection error.</div>'; });
 }
 
 // ── Submit a new request (Sep 16 2026) ──────────────────────────
