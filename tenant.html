@@ -946,6 +946,78 @@ function buildPhotoSection(woId, propAddr, opts) {
 })();
 </script>
 
+<!-- Tenant session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
+     tenant-by-pin payload are cached in mh_tenant_sess at login and never re-checked
+     otherwise -- this is what Brett hit directly: his own portal kept hiding "+ SUBMIT A NEW
+     REQUEST" through a hard refresh (restoreTenantSession() just replays the same stale
+     cached object) and only a full logout/login re-fetched the real flag. Fixes that by
+     calling the new token-authenticated GET /tenant-session-refresh (no PIN/name needed,
+     unlike /tenant-by-pin) instead of forcing a relogin.
+     Deliberately much less chatty than the B-093 poller right above: Brett was explicit that
+     vendors are the role where this kind of staleness actually costs something (a vendor not
+     seeing a new/updated job), while a tenant seeing a toggle change a few hours late is a
+     non-event, and he asked to keep this cheap on requests/data for tenants specifically. So:
+     check once shortly after a session is restored (catches the hard-refresh case above
+     within seconds, not minutes or a full relogin), then only a few times a day on a timer,
+     plus opportunistically when the tenant actually reopens the tab -- free in practice, but
+     still capped so tab-switching can't turn it back into a fast poll. -->
+<script>
+(function(){
+  var CHECK_MS = 6 * 60 * 60000;        // ~4x/day steady-state -- tenants are the least
+                                         // time-critical role for this per Brett
+  var MIN_REFOCUS_GAP_MS = 30 * 60000;  // floor between focus/visibility-triggered checks
+  var lastCheck = 0;
+
+  function tenantBusy(){
+    var el = document.activeElement;
+    if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
+    return !!document.querySelector('.modal-overlay.open'); // e.g. mid-note in modalNote
+  }
+
+  function applyRefresh(d){
+    if (!session) return; // logged out while the request was in flight
+    var buttonChanged = session.can_submit_wo !== d.can_submit_wo;
+    session.tenant_name      = d.tenant_name;
+    session.property_id      = d.property_id;
+    session.property_address = d.property_address;
+    session.unit_id          = d.unit_id;
+    session.unit_label       = d.unit_label;
+    session.owner_id         = d.owner_id;
+    session.can_submit_wo    = d.can_submit_wo;
+    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){}
+    if (buttonChanged) {
+      var nr = document.getElementById('newRequestBtn');
+      if (nr) nr.style.display = d.can_submit_wo ? '' : 'none';
+    }
+    var n = document.getElementById('tenantName'); if (n) n.textContent = session.tenant_name || '';
+    var a = document.getElementById('tenantAddr');
+    if (a) a.textContent = (session.property_address||'') + (session.unit_label ? ' · Unit ' + session.unit_label : '');
+  }
+
+  function check(){
+    if (!session || !session.token) return;
+    if (tenantBusy()) return; // don't yank the button/header while a note or form is in progress -- retry next tick
+    lastCheck = Date.now();
+    api('/tenant-session-refresh').then(function(d){
+      if (d && d.session_invalid) { doLogout(); showLoginMsg('Your session has ended. Please sign in again.', 'error'); return; }
+      if (d && !d.error) applyRefresh(d);
+    }).catch(function(){});
+  }
+
+  // Catches Brett's exact reported case: a hard refresh re-runs restoreTenantSession() from
+  // the same stale cached object, so check again a few seconds after boot instead of waiting
+  // for the steady-state timer below.
+  setTimeout(check, 4000);
+  setInterval(check, CHECK_MS);
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden && Date.now() - lastCheck > MIN_REFOCUS_GAP_MS) check();
+  });
+  window.addEventListener('focus', function(){
+    if (Date.now() - lastCheck > MIN_REFOCUS_GAP_MS) check();
+  });
+})();
+</script>
+
 <!-- Voice-to-text on every text block, now and going forward (Brett, Aug 18 2026): attaches
      a 🎤 button to every <textarea> — on load AND any added later (modals, dynamically-built
      forms) via MutationObserver, so a future textarea needs zero extra wiring. Web Speech API
