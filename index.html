@@ -3163,6 +3163,7 @@ function renderTenantsPage() {
         '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+esc(t.Phone||'')+'\')" title="Set PIN">PIN</button>' +
         (canSend?'<button class="btn small" style="background:var(--info);color:#fff" onclick="previewSendPin(\'tenant\',\''+t.ID+'\',\''+esc(t.First_Name)+'\',\''+esc(t.Phone||'')+'\')">📱</button>':'') +
         (t.Phone?'<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'tenant\',\''+t.ID+'\',\''+esc(nm)+'\',\''+esc(t.Phone||'')+'\')" title="Send Welcome">👋</button>':'') +
+        '<button class="btn small secondary" onclick="openSendMessageModal(\'tenant\',\''+t.ID+'\',\''+esc(nm)+'\',\''+esc(t.Phone||'')+'\')" title="Send a one-off message">✉️</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
