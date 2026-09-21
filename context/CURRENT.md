@@ -1355,3 +1355,229 @@ a cutoff (default = the bill's `Created_Date`, editable) — earlier photos stay
 "↪ Move bill to new WO" button lives in the shared `invBuilderHtml` panel, so it's reachable from
 both the Review Bills queue and the WO-detail modal. **ridgeco-validate (independent subagent) caught
 2 real 🔴s before push and both were fixed same session, then re-validated PASS:** (1) attachments
+have no per-bill link in the schema, so a WO with a 2nd still-active bill needed an explicit warning
+before a date cutoff could silently grab that bill's photos too — now surfaced as a named banner in
+the preview; (2) the apply sequence wasn't atomic between WO-creation and the vendor/bill-move steps
+— a partial failure now returns the stray WO's id explicitly instead of a bare 500, and warns against
+blind-retrying (which would create a second stray WO). `node --check` clean on worker.js + all 5
+index.html script blocks. `BUILD_VERSION` → `2026-08-24.1`. Full detail: FEATURE_LOG rule 138.
+**🔴 Not yet run against production — this session had no `WORKER_SECRET`, so the actual WO-1134 move
+needs Brett to tap the new button himself (Review Bills → Allen George's bill → "↪ Move bill to new
+WO"), or Claude can run it via curl if `WORKER_SECRET` is pasted in a future turn.** A 2nd job is
+queued to repeat the pattern once this one's confirmed working.
+
+# WHERE THINGS STAND — Aug 23, 2026 (later still, again)
+
+## 🟢 Receipt Reconciler UI overhaul — Brett's live-test caught 4 real gaps, all fixed in one pass.
+His first real test (right after B-127's routing went live) immediately surfaced: no way to
+correct the auto-guessed property, only top-3 open WOs ever shown, a free-text WO-number field
+with zero validation (real typo-to-wrong-job risk), and duplicates dead-ending into generic Skip
+with no retention plan. Built all four: property override, full open-WO list + an opt-in
+closed/past search, WO-number validation on both client (fast-fail UX) and server (the actual
+guard — `receiptReconConfirm` now rejects a nonexistent WO ID with a 400 before ever calling
+`addReceipt`), and a distinct **Confirm duplicate** action with **180-day** soft-delete retention
+(Brett's number) via a new nightly sweep. Checked the new column addition against the exact rule
+37/78 silent-no-op class (used `ensureColumns`, not just `ensureTab`, since the tab already had
+live rows) and checked every new/edited button against `UI_QA_CHECKLIST.md` — caught and fixed
+two real misses (touch-target height, adjacent-button gap) before shipping. Ran `ridgeco-validate`
+— PASS, one 🟡 non-blocking note. New `test/receipt-reconciler-ui.test.mjs`, 10/10. Full detail +
+the complete validation report in FEATURE_LOG rule 136. `BUILD_VERSION` → `2026-08-23.2`.
+
+# WHERE THINGS STAND — Aug 23, 2026 (later still)
+
+## 🟢 B-127's first live call site — `receiptExtract` now routes through `routeAI`. Real telemetry starts flowing.
+Found this exact swap sitting half-built, uncommitted, in the working tree with no doc trail — treated
+it as unverified rather than trusting the code comments' own claims (same discipline as the B-142 catch
+earlier today). Verified it properly before trusting it: confirmed `callGemini` (CHEAP tier) has no
+media/vision support at all, so this only works because `moneyFacing: true` pins it to REASON/Claude —
+if that pin were ever missing, OCR would silently run on an image-blind model. Ran the full test suite
+(model-routing 17/17, receipt-suggest-core 11/11, receipt-suggest 13/13, same 2 pre-existing unrelated
+failures elsewhere, nothing new), `node --check` clean, and ran the actual `ridgeco-validate` gate
+(now genuinely wired as of the B-142 fix) — PASS-WITH-NOTES, one 🟡 cosmetic error-message-text change,
+nothing blocking. See FEATURE_LOG rule 135 for the full validation report and both trigger paths
+(drop a file in the "Receipts and Invoices" Drive folder for the daily cron, or tap "Scan now" on
+`receipt-reconciler.html` for an immediate manual scan). **B-211 is unchanged by this — still needs the
+design session, still has nothing to gate.**
+
+# WHERE THINGS STAND — Aug 23, 2026 (later same day)
+
+## 🔧 B-142 actually closed — ridgeco-validate wired into brett-flow's build flow as a real step. Corrects an earlier stale claim.
+Brett asked what it'd take to deploy B-127/B-211; that surfaced that BUILD_ORDER_v1.0's Phase-1
+substrate wasn't actually fully closed the way this file's earlier Aug 23 entry (below) implied.
+Checked directly: `ridgeco-validate`'s own SKILL.md claims it runs "as the brett-flow verify gate
+(step 5.5)," but `brett-flow`'s SKILL.md + `references/` had **zero mentions of "validate"** —
+BACKLOG's Quick Index line calling B-142 "confirmed shipped" was wrong; the skill was delivered
+July 23 but never actually invoked by brett-flow's numbered flow. Fixed: `brett-flow` SKILL.md now
+has a real step 6 (renumbering old 6→7, 7→8, 8→9) that names `ridgeco-validate` explicitly, states
+it's mandatory for auth/PII/QB/payment/money/customer changes, and gives the same PASS/FAIL +
+human-gate-required logic the validator's own doc already promised. BACKLOG.md's B-142 row
+corrected from 🟠 to ✅ with the real completion note (not just re-marked without explanation).
+**This means Phase-1 substrate (B-140 ✅ + B-141 ✅ + B-142 ✅ now + B-144 ✅) is genuinely complete
+as of this entry — not as of the earlier one below.** B-127's code is already live on `main`
+(dormant, no call site yet — still needs receipt-parsing wired in as its first job type, a
+separate scoped build). B-211's `judge()` still has nothing to gate — substrate completion doesn't
+change that; it still needs the "build with Brett" design session on the Rung-1→Rung-2 write path
+per `AUTONOMY_GUARDRAILS_v1.0`, unchanged from the note below.
+
+# WHERE THINGS STAND — Aug 23, 2026
+
+## ✅ B-144 (Quality Bar / Definition-of-Done rubric) BUILT + PUSHED + VERIFIED live on `main`.
+`context/QUALITY_BAR_v1.0.md` — the last Phase-1 item BUILD_ORDER_v1.0 named before B-127/B-211
+are eligible to deploy. Doc-only, zero blast radius, no worker.js/index.html touched. Three
+change-class tables (Worker Endpoint / Hub Screen / Money Change), every criterion grounded in
+a real FEATURE_LOG bug or an existing enforced pattern (rule 6, rule 18, rule 37, UI_QA_CHECKLIST
+132/134, the reconcile-never-auto-corrects and in-house-exclusion invariants) rather than invented
+style preference — kept it a scorable pass/fail rubric, not a wishlist. **Push status: committed
+locally, then pushed to `main` (`ad02fb4b`) using a fresh classic PAT Brett supplied this session
+(env's `BRETT_GH_PAT` was empty — same gap that stalled B-127's push) — confirmed present on
+GitHub via a fresh anonymous clone, not just a local commit.** See FEATURE_LOG rule 118.
+**What this does NOT do:** it doesn't deploy B-127 or B-211 itself, and it doesn't build B-149's
+automated lint pass (the greppable subset of this rubric) or B-146's reviewer agent — those are
+still separate, unbuilt backlog items that now have something concrete to build against. The
+Phase-1 substrate gate also still needs the golden-path tests (B-145) before Phase 3 (buttons that
+DO things) per BUILD_ORDER_v1.0.
+
+## 🚧 B-127 built + tested, NOT deployed. B-140 confirmed live. B-141 done. B-211 built + tested, NOT deployed.
+Brett asked to build B-127/B-140/B-141/B-211 across sessions. Sequenced per his choice: B-127 first,
+Cloudflare fix for B-141 after, B-211 in its own fresh session once B-127/B-140/B-141 were all confirmed
+live on `main` (checked fresh via a new clone at the start of the B-211 session — B-127's `routeAI` etc.
+were present in worker.js, not just claimed in notes).
+
+**B-211 (independent verifier write-gate, `judge()`) — 🟠 BUILT + TESTED, sitting un-deployed on purpose,
+same status as B-127.** `judge(env, call)` added right after the B-127 block, reuses `routeAI`(CHEAP)
++ `logTelemetry`. Fails closed on every path (missing input, non-SAFE `riskClass`, model throw,
+unparseable JSON, confidence below the LOCKED 0.7 floor) — no path silently produces `approve`. New
+`POST /judge` test-drive endpoint (secret-gated same as `/ops-review`). `test/judge-write-gate.test.mjs`
+— 25/25 passing, routeAI/logTelemetry mocked so the test suite does no network I/O (same convention as
+B-127's tests). **Not wired into a live write path** — nothing autonomous exists yet for it to gate
+(Rung 2 is off; BUILD_ORDER_v1.0's locked rule blocks hand-edited worker.js from shipping until Phase-1
+substrate + B-144 Quality Bar land). Next real step is a call site, not more of this build.
+
+**B-140 (staging/preview Worker lane) — ✅ CONFIRMED, no rebuild needed.** Was already marked built July
+23; this session verified it live: `curl https://maintenance-hub-staging.brett-2f8.workers.dev/health`
+→ 200, `sheet_tail: 0H6dFY` (the staging sheet, not prod's), real tab row counts. Nothing to do here.
+
+**B-141 (smoke-test harness) — ✅ DONE.** The July-23 SNAG (Cloudflare production-branch setting)
+turned out to already be fixed — Brett checked the dashboard, branch control was already `staging`
+with non-prod builds on, and `/health` confirmed live (see above). Built the actual harness:
+`scripts/smoke-staging.mjs` — curl-asserts `/health` + `/version` against the real staging Worker (10
+assertions: 200s, `ok:true`, correct sheet_tail, all 4 expected tabs present as numbers, version
+string present). Run: `node scripts/smoke-staging.mjs`. **Scope note or it'll look bigger than it is:**
+only `/health` and `/version` are curlable with zero setup (no auth token, no real PIN/share-token
+record needed) — broader endpoint coverage needs seeded fixture data on staging, which is B-145
+(golden-path tests), not this item. All 10 assertions passing as of this session.
+
+**Invoice OCR canary — ✅ DONE (Sept 1 2026).** Sibling to `scripts/smoke-staging.mjs`, and the
+answer to "how does Claude check the invoice auto-read every session without me rotating keys."
+`POST /selftest/invoice-extract` on the Worker runs a caller-supplied fixture through the real
+`invoiceExtract` — a genuine Claude-vision call — and returns the parse plus an honest `read_ok`
+flag. Gated by its own **`SELFTEST_TOKEN`**, deliberately NOT `WORKER_SECRET` (don't widen that
+shared key). `ANTHROPIC_API_KEY` never leaves Cloudflare. `scripts/selftest-invoice.mjs` holds the
+fixture + expected values and asserts them; `.github/workflows/selftest-invoice.yml` runs it daily
+at 12:00 UTC, on any push touching `worker.js`/fixtures, and on `workflow_dispatch` — so a session
+with no credentials can trigger it via the GitHub API and read the result.
+**Why it exists:** every other test of the auto-read stubs the model
+(`test/vendor-invoice-extract.test.mjs`, the Playwright pass), so all of them would stay green
+while the model silently stopped reading invoices — a deprecated model id, a changed response
+shape, a drifting prompt. This is the only check that would go red. `invoiceExtract` fails OPEN by
+design, so the canary asserts `read_ok`, not just a 200; a blank result is a failure, not a pass.
+**Add fixtures** by dropping `<name>.jpg|png|pdf` + `<name>.expected.json` into `test/fixtures/` —
+no Worker or workflow change. Worth adding: an angled phone photo, a handwritten total, a PDF, and
+one with no invoice number at all. **Setup Brett owes it (one time, never rotates):** add
+`SELFTEST_TOKEN` as a Worker secret in the Cloudflare dashboard AND as a GitHub Actions secret of
+the same name. Until then the endpoint returns 503 `configured:false` and the workflow fails with
+that exact message.
+
+**B-127 (model routing) — 🟠 BUILT + TESTED, sitting un-deployed on purpose.** `routeAI(env, job)` +
+`MODEL_REGISTRY` (CHEAP/REASON/HARD) + `callGemini`/`callClaude` adapters + `GET /model-registry`,
+right before the Optimizer section in worker.js (reuses the existing `logTelemetry` chokepoint —
+`Tier_Requested`/`Model_Used`/`Escalated`/tokens/cost columns already existed in `Ops_Telemetry` from
+B-128, built for exactly this). `test/model-routing.test.mjs` — 17 assertions, passing. Deliberately
+did NOT rewire the ~6 existing direct-`ANTHROPIC_API_KEY` call sites (scopeClaude, translations, weekly
+review) onto the router — migrating a live money/customer-adjacent flow onto new plumbing is its own
+per-flow blast-radius call, not a batch edit.
+**🔴 CAUGHT MID-SESSION: `gemini-2.0-flash` (what the brief/first draft used) was shut down by Google
+June 1, 2026.** Fixed to `gemini-2.5-flash-lite` ($0.10/$0.40 per 1M tokens) before Brett spent
+anything on it — caught via web search when he asked about cost, NOT before. **Google has 2.5
+Flash-Lite scheduled for retirement Oct 16, 2026 — bump to `gemini-3.1-flash-lite` ($0.25/$1.50/1M)
+before then, comment left in worker.js at the MODEL_REGISTRY.CHEAP line as a reminder.**
+**Why not deployed:** `BUILD_ORDER_v1.0`'s own locked rule — no hand-edited worker.js goes live until
+Phase-1 substrate exists — and per this session B-141 just barely closed, B-144 (Quality Bar) still
+isn't built. Also **nothing in the live app calls `routeAI()` yet** — this is plumbing only, current
+real-world cost is $0 until a job type is actually wired to route through it (receipt_parse flagged as
+the safest first candidate — no customer/money exposure — but Brett declined to wire it this session).
+**Brett added `GEMINI_API_KEY` as a Cloudflare secret on BOTH `maintenance-hub` and
+`maintenance-hub-staging`** (had to set up Prepay billing — $10 min top-up, new as of March 2026 —
+that's expected, not a bug). Key is live but literally unused until something calls `routeAI`.
+**🔴 NOT PUSHED TO GITHUB — only exists in this session's local clone.** Brett ended the session before
+authorizing a push (needs his classic PAT, which isn't in this session's env). **The next session
+MUST either receive `BRETT_GH_PAT` and push this diff, or rebuild it from this description — do NOT
+assume it's already on `main` without checking `grep -n "routeAI" worker.js` first.**
+
+**Next: B-211 (`judge()` write-gate).** Backlog explicitly flags this "GATED-adjacent — build with
+Brett," not a solo/background build — Brett is opening a fresh session specifically to sit down on
+this one together. Read `AUTONOMY_GUARDRAILS_v1.0.md` first (governs what `judge()` is FOR — the
+Rung-1→Rung-2 gate) before proposing a design.
+
+## 🛠️ Reviewed a "4 Claude upgrades" video → built 2 real gaps, confirmed 2 already covered. CAP-033.
+Same discipline as the Aug 21 nine-skills review and CAP-029: check each idea against what Brett
+already runs before building anything new. Of the video's 4 upgrades, 2 were genuine gaps and got
+built, 2 were already covered (one more thoroughly than the video's version). **Built
+`brett-council.skill`** — a 5-persona adversarial idea pre-mortem (skeptic/upside/first-principles/
+real-web-search researcher/customer proxy → judge gives kill/reshape/build + the cheapest test to
+run first), sits upstream of `brett-amplify` (kills weak ideas before amplify would develop them).
+**Extended `test-verified-builds.skill`** with a new Step 3 — Playwright screenshots + click-through
++ form-stress-testing at both viewports for any build touching a live-facing page, the automated way
+to run the new `UI_QA_CHECKLIST.md` instead of eyeballing it; `test-verified-builds`'s backend HTTP
+checks (Step 1-2) untouched, description bumped to mention the addition, both under the 1024-char
+limit and angle-bracket-clean per `brett-skillsmith`. **Not built:** the video's context-management
+upgrade (session-handoff-before-clear) is already `SESSION_EFFICIENCY_PROTOCOL_v1.0`'s
+checkpoint-and-resume, phase-boundary-triggered rather than token-count-triggered — no gap. The
+parallel-subagents + separate-evaluator-model upgrade — subagent fan-out is already Rule 2 of that
+same protocol; the "separate evaluator grades done, not the builder" piece is a live working proof of
+the mechanism the existing **B-211** (`judge()` verifier, unbuilt) is designed around — logged as
+reinforcement for B-211's priority, not a new item. Both `.skill` files delivered same session.
+**🔴 Needs Brett's Save** — neither confirmed saved yet; do not mark done here until he confirms,
+same discipline as every prior skill delivery in this file.
+
+## 📋 Wishlist/devlog reconciliation + Brett's 5 fresh items — 3 shipped, 2 already done, 2 open questions.
+Brett asked to surface the Ridge Co Hub wishlist/improvement backlog, strip anything already shipped, add 5 fresh items he'd just hit, and start on the priority ones. Reconciled against BACKLOG.md + FEATURE_LOG + this file rather than re-describing from memory (truth-mode). Full writeup + the reconciled list went to Brett directly; short version:
+- **Already done, not rebuilt:** (1) select-multiple on Review Bills — live since rule 98 (Aug 10). (2) Turnover trigger (repairs+cleaning+paint as 3 connected WOs, B-100) — shipped rule 104 (Aug 18), still flagged `🔴 Needs Brett's confirm` there and never confirmed since. Told Brett rather than silently re-building these — asked him to do the rule 104 live-verify instead.
+- **Shipped this session:** voice-to-text auto-restart-through-pauses (FEATURE_LOG rule 131, all 4 mic-enabled files); Trash Service "Add photos" precise-tap-only bug (rule 132); Trash Service service-date picker + This week/Last week tabs + batch send + mark-skipped (rule 133). See FEATURE_LOG for full detail and Brett's live-verify checklist — none of the four have had a first live pass yet.
+- **Added to BACKLOG.md as open items (not built this session):** B-227 (repo-wide sweep of the same label-wraps-hidden-file-input tap-target bug — found in `wo.html`×3, `scope-creator.html`×2, and the shared `inputAttrs` helper used by index/tenant/owner/vendor — rule 132 only fixed Trash Service, the one Brett named), B-228 (Brett's "add it to a checklist project" ask — **open question**, see below).
+- **🔴 Open question for Brett — asked in plain text, not the question widget (per his standing instruction, doesn't work on mobile):** "checklist project" — did you mean a ClickUp list (this session has ClickUp tools connected), or the Hub's own Wishlist/Dev Log checklist mechanism (rule 37, already in BACKLOG.md's reconciliation ritual)? Logged as B-228 either way so it's not lost; will file it into whichever you mean once you say.
+- **B-100's BACKLOG.md Quick-Index row was stale** (still showed 🟠 open despite rule 104 shipping it Aug 18) — corrected to reflect shipped-pending-verify, per the reconciliation ritual's own rule ("never mark Done what FEATURE_LOG can't confirm" — this one FEATURE_LOG DOES confirm as shipped, just not yet Brett-verified, so it's marked accordingly, not silently closed).
+
+## ⚡ NEW STANDING RULE — `context/UI_QA_CHECKLIST.md` (added Aug 22) — check every new/edited button against it
+B-227 done same session: swept the label-wraps-hidden-file-input tap-target bug everywhere it existed (`wo.html`×4, `scope-creator.html`×2, the shared WO-photo-upload builder used by `index.html`/`tenant.html`/`owner.html`/`vendor.html`, plus vendor.html's own invoice/receipt upload buttons — 12 sites total across 6 files) — see FEATURE_LOG rule 134. Also answered his own follow-up on B-228 ("checklist project" meant a build-time QA checklist so this class of bug doesn't recur, not ClickUp/the Hub Wishlist) by writing `context/UI_QA_CHECKLIST.md`: full-tap-box pattern, minimum touch-target size, adjacent-button spacing, and double-submit protection (points at the existing `claimSubmit()` guard in `vendor.html` as the pattern to reuse, not reinvent). **Read this file before shipping ANY new or edited button in this repo, and add its check to the mental pre-push list alongside `node --check` — it's short, it's cheap, and it's exactly the class of bug Brett doesn't want to see a third time.**
+
+# WHERE THINGS STAND — Aug 21, 2026
+
+## ✅ SHIPPED — Bulk Importer: fixed a multi-line CSV cell shredding a real tenant into a phantom property + added CSV file upload. FEATURE_LOG rule 130.
+Brett re-tested rule 129's fix with the exact same CSV and correctly caught that the numbers still didn't add up: "1 new property, 7 new units" for a 2-address paste that should show 0 new properties. Traced it by running the real parser against his exact paste: his CSV has a Phone cell with two numbers on two lines inside one quoted field (`"609-608-5080\n443-333-7107"`, valid CSV) — the old `parseDelimited()` split the raw paste on every newline BEFORE checking quote state, so this one row got shredded into two garbage rows. Gabriel Bellone & Faith Dean's real name/email got stranded in a phantom brand-new "property," and the real 2R unit was left with a nameless tenant. Fixed at the root: `parseDelimited()` now tokenizes the whole raw paste in one pass, quote-state carried across newlines. Also added `firstPhone()` (worker.js) so a correctly-parsed multi-number phone cell doesn't get concatenated into 20-digit garbage by `normalizePhone` — applied everywhere a bulk-import phone reaches it (hub tenant, hub owner, inspection-scheduler tenant). **Also shipped Brett's own suggestion from this conversation:** a real "Choose CSV file…" upload button next to the paste box, reading straight into the same fixed parser — a second, more reliable input path alongside paste. New `test/bulk-import-csv-parse.test.mjs` (14 assertions against the real extracted parser, not a reimplementation). `node --check` clean, full suite re-run clean (same 2 pre-existing unrelated failures), rule 129's own test still 11/11. Worker `2026-08-21.9`. **🔴 Needs Brett's live pass** — re-paste (or upload as a .csv) the same CSV and confirm 0 new properties / 2 matched, 6 new units / 6 matched (only 3F/3R new), and that 2R shows Gabriel Bellone & Faith Dean as the tenant with the first phone number stored — not a blank-name tenant plus a garbage new property. Then Confirm and check the Hub.
+
+## ✅ SHIPPED — Bulk Importer "St vs Saint" address bug fixed. FEATURE_LOG rule 129.
+Brett's first live check of rule 122 found exactly what he suspected: 931 St Paul St already existed (6 units already on file), but the importer proposed 13 brand-new units instead of recognizing them. Root cause confirmed via the sheet-write history in `context/sheet-ops/` before touching any code: Property 70's address is on file as "931 **Saint** Paul St" (spelled out), while the pasted CSV said "931 **St.** Paul St." (abbreviated) — the importer's address normalizer only stripped punctuation, never reconciled that "St" can mean either "Street" or "Saint." Brett confirmed the on-file spelling via the Hub, then flagged this will keep coming up (Saint Paul is a common street/neighborhood name locally). Fixed at the root: added `saint: 'st'` to the existing `QB_ADDR_WORDS` dictionary (already used for QuickBooks address matching, already folds Street/Ave/Rd/Blvd/N-S-E-W) instead of writing a second normalizer — one line, benefits every consumer of that dictionary. Both `hubBulkImport` and `inspBulkImport` had their own weaker local normalizer; both now just alias the shared one (single source of truth, PAT-001). Also added a visible "✓ matched via St/Saint/Street normalization" banner to the preview (`properties_matched_via_address_normalization`) so a fuzzy match is never silent — Brett gets a one-glance pasted-vs-matched-address check before confirming. New `test/bulk-import-address.test.mjs` (11 assertions). `node --check` clean, full suite re-run: same 2 pre-existing unrelated failures (`pricing-model`, `scope-core`), `qb-address.test.mjs` still 19/19. Landed via `git rebase` on top of rules 127-128 (Gladden un-gated/editable proposal text, standalone-pricing disclaimer) — renumbered from 127 to 129 to avoid colliding, one BUILD_VERSION conflict (`.6` vs `.7`, resolved to `.8`), no route/function collisions. Worker `2026-08-21.8`. **🔴 Needs Brett's live pass** — re-paste the same 931 St. Paul St. + 1305 N Calvert St. CSV into Bulk Importer and confirm 931 St Paul now shows as MATCHED (green banner) with 6 units matched / 2 new (3F, 3R only), and 1305 N Calvert shows as matched too (its address already lined up) with all 4 units new since none were ever entered — then Confirm and check the Hub.
+
+## 📜 New standing disclaimer on standalone/cherry-picked pricing — now on every proposal. FEATURE_LOG rule 128.
+Brett wants it permanently clear: cherry-picked items already cost more than their combined-job share
+(the tapering-trip-charge model built earlier this session), AND even that higher standalone number
+is only a best-efforts estimate — the combined price is what actually absorbs the small unknowns of
+mixing larger and smaller tasks, a lone item doesn't get that cushion. Added the confirmed disclaimer
+to Gladden's live proposal, to `scopeProposal()`'s doc template (every future Scope proposal), and to
+`generateEstimateText()`'s doc template (the older WO-based estimate path, still live) — three places
+so "every proposal we make" is actually covered regardless of which generator built it. Kept separate
+from the older 15%+$150 Estimate Integrity Clause (different scenario — dropping items from an
+already-versioned WO estimate). Documented as **LOCKED policy** in `billing-model.md` (private repo)
+so it's the standing reference. Worker `2026-08-21.7`.
+
+## 🔓 Gladden un-gated + proposal text is now editable in the tool. FEATURE_LOG rule 127.
+Brett: "add the prices to the items on the page itself so we can fix it going forward and i can
+have full access to the link... i should be able to paste the text into the bottom proposal
+section... i don't want to send the link unless i can edit something in it if needed." Populated
+real per-item vendor costs on scope id=1 (Eddie's actual $3,600 quote, matched item-by-item — every
+one reproduces the already-quoted price at the 1.375x flat markup) via `/scope/update`'s
+`line_items` path only — confirmed live that `Proposal_Text`/`Status`/`Estimate_Amount` didn't
+move. `itemsFullyPriced()` is now true, owner-billing was already satisfied, so the proposal
+section is un-greyed. Also swapped the read-only proposal-text `<pre>` for an editable `<textarea>`
++ **Save** button, so Brett can edit/paste the proposal text directly going forward instead of
