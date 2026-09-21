@@ -1581,3 +1581,229 @@ one reproduces the already-quoted price at the 1.375x flat markup) via `/scope/u
 move. `itemsFullyPriced()` is now true, owner-billing was already satisfied, so the proposal
 section is un-greyed. Also swapped the read-only proposal-text `<pre>` for an editable `<textarea>`
 + **Save** button, so Brett can edit/paste the proposal text directly going forward instead of
+needing an API call each time. Worker `2026-08-21.6`. **🔴 Do not tap "Generate proposal" on
+Gladden** — it recomputes through the new per-item engine and would overwrite the $4,950
+combined/standalone text with a recomputed $5,175 (per rule 125); edit the text box directly
+instead. **Verify (Brett):** open Gladden in Scope Creator, confirm the section is unlocked, the
+text box shows the existing proposal, Save works, and Get Shareable Link still returns the same
+link.
+
+## ✅ SHIPPED — Owner ↔ Property linking gap fixed. FEATURE_LOG rule 126.
+Brett: "can't add owner to property or property to owner for new owner jeannie... not sure if this
+is a bug." Checked first whether this was a regression from today's other sessions — it wasn't:
+`git log --all` on index.html shows an Owner field on the Edit Property modal never existed at any
+point in history. The Add Owner modal's own help text has always promised "go to Properties → Edit
+each property to link them to this owner" — a promise the Edit Property modal never actually kept.
+Fixed both directions: Edit Property modal now has an Owner select (saves via the already-generic
+`POST /property/update`), and the Owners list gets a "+ Property" quick-link button. Tenant-to-property
+linking checked separately and already works fine (Add/Edit Tenant), untouched. `node --check` clean
+on worker.js + all 5 inline `<script>` blocks, full suite 32/34 (same 2 pre-existing unrelated
+failures, nothing new). Worker `2026-08-21.5`, pushed (rebased clean onto rule 125's concurrent push).
+**🔴 Needs Brett's first live pass** — see FEATURE_LOG rule 126 for the exact check (try linking
+jeannie's property from either side).
+
+## 🔧 FIXED — Gladden's live customer link was actively broken ($0.00, blank, signable). FEATURE_LOG rule 125.
+Brett: "I may have had an old one running on that, and there's also the esign... check to make sure
+the esign is done." Checking that surfaced something worse than the greyed-out button he'd reported:
+the customer's ALREADY-SENT shareable link for scope id=1 (Gladden) was live-broken right now — rule
+123's rewrite made `scope-proposal.html` render only `Proposal_Items_JSON` with no fallback, so a
+scope priced before that rewrite (Gladden's 14 items have no `variants`) was serving a blank scope of
+work, a **$0.00 total**, and a working sign form. Live-curled the real link to confirm before touching
+anything. Fixed additively — `render()` now falls back to the exact pre-rewrite flat-text renderer
+(restored from `de121b8`) whenever an item array is empty; any scope with real per-item data renders
+exactly as before, untouched. Verified against Gladden's live payload: correct $4,950/$2,475 and the
+full combined-vs-standalone breakdown, byte for byte. **Deliberately did NOT run Gladden through the
+new per-item pricing engine** — simulated it first against Eddie's real vendor costs and it computes
+$5,175, not $4,950 (the $50-per-item minimum markup applies once per item, not once per job); forcing
+fake vendor costs to hit $4,950 would also mis-price Eddie's real prorated vendor bill under rule 124's
+QB booking. Brett's call: keep this one as a flat-text proposal outside the new engine ("we are
+supposed to send the original amount... I want both on the proposal"). **E-sign itself: still shipped
++ unit-tested, still NOT field-verified** — live-checked `Scope_Signatures`, zero rows, nobody has
+signed anything yet; needs Brett's first live pass same as rule 123 already flagged. Worker
+`2026-08-21.5`. **Verify (Brett): reopen Gladden's existing link (same URL) and confirm it now shows
+the real proposal instead of a blank $0 page.**
+
+## ✅ SHIPPED — Scope proposal → QuickBooks booking, Phase 2. FEATURE_LOG rule 124.
+Brett, same session as the `ac1470a` recovery right below: "give me the instructions to start the
+quickbooks invoice from signature workflow/code. I want that for my current proposal at gladden."
+Built and pushed `POST /scope-proposal/book` (`scopeProposalBook`, worker.js) — preview-first,
+admin-gated, idempotent, same safety pattern as the old B-076 `proposalBook()` (untouched): creates
+a QuickBooks customer invoice for the signed row's DEPOSIT, persists its id before touching the bill,
+then creates a vendor bill prorated to the SAME share of the vendor's cost as the deposit is of the
+subtotal (not the vendor's full cost — new pure helper `scopeSigVendorBillAmount`). Trade for the QB
+item/account routing picked by majority vote across the signed items (`scopeSigTrade`, new). UI:
+extended `signed-proposals.html` (already the Hub's "Signed proposals → QB" tool) to load and book
+BOTH the old and new signature systems from one screen instead of building a second page. New
+`test/scope-book.test.mjs` (11 assertions on the two new pure helpers). `node --check` clean, full
+suite re-run: same 2 pre-existing unrelated failures (`pricing-model`, `scope-core`), nothing new.
+Worker `2026-08-21.4`. **Brett: this is real money — see FEATURE_LOG rule 124 for the exact live-test
+checklist before trusting Confirm on the actual Gladden proposal.** Note what this phase does NOT do:
+no second step yet to invoice/bill the remaining balance once a job is actually complete — only the
+deposit side books today.
+
+## ✅ RESOLVED — `ac1470a` recovered after all. Brett found the patch. FEATURE_LOG rule 123.
+The "unrecoverable" call right below was correct as far as this checkout went — but Brett had the
+patch on his end (this session's `git cat-file`/`git log --all` checks only ever prove a commit
+isn't in a checkout that was reclaimed, never that no export of it exists anywhere). Uploaded
+`0001ScopeproposalsperitemRepairReplacestyleoption.patch`, applied clean against current `main` with
+**zero conflicts** (untouched by everything else that landed today), `node --check` clean, full
+suite re-run clean (same 2 pre-existing failures, nothing new — including the new
+`test/scope-variants.test.mjs`'s 13 no-leak assertions). Pushed. See FEATURE_LOG rule 123 for the
+full feature writeup, the one cross-patch interaction worth knowing about (hand-edited proposals via
+today's other `scope/update` change won't populate the new item-picker view), and the live-test
+checklist — this one involves a real signature, so it's worth Brett's own careful first pass before
+relying on it for an actual customer.
+
+## 🔴 "resume ridgeco" hit an unrecoverable commit — Phase 1 e-sign/repair-replace/owner-gate work is lost, not pushed (Aug 21, later Cowork/mobile session).
+Brett resumed with "Phase 1 (per-item Repair/Replace pricing, owner gate, e-sign) is committed locally
+as `ac1470a` but never got pushed because this session couldn't reach `Ridge-Co/RidgeCo`. Push it,
+then continue to Phase 2." **Verified `ac1470a` does not exist anywhere reachable**: not an object in
+a fresh clone of `Ridge-Co/RidgeCo` (`git cat-file -t ac1470a` → not found), not in `git log --all`,
+no active/resumable Claude session holds it (`ListAgents` → none reachable), and no patch file was
+uploaded with this message (the `ridgecoaug20changesresolved.patch` recovery pattern used earlier
+today for the tenant-WO-toggle work — see the entry right below — does not apply here; nothing was
+attached this time). The container that held that local commit was reclaimed when its session ended,
+same root cause as the patch-recovery case, but this time there's no export to replay. **Nothing in
+FEATURE_LOG/BACKLOG/SESSION_STATE documents this Phase 1 as ever built or checkpointed** — the closest
+tracked threads are B-126 (owner marked-up-estimate approval gate), B-194 (repair-vs-replace asset
+register, referenced from B-223), and FEATURE_LOG rule 116 (Aug 18, "NEXT SESSION — real e-sign +
+Fairfax-template proposal," still open, still waiting on Brett to supply the Fairfax template file) —
+none show a "built" entry, so this looks like a session that built real work, committed it locally,
+and ended (ran out of turns / was closed) before push or session-close logging happened. **Asked Brett
+in plain text (no AskUserQuestion widget — mobile) whether he can export/upload a patch from that
+prior session the same way as the Aug 20 recovery, or wants it rebuilt from spec.** Did not proceed to
+Phase 2 (QuickBooks deposit invoice + prorated vendor bill) since it would build on Phase 1 code that
+doesn't exist in this checkout.
+
+## 📥 Second uploaded Aug 20 patch: shared Bulk Importer, recovered + pushed. FEATURE_LOG rule 122.
+Same story as the tenant-WO-toggle patch below — Brett asked to review everything that didn't get
+pushed in the last 72h, which surfaced a **second** orphaned patch from the same Aug 20 session
+(`011yNE8vGUgdQ2DLUa8jQ1tS`): a shared Bulk Importer for Properties/Units/Tenants (`bulk-importer.html`
++ `POST /bulk-import`), reusing the Inspection Scheduler's importer engine so one tool covers both.
+Went through two rounds of `BUILD_VERSION` conflicts — the patch's own `.1` vs. main's `.3` from the
+earlier tenant-WO-toggle merge, then a rebase onto a concurrent session's B-227 Phase 3 push (which
+had already claimed FEATURE_LOG rule 121) reconflicted the same line — landed at `2026-08-21.2`, this
+entry logged as rule 122 to avoid the collision. `node --check` clean, full suite re-run clean (same 2
+pre-existing failures). **🔴 Needs Brett's first live pass** — see FEATURE_LOG rule 122 for the exact check.
+
+Also applied a small **live data fix** from the same session: a follow-up sheet-op
+(`context/sheet-ops/pending.json`, auto-runs via GitHub Action on push) blanking the stray duplicate
+Tenant row 98's First_Name/Phone (James / 20 E Eager St) — row 98 was retired (Active=FALSE) back on
+Aug 12 but still carried James's phone number, so the old Contacts sync kept resyncing it as a
+"Former Tenant" duplicate. Never hard-deletes, per house rule; row stays, just blanked. **This one
+actually writes to the live Google Sheet on push** — flagging clearly since it's not app code Brett
+can review in a diff first the way the two code patches were.
+
+## 🔀 Uploaded Aug 20 patch applied + pushed live (Aug 21, Cowork/mobile session, commit `edc5f21`).
+Brett uploaded `ridgecoaug20changesresolved.patch` — the tenant WO submit toggle, owner edit modal,
+and mobile/nav sweep (rules 118–120 below) from session `011yNE8vGUgdQ2DLUa8jQ1tS`, which had never
+actually been pushed to `main`. Verified the patch's base matched current `main` exactly for every
+app file (worker.js's BUILD_VERSION hunk went cleanly from `.2`→`.3`, confirming nothing else had
+touched those files since); only `context/CURRENT.md` conflicted, because this file itself had moved
+on (today's earlier venture-web entry). Resolved by keeping both dated sections in order (this Aug 21
+section, then the patch's own Aug 20 section right below). Applied clean via `git apply --3way`,
+`node --check` clean on worker.js + the new test file, full suite re-run: `tenant-wo-toggle` 15/15,
+same 2 pre-existing unrelated failures (`pricing-model`, `scope-core`) as before — nothing newly
+broken. Pushed to `origin/main` (`c320948..edc5f21`). **The three shipped items below (rules 118–120)
+still need Brett's first live pass** — see their own verify notes.
+
+**🔴 Also: two fresh classic PATs were pasted into this chat to load context** (Ridge Co org token +
+brett332 token) — per the standing CREDENTIALS_MAP rule, rotate both (revoke + reissue) once this
+session closes, same as the prior BRETT_GH_PAT paste flagged just below.
+
+## 🕸️ Venture Web + skills review + two BACKLOG skills delivered (Aug 21, Cowork/mobile session).
+Brett brought a transcript of a Matt Wolfe video reviewing 9 external Claude Code/Codex skills
+(GStack, Stop Slop, Graphify, Understand Anything, Last 30 Days, Anthropic's Front-End Design, the
+Taste skill, Remotion, HyperFrames) and asked which were worth having. Reviewed each against what
+Brett already runs: 5 of 9 lost to a skill he already has tuned to his stack specifically (Stop Slop
+→ `humanize-text`; GStack's review/QA role → `ridgeco-validate`; Understand Anything → `ridgeco-map`);
+3 are genuinely useful but situational, not worth installing as standing skills (Last 30 Days,
+Front-End Design/Taste, Remotion/HyperFrames); 1 was a real gap. Built **`venture-web`** for that
+gap — an interactive cross-venture connection graph (mobile-first HTML, published as an Artifact)
+mined from `business_map.md`/`theme_map.md` in `brett332/data`, surfacing 9 "bridge" connections
+across ventures that don't show up working one venture at a time (e.g. BarrelCo and Winchester
+Hauling independently built near-identical Facebook Marketplace bot logic; the Fluid Truck
+bankruptcy claim has no single owner, split across Fleet & Vehicles and Finance). **Delivered as
+`venture-web.skill`, Brett saved it** (first attempt failed — `description` field was over the
+1024-char limit and silently broke "Save skill"; fixed and redelivered).
+
+Brett then asked what else had been built in past sessions but never installed. Checked the record
+(BACKLOG/CAPTURE_INBOX/CURRENT.md session log) rather than relying on memory: `brett-flow`,
+`ridgeco-map`, `brett-amplify`, `ridgeco-validate` were all already delivered-and-saved historically
+— nothing was actually pending. Found one loose end instead: a stale, superseded draft of the
+brett-context skill sitting at `brett332/data/skill/brettcontextSKILLFIXED.md` (pre-dates the
+light-load/session-efficiency version currently installed). **Deleted it from the private repo**
+(the currently-installed brett-context skill itself lives in Brett's account, not this repo, and
+was untouched). Also surfaced two never-built BACKLOG ideas (B-031, B-017) and built both on request:
+
+- **B-031 → `ridgeco-scope.skill`** — scope intake from typed/dictated/photographed notes into a
+  clean itemized scope, no invented line items, questions asked instead of assumed. Deliberately
+  **does not compute or state pricing** — that's scoped down from the original ask because
+  scope-creator.html already applies markup server-side (`calcTieredEstimate`) per the Aug 10 hard
+  rule (rule 73), which postdates this backlog item. Flags multi-trade/descope situations for the
+  existing cherry-pick upcharge language but reads the live numbers at proposal time rather than
+  memorizing them into the skill.
+- **B-017 → `brett-skillsmith.skill`** — a meta-skill for building future Brett-specific skills
+  consistently: checks for overlap with what Brett already has before building (the same discipline
+  used in the 9-skills review above), follows house SKILL.md conventions, checks the description
+  length before packaging (see the venture-web bug above), and logs each build here + in BACKLOG so
+  this exact "what haven't I installed" question stays answerable from the repo alone next time.
+  Note: **B-177 "Flows"** (the bigger in-app event-trigger automation engine) is the larger thing
+  B-017 originally pointed toward and remains separate/open — this skill covers the literal
+  "reusable Cowork skill for building skills" ask, not Flows.
+
+**Update (same session):** `ridgeco-scope.skill` failed "Save skill" on first delivery — a second,
+different bug from venture-web's: `<address>`/`<item>`/`<question>`-style angle-bracket placeholders
+in the template/output-format sections read as XML tags to the save validator and reject the whole
+file. Fixed by switching every placeholder to square brackets (`[address]`, `[item]`, etc.) — this
+applies to any text in the file, including prose that merely *mentions* the angle-bracket shape as an
+example. Both `.skill` files rebuilt clean (verified: `grep -noE '<[^<>]{1,60}>'` returns nothing in
+either) and redelivered. `brett-skillsmith` now checks for this alongside the description-length
+check, so a future skill build catches both before Brett ever sees a save error.
+
+**🔴 Needs Brett:** tap **Save skill** on the redelivered `ridgeco-scope.skill` and
+`brett-skillsmith.skill` (neither confirmed saved yet — do not mark BACKLOG/this row "saved" until
+confirmed, same as `venture-web` wasn't marked done until its second delivery actually worked).
+Also: Brett pasted `BRETT_GH_PAT` into this chat to load context (his documented workflow) — per the
+standing CREDENTIALS_MAP rule, rotate it (revoke + reissue) after this session closes.
+
+# WHERE THINGS STAND — Aug 20, 2026
+
+## 🔴 SECURITY — rotate your GitHub token. It was pasted into this chat in plain text.
+Not a code issue — a housekeeping one. A classic GitHub personal access token was pasted directly into this session's chat to authenticate the git push. It was used only in-session (never written to any file in the repo) but it now exists in this conversation's history, which is enough reason to treat it as burned: go to GitHub → Settings → Developer settings → Personal access tokens and revoke/regenerate it next time you're at a computer. This isn't urgent-tonight urgent, but don't leave the old one live indefinitely.
+
+## 🔓 Tenant work-order submit toggle (owner overrides property) SHIPPED (Aug 20, Worker `2026-08-20.3`, new `tenant-wo-access.html`, live). FEATURE_LOG rule 118. 🔴 Needs Brett's first live pass.
+One page, two levels, owner always wins when it applies. Off everywhere by default — no tenant anywhere can submit a work order until you turn it on at the owner or property level. **Verify (Brett):** open Tenant Work Order Access from the Hub's 🧰 TOOLS, confirm everything shows OFF to start, turn one property ON and confirm a tenant there can now submit from the online request page, then set an owner-level Block scoped to that property and confirm it overrides the property back to blocked.
+
+## ✏️ Owners are now editable from the Hub SHIPPED (Aug 20, live). FEATURE_LOG rule 119.
+Owners was the one contact type in the Hub you couldn't actually edit — its Edit button was a placeholder. Real edit modal now, same as Vendors/Tenants/Properties. **Verify (Brett):** Owners list → Edit on any owner → change something → Save → reload and confirm it stuck.
+
+## 📱 Mobile fix for owner/property pages + every day-to-day page, plus a "back to Hub" nav on every tool SHIPPED (Aug 20, live). FEATURE_LOG rule 120. 🔴 Needs Brett's phone check.
+Found the real cause of "can't see the whole screen": the Hub's data tables (Owners/Vendors/Tenants/etc.) were being clipped off-screen instead of letting you scroll sideways to see every column, and the owner/vendor page headers didn't wrap on a narrow screen. Both fixed, plus the same overflow guard applied across tenant/owner-submit/submit pages defensively. Separately, every one of your 23 standalone tool pages (Trash, Command Center, Receipt Reconciler, Inspection Scheduler, etc.) now has a thin bar at the top with a link back to the Hub and a dropdown to jump straight to any other tool — so you don't have to back out through the browser when you're bouncing between tools. **Verify (Brett):** on your phone, check the Owners/Vendors/Tenants tables in the Hub scroll properly now, open owner.html and vendor.html and confirm the header looks right, and open any tool from Dev Log → 🧰 TOOLS and confirm the new nav bar at the top works.
+
+---
+
+# WHERE THINGS STAND — Aug 18, 2026 (end of day)
+
+## 📋 Open Item Report — admin test-send override added SHIPPED (Aug 18, not yet usable). FEATURE_LOG rule 117. 🔴 Still needs Brett's Gmail OAuth setup before any send works.
+Brett asked to test on Goldszmidt but have the email land in his own inbox (`brett@bmoremanagement.com`) instead of the real billing contact, so he can preview it before any customer sees one. `ar-report-admin.html` now has a "Test email" field above the customer list — fill it in and "Send now" pulls that customer's real, live report (real balance, real invoices, real pay link) but sends it to the test address instead, skipping the eligibility check so you can preview any customer on demand regardless of whether they'd normally qualify. Leave the field blank for a normal real send. Both the confirm-dialog and the log entry (`AR_Report_Log`, `Trigger: manual-test`) are clearly marked as a test so it never gets confused with a real send. Walked Brett through the Gmail OAuth setup needed to unblock this (Google Cloud project, Gmail API, OAuth consent screen published, Desktop OAuth client, refresh token via OAuth Playground, four Cloudflare Worker secrets — `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN/SENDER`) — not yet completed on his end. **This is still blocked on the exact same prerequisite as the report itself (rule 111): nothing sends — test or real — until Brett finishes the Gmail OAuth setup.** **Verify (Brett) once Gmail is set up:** open `ar-report-admin.html`, put `brett@bmoremanagement.com` in the Test email field, tap "Send now" on Goldszmidt's card, confirm the email arrives in your own inbox with the real Goldszmidt balance/invoices and a working link.
+
+## 🖊️ NEXT SESSION — proposal with e-sign + Fairfax template. Brett needs to bring the Fairfax proposal file.
+Closing item for the day. Brett wants the proposal generator to actually look professional (not plain rendered text) using **"the Fairfax proposal"** as the template, plus real **e-signature** capture. FEATURE_LOG rule 116 has the full brief. Searched this repo + session uploads for anything Fairfax-related — nothing found, Brett has it on his end. **First thing next session: get that file from Brett** (upload it), then match its layout for `scope-proposal.html` and scope the e-sign path — Documenso (self-hosted, github.com/documenso/documenso) was floated but not yet evaluated against this stack (Worker + GitHub Pages, no Postgres/Next.js host today), vs. a simpler typed-name+timestamp+IP click-to-sign if that's actually enough for a contractor proposal. Ask Brett which he wants before building.
+
+## 🔗 Customer-facing proposal link SHIPPED (Aug 18, Worker `2026-08-18.9` + new `scope-proposal.html`, live). FEATURE_LOG rule 114. 🔴 Needs Brett's first real send.
+Public no-login link for a generated proposal — `scope-creator.html` → "🔗 Get shareable link" → `scope-proposal.html?t=...`, same signed-token pattern as the WO share link and AR report link. Response is strictly `{ok, address, title, proposal_text, status}` — no vendor/email/cost/markup, verified live. **Verify (Brett):** on an approved scope with a generated proposal, tap "Get shareable link," open the link in a private/incognito window, confirm it reads clean and professional enough to send as-is (cosmetic polish + e-sign is next session's work, rule 116).
+
+## ✅ Local-storage security scare — investigated, confirmed NOT a leak (Aug 18). FEATURE_LOG rule 115.
+Brett saw vendor name/email/pricing when he "inspected" the proposal link page and (understandably) assumed the page was leaking it. Real cause: the Hub/vendor/tenant portals and the proposal page share one browser origin, so his browser's own leftover admin/vendor/tenant session data showed up in DevTools' Local Storage panel — not anything the proposal page fetched or displayed. `scope-proposal.html` has zero `localStorage` code (grepped clean); confirmed via incognito window (empty storage, clean render). No leak to real customers. Full explanation + the one open follow-up (Brett's admin token has no logout/expiry) in FEATURE_LOG rule 115.
+
+## 🔍 Inspection Scheduler — blackout date ranges/times + bulk property/unit import SHIPPED (Aug 18, Worker `2026-08-18.8` + `inspect.html`, live). FEATURE_LOG rule 113. B-226. 🔴 Needs Brett's first live pass.
+Follow-up to Phase 1 (rule 110) based on Brett's direct feedback after confirming that stuck: "add ability to bulk add dates in a batch and date ranges as well as time ranges (in the blackout dates bulk add)... need to be able to select from existing properties/tenants/units. i don't want to onboard hundreds of units manually." Blackouts: the one-off date builder now supports a From/To date range (stored as one row, not one per day), a paste-a-batch-of-dates textarea, and Start/End time fields that apply to the whole save — so "block Dec 24–26, all day" or "block just the 31st, 1pm–5pm" are both one action. Bulk import: new "Bulk import properties/units" screen — paste rows from a spreadsheet (Address/Zip/Unit_Label/Tenant/Phone), preview the counts before committing, confirm to import in safe-sized batches; matches existing properties by address and skips duplicate units, so re-pasting an overlapping list never creates doubles. Built specifically to not blow through the Google Sheets API quota on hundreds of rows (same lesson as rule 99's quota incident) — reads the existing data once, writes in at most 2 batched calls regardless of row count. Also fixed the underlying "can't find one property among hundreds" problem: properties/units now load in one batched call instead of one-per-property, each property's unit list is collapsed by default (tap to expand), and there's a search box to filter by address or zip. **Verify (Brett):** open Inspection Scheduler, paste a small test batch of 2-3 addresses (include one multifamily with 2 units) into Bulk import, confirm the preview counts look right, confirm, then refresh and use the search box to find one of them. Separately, add a one-off blackout with a date range and a time window and confirm it saves and displays correctly.
+
+## 🔧 Fixed real cause of "Hub loads very slowly, no work orders" — timeouts now actually cancel the request SHIPPED (Aug 18, live). FEATURE_LOG rule 112. 🔴 Needs Brett's confirm.
+Rule 106's 20s timeout wasn't enough — Brett reported it was STILL slow, work orders never loading, even though scope-creator (same Worker) worked fine. Found the real bug: the old timeout only stopped the app from WAITING on a stuck request, it never actually cancelled it — so a stalled load could sit there quietly using up one of the browser's few connections to the Worker right when the backup 8-requests-at-once fallback tried to fire, starving it too. Now a timeout uses a real cancel (AbortController) that frees the connection immediately. Also added a same-page way to check (via `/health`) whether the pricing config actually got saved — checked it just now and confirmed **Brett's pricing config has not been saved yet anywhere** (not a bug, still needs the paste-in step from rule 109/111). **Verify (Brett): open the Hub and confirm work orders load promptly now; if it's ever slow again, it should fail cleanly with a Retry message within about 20-40 seconds instead of hanging.**
+
+## 📋 Weekly Open Item Report — SHIPPED, DORMANT (Aug 18, GitHub Pages + Worker, not yet deployed live). FEATURE_LOG rule 111. 🔴 Needs Brett's Gmail OAuth setup before anything can send.
+Built the full weekly/on-demand open-item report Brett asked for: rolls sub-customers up to the parent (Goldszmidt-style — several properties, one owner, one combined total), eligible once $75+ open OR the oldest invoice has been open >10 days, opt-in list so nobody's auto-emailed by default, and a customer-facing link (`ar-report.html`, no login, token-gated the same proven way the Shareable Work Order link works) with a Pay Now per invoice. Admin side is `ar-report-admin.html` (Hub → Dev Log → 🧰 TOOLS → 📋 Open Item Report) — preview-first "Send now" per customer, plus the weekly-auto-send checkbox. Full design in `context/AR_REPORT_BUILD_BRIEF_v1.0.md`. **Nothing sends yet — three things first:** (1) 🔴 Brett sets up the Gmail OAuth client + refresh token for `ridgecomaintenance@gmail.com` (~15 min at a computer) and adds `GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN/SENDER` as Cloudflare Worker secrets — until then any send attempt fails loud with a clear "Gmail not configured" error, nothing silently no-ops; (2) a live check of whether QuickBooks exposes its own `InvoiceLink` field on Brett's account (affects whether Pay Now is instant-redirect or falls back to "check your email"); (3) Brett opts in the first customer (recommend Goldszmidt, the example that prompted this) via `ar-report-admin.html` and tries one manual "Send now" before turning on the weekly cron (`Config.ar_report_enabled=TRUE`). **Verify (Brett) once Gmail is set up:** open `ar-report-admin.html`, confirm Goldszmidt shows as one rolled-up group (not split by property), tap "Send now," confirm the email arrives and the link opens `ar-report.html` with the right invoices and a working Pay Now.
+
+## 🆕 Inspection Scheduler Phase 1 SHIPPED — new venture line, data model + admin onboarding (Aug 18, Worker `2026-08-18.4` + new `inspect.html`, live). FEATURE_LOG rule 110. B-226. 🔴 Needs Brett's first live pass.
