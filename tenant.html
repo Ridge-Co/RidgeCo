@@ -820,6 +820,13 @@ function buildPhotoSection(woId, propAddr, opts) {
   var viewTypes = opts.viewAll ? ['before','after','report','receipt'] :
                   (opts.canBefore ? ['before'] : []).concat(opts.canAfter ? ['after'] : [])
                   .concat(opts.canReport ? ['report'] : []).concat(opts.canReceipt ? ['receipt'] : []);
+  // hideView lets a caller pass viewAll:true (show most sections without needing a can* flag
+  // for each) while still hiding one specific type outright — e.g. tenants should never see
+  // receipts, even though they can view before/after/report photos. Without this, viewAll:true
+  // was overriding canReceipt:false and showing the RECEIPT section to tenants anyway.
+  if (opts.hideView && opts.hideView.length) {
+    viewTypes = viewTypes.filter(function(t){ return opts.hideView.indexOf(t) === -1; });
+  }
 
   viewTypes.forEach(function(type) {
     var cfg = TYPE_CONFIG[type];
