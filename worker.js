@@ -4785,7 +4785,12 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
     `<p style="color:#888;font-size:11px">Ridge Co — this is an automated confirmation, no reply needed.</p>`,
   ];
   const subject = isEs ? `Hemos recibido su factura — OT ${woId}` : `We've received your invoice — WO ${woId}`;
-  await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') });
+  let emailOutcome = 'failed';
+  try { await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') }); emailOutcome = 'sent'; } catch (e) { emailOutcome = 'failed'; throw e; }
+  finally {
+    // Per-WO communication audit (Sep 20 2026) — same visibility as the SMS side (smsGatedSend).
+    try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_invoice_confirmation', messageBody: subject + '\n\n' + html.filter(Boolean).join('\n'), outcome: emailOutcome }); } catch (e) {}
+  }
 }
 
 async function addVendorBill(env, body) {
