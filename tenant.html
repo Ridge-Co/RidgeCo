@@ -514,7 +514,7 @@ function buildDetail(wo, idx) {
     html += '</div>';
   }
 
-  html += buildPhotoSection(wo.ID, wo.property_address||wo.Address||'', { canBefore:false, canAfter:false, canReport:true, canReceipt:false, viewAll:true });
+  html += buildPhotoSection(wo.ID, wo.property_address||wo.Address||'', { canBefore:false, canAfter:false, canReport:true, canReceipt:false, viewAll:true, hideView:['receipt'] });
 
   return html;
 }
