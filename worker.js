@@ -285,6 +285,15 @@ export default {
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
+        // Session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
+        // tenant-by-pin payload are cached in the client's mh_tenant_sess at login and never
+        // re-checked otherwise -- a tenant's own hard refresh restores that same stale cached
+        // object instead of re-deriving it, so a toggle/turnover change doesn't show up until
+        // a full logout/login. Token-authenticated (ROLE_SCOPES.tenant below) instead of
+        // PIN+name like /tenant-by-pin, and resolves the tenant from the verified session id
+        // (callerSessionId), never a client-supplied id -- same identity-hardening pattern as
+        // the /workorder tenant path above.
+        if (path === '/tenant-session-refresh') return await tenantSessionRefresh(env, callerRole, callerSessionId);
         if (path === '/owner-by-pin')           return await ownerByPin(env, url);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url);
