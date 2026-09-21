@@ -4080,6 +4080,94 @@ function confirmSendPin() {
   });
 }
 
+// ── Send Custom Message (Sep 21 2026) — a general "text one person" tool for tenants,
+// owners and vendors, separate from the fixed PIN/Welcome templates above and from the
+// existing tenant-only, WO-tied `sendTenantManualUpdate` (which stays untouched). Goes through
+// the same /message/send-custom → smsGatedSend pipeline as everything else, so Global/property/
+// owner/tenant/vendor SMS toggles, opt-out, quiet-hours holding and Message_Queue logging all
+// apply automatically. When opened with a wo_id (from a WO's "✉️ Message" button), the send is
+// also logged to that WO's audit trail server-side — nothing extra to do here for that.
+var _sendMessageCtx = null;
+function _contactPhone(type, id) {
+  var list = type === 'tenant' ? state.tenants : type === 'owner' ? state.owners : state.vendors;
+  var rec = safeArray(list).find(function(x){ return String(x.ID) === String(id); });
+  return rec ? (rec.Phone || '') : '';
+}
+function openSendMessageModal(type, id, name, phone, woId) {
+  if (!phone) phone = _contactPhone(type, id);
+  _sendMessageCtx = { type: type, id: id, name: name, phone: phone, woId: woId || '' };
+  document.getElementById('sm-to').textContent = 'To: ' + name + ' (' + type + ')' + (phone ? ' · ' + phone : ' — no phone on file');
+  document.getElementById('sm-message').value = '';
+  document.getElementById('sm-wo-note').textContent = woId ? 'Logged to ' + woId + '’s audit trail once sent.' : '';
+  document.getElementById('sm-msg').innerHTML = '';
+  var btn = document.getElementById('sm-send-btn');
+  btn.disabled = false; btn.textContent = 'SEND SMS';
+  openModal('modal-send-message');
+  if (!phone) document.getElementById('sm-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">No phone number on file — add one before sending.</div>';
+}
+// Opened from a WO's sticky bar. Resolves the tenant/owner/vendor on that job the same way
+// openWODetail does, and if more than one contact is available, asks which to message.
+function openWOMessageModal(woId) {
+  var wo = safeArray(state.workorders).find(function(w){ return w.ID === woId; });
+  if (!wo) { alert('Work order not found.'); return; }
+  var options = [];
+  var unit = safeArray(state.units).find(function(u){ return u.ID === wo.Unit_ID; });
+  var tenant = null;
+  if (wo.Tenant_ID) tenant = safeArray(state.tenants).find(function(t){ return t.ID === wo.Tenant_ID && t.Active !== 'FALSE'; });
+  if (!tenant && unit && unit.Tenant_ID) tenant = safeArray(state.tenants).find(function(t){ return t.ID === unit.Tenant_ID; });
+  if (!tenant && wo.Unit_ID) tenant = safeArray(state.tenants).find(function(t){ return t.Unit_ID === wo.Unit_ID && t.Active !== 'FALSE'; });
+  if (!tenant && wo.Property_ID && !wo.Unit_ID) tenant = safeArray(state.tenants).find(function(t){ return String(t.Property_ID) === String(wo.Property_ID) && !t.Unit_ID && t.Active !== 'FALSE'; });
+  if (tenant) options.push({ type: 'tenant', id: tenant.ID, name: (tenant.First_Name + ' ' + (tenant.Last_Name || '')).trim(), phone: tenant.Phone });
+  var prop = safeArray(state.properties).find(function(p){ return String(p.ID) === String(wo.Property_ID); });
+  var owner = prop ? safeArray(state.owners).find(function(o){ return String(o.ID) === String(prop.Owner_ID); }) : null;
+  if (owner) options.push({ type: 'owner', id: owner.ID, name: (owner.First_Name + ' ' + (owner.Last_Name || '')).trim() || owner.Company || 'Owner', phone: owner.Phone });
+  var vendor = wo.Vendor_ID ? safeArray(state.vendors).find(function(v){ return v.ID === wo.Vendor_ID; }) : null;
+  if (vendor) options.push({ type: 'vendor', id: vendor.ID, name: vendor.Name || vendor.Company || 'Vendor', phone: vendor.Phone });
+  if (!options.length) { alert('No tenant, owner, or vendor contact found on this work order.'); return; }
+  if (options.length === 1) { var o = options[0]; openSendMessageModal(o.type, o.id, o.name, o.phone, woId); return; }
+  _pickSendMessageRecipient(options, woId);
+}
+function _pickSendMessageRecipient(options, woId) {
+  var pick = prompt('Message who on this job?\n' + options.map(function(o, i){ return (i+1) + ') ' + o.name + ' (' + o.type + ')'; }).join('\n'));
+  if (pick === null) return;
+  var idx = parseInt(pick, 10) - 1;
+  if (isNaN(idx) || !options[idx]) { alert('Enter a number from the list.'); return; }
+  var o = options[idx];
+  openSendMessageModal(o.type, o.id, o.name, o.phone, woId);
+}
+function confirmSendMessage() {
+  if (!_sendMessageCtx) return;
+  var msg = document.getElementById('sm-message').value.trim();
+  if (!msg) { document.getElementById('sm-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">Type a message first.</div>'; return; }
+  if (!_sendMessageCtx.phone) { document.getElementById('sm-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">No phone number on file for this contact.</div>'; return; }
+  var btn = document.getElementById('sm-send-btn');
+  btn.disabled = true; btn.textContent = 'SENDING…';
+  document.getElementById('sm-msg').innerHTML = '';
+  api('POST', '/message/send-custom', {
+    recipient_type: _sendMessageCtx.type,
+    recipient_id: _sendMessageCtx.id,
+    message: msg,
+    wo_id: _sendMessageCtx.woId || '',
+    sent_by: 'Admin',
+  }).then(function(r) {
+    btn.disabled = false; btn.textContent = 'SEND SMS';
+    if (r && r.error) { document.getElementById('sm-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(r.error) + '</div>'; return; }
+    if (r && r.sent) {
+      toast('Message sent', 'success'); closeModal('modal-send-message');
+      if (_sendMessageCtx.woId) loadAll().then(function(){ openWODetail(_sendMessageCtx.woId); });
+      return;
+    }
+    if (r && r.send_ok === false) {
+      document.getElementById('sm-msg').innerHTML = '<div style="color:var(--warn,#c8992a);font-size:12px">Queued, not sent — SMS is currently gated off (' + esc(r.gate_snapshot || 'Global OFF') + '). It\'ll show in the Message Queue review screen once turned on.</div>';
+      return;
+    }
+    document.getElementById('sm-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">Queued but the send itself failed — check the Message Queue review screen.</div>';
+  }).catch(function(e) {
+    btn.disabled = false; btn.textContent = 'SEND SMS';
+    document.getElementById('sm-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(e && e.message ? e.message : 'unknown error') + '</div>';
+  });
+}
+
 function bulkSendPinFromTab(listId) {
   var scopeEl = (listId && document.getElementById(listId)) || document;
   var checked = Array.from(scopeEl.querySelectorAll('.pin-check:checked'));
