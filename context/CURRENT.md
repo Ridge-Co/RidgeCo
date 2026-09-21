@@ -450,3 +450,230 @@ access check or WO creation run — a tenant session can no longer be used to su
 a different property/unit/tenant. Scoped strictly to callerRole === 'tenant'; admin/owner paths
 untouched. `test/tenant-submit-request.test.mjs` +8 assertions, full suite 76/76, zero
 regressions. Deployed (`2026-09-16.5`), confirmed via `/version` and a fresh anonymous clone.
+
+**Not verified live** — no live tenant PIN session available from the build sandbox. Needs
+Brett's first live pass: log in to tenant.html as a real tenant, replay POST /workorder via
+browser dev tools with a spoofed property_id/unit_id, confirm the WO lands on the tenant's own
+real property/unit regardless (overwritten, not rejected) — then confirm a normal unmodified
+submission still works.
+
+## Next up: Part B — Hub (index.html) UI for tenant-WO settings + admin Managed_By control
+Brett's answers (this session): (1) fold into the existing Owners and Properties pages, not a
+standalone settings page/tab; (2) the admin-side Managed_By toggle shows the same confirm dialog
+owner.html's does; (3) Brett flagging a WO as owner-managed himself DOES notify the owner (not a
+quiet internal-only flag — differs from the brief's "recommend yes for consistency, confirm"
+framing, which left this open). Every endpoint Part B needs already exists and is already
+correct (GET /tenant-wo-settings, POST /owner|property/tenant-wo-toggle, POST
+/owner/held-contact-note, POST /wo/admin-update) — this is a pure frontend build against
+already-tested endpoints, plus one small addition: an owner-notify SMS/queue call when admin sets
+Managed_By='Owner' via the new UI (doesn't exist yet — today's owner.html-side toggle doesn't
+notify either, so this is net-new, not a gap in existing code).
+
+# WHERE THINGS STAND — Sep 16, 2026 (all 3 parts of the owner-managed-WO access-control build shipped)
+
+## 🟢 Shipped: full access-control model live — Phoenix owner-first, Goldszmidt tenant-submit, held-WO tenant redirect — full detail FEATURE_LOG [FL-20260916-2145-w2]
+Closes out today's design conversation with Brett. All three pieces are live: (1) owners can
+bidirectionally claim/release a WO via `Managed_By`, Ridge Co blocked from assigning a vendor
+to a claimed one; (2) tenants can submit new requests where the owner/property toggle allows it
+(Goldszmidt ON, everyone else at the existing OFF default) — turned out to reuse an already-built
+Aug 20 backend rather than needing a new one; (3) a held WO shows visibly different to the tenant
+— dimmed card + "Handled by your landlord" label + a top banner with the owner's own contact info
+(custom note or name+phone fallback), description still fully visible. 76/76 tests, deployed
+(`2026-09-16.4`).
+
+**Flagged, not fixed**: the pre-existing (Aug 20) tenant-submission gate doesn't cross-verify the
+calling tenant's session against the property/tenant_id in the request body — worth hardening
+before wider rollout.
+
+**Still open**: no admin (index.html) UI for managing the toggle hierarchy or setting a held-
+contact note day-to-day — both set via direct API call this session. `GET /tenant-wo-settings`
+already exists and is ready for a real settings screen whenever wanted.
+
+# WHERE THINGS STAND — Sep 16, 2026 (owner-managed WO toggle shipped; tenant-submit-request UI wired up to Aug 20's orphaned backend)
+
+## 🟢 Shipped: owners can claim/release a WO themselves; tenants can submit new requests where enabled — full detail FEATURE_LOG [FL-20260916-1950-m4] / [FL-20260916-2135-r4]
+Two pieces from the same design conversation with Brett (per-owner/per-property access model:
+Phoenix = owner-first no tenant-submit, Goldszmidt = tenant-submit + owner auto-notified,
+owner-occupant as a shadow-tenant flag):
+1. **`Managed_By` bidirectional owner toggle** (worker.js + owner.html) — an owner can mark a WO
+   as handled by themselves; Ridge Co is mechanically blocked from assigning a vendor to it
+   until it's handed back. Live, tested (74/74 → since grown to 75/75).
+2. **Tenant "Submit a New Request"** (tenant.html only) — turned out the entire backend already
+   existed from an Aug 20 2026 build (owner→property→unit toggle hierarchy, the `/workorder`
+   gate, dedicated toggle-setting endpoints, a settings-summary endpoint) but nothing ever linked
+   to it. Wired tenant.html up to it rather than building a parallel system. Goldszmidt's toggle
+   set ON live via the existing endpoint; everyone else stays at the existing OFF default.
+
+**Flagged, not fixed**: the pre-existing (Aug 20) tenant-submission gate checks property-level
+permission but doesn't cross-verify the calling tenant's session against the property/tenant_id
+in the request body — worth hardening before wider rollout, see FEATURE_LOG entry for detail.
+
+**Still open**: the owner-managed WO's tenant-facing grayed-out display + a per-owner redirect-
+contact field; an admin (index.html) settings screen for the toggle hierarchy (currently set via
+direct API call — `GET /tenant-wo-settings` already exists and is ready for exactly this).
+
+# WHERE THINGS STAND — Sep 16, 2026 (1109 Battery Ave unit/tenant fix closed out — rule 171's feature confirmed self-serve)
+
+## 🟢 Fixed: 1109 Battery Ave (Property 84) unit/tenant data — full detail FEATURE_LOG [FL-20260916-2150-t8]
+Brett supplied the two answers rule 171 was blocked on (unit labels Apt 1/Apt 2; Reagan is in
+Apt 2). Created Units 55 (Apt 1, vacant) and 56 (Apt 2, linked to tenant 102/Reagan) via the
+existing `/unit/add` + `/tenant/update` endpoints — no code changes, pure data fix. Verified live
+via `/units` and `/tenants` after the write. Also re-confirmed the Property Structure management
+feature itself (rule 171, Sep 14) is live and correct in the current build — Brett can now do
+this himself in the Hub (Edit Property → Units section; Edit Tenant → Unit dropdown) for any
+future property without needing a session.
+
+# WHERE THINGS STAND — Sep 16, 2026 (vendor nudge satisfied-check fixed off real live false-positives; 3 SMS templates stopped over-promising a reply channel that doesn't route anywhere)
+
+## 🟢 Fixed: WO-1200/1201 kept getting "any update on status?" nudges after already being Invoiced — full detail FEATURE_LOG [FL-20260916-1950-m4]
+Brett pulled the last 48h of SMS via `/message-queue` to review content/timing and flagged two live
+false positives directly (WO-1200, WO-1201, both nudged at 3:06pm ET despite already being
+Invoiced with a real reviewed Vendor_Bills row on file). Root cause confirmed against the live
+Sheet, not guessed: `processVendorNudges`'s satisfied-check only recognized `wo.Status ===
+'Complete'` as the status-ask stopping condition — once a WO moved past Complete to Invoiced, it
+silently fell through and kept nudging forever. Fixed per Brett's explicit new rule: the status ask
+now stops at Complete-or-later regardless of billing; a separate `invoice`-type ask auto-starts at
+that same moment and persists specifically until Invoiced-or-later; Cancelled/Declined still stop
+everything. Status nudge copy also rewritten to coach the vendor through the actual workflow
+(schedule → mark complete → invoice) instead of a bare "any update?". `node --check` clean, full
+suite 65/65. **Not yet live-verified** — needs a real sweep pass to confirm WO-1200/1201 go fully
+quiet next cycle.
+
+**Also surfaced, not yet re-confirmed**: the Sep 15 evening cron-cadence fix (FL-20260915-1839-x7,
+5th Cloudflare Cron Trigger) doesn't look fully effective yet per today's real firing times — nudges
+due at 9:00am/12:16-12:20pm actually fired at 11:33am/3:06pm (~2.5-2.8h late), batched in pairs.
+Better than the original ~5h GH-Actions-only gap, but not the intended 15-min cadence. Worth
+confirming the new Cloudflare Cron Trigger is actually registered and firing.
+
+## 🟢 Fixed: 3 SMS templates promised "reply or call us" with no real inbound path — full detail FEATURE_LOG [FL-20260916-1955-p1]
+Brett flagged the tenant-job-completed text specifically; confirmed via `handleInboundSMS` that it
+only recognizes vendor phone numbers, so a tenant OR owner replying gets a nonsensical "could not
+find your vendor record" dead end. Dropped the reply/call promise from `tenant_job_completed`,
+`tenant_welcome`, and the `addWONote` owner on-hold notification. `vendor_welcome` left untouched —
+vendor replies genuinely do route somewhere today. **Interim only** — Brett wants a real contact
+form (name/phone/address/details) and eventually AI-agent-routed inbound replies; that's a separate
+unscoped build, not attempted this session. `node --check` clean, full suite 65/65.
+
+# WHERE THINGS STAND — Sep 16, 2026 (GH Broker built, broke, and got fixed — with no documentation trail until this entry)
+
+## 🟢 Fixed and live-verified: GH Broker's write path (`commit_file`) crashed on any non-ASCII character — full detail FEATURE_LOG [FL-20260916-1750-k3]
+GH Broker (`brett332/gh-broker`) is the Cloudflare Worker MCP connector that gives Cowork sessions
+GitHub read/write access without a pasted PAT. A session today built it further (added
+`list_directory`, fixed UTF-8 decoding on reads) and then disconnected with **no checkpoint saved
+and no FEATURE_LOG/CURRENT.md entry written** — the only record was the git history itself.
+A follow-up session found `commit_file` (the write tool) was failing on almost every real call —
+root cause: it base64-encoded content with plain `btoa()`, which throws on any non-Latin-1
+character (em-dashes, checkmarks, curly quotes, emoji, CJK — i.e. almost all real prose). Fixed
+with a proper UTF-8-safe encoder, verified live against the actual deployed connector with a
+string containing every one of those character classes. `context/CREDENTIALS_MAP.md` bumped to
+v1.4 and now documents GH Broker as the primary GitHub-access method (previously undocumented
+entirely — the file still told sessions to ask Brett to paste a PAT by default).
+
+**Real gap this exposes**: `brett332/gh-broker` is a separate repo from this one, so nothing in
+this repo's doc-audit system (`scripts/doc_audit.py`) ever sees changes to it. Worth deciding
+whether it needs its own FEATURE_LOG or whether changes there should always also get logged here
+(this entry is the first instance of the latter).
+
+**Open/unknown**: whatever RidgeCo task the lost session was originally working toward before it
+became "fix GH Broker" is not recorded anywhere and may need to be re-asked of Brett directly —
+there's no trail to recover it from.
+
+# WHERE THINGS STAND — Sep 15, 2026 (documentation-completeness infrastructure — FL-20260915-1644-cz — on top of the share-attachments repair chain and rule 175)
+
+## 🟢 Shipped, one real bug caught by its own first live run: documentation-completeness infrastructure — FL-20260915-1644-cz
+Full detail: FEATURE_LOG `[FL-20260915-1644-cz]`. Brett's ask after the Sep 14 documentation
+gaps: capture more as it happens, plus a scheduled audit to catch what still slips through,
+without needing a manual save from every session that touched something that day. Four pieces:
+
+1. **ID/tag convention** (FEATURE_LOG.md + BACKLOG.md headers) — new entries get
+   `[FL-YYYYMMDD-HHMM-xx] [tags]` instead of the next sequential number. Kills the
+   "two concurrent sessions both grab 171" collision class outright rather than detecting it
+   after the fact; tags make cross-session/cross-subject search work via plain grep. Already
+   picked up and used correctly by a concurrent session the same day (see the share-attachments
+   entries below, IDs `FL-20260915-1649-q8` etc.) — a good early sign it's actually sticking.
+2. **`ridgeco-validate` documentation gate** — output contract gained a Documentation field;
+   a change with no FEATURE_LOG entry now blocks autonomy-ladder eligibility. **Sandbox-local
+   skill edit — persistence to a real future session is NOT confirmed.** Watch for whether this
+   field actually shows up next time ridgeco-validate runs.
+3. **`brett-context` staleness tripwire** — session-start check comparing CURRENT.md's header
+   date against the latest commit date, surfaces a plain warning if they've drifted. **Same
+   persistence caveat as above** — watch for whether it fires on the next fresh session load.
+4. **`scripts/doc_audit.py` + `.github/workflows/doc-audit.yml`** — nightly, no-Worker-needed
+   audit (full repo access from the GitHub Actions runner itself) flagging commits with no
+   apparent FEATURE_LOG entry, via per-entry keyword clustering (an early whole-file-presence
+   version was useless — scored 9/9 false-positive "hits" on an undocumented commit, since
+   common words like "receipt"/"work"/"property" appear everywhere in a 150+-entry file).
+   Commits its own run result to `context/DOC_AUDIT_LOG.md` — a missed night is a visible gap
+   in that file's own run history, not silence.
+
+**Real bug caught by the audit's own first live run, same day**: it crashed before writing
+anything — `CURRENT.md`'s header used an abbreviated month ("Sep 15") and the parser only
+accepted the full name, an untested path since local testing always passed `--since-date`
+explicitly. The workflow's own `|| echo gaps_found=true` masked the crash as a green step —
+looked like "ran, found nothing" when the check never actually ran. Fixed: parser accepts both
+month formats now; more importantly, "since" now sources from the audit's OWN last recorded run
+in `DOC_AUDIT_LOG.md` first (self-contained, doesn't depend on another file's formatting staying
+stable), falling back to `CURRENT.md`'s header only on a genuine first run, and a fixed lookback
+window if even that's unavailable — never just crashes. Exit codes now distinguish "ran fine,
+found gaps" (1) from "the audit itself broke" (2), so a future silent crash can't hide behind a
+green checkmark. Re-triggered for real after the fix — confirmed a real commit landed
+(`4140450`) with a correct run entry.
+
+**Not built**: SMS notification on a flagged gap — wasn't part of what was asked, would need a
+new endpoint/token. **Worth checking periodically**: `context/DOC_AUDIT_LOG.md` for whether the
+nightly run is actually firing on schedule (not just that it can, which is all that's confirmed
+so far via two manual triggers).
+
+## 🟡 Diagnostic added, root cause not yet run: WO-1039's 5 files are 404 — but which kind? — FL-20260915-1745-tp
+Full detail: FEATURE_LOG `[FL-20260915-1745-tp]`. Brett's first real batch (with the corrected
+tool) confirmed all 5 WO-1039 failures are `404 File not found`. That's ambiguous on its own —
+Google Drive returns 404 both for a truly-gone file AND for one the service account simply can't
+see (hiding existence rather than returning 403). Added a read-only `/admin/drive-file-check`
+(`files.get` per ID, never writes) to tell them apart. Verified: 16/16 new tests, full suite
+70/70, deployed (`2026-09-15.6`). **Next step**: actually run it against WO-1039's 5 file IDs and
+read the result together with Brett — this session hasn't done that yet.
+
+## 🟡 Fixed and deployed, one thing still open: real batches revealed 2 more issues — FL-20260915-1731-yh
+Full detail: FEATURE_LOG `[FL-20260915-1731-yh]`. Brett ran "Run for real" 3 times and got
+byte-identical results — correctly asked if this was actually doing anything. Two separate
+causes: (1) **the updated offset-tracking tool from FL-20260915-1714-wy was never actually
+re-sent to him** — he was still on the original file, which never included `offset` in its
+requests, so every "batch" silently repeated the same first 25 files (the 20 real shares from
+batch 1 did land — not wasted, just not visible as progress). Delivered the corrected file this
+time. (2) **5 files under WO-1039 fail identically every retry** — a real, persistent issue,
+separate from the delivery mistake. `driveShareAnyone` discarded the actual Drive API error on
+failure; added `driveShareAnyoneVerbose` so `failures[]` now carries the real HTTP status +
+error message (403 vs 404 vs 5xx are very different problems). Tool also now persists its
+position via `localStorage` so a phone backgrounding the tab mid-sweep can't cause a repeat of
+issue (1). Verified: 42/42 in `test/share-attachments-limit.test.mjs`, full suite 69/69,
+deployed (`2026-09-15.5`), confirmed live.
+**Still open**: WO-1039's actual failure reason isn't known yet — this session's
+write-classifier blocks a real share call from here, so it couldn't be reproduced directly.
+Brett's next real batch (starting fresh with the corrected tool) will show the real status/error
+for those 5 files in the response; worth a quick read-together once he has it.
+
+## 🟢 Fixed and deployed: `/admin/share-attachments` couldn't advance past its first batch — FL-20260915-1714-wy
+Full detail: FEATURE_LOG `[FL-20260915-1714-wy]`. Found right after the limit fix below, before
+recommending Brett a batching plan for the ~492-file backlog: even with `limit` fixed, calling
+the endpoint again with the same limit always re-scanned from row 1 and reconsidered the SAME
+first N shareable files — no way to say "skip what an earlier batch already did." Added `offset`
++ a `next_offset` response field so calls chain correctly. The local repair tool
+(`ridgeco-share-attachments-repair.html`) now tracks its own position automatically — click
+"Dry run" or "Run for real" repeatedly and it continues where the last click left off, with a
+visible Progress line and a reset button. Verified: 38/38 assertions in
+`test/share-attachments-limit.test.mjs`, full suite 69/69, deployed (`2026-09-15.4`), confirmed
+live.
+**Recommendation given to Brett**: don't run all ~492 in one call — this codebase has hit
+Cloudflare's subrequest cap live before at similar scale in a different function, and a mid-batch
+failure here would return a bare error with no partial-progress stats. A live 100-item dry-run
+batch completed cleanly, so batches of ~100-150 (the tool defaults to 100, auto-advancing) are a
+reasonable balance. Still his call/his button to press — this session's write-classifier still
+blocks the real endpoint from being called directly from here.
+
+## 🟢 Fixed and deployed: `/admin/share-attachments` dry-run `limit` was a silent no-op — FL-20260915-1649-q8
+Full detail: FEATURE_LOG `[FL-20260915-1649-q8]`. Brett tried the rule-174/175 photo-share repair
+tool with `limit` at 5, 10, 15, and 100 in dry-run and got byte-identical output every time —
+correctly didn't trust it enough to run for real. Root cause: the limit check compared against
+`shared`, a counter dry-run never moves (it always skips the share call before that counter would
+increment) — so `limit` provably had zero effect on any dry-run response. Fixed: limit now gates
+on a new `considered` counter that increments in both modes, response reports
