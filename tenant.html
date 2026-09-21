@@ -177,6 +177,11 @@ textarea{resize:vertical;min-height:70px;}
     <div class="modal-title">ADD INFORMATION</div>
     <p style="color:var(--muted);font-size:11px;margin-bottom:10px">Share additional details with your property manager. This cannot be edited after submission.</p>
     <textarea id="noteText" placeholder="e.g. The leak is getting worse after rain. I'm available Tuesday afternoon after 3pm…" style="min-height:90px;margin-bottom:8px"></textarea>
+    <div style="margin-bottom:8px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Photos <span style="font-weight:normal;text-transform:none">(optional — helps us fix it faster)</span></label>
+      <input type="file" id="noteFiles" accept="image/*,video/*" multiple onchange="noteHandleFiles(this.files)">
+      <div id="notePreview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+    </div>
     <div id="noteMsg"></div>
     <div class="modal-actions">
       <button class="btn btn-sm btn-muted" onclick="closeModal('modalNote')">Cancel</button>
@@ -514,7 +519,7 @@ function buildDetail(wo, idx) {
     html += '</div>';
   }
 
-  html += buildPhotoSection(wo.ID, wo.property_address||wo.Address||'', { canBefore:false, canAfter:false, canReport:true, canReceipt:false, viewAll:true });
+  html += buildPhotoSection(wo.ID, wo.property_address||wo.Address||'', { canBefore:false, canAfter:false, canReport:true, canReceipt:false, viewAll:true, hideView:['receipt'] });
 
   return html;
 }
@@ -542,29 +547,71 @@ function renderDescription(desc) {
 }
 
 // ── Note ──────────────────────────────────────────────────────
+// Sep 21 2026 (Brett): a note stays append-only and attributed (see /wo/add-note server-side —
+// it timestamps + tags every entry "[<ts> — <author> (<role>)]" and never lets a tenant edit or
+// remove an existing entry), so a tenant can add new information to a job — e.g. clarifying which
+// of two vanity faucets is leaking — without being able to rewrite the work order itself, which
+// matters since they may be billed for repairs tied to what the WO actually says. Photos here are
+// optional, matching "Submit a New Request"; they upload as file_type 'report' (same bucket a
+// tenant can already view, per buildDetail's canReport:true) once the note itself is saved.
+var noteFiles = [];
 function openNote(woId) {
   activeNoteWOId = woId;
   document.getElementById('noteText').value = '';
   document.getElementById('noteMsg').innerHTML = '';
+  document.getElementById('noteFiles').value = '';
+  document.getElementById('notePreview').innerHTML = '';
+  noteFiles = [];
   openModal('modalNote');
 }
+function noteHandleFiles(fileList) {
+  Array.from(fileList).forEach(function(f) { if (noteFiles.length < 6) noteFiles.push(f); });
+  renderNotePreview();
+}
+function renderNotePreview() {
+  document.getElementById('notePreview').innerHTML = noteFiles.map(function(f, i) {
+    var url = URL.createObjectURL(f);
+    var isVideo = f.type.startsWith('video/');
+    return '<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;background:var(--surface2)">' +
+      (isVideo ? '<video src="' + url + '" muted style="width:100%;height:100%;object-fit:cover"></video>' : '<img src="' + url + '" style="width:100%;height:100%;object-fit:cover">') +
+      '<button onclick="noteRemoveFile(' + i + ')" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,.8);color:#fff;border:none;border-radius:50%;width:16px;height:16px;font-size:9px;cursor:pointer">&#x2715;</button>' +
+      '</div>';
+  }).join('');
+}
+function noteRemoveFile(i) { noteFiles.splice(i, 1); renderNotePreview(); }
 
 function submitNote() {
   var text = document.getElementById('noteText').value.trim();
   if (!text) return;
   document.getElementById('noteBtn').disabled = true;
+  var woId = activeNoteWOId;
+  var filesToUpload = noteFiles.slice();
+  var noteToSend = text + (filesToUpload.length ? ' (' + filesToUpload.length + ' photo' + (filesToUpload.length===1?'':'s') + ' attached)' : '');
   api('/wo/add-note', { method:'POST', body: {
-    wo_id: activeNoteWOId, note: text,
+    wo_id: woId, note: noteToSend,
     author: session.tenant_name, author_role: 'tenant',
   }}).then(function(res) {
-    document.getElementById('noteBtn').disabled = false;
-    if (res.success) {
-      document.getElementById('noteMsg').innerHTML = '<div class="msg success">✓ Sent to your property manager.</div>';
-      setTimeout(function(){ closeModal('modalNote'); loadWOs(); }, 1500);
-    } else {
+    if (!res.success) {
+      document.getElementById('noteBtn').disabled = false;
       document.getElementById('noteMsg').innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>';
+      return;
     }
-  }).catch(function(){ document.getElementById('noteBtn').disabled = false; });
+    var uploadNext = function(i) {
+      if (i >= filesToUpload.length) {
+        document.getElementById('noteBtn').disabled = false;
+        document.getElementById('noteMsg').innerHTML = '<div class="msg success">✓ Sent to your property manager.</div>';
+        setTimeout(function(){ closeModal('modalNote'); loadWOs(); }, 1500);
+        return;
+      }
+      var fd = new FormData();
+      fd.append('file', filesToUpload[i]);
+      fd.append('wo_id', woId);
+      fd.append('file_type', 'report');
+      fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
+        .then(function(){ uploadNext(i + 1); }).catch(function(){ uploadNext(i + 1); });
+    };
+    uploadNext(0);
+  }).catch(function(){ document.getElementById('noteBtn').disabled = false; document.getElementById('noteMsg').innerHTML = '<div class="msg error">Connection error.</div>'; });
 }
 
 // ── Submit a new request (Sep 16 2026) ──────────────────────────
@@ -820,6 +867,13 @@ function buildPhotoSection(woId, propAddr, opts) {
   var viewTypes = opts.viewAll ? ['before','after','report','receipt'] :
                   (opts.canBefore ? ['before'] : []).concat(opts.canAfter ? ['after'] : [])
                   .concat(opts.canReport ? ['report'] : []).concat(opts.canReceipt ? ['receipt'] : []);
+  // hideView lets a caller pass viewAll:true (show most sections without needing a can* flag
+  // for each) while still hiding one specific type outright — e.g. tenants should never see
+  // receipts, even though they can view before/after/report photos. Without this, viewAll:true
+  // was overriding canReceipt:false and showing the RECEIPT section to tenants anyway.
+  if (opts.hideView && opts.hideView.length) {
+    viewTypes = viewTypes.filter(function(t){ return opts.hideView.indexOf(t) === -1; });
+  }
 
   viewTypes.forEach(function(type) {
     var cfg = TYPE_CONFIG[type];
@@ -889,6 +943,78 @@ function buildPhotoSection(woId, propAddr, opts) {
   setInterval(check, 60000);
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
   window.addEventListener('focus', check);
+})();
+</script>
+
+<!-- Tenant session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
+     tenant-by-pin payload are cached in mh_tenant_sess at login and never re-checked
+     otherwise -- this is what Brett hit directly: his own portal kept hiding "+ SUBMIT A NEW
+     REQUEST" through a hard refresh (restoreTenantSession() just replays the same stale
+     cached object) and only a full logout/login re-fetched the real flag. Fixes that by
+     calling the new token-authenticated GET /tenant-session-refresh (no PIN/name needed,
+     unlike /tenant-by-pin) instead of forcing a relogin.
+     Deliberately much less chatty than the B-093 poller right above: Brett was explicit that
+     vendors are the role where this kind of staleness actually costs something (a vendor not
+     seeing a new/updated job), while a tenant seeing a toggle change a few hours late is a
+     non-event, and he asked to keep this cheap on requests/data for tenants specifically. So:
+     check once shortly after a session is restored (catches the hard-refresh case above
+     within seconds, not minutes or a full relogin), then only a few times a day on a timer,
+     plus opportunistically when the tenant actually reopens the tab -- free in practice, but
+     still capped so tab-switching can't turn it back into a fast poll. -->
+<script>
+(function(){
+  var CHECK_MS = 6 * 60 * 60000;        // ~4x/day steady-state -- tenants are the least
+                                         // time-critical role for this per Brett
+  var MIN_REFOCUS_GAP_MS = 30 * 60000;  // floor between focus/visibility-triggered checks
+  var lastCheck = 0;
+
+  function tenantBusy(){
+    var el = document.activeElement;
+    if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
+    return !!document.querySelector('.modal-overlay.open'); // e.g. mid-note in modalNote
+  }
+
+  function applyRefresh(d){
+    if (!session) return; // logged out while the request was in flight
+    var buttonChanged = session.can_submit_wo !== d.can_submit_wo;
+    session.tenant_name      = d.tenant_name;
+    session.property_id      = d.property_id;
+    session.property_address = d.property_address;
+    session.unit_id          = d.unit_id;
+    session.unit_label       = d.unit_label;
+    session.owner_id         = d.owner_id;
+    session.can_submit_wo    = d.can_submit_wo;
+    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){}
+    if (buttonChanged) {
+      var nr = document.getElementById('newRequestBtn');
+      if (nr) nr.style.display = d.can_submit_wo ? '' : 'none';
+    }
+    var n = document.getElementById('tenantName'); if (n) n.textContent = session.tenant_name || '';
+    var a = document.getElementById('tenantAddr');
+    if (a) a.textContent = (session.property_address||'') + (session.unit_label ? ' · Unit ' + session.unit_label : '');
+  }
+
+  function check(){
+    if (!session || !session.token) return;
+    if (tenantBusy()) return; // don't yank the button/header while a note or form is in progress -- retry next tick
+    lastCheck = Date.now();
+    api('/tenant-session-refresh').then(function(d){
+      if (d && d.session_invalid) { doLogout(); showLoginMsg('Your session has ended. Please sign in again.', 'error'); return; }
+      if (d && !d.error) applyRefresh(d);
+    }).catch(function(){});
+  }
+
+  // Catches Brett's exact reported case: a hard refresh re-runs restoreTenantSession() from
+  // the same stale cached object, so check again a few seconds after boot instead of waiting
+  // for the steady-state timer below.
+  setTimeout(check, 4000);
+  setInterval(check, CHECK_MS);
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden && Date.now() - lastCheck > MIN_REFOCUS_GAP_MS) check();
+  });
+  window.addEventListener('focus', function(){
+    if (Date.now() - lastCheck > MIN_REFOCUS_GAP_MS) check();
+  });
 })();
 </script>
 

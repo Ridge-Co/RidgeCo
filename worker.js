@@ -285,6 +285,15 @@ export default {
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
+        // Session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
+        // tenant-by-pin payload are cached in the client's mh_tenant_sess at login and never
+        // re-checked otherwise -- a tenant's own hard refresh restores that same stale cached
+        // object instead of re-deriving it, so a toggle/turnover change doesn't show up until
+        // a full logout/login. Token-authenticated (ROLE_SCOPES.tenant below) instead of
+        // PIN+name like /tenant-by-pin, and resolves the tenant from the verified session id
+        // (callerSessionId), never a client-supplied id -- same identity-hardening pattern as
+        // the /workorder tenant path above.
+        if (path === '/tenant-session-refresh') return await tenantSessionRefresh(env, callerRole, callerSessionId);
         if (path === '/owner-by-pin')           return await ownerByPin(env, url);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url);
@@ -438,6 +447,7 @@ export default {
         if (path === '/status')                   return await callWithFailureAlert(env, 'wo_status', '/status', () => updateStatus(env, body));
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
+        if (path === '/message/send-custom')      return await sendCustomMessage(env, body);
         if (path === '/cron/sweep')                return await cronSweep(env);
         if (path === '/vendor-request/create')     return await createVendorRequest(env, body);
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
@@ -902,6 +912,38 @@ async function tenantByPin(env, url) {
       can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
       token:            await makeSessionToken({ role: 'tenant', id: tenant.ID }, env.WORKER_SECRET),
     });
+  });
+}
+
+// Lightweight re-derive of the tenant-by-pin payload for an ALREADY-logged-in tenant, off the
+// verified session token instead of PIN+name -- see the router comment above for why this
+// exists (can_submit_wo and friends going stale in the client's cached mh_tenant_sess). No new
+// token is issued; the existing one keeps working until it expires on its own. Deliberately
+// resolves the tenant from callerSessionId (the id baked into the signed token), never a
+// query-string tenant_id, so a tenant can only ever re-check their own record.
+async function tenantSessionRefresh(env, callerRole, callerSessionId) {
+  if (callerRole !== 'tenant' || !callerSessionId) return json({ error: 'Unauthorized' }, 401);
+  const [tenants, props, units, owners] = await fetchTabs(env, ['Tenants', 'Properties', 'Units', 'Owners']);
+  const tenant = tenants.find(t => t.ID === callerSessionId && t.Active !== 'FALSE');
+  // Deactivated or deleted since login (e.g. moved out and the record was archived) -- the
+  // client should treat this like any other expired session and send them back to the PIN
+  // screen rather than silently keep showing whatever was cached at login.
+  if (!tenant) return json({ error: 'Tenant session no longer active', session_invalid: true }, 403);
+  if (tenant.Move_Out_Date) {
+    const moveOut = new Date(tenant.Move_Out_Date + 'T23:59:59');
+    if (moveOut < new Date()) return json({ error: 'Tenant session no longer active', session_invalid: true }, 403);
+  }
+  const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
+  const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
+  const owner = prop.Owner_ID ? owners.find(o => o.ID === prop.Owner_ID) : null;
+  return json({
+    tenant_name:      `${tenant.First_Name} ${tenant.Last_Name||''}`.trim(),
+    property_id:      prop.ID||'',
+    property_address: prop.Address||'',
+    unit_id:          tenant.Unit_ID||'',
+    unit_label:       unit.Unit_Label||'',
+    owner_id:         prop.Owner_ID||'',
+    can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
   });
 }
 
@@ -7995,6 +8037,68 @@ async function tenantManualUpdate(env, body) {
   return json({ success: true, sent: r.sent, send_ok: r.send_ok, queued_id: r.queued_id, gate_snapshot: r.gate_snapshot });
 }
 
+// -- Custom one-off message to a single tenant/owner/vendor (Sep 21 2026) --------------------
+// Brett's ask: a way to type a free-text message to one specific person, either from a work
+// order's own detail view (logged to that WO's audit trail via smsGatedSend's built-in
+// logMessageAudit, e.g. "is this the same faucet as the shower?") or directly from that
+// person's row on the Tenants/Owners/Vendors list (no WO context -- general one-off outreach).
+// Generalizes the existing tenant-only /wo/tenant-update-manual (tenantManualUpdate, left
+// completely untouched below) to all three roles and to the no-WO case. Always routes through
+// smsGatedSend -- same Global/Property/Customer/Tenant-or-Vendor gate, Test Mode redirect,
+// quiet-hours hold, and Message_Queue logging every other real send in this file gets; nothing
+// here bypasses that.
+async function sendCustomMessage(env, body) {
+  const kind = body.recipient_type;
+  if (!['tenant', 'owner', 'vendor'].includes(kind)) return json({ error: "recipient_type must be 'tenant', 'owner', or 'vendor'" }, 400);
+  if (!body.recipient_id) return json({ error: 'Missing recipient_id' }, 400);
+  const message = String(body.message || '').trim();
+  if (!message) return json({ error: 'Missing message text' }, 400);
+
+  const tabName = kind === 'tenant' ? 'Tenants' : kind === 'owner' ? 'Owners' : 'Vendors';
+  const tabsNeeded = Array.from(new Set([tabName, 'Properties', 'Work_Orders', 'Owners']));
+  const fetched = await fetchTabs(env, tabsNeeded);
+  const records    = fetched[tabsNeeded.indexOf(tabName)];
+  const properties = fetched[tabsNeeded.indexOf('Properties')];
+  const workorders = fetched[tabsNeeded.indexOf('Work_Orders')];
+  const owners     = fetched[tabsNeeded.indexOf('Owners')];
+
+  const recipient = records.find(r => r.ID === body.recipient_id && r.Active !== 'FALSE');
+  if (!recipient) return json({ error: `${kind.charAt(0).toUpperCase()}${kind.slice(1)} not found or inactive` }, 404);
+  if (!recipient.Phone) return json({ error: `No phone number on file for this ${kind}` }, 400);
+
+  let wo = null, property = null;
+  if (body.wo_id) {
+    wo = findWO(workorders, body.wo_id);
+    if (!wo) return json({ error: 'WO not found' }, 404);
+    property = properties.find(p => p.ID === wo.Property_ID) || null;
+  }
+  if (!property) {
+    if (kind === 'tenant') property = properties.find(p => p.ID === (recipient.Property_ID || '')) || null;
+    if (kind === 'owner') property = properties.find(p => p.Owner_ID === recipient.ID) || null;
+  }
+  const owner = kind === 'owner' ? recipient : (property && property.Owner_ID ? owners.find(o => o.ID === property.Owner_ID) : null);
+
+  const firstName = recipient.First_Name || recipient.Company || 'there';
+  const msg = body.wo_id ? `Hi ${firstName}, ${message} Ref: ${body.wo_id}.` : `Hi ${firstName}, ${message}`;
+
+  const sendArgs = { wo_id: body.wo_id || '', message_type: 'custom_admin_message', recipient_type: kind, message_body: msg, property: property || undefined };
+  sendArgs[kind] = recipient;
+  if (kind !== 'owner' && owner) sendArgs.owner = owner;
+  const r = await smsGatedSend(env, sendArgs);
+
+  // smsGatedSend already writes a full WO_Audit row (Channel/Recipient/Message/Outcome) whenever
+  // wo_id is set -- see logMessageAudit inside it. With no wo_id (a list-page message, not tied
+  // to any work order) there's no WO_Audit row possible, so log to SMS_Logs instead as the
+  // durable record of the send attempt.
+  if (!body.wo_id) { try { await logSMS(env, '', kind, recipient.ID, recipient.Phone, msg); } catch (_) {} }
+
+  return json({
+    success: true, sent: r.sent, send_ok: r.send_ok, held_for_quiet_hours: !!r.held_for_quiet_hours,
+    queued_id: r.queued_id, gate_snapshot: r.gate_snapshot,
+    recipient_name: kind === 'owner' ? ((`${recipient.First_Name||''} ${recipient.Last_Name||''}`.trim()) || recipient.Company || '') : `${recipient.First_Name||''} ${recipient.Last_Name||''}`.trim(),
+  });
+}
+
 async function logSMS(env, woId, recipientType, recipientId, phone, message) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/SMS_Logs`);const rows=data.values||[[]];const headers=rows[0];const now=new Date().toISOString();
@@ -11164,7 +11268,7 @@ async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 const ROLE_SCOPES = {
   vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact'],
-  tenant: ['/tenant-by-pin','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
+  tenant: ['/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
   owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view'],
 };
 function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !!(s && s.includes(path)); }
