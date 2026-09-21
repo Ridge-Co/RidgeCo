@@ -1129,3 +1129,229 @@ check a few genuinely-owed bills still show plain "PAY THE VENDOR" with no false
 50/50. No known failures remain.
 
 # WHERE THINGS STAND — Sep 8, 2026
+
+## 🟢 Test suite is fully green for the first time — 49/49 — rule 152
+The 2 "pre-existing unrelated failures" every session since Aug 12 had been carrying as an accepted
+baseline (`pricing-model.test.mjs`, `scope-core.test.mjs`) were actually root-caused and fixed, not
+just documented further. Both were test-harness bugs, zero production code involved: `pricing-model`
+never declared the `PRICING_CFG` global its extracted `index.html` functions read; `scope-core` never
+passed a `pc` config to `calcTieredEstimate`, which returns `null` (not a default) without one. Full
+detail: FEATURE_LOG rule 152. No live check needed — test-only change.
+
+## 🟢 Proposal photos, editable title, WO-linked status grouping, Who To Pay → QuickBooks bill link — rules 149/150/151
+Same session, four related asks from Brett, all built and tested:
+- **Photos on the shareable proposal link** — pulled from the scope's WO Attachments (or the
+  pre-WO `SCOPE-<id>` staging key), customer-safe types only, shown as a tap-to-open gallery.
+- **Scope title is now editable any time**, not just at creation ("✎" button in the editor).
+- **Status grouping on the scope list**: "in-progress"/"completed" pills now display correctly
+  (were silently falling back to a generic grey pill), collapsed into bundles at the bottom of the
+  list. **Corrected same day per Brett's own catch**: "completed" is now linked to the Work Order's
+  status, not just the money-booking history, with a new always-visible, never-collapsed
+  "ready to bill" state so a physically-done-but-unbilled job can't get buried in the completed pile.
+- **Who To Pay**: every vendor-bill card with a real QuickBooks bill now has a direct "open bill in
+  QB" link (`https://app.qbo.intuit.com/app/bill?txnId=...`, same pattern as the existing invoice
+  link on Send & Track) so Brett can jump straight to scheduling payment.
+
+Full detail: FEATURE_LOG rules 149 (photos/title/first-pass status), 150 (WO-linked ready-to-bill
+correction), 151 (QB bill link). `node --check` clean throughout, full suite 49/49 (see rule 152).
+🔴 **Needs Brett's first live pass on all of it**: open the Riverside Ave / Tyler Frank scope (or
+any scope with WO-attached photos) and confirm photos show on the shareable link; edit a scope
+title from the editor; check the scope list shows the new "ready to bill" banner correctly for any
+job whose WO is Complete but not yet final-invoiced; open Who To Pay and confirm "open bill in QB"
+lands on the right bill.
+
+# WHERE THINGS STAND — Sep 7, 2026
+
+## 🟡 Fixed: "alternate option" additions on a scope item never reached the customer's proposal — rule 148
+Brett (screenshot, 3101 Gibbons deck job): adding a 2nd priced option ("Treated lumber decking" vs
+"Use composite decking...") on a scope item and generating the proposal didn't give the tenant a
+choice on the actual proposal page. Root cause: `genProposal()` (`scope-creator.html`) called
+`/scope/proposal` without first saving pending item edits via `/scope/update` — any option added but
+not separately "💾 Save edits"-ed was silently dropped before the proposal was built. The customer-
+facing selector itself (rule 123) was never broken — it had nothing to render because the new option
+never reached the server. Fixed by having `genProposal()` save current items first, same as
+`applyCommand()`/`splitSelected()` already do. Zero worker.js changes. Verified with a real headless
+Playwright run: confirmed the bug reproduces against an unmodified clone (only `/scope/proposal`
+fires) and is fixed on the patched file (`/scope/update` fires first with both variants correct).
+Full detail: FEATURE_LOG rule 148. 🔴 **Needs Brett's first live pass**: on a real scope, add a 2nd
+alternate option to an item, tap "Generate proposal" directly (no separate Save tap), open the
+shareable link, confirm both options now show as a real radio-button choice with live-updating total.
+
+## 🟢 Gmail OAuth fixed live + real "Send estimate" email built (both same day, later sessions)
+Two more things shipped today on top of the review/merge session below:
+- **Gmail OAuth for `ridgecomaintenance@gmail.com` is fully live**, confirmed with a real test
+  send (`message_id: 1a07e381b6a5d2de`). Root causes were: authorizing against Google's own OAuth
+  Playground demo client instead of a real one; the address missing from the OAuth app's Test
+  users list; a refresh token pasted with its surrounding `{ }`/label; and a client_id/secret
+  mismatch, resolved by regenerating the secret + refresh token together in one pass.
+  `GET /gmail/test?to=` (admin-gated) is now a standing diagnostic to re-verify the send path
+  any time without a new build. `/health` also reports Gmail secret-presence (booleans only).
+- **Rule 147 — real "Send estimate" email, B-210's follow-on.** New `POST /scope/proposal/send`
+  + a "📧 Send estimate to owner" button in `scope-creator.html`, emailing the confirmed payor
+  (never the Realtor/PM referral source) the shareable proposal link via `gmailSendEmail`.
+  `copyProposal()`/`getProposalLink()` left untouched — this sits alongside them. Full detail:
+  FEATURE_LOG rule 147. **🔴 Built and tested (44/46, same 2 pre-existing unrelated failures) but
+  NOT YET PUSHED to `main`** — no push credential (`BRETT_GH_PAT`) was available in that session,
+  so the commit is sitting as a patch-file handoff (see `ridgeco-git-push-proxy-bug.md`'s recovery
+  playbook). **Next step is Brett's**: open claude.ai/code → repo picker → `Ridge-Co/RidgeCo` →
+  paste the delivered reconstruction file's contents as the first message → verify → push. Once
+  live, needs Brett's first real pass: generate a proposal, confirm the payor in step 6, tap Send,
+  confirm the email lands looking right and the link opens correctly.
+
+# WHERE THINGS STAND — Sep 7, 2026 (earlier the same day)
+
+## ⚡ This file (and BACKLOG.md) went stale for two weeks — Sep 2/3 work never got logged here
+Real sessions on Sep 2 and Sep 3 shipped rules 142/143/144 straight to `main` and wrote them up in
+FEATURE_LOG, but nobody updated this file or BACKLOG's Quick Index to match — so anyone reading
+"where things stand" from the top of this file alone would have missed two weeks of real, deployed
+work. Caught today doing a full review at Brett's request. Going forward: **update this file the
+same session anything ships**, not just FEATURE_LOG — this file is what gets read first.
+
+## 🟢 What Sep 2/3 actually shipped (all confirmed live on `main` as of this writing, none yet Brett-verified)
+- **Rule 142 — manual final-price override per variant** on scope proposals (`scope-creator.html`).
+  You can now set a price directly per variant instead of only ever getting the auto-markup number.
+  🔴 First live pass still needed: set a vendor cost + override on one variant, Generate proposal,
+  confirm the total matches the override.
+- **Rule 143 — final-balance invoicing** for signed scope proposals (`signed-proposals.html`). Once
+  a deposit is booked, a "Job done — invoice final balance" button appears. This is what unblocks
+  931 St Paul St Apt 2F (Jamuna Yalamanchili / Cesar Gomez) specifically. 🔴 Needs Brett's first live
+  run on that exact job.
+- **Rule 144 — QuickBooks customer created eagerly at Owner-add time**, not lazily at first invoice.
+  🔴 Needs a live check: add a new owner, confirm the QB Customer appears immediately.
+- **CAP-034** (scope→estimate→signature→invoice split across 2 pages) — captured as a wishlist item
+  only, not designed or built. No action needed yet.
+- **B-236** (`context/SCOPE_INVOICE_AUTOMATION_BUILD_BRIEF_v1.0.md` — auto-create/edit/void the
+  deposit invoice at estimate time, redirect signer straight to a QuickBooks payment link) — brief
+  only, nothing built. Still blocking the actual build: Brett reading/approving the drafted
+  `AUTONOMY_GUARDRAILS_v1.0` addendum wording in that file (the BillEmail-from-creation question is
+  already answered — the brief's own "Next step" section says otherwise but that's stale text
+  inside the brief itself, not a real open question — Decisions Locked #1 already covers it).
+- B-210 (Gmail OAuth for the RidgeCo send address) noted as broken — blocked on Brett confirming the
+  address + a one-time Google consent step. His action item, not a code fix.
+
+## 🟢 Rule 145 — Signed-proposal vendor-bill-gap fix, MERGED TO MAIN TODAY (Sep 7 2026) after sitting unmerged for 2 weeks
+This is the important finding from today's review: the Aug 24 fix for the Cesar Gomez /
+"deposit share showed the vendor's full cost" bug was built, tested, and `ridgeco-validate`-passed
+back on Aug 24 — and then never actually made it into `main`. It sat on a feature branch
+(`claude/vendor-bill-gap-ridgeco-13k29s`) the whole time, so it was never deployed despite every
+prior session describing it as "done." **A second, independent session built a different fix for
+the exact same two bugs the same day**, also never merged (`claude/ridge-co-vendor-bill-fixes-zrcv9l`,
+commit `bb8442b`) — that one is now superseded, not applied; merging both would have double-patched
+the same bug two incompatible ways. Full detail: FEATURE_LOG rule 145 (renumbered from the fix's
+original "142," which collided with the later, unrelated price-override rule above). 🔴 Still needs
+Brett's live check: open Signed Proposals, confirm a deposit-share bill shows the correct prorated
+number (not the vendor's full job cost), and that a booked-with-no-bill row shows the red banner.
+
+## 🟢 Rule 146 — Signed Proposals modal: Cancel→Close + real Undo, MERGED TO MAIN TODAY (Sep 7 2026)
+Brett flagged the exact post-Confirm modal from rule 145/143 (the one shown for the Jamuna/Cesar
+job above) as confusing — it read "Cancel" right next to "✓ Created invoice #1694 + bill," even
+though nothing was left to cancel. Fixed: the button relabels to "Close" once Confirm succeeds, and
+a new "Undo" (button in the modal + a link on already-booked rows in the list) actually deletes the
+QB invoice+bill and reverts the row, gated by a confirm() dialog using Brett's own requested wording.
+Backend: `POST /scope-proposal/unbook`, `/scope-proposal/unbook-final`, `/proposal/unbook`, all
+refusing to delete anything with a payment already applied. Full detail: FEATURE_LOG rule 146.
+🔴 **No live QuickBooks credentials in the build session — first live check for Brett**: book a
+low-stakes test deposit or final balance, confirm Undo appears/reads correctly, tap it, confirm the
+dialog wording, and check in QuickBooks that the invoice+bill are actually gone and the row reverted.
+
+## 🟢 Vendor portal 3-bug fix — MERGED TO MAIN (Sep 16 2026), after sitting unmerged since Sep 2
+A cross-session reconciliation pass (prompted by Brett asking to unearth everything stuck on old
+PAT/push blockers) found `claude/ridgeco-receipt-invoice-fixes-1t4527` still sitting unmerged, built
+and tested Sep 2, never actually deployed despite BACKLOG describing it as "just needs Brett's go."
+Rebased onto current `main` (rules 143-175 had landed since) — two trivial additive-only conflicts
+(`BUILD_VERSION`, `ROLE_SCOPES.vendor` — both resolved by taking the union/newer value, no logic
+collision). Full suite re-run post-merge: 74/74 passing (zero failures, not just the same 2
+pre-existing ones — those two now pass too). `node --check` clean on worker.js and every inline
+script block in index.html/vendor.html/trash.html/wo.html. `BUILD_VERSION` bumped to `2026-09-16.3`.
+Full detail: FEATURE_LOG `[FL-20260916-2330-r7]`. 🔴 **Still needs Brett's first live pass** (no live
+Drive credentials in the build sandbox to test actual byte-streaming): (1) as a vendor, tap an
+uploaded receipt photo and confirm it opens instead of a black screen; (2) same for a PDF invoice
+upload; (3) in Trash Service billing, send an invoice and confirm the Close/Send button responds
+anywhere tapped, not just the edges.
+
+## ⏳ Staging deploy gate — still unmerged, not yet deployed — Brett's call on when to merge
+`claude/staging-deploy-gate-8nttsk` / `staging` — stubs QB/SMS/Gmail writes on a staging Worker so
+future changes can be verified before they ever reach `main`. Built, unmerged, not touched by this
+reconciliation pass (queued separately — see BACKLOG). Ironic that the thing meant to protect future
+merges is itself sitting unmerged — worth prioritizing this one specifically so it can start
+protecting the next batch of changes.
+
+## 🟢 Receipt-reconciler duplicate checker — REBUILT AND SHIPPED Sep 16 2026 (Sep 2 original confirmed lost, not just unmerged)
+The Sep 2 build never existed anywhere in git history (checked `git log --all` at the time —
+nothing) and only ever existed as a delivered paste-ready file Brett apparently never pasted in.
+The unit-search half of that same Sep 2 session was independently rebuilt Sep 14 (rule 173) — this
+closes the other half: property-wide cross-source duplicate detection, on-demand only (real,
+cost-metered QuickBooks reads — never automatic). Three layers, matching the original Sep 2 design
+exactly: (1) other Receipts entries at the SAME PROPERTY, wider than the existing same-WO-only
+`receiptIsDuplicate` flag — a receipt entered against the wrong WO at a multi-job property was
+never caught before this; (2) a QuickBooks Bill or Expense/Purchase within 3 days at the same
+amount; (3) an already-sent customer Invoice with a matching line-item amount (the pre-Hub
+bookkeeping case — a receipt manually billed to a customer before this queue existed), found via a
+cheap date-windowed list pull then a small number of individual invoice opens (capped at 5 per
+receipt) for the real line-item scan.
+
+New: `receiptDuplicatesAtProperty` (pure), `qbInvoiceCandidatesByDate` (pure), 3 QuickBooks
+read-only helpers, `receiptCheckDuplicatesOne` orchestration, `POST /receipt-recon/check-duplicates`
+(single) + `/receipt-recon/check-duplicates-bulk` (batch, capped at 5 rows/call, shares one QB
+token + one Invoice list pull across the batch). Evidence persists onto the queue row
+(`Duplicate_Evidence_JSON`, `Duplicate_Checked_Date`) so it survives a refresh.
+`receiptReconConfirmDuplicate` now accepts an optional specific `reason` from the matched evidence
+instead of always writing the generic note — directly answers Brett's original "there may be
+reason to reference it later" ask. Frontend: a "🔍 Check duplicates" button on every pending
+receipt-reconciler row, an evidence block per match with its own "It's this one" confirm button
+(reason looked up from a JS-side cache by index, not passed through the onclick string, since a
+QuickBooks vendor name or line description can contain characters that would break a naive inline
+string).
+
+New `test/receipt-duplicate-checker.test.mjs` (11 assertions) covers both pure helpers — the
+QB-touching functions themselves need live credentials no build sandbox has, same as every other
+QuickBooks-reading build in this repo. Full suite 77/77 post-build, `node --check` clean on
+worker.js and receipt-reconciler.html's inline script.
+
+**Caught and fixed a real self-inflicted bug before this was called done**: an early edit used the
+`receiptSuggestCore` function's own declaration line as unique anchor context for a str_replace but
+didn't include it in the replacement text, silently deleting that line and orphaning the function
+body underneath it. The full test suite caught this immediately (75/76, not 76/76) — fixed and
+re-verified clean on a fresh clone before moving on.
+
+🔴 **Needs Brett's first live pass — no QuickBooks credentials in any build sandbox to exercise
+this against real data**: open Receipt Reconciler, tap "🔍 Check duplicates" on a pending receipt,
+confirm it returns real evidence (or a clean "nothing found") without erroring; if a match comes
+back, confirm "It's this one" records the specific reason and the row moves to Duplicates the same
+way the original same-WO flag's "Confirm duplicate" always has.
+
+# WHERE THINGS STAND — Aug 24, 2026 (later still)
+
+## 🟢 Real multi-select for sending bills/invoices to QuickBooks — Send & Track (AR) + Send to QB (AP). FEATURE_LOG rule 139.
+Brett asked where his "select multiple bills to send to QB" fix went, believing he'd built it this
+weekend. Checked every commit from Aug 22-23 — none touched bill selection; this was a mix-up with
+the Review Bills "Select multiple" toggle (rule 98), which only bulk-approves bills into the QB
+queue and never sends to QuickBooks. Two real gaps, confirmed by reading the actual code, not
+memory: Send & Track had only a one-at-a-time "Send →" per invoice (never had a bulk path); Send to
+QB had only all-or-nothing "Send all N" (no way to pick a subset). Both fixed, frontend-only — the
+Worker's `/ar/remind` already took an array of invoice_ids and looped server-side (rule 81), the UI
+just never exposed more than one at a time. Same "☑ Select multiple" sticky-bar pattern as Review
+Bills on both screens now; Send to QB's existing send loop was extracted into a shared `qbSendRows`
+so "Send all" and "Send selected" are the same code, not two paths that can drift. **Independent
+review subagent caught a real gap before push**: the new "Send selected" on Send to QB relied only
+on the checkbox's disabled attribute to keep bills needing individual send out of a batch — no
+code-level filter like the existing "Send all" has. Fixed before shipping. `node --check` clean on
+all 5 `index.html` script blocks. **🔴 Needs Brett's live pass** — on Send & Track, toggle Select
+multiple, check 2-3 not-sent invoices, Send selected, confirm the right ones go out; on Send to QB,
+toggle Select multiple, confirm a bill needing individual send shows a disabled checkbox with why,
+check a couple of batchable ones, Send selected, confirm only those post to QuickBooks.
+
+# WHERE THINGS STAND — Aug 24, 2026
+
+## 🟡 B-235: Move a vendor bill + its photos to a new WO — built, validated, pushed. Not yet run live.
+Brett: Allen George revisited 1214 N Calvert St (a property he'd already done a billed job at), and
+the new $60 landscaping bill landed on the old, already-billed WO-1134 instead of getting its own —
+no recurring-WO system exists yet, and he named a 2nd job needing the same fix, so this had to be a
+reusable Hub tool. New `POST /vendor-bill/move-to-new-wo` (preview-first, mirrors the existing
+`adminMergeOwner`/`adminMergeProperty` shape) creates a fresh WO (property/unit/tenant/trade/type
+copied, description blank), sets it Complete + the vendor directly (no `assignVendor` — no SMS for
+work that's already done), moves the bill's `WO_ID`, and moves only the `Attachments` dated on/after
+a cutoff (default = the bill's `Created_Date`, editable) — earlier photos stay on the old WO. New
+"↪ Move bill to new WO" button lives in the shared `invBuilderHtml` panel, so it's reachable from
+both the Review Bills queue and the WO-detail modal. **ridgeco-validate (independent subagent) caught
+2 real 🔴s before push and both were fixed same session, then re-validated PASS:** (1) attachments
