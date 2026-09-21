@@ -177,6 +177,11 @@ textarea{resize:vertical;min-height:70px;}
     <div class="modal-title">ADD INFORMATION</div>
     <p style="color:var(--muted);font-size:11px;margin-bottom:10px">Share additional details with your property manager. This cannot be edited after submission.</p>
     <textarea id="noteText" placeholder="e.g. The leak is getting worse after rain. I'm available Tuesday afternoon after 3pm…" style="min-height:90px;margin-bottom:8px"></textarea>
+    <div style="margin-bottom:8px">
+      <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Photos <span style="font-weight:normal;text-transform:none">(optional — helps us fix it faster)</span></label>
+      <input type="file" id="noteFiles" accept="image/*,video/*" multiple onchange="noteHandleFiles(this.files)">
+      <div id="notePreview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+    </div>
     <div id="noteMsg"></div>
     <div class="modal-actions">
       <button class="btn btn-sm btn-muted" onclick="closeModal('modalNote')">Cancel</button>
