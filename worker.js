@@ -7919,8 +7919,35 @@ async function checkDeadManSwitch(env) {
   return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
 }
 
+// Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
+// independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
+// `schedule:` (now removed, see that file — it's manual/workflow_dispatch-only going forward)
+// and the Cloudflare Cron Trigger in scheduled() below. Both called cronSweep() on the
+// assumption it was idempotent to fire twice. It wasn't: processVendorNudges (and the other two
+// sub-sweeps) read a row as "due," act on it, and only mark it done AFTERWARD — no claim step.
+// Real result: a vendor (Eddie Smith, WO-1195) got the same invoice-nudge SMS twice, 2.5 hours
+// apart. Removing the duplicate automatic trigger kills that exact collision; this claim is
+// defense-in-depth against a stray manual re-trigger (or any future second caller) landing close
+// to a real scheduled run. NOT a true atomic lock — this Worker has no KV/Durable Object binding
+// — just a Sheets-backed Config key, same class of check-then-write primitive as
+// checkPinLockout/findRecentDuplicate elsewhere in this file. Good enough to turn a 2.5-hour
+// collision window into a sub-second one.
+const CRON_SWEEP_LOCK_KEY = 'Cron_Sweep_Claimed_Until';
+const CRON_SWEEP_LOCK_TTL_MS = 2 * 60 * 1000; // comfortably longer than a normal sweep run; short enough to self-heal within one cycle if a run ever dies mid-flight without clearing it
+
 async function cronSweep(env) {
-  const out = { ok: true, ts: new Date().toISOString() };
+  const now = new Date();
+  let cfg;
+  try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
+  const claimedUntil = cfg[CRON_SWEEP_LOCK_KEY] ? new Date(cfg[CRON_SWEEP_LOCK_KEY]) : null;
+  if (claimedUntil && !isNaN(claimedUntil.getTime()) && claimedUntil > now) {
+    return json({ ok: true, skipped: 'already claimed', claimed_until: claimedUntil.toISOString() });
+  }
+  try {
+    await setConfigKey(env, { key: CRON_SWEEP_LOCK_KEY, value: new Date(now.getTime() + CRON_SWEEP_LOCK_TTL_MS).toISOString() });
+  } catch (e) { /* best-effort — if the claim write itself fails, still proceed rather than silently never sweeping again */ }
+
+  const out = { ok: true, ts: now.toISOString() };
   try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
   try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
