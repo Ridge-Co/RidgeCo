@@ -4439,19 +4439,38 @@ function renderOwnersPage() {
   // Load Owner_Users too
   api('GET', '/owner-users?owner_id=all').catch(function(){ return []; }).then(function() {});
 
-  var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
-    'Several people at one company belong on <b>one</b> owner record — use <b>+ Contact</b> to give each their own login. ' +
-    'A second owner row splits the properties and only one of them can hold the QuickBooks link.</div>';
-  html += '<div class="table-wrap"><table class="data-table"><thead><tr>' +
-    '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'owners-action-bar\')"></th>' +
-    '<th>Name / Company</th><th>Phone</th><th>Properties</th><th title="Your hourly rate for this customer\'s jobs — blank follows the $85 default">Rate $/hr</th><th>PIN</th><th></th></tr></thead><tbody>';
+  var search = ((document.getElementById('owner-search')||{}).value || '').trim().toLowerCase();
+  var statusFilter = (document.getElementById('owner-filter-status')||{}).value || 'all';
 
-  html += owners.map(function(o) {
+  function matchesSearch(o) {
+    if (!search) return true;
+    var nm = (o.First_Name+' '+(o.Last_Name||'')).trim().toLowerCase();
+    var hay = (nm + ' ' + (o.Company||'')).toLowerCase();
+    return hay.indexOf(search) !== -1;
+  }
+
+  var activeOwners = owners.filter(function(o){ return o.Active !== 'FALSE' && matchesSearch(o); });
+  var inactiveOwners = owners.filter(function(o){ return o.Active === 'FALSE' && matchesSearch(o); });
+
+  var showActive = statusFilter !== 'inactive';
+  var showInactive = statusFilter !== 'active';
+  // Auto-expand the inactive section whenever a search turns up an inactive match, so a name
+  // search doesn't silently hide a result just because it happens to be inactive — but otherwise
+  // remember whatever collapsed/expanded state the person last left it in.
+  var wasExpanded = el.getAttribute('data-inactive-expanded') === '1';
+  var expandInactive = statusFilter === 'inactive' || wasExpanded || !!(search && inactiveOwners.length);
+
+  var theadHtml = '<thead><tr>' +
+    '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'owners-action-bar\')"></th>' +
+    '<th>Name / Company</th><th>Phone</th><th>Properties</th><th title="Your hourly rate for this customer\'s jobs — blank follows the $85 default">Rate $/hr</th><th>PIN</th><th></th></tr></thead>';
+
+  function ownerRow(o, isInactive) {
     var propCount = safeArray(state.properties).filter(function(p){return p.Owner_ID===o.ID;}).length;
     var canSend = !!(o.PIN && o.Phone);
     var nm = (o.First_Name+' '+(o.Last_Name||'')).trim();
-    var display = nm + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '');
-    return '<tr>' +
+    var badge = isInactive ? ' <span style="background:var(--danger);color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;letter-spacing:.05em;font-weight:bold;vertical-align:middle">INACTIVE</span>' : '';
+    var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '');
+    return '<tr'+(isInactive?' style="opacity:0.65"':'')+'>' +
       '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
       '<td>'+display+'</td>' +
       '<td>'+(o.Phone||'—')+'</td>' +
@@ -4463,11 +4482,53 @@ function renderOwnersPage() {
       '<button class="btn small secondary" onclick="openLinkPropertyModal(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Assign an existing property to this owner">+ Property</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+      '<button class="btn small secondary" onclick="openSendMessageModal(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Send a one-off message">✉️</button>' +
       '</td></tr>';
-  }).join('');
+  }
 
-  html += '</tbody></table></div>';
+  var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
+    'Several people at one company belong on <b>one</b> owner record — use <b>+ Contact</b> to give each their own login. ' +
+    'A second owner row splits the properties and only one of them can hold the QuickBooks link.</div>';
+
+  if (showActive) {
+    html += '<div class="table-wrap"><table class="data-table">' + theadHtml + '<tbody>';
+    if (!activeOwners.length) {
+      html += '<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:14px">' +
+        (search ? 'No active owners match "'+esc(search)+'".' : 'No active owners.') + '</td></tr>';
+    } else {
+      html += activeOwners.map(function(o){ return ownerRow(o, false); }).join('');
+    }
+    html += '</tbody></table></div>';
+  }
+
+  if (showInactive && (inactiveOwners.length || statusFilter === 'inactive')) {
+    html += '<div style="margin-top:14px">' +
+      '<div style="cursor:pointer;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;font-weight:bold;letter-spacing:.05em;padding:6px 0;user-select:none" onclick="toggleInactiveOwners()">' +
+      '<span id="owner-inactive-caret">'+(expandInactive?'▾':'▸')+'</span> INACTIVE OWNERS ('+inactiveOwners.length+')' +
+      '</div>' +
+      '<div id="owner-inactive-section" style="display:'+(expandInactive?'block':'none')+'">';
+    if (!inactiveOwners.length) {
+      html += '<div style="color:var(--muted);text-align:center;padding:14px">No inactive owners match "'+esc(search)+'".</div>';
+    } else {
+      html += '<div class="table-wrap"><table class="data-table">' + theadHtml + '<tbody>' +
+        inactiveOwners.map(function(o){ return ownerRow(o, true); }).join('') +
+        '</tbody></table></div>';
+    }
+    html += '</div></div>';
+  }
+
   el.innerHTML = html;
+  el.setAttribute('data-inactive-expanded', expandInactive ? '1' : '0');
+}
+function toggleInactiveOwners() {
+  var sec = document.getElementById('owner-inactive-section');
+  var caret = document.getElementById('owner-inactive-caret');
+  var el = document.getElementById('owners-list');
+  if (!sec || !caret) return;
+  var willExpand = sec.style.display === 'none';
+  sec.style.display = willExpand ? 'block' : 'none';
+  caret.textContent = willExpand ? '▾' : '▸';
+  if (el) el.setAttribute('data-inactive-expanded', willExpand ? '1' : '0');
 }
 
 // Set (or clear) a customer's hourly rate for Brett's own time. Blank/0 clears it back to
