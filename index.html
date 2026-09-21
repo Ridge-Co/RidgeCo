@@ -3088,6 +3088,7 @@ function renderVendorsPage() {
         '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
         '<button class="btn small secondary" style="font-size:10px" onclick="regenerateAndShowPIN(\'vendor\',\''+v.ID+'\',\''+nm+'\')" title="Regenerate PIN">🔄</button>' +
         (v.Phone?'<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')" title="Send Welcome">👋</button>':'') +
+        '<button class="btn small secondary" onclick="openSendMessageModal(\'vendor\',\''+v.ID+'\',\''+esc(nm)+'\',\''+esc(v.Phone||'')+'\')" title="Send a one-off message">✉️</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
