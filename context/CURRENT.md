@@ -224,7 +224,6 @@ was available) to run once daily ~7am ET with `deliver:true`, tracked in a new `
 tab, and delivered via the real `gmailSendEmail` — deliberately NOT the dead `deliverDigestEmail`
 stub. `test/selftest.test.mjs` (105 assertions) covers all the pure/helper logic; `node --check`
 clean; landed as 5 small atomic commits. Full detail FEATURE_LOG rule 193.
-
 **Not yet run for real** — no credential to do that from this build session, by design. Brett:
 (1) hit `POST /selftest` once by hand to see the first real digest and confirm all 38 checks pass
 live; (2) set `admin_email` + `selftest_digest_enabled=TRUE` (Config) when ready for the daily
