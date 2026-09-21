@@ -10545,6 +10545,25 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- SEND CUSTOM MESSAGE MODAL — one-off SMS to a single tenant/owner/vendor, optionally tied
+     to a work order (WO detail's "✉️ Message" button pre-fills the recipient from the job and
+     logs the exchange to that WO's audit trail). Reuses the same smsGatedSend/queue/opt-out
+     pipeline as every other outbound text in the Hub — nothing new to gate or audit separately. -->
+<div class="modal-overlay" id="modal-send-message">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title">✉️ SEND MESSAGE</div>
+    <div id="sm-to" style="color:var(--info);font-size:12px;margin-bottom:10px"></div>
+    <label style="font-size:11px;color:var(--muted)">Message</label>
+    <textarea id="sm-message" style="width:100%;min-height:90px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;color:var(--text);font-family:var(--font);resize:vertical;margin:4px 0 4px" placeholder="Type your message…"></textarea>
+    <div id="sm-wo-note" style="font-size:10.5px;color:var(--muted);margin-bottom:8px"></div>
+    <div id="sm-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-send-message')">Cancel</button>
+      <button class="btn" id="sm-send-btn" onclick="confirmSendMessage()">SEND SMS</button>
+    </div>
+  </div>
+</div>
+
 <!-- PROPERTY NOTICE MODAL — shared by the property-card "📢 Notice" button and the
      Messaging page's "New Property Notice" button -->
 <div class="modal-overlay" id="modal-property-notice">
