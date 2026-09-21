@@ -677,3 +677,229 @@ correctly didn't trust it enough to run for real. Root cause: the limit check co
 `shared`, a counter dry-run never moves (it always skips the share call before that counter would
 increment) — so `limit` provably had zero effect on any dry-run response. Fixed: limit now gates
 on a new `considered` counter that increments in both modes, response reports
+`considered_this_batch`/`remaining_after_this_batch` so the limit's effect is visible. Also fixed
+the tautological `shared: 0` in dry-run — it now does a real read-only Drive permission check per
+considered file (`driveIsSharedAnyone`, no write) and reports genuine `already_shared`/
+`needs_sharing` counts. Verified: `node --check` clean, new
+`test/share-attachments-limit.test.mjs` (25 assertions), full suite 69/69, deployed
+(`BUILD_VERSION 2026-09-15.3`), confirmed via `/version`.
+**Still needs Brett's go**: the actual retroactive sweep (492 shareable attachments, rule 174) —
+he should now get a trustworthy dry-run reading via the same local tool
+(`ridgeco-share-attachments-repair.html`, same URL/token, no changes needed to the tool itself —
+the fix is entirely server-side) before deciding whether to run it for real. Still only runnable
+from his own browser — the platform's write-classifier has twice blocked this session from
+calling the real endpoint directly.
+
+## 🟢 Fixed and deployed: preventive measure for rule 174's failure class — rule 175
+Full detail: FEATURE_LOG rule 175. Direct response to Brett's ask: don't just fix the two
+reported bugs, reduce the chance of this exact class recurring. `ensureColumns` (70+ call sites)
+and `driveShareAnyone` now log a Telemetry row on every failure centrally, in the shared
+function — so any NEW call site automatically gets this protection with no extra work, instead
+of needing 70+ individual call sites fixed by hand. `driveShareAnyone` also retries once.
+**Important gap flagged, not fixed by this build**: the existing weekly ops review already turns
+2+ repeated failures for the same job type into a flagged pattern delivered to Brett by
+SMS/email — but that delivery (`digest_enabled`) is OFF by default and has been the whole time.
+Logging a failure that nobody is told about is only half the fix. **Brett: worth deciding
+whether to turn `digest_enabled` on now that Twilio is live**, or confirm you want it to stay
+manual-check-only for now.
+
+## 🟢 Fixed and deployed: receipt payment-source + photo-sharing silent failures — rule 174
+Full detail: FEATURE_LOG rule 174. Brett reported two live bugs (vendor "my own money" receipt
+toggle not sticking; WO-1071 photos unviewable in-app but fine in Drive directly) — both
+root-caused to the same pattern: a "non-fatal, silent" catch around a Sheets/Drive write that
+had actually been failing every time, with zero trace. `Payment_Source` column: confirmed via
+live data it has NEVER existed on the Receipts sheet since the feature shipped (rule 173,
+Sep 14) — fixed live via new `/admin/ensure-receipts-payment-source` (called for real this
+session, confirmed column now exists going forward; historical rows still read as the
+company_card default — the true answer was never captured for those). Photo sharing:
+`driveShareAnyone` now retries once + logs failures instead of swallowing. **Still needs
+Brett's go**: the retroactive `/admin/share-attachments` sweep to fix already-affected photos
+(492 shareable attachments scanned dry-run, real count of actually-broken ones unknown until
+it runs) — held for his confirm, not run autonomously (Drive permission change at scale). Also
+needs a live pass: vendor selects "my own money" on a new receipt and confirms the badge shows
+correctly.
+
+## 🔴 OPEN BUG, not yet root-caused: Brett expected vendor nudges to fire and they didn't
+Rule 170 (vendor nudge/request system) was built, deployed, and live-verified mechanically
+(clock creation timing, reset-on-activity, the quiet-hours-hold fix) — but Brett reports that
+after all that, he should have gotten actual nudge SMS and did not. **Per Brett's explicit
+instruction, this was NOT troubleshot in the session that found it** — flagging here so the
+next session picks it up directly rather than re-discovering it. Start here: check
+`GET /vendor-requests` for the real row(s) and their `Next_Nudge_At`/`Status`/`Nudge_Count`;
+check whether `POST /cron/sweep` is actually firing on schedule via the GitHub Actions run
+history (`cron-sweep.yml`) — rule 166/167 needed 2 secrets set (`CRON_SWEEP_TOKEN`, both
+Cloudflare + GitHub) before anything in the sweep can run at all; confirm those are actually
+set and the workflow has been running (not just that it CAN run, which was already verified
+once manually). Also worth checking Twilio's own delivery status for any nudge that the
+Message_Queue says went out but Brett never received — rule 159a already found a real
+"Twilio accepts it, phone gets nothing" gap in a different message type, not yet ruled out
+here too.
+
+## 🟢 Documentation audit — closed 3 real gaps where Sep 14 work never got a CURRENT.md/
+FEATURE_LOG entry (found and fixed Sep 15, 2026, in response to Brett's own audit request)
+Cross-checked every commit timestamped Sep 14 (14:24 through the Sep 15 early-morning
+continuation) against this file and FEATURE_LOG.md. Found and backfilled:
+- **Property Structure management** (Unit_Count auto-compute, Units add/rename/remove, tenant
+  unit reassignment) — had a FEATURE_LOG entry (from a concurrent session, landed mid this
+  session's own work) but it was mis-numbered **rule 163**, colliding with this session's own
+  unrelated "SMS text names the actual job" entry. Renumbered to **rule 171** (nothing else
+  referenced the old number, confirmed before renumbering) — no CURRENT.md entry existed for
+  it at all until now. See FEATURE_LOG rule 171.
+- **Receipt Reconciler description-fallback fix + pending-receipt backfill + image-gap
+  diagnostic** (5 commits, 14:32-14:58) — had NO FEATURE_LOG or CURRENT.md entry anywhere.
+  Backfilled as **FEATURE_LOG rule 172**, reconstructed from the original commit messages
+  (each already had detailed, self-documenting messages) — not re-verified live by this
+  backfill pass.
+- **Receipt Reconciler Unit picker + payment-source delineation + multi-receipt-per-photo
+  safety check + guided bill-submit review + Truck Stock Log** (4 commits, 15:27-16:38) — same
+  gap, backfilled as **FEATURE_LOG rule 173**, same caveat (reconstructed, not re-verified).
+
+**Also worth noting**: several of the backfilled commits' own `BUILD_VERSION` strings are
+still dated `2026-09-10.x` even though the actual work happened Sep 14 — a version-string/
+calendar drift, not a functional bug, not corrected by this pass since the version has moved
+on many times since. If anything from this specific cluster is ever the exact thing being
+live-tested, don't rely on the BUILD_VERSION string alone to prove it's deployed — check
+`git log` directly.
+
+**Not re-checked in this pass**: whether every OTHER session's work from Sep 14 (rules
+145-162 and earlier, already in this file) is fully accurate — this audit specifically
+targeted the GAP (things with zero entry anywhere), not a correctness re-review of entries
+that already exist.
+
+## 🟡 Built, needs a live pass: vendor nudge/request system — rule 170
+Full detail: FEATURE_LOG rule 170. This was the last item queued from the Twilio-build message
+redesign — the whole redesign (rules 157-170) is now feature-complete pending live verification.
+Automatic status-update clock on every assignment (timing verified against Brett's own
+examples), resets on real vendor activity, quiets for a future Scheduled_Date, caps at 5 nudges
+then flags Brett. Manual "Request Photos"/"Request Invoice" buttons on the WO detail view.
+Needs a live pass — see FEATURE_LOG rule 170 for the specific checks.
+
+## 🟡 Built, needs a live pass: welcome messages — rule 169
+Full detail: FEATURE_LOG rule 169. tenant_welcome/vendor_welcome, manual send (single +
+bulk), editable text at send time, gated pipeline, Welcome_Sent tracking + a "hasn't been
+welcomed" filter on both Tenants and Vendors tables. Needs a live pass — see FEATURE_LOG
+rule 169 for the specific checks (preview/edit flow, bulk send, badge/filter update, a
+gate-blocked send showing the real reason rather than silently marking someone welcomed).
+
+## 🟡 Built, needs a live pass: owner messages on the gated pipeline — rule 168
+Full detail: FEATURE_LOG rule 168. Owner Received (new)/Scheduled/Complete/On-Hold (new,
+requires a reason) all now go through the real gate + Test Mode + Message_Queue, not the old
+raw sendSMS. Assigned and Invoiced retired. Tenant Received (new, 8h-delayed, bumped by
+Assigned if it arrives first) also added. Needs a live pass — see FEATURE_LOG rule 168 for the
+specific checks (Owner Received on a tenant-submitted WO, the 8h supersede behavior, the
+On-Hold reason block, Hold_Reason showing up correctly).
+
+## 🟡 Built, needs 2 secrets + a live pass: quiet hours + GitHub Actions cron replacement — rule 166
+Full detail: FEATURE_LOG rule 166. Automatic SMS now holds until 9am ET if it would otherwise
+fire after 7pm ET (DST-aware, real Intl-derived offset, not a hardcoded UTC number). Periodic
+processing (firing held messages, plus the deferred-appointment-reminder sweep that was never
+actually wired to anything before this) now runs via a new GitHub Actions workflow
+(`cron-sweep.yml`, every 15 min) instead of a Cloudflare Cron Trigger — free, no limit, doesn't
+compete for the 4 Cloudflare cron slots already in use. **Brett needs to set `CRON_SWEEP_TOKEN`
+as both a Cloudflare Worker secret and a GitHub Actions repo secret (same value, one-time)**
+before any of this actually runs — until then it's fully inert (`/health` shows
+`cron_sweep.token_set: false`). `node --check` clean, full suite green, new
+`test/quiet-hours.test.mjs` (12 assertions, verified across real EDT/EST timestamps).
+
+## 🟡 Built, not yet live-verified: SMS text now names the actual job — rule 163
+Full detail: FEATURE_LOG rule 163. Brett, live-testing: two same-trade jobs at the same address
+read identically in a text ("your General job at 123 Test St" either way). New `woJobLabel(wo)`
+builds `"{Trade} job ({short description})"` — used in all 3 tenant message types; vendor's own
+text keeps the FULL untruncated description (lower priority per Brett — vendors have portal
+access as a backup). `node --check` clean, full suite green, new `test/wo-job-label.test.mjs`
+(8 assertions, reproduces Brett's own two example labels exactly). **Needs Brett's live pass**:
+assign a vendor on a real WO and confirm the tenant text names the actual job now.
+
+## 🟡 Built, not yet live-verified: Work Order Void/Hide + duplicate-create guard — rule 162
+Full detail: FEATURE_LOG rule 162. Brett hit WO-1192 live: a double-tap on Create Work Order
+made two rows share one WO number, and every WO lookup in the app resolves by ID first-match —
+the second row became permanently unreachable, stuck at New, no matter which button Brett
+tapped. Diagnosed from the live code AND the live Sheet data (via `WORKER_SECRET`), not guessed.
+Brett fixed that specific row by hand; this build is the fix so it can't happen again, plus the
+Void/Hide feature Brett asked for on top (distinct from Cancelled — Void is for a work order
+that should never have existed at all, e.g. a duplicate or one job folded into another; the
+record stays, just hidden from every list/search by default, restorable).
+
+- `createWorkOrder` now runs the existing `findRecentDuplicate` guard (already used elsewhere,
+  never wired to Work_Orders before) — a same-signature create within 30s hands back the
+  existing WO instead of appending a twin.
+- New `POST /wo/void` (reasons: Duplicate / Combined / Other) + `POST /wo/unvoid` — admin-only,
+  logged to `WO_Audit`. Combined copies Notes onto the surviving WO; nothing else migrates.
+- `/workorders` excludes Voided by default (`?include_voided=1` / `?voided_only=1` available);
+  vendor/tenant/owner/nearby-WO endpoints exclude voided rows unconditionally.
+- index.html: new "Voided" filter (kept separate from open/closed/"all"), dashboard exclusion,
+  a "VOIDED — reason" badge, a Void/Restore button + modal on the WO detail screen, and every
+  other WO-picker dropdown in the admin app patched to exclude voided rows too.
+
+`node --check` clean on worker.js + all 5 inline `index.html` script blocks. This originally
+shipped as "rule 159" but that number turned out to be claimed by two other concurrent sessions'
+work (the notify-toggle/bulk-checkbox/Twilio-status patch, itself renumbered 158/158a → 159/159a
+somewhere in this same chaotic day — see the PR #3 note below) before this one could push;
+renumbered to 162 (the next actually-free number, after rule 161) to stop colliding. Rebased
+three times mid-build across the day's concurrent pushes (rule 158's invoice-description work,
+rule 158/158a→159/159a's notify-toggle work, and rule 160/161's Twilio-diagnostic + whole-
+property-SMS fixes) — `createWorkOrder` itself never had a real logical conflict with any of
+them (each session's changes sit at different points in the function), just repeated
+`BUILD_VERSION` line collisions, each one bumped past whatever the incoming tip claimed. Fixed a
+real regression this caused in `test/turnover.test.mjs` (sandbox-extracts `createWorkOrder`
+verbatim; needed the new `findRecentDuplicate` dependency grabbed alongside it). Extended
+`test/dupe-guard.test.mjs` with the WO-1192 scenario itself. New `test/wo-void.test.mjs` (25
+assertions). Full suite re-verified after the final rebase: 65/65.
+
+**Not pushed yet** — sitting locally, prepared for Brett's push (Basic-auth PAT method per the
+standing rule in `ridgeco-git-push-proxy-bug.md`, or the patch-file handoff if no PAT is
+available). No live Sheets credentials in this build sandbox, so the six new `Work_Orders`
+columns' actual creation on the live Sheet, a real double-tap against the live Worker, and a
+real Void→Restore round trip in the browser are all unverified — see rule 162's live-pass list.
+
+
+
+## 🟡 Built, not yet live-verified: root-cause fix for whole-property tenant SMS — rule 161
+Full detail: FEATURE_LOG rule 161. `currentTenantForDispatch` (used by every SMS trigger) never
+had the Property_ID fallback `enrichWO` already used for whole-property (no-Unit) listings —
+found live when Brett's "Send update" button failed on a real test WO despite the tenant being
+clearly shown on the WO detail screen. This predates the Twilio build; confirmed via
+`Tenant_SMS_Sent: FALSE` on that WO that the automatic tenant text never fired either, silently,
+all along. Fixed at the root (the shared helper) + swept 3 other call sites that had inlined the
+same incomplete lookup instead of using it. New test caught a real precision bug in the first
+draft before it shipped (see rule 161 for detail). `node --check` clean, full suite green.
+
+## 🟢 Two other things Brett found live-testing, NOT code bugs — his own action items
+1. **Inbound "YES" reply routes to an old PM auto-responder, not this Hub.** The Worker's own
+   `/sms-inbound` handler is fine and unchanged — the number's Twilio-side inbound webhook (or
+   the Messaging Service's own "Integration" config, which can override the number-level
+   setting) is very likely still pointed at whatever the old PM system used. Brett needs to
+   check, in Twilio Console: Phone Numbers → Manage → the number → Messaging config ("A message
+   comes in"), AND the Messaging Service's own Integration tab — both should point to
+   `https://maintenance-hub.brett-2f8.workers.dev/sms-inbound` (POST), not a Studio Flow or a
+   different webhook. Nothing to build here; this is a console setting.
+2. **Vendor dispatch text has no link to the WO.** Reasonable ask, deliberately not rushed into
+   the same patch as the two live bugs above — the codebase already has a proven shareable-WO-
+   link mechanism (`/wo/share-link`, last-4-of-phone gated), and before wiring it into the
+   accept-gated dispatch text, worth confirming what that shared page reveals pre-Accept doesn't
+   quietly widen what the accept-gate currently withholds. Queued as a real next-round item, not
+   dropped.
+
+
+## 🔴 PR #3 (rule 159/159a) was never actually merged — a different session's work landed on main instead, in the meantime
+Brett's Claude Code session for the notify-toggle/checkbox-left/Twilio-diagnostic patch got as
+far as confirming the PR was green and mergeable, then stalled there — it was never actually
+merged. Meanwhile, an unrelated session (invoice descriptions, rule 158 below) pushed straight
+to `main`. Confirmed directly: `origin/main`'s current tip has no trace of the rule 159/159a
+commit; the PR branch (`claude/pensive-rubin-uxmdr4`) still exists, unmerged, 1 commit behind
+current `main`. **This session rebased that branch onto current `main` cleanly (no conflicts,
+full test suite still green) and added one more diagnostic endpoint on top (rule 160) — this
+combined branch supersedes PR #3 entirely.** Brett should close PR #3 without merging once the
+new combined patch lands, to avoid double-applying the same changes.
+
+## 🟡 Built, not yet live-verified: Twilio account/A2P-status diagnostic — rule 160
+Full detail: FEATURE_LOG rule 160. Brett asked directly whether he needs an opt-in, whether the
+campaign needs activating, and asked Claude to confirm via the Worker's own Twilio API access
+that everything is actually live — rather than guess, researched current (2026) Twilio/A2P
+10DLC practice: `Status:'sent'` has only ever meant "carrier/Twilio accepted the request," and
+a message can be silently carrier-filtered after that with zero trace in `Message_Queue`.
+Brand approval (already confirmed) and campaign approval are two DIFFERENT, sequential gates —
+a business can be fully approved while its specific messaging campaign is still pending carrier
+vetting. New `GET /twilio/account-status` checks the sending number, every A2P Brand
+Registration's status, and — the part that actually matters for carrier delivery — every
+Messaging Service's Campaign compliance status plus whether `TWILIO_FROM` is actually in that
