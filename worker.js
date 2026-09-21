@@ -438,6 +438,7 @@ export default {
         if (path === '/status')                   return await callWithFailureAlert(env, 'wo_status', '/status', () => updateStatus(env, body));
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
+        if (path === '/message/send-custom')      return await sendCustomMessage(env, body);
         if (path === '/cron/sweep')                return await cronSweep(env);
         if (path === '/vendor-request/create')     return await createVendorRequest(env, body);
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
