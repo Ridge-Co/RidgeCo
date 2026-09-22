@@ -1,8 +1,8 @@
 # Production Read-Only Token Build Brief — v1.0
 
 **Status:** Built, staged as two PRs, pending Brett's secret setup + merge (Sep 22, 2026):
-- [Ridge-Co/RidgeCo#TBD](#) — `HUB_PROD_RO_TOKEN` auth-gate addition (GET-only, allow-listed).
-- [brett332/gh-broker#TBD](#) — `hub_prod_get` tool on the existing connector.
+- [Ridge-Co/RidgeCo#20](https://github.com/Ridge-Co/RidgeCo/pull/20) — `HUB_PROD_RO_TOKEN` auth-gate addition (GET-only, allow-listed).
+- [brett332/gh-broker#4](https://github.com/brett332/gh-broker/pull/4) — `hub_prod_get` tool on the existing connector.
 
 **To finish (Brett only — none of this can be done from a session):**
 1. Generate a random secret value for `HUB_PROD_RO_TOKEN` (any long random string — treat with the
