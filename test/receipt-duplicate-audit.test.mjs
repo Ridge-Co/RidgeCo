@@ -50,7 +50,7 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(qbInvoiceLineCacheRows({ Id: '1', Line: [{ DetailType: 'SalesItemLineDetail', Amount: 0 }] }).length === 0, 'a zero-amount line is dropped');
 }
 
-// ── resolveWOCustomerId ─────────────────────────────────────────────────────────────
+// ── resolveWOCustomerId ──────────────────────────────────────────────────────────────────────
 const WOS = [{ ID: '1001', Property_ID: '8', Unit_ID: '' }, { ID: '1002', Property_ID: '8', Unit_ID: 'U1' }, { ID: '1003', Property_ID: '9', Unit_ID: '' }];
 const PROPS = [{ ID: '8', Owner_ID: '5', QBO_Customer_ID: '' }, { ID: '9', Owner_ID: '6', QBO_Customer_ID: '77' }];
 const UNITS = [{ ID: 'U1', QBO_Customer_ID: '88' }];
