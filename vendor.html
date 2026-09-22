@@ -2936,6 +2936,49 @@ function isVendorBusy(){
   setInterval(check, 60000);
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
   window.addEventListener('focus', check);
+
+  // Frontend-freshness check (Sep 22 2026 fix). The /version check above only ever detects a
+  // WORKER (backend) deploy -- it compares the Cloudflare Worker's own build_version, which does
+  // NOT change on a vendor.html-only frontend edit. GitHub Pages, which serves this file, sends a
+  // real `Cache-Control: max-age=600` response header (confirmed live) that silently overrides
+  // this page's own <meta http-equiv="Cache-Control"> tag -- browsers only honor the real HTTP
+  // header for top-level document caching, not the meta tag. Net effect: a vendor's already-open
+  // (or freshly but cache-served) tab could be running a stale, already-fixed-elsewhere copy of
+  // THIS file for up to 10+ minutes with nothing in the page able to tell -- confirmed as a real
+  // gap after a vendor reported a long-stalled load that only a manual hard refresh cleared.
+  // Fix: independently re-fetch this exact document with cache:'no-store' (bypasses the local/CDN
+  // cache entirely) on the same cadence as the work-order data poll, and compare its ETag against
+  // the last one seen. A changed ETag means a newer vendor.html actually exists on GitHub Pages
+  // right now, whether or not the Worker's own build_version moved -- same banner/reload path as
+  // a backend version change, reusing the exact mechanism above rather than a second one.
+  var PAGE_ETAG_KEY = 'rc_vendor_html_etag';
+  var pageEtagKnown = null;
+  function checkPageFreshness(){
+    var url = location.pathname + (location.pathname.indexOf('?') >= 0 ? '&' : '?') + '_fresh=' + Date.now().toString(36);
+    fetch(url, {cache: 'no-store', method: 'HEAD'}).then(function(r){
+      var tag = r.headers.get('etag') || r.headers.get('last-modified');
+      if (!tag) return; // host doesn't expose either -- nothing to compare against, fail open
+      if (pageEtagKnown === null){
+        pageEtagKnown = tag;
+        var last = null;
+        try { last = localStorage.getItem(PAGE_ETAG_KEY); } catch(e){}
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        // Same pattern as the version check's own first-run branch: if the last ETag this
+        // browser saw differs from what's live right now, THIS load itself was already stale.
+        if (last && last !== tag) { isVendorBusy() ? banner() : reloadFresh(); }
+        return;
+      }
+      if (tag !== pageEtagKnown){
+        pageEtagKnown = tag;
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        isVendorBusy() ? banner() : reloadFresh();
+      }
+    }).catch(function(){});
+  }
+  checkPageFreshness();
+  setInterval(checkPageFreshness, 60000);
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) checkPageFreshness(); });
+  window.addEventListener('focus', checkPageFreshness);
 })();
 </script>
 <!-- Work-order background refresh (Sep 19 2026, Brett's ask -- vendors kept having to be
