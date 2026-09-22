@@ -800,11 +800,11 @@ function addVariant(btn){
     // becoming multi-option — the one existing row needs a label + remove button too
     var first=existing[0];
     if(!first.querySelector('.v-label')){ var lbl=document.createElement('input'); lbl.className='v-label'; lbl.placeholder='Option label (e.g. Repair Roof)'; first.insertBefore(lbl, first.firstChild); }
-    if(!first.querySelector('.danger')){ var rm=document.createElement('button'); rm.type='button'; rm.className='btn small danger'; rm.textContent='✕'; rm.onclick=function(){removeVariant(rm);}; first.appendChild(rm); }
+    if(!first.querySelector('.danger')){ var rm=document.createElement('button'); rm.type='button'; rm.className='btn small danger'; rm.textContent='✕'; rm.onclick=function(){removeVariant(rm);}; var vm=first.querySelector('.vmat'); if(vm) first.insertBefore(rm, vm); else first.appendChild(rm); }
   }
   var n=rows.querySelectorAll('.vrow').length;
   var div=document.createElement('div'); div.className='vrow'; div.dataset.key='v'+(n+1);
-  div.innerHTML='<input class="v-label" placeholder="Option label (e.g. Replace Roof)"><input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $"><input class="v-price-override" type="number" step="0.01" placeholder="Override final price $ (optional)"><button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>';
+  div.innerHTML='<input class="v-label" placeholder="Option label (e.g. Replace Roof)"><input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $"><input class="v-price-override" type="number" step="0.01" placeholder="Override final price $ (optional)"><button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>'+matInputsHtml({});
   rows.appendChild(div);
 }
 function removeVariant(btn){
