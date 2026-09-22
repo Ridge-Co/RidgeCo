@@ -2291,7 +2291,21 @@ async function scopeCommand(env, body) {
   const txt = await scopeClaude(env, prompt, null, 2000);
   const parsed = scopeParseJSON(txt);
   if (!parsed || !Array.isArray(parsed.items)) return json({ error: 'Could not apply command — model returned unparseable output', raw: String(txt).slice(0, 300) }, 502);
-  const clean = scopeCleanItems(parsed.items);
+  // The model is told to return only the text fields ("never add prices"), so a kept item comes
+  // back with no `variants` — which scopeCleanItems would reset to a single $0 option, silently
+  // wiping every vendor cost, override, and Ridge Co materials amount on items the command didn't
+  // even touch. Carry the saved priced variants back over by id for every kept item.
+  const prevById = {}; for (const it of items) if (it && it.id) prevById[it.id] = it;
+  const merged = parsed.items.map(it => {
+    // Kept item → ALWAYS its saved pricing (the model is told never to touch prices, so any
+    // variants it echoes back are at best a copy and at worst a mangled one).
+    const prev = it && it.id && prevById[it.id];
+    if (prev && Array.isArray(prev.variants) && prev.variants.length) {
+      return Object.assign({}, it, { variants: prev.variants, selected_key: prev.selected_key });
+    }
+    return it;
+  });
+  const clean = scopeCleanItems(merged);
   await updateRow(env, 'Scopes', id, { Line_Items: JSON.stringify(clean), Updated_Date: new Date().toISOString() });
   return json({ success: true, line_items: clean, summary: parsed.summary || 'Updated.' });
 }
