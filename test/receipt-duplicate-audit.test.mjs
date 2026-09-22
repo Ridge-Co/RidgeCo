@@ -82,7 +82,7 @@ const CACHE = [
   ok(sameDay.length === 1, 'an invoice dated exactly ON the receipt date counts as a match (on-or-after, not strictly after)');
 }
 
-// ── receiptDuplicateAuditDecision ────────────────────────────────────────────────────────
+// ── receiptDuplicateAuditDecision ────────────────────────────────────────────────────────────
 {
   const d = receiptDuplicateAuditDecision([], '55');
   ok(d.flagged === false, 'zero matches never flags');
