@@ -21,7 +21,16 @@ function extractFn(name) {
   return src.slice(start, i);
 }
 
-function world(nFiles, cfg = {}) {
+function extractSync(name) {
+  const start = src.indexOf(`function ${name}(`);
+  if (start === -1) throw new Error(name + ' not found');
+  let i = src.indexOf('{', start), d = 0;
+  for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
+  return src.slice(start, i);
+}
+const helpers = new Function(`const RECEIPT_RECON_MIN_DATE_DEFAULT = '2026-07-01'; ${extractSync('receiptReconCutoff')}; ${extractSync('receiptBeforeCutoff')}; ${extractSync('receiptCutoffNote')}; return { receiptReconCutoff, receiptBeforeCutoff, receiptCutoffNote };`)();
+
+function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const queue = [];
   const files = Array.from({ length: nFiles }, (_, k) => ({ id: 'f' + k, name: 'r' + k + '.pdf', mimeType: 'application/pdf', webViewLink: '' }));
   let downloads = 0, cur = null;
