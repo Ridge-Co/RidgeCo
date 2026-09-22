@@ -5394,6 +5394,16 @@ async function approveInvoiceReview(env, body) {
   // account with no labor bill) has NO vendor bill — so bill_id is optional, but we still need
   // a work order to anchor the review row to.
   if (!customer_total || (!bill_id && !wo_id)) return json({ error: 'customer_total and a bill_id or wo_id are required' }, 400);
+  // Server-side backstop for the Sep 22 2026 double-billing block: receipts on a signed scope
+  // proposal's WO are already billed through its payment milestones. The picker disables them
+  // (listBilledReceipts), but a stale page could still send them — refuse rather than bill twice.
+  const _ownIds = String(own_material_ids || '').split(',').map(x => x.trim()).filter(Boolean);
+  if (_ownIds.length && wo_id) {
+    let covered = null;
+    try { covered = await scopeCoveringSignatureForWO(env, wo_id); }
+    catch (e) { return json({ error: 'Could not confirm whether this job is billed through a signed proposal, so its receipts were not billed — try again.' }, 503); }
+    if (covered) return json({ error: `This job is billed through signed proposal Scope #${covered.scope_id} (its payment milestones already include materials) — its receipts can't be invoiced again here. Reload and untick them.`, scope_covered: covered }, 409);
+  }
   const today = new Date().toISOString().split('T')[0];
 
   // Approving twice must not create a second Invoice_Review row — the Hub can now approve
