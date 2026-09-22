@@ -595,6 +595,20 @@ window.addEventListener('pageshow', function(e){
     <div id="payables-body"><div style="color:var(--muted);font-size:12px">Reading QuickBooks…</div></div>
   </div>
 
+  <div class="page" id="page-vendor-performance">
+    <div class="section-title" style="margin-bottom:4px">📊 VENDOR PERFORMANCE</div>
+    <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:780px">
+      Ranks vendors by reliability, speed, volume, and cost — computed live from Work Orders,
+      Vendor Bills, and Time Entries already on file. Nothing new to enter. Read-only; tap a
+      column to sort.
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <button class="btn small" onclick="loadVendorPerformance()">↻ Refresh</button>
+    </div>
+    <div id="vendor-perf-summary" style="color:var(--muted);font-size:11.5px;margin-bottom:10px"></div>
+    <div id="vendor-perf-body"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
   <div class="page" id="page-qb-map">
     <div class="section-title" style="margin-bottom:4px">QUICKBOOKS MAPPING</div>
     <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:760px">
