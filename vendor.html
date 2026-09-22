@@ -3006,8 +3006,7 @@ function isVendorBusy(){
 
   function check() {
     if (!session) return;
-    var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
-    api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed).then(function(wos) {
+    loadWOsForCurrentTab().then(function(wos) {
       if (!session) return; // logged out while the request was in flight
       if (woSignature(wos) === woSignature(window._wos)) return; // nothing changed -- leave the DOM alone
       if (isVendorBusy()) { pendingWos = wos; } // wait -- see the backgrounding handler below
