@@ -673,7 +673,7 @@ async function confirmBusinessExpense(id, btn){
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already recorded — skipped, not double-posted.</span>'
       : '<span class="ok">✓ Recorded $'+esc(res.amount||amount)+' as a business expense'+(property_id?' on that property':'')+'. It\'ll go to QuickBooks in the next receipts sweep.</span>';
-    setTimeout(loadQueue, 900);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
