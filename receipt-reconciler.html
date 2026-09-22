@@ -380,9 +380,58 @@ function checkManualWo(id){
   updatePostingLine(id);
 }
 
+// Brett, Sep 22 2026: "it drives me crazy to have to scroll down through a whole bunch of
+// receipts to get to the one I was just working on". Actions no longer reload the whole list —
+// finishCard() takes just the handled card out (the next one slides up into the same spot, so
+// the scroll position stays put) and leaves the result in a toast at the bottom so a warning
+// like "already invoiced — flagged for repair" isn't lost when the card goes. The ↻ Refresh
+// button and tab switches still do a full reload.
+let rowsById = {};
+function toast(html){
+  let box = document.getElementById('rc-toast');
+  if (!box) { box = document.createElement('div'); box.id = 'rc-toast'; document.body.appendChild(box); }
+  const item = document.createElement('div'); item.className = 'rc-toast-item'; item.innerHTML = html;
+  item.onclick = () => item.remove();
+  box.appendChild(item);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => item.remove(), 9000);
+}
+function finishCard(id){
+  const card = document.getElementById('rc'+id);
+  const statusEl = document.getElementById('rc'+id+'-status');
+  const r = rowsById[id] || {};
+  if (statusEl && statusEl.innerHTML) toast('<b>'+esc(r.Vendor||'Receipt')+' $'+money(r.Total)+'</b> — '+statusEl.innerHTML);
+  delete rowsById[id];
+  if (card) {
+    card.style.transition = 'opacity .25s, max-height .3s, margin .3s, padding .3s';
+    card.style.maxHeight = card.offsetHeight + 'px'; card.style.overflow = 'hidden';
+    requestAnimationFrame(() => { card.style.opacity = '0'; card.style.maxHeight = '0'; card.style.marginBottom = '0'; card.style.paddingTop = '0'; card.style.paddingBottom = '0'; });
+    setTimeout(() => {
+      card.remove();
+      const left = Object.keys(rowsById).length;
+      const list = document.getElementById('list');
+      if (!left) list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>';
+      const st = document.getElementById('conn-status');
+      st.textContent = st.textContent.replace(/(\d+) (pending|confirmed|skipped|duplicates|all)\b/, left + ' $2');
+    }, 320);
+  }
+}
+async function unskipRow(id, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('rc'+id+'-status');
+  statusEl.innerHTML = '<span class="info">Moving back to Pending…</span>';
+  try {
+    const res = await post('/receipt-recon/unskip', { id });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">↩ Back in Pending.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 function render(rows){
   const list = document.getElementById('list');
   if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; return; }
+  rowsById = {}; rows.forEach(r => { rowsById[r.ID] = r; });
   list.innerHTML = rows.map(r => rowCard(r)).join('');
   rows.forEach(r => { rowSuggestions[r.ID] = r.suggestion || {}; rowEvidence[r.ID] = r.duplicate_evidence || []; if ((r.Status||'pending')==='pending') refreshWoSelect(r.ID); });
 }
