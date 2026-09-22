@@ -4344,6 +4344,206 @@ async function woUnvoid(env, body) {
   return json({ success: true });
 }
 
+// Split (inverse of Combine, Sep 22 2026 build — WO detail "Split" action). Takes ONE existing
+// work order and creates N new additional work orders from it, dividing the work between the
+// original (which survives, trimmed down) and the new ones. New WOs inherit Property_ID/
+// Unit_ID/Tenant_ID from the original (same job location/tenant) — never re-entered. Each new
+// WO's Description arrives from the client already pre-filled from the original's own text and
+// then edited/trimmed down there — the server does not re-derive it, whatever the client sends
+// is what gets written, same as any other field.
+const WO_SPLIT_ORIGINAL_FIELDS = ['Trade', 'Priority', 'Vendor_ID', 'Scheduled_Date', 'Managed_By', 'Description'];
+const WO_SPLIT_MAX_NEW = 10;
+
+// Pure — whether a Time_Entries row is safe to move to a different WO_ID. Already-billed hours
+// (Bill_ID set, and that bill still live) are the labor a live vendor bill already accounts for —
+// moving the hours without moving the bill would make the two disagree about which job they're
+// for. A blank Bill_ID, or one pointing at a voided/inactive bill (voiding already frees the
+// hours again — same convention listTimeEntries' Billed_Bill_ID already uses), is safe to move.
+function timeEntryReassignLock(entry, vendorBills) {
+  const billId = String(entry.Bill_ID || '').trim();
+  if (!billId) return null;
+  const bill = vendorBills.find(b => String(b.ID) === billId);
+  if (!bill || bill.Active === 'FALSE') return null;
+  return `Already linked to vendor bill ${billId} — reassign the bill instead, or unlink the entry first.`;
+}
+
+// Pure — whether a Vendor_Bills row is safe to move to a different WO_ID. 'reviewed' means
+// Brett has already approved/markup-priced it (approveInvoiceReview) against the WO it names; a
+// live Invoice_Review row carrying a QB_Invoice_ID means it has actually been sent to
+// QuickBooks. Either way the WO on the bill is already baked into billed/booked numbers
+// elsewhere — moving it after that point would make the Hub and QuickBooks disagree about which
+// job it was for. Same care the existing bill-adjustment code (moveVendorBillToNewWO) takes with
+// otherAactiveBills, applied here as a hard block rather than a "pause and look" preview, since
+// Split's reassignment table has no separate preview/apply step of its own.
+function vendorBillReassignLock(bill, invoiceReviewRows) {
+  if (bill.Active === 'FALSE') return 'Bill is voided/inactive.';
+  if (bill.Status === 'reviewed') return 'Already reviewed/approved for invoicing.';
+  const sentReview = (invoiceReviewRows || []).find(ir => ir.Active !== 'FALSE' && String(ir.Bill_ID) === String(bill.ID) && String(ir.QB_Invoice_ID || '').trim());
+  if (sentReview) return `Already sent to QuickBooks (invoice ${sentReview.QB_Invoice_ID}).`;
+  return null;
+}
+
+// POST /wo/split {original_wo_id, original_overrides?:{Trade,Priority,Vendor_ID,Scheduled_Date,
+// Managed_By,Description}, new_work_orders:[{Trade,Priority,Vendor_ID?,Scheduled_Date?,
+// Managed_By,Description}, ...], reassignments?:[{type:'time_entry'|'vendor_bill', id,
+// target:'original'|<new-WO index>}]}. Property_ID/Unit_ID/Tenant_ID are always inherited from
+// the original, never taken from the client. New WOs are created through the real
+// createWorkOrder() so numbering/defaults/required-column handling stays exactly consistent with
+// every other WO creation path; fields it doesn't accept on its own body (Vendor_ID,
+// Scheduled_Date, Managed_By) are applied right after via updateWOFields, same two-step pattern
+// moveVendorBillToNewWO already uses. Reassignments are validated (existence, ownership by the
+// original, lock state) BEFORE anything is created, so a bad reassignment never leaves new WOs
+// half-created. Rollback on any later failure: undo any already-applied reassignments, restore
+// the original's overridden fields, and void (there is no hard-delete anywhere in this app —
+// voiding is the standing "undo a creation" mechanism) whatever new WOs already got created.
+async function woSplit(env, body) {
+  const originalId = body.original_wo_id;
+  if (!originalId) return json({ error: 'original_wo_id required' }, 400);
+  const newSpecs = Array.isArray(body.new_work_orders) ? body.new_work_orders : [];
+  if (!newSpecs.length) return json({ error: 'new_work_orders required (at least one)' }, 400);
+  if (newSpecs.length > WO_SPLIT_MAX_NEW) return json({ error: `Cannot split into more than ${WO_SPLIT_MAX_NEW} new work orders at once` }, 400);
+
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const original = findWO(workorders, originalId);
+  if (!original) return json({ error: `Work order ${originalId} not found` }, 404);
+  if (original.Voided === 'TRUE') return json({ error: `Work order ${originalId} is voided — cannot split it` }, 400);
+
+  const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
+  const overrides = body.original_overrides && typeof body.original_overrides === 'object' ? body.original_overrides : {};
+
+  const reassignments = Array.isArray(body.reassignments) ? body.reassignments : [];
+  for (const r of reassignments) {
+    if (!r || (r.type !== 'time_entry' && r.type !== 'vendor_bill') || r.id === undefined || r.id === null || r.id === '') {
+      return json({ error: 'Each reassignment needs a type (time_entry|vendor_bill) and id' }, 400);
+    }
+    const validTarget = r.target === 'original' || (Number.isInteger(r.target) && r.target >= 0 && r.target < newSpecs.length);
+    if (!validTarget) return json({ error: `Invalid reassignment target for ${r.type} ${r.id}` }, 400);
+  }
+
+  // Load + lock-check every referenced Time_Entries/Vendor_Bills row up front. Vendor_Bills is
+  // needed for BOTH types (a time entry's own lock check reads it too), so any reassignment at
+  // all pulls it in.
+  let timeEntries = [], vendorBills = [], invoiceReview = [];
+  if (reassignments.some(r => r.type === 'time_entry')) timeEntries = await fetchTab(env, 'Time_Entries');
+  if (reassignments.length) vendorBills = await fetchTab(env, 'Vendor_Bills');
+  if (reassignments.some(r => r.type === 'vendor_bill')) { try { invoiceReview = await fetchTab(env, 'Invoice_Review'); } catch (e) {} }
+
+  const resolvedReassignments = [];
+  for (const r of reassignments) {
+    if (r.type === 'time_entry') {
+      const te = timeEntries.find(t => String(t.ID) === String(r.id));
+      if (!te) return json({ error: `Time entry ${r.id} not found` }, 404);
+      if (String(te.WO_ID) !== String(originalId)) return json({ error: `Time entry ${r.id} does not belong to ${originalId}` }, 400);
+      const lockReason = timeEntryReassignLock(te, vendorBills);
+      if (lockReason) return json({ error: 'reassign_locked', type: 'time_entry', id: r.id, reason: lockReason }, 409);
+      resolvedReassignments.push({ type: 'time_entry', id: r.id, target: r.target });
+    } else {
+      const bill = vendorBills.find(b => String(b.ID) === String(r.id));
+      if (!bill) return json({ error: `Vendor bill ${r.id} not found` }, 404);
+      if (String(bill.WO_ID) !== String(originalId)) return json({ error: `Vendor bill ${r.id} does not belong to ${originalId}` }, 400);
+      const lockReason = vendorBillReassignLock(bill, invoiceReview);
+      if (lockReason) return json({ error: 'reassign_locked', type: 'vendor_bill', id: r.id, reason: lockReason }, 409);
+      resolvedReassignments.push({ type: 'vendor_bill', id: r.id, target: r.target });
+    }
+  }
+
+  const originalSnapshot = {};
+  for (const f of WO_SPLIT_ORIGINAL_FIELDS) originalSnapshot[f] = original[f] ?? '';
+  const originalFieldsToApply = {};
+  for (const f of WO_SPLIT_ORIGINAL_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(overrides, f) && String(overrides[f] ?? '') !== String(originalSnapshot[f] ?? '')) {
+      originalFieldsToApply[f] = overrides[f];
+    }
+  }
+
+  const createdWoIds = [];
+  const appliedReassignments = []; // {type, id, from} — for rollback
+  try {
+    // 1. Create each new WO via the real createWorkOrder() path — inherits Property/Unit/Tenant
+    //    from the original, never from the client. A zero-width-space marker (stripped right
+    //    back off below) makes each call's Description unique even when two new WOs still carry
+    //    the identical pre-filled text — createWorkOrder's own accidental-double-tap duplicate
+    //    guard (findRecentDuplicate) has no way to know this is 1-of-N intentional creates in
+    //    one Split, not a resubmit, and would otherwise collapse them into the same WO id.
+    for (let i = 0; i < newSpecs.length; i++) {
+      const spec = newSpecs[i] || {};
+      const dupeGuardMarker = '​'.repeat(i + 1);
+      const createRes = await createWorkOrder(env, {
+        property_id: original.Property_ID || '', unit_id: original.Unit_ID || '', tenant_id: original.Tenant_ID || '',
+        type: original.Type || 'manual', trade: spec.Trade || '', description: (spec.Description || '') + dupeGuardMarker,
+        priority: spec.Priority || 'normal', room: original.Room || '',
+        created_by: changedBy, notes: `Created via split from ${originalId}`,
+      });
+      const created = await createRes.clone().json();
+      if (!created || !created.id) throw new Error('Failed to create a new work order during split');
+      createdWoIds.push(created.id);
+      const postCreateFields = { Description: spec.Description || '' }; // strip the dupe-guard marker back off
+      if (spec.Vendor_ID) postCreateFields.Vendor_ID = spec.Vendor_ID;
+      if (spec.Scheduled_Date) postCreateFields.Scheduled_Date = spec.Scheduled_Date;
+      if (spec.Managed_By) postCreateFields.Managed_By = spec.Managed_By;
+      await updateWOFields(env, created.id, postCreateFields);
+    }
+
+    // 2. Apply overrides to the original.
+    if (Object.keys(originalFieldsToApply).length) {
+      await updateWOFields(env, originalId, originalFieldsToApply);
+      await logWOAuditMany(env, Object.entries(originalFieldsToApply).map(([field, newVal]) => ({
+        woId: originalId, changedBy, changedByRole, field,
+        oldValue: originalSnapshot[field], newValue: newVal,
+        notes: `Split: original updated, new work orders ${createdWoIds.join(', ')}`,
+      })));
+    }
+
+    // 3. Apply reassignments — after the new WOs exist, so a target index resolves to a real id.
+    for (const r of resolvedReassignments) {
+      const targetWoId = r.target === 'original' ? originalId : createdWoIds[r.target];
+      const tab = r.type === 'time_entry' ? 'Time_Entries' : 'Vendor_Bills';
+      await updateRow(env, tab, r.id, { WO_ID: targetWoId });
+      appliedReassignments.push({ type: r.type, id: r.id, from: originalId });
+    }
+
+    // 4. Audit trail — original names every new WO it was split into; each new WO names the
+    //    original it came from. Mirrors woCombine's logWOAuditMany convention.
+    await logWOAudit(env, originalId, changedBy, changedByRole, 'Split', 'FALSE', 'TRUE', `Split into ${createdWoIds.join(', ')}`);
+    await logWOAuditMany(env, createdWoIds.map(id => ({
+      woId: id, changedBy, changedByRole, field: 'Created', oldValue: '', newValue: 'TRUE',
+      notes: `Created via split from ${originalId}`,
+    })));
+  } catch (e) {
+    for (const ar of appliedReassignments) {
+      const tab = ar.type === 'time_entry' ? 'Time_Entries' : 'Vendor_Bills';
+      try { await updateRow(env, tab, ar.id, { WO_ID: ar.from }); } catch (_) {}
+    }
+    if (Object.keys(originalFieldsToApply).length) { try { await updateWOFields(env, originalId, originalSnapshot); } catch (_) {} }
+    for (const id of createdWoIds) {
+      try { await woVoid(env, { wo_id: id, reason: 'Other', detail: `Split rolled back — ${originalId}'s split failed partway`, updated_by: changedBy, updated_by_role: changedByRole }); } catch (_) {}
+    }
+    return json({ error: 'split_failed', detail: e.message, rolled_back: true, created_then_rolled_back: createdWoIds }, 500);
+  }
+
+  // 5. Batched tenant SMS — gated on the ORIGINAL's own (post-override) Tenant_Notify_Updates,
+  //    through the same full Global/Property/Owner/Tenant hierarchy as every other tenant SMS —
+  //    no bypass. Best-effort — the split itself has already succeeded above regardless of this.
+  try {
+    const originalFresh = findWO(await fetchTab(env, 'Work_Orders'), originalId) || original;
+    const units = await fetchTab(env, 'Units'), tenants = await fetchTab(env, 'Tenants');
+    const properties = await fetchTab(env, 'Properties'), owners = await fetchTab(env, 'Owners');
+    const unit = units.find(u => u.ID === originalFresh.Unit_ID);
+    const property = properties.find(p => p.ID === originalFresh.Property_ID);
+    const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+    const tenant = currentTenantForDispatch(tenants, unit, originalFresh);
+    if (isTenantNotifiable(tenant, originalFresh) && originalFresh.Tenant_Notify_Updates !== 'FALSE') {
+      const idList = createdWoIds.join(', ');
+      const msg = `Hi ${tenant.First_Name}, work order ${originalId} was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
+      await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+    }
+  } catch (e) { /* non-fatal — split already succeeded */ }
+
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (_) {}
+
+  return json({ success: true, original_wo_id: originalId, new_wo_ids: createdWoIds });
+}
+
 // Voided WOs are excluded from the default list, and from ?include_closed=true, on every
 // list endpoint below — they are not a "closed" status like Complete/Invoiced/Paid, they are
 // removed from view entirely. The admin /workorders route below is the one place that can
