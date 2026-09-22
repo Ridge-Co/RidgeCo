@@ -15998,6 +15998,15 @@ async function qbSendInvoice(env, body) {
     // single-vendor job — falls straight through to the unchanged code beneath, zero
     // behavior change for the ~95% of jobs that only ever had one vendor bill.
     const groupRows = qbGroupOpenRows(irRows, ir);
+    // Sep 22 2026 backstop: a receipt approved onto this invoice BEFORE the job's scope proposal
+    // was signed with Ridge Co materials priced in would otherwise go out a second time here.
+    // Warn in the preview (never silently change a total that was already approved).
+    if (groupRows.some(r => String(r.Own_Material_IDs || '').trim())) {
+      try {
+        const covered = await scopeCoveringSignatureForWO(env, ir.WO_ID);
+        if (covered) warnings.push(`⚠ This job is on signed proposal Scope #${covered.scope_id}, which already charges the owner for Ridge Co materials ($${covered.materials_budget.toFixed(2)} budget) in its payment milestones — this invoice also itemises receipts. Make sure they aren't the same materials before sending.`);
+      } catch (e) { warnings.push('⚠ Could not check whether this job is on a signed proposal that already bills its materials — check before sending.'); }
+    }
     if (groupRows.length > 1) {
       return await qbSendCombinedInvoice(env, {
         groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName,
