@@ -177,7 +177,7 @@ async function scanNow(){
   try {
     const res = await post('/receipt-recon/scan', {});
     if (res.ok === false) throw new Error(res.error||'scan failed');
-    status.textContent = '✅ scanned '+res.scanned+' new file(s)'+((res.errors&&res.errors.length)?' — '+res.errors.length+' error(s)':'');
+    status.textContent = '✅ scanned '+res.scanned+' new file(s)'+((res.errors&&res.errors.length)?' — '+res.errors.length+' error(s)':'')+(res.remaining?' — '+res.remaining+' more waiting in the folder, tap Scan again':'');
     await loadQueue();
   } catch(e){ status.textContent = '❌ '+e.message; }
 }
