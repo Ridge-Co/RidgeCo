@@ -1962,7 +1962,14 @@ async function receiptReconConfirm(env, body) {
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
-    invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
+    // A signed scope proposal's WO is billed through its payment milestones — folding this
+    // receipt into a pending Invoice_Review row would charge the customer for it a second time.
+    // It still lands on the WO (counted in Signed Proposals' materials budget vs actual).
+    let covered = null, coverErr = null;
+    try { covered = await scopeCoveringSignatureForWO(env, wo_id); } catch (e) { coverErr = e; }
+    if (covered) invoiceLink = { linked: false, reason: 'covered_by_signed_proposal', scope_id: covered.scope_id };
+    else if (coverErr) invoiceLink = { linked: false, reason: 'scope_check_failed', error: String(coverErr && coverErr.message || coverErr) };
+    else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
   }
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
