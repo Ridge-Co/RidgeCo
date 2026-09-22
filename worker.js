@@ -2351,6 +2351,14 @@ async function scopeUpdate(env, body) {
   await scopesTab(env);
   const fields = { Updated_Date: new Date().toISOString() };
   if (Array.isArray(body.line_items)) fields.Line_Items = JSON.stringify(scopeCleanItems(body.line_items));
+  // How Ridge Co–supplied materials are priced to the customer on this proposal (Sep 22 2026):
+  // chosen per proposal on scope-creator.html step 7. Validated here, the one place it's written.
+  if (body.materials_pricing !== undefined) {
+    const mp = scopeCleanMaterialsPricing(body.materials_pricing);
+    if (mp.error) return json({ error: mp.error }, 400);
+    await ensureColumns(env, 'Scopes', ['Materials_Pricing_JSON']);
+    fields.Materials_Pricing_JSON = JSON.stringify(mp.value);
+  }
   if (body.title !== undefined) fields.Title = body.title;
   if (body.notes !== undefined) fields.Notes = body.notes;
   if (body.room !== undefined) fields.Room = body.room;
