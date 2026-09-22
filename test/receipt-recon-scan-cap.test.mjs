@@ -43,11 +43,12 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
     receiptCustomerCards: async () => ({}),
     fetchTabs: async () => [[], [], []],
     driveDownload: async (tok, id) => { downloads++; cur = id; return { bytes: new ArrayBuffer(1), mime: 'application/pdf' }; },
-    receiptExtract: async (env, bytes, mime) => { if (cfg.__bad && cfg.__bad.has(cur)) throw new Error('Could not process image'); return { vendor: 'Home Depot', total: 12.34, date: '2026-09-10', items: [] }; },
+    receiptExtract: async (env, bytes, mime) => { if (cfg.__bad && cfg.__bad.has(cur)) throw new Error('Could not process image'); return { vendor: 'Home Depot', total: 12.34, date: dateFor(cur), items: [] }; },
     receiptSuggestCore: () => ({ verdict: 'review' }),
     addRow: async (env, tab, row) => { queue.push(row); },
     setConfigKey: async (env, { key, value }) => { cfg[key] = value; },
     json: (o) => o,
+    ...helpers,
     RECEIPT_RECON_QUEUE_HEADERS: [], RECEIPT_RECON_FOLDER_ID_DEFAULT: 'FOLDER',
   };
   const names = Object.keys(deps);
