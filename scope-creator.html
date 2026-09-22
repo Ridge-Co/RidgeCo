@@ -269,6 +269,16 @@
       <button class="btn small" onclick="saveSchedule()">💾 Save payment schedule</button>
     </div>
     <div id="schedule-status" class="status"></div>
+    <div id="mat-pricing-box" style="margin-top:12px;border-top:1px dashed var(--border);padding-top:10px;">
+      <div style="font-size:11px;font-weight:bold;margin-bottom:4px;">Ridge Co materials — how to price them to the owner</div>
+      <div class="sub" style="margin-bottom:4px;">Only used for options with a green "RC materials $" amount in step 2. The owner sees a separate "Includes materials" line (description + price) — never your cost or markup. Saved when you generate.</div>
+      <div class="mat-mode">
+        <label><input type="radio" name="mat-mode" value="markup" onchange="onMatModeChange()"> Same markup as vendor cost (priced together with the vendor's part)</label>
+        <label><input type="radio" name="mat-mode" value="at_cost" onchange="onMatModeChange()"> At cost + card fee only (no markup)</label>
+        <label><input type="radio" name="mat-mode" value="flat_pct" onchange="onMatModeChange()"> Flat markup % <input id="mat-pct" type="number" step="0.01" min="0" max="500" style="width:72px;" placeholder="%" oninput="onMatModeChange()"> + card fee</label>
+      </div>
+      <div id="mat-summary" class="status"></div>
+    </div>
     <button class="btn" style="margin-top:10px;" onclick="genProposal()">📄 Generate proposal from scope + pricing</button>
     <div class="sub" style="margin-top:4px;">⚠ Generating recomputes pricing from the items above and overwrites the text below — if you've hand-edited it (e.g. a custom combined/standalone breakdown), edit the text box directly instead of regenerating.</div>
     <div id="prop-status" class="status"></div>
