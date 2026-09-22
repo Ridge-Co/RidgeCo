@@ -17,6 +17,8 @@ Start the next session with: **"resume ridgeco receipt follow-ups"**. Load conte
 
 ## Task 1: QuickBooks line-item duplicate audit for OLDER receipts (highest priority)
 
+> **Status (end of Sep 22):** in progress as **PR #27** (`receipt-duplicate-audit`): `build-index` → `QB_Invoice_Line_Cache`, `scan` → `Receipt_Duplicate_Audit`, `mark`, `GET flags`. ⚠️ The branch predates the #25 (`/wo/combine`) and #26 (`/admin/backfill-scope-wo-vendor`, `HUB_PROD_WRITE_TOKEN`) merges and conflicts with main in the auth-gate cascade and the router. **Update it from main and keep all of those before merging**, then bump `BUILD_VERSION`. Pick up that PR; don't start over.
+
 **What Brett found:** a receipt amount that matched a line item on an older invoice, meaning the same receipt was billed twice. He caught a couple and believes there are several more.
 
 **Why the current check misses them:** `receiptCheckDuplicatesOne` (worker.js, the "Check duplicates" button) has three limits.
