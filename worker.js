@@ -10968,7 +10968,7 @@ async function sendReceiptsToQBEmail(env, opts) {
       const wo = r.WO_ID ? workorders.find(w => String(w.ID) === String(r.WO_ID)) : null;
       const prop = r.Property_ID ? properties.find(p => String(p.ID) === String(r.Property_ID)) : null;
       const context = wo ? `WO ${wo.ID}${wo.Description ? ' — ' + _escHtml(String(wo.Description).slice(0, 120)) : ''}`
-        : prop ? `Property: ${_escHtml(prop.Address || ('#' + prop.ID))}`
+        : prop ? `Expense — property: ${_escHtml(prop.Address || ('#' + prop.ID))}`
         : 'General Ridge Co expense (no job/property)';
       const html = [
         `<p><b>${_escHtml(r.Store || 'Unknown vendor')}</b> — $${_escHtml(r.Amount || '')} on ${_escHtml(r.Date || '')}</p>`,
