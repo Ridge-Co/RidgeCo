@@ -1860,7 +1860,8 @@ async function receiptReconScan(env, body) {
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
-  let n = 0; const errs = []; let failuresChanged = false;
+  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0;
+  const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
       const dl = await driveDownload(tok, f.id);
