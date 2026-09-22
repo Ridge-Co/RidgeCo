@@ -505,7 +505,8 @@ function loadWorkOrders() {
 function renderWOs(wos) {
   var list = document.getElementById('woList');
   if (!wos || !wos.length) {
-    list.innerHTML = '<div class="empty"><div class="icon">✓</div>No ' + (currentTab === 'open' ? 'open ' : '') + 'work orders.</div>';
+    var emptyMsg = currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : 'No work orders.';
+    list.innerHTML = '<div class="empty"><div class="icon">✓</div>' + emptyMsg + '</div>';
     return;
   }
 
