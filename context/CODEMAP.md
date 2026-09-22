@@ -100,6 +100,7 @@ secret gate at ≈38 (`if (!PUBLIC_PATHS.includes(path))`), then method +
 | GET /qb/accounts | qbListAccounts | List QB accounts | — (QB API) | **PUBLIC** | ≈1851 |
 | GET /qb/setup-trades | qbSetupTrades | Provision QB income accts/items per trade | — (QB API) | **PUBLIC** | ≈1910 |
 | GET /qb/ready | qbReadyQueue | Invoices ready to push to QB | Invoice_Review, Work_Orders · R | secret | ≈2112 |
+| GET /gemini-context | geminiContext | Serves the Gemini-Notebook context snapshot as plain text; self-verifies `?token=` against `GEMINI_CONTEXT_TOKEN` (404 if missing/wrong, not 401) | Config (`Gemini_Context_Snapshot` key) · R | **PUBLIC** (self-verified) | new, Sep 22 2026, PR #33 |
 
 ### POST routes
 | METHOD PATH | Handler | Purpose | Sheet tab(s) · R/W | Auth | ≈Line |
