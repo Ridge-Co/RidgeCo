@@ -108,22 +108,35 @@ env var and distinct secret value from `HUB_PROD_RO_TOKEN` — never shared, so 
 never implicates the other, and the Hub's own gate is checking method + path + token identity all
 three, not inferring write capability from a read token.
 
-**Allow-listed (write):** `POST /admin/backfill-scope-wo-vendor` only. This endpoint is idempotent
-(re-running it is a no-op for rows already backfilled — `scopeBackfillEligible` only ever fills a
-currently-blank `Vendor_ID`, never overwrites one that's already set) and additive-only (touches
-exactly one field, on rows already identified as eligible by the existing Scope↔WO link — no new rows
-created, nothing deleted).
+**Allow-listed (write), as of this revision:**
+- `POST /admin/backfill-scope-wo-vendor` — idempotent (re-running it is a no-op for rows already
+  backfilled — `scopeBackfillEligible` only ever fills a currently-blank `Vendor_ID`, never overwrites
+  one that's already set) and additive-only (touches exactly one field, on rows already identified as
+  eligible by the existing Scope↔WO link — no new rows created, nothing deleted).
+- `POST /admin/ensure-receipts-payment-source` — schema-only (adds the `Payment_Source` header column
+  to the `Receipts` sheet if it's missing, touches zero row data) and self-reporting idempotent (returns
+  `already_present: true` and does nothing further if the column already exists).
+
+**Deliberately NOT included, pending Brett's call (see Open Questions):** `/admin/share-attachments` —
+looks like it fits the same class (idempotent re-share of already-public files, explicitly skips
+vendor cost documents per its own doc comment) but has more surface area (dry-run/limit/offset
+params, live Google Drive permission changes) than the two above, so it's flagged rather than assumed.
 
 **Never allow-listed under this token:** everything else, by construction — the path check alone rules
-out every other write handler, and the method check rules out every GET.
+out every other write handler, and the method check rules out every GET. In particular, never
+`/admin/merge-property`, `/admin/merge-owner`, `/admin/owner-to-user`, `/admin/migrate-trades`,
+`/admin/fix-pins`, `/admin/fix-stale-tenants`, or `/admin/reformat-sheets` — these mutate or merge
+existing real records (not additive-only) and stay on `WORKER_SECRET` only, full stop.
 
-### Adding a new path (future)
-Two-repo, two-PR change, same posture as this brief's own rollout — never a one-line addition:
-1. Confirm the candidate endpoint is idempotent and additive-only (same bar as above) and touches
-   none of the excluded categories in Non-goals.
-2. Add it to `HUB_PROD_WRITE_PATHS` in `worker.js` (Hub repo) — PR, reviewed, not auto-merged (Rung-3).
+### Adding a new path (future) — same-PR convention
+Mirrors how `HUB_PROD_RO_TOKEN`'s read-list already grows: no separate build-brief cycle per addition,
+just ordinary review on the PR that ships the qualifying endpoint.
+1. Confirm the candidate endpoint is idempotent and additive-only (same bar as above, verified by
+   reading the actual handler) and touches none of the excluded categories in Non-goals.
+2. Add it to `HUB_PROD_WRITE_PATHS` in `worker.js` (Hub repo) in the SAME PR that ships the endpoint —
+   still a PR, not auto-merged (Rung-3 — this file is the auth gate), but no extra process.
 3. Add it to `HUB_PROD_WRITE_PATHS` in `gh-broker/src/index.ts` and update `hub_prod_post`'s tool
-   description to name it — PR, reviewed.
+   description to name it — its own PR (different repo), reviewed the same way.
 4. Both PRs merged before the path actually works end to end (the Hub's own allow-list is the real
    gate; the broker's is a client-side second layer, so either one missing the path means it's
    refused).
