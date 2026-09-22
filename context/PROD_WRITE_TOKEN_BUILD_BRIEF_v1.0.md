@@ -1,0 +1,1 @@
+$(cat "/tmp/claude-0/-home-claude/1ecfcbc7-17ac-58f2-8abf-d0c56ed1d4d1/scratchpad/PROD_WRITE_TOKEN_BUILD_BRIEF_v1.0.md")
