@@ -823,8 +823,12 @@ function collectItems(){
     var variants=[];
     el.querySelectorAll('.vrow').forEach(function(vr,i){
       var lblEl=vr.querySelector('.v-label'), costEl=vr.querySelector('.v-cost'), poEl=vr.querySelector('.v-price-override');
+      var matEl=vr.querySelector('.v-mat-cost'), matDescEl=vr.querySelector('.v-mat-desc');
       var poVal=poEl&&poEl.value!==''?parseFloat(poEl.value):null;
-      variants.push({ key:vr.dataset.key||('v'+(i+1)), label:lblEl?lblEl.value.trim():'', vendor_cost:parseFloat(costEl&&costEl.value)||0, price_override:(poVal!=null&&isFinite(poVal)&&poVal>=0)?poVal:null });
+      var vv={ key:vr.dataset.key||('v'+(i+1)), label:lblEl?lblEl.value.trim():'', vendor_cost:parseFloat(costEl&&costEl.value)||0, price_override:(poVal!=null&&isFinite(poVal)&&poVal>=0)?poVal:null };
+      var matVal=Math.max(0, parseFloat(matEl&&matEl.value)||0), matDesc=(matDescEl&&matDescEl.value||'').trim();
+      if(matVal>0 || matDesc){ vv.rc_materials_cost=matVal; vv.rc_materials_desc=matDesc; }
+      variants.push(vv);
     });
     if(!variants.length) variants=[{key:'v1',label:'',vendor_cost:0,price_override:null}];
     out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value, variants:variants, selected_key:variants[0].key });
