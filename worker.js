@@ -12016,6 +12016,14 @@ async function health(env, url) {
     out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
     out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
   } catch (_) {}
+  // "Reconnect Gmail" (Sep 22 2026): whether a sign-in-flow token is stored in Config, and when —
+  // presence/date only, never the value. The live no-send check is ADMIN-only: GET /gmail/token-check.
+  try {
+    const _cfg = await fetchConfig(env);
+    out.gmail.config_token_set = !!String(_cfg.GMAIL_REFRESH_TOKEN || '').trim();
+    out.gmail.config_token_updated = _cfg.GMAIL_TOKEN_UPDATED || '';
+  } catch (_) {}
+
   // Twilio (TWILIO_SMS_BUILD_BRIEF_v1.0) — same never-expose-values, presence-only pattern.
   // twilio_enabled reflects the live Config kill switch, not the secrets — lets Brett confirm
   // from a plain curl whether sends are actually live without opening the Hub.
