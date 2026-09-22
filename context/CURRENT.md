@@ -1,3 +1,42 @@
+# WHERE THINGS STAND — Sep 22, 2026 (B-012 Vendor Performance dashboard — built from Optimizer's RUNG-1 SAFE-class brief, PR #19 open)
+
+## 🟡 Built, PR open, needs Brett's live pass: Vendor Performance dashboard — B-012
+Full detail: https://github.com/Ridge-Co/RidgeCo/pull/19. Built directly from the Optimizer
+Prepare Agent's build-ready brief (B-012, RUNG-1 SAFE-class) after Brett said "Build it." New
+`GET /vendor-performance` (admin-gated by omission from `PUBLIC_PATHS`, same convention as
+`arAging`) aggregates `Work_Orders`+`Vendor_Bills`+`Time_Entries` by vendor — jobs total/done/
+open, completion rate, avg days to complete, total billed, labor hours, last activity — no new
+tab, no new column, no writes. New "📊 VENDOR PERFORMANCE" page in `index.html`, fetch-on-open
+(same lazy pattern as Who To Pay/Review Bills), sortable table.
+
+**One real correction to the brief, caught by opening the live handlers first (PAT-024) rather
+than trusting the brief's field-name draft**: Vendors' actual display-name column is `Name`
+(confirmed in `renderVendorsPage`), not `Company` as the brief assumed — `Company` is the
+secondary/business name shown alongside it. Built as `v.Name || v.Company`. Same for trade: the
+live tab uses `Trades` (comma list), `Trade` only as a legacy fallback — the brief assumed a
+single `Trade` field. Built as `v.Trades || v.Trade`. Everything else in the brief's field list
+(`Vendor_ID`, `Status`, `Voided`, `Active`, `Total`/`Customer_Total`, `Role`/`Entered_By_ID`/
+`Duration_Minutes`) matched the real handlers exactly.
+
+`node --check` clean on `worker.js` and all 5 inline `<script>` blocks in `index.html`. No
+`WORKER_SECRET` in this build sandbox, so the real test suite couldn't run — instead ran a
+20-assertion pure-logic sanity test against synthetic data (not committed) covering the trickiest
+part of the aggregation: `OPEN_WO_STATUSES` and the new `DONE` set both contain
+Complete/Pending Invoice, and the `open` filter's `&& !DONE.has(w.Status)` guard correctly
+resolves that overlap so a completed-but-unbilled job never double-counts as both done and open.
+Also confirmed `/vendor-performance` is genuinely absent from `PUBLIC_PATHS` via grep, and the
+pushed branch content was read back from GitHub and diffed byte-for-byte against the locally
+verified copy before opening the PR. `BUILD_VERSION` → `2026-09-22.1-vendor-performance-dashboard`
+(on the branch; not live until merged).
+
+**Pushed as a branch + PR (`feature/vendor-performance-dashboard`, PR #19), not direct to
+`main`** — per PAT-033, and per this file's own repeated flags this session about CAP-035/
+Queue #24 skipping the branch-first+staging-verify step; this one goes through it properly.
+**Needs Brett's live pass before merge** (full checklist in the PR body): `GET
+/vendor-performance` with the admin token → 200 + real rows; same call with no token → 401; a
+read-back check for one real vendor against `/vendor-workorders` and `Vendor_Bills`; open the
+Hub, confirm the page renders on a phone with no console errors and sorting works.
+
 # WHERE THINGS STAND — Sep 20, 2026 (Invoice Submitted vendor-bill status + notify-tier controls shipped as PR #9 (open, awaiting Brett's staging verify + merge — not yet live); HUB_TEST_TOKEN staging test-infra fully unblocked — the real root cause of the day-long "/workorder always 403s" mystery was never the guard code (isTestRecord/hubTestWriteAllowed were correct throughout), it was that maintenance-hub-staging's Cloudflare Build only auto-deploys from a `staging` git branch that had drifted 457 commits behind `main` since the original Sep 19 setup, so every merge to main all day built as an unpromoted Cloudflare "version" but never reached live traffic; fixed via a one-time `git push origin main:staging --force` (Brett, via GitHub Codespaces, since GH Broker's git tools are intentionally fast-forward-only); full /workorder → /assign → /status write lifecycle now verified working end-to-end against staging — see context/... doc and the "THE ACTUAL ROOT CAUSE" section for the full diagnosis; open follow-up: decide whether to point maintenance-hub-staging's production branch directly at `main` to remove the manual-sync step permanently; Ops_Build_Queue greenlit-13 pass — admin_share_attachments 21% failure rate root-caused and fixed (Drive_File_Missing skip-list) + smoke test; failure runbook + dead-man's-switch alerting shipped, dormant behind Config flags; latency instrumentation added to wo_schedule/admin_share_attachments; items_summarize escalation root-caused and fixed same day — Google retired the CHEAP-tier model (gemini-2.5-flash-lite), swapped to gemini-3.5-flash-lite, live-verified via /admin/items-summarize-test; auto wo_create from inbound triggers explicitly left out of scope. Selftest auto-verification pass added — POST /selftest + daily 7am ET cron digest, closing the "built, not yet live-verified" gap, but not yet live-verified itself; Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window; CAP-035 vendor.html `.btn-muted` cosmetic fix shipped and live-verified via a real test-vendor login)
 
 ## ✅ MERGED to `main` (`43e9757`, Sep 20 2026): Sweep single-flight lock + per-WO communication audit + vendor invoice confirmation — was PR #17 (`feature/sweep-lock-and-message-audit`)

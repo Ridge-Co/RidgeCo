@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-21.1-tenant-session-refresh';
+const BUILD_VERSION = '2026-09-22.1-vendor-performance-dashboard';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -341,6 +341,7 @@ export default {
         if (path === '/ar/report/preview')      return await arReportPreview(env, url);
         if (path === '/ar/report/opt-in')       return await arReportOptInRead(env, url);
         if (path === '/ar-report/view')         return await arReportView(env, url);
+        if (path === '/vendor-performance')     return await vendorPerformance(env, url);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
@@ -9799,6 +9800,68 @@ async function arAging(env, url) {
     .sort((a, b) => b.oldest_days - a.oldest_days || b.total - a.total);
   list.sort((a, b) => b.age_days - a.age_days || b.balance - a.balance);
   return json({ ok: true, as_of: new Date(now).toISOString().slice(0, 10), total_open: +totalOpen.toFixed(2), open_count: list.length, buckets, by_customer: customers, invoices: list.slice(0, 100) });
+}
+
+// GET /vendor-performance (B-012) — READ-ONLY vendor scorecard. Ranks Brett's vendors by
+// reliability, speed, volume, and cost — aggregated live from data the Hub already stores
+// (Work_Orders + Vendor_Bills + Time_Entries). No new tab, no new column, no writes. Admin-gated
+// by omission from PUBLIC_PATHS (top auth gate), same convention as arAging above, which this
+// is modeled on (aggregate → bucket/roll-up → return json({...})).
+async function vendorPerformance(env, url) {
+  const [vendors, wos, bills, times] = await fetchTabs(
+    env, ['Vendors', 'Work_Orders', 'Vendor_Bills', 'Time_Entries']
+  );
+  // "Done" here means the job itself is finished (billing-lifecycle-agnostic) — distinct from
+  // OPEN_WO_STATUSES, which (correctly, for the vendor portal it was built for) still counts
+  // Complete/Pending Invoice as "open" because there's billing follow-up left. Guarding `open`
+  // below with `&& !DONE.has(w.Status)` reconciles the two so a completed-but-unbilled job never
+  // double-counts as both done and open.
+  const DONE = new Set(['Complete', 'Pending Invoice', 'Invoiced', 'Paid']);
+  const now = Date.now();
+  const daysBetween = (a, b) => {
+    const ta = Date.parse(a), tb = Date.parse(b);
+    return (isNaN(ta) || isNaN(tb)) ? null : Math.max(0, Math.round((tb - ta) / 86400000));
+  };
+  const activeVendors = vendors.filter(v => v.Active !== 'FALSE');
+  const rows = activeVendors.map(v => {
+    const vid = String(v.ID);
+    const myWos   = wos.filter(w => String(w.Vendor_ID) === vid && w.Voided !== 'TRUE');
+    const myBills = bills.filter(b => String(b.Vendor_ID) === vid && b.Active !== 'FALSE');
+    const done    = myWos.filter(w => DONE.has(w.Status) || w.Completed_Date);
+    const open    = myWos.filter(w => OPEN_WO_STATUSES.includes(w.Status) && !DONE.has(w.Status));
+    const cycle   = done.map(w => daysBetween(w.Created_Date, w.Completed_Date)).filter(n => n != null);
+    const avgCycle = cycle.length ? +(cycle.reduce((s, n) => s + n, 0) / cycle.length).toFixed(1) : null;
+    const billed  = myBills.reduce((s, b) => s + (parseFloat(b.Total || b.Customer_Total || 0) || 0), 0);
+    const vminutes = times
+      .filter(t => t.Active !== 'FALSE' && t.Role === 'vendor' && String(t.Entered_By_ID) === vid)
+      .reduce((s, t) => s + (parseFloat(t.Duration_Minutes || 0) || 0), 0);
+    const lastActivity = [...myWos.map(w => w.Created_Date), ...myBills.map(b => b.Created_Date)]
+      .filter(Boolean).sort().pop() || '';
+    return {
+      // Name is the Vendors tab's actual display-name column (Company is the secondary/business
+      // name shown alongside it elsewhere, e.g. renderVendorsPage) — verified against the live
+      // handler rather than assumed, since Vendors carries both.
+      vendor_id: vid, name: v.Name || v.Company || '', trade: v.Trades || v.Trade || '',
+      jobs_total: myWos.length, jobs_completed: done.length, jobs_open: open.length,
+      jobs_open_urgent: open.filter(w => String(w.Priority || '').toLowerCase() === 'urgent').length,
+      completion_rate: myWos.length ? +(done.length / myWos.length).toFixed(2) : null,
+      avg_days_to_complete: avgCycle,
+      total_billed: +billed.toFixed(2), bill_count: myBills.length,
+      avg_bill: myBills.length ? +(billed / myBills.length).toFixed(2) : 0,
+      labor_hours: +(vminutes / 60).toFixed(1),
+      last_activity: lastActivity,
+    };
+  }).sort((a, b) => b.jobs_total - a.jobs_total || b.total_billed - a.total_billed);
+  return json({
+    ok: true,
+    as_of: new Date(now).toISOString().slice(0, 10),
+    totals: {
+      vendors: rows.length,
+      total_billed: +rows.reduce((s, r) => s + r.total_billed, 0).toFixed(2),
+      open_jobs: rows.reduce((s, r) => s + r.jobs_open, 0),
+    },
+    vendors: rows,
+  });
 }
 
 // GET /ar/invoices — READ-ONLY invoice status board, straight from QuickBooks. Solves the thing
