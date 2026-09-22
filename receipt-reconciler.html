@@ -686,7 +686,7 @@ async function skipRow(id, btn){
     const res = await post('/receipt-recon/skip', { id, reason: 'dismissed from Receipt Reconciler' });
     if (res.error) throw new Error(res.error);
     statusEl.innerHTML = '<span class="ok">Skipped.</span>';
-    setTimeout(loadQueue, 500);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
