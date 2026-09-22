@@ -1870,6 +1870,8 @@ async function receiptReconScan(env, body) {
       const items = Array.isArray(ex.items) ? ex.items : [];
       const itemsSummary = Array.isArray(ex.items_summary) ? ex.items_summary : [];
       const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '' }, properties, workorders, receipts, custCards);
+      const tooOld = receiptBeforeCutoff(ex.date, cutoff);
+      if (tooOld) skippedOld++;
       await addRow(env, 'Receipt_Recon_Queue', {
         Source_File_ID: f.id, Source_File_URL: f.webViewLink || '', File_Name: f.name || '',
         Received_Date: new Date().toISOString(), Vendor: ex.vendor || '', Receipt_Date: ex.date || '',
