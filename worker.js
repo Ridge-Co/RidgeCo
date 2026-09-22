@@ -2974,10 +2974,29 @@ async function scopeProposalSign(env, body, ip, ua) {
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) vendorCostTotal += (+v.vendor_cost || 0);
   }
+  // Ridge Co–supplied materials on the SIGNED options (Sep 22 2026) — never part of
+  // vendorCostTotal (so never on a vendor bill); recorded as the budget Signed Proposals tracks
+  // matched receipts against. Cost from private Line_Items, customer price from Proposal_Items_JSON.
+  let rcMaterialsCost = 0, rcMaterialsPrice = 0;
+  for (const it of scopeParseItems(s)) {
+    const key = finalSelections[it.id];
+    const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
+    if (v) rcMaterialsCost += (+v.rc_materials_cost || 0);
+  }
+  for (const it of items) {
+    const key = finalSelections[it.id];
+    const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
+    if (v) rcMaterialsPrice += (+v.materials_price || 0);
+  }
+  rcMaterialsCost = +rcMaterialsCost.toFixed(2); rcMaterialsPrice = +rcMaterialsPrice.toFixed(2);
   subtotal = +subtotal.toFixed(2); vendorCostTotal = +vendorCostTotal.toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2); // legacy column, kept for any old dashboard summing it — not used for new billing
   const now = new Date();
+  if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
+    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
+  }
   const sigResp = await addRow(env, 'Scope_Signatures', {
+    RC_Materials_Cost: rcMaterialsCost ? String(rcMaterialsCost) : '', RC_Materials_Price: rcMaterialsPrice ? String(rcMaterialsPrice) : '',
     Scope_ID: String(s.ID), Signer_Name: signer,
     Signature_PNG: sigPng.length <= 45000 ? sigPng : '', // Sheets cell cap ~50k chars; skip if oversized
     Selections_JSON: JSON.stringify(finalSelections),
