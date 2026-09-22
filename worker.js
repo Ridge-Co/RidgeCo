@@ -2470,8 +2470,27 @@ async function scopeEstimate(env, body) {
 // default-selected variant per item to compute a subtotal/deposit. Returns vendor_cost alongside
 // price for the ADMIN-only caller (scopeProposal) — the customer-facing boundary functions
 // (scopeProposalView, scopeProposalSign) are what strip it before anything leaves the server.
-function scopeItemsPricing(items, pc) {
-  let subtotal = 0, vendorCostTotal = 0;
+//
+// Ridge Co–supplied materials (Sep 22 2026): a variant may also carry rc_materials_cost — what
+// Ridge Co itself pays for materials (never the vendor). `mp` = the scope's materials pricing
+// choice {mode, pct}, picked per proposal on scope-creator.html:
+//   'markup'   — same tiered markup as vendor cost: the variant is priced as ONE job of
+//                (vendor_cost + materials) through calcTieredEstimate (so a small add-on never
+//                gets its own minimum-markup/admin fee), and the materials share of that price is
+//                split out proportionally for the customer's "Includes materials" line.
+//   'at_cost'  — pass-through: materials × cardFeeMult only, no markup.
+//   'flat_pct' — materials × (1 + pct/100) × cardFeeMult.
+// A price_override always covers the vendor/labor part only; materials are priced per mode on top.
+// Variant.price stays the TOTAL for the option (labor + materials) so every existing consumer
+// (scopeProposalView subtotal, scopeProposalSign) keeps working unchanged. vendorCostTotal never
+// includes materials — that is the whole point: the vendor is never billed for them.
+// Self-contained on purpose (only calcTieredEstimate) — test files extract this function alone.
+function scopeItemsPricing(items, pc, mp) {
+  const mode = (mp && ['markup', 'at_cost', 'flat_pct'].includes(mp.mode)) ? mp.mode : 'markup';
+  const pct = (mp && isFinite(+mp.pct) && +mp.pct >= 0) ? +mp.pct : 0;
+  const fee = (pc && pc.cardFeeMult != null) ? pc.cardFeeMult : 1;
+  const r2 = n => Math.round((+n || 0) * 100) / 100;
+  let subtotal = 0, vendorCostTotal = 0, rcMaterialsCostTotal = 0, rcMaterialsPriceTotal = 0;
   const priced = items.map(it => {
     const rawVariants = (it.variants && it.variants.length) ? it.variants : [{ key: 'v1', label: '', vendor_cost: 0 }];
     const variants = rawVariants.map(v => {
@@ -2479,18 +2498,62 @@ function scopeItemsPricing(items, pc) {
       // variant entirely. vendor_cost is still carried through unchanged for the later vendor-bill
       // proration at signing, so overriding the customer price never touches what the vendor is owed.
       const hasOverride = v.price_override != null && isFinite(v.price_override) && v.price_override >= 0;
-      const calc = hasOverride ? null : calcTieredEstimate(v.vendor_cost, pc);
-      const price = hasOverride ? +(+v.price_override).toFixed(2) : (calc ? calc.finalPrice : 0);
-      return { key: v.key, label: v.label, price, vendor_cost: +(v.vendor_cost || 0).toFixed(2), price_override: hasOverride ? price : null };
+      const vc = +(v.vendor_cost || 0);
+      const mat = Math.max(0, +(v.rc_materials_cost || 0) || 0);
+      if (!(mat > 0)) {
+        // No Ridge Co materials — byte-for-byte the pre-Sep-22 behavior.
+        const calc = hasOverride ? null : calcTieredEstimate(vc, pc);
+        const price = hasOverride ? +(+v.price_override).toFixed(2) : (calc ? calc.finalPrice : 0);
+        return { key: v.key, label: v.label, price, vendor_cost: +vc.toFixed(2), price_override: hasOverride ? price : null };
+      }
+      let labor, matPrice;
+      if (mode === 'markup') {
+        const combo = calcTieredEstimate(vc + mat, pc);
+        const comboPrice = combo ? combo.finalPrice : 0;
+        matPrice = r2(comboPrice * mat / (vc + mat));
+        labor = hasOverride ? r2(v.price_override) : r2(comboPrice - matPrice);
+      } else {
+        matPrice = mode === 'at_cost' ? r2(mat * fee) : r2(mat * (1 + pct / 100) * fee);
+        const calc = (hasOverride || !(vc > 0)) ? null : calcTieredEstimate(vc, pc);
+        labor = hasOverride ? r2(v.price_override) : (calc ? calc.finalPrice : 0);
+      }
+      const price = r2(labor + matPrice);
+      return {
+        key: v.key, label: v.label, price, vendor_cost: +vc.toFixed(2), price_override: hasOverride ? r2(v.price_override) : null,
+        rc_materials_cost: r2(mat), materials_price: matPrice, materials_desc: String(v.rc_materials_desc || '').trim() || 'Materials',
+      };
     });
     let selKey = it.selected_key || variants[0].key;
     if (!variants.some(v => v.key === selKey)) selKey = variants[0].key;
     const sel = variants.find(v => v.key === selKey) || variants[0];
     subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
+    rcMaterialsCostTotal += (sel.rc_materials_cost || 0); rcMaterialsPriceTotal += (sel.materials_price || 0);
     return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey };
   });
   subtotal = +subtotal.toFixed(2);
-  return { items: priced, subtotal, deposit: +(subtotal / 2).toFixed(2), vendorCostTotal: +vendorCostTotal.toFixed(2) };
+  return {
+    items: priced, subtotal, deposit: +(subtotal / 2).toFixed(2), vendorCostTotal: +vendorCostTotal.toFixed(2),
+    rcMaterialsCostTotal: +rcMaterialsCostTotal.toFixed(2), rcMaterialsPriceTotal: +rcMaterialsPriceTotal.toFixed(2),
+  };
+}
+
+// Materials pricing choice for a scope (Sep 22 2026). Validates what scope-creator.html sends.
+const SCOPE_MATERIALS_MODES = ['markup', 'at_cost', 'flat_pct'];
+function scopeCleanMaterialsPricing(mp) {
+  const mode = mp && mp.mode;
+  if (!SCOPE_MATERIALS_MODES.includes(mode)) return { error: 'materials_pricing.mode must be one of: ' + SCOPE_MATERIALS_MODES.join(', ') };
+  if (mode !== 'flat_pct') return { value: { mode } };
+  const pct = parseFloat(mp.pct);
+  if (!isFinite(pct) || pct < 0 || pct > 500) return { error: 'Flat materials % must be a number from 0 to 500.' };
+  return { value: { mode, pct: Math.round(pct * 100) / 100 } };
+}
+function scopeParseMaterialsPricing(s) {
+  try {
+    const v = JSON.parse((s && s.Materials_Pricing_JSON) || 'null');
+    const c = scopeCleanMaterialsPricing(v);
+    if (c.value) return c.value;
+  } catch (_) {}
+  return { mode: 'markup' };
 }
 
 // POST /scope/proposal — build the CUSTOMER proposal from scope + per-item vendor pricing.
