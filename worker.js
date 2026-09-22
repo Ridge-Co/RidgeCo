@@ -2619,6 +2619,18 @@ function scopeBackfillEligible(scope, wo) {
 // actually did the job) is known. Read-mostly: only ever writes Work_Orders.Vendor_ID, and only
 // when it's currently blank on a WO whose linked Scope has a Vendor_ID on file — never overwrites
 // an existing value, never touches anything else on the WO or the Scope.
+// POST /admin/gemini-context-update — writes the daily-refreshed Brett-context snapshot that
+// GET /gemini-context serves. Gated by HUB_PROD_WRITE_TOKEN (see HUB_PROD_WRITE_PATHS above),
+// same narrow-token cascade as the other prod-write admin routes. Body: { content: "<markdown>" }.
+// Stored in Config (not a dedicated tab) since it's a single blob, same pattern as other
+// singleton settings — see fetchConfig/setConfigKey.
+async function adminGeminiContextUpdate(env, body) {
+  const content = body && body.content;
+  if (!content || typeof content !== 'string') return json({ error: 'content (string) required' }, 400);
+  await setConfigKey(env, { key: 'Gemini_Context_Snapshot', value: content });
+  return json({ success: true, bytes: content.length });
+}
+
 async function backfillScopeWOVendor(env) {
   const [scopes, workorders] = await Promise.all([
     fetchTab(env, 'Scopes').catch(() => []),
