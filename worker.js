@@ -1877,8 +1877,8 @@ async function receiptReconScan(env, body) {
         Received_Date: new Date().toISOString(), Vendor: ex.vendor || '', Receipt_Date: ex.date || '',
         Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
         PO_Reference: po, Items: JSON.stringify(items), Items_Summary: JSON.stringify(itemsSummary), Card_Last4: ex.card_last4 || '', Invoice_Number: ex.invoice_number || '',
-        Suggestion: JSON.stringify(suggestion).slice(0, 4000), Status: 'pending',
-        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: '', Active: 'TRUE',
+        Suggestion: JSON.stringify(suggestion).slice(0, 4000), Status: tooOld ? 'skipped' : 'pending',
+        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: tooOld ? receiptCutoffNote(ex.date, cutoff) : '', Active: 'TRUE',
       });
       n++;
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
