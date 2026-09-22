@@ -747,7 +747,10 @@ export default {
     // real "Receipts and Invoices" Drive folder Brett drops purchase receipts into, OCRs new
     // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
     // read + queue only — nothing bills until Brett taps Confirm in the Hub.
-    try { await receiptReconScan(env); } catch (e) { /* non-fatal */ }
+    // Capped at 5 new files here (vs 8 for the Hub's Scan button): this cron invocation shares one
+    // Cloudflare subrequest budget with every other sweep in it, and an email backfill can drop
+    // dozens of files into the folder at once (Receipt Mail → Hub, Sep 22 2026).
+    try { await receiptReconScan(env, { max: 5 }); } catch (e) { /* non-fatal */ }
     // Backfill Items_Summary for any Receipt_Recon_Queue rows still missing it (Sep 10 2026) —
     // catches receipts scanned before this field existed, or a rare failed AI call. Cheap and
     // bounded; no-op once caught up.
