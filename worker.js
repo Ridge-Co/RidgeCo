@@ -228,7 +228,7 @@ export default {
         // Fully inert unless env.HUB_TEST_TOKEN is set, so deploying this has zero effect until
         // the secret exists — and it never exists on production's env at all.
         const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
@@ -520,6 +520,7 @@ export default {
         if (path === '/wo/set-tenant-visibility') return await setTenantVisibility(env, body);
         if (path === '/wo/void')                  return await woVoid(env, body);
         if (path === '/wo/unvoid')                return await woUnvoid(env, body);
+        if (path === '/wo/combine')               return await woCombine(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
         if (path === '/tenant/schedule-move-out') return await scheduleMoveOutWithTurnover(env, body);
         if (path === '/schedule')                 return await scheduleWO(env, body);
@@ -4341,6 +4342,139 @@ async function woUnvoid(env, body) {
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   await logWOAudit(env, woId, changedBy, changedByRole, 'Voided', 'TRUE', 'FALSE', 'Restored');
   return json({ success: true });
+}
+
+// Combine (bulk void-into-one, Sep 22 2026 build — index.html bulk-select toolbar). Only
+// these fields are ever compared/reconciled across the selected work orders; Trade is
+// deliberately excluded — the survivor always keeps its own original Trade, no picker, no
+// comparison (Brett, explicit — every selected WO can have a different Trade and that's fine).
+const WO_COMBINE_RECONCILE_FIELDS = ['Managed_By', 'Vendor_ID', 'Scheduled_Date', 'Description', 'Priority', 'Status'];
+
+// Pure — no I/O — so it's directly unit-testable without mocking Sheets. `wos` is
+// [survivor, ...combined], each a plain Work_Orders row object; `overrides` is the client's
+// field_overrides object (or {}/null). A field only lands in `resolved` when every WO in
+// `wos` agrees on it (even if that shared value differs from what the survivor itself
+// originally had — silent auto-resolve either way), OR the caller supplied an override that
+// matches one of the REAL candidate values already present on one of the selected WOs. An
+// override that doesn't match any real candidate is refused, not trusted blindly — it still
+// comes back as a conflict, same as no override at all.
+function resolveCombineFields(wos, overrides, fields) {
+  fields = fields || WO_COMBINE_RECONCILE_FIELDS;
+  overrides = overrides && typeof overrides === 'object' ? overrides : {};
+  const resolved = {}, conflicts = [];
+  for (const f of fields) {
+    const values = wos.map(w => (w && w[f] != null) ? String(w[f]) : '');
+    const allAgree = values.every(v => v === values[0]);
+    if (allAgree) { resolved[f] = values[0]; continue; }
+    if (Object.prototype.hasOwnProperty.call(overrides, f)) {
+      const chosen = String(overrides[f] == null ? '' : overrides[f]);
+      if (values.includes(chosen)) { resolved[f] = chosen; continue; }
+    }
+    conflicts.push(f);
+  }
+  return { resolved, conflicts };
+}
+
+// POST /wo/combine {survivor_wo_id, combined_wo_ids:[...], field_overrides?:{...}, updated_by?,
+// updated_by_role?} — extends the existing single-target woVoid(reason:'Combined') flow (the
+// WO detail page's Void modal, left completely untouched) to N sources -> 1 survivor in one
+// call. Brett always picks the survivor client-side — no auto-default here. Field
+// reconciliation is recomputed here from the real rows, never trusted from the client; a real
+// disagreement 409s with the conflicting field names so the UI can show the picker and retry
+// with field_overrides. Each non-survivor WO is voided by calling the real woVoid() so its
+// Notes-merge/WO_Audit behavior is byte-for-byte identical to a manual single Combine — this
+// endpoint does not reimplement that logic.
+//
+// Rollback: Sheets has no transactions, so this is best-effort atomicity, same shape as
+// /ops-queue/start-build's original-status rollback (see opsQueueStartBuild) — snapshot the
+// survivor's reconciled fields before writing, and if any later step throws, unvoid whatever
+// was already voided and restore the survivor's snapshot before reporting the failure, rather
+// than leaving a half-combined state on the sheet.
+async function woCombine(env, body) {
+  const survivorId = body.survivor_wo_id;
+  if (!survivorId) return json({ error: 'survivor_wo_id required' }, 400);
+  const combinedIds = [...new Set((Array.isArray(body.combined_wo_ids) ? body.combined_wo_ids : []).map(x => String(x || '')).filter(Boolean))];
+  if (!combinedIds.length) return json({ error: 'combined_wo_ids required (at least one)' }, 400);
+  if (combinedIds.includes(String(survivorId))) return json({ error: 'survivor_wo_id cannot also appear in combined_wo_ids' }, 400);
+
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const survivor = findWO(workorders, survivorId);
+  if (!survivor) return json({ error: `Survivor work order ${survivorId} not found` }, 404);
+  const combinedWOs = [];
+  for (const id of combinedIds) {
+    const w = findWO(workorders, id);
+    if (!w) return json({ error: `Work order ${id} not found` }, 404);
+    combinedWOs.push(w);
+  }
+  // Same same-Property_ID/Unit_ID scoping the existing single-WO Combined picker already
+  // enforces client-side (populateVoidCombineOptions) — re-enforced here server-side, never
+  // trusted from the client.
+  for (const w of combinedWOs) {
+    if (String(w.Property_ID || '') !== String(survivor.Property_ID || '') || String(w.Unit_ID || '') !== String(survivor.Unit_ID || '')) {
+      return json({ error: `Work order ${w.ID} is not the same property/unit as survivor ${survivorId}` }, 400);
+    }
+  }
+
+  const { resolved, conflicts } = resolveCombineFields([survivor, ...combinedWOs], body.field_overrides);
+  if (conflicts.length) {
+    return json({ error: 'field_conflict', conflicts, message: `These fields disagree across the selected work orders — field_overrides required for: ${conflicts.join(', ')}` }, 409);
+  }
+
+  const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
+  const survivorSnapshot = {};
+  for (const f of WO_COMBINE_RECONCILE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
+  const fieldsToApply = {};
+  for (const f of WO_COMBINE_RECONCILE_FIELDS) {
+    if (String(resolved[f] ?? '') !== String(survivorSnapshot[f] ?? '')) fieldsToApply[f] = resolved[f];
+  }
+
+  const voidedSoFar = [];
+  try {
+    if (Object.keys(fieldsToApply).length) {
+      await updateWOFields(env, survivorId, fieldsToApply);
+      await logWOAuditMany(env, Object.entries(fieldsToApply).map(([field, newVal]) => ({
+        woId: survivorId, changedBy, changedByRole, field,
+        oldValue: survivorSnapshot[field], newValue: newVal,
+        notes: `Combine: reconciled from ${combinedIds.join(', ')}`,
+      })));
+    }
+    for (const w of combinedWOs) {
+      const res = await woVoid(env, { wo_id: w.ID, reason: 'Combined', combined_into_wo_id: survivorId, updated_by: changedBy, updated_by_role: changedByRole });
+      const resBody = await res.json();
+      if (!resBody || !resBody.success) throw new Error(`Failed to void ${w.ID}${resBody && resBody.error ? ': ' + resBody.error : ''}`);
+      voidedSoFar.push(w.ID);
+    }
+  } catch (e) {
+    for (const id of voidedSoFar) { try { await woUnvoid(env, { wo_id: id, updated_by: changedBy, updated_by_role: changedByRole }); } catch (_) {} }
+    if (Object.keys(fieldsToApply).length) { try { await updateWOFields(env, survivorId, survivorSnapshot); } catch (_) {} }
+    return json({ error: 'combine_failed', detail: e.message, rolled_back: true }, 500);
+  }
+
+  // Batched tenant SMS — ONE new notice about the merge, gated exactly like every other
+  // tenant status SMS (isTenantNotifiable + the survivor's own Tenant_Notify_Updates toggle),
+  // through the same smsGatedSend chokepoint (full Global/Property/Owner/Tenant gate
+  // hierarchy) — no bypass. The survivor keeps getting its normal future notifications
+  // unchanged; this is just the one extra notice about the combine itself. Best-effort —
+  // the combine itself has already succeeded above regardless of this.
+  try {
+    const survivorFresh = findWO(await fetchTab(env, 'Work_Orders'), survivorId) || survivor;
+    const units = await fetchTab(env, 'Units'), tenants = await fetchTab(env, 'Tenants');
+    const properties = await fetchTab(env, 'Properties'), owners = await fetchTab(env, 'Owners');
+    const unit = units.find(u => u.ID === survivorFresh.Unit_ID);
+    const property = properties.find(p => p.ID === survivorFresh.Property_ID);
+    const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+    const tenant = currentTenantForDispatch(tenants, unit, survivorFresh);
+    if (isTenantNotifiable(tenant, survivorFresh) && survivorFresh.Tenant_Notify_Updates !== 'FALSE') {
+      const idList = combinedIds.join(', ');
+      const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
+      await smsGatedSend(env, { wo_id: survivorId, message_type: 'tenant_wo_combined', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+    }
+  } catch (e) { /* non-fatal — combine already succeeded */ }
+
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {}
+
+  return json({ success: true, survivor_wo_id: survivorId, combined_wo_ids: combinedIds, resolved_fields: resolved });
 }
 
 // Voided WOs are excluded from the default list, and from ?include_closed=true, on every
@@ -12405,6 +12539,21 @@ async function hubTestWriteAllowed(env, path, body) {
     const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/wo/combine') {
+    // /wo/combine touches the survivor AND every combined WO — every one of them must
+    // resolve (via its Property) to a TEST- record, or this token can never touch it.
+    const wos = await fetchTab(env, 'Work_Orders');
+    const survivor = wos.find(w => String(w.ID) === String(body && body.survivor_wo_id));
+    if (!survivor) return false;
+    if (!(await isTestRecord(env, 'Properties', survivor.Property_ID))) return false;
+    const combinedIds = Array.isArray(body && body.combined_wo_ids) ? body.combined_wo_ids : [];
+    for (const id of combinedIds) {
+      const w = wos.find(x => String(x.ID) === String(id));
+      if (!w) return false;
+      if (!(await isTestRecord(env, 'Properties', w.Property_ID))) return false;
+    }
+    return true;
   }
   return false;
 }
