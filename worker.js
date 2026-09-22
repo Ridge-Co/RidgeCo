@@ -1891,7 +1891,7 @@ async function receiptReconScan(env, body) {
   }
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
-  return json({ ok: true, folder_id: folder, scanned: n, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
+  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
