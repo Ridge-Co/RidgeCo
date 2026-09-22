@@ -758,12 +758,22 @@ function variantsBlock(it){
       '<input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $" value="'+(v.vendor_cost?esc(v.vendor_cost):'')+'">'+
       '<input class="v-price-override" type="number" step="0.01" placeholder="Override final price $ (optional)" value="'+(v.price_override?esc(v.price_override):'')+'">'+
       (multi?'<button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>':'')+
+      matInputsHtml(v)+
     '</div>';
   }).join('');
   return '<div class="variants"><label>Pricing — vendor cost per option (private; never shown to the customer)</label>'+
     '<div class="variant-rows">'+rows+'</div>'+
-    '<div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave "Override final price" blank to auto-calculate from vendor cost + standard markup. Set it to lock the exact customer price/invoice amount for that option instead — vendor cost still tracks correctly either way.</div>'+
+    '<div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave "Override final price" blank to auto-calculate from vendor cost + standard markup. Set it to lock the exact customer price/invoice amount for that option instead — vendor cost still tracks correctly either way. When the option has Ridge Co materials, the override covers the vendor/labor part only; materials are priced on top (step 7).</div>'+
+    '<div style="font-size:9px;color:#166534;margin-top:2px;">Green = "RC materials": materials <b>Ridge Co buys</b>, not the vendor. Never on the vendor bill. Owner sees description + price only. Vendor cost can be blank for a materials-only item.</div>'+
     '<button type="button" class="btn small secondary" onclick="addVariant(this)">+ Add alternate option (e.g. Repair vs Replace)</button></div>';
+}
+// Ridge Co–supplied materials inputs for one option (Sep 22 2026).
+function matInputsHtml(v){
+  v=v||{};
+  return '<div class="vmat">'+
+    '<input class="v-mat-cost" type="number" step="0.01" min="0" placeholder="RC mat. $" title="Ridge Co materials $ — what Ridge Co pays (not the vendor)" value="'+((+v.rc_materials_cost>0)?esc(v.rc_materials_cost):'')+'">'+
+    '<input class="v-mat-desc" maxlength="200" placeholder="Materials (owner sees)" title="Materials description — shown to the owner with their price" value="'+esc(v.rc_materials_desc||'')+'">'+
+  '</div>';
 }
 function renderItems(){
   var items=state.current.line_items||[];
