@@ -211,9 +211,9 @@ input[type=file]{display:none;}
   </div>
 
   <div class="tabs">
-    <div class="tab active" id="tabOpen" onclick="switchTab('open')">OPEN JOBS</div>
-    <div class="tab" id="tabAll" onclick="switchTab('all')">ALL JOBS</div>
-    <div class="tab" id="tabDue" onclick="switchTab('due')">NEEDS INVOICE</div>
+    <div class="tab active" id="tabOpen" data-i18n="OPEN JOBS" onclick="switchTab('open')">OPEN JOBS</div>
+    <div class="tab" id="tabAll" data-i18n="ALL JOBS" onclick="switchTab('all')">ALL JOBS</div>
+    <div class="tab" id="tabDue" data-i18n="NEEDS INVOICE" onclick="switchTab('due')">NEEDS INVOICE</div>
   </div>
 
   <div style="margin-bottom:10px;position:relative"><input type="text" id="woSearch" placeholder="Search by WO #, ref #, address, trade…" oninput="filterVendorWOs()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px 10px 10px 32px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none">⌕</span></div><div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"><select id="vFilterTrade" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Trades</option><option>Plumbing</option><option>Electrical</option><option>HVAC</option><option>Appliance</option><option>General</option><option>Carpentry</option><option>Painting</option><option>Flooring</option><option>Roofing</option><option>Windows</option><option>Locks</option><option>Landscaping</option><option>Cleaning</option><option>Pest Control</option></select><select id="vFilterPriority" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><select id="vSort" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="priority">Priority</option><option value="address">Address A-Z</option><option value="date-desc">Newest First</option><option value="date-asc">Oldest First</option></select></div>
@@ -393,11 +393,28 @@ function doLogout() {
 }
 
 // Restore a persisted session so a reload / auto-refresh keeps the vendor logged in.
-(function restoreVendorSession(){
+// Sep 22 2026 fix: this used to run immediately as an IIFE, inline in this early <script>
+// block -- but onLoginSuccess() calls applyTranslations(), which isn't defined until a LATER
+// <script> block further down this document runs. On a completely fresh page load (not a
+// dev-tools re-run), that made onLoginSuccess() throw a ReferenceError on every automatic
+// session restore, silently swallowed by this function's own try/catch -- leaving loadWorkOrders()
+// (the very next line in onLoginSuccess) never called, and the static "Loading work orders…"
+// placeholder in the initial HTML on screen forever. This is also why the page looked
+// untranslated even for a Spanish-language vendor: applyTranslations() crashed before doing
+// its work. A vendor's own fresh manual login (clicking SIGN IN) never hit this, because by
+// the time a real click can happen every script tag -- including the one defining
+// applyTranslations -- has already run. Fix: defer the restore itself until DOMContentLoaded,
+// by which point the whole document (every <script> tag) has executed.
+function restoreVendorSession(){
   try { var raw = localStorage.getItem(SESS_KEY);
     if (raw) { var d = JSON.parse(raw); if (d && d.token) onLoginSuccess(d, false); }
   } catch(e){}
-})();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', restoreVendorSession);
+} else {
+  restoreVendorSession();
+}
 
 // Floating toast notification — used after async actions (estimate save, etc.)
 function toast(msg, type) {
@@ -2785,6 +2802,9 @@ async function doActualBillSubmit() {
 var LANG = 'en';
 
 var ES = {
+  'OPEN JOBS':'TRABAJOS ABIERTOS',
+  'ALL JOBS':'TODOS LOS TRABAJOS',
+  'NEEDS INVOICE':'NECESITA FACTURA',
   'VENDOR PORTAL':'PORTAL DE CONTRATISTAS',
   'FIRST NAME':'NOMBRE',
   'YOUR NAME':'SU NOMBRE',
