@@ -584,7 +584,9 @@ async function editTitle(){
 // proposal can be sent — separate from an optional "who referred this" field.
 function itemsFullyPriced(items){
   return !!(items && items.length) && items.every(function(it){
-    return (it.variants||[]).some(function(v){ return (parseFloat(v.vendor_cost)||0)>0; });
+    // Priced = some option has a vendor cost OR Ridge Co materials (a materials-only item has no
+    // vendor cost at all — Sep 22 2026; before, this forced a fake $1 vendor cost).
+    return (it.variants||[]).some(function(v){ return (parseFloat(v.vendor_cost)||0)>0 || (parseFloat(v.rc_materials_cost)||0)>0; });
   });
 }
 function ownerBillingStatus(){
