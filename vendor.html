@@ -213,6 +213,7 @@ input[type=file]{display:none;}
   <div class="tabs">
     <div class="tab active" id="tabOpen" onclick="switchTab('open')">OPEN JOBS</div>
     <div class="tab" id="tabAll" onclick="switchTab('all')">ALL JOBS</div>
+    <div class="tab" id="tabDue" onclick="switchTab('due')">NEEDS INVOICE</div>
   </div>
 
   <div style="margin-bottom:10px;position:relative"><input type="text" id="woSearch" placeholder="Search by WO #, ref #, address, trade…" oninput="filterVendorWOs()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px 10px 10px 32px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none">⌕</span></div><div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"><select id="vFilterTrade" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Trades</option><option>Plumbing</option><option>Electrical</option><option>HVAC</option><option>Appliance</option><option>General</option><option>Carpentry</option><option>Painting</option><option>Flooring</option><option>Roofing</option><option>Windows</option><option>Locks</option><option>Landscaping</option><option>Cleaning</option><option>Pest Control</option></select><select id="vFilterPriority" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><select id="vSort" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="priority">Priority</option><option value="address">Address A-Z</option><option value="date-desc">Newest First</option><option value="date-asc">Oldest First</option></select></div>
@@ -451,10 +452,37 @@ function filterVendorWOs() {
   renderWOs(filtered);
 }
 
+// "NEEDS INVOICE" tab (Sep 22 2026): jobs this vendor has finished but hasn't yet billed for --
+// Complete/Pending Invoice status AND no active Vendor_Bills row on file yet. Both the initial
+// load and the background poller (below) need the exact same set, so it's factored out once
+// rather than duplicated -- a mismatch between the two was exactly the kind of bug that made the
+// poller silently fight the tab's own view on a filtered list.
+function isCompleteNotInvoiced(w) {
+  var st = (w.Status || '').toLowerCase();
+  return st === 'complete' || st === 'pending invoice';
+}
+function fetchDueWOs() {
+  return Promise.all([
+    api('/vendor-workorders?vendor_id=' + session.vendor_id + '&include_closed=true'),
+    api('/vendor-bills?vendor_id=' + session.vendor_id)
+  ]).then(function(results) {
+    var wos = results[0] || [], bills = results[1] || [];
+    var billedWOIds = {};
+    bills.forEach(function(b) { if (b.WO_ID) billedWOIds[b.WO_ID] = true; });
+    return wos.filter(function(w) { return isCompleteNotInvoiced(w) && !billedWOIds[w.ID]; });
+  });
+}
+function loadWOsForCurrentTab() {
+  if (currentTab === 'due') return fetchDueWOs();
+  var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
+  return api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed);
+}
+
 function switchTab(tab) {
   currentTab = tab;
   document.getElementById('tabOpen').className = 'tab' + (tab === 'open' ? ' active' : '');
   document.getElementById('tabAll').className = 'tab' + (tab === 'all' ? ' active' : '');
+  document.getElementById('tabDue').className = 'tab' + (tab === 'due' ? ' active' : '');
   loadWorkOrders();
 }
 
@@ -464,8 +492,7 @@ function loadWorkOrders() {
   var list = document.getElementById('woList');
   list.innerHTML = '<div class="spinner">Loading…</div>';
   document.getElementById('woSearch').value = '';
-  var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
-  api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed)
+  loadWOsForCurrentTab()
     .then(function(wos) {
       renderWOs(wos);
     })
@@ -478,7 +505,8 @@ function loadWorkOrders() {
 function renderWOs(wos) {
   var list = document.getElementById('woList');
   if (!wos || !wos.length) {
-    list.innerHTML = '<div class="empty"><div class="icon">✓</div>No ' + (currentTab === 'open' ? 'open ' : '') + 'work orders.</div>';
+    var emptyMsg = currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : 'No work orders.';
+    list.innerHTML = '<div class="empty"><div class="icon">✓</div>' + emptyMsg + '</div>';
     return;
   }
 
@@ -2908,6 +2936,49 @@ function isVendorBusy(){
   setInterval(check, 60000);
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });
   window.addEventListener('focus', check);
+
+  // Frontend-freshness check (Sep 22 2026 fix). The /version check above only ever detects a
+  // WORKER (backend) deploy -- it compares the Cloudflare Worker's own build_version, which does
+  // NOT change on a vendor.html-only frontend edit. GitHub Pages, which serves this file, sends a
+  // real `Cache-Control: max-age=600` response header (confirmed live) that silently overrides
+  // this page's own <meta http-equiv="Cache-Control"> tag -- browsers only honor the real HTTP
+  // header for top-level document caching, not the meta tag. Net effect: a vendor's already-open
+  // (or freshly but cache-served) tab could be running a stale, already-fixed-elsewhere copy of
+  // THIS file for up to 10+ minutes with nothing in the page able to tell -- confirmed as a real
+  // gap after a vendor reported a long-stalled load that only a manual hard refresh cleared.
+  // Fix: independently re-fetch this exact document with cache:'no-store' (bypasses the local/CDN
+  // cache entirely) on the same cadence as the work-order data poll, and compare its ETag against
+  // the last one seen. A changed ETag means a newer vendor.html actually exists on GitHub Pages
+  // right now, whether or not the Worker's own build_version moved -- same banner/reload path as
+  // a backend version change, reusing the exact mechanism above rather than a second one.
+  var PAGE_ETAG_KEY = 'rc_vendor_html_etag';
+  var pageEtagKnown = null;
+  function checkPageFreshness(){
+    var url = location.pathname + (location.pathname.indexOf('?') >= 0 ? '&' : '?') + '_fresh=' + Date.now().toString(36);
+    fetch(url, {cache: 'no-store', method: 'HEAD'}).then(function(r){
+      var tag = r.headers.get('etag') || r.headers.get('last-modified');
+      if (!tag) return; // host doesn't expose either -- nothing to compare against, fail open
+      if (pageEtagKnown === null){
+        pageEtagKnown = tag;
+        var last = null;
+        try { last = localStorage.getItem(PAGE_ETAG_KEY); } catch(e){}
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        // Same pattern as the version check's own first-run branch: if the last ETag this
+        // browser saw differs from what's live right now, THIS load itself was already stale.
+        if (last && last !== tag) { isVendorBusy() ? banner() : reloadFresh(); }
+        return;
+      }
+      if (tag !== pageEtagKnown){
+        pageEtagKnown = tag;
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        isVendorBusy() ? banner() : reloadFresh();
+      }
+    }).catch(function(){});
+  }
+  checkPageFreshness();
+  setInterval(checkPageFreshness, 60000);
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) checkPageFreshness(); });
+  window.addEventListener('focus', checkPageFreshness);
 })();
 </script>
 <!-- Work-order background refresh (Sep 19 2026, Brett's ask -- vendors kept having to be
@@ -2979,8 +3050,7 @@ function isVendorBusy(){
 
   function check() {
     if (!session) return;
-    var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
-    api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed).then(function(wos) {
+    loadWOsForCurrentTab().then(function(wos) {
       if (!session) return; // logged out while the request was in flight
       if (woSignature(wos) === woSignature(window._wos)) return; // nothing changed -- leave the DOM alone
       if (isVendorBusy()) { pendingWos = wos; } // wait -- see the backgrounding handler below

@@ -539,6 +539,7 @@ export default {
         if (path === '/admin/migrate-trades')     return await adminMigrateTrades(env, body);
         if (path === '/admin/share-attachments')  return await adminShareAttachments(env, body);
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
+        if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
@@ -2552,7 +2553,57 @@ async function scopeEstimate(env, body) {
   if (body.estimate_notes !== undefined) fields.Estimate_Notes = body.estimate_notes;
   if (['draft', 'approved', 'wo-created'].includes(s.Status)) fields.Status = 'estimated';
   await updateRow(env, 'Scopes', id, fields);
+  // Keep the linked Work Order's own Vendor_ID in sync (Sep 22 2026 fix). A WO created via
+  // /scope/to-wo starts fully unassigned (createWorkOrder is called with no vendor_id), and
+  // nothing else in the Scope Proposal pipeline — /scope/proposal/sign, scopeProposalBook,
+  // scopeProposalBillMilestones — ever writes Work_Orders.Vendor_ID; this endpoint (the one
+  // place Scopes.Vendor_ID is ever set) was the only candidate. Left unfixed, a WO that
+  // originated from a Scope Proposal stays permanently invisible to that vendor's own portal
+  // (GET /vendor-workorders filters on Work_Orders.Vendor_ID) and to the admin Work Orders
+  // vendor filter, no matter who is actually doing the job or how far the job has progressed
+  // (estimate → signed → booked → invoiced) — confirmed live root cause of Cesar Diaz showing
+  // zero jobs in both places despite having signed, in-progress proposal work. Only fires when
+  // this call is actually changing the vendor and the scope has a real linked WO; never writes
+  // a blank Vendor_ID onto a WO.
+  if (body.vendor_id !== undefined && body.vendor_id && s.WO_ID) {
+    try { await updateWOFields(env, s.WO_ID, { Vendor_ID: body.vendor_id }); } catch (_) {}
+  }
   return json({ success: true });
+}
+
+// Pure: should this Scope's Vendor_ID be backfilled onto its linked Work Order? Factored out so
+// the rule is unit-testable on its own (the surrounding function is pure Sheets I/O
+// orchestration, same as every other qbApi/Sheets-calling function in this file) and so nothing
+// else can accidentally drift from it. Requires a real linked WO and a real vendor on the scope,
+// and -- the part that matters most -- the WO's own Vendor_ID must still be blank; this must
+// never overwrite a WO that already has a vendor on file.
+function scopeBackfillEligible(scope, wo) {
+  return !!(scope && wo && scope.WO_ID && scope.Vendor_ID && !wo.Vendor_ID);
+}
+
+// POST /admin/backfill-scope-wo-vendor — one-time (idempotent, safe to re-run) backfill for the
+// gap fixed above: every Work Order that was ever created from a Scope Proposal before this fix
+// has Work_Orders.Vendor_ID permanently blank even though its Scope row (and the vendor who
+// actually did the job) is known. Read-mostly: only ever writes Work_Orders.Vendor_ID, and only
+// when it's currently blank on a WO whose linked Scope has a Vendor_ID on file — never overwrites
+// an existing value, never touches anything else on the WO or the Scope.
+async function backfillScopeWOVendor(env) {
+  const [scopes, workorders] = await Promise.all([
+    fetchTab(env, 'Scopes').catch(() => []),
+    fetchTab(env, 'Work_Orders').catch(() => []),
+  ]);
+  const woById = new Map(workorders.map(w => [String(w.ID), w]));
+  let scopesChecked = 0, updated = 0; const details = [];
+  for (const s of scopes) {
+    if (!s.WO_ID || !s.Vendor_ID) continue;
+    scopesChecked++;
+    const wo = woById.get(String(s.WO_ID));
+    if (!scopeBackfillEligible(s, wo)) continue;
+    await updateWOFields(env, wo.ID, { Vendor_ID: s.Vendor_ID });
+    updated++;
+    details.push({ wo_id: wo.ID, scope_id: s.ID, vendor_id: s.Vendor_ID });
+  }
+  return json({ success: true, scopes_checked: scopesChecked, wo_vendor_backfilled: updated, details });
 }
 
 // Marks up every item's variant(s) SERVER-SIDE (calcTieredEstimate, per item — each option is

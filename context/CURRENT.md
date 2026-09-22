@@ -1,4 +1,47 @@
-# WHERE THINGS STAND — Sep 22, 2026 (receipt work: PRs #21/#23/#24 merged + live; follow-ups handed off)
+# WHERE THINGS STAND — Sep 22, 2026 (PR #26 open: Scope→WO Vendor_ID sync fix + vendor NEEDS INVOICE tab + frontend staleness check — not yet merged/live)
+
+## 🟡 Open PR #26: root-caused why vendor Cesar Diaz had zero work orders in his own portal AND the admin Work Orders vendor filter
+Brett reported it live (both surfaces empty). Root cause, confirmed by reading the code (not
+guessed): `/scope/to-wo` creates a Work Order fully unassigned, and **nothing** in the Scope
+Proposal pipeline — `/scope/estimate`, `/scope/proposal/sign`, `scopeProposalBook`,
+`scopeProposalBillMilestones` — ever writes `Work_Orders.Vendor_ID`. A job that only ever went
+through Scope Proposals (several of Cesar's recent jobs have — WO-1071, WO-1175, 931 St Paul)
+stays permanently invisible to that vendor's own portal (`GET /vendor-workorders` filters on that
+field) and to the admin's own vendor filter, no matter the status or how long you wait — no
+caching or refresh involved, the field is just never set.
+
+Fix (PR #26, branch `fix/scope-wo-vendor-sync`): `/scope/estimate` (the one place
+`Scopes.Vendor_ID` is ever set) now propagates onto the linked WO going forward. New admin-gated
+`POST /admin/backfill-scope-wo-vendor` sweeps every already-existing gap (idempotent, never
+overwrites a WO that already has a vendor). New `test/scope-wo-vendor-sync.test.mjs` (9
+assertions on the pure `scopeBackfillEligible` rule). Full existing suite re-run against the
+branch, zero regressions.
+
+Same investigation also surfaced a second, separate real bug while reproducing what Brett saw: he
+described a very long load that showed the empty ✓ state, fixed only by a hard refresh — which
+shouldn't have been needed given the built auto-refresh. Confirmed live via curl: GitHub Pages
+serves `vendor.html` with a real `Cache-Control: max-age=600` header that silently overrides the
+page's own `<meta http-equiv="Cache-Control">` no-cache tag (browsers only honor the real HTTP
+header for the top-level document). The existing `/version` auto-reload poller only ever compares
+the Worker's own backend `build_version` — it does not detect a frontend-only `vendor.html`
+change, so a stale cached copy of the page itself has no way to notice and self-correct. PR #26
+adds a second, independent no-store ETag check against the document itself, same cadence, same
+banner/reload path.
+
+Also in PR #26 (Brett's ask, same conversation): a 3rd portal tab, **NEEDS INVOICE** — Complete/
+Pending Invoice jobs with no active `Vendor_Bills` row yet, so a vendor can self-serve check what
+they still owe an invoice for instead of Brett chasing them. Shares one fetch helper with the
+existing background poller so the two can't drift out of sync (a real near-miss caught during
+review: the poller was still hard-coded to the old 2-tab logic and would have silently fought the
+new tab's filtered view every 5 minutes).
+
+**Needs Brett:** merge PR #26, then run `POST /admin/backfill-scope-wo-vendor` once (admin
+secret) to backfill Cesar's existing gap and any others like it, then confirm live — his jobs show
+up in both his own portal and the admin Work Orders vendor filter; the NEEDS INVOICE tab shows the
+right jobs; and (hardest to verify without waiting) that a vendor.html-only change from here
+forward actually auto-refreshes a still-open portal tab without a manual hard refresh.
+
+
 
 ## ▶ NEXT SESSION: "resume ridgeco receipt follow-ups" → read `context/RECEIPT_FOLLOWUPS_HANDOFF_v1.0.md`
 Three open tasks. (1) A read-only QuickBooks line-item duplicate audit for older receipts: Brett found receipt amounts already billed as line items on older invoices and thinks there are more. (2) Detect Home Depot return receipts, which currently OCR as positive purchases. (3) Cut the Apps Script sender-approval noise (about 190 Pending rows). Live now: `2026-09-22.4-receipt-inplace-cutoff`. The cutoff cleanup ran, 9 pre-Jul-1 receipts were skipped, Pending = 35.
