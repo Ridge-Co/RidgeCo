@@ -1,4 +1,48 @@
-# WHERE THINGS STAND — Sep 22, 2026 (PR #26 open: Scope→WO Vendor_ID sync fix + vendor NEEDS INVOICE tab + frontend staleness check — not yet merged/live)
+# ⭐ FULL PICTURE — end of day Sep 22, 2026 (consolidated across all of today's sessions; read this first, the dated sections below are the detail/history)
+
+**Live build:** `/version` = `2026-09-22.4-receipt-inplace-cutoff`. PRs #25 and #26 merged after that without bumping `BUILD_VERSION`, so `/version` alone can't prove they deployed. Check a feature from each instead.
+
+## Merged to main today
+| PR | What | Status |
+|---|---|---|
+| #19 | B-012 Vendor Performance dashboard (`GET /vendor-performance`, 📊 page) | ✅ live-verified |
+| #20 + gh-broker #4 | `HUB_PROD_RO_TOKEN`: GET-only, allow-listed prod read token + `hub_prod_get` tool | merged in both repos. Brett still has to set the secret on both Workers and refresh the connector; not verified from here (`hub_prod_get` wasn't in the receipts session's tool list) |
+| gh-broker #5 + worker (shipped in #26) | `HUB_PROD_WRITE_TOKEN`: POST-only, allow-list `/admin/backfill-scope-wo-vendor`, `/admin/ensure-receipts-payment-source` | merged; inert until Brett sets the secret on both Workers. Brief: `context/PROD_WRITE_TOKEN_BUILD_BRIEF_v1.0.md` |
+| #21 | Receipt Mail → Hub (Gmail filters + Apps Script → "Receipts and Invoices" folder) + scan batch cap (8 per tap / 5 per cron) | ✅ live `.2`. Apps Script running in **brett@ and info@**; first info@ run pulled 21 HD e-receipts (Jul 7 → Sep 15). `[FL-20260922-1900-rm]`, `context/RECEIPT_MAIL_TO_HUB_v1.0.md` |
+| #22 | Ridge Co–supplied materials on scope proposals + 🔑 Reconnect Gmail | ✅ live. Gmail token lives in Config (`config_token_updated 2026-09-22T19:35Z`), and all Hub email is back. `[FL-20260922-1500-rm]` |
+| #23 | One-tap expense (🧾 Ridge Co / 🏡 1864 Kerns School Rd / picked property) → QuickBooks right away; unreadable scan files stop after 3 tries | ✅ live `.3`. `[FL-20260922-1545-ex]` |
+| #24 | Reconciler actions update in place (no reload or scroll jump); receipt-date cutoff `receipt_recon_min_date` (default 2026-07-01); ↩ Move back to Pending | ✅ live `.4`. The cleanup ran: 9 pre-Jul-1 receipts skipped, **Pending = 35** (oldest 2026-07-04). `[FL-20260922-1620-ip]` |
+| #25 | `POST /wo/combine`: bulk-combine N work orders into 1 survivor (reuses `woVoid` 'Combined'; field-conflict 409 + picker; best-effort rollback) | merged. **No FEATURE_LOG entry yet.** A live UI check still needs doing |
+| #26 | Scope→WO `Vendor_ID` sync (fixes Cesar's empty vendor portal / admin vendor filter) + `POST /admin/backfill-scope-wo-vendor` + vendor portal **NEEDS INVOICE** tab + vendor.html self-staleness ETag check | merged. **The backfill has to be run once** (admin, or through `HUB_PROD_WRITE_TOKEN` once it's set). Then confirm Cesar's WO-1071 / WO-1175 / 931 St Paul show in his portal. **No FEATURE_LOG entry yet** |
+
+## Open right now
+- **PR #27 `receipt-duplicate-audit`** (the Sonnet follow-up session, handoff Task 1): a read-only QuickBooks line-item duplicate audit.
+  - Endpoints: `/admin/receipt-duplicate-audit/build-index` (pages every invoice into a new `QB_Invoice_Line_Cache` tab), `/scan` (matches `Receipts` in memory and writes `Receipt_Duplicate_Audit` flags), `/mark` (Brett's real / not-a-duplicate call), and `GET /flags`.
+  - ⚠️ **The branch was cut before #25/#26 merged.** Its auth-gate lines (`HUB_TEST_WRITE_PATHS`, the `if (!_syncOk…)` cascade) and the router conflict with main. It **must be rebased/updated onto main before merge**, keeping `/wo/combine`, `/admin/backfill-scope-wo-vendor` and `_prodWriteOk`. If it isn't, merging it could drop them.
+  - `BUILD_VERSION` on the branch is still `.4`; it should get a bump.
+- **Receipts handoff tasks 2–3 are not started:**
+  - Home Depot returns OCR as positive. Aug 24 −$111.18: Skip it if it's still pending.
+  - The Apps Script discovery list is noisy (~190 Pending sender rows; ~10 real supply vendors). Ask Brett before bulk-denying any.
+  - Both are in `context/RECEIPT_FOLLOWUPS_HANDOFF_v1.0.md`.
+- **Materials follow-ups from #22 (not built):**
+  - Materials overage has no in-Hub billing path.
+  - Vendor-portal `Receipts_Total` on proposal jobs isn't covered by the double-billing guard.
+- **Andreas Cleaning** shows $3,180.97 billed against 0 linked WOs (from the B-012 live data). Worth a look alongside the plan to cut them.
+- **Process:** the `test-verified-builds` / `brett-flow` skill updates (mandatory self-test loop) were proposed via `propose_skills`. Brett still needs to save them in the client if he hasn't.
+
+## Brett-only to-dos (in order)
+1. Set `HUB_PROD_RO_TOKEN` and `HUB_PROD_WRITE_TOKEN` on production `maintenance-hub` **and** on `gh-broker`, then refresh the GH Broker connector. This ends every "paste the secret" moment.
+2. Run `POST /admin/backfill-scope-wo-vendor` once, then check Cesar's portal and the NEEDS INVOICE tab.
+3. Get PR #27 rebased onto main, then answer its design questions (how far back, markup, amount-only), then merge.
+4. Skip the Aug 24 HD return if it's still pending. Approve the real supply vendors in the "Receipt Mail → Hub Rules" sheet.
+
+## ▶ Next session pointers
+- Receipts: **"resume ridgeco receipt follow-ups"** → `context/RECEIPT_FOLLOWUPS_HANDOFF_v1.0.md`. Task 1 is now PR #27: finish, rebase and verify it rather than starting over.
+- Missing FEATURE_LOG entries for #25 and #26: add them the next time either area is touched.
+
+---
+
+# WHERE THINGS STAND — Sep 22, 2026 (PR #26 — MERGED later Sep 22, see FULL PICTURE above; originally open: Scope→WO Vendor_ID sync fix + vendor NEEDS INVOICE tab + frontend staleness check — not yet merged/live)
 
 ## 🟡 Open PR #26: root-caused why vendor Cesar Diaz had zero work orders in his own portal AND the admin Work Orders vendor filter
 Brett reported it live (both surfaces empty). Root cause, confirmed by reading the code (not
