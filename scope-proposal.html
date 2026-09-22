@@ -207,6 +207,12 @@ function renderLegacyText(d){
   document.getElementById('content').innerHTML = html;
 }
 
+// Ridge Co–supplied materials (Sep 22 2026): shown as its own line — description + the price to
+// the customer only. The server never sends Ridge Co's cost or how the price was set.
+function matLineHtml(v){
+  if (!v || !(+v.materials_price > 0)) return '';
+  return '<div class="vmat">Includes materials: ' + esc(v.materials_desc || 'Materials') + ' — ' + money(v.materials_price) + '</div>';
+}
 function itemHtml(it, locked, signedSelections){
   var selKey = locked ? (signedSelections && signedSelections[it.id]) : it.selected_key;
   var multi = it.variants && it.variants.length > 1;
@@ -215,13 +221,18 @@ function itemHtml(it, locked, signedSelections){
     body = '<div class="variant-group">' + it.variants.map(function(v){
       var checked = v.key === selKey;
       if (locked) {
-        return '<div class="vopt locked' + (checked?' selected':'') + '"><span class="vlabel">' + (checked?'&#10003; ':'') + esc(v.label || v.key) + '</span><span class="vprice">' + money(v.price) + '</span></div>';
+        return '<div class="vopt locked' + (checked?' selected':'') + '"><span class="vlabel">' + (checked?'&#10003; ':'') + esc(v.label || v.key) + '</span><span class="vprice">' + money(v.price) + '</span>' + matLineHtml(v) + '</div>';
       }
-      return '<label class="vopt"><input type="radio" name="item-' + esc(it.id) + '" value="' + esc(v.key) + '"' + (checked?' checked':'') + ' onchange="recalc()"><span class="vlabel">' + esc(v.label || v.key) + '</span><span class="vprice">' + money(v.price) + '</span></label>';
+      return '<label class="vopt"><input type="radio" name="item-' + esc(it.id) + '" value="' + esc(v.key) + '"' + (checked?' checked':'') + ' onchange="recalc()"><span class="vlabel">' + esc(v.label || v.key) + '</span><span class="vprice">' + money(v.price) + '</span>' + matLineHtml(v) + '</label>';
     }).join('') + '</div>';
   } else {
     var only = it.variants && it.variants[0];
     body = '<div class="item-price-row"><span></span><span>' + money(only ? only.price : 0) + '</span></div>';
+    // Inline text, NOT a second right-hand price — the item total above already includes it,
+    // and a second number in the price column reads like an extra charge.
+    if (only && +only.materials_price > 0) {
+      body += '<div class="item-mat-row">Includes materials: ' + esc(only.materials_desc || 'Materials') + ' (' + money(only.materials_price) + ')</div>';
+    }
   }
   // No `it.note` rendering here on purpose (Aug 24 2026 security fix): the server
   // (scopeProposalView in worker.js) never sends `note` to this page anymore, since that
