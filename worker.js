@@ -12497,6 +12497,25 @@ async function twilioAccountStatus(env) {
   return json({ ok: true, ...out });
 }
 
+// GET /gemini-context?token=... — public at the router gate (see PUBLIC_PATHS), self-verifies
+// here. Query-string token, not a header, because this URL is added to a Gemini Notebook as a
+// plain "website" source, and Notebook website-sources are fetched as an unauthenticated GET
+// with no custom headers available — the token has to travel in the URL itself. Read-only;
+// returns the latest Brett-context snapshot (Config key Gemini_Context_Snapshot, written by
+// POST /admin/gemini-context-update) as plain text for Gemini to ground on. Wrong/missing token
+// gets a plain 404, not 401, so the endpoint doesn't announce its own existence to a prober.
+async function geminiContext(env, url) {
+  const tok = url.searchParams.get('token') || '';
+  if (!env.GEMINI_CONTEXT_TOKEN || tok !== env.GEMINI_CONTEXT_TOKEN) {
+    return new Response('Not found', { status: 404 });
+  }
+  const config = await fetchConfig(env);
+  const content = config.Gemini_Context_Snapshot || 'No snapshot has been published yet.';
+  return new Response(content, {
+    headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
+}
+
 async function health(env, url) {
   // PUBLIC read-only self-check so an automated agent can verify the Worker
   // without a browser or auth. Row counts per key tab + which sheet it points at
