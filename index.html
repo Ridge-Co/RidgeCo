@@ -3109,6 +3109,82 @@ function renderVendorsPage() {
     }).join('') + '</tbody></table></div>';
 }
 
+// ── Vendor Performance (B-012) — read-only, fetch-on-open like Who To Pay/Review Bills ──
+var _vendorPerfRows = null;
+var _vendorPerfSort = { key: 'jobs_total', dir: -1 };
+
+function loadVendorPerformance() {
+  var el = document.getElementById('vendor-perf-body');
+  if (el) el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading...</div>';
+  var summary = document.getElementById('vendor-perf-summary');
+  if (summary) summary.textContent = '';
+  api('GET', '/vendor-performance').then(function(res) {
+    if (!res || res.ok === false) {
+      if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Could not load vendor performance') + '</div>';
+      return;
+    }
+    _vendorPerfRows = safeArray(res.vendors);
+    if (summary && res.totals) {
+      summary.textContent = _vendorPerfRows.length
+        ? 'As of ' + res.as_of + ' · ' + res.totals.vendors + ' vendors · ' + res.totals.open_jobs + ' open jobs · $' + res.totals.total_billed.toLocaleString() + ' total billed'
+        : '';
+    }
+    renderVendorPerformanceTable();
+  }).catch(function(e) {
+    if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
+  });
+}
+
+function sortVendorPerf(key) {
+  if (_vendorPerfSort.key === key) { _vendorPerfSort.dir = -_vendorPerfSort.dir; }
+  else { _vendorPerfSort = { key: key, dir: (key === 'name' || key === 'trade' || key === 'last_activity') ? 1 : -1 }; }
+  renderVendorPerformanceTable();
+}
+
+function renderVendorPerformanceTable() {
+  var el = document.getElementById('vendor-perf-body');
+  if (!el) return;
+  var rows = safeArray(_vendorPerfRows).slice();
+  if (!rows.length) { el.innerHTML = '<div class="loading">No vendor activity yet.</div>'; return; }
+  var key = _vendorPerfSort.key, dir = _vendorPerfSort.dir;
+  rows.sort(function(a, b) {
+    var av = a[key], bv = b[key];
+    if (av == null) av = (typeof bv === 'number') ? -Infinity : '';
+    if (bv == null) bv = (typeof av === 'number') ? -Infinity : '';
+    if (typeof av === 'string' || typeof bv === 'string') { return dir * String(av).localeCompare(String(bv)); }
+    return dir * ((av > bv) ? 1 : (av < bv) ? -1 : 0);
+  });
+  var cols = [
+    { key: 'name', label: 'Vendor' },
+    { key: 'jobs_total', label: 'Jobs' },
+    { key: 'jobs_completed', label: 'Done' },
+    { key: 'jobs_open', label: 'Open' },
+    { key: 'completion_rate', label: 'Compl. %' },
+    { key: 'avg_days_to_complete', label: 'Avg days' },
+    { key: 'total_billed', label: 'Billed' },
+    { key: 'labor_hours', label: 'Hours' },
+    { key: 'last_activity', label: 'Last activity' },
+  ];
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+    cols.map(function(c) {
+      var arrow = _vendorPerfSort.key === c.key ? (_vendorPerfSort.dir === 1 ? ' ▲' : ' ▼') : '';
+      return '<th style="cursor:pointer;white-space:nowrap" onclick="sortVendorPerf(\'' + c.key + '\')">' + c.label + arrow + '</th>';
+    }).join('') + '</tr></thead><tbody>' +
+    rows.map(function(v) {
+      return '<tr>' +
+        '<td>' + esc(v.name) + (v.trade ? ' <span style="color:var(--muted);font-size:11px">· ' + esc(v.trade) + '</span>' : '') + '</td>' +
+        '<td>' + v.jobs_total + '</td>' +
+        '<td>' + v.jobs_completed + '</td>' +
+        '<td>' + v.jobs_open + (v.jobs_open_urgent ? ' <span class="badge" style="background:#fdecea;border:1px solid var(--danger);color:var(--danger)">' + v.jobs_open_urgent + '⚡</span>' : '') + '</td>' +
+        '<td>' + (v.completion_rate != null ? Math.round(v.completion_rate * 100) + '%' : '—') + '</td>' +
+        '<td>' + (v.avg_days_to_complete != null ? v.avg_days_to_complete : '—') + '</td>' +
+        '<td>$' + Number(v.total_billed || 0).toLocaleString() + '</td>' +
+        '<td>' + (v.labor_hours || '—') + '</td>' +
+        '<td style="color:var(--muted);font-size:11px">' + esc(v.last_activity || '—') + '</td>' +
+        '</tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
 // ── Tenants ──────────────────────────────────────────────────
 function renderTenantsPage() {
   var el = document.getElementById('tenants-list');
