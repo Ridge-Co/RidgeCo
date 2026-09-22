@@ -487,22 +487,7 @@ function rowCard(r){
   // itself. Rendered whenever a check has already run (Duplicate_Checked_Date set), even if it
   // came back with zero matches, so "checked, nothing found" reads differently from "never
   // checked" — the empty-evidence case still shows the checked-date line, just no cards under it.
-  const evidence = rowEvidence[r.ID] || [];
-  if (r.Duplicate_Checked_Date || evidence.length) {
-    html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">';
-    if (!evidence.length) {
-      html += '<div class="rc-sub">🔍 Checked '+esc((r.Duplicate_Checked_Date||'').slice(0,10))+' — no matching Receipts/QuickBooks entries found.</div>';
-    } else {
-      evidence.forEach((ev, i) => {
-        if (ev.signal === 'qb_check_error') { html += '<div class="rc-sub err">⚠ '+esc(ev.reason)+'</div>'; return; }
-        html += '<div class="rc-posting" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
-          + '<span>🔍 '+esc(ev.reason)+'</span>'
-          + '<button class="btn small warnbtn" onclick="confirmDuplicateFromEvidence(\''+r.ID+'\', '+i+', this)">It\'s this one</button>'
-          + '</div>';
-      });
-    }
-    html += '</div>';
-  }
+  html += '<div id="rc'+r.ID+'-evidence">'+evidenceHtml(r)+'</div>';
 
   // Materials description default: the receipt's own OCR'd items, generalized into short
   // categories (e.g. "paint, primer, batteries") when the AI-cleaned Items_Summary is on file.
