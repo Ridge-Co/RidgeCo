@@ -10942,7 +10942,9 @@ async function sendReceiptsToQBEmail(env, opts) {
   // vendor_reimburse rows never touched a Ridge Co card — nothing to reconcile against a bank/CC
   // statement, and sending them would just clutter QuickBooks' receipts inbox with entries that
   // don't correspond to any real transaction on the account being reconciled.
-  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse');
+  const onlyIds = (opts && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
+  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse'
+    && (!onlyIds || onlyIds.has(String(r.ID))));
   const batch = pending.slice(0, limit);
   if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
 
