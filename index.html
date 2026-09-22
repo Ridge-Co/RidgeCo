@@ -288,6 +288,11 @@ window.addEventListener('pageshow', function(e){
         <button class="btn small secondary" onclick="applyBulkTenantFlag('Tenant_Notify_Updates','TRUE')">On</button>
         <button class="btn small secondary" onclick="applyBulkTenantFlag('Tenant_Notify_Updates','FALSE')">Off</button>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:12px;min-width:90px">Combine</span>
+        <button class="btn small secondary" id="bc-open-btn" disabled onclick="openBulkCombineModal()">Combine Selected…</button>
+        <span id="bc-hint" style="color:var(--muted);font-size:11px"></span>
+      </div>
     </div>
     <!-- Filter Panel -->
     <div id="filterPanel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px">
