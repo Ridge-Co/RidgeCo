@@ -3109,6 +3109,11 @@ async function scopeProposalSignedList(env, url) {
   // (signed-proposals.html branches on milestones.length).
   let allMilestones = [];
   try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (_) {}
+  // Receipts on each signed scope's work order = the ACTUAL side of Ridge Co materials budget
+  // vs actual (Sep 22 2026). null (not []) on a read failure so the page says "couldn't check"
+  // instead of a confident $0.
+  let allReceipts = null;
+  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (_) {}
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
