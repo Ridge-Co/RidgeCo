@@ -1826,8 +1826,9 @@ async function receiptReconScan(env, body) {
 
   let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
-  const newFiles = files.filter(f => !seen.has(f.id));
-  if (!newFiles.length) return json({ ok: true, folder_id: folder, scanned: 0, already_queued: files.length });
+  const allNew = files.filter(f => !seen.has(f.id));
+  if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length });
+  const newFiles = allNew.slice(0, cap);
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
