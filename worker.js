@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-22.2-receipt-scan-batch-cap';
+const BUILD_VERSION = '2026-09-22.3-receipt-expense-path';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -1846,13 +1846,19 @@ async function receiptReconScan(env, body) {
 
   let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
-  const allNew = files.filter(f => !seen.has(f.id));
-  if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length });
+  // A file the OCR can't read (Sep 22 2026: recon_smoke_test.png, "Could not process image")
+  // was never written to the queue, so every scan retried it forever — one wasted AI call per
+  // scan, and a permanent error line. Same fix receiptScan got for its folder: 3 attempts,
+  // tracked in Config (no schema change), then skipped and reported under `stuck`.
+  let failures = {}; try { failures = JSON.parse(cfg.receipt_recon_failures || '{}'); } catch (e) { failures = {}; }
+  const allNew = files.filter(f => !seen.has(f.id) && !(failures[f.id] && failures[f.id].attempts >= 3));
+  const stuck = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
+  if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length, stuck });
   const newFiles = allNew.slice(0, cap);
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
-  let n = 0; const errs = [];
+  let n = 0; const errs = []; let failuresChanged = false;
   for (const f of newFiles) {
     try {
       const dl = await driveDownload(tok, f.id);
@@ -1870,9 +1876,17 @@ async function receiptReconScan(env, body) {
         Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: '', Active: 'TRUE',
       });
       n++;
-    } catch (e) { errs.push((f.name || f.id) + ': ' + (e.message || 'err')); }
+      if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
+    } catch (e) {
+      errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
+      const prior = failures[f.id];
+      failures[f.id] = { name: f.name || f.id, error: String(e && e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
+      failuresChanged = true;
+    }
   }
-  return json({ ok: true, folder_id: folder, scanned: n, remaining: allNew.length - newFiles.length, errors: errs });
+  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
+  return json({ ok: true, folder_id: folder, scanned: n, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
@@ -1963,7 +1977,11 @@ async function receiptReconConfirm(env, body) {
   const store = body.store || row.Vendor || '';
   const date = body.date || row.Receipt_Date || '';
   let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
-  const category = (suggestion && suggestion.category) || (noWo ? 'company' : 'billable');
+  // Brett, Sep 22 2026: "attach receipts to Ridge Co and 1864 Kerns School Rd as an expense
+  // rather than selecting a work order". A no-WO confirm is ALWAYS an expense record, even when
+  // the scanner suggested 'billable' (a Home Depot receipt with a job address on it) — otherwise
+  // it would sit in Receipts marked billable with nothing to bill it to.
+  const category = noWo ? 'company' : ((suggestion && suggestion.category) || 'billable');
   const addResp = await addReceipt(env, {
     wo_id: wo_id || '', property_id, amount, description, store, date,
     added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
@@ -1989,7 +2007,18 @@ async function receiptReconConfirm(env, body) {
       Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
     });
   }
-  return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink });
+  // Expense receipts go to QuickBooks' receipts inbox right away rather than waiting for the
+  // 7am sweep (which only takes 8 a day) — Brett is clearing a backlog and wants each one done
+  // when he taps it. Work-order receipts keep going through the normal daily sweep.
+  let qbEmail = null;
+  if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
+    try {
+      const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
+      const j = await r.json().catch(() => ({}));
+      qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
+    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
+  }
+  return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
 // POST /receipt-recon/skip { id, reason? } — dismiss without billing anything.
@@ -10927,7 +10956,9 @@ async function sendReceiptsToQBEmail(env, opts) {
   // vendor_reimburse rows never touched a Ridge Co card — nothing to reconcile against a bank/CC
   // statement, and sending them would just clutter QuickBooks' receipts inbox with entries that
   // don't correspond to any real transaction on the account being reconciled.
-  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse');
+  const onlyIds = (opts && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
+  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse'
+    && (!onlyIds || onlyIds.has(String(r.ID))));
   const batch = pending.slice(0, limit);
   if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
 
@@ -10951,7 +10982,7 @@ async function sendReceiptsToQBEmail(env, opts) {
       const wo = r.WO_ID ? workorders.find(w => String(w.ID) === String(r.WO_ID)) : null;
       const prop = r.Property_ID ? properties.find(p => String(p.ID) === String(r.Property_ID)) : null;
       const context = wo ? `WO ${wo.ID}${wo.Description ? ' — ' + _escHtml(String(wo.Description).slice(0, 120)) : ''}`
-        : prop ? `Property: ${_escHtml(prop.Address || ('#' + prop.ID))}`
+        : prop ? `Expense — property: ${_escHtml(prop.Address || ('#' + prop.ID))}`
         : 'General Ridge Co expense (no job/property)';
       const html = [
         `<p><b>${_escHtml(r.Store || 'Unknown vendor')}</b> — $${_escHtml(r.Amount || '')} on ${_escHtml(r.Date || '')}</p>`,

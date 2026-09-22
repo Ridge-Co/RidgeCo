@@ -24,7 +24,7 @@ function extractFn(name) {
 function world(nFiles, cfg = {}) {
   const queue = [];
   const files = Array.from({ length: nFiles }, (_, k) => ({ id: 'f' + k, name: 'r' + k + '.pdf', mimeType: 'application/pdf', webViewLink: '' }));
-  let downloads = 0;
+  let downloads = 0, cur = null;
   const deps = {
     fetchConfig: async () => cfg,
     getAccessToken: async () => 'tok',
@@ -33,10 +33,11 @@ function world(nFiles, cfg = {}) {
     fetchTab: async () => queue.slice(),
     receiptCustomerCards: async () => ({}),
     fetchTabs: async () => [[], [], []],
-    driveDownload: async () => { downloads++; return { bytes: new ArrayBuffer(1), mime: 'application/pdf' }; },
-    receiptExtract: async () => ({ vendor: 'Home Depot', total: 12.34, date: '2026-09-10', items: [] }),
+    driveDownload: async (tok, id) => { downloads++; cur = id; return { bytes: new ArrayBuffer(1), mime: 'application/pdf' }; },
+    receiptExtract: async (env, bytes, mime) => { if (cfg.__bad && cfg.__bad.has(cur)) throw new Error('Could not process image'); return { vendor: 'Home Depot', total: 12.34, date: '2026-09-10', items: [] }; },
     receiptSuggestCore: () => ({ verdict: 'review' }),
     addRow: async (env, tab, row) => { queue.push(row); },
+    setConfigKey: async (env, { key, value }) => { cfg[key] = value; },
     json: (o) => o,
     RECEIPT_RECON_QUEUE_HEADERS: [], RECEIPT_RECON_FOLDER_ID_DEFAULT: 'FOLDER',
   };
@@ -72,6 +73,19 @@ function world(nFiles, cfg = {}) {
 {
   const r = await world(4).scan({});
   ok(r.scanned === 4 && r.remaining === 0, 'small drop: all scanned, remaining 0');
+}
+{
+  // Unreadable file (Sep 22 2026, recon_smoke_test.png): retried 3 times, then skipped for good.
+  const cfg = { __bad: new Set(['f0']) };
+  const w = world(3, cfg);
+  let r = await w.scan({});
+  ok(r.scanned === 2 && r.errors.length === 1 && r.stuck.length === 0, 'bad file: attempt 1 errors, others still scanned');
+  r = await w.scan({}); r = await w.scan({});
+  ok(r.stuck.length === 1 && r.stuck[0] === 'r0.pdf', 'after 3 failed attempts it is reported as stuck');
+  const before = w.downloads;
+  r = await w.scan({});
+  ok(w.downloads === before && r.scanned === 0 && r.errors === undefined && r.stuck.length === 1, '4th scan does not touch it again (no wasted OCR call)');
+  ok(JSON.parse(cfg.receipt_recon_failures).f0.attempts === 3, 'failure count kept in Config');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

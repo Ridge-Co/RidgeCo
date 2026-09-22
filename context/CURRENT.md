@@ -1,6 +1,11 @@
-# WHERE THINGS STAND — Sep 22, 2026 (Receipt Mail → Hub: emailed HD receipts into the Reconciler, filter-driven, off Cloudflare cron)
+# WHERE THINGS STAND — Sep 22, 2026 (Receipt Mail → Hub live in brett@ + info@; one-tap expense receipts to QuickBooks)
 
-## 🟡 Built + tested, pending Brett: Receipt Mail → Hub. Full detail `context/RECEIPT_MAIL_TO_HUB_v1.0.md`, FEATURE_LOG `[FL-20260922-1900-rm]`
+## 🟡 PR open: one-tap expense receipts (Ridge Co / 1864 Kerns School Rd) sent to QuickBooks right away. FEATURE_LOG `[FL-20260922-1545-ex]`
+Every pending receipt in the Reconciler gets **🧾 Ridge Co expense** / **🏡 1864 Kerns School Rd** / **Expense to the property picked above** buttons. One tap records it as an expense with no work order and no customer invoice, and emails that single receipt to QuickBooks' receipts inbox immediately instead of waiting for the 8-a-day 7am sweep. Work-order confirms are unchanged. Also: unreadable scan files (recon_smoke_test.png) stop retrying after 3 attempts, and the Scan button's result line no longer gets wiped by the list reload. Tests 84/84 + 13/13 headless UI. **Live check after merge:** tap Ridge Co expense on one real receipt, then confirm it shows "Sent to QuickBooks" and appears in QuickBooks' Receipts inbox.
+
+## 🟢 Live: Receipt Mail → Hub (Apps Script installed in brett@ + info@ Sep 22; PR #21 merged, `2026-09-22.2` live). The first run pulled 21 Home Depot e-receipts from info@ (Jul 1 → Sep 15) into the Reconciler. One of them (Aug 24, −$111.18) is a **return** that OCR read as +$111.18. Skip it; refund detection isn't built. The discovery list is noisy (190+ Pending senders): tighten the weekly scan and cut it to real supply vendors.
+
+## (earlier today) Built + tested, pending Brett: Receipt Mail → Hub. Full detail `context/RECEIPT_MAIL_TO_HUB_v1.0.md`, FEATURE_LOG `[FL-20260922-1900-rm]`
 Home Depot e-receipts go to info@ now (brett@ has had none since Jun 30). This adds a Gmail-filter + Apps Script path that drops emailed receipts into "Receipts and Invoices" for the existing Reconciler, with no AI retrieval and no Cloudflare cron. It includes a weekly sender-approval list and a July 1 backfill. Worker change: `receiptReconScan` batch cap (8 per Scan tap, 5 in cron) so a backfill drop can't blow the subrequest budget. Shipped as a PR.
 **To finish (Brett):** merge the PR, then install the Apps Script in brett@ and then info@ (3 steps each, in the doc). Approve the Lowe's/Amazon rows he wants from the first discovery list, then tap Scan in the Reconciler until it says 0 waiting. Run the duplicate check on backfilled receipts that may already have been entered by hand.
 
