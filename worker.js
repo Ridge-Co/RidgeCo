@@ -249,7 +249,23 @@ export default {
           // value is set on the gh-broker Worker's own HUB_PROD_RO_TOKEN).
           const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance'];
           const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && HUB_PROD_RO_READ_PATHS.includes(path);
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk) {
+          // Narrow WRITE-CAPABLE token for safe, allow-listed production writes (Sep 22 2026,
+          // follow-on to HUB_PROD_RO_TOKEN above — see context/PROD_WRITE_TOKEN_BUILD_BRIEF_v1.0.md).
+          // Lets a session run a specific, pre-reviewed production write (e.g. the one-time
+          // scope→WO Vendor_ID backfill) WITHOUT ever holding WORKER_SECRET. Deliberately a
+          // DISTINCT token from every other narrow token in this cascade — never reuse
+          // HUB_PROD_RO_TOKEN, HUB_TEST_TOKEN, or any of the others for this. Structurally POST
+          // only (can never satisfy a GET handler check) and allow-listed to a single conservative
+          // path for now. Every path added here must be idempotent, additive-only, and touch no
+          // money, SMS, QuickBooks, or auth/vendor-assignment fields — the bar this repo already
+          // applies to OPS_QUEUE_TOKEN/SCOUT_QUEUE_TOKEN above. Fully inert unless
+          // env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect until the secret is
+          // set on both production maintenance-hub AND the gh-broker Worker (Brett only — no
+          // session can set a Cloudflare secret). Auth-gate change: staged as a PR per
+          // AUTONOMY_GUARDRAILS Rung-3, never auto-merged.
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor'];
+          const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
