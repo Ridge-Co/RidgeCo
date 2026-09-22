@@ -87,6 +87,10 @@ export default {
     // scope. Never set for a WORKER_SECRET or session-token call — those get full access as today.
     let _viaHubTestToken = false;
     const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
+      // Gmail "Reconnect" sign-in return (Sep 22 2026): Google redirects the browser here, so it
+      // can't carry the admin header — gmailOAuthCallback refuses anything without a valid signed,
+      // 15-minute gmail-oauth `state` minted by the ADMIN-gated POST /gmail/connect-url.
+      '/gmail/callback',
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
       // last-4-of-phone gate + per-WO lockout live INSIDE these handlers, not here.
