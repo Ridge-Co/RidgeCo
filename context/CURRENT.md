@@ -1,6 +1,6 @@
-# WHERE THINGS STAND — Sep 22, 2026 (B-012 Vendor Performance dashboard — built from Optimizer's RUNG-1 SAFE-class brief, PR #19 open)
+# WHERE THINGS STAND — Sep 22, 2026 (B-012 Vendor Performance dashboard — merged, deployed, and fully live-verified)
 
-## 🟡 Built, PR open, needs Brett's live pass: Vendor Performance dashboard — B-012
+## 🟢 Shipped and live-verified: Vendor Performance dashboard — B-012
 Full detail: https://github.com/Ridge-Co/RidgeCo/pull/19. Built directly from the Optimizer
 Prepare Agent's build-ready brief (B-012, RUNG-1 SAFE-class) after Brett said "Build it." New
 `GET /vendor-performance` (admin-gated by omission from `PUBLIC_PATHS`, same convention as
