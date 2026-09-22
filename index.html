@@ -822,6 +822,26 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- BULK COMBINE WORK ORDERS (Sep 22 2026) — the bulk-select toolbar's Combine button.
+     Every non-survivor WO is voided (reason: Combined) into the one Brett picks; field
+     reconciliation only shows a picker for fields that actually disagree. -->
+<div class="modal-overlay" id="modal-bulk-combine">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">COMBINE WORK ORDERS</div><button class="modal-close" onclick="closeModal('modal-bulk-combine')">✕</button></div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Every work order below except the one you pick as survivor will be voided (reason: Combined) into it. Notes from each voided work order are appended onto the survivor. Only work orders at the same property/unit can be combined.</div>
+    <div class="form-group full">
+      <label>Which work order survives?</label>
+      <div id="bc-survivor-list" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+    <div id="bc-conflicts-wrap" style="display:none;margin-top:10px">
+      <div style="color:var(--accent);font-size:12px;font-weight:bold;margin-bottom:6px">These fields disagree across the selected work orders — pick one value for each:</div>
+      <div id="bc-conflicts-list" style="display:flex;flex-direction:column;gap:10px"></div>
+    </div>
+    <div id="bc-error" style="color:#e55;font-size:12px;margin-top:8px;display:none"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-bulk-combine')">Cancel</button><button class="btn" id="bc-confirm-btn" onclick="submitBulkCombine()" disabled>Confirm Combine</button></div>
+  </div>
+</div>
+
 <!-- SEND WORK ORDER TO VENDOR (B-117 shareable WO) -->
 <div class="modal-overlay" id="modal-share-wo">
   <div class="modal">
