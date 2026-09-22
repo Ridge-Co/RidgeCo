@@ -475,6 +475,7 @@ function rowCard(r){
         + '<div>'+categoryPill(sug.category, sug.action)+'</div></div>';
 
   if (r.items && r.items.length) html += '<div class="rc-items">Items: '+r.items.map(esc).join(', ')+'</div>';
+  if (!isPendingLike && r.Notes) html += '<div class="rc-sub">'+esc(r.Notes)+'</div>';
 
   const flags = sug.flags || [];
   if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
