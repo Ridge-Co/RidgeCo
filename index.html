@@ -2314,7 +2314,7 @@ function openWODetail(woId) {
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   if (wo.Voided==='TRUE') addBtn('↩ Restore','secondary',function(){unvoidWO(woId);});
-  else addBtn('🗑 Void / Hide','danger',function(){openVoidModal(woId);});
+  else { addBtn('✂ Split','secondary',function(){openSplitModal(woId);}); addBtn('🗑 Void / Hide','danger',function(){openVoidModal(woId);}); }
   openModal('modal-wo-detail');
   // Inject photo section after modal opens (deferred so modal always shows)
   setTimeout(function(){
