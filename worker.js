@@ -1802,8 +1802,15 @@ const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
 
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
-async function receiptReconScan(env) {
+async function receiptReconScan(env, body) {
   const cfg = await fetchConfig(env).catch(() => ({}));
+  // Per-call cap on NEW files (Sep 22 2026). Each file costs ~4 subrequests (Drive download, OCR,
+  // Sheets append); uncapped, a big drop (e.g. an email backfill) blew Cloudflare's per-invocation
+  // subrequest limit partway through — same failure rule 155a hit at 25 for QB email forwarding.
+  // Files past the cap simply wait for the next scan (dedup is by Source_File_ID), and the
+  // response's `remaining` tells the Hub button to say "tap Scan again".
+  const want = [body && body.max, cfg.receipt_recon_scan_batch].map(Number).find(n => Number.isFinite(n) && n >= 1);
+  const cap = Math.min(10, Math.floor(want || 8));
   const folder = cfg.receipt_recon_folder_id || env.RECEIPT_RECON_FOLDER_ID || RECEIPT_RECON_FOLDER_ID_DEFAULT;
   const tok = await getAccessToken(env);
   await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
