@@ -1852,7 +1852,7 @@ async function receiptReconScan(env, body) {
       n++;
     } catch (e) { errs.push((f.name || f.id) + ': ' + (e.message || 'err')); }
   }
-  return json({ ok: true, folder_id: folder, scanned: n, errors: errs });
+  return json({ ok: true, folder_id: folder, scanned: n, remaining: allNew.length - newFiles.length, errors: errs });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
