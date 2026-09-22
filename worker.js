@@ -1846,8 +1846,14 @@ async function receiptReconScan(env, body) {
 
   let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
-  const allNew = files.filter(f => !seen.has(f.id));
-  if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length });
+  // A file the OCR can't read (Sep 22 2026: recon_smoke_test.png, "Could not process image")
+  // was never written to the queue, so every scan retried it forever — one wasted AI call per
+  // scan, and a permanent error line. Same fix receiptScan got for its folder: 3 attempts,
+  // tracked in Config (no schema change), then skipped and reported under `stuck`.
+  let failures = {}; try { failures = JSON.parse(cfg.receipt_recon_failures || '{}'); } catch (e) { failures = {}; }
+  const allNew = files.filter(f => !seen.has(f.id) && !(failures[f.id] && failures[f.id].attempts >= 3));
+  const stuck = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
+  if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length, stuck });
   const newFiles = allNew.slice(0, cap);
 
   const custCards = await receiptCustomerCards(env);
