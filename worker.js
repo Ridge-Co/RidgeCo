@@ -1993,7 +1993,18 @@ async function receiptReconConfirm(env, body) {
       Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
     });
   }
-  return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink });
+  // Expense receipts go to QuickBooks' receipts inbox right away rather than waiting for the
+  // 7am sweep (which only takes 8 a day) — Brett is clearing a backlog and wants each one done
+  // when he taps it. Work-order receipts keep going through the normal daily sweep.
+  let qbEmail = null;
+  if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
+    try {
+      const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
+      const j = await r.json().catch(() => ({}));
+      qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
+    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
+  }
+  return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
 // POST /receipt-recon/skip { id, reason? } — dismiss without billing anything.
