@@ -1565,7 +1565,20 @@ async function listBilledReceipts(env, url) {
       String(r.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean)
         .forEach(id => { billed[id] = String(r.ID); });
     });
-    return json({ ok: true, wo_id: woId, billed });
+    // Signed scope proposal WITH Ridge Co materials priced in (Sep 22 2026): the owner already
+    // pays for those materials through the proposal's payment milestones — so every receipt on
+    // this job counts as billed. index.html's invoice picker already renders any id in
+    // `billed` as disabled + "already invoiced", so no picker change is needed. A read failure
+    // here throws into the catch below → ok:false → the picker ticks nothing by default.
+    const covered = await scopeCoveringSignatureForWO(env, woId);
+    if (covered) {
+      const rcs = await fetchTab(env, 'Receipts');
+      rcs.filter(rc => String(rc.WO_ID) === String(woId) && rc.Active !== 'FALSE').forEach(rc => {
+        const id = String(rc.ID);
+        if (!billed[id]) billed[id] = 'signed proposal (Scope #' + covered.scope_id + ')';
+      });
+    }
+    return json({ ok: true, wo_id: woId, billed, scope_covered: covered || null });
   } catch (e) { return json({ ok: false, error: e.message, billed: {} }); }
 }
 
