@@ -2566,13 +2566,25 @@ async function scopeProposal(env, body) {
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
-  const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0));
-  if (unpriced.length) return json({ error: `Add vendor cost to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
+  // An item is priced once ANY option carries a vendor cost OR a Ridge Co materials cost — a
+  // materials-only item (Ridge Co buys it, no vendor labor) is legitimately $0 vendor cost
+  // (Sep 22 2026; before this, Brett had to type a fake $1 vendor cost, which then got paid to
+  // the vendor on the milestone bill).
+  const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0 || (parseFloat(v.rc_materials_cost) || 0) > 0));
+  if (unpriced.length) return json({ error: `Add vendor cost (or Ridge Co materials) to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
+  // The materials description is hand-typed and shown to the customer verbatim — same leak class
+  // as Proposal_Text (see findVendorPricingLeak). Gate it here, where it becomes customer-facing.
+  for (const it of items) for (const v of (it.variants || [])) {
+    if (!((parseFloat(v.rc_materials_cost) || 0) > 0)) continue;
+    const leak = findVendorPricingLeak(v.rc_materials_desc || '');
+    if (leak) return json({ error: `The materials description on "${it.description}" contains pricing language ("${leak}") that can never reach the customer — describe the materials only (e.g. "LVP flooring + underlayment").` }, 400);
+  }
   let addr = await scopeAddr(env, s);
   addr = addr || ('Property ' + s.Property_ID);
   const _pc = await getPricingConfig(env);
   if (!_pc) return json({ error: 'Pricing not configured — set PRICING_CONFIG (Cloudflare secret) or the Config sheet `pricing_config` row.' }, 400);
-  const priced = scopeItemsPricing(items, _pc); // markup applied here, server-side, per item
+  const materialsPricing = scopeParseMaterialsPricing(s);
+  const priced = scopeItemsPricing(items, _pc, materialsPricing); // markup applied here, server-side, per item
   const maxUpfront = await scopeMaxUpfrontPct(env);
   const rawSchedule = scopeParsePaymentSchedule(s);
   const scheduleCheck = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
