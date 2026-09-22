@@ -1,6 +1,9 @@
-# WHERE THINGS STAND — Sep 22, 2026 (Receipt Mail → Hub live in brett@ + info@; one-tap expense receipts to QuickBooks)
+# WHERE THINGS STAND — Sep 22, 2026 (receipt work: PRs #21/#23/#24 merged + live; follow-ups handed off)
 
-## 🟡 PR open: one-tap expense receipts (Ridge Co / 1864 Kerns School Rd) sent to QuickBooks right away. FEATURE_LOG `[FL-20260922-1545-ex]`
+## ▶ NEXT SESSION: "resume ridgeco receipt follow-ups" → read `context/RECEIPT_FOLLOWUPS_HANDOFF_v1.0.md`
+Three open tasks. (1) A read-only QuickBooks line-item duplicate audit for older receipts: Brett found receipt amounts already billed as line items on older invoices and thinks there are more. (2) Detect Home Depot return receipts, which currently OCR as positive purchases. (3) Cut the Apps Script sender-approval noise (about 190 Pending rows). Live now: `2026-09-22.4-receipt-inplace-cutoff`. The cutoff cleanup ran, 9 pre-Jul-1 receipts were skipped, Pending = 35.
+
+## ✅ MERGED + live (was "PR open"): one-tap expense receipts (Ridge Co / 1864 Kerns School Rd) sent to QuickBooks right away. FEATURE_LOG `[FL-20260922-1545-ex]`
 Every pending receipt in the Reconciler gets **🧾 Ridge Co expense** / **🏡 1864 Kerns School Rd** / **Expense to the property picked above** buttons. One tap records it as an expense with no work order and no customer invoice, and emails that single receipt to QuickBooks' receipts inbox immediately instead of waiting for the 8-a-day 7am sweep. Work-order confirms are unchanged. Also: unreadable scan files (recon_smoke_test.png) stop retrying after 3 attempts, and the Scan button's result line no longer gets wiped by the list reload. Tests 84/84 + 13/13 headless UI. **Live check after merge:** tap Ridge Co expense on one real receipt, then confirm it shows "Sent to QuickBooks" and appears in QuickBooks' Receipts inbox.
 
 ## 🟢 Live: Receipt Mail → Hub (Apps Script installed in brett@ + info@ Sep 22; PR #21 merged, `2026-09-22.2` live). The first run pulled 21 Home Depot e-receipts from info@ (Jul 1 → Sep 15) into the Reconciler. One of them (Aug 24, −$111.18) is a **return** that OCR read as +$111.18. Skip it; refund detection isn't built. The discovery list is noisy (190+ Pending senders): tighten the weekly scan and cut it to real supply vendors.
