@@ -1035,6 +1035,9 @@ async function genProposal(){
     state.current.Proposal_Text=r.proposal_text; state.current.Status='proposed'; document.getElementById('ed-status-pill').innerHTML=statusPill('proposed');
     var schedTxt=(r.schedule||[]).map(function(m){ return m.label+' $'+Number(m.customer_amount).toFixed(2); }).join(' · ');
     var msg='✅ proposal ready — total $'+Number(r.final_price).toFixed(2)+' — '+schedTxt;
+    if(r.materials && Number(r.materials.cost_total)>0){
+      msg+=' · Ridge Co materials: your cost $'+Number(r.materials.cost_total).toFixed(2)+' → owner pays $'+Number(r.materials.price_total).toFixed(2)+' (vendor bill basis $'+Number(r.materials.vendor_cost_total).toFixed(2)+', materials excluded)';
+    }
     if(r.schedule_warnings && r.schedule_warnings.length) msg+=' ⚠ '+r.schedule_warnings.join(' ');
     setStatus('prop-status',msg,(r.schedule_warnings&&r.schedule_warnings.length)?'warn':'ok');
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
