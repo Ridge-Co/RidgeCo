@@ -2801,7 +2801,11 @@ async function scopeProposalView(env, url) {
   let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
   const items = rawItems.map(it => ({
     id: it.id, area: it.area, trade: it.trade, description: it.description,
-    variants: (it.variants || []).map(v => ({ key: v.key, label: v.label, price: v.price })), // no vendor_cost
+    // no vendor_cost, no rc_materials_cost (Ridge Co's own materials cost) — only the customer's
+    // materials PRICE + description, and only when the option actually includes materials.
+    variants: (it.variants || []).map(v => (+v.materials_price > 0)
+      ? { key: v.key, label: v.label, price: v.price, materials_price: +v.materials_price, materials_desc: String(v.materials_desc || 'Materials') }
+      : { key: v.key, label: v.label, price: v.price }),
     selected_key: it.selected_key,
   })); // no `note` — free-text field with no internal/customer split; never safe to echo back
   const photos = await scopeProposalPhotos(env, s);
