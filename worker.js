@@ -11988,7 +11988,7 @@ async function twilioAccountStatus(env) {
   return json({ ok: true, ...out });
 }
 
-async function health(env) {
+async function health(env, url) {
   // PUBLIC read-only self-check so an automated agent can verify the Worker
   // without a browser or auth. Row counts per key tab + which sheet it points at
   // (last 6 chars of SHEET_ID, so staging vs prod is visible without leaking it).
