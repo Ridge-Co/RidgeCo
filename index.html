@@ -842,6 +842,25 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- SPLIT WORK ORDER MODAL -->
+<div class="modal-overlay" id="modal-split-wo">
+  <div class="modal" style="max-width:820px">
+    <div class="modal-header"><div class="modal-title" id="split-modal-title">SPLIT WORK ORDER</div><button class="modal-close" onclick="closeModal('modal-split-wo')">✕</button></div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Creates new work orders from this one, dividing the job between the original (which stays) and the new ones. Nothing is deleted — every field below defaults from the original and is editable per work order.</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <button class="btn small secondary" onclick="addSplitWO()">+ Add another new work order</button>
+      <span style="color:var(--muted);font-size:11px" id="split-count-label"></span>
+    </div>
+    <div id="split-cards"></div>
+    <div id="split-reassign-wrap" style="display:none;margin-top:14px">
+      <div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">TIME ENTRIES / VENDOR BILLS ALREADY ON THE ORIGINAL</div>
+      <div style="color:var(--muted);font-size:11px;margin-bottom:8px">Choose whether each already-logged item stays on the original or moves to one of the new work orders. Locked rows (already billed/reviewed/sent to QuickBooks) can't be reassigned.</div>
+      <div id="split-reassign-rows"></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-split-wo')">Cancel</button><button class="btn" id="split-submit-btn" onclick="submitSplitWO()">Confirm Split</button></div>
+  </div>
+</div>
+
 <!-- SEND WORK ORDER TO VENDOR (B-117 shareable WO) -->
 <div class="modal-overlay" id="modal-share-wo">
   <div class="modal">
