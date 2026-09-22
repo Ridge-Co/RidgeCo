@@ -12489,6 +12489,21 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/wo/combine') {
+    // /wo/combine touches the survivor AND every combined WO — every one of them must
+    // resolve (via its Property) to a TEST- record, or this token can never touch it.
+    const wos = await fetchTab(env, 'Work_Orders');
+    const survivor = wos.find(w => String(w.ID) === String(body && body.survivor_wo_id));
+    if (!survivor) return false;
+    if (!(await isTestRecord(env, 'Properties', survivor.Property_ID))) return false;
+    const combinedIds = Array.isArray(body && body.combined_wo_ids) ? body.combined_wo_ids : [];
+    for (const id of combinedIds) {
+      const w = wos.find(x => String(x.ID) === String(id));
+      if (!w) return false;
+      if (!(await isTestRecord(env, 'Properties', w.Property_ID))) return false;
+    }
+    return true;
+  }
   return false;
 }
 
