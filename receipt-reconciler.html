@@ -650,7 +650,7 @@ async function confirmExpense(id, btn, mode){
       const qbLine = qb.sent ? ' Sent to QuickBooks.' : ' ⚠ Recorded, but the QuickBooks email didn\'t go out'+(qb.error?' ('+esc(qb.error)+')':'')+' — the 7am sweep will retry it.';
       statusEl.innerHTML = '<span class="ok">✓ $'+esc(res.amount||amount)+' recorded as a '+esc(where)+' expense — no work order, no customer invoice.'+qbLine+'</span>';
     }
-    setTimeout(loadQueue, 1200);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; card.querySelectorAll('button').forEach(b => b.disabled = false); }
 }
 
