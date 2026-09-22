@@ -16,9 +16,18 @@
 5. Ask Claude to refresh the GH Broker connector's tool list (`RefreshMcpTools`) so `hub_prod_post`
    becomes callable.
 
-Once that's done, any session can run `hub_prod_post('/admin/backfill-scope-wo-vendor', {})` against
-LIVE PRODUCTION with zero standing access to `WORKER_SECRET` — and the same pattern extends to future
-paths by adding them to two allow-lists (see "Adding a new path" below), each time reviewed by Brett.
+Once that's done, any session can run `hub_prod_post('/admin/backfill-scope-wo-vendor', {})` or
+`hub_prod_post('/admin/ensure-receipts-payment-source', {})` against LIVE PRODUCTION with zero standing
+access to `WORKER_SECRET` — and the same pattern extends to future qualifying paths in the same PR
+that ships them (see "Adding a new path" below), not a separate build-brief cycle each time.
+
+**Revision note (same day, before merge):** the first draft of this brief allow-listed exactly one
+path. Brett's feedback: a token scoped to a single one-time backfill is dead weight the moment that
+backfill runs — not worth the standing credential. Revised to (a) start with every already-shipped
+endpoint that already meets the safety bar, not just the one that motivated the build, and (b) make
+future additions a same-PR convention (like `HUB_PROD_RO_TOKEN`'s read-list already is) instead of a
+new dedicated brief each time. The safety bar itself is unchanged — still idempotent, additive-only,
+no money/SMS/QB/auth, still Rung-3 PR-only.
 
 **Governs:** how sessions perform a specific, pre-reviewed, narrow production write — starting with
 the one-time scope→WO `Vendor_ID` backfill needed to fix vendor Cesar's zero-work-orders bug — without
