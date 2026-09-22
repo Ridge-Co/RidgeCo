@@ -53,6 +53,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 .vopt.locked{cursor:default;}
 .vopt.locked.selected{border-color:var(--accent2);background:#eaf6ee;}
 .vopt.locked.selected .vprice{color:var(--accent2);}
+.vopt{flex-wrap:wrap;}
+.vmat{flex-basis:100%;font-size:12px;color:var(--muted);padding-left:26px;margin-top:-2px;}
+.vopt.locked .vmat{padding-left:0;}
+.item-mat-row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);margin-top:4px;}
 .totals{margin-top:4px;}
 .total-line{display:flex;justify-content:space-between;font-size:14px;padding:6px 0;}
 .total-line.grand{font-size:16px;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:10px;}
