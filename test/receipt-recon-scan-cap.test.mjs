@@ -21,7 +21,16 @@ function extractFn(name) {
   return src.slice(start, i);
 }
 
-function world(nFiles, cfg = {}) {
+function extractSync(name) {
+  const start = src.indexOf(`function ${name}(`);
+  if (start === -1) throw new Error(name + ' not found');
+  let i = src.indexOf('{', start), d = 0;
+  for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
+  return src.slice(start, i);
+}
+const helpers = new Function(`const RECEIPT_RECON_MIN_DATE_DEFAULT = '2026-07-01'; ${extractSync('receiptReconCutoff')}; ${extractSync('receiptBeforeCutoff')}; ${extractSync('receiptCutoffNote')}; return { receiptReconCutoff, receiptBeforeCutoff, receiptCutoffNote };`)();
+
+function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const queue = [];
   const files = Array.from({ length: nFiles }, (_, k) => ({ id: 'f' + k, name: 'r' + k + '.pdf', mimeType: 'application/pdf', webViewLink: '' }));
   let downloads = 0, cur = null;
@@ -34,11 +43,12 @@ function world(nFiles, cfg = {}) {
     receiptCustomerCards: async () => ({}),
     fetchTabs: async () => [[], [], []],
     driveDownload: async (tok, id) => { downloads++; cur = id; return { bytes: new ArrayBuffer(1), mime: 'application/pdf' }; },
-    receiptExtract: async (env, bytes, mime) => { if (cfg.__bad && cfg.__bad.has(cur)) throw new Error('Could not process image'); return { vendor: 'Home Depot', total: 12.34, date: '2026-09-10', items: [] }; },
+    receiptExtract: async (env, bytes, mime) => { if (cfg.__bad && cfg.__bad.has(cur)) throw new Error('Could not process image'); return { vendor: 'Home Depot', total: 12.34, date: dateFor(cur), items: [] }; },
     receiptSuggestCore: () => ({ verdict: 'review' }),
     addRow: async (env, tab, row) => { queue.push(row); },
     setConfigKey: async (env, { key, value }) => { cfg[key] = value; },
     json: (o) => o,
+    ...helpers,
     RECEIPT_RECON_QUEUE_HEADERS: [], RECEIPT_RECON_FOLDER_ID_DEFAULT: 'FOLDER',
   };
   const names = Object.keys(deps);
@@ -86,6 +96,23 @@ function world(nFiles, cfg = {}) {
   r = await w.scan({});
   ok(w.downloads === before && r.scanned === 0 && r.errors === undefined && r.stuck.length === 1, '4th scan does not touch it again (no wasted OCR call)');
   ok(JSON.parse(cfg.receipt_recon_failures).f0.attempts === 3, 'failure count kept in Config');
+}
+{
+  // Date cutoff (Sep 22 2026): receipts dated before 2026-07-01 go straight to Skipped with a note.
+  const dates = { f0: '2023-09-25', f1: '2025-06-15', f2: '2026-06-30', f3: '2026-07-01', f4: '', f5: '2026-09-04' };
+  const w = world(6, {}, id => dates[id]);
+  const r = await w.scan({});
+  const byId = Object.fromEntries(w.queue.map(q => [q.Source_File_ID, q]));
+  ok(r.skipped_before_cutoff === 3 && r.cutoff === '2026-07-01', 'three pre-July-1 receipts reported as skipped (got ' + r.skipped_before_cutoff + ')');
+  ok(['f0','f1','f2'].every(k => byId[k].Status === 'skipped' && /before the 2026-07-01 cutoff/.test(byId[k].Notes)), '2023, 2025 and Jun 30 2026 queued as skipped with the cutoff note');
+  ok(byId.f3.Status === 'pending' && byId.f5.Status === 'pending', 'Jul 1 and later stay pending');
+  ok(byId.f4.Status === 'pending', 'receipt with no readable date stays pending (never hidden)');
+  const w2 = world(2, { receipt_recon_min_date: '2025-01-01' }, id => ({ f0: '2025-06-15', f1: '2024-12-31' })[id]);
+  await w2.scan({});
+  ok(w2.queue.find(q => q.Source_File_ID === 'f0').Status === 'pending' && w2.queue.find(q => q.Source_File_ID === 'f1').Status === 'skipped', 'Config receipt_recon_min_date moves the cutoff');
+  const w3 = world(1, { receipt_recon_min_date: 'garbage' }, () => '2026-06-01');
+  await w3.scan({});
+  ok(w3.queue[0].Status === 'skipped', 'a bad Config value falls back to 2026-07-01');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

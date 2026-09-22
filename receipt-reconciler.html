@@ -53,6 +53,8 @@
   .rc-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:8px;}
   .rc-foot a{color:var(--info);text-decoration:none;font-weight:bold;font-size:11px;}
   .rc-foot .actions{display:flex;gap:8px;flex-wrap:wrap;}
+  #rc-toast{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);width:min(560px,calc(100% - 24px));display:flex;flex-direction:column;gap:6px;z-index:50;}
+  .rc-toast-item{background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--accent2);border-radius:var(--radius);padding:8px 10px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.12);cursor:pointer;}
   .rc-expense{display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#eef7f1;border:1px solid #cfe8d7;border-radius:var(--radius);padding:8px 10px;margin-bottom:8px;}
   .rc-expense-label{color:var(--accent2);font-size:11px;font-weight:bold;flex-basis:100%;}
   .btn.expbtn{background:var(--accent2);}
@@ -181,7 +183,7 @@ async function scanNow(){
   try {
     const res = await post('/receipt-recon/scan', {});
     if (res.ok === false) throw new Error(res.error||'scan failed');
-    const msg = '✅ scanned '+res.scanned+' new file(s)'+((res.errors&&res.errors.length)?' — '+res.errors.length+' error(s)':'')+(res.remaining?' — '+res.remaining+' more waiting in the folder, tap Scan again':'')+((res.stuck&&res.stuck.length)?' — skipping '+res.stuck.length+' unreadable file(s): '+res.stuck.join(', '):'');
+    const msg = '✅ scanned '+res.scanned+' new file(s)'+((res.errors&&res.errors.length)?' — '+res.errors.length+' error(s)':'')+(res.remaining?' — '+res.remaining+' more waiting in the folder, tap Scan again':'')+(res.skipped_before_cutoff?' — '+res.skipped_before_cutoff+' dated before '+esc(res.cutoff||'')+' went straight to Skipped':'')+((res.stuck&&res.stuck.length)?' — skipping '+res.stuck.length+' unreadable file(s): '+res.stuck.join(', '):'');
     status.textContent = msg;
     // loadQueue() rewrites this same line with "✅ N pending" — put the scan result back in front
     // of it, or the "tap Scan again" / unreadable-file notes vanish the instant the list reloads.
@@ -378,11 +380,82 @@ function checkManualWo(id){
   updatePostingLine(id);
 }
 
+// Brett, Sep 22 2026: "it drives me crazy to have to scroll down through a whole bunch of
+// receipts to get to the one I was just working on". Actions no longer reload the whole list —
+// finishCard() takes just the handled card out (the next one slides up into the same spot, so
+// the scroll position stays put) and leaves the result in a toast at the bottom so a warning
+// like "already invoiced — flagged for repair" isn't lost when the card goes. The ↻ Refresh
+// button and tab switches still do a full reload.
+let rowsById = {};
+function toast(html){
+  let box = document.getElementById('rc-toast');
+  if (!box) { box = document.createElement('div'); box.id = 'rc-toast'; document.body.appendChild(box); }
+  const item = document.createElement('div'); item.className = 'rc-toast-item'; item.innerHTML = html;
+  item.onclick = () => item.remove();
+  box.appendChild(item);
+  while (box.children.length > 3) box.firstChild.remove();
+  setTimeout(() => item.remove(), 9000);
+}
+function finishCard(id){
+  const card = document.getElementById('rc'+id);
+  const statusEl = document.getElementById('rc'+id+'-status');
+  const r = rowsById[id] || {};
+  if (statusEl && statusEl.innerHTML) toast('<b>'+esc(r.Vendor||'Receipt')+' $'+money(r.Total)+'</b> — '+statusEl.innerHTML);
+  delete rowsById[id];
+  if (card) {
+    card.style.transition = 'opacity .25s, max-height .3s, margin .3s, padding .3s';
+    card.style.maxHeight = card.offsetHeight + 'px'; card.style.overflow = 'hidden';
+    requestAnimationFrame(() => { card.style.opacity = '0'; card.style.maxHeight = '0'; card.style.marginBottom = '0'; card.style.paddingTop = '0'; card.style.paddingBottom = '0'; });
+    setTimeout(() => {
+      card.remove();
+      const left = Object.keys(rowsById).length;
+      const list = document.getElementById('list');
+      if (!left) list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>';
+      const st = document.getElementById('conn-status');
+      st.textContent = st.textContent.replace(/(\d+) (pending|confirmed|skipped|duplicates|all)\b/, left + ' $2');
+    }, 320);
+  }
+}
+async function unskipRow(id, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('rc'+id+'-status');
+  statusEl.innerHTML = '<span class="info">Moving back to Pending…</span>';
+  try {
+    const res = await post('/receipt-recon/unskip', { id });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">↩ Back in Pending.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 function render(rows){
   const list = document.getElementById('list');
   if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; return; }
+  rowsById = {}; rows.forEach(r => { rowsById[r.ID] = r; });
   list.innerHTML = rows.map(r => rowCard(r)).join('');
   rows.forEach(r => { rowSuggestions[r.ID] = r.suggestion || {}; rowEvidence[r.ID] = r.duplicate_evidence || []; if ((r.Status||'pending')==='pending') refreshWoSelect(r.ID); });
+}
+
+function evidenceHtml(r){
+  const evidence = rowEvidence[r.ID] || [];
+  let html = '';
+  if (r.Duplicate_Checked_Date || evidence.length) {
+    html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">';
+    if (!evidence.length) {
+      html += '<div class="rc-sub">🔍 Checked '+esc((r.Duplicate_Checked_Date||'').slice(0,10))+' — no matching Receipts/QuickBooks entries found.</div>';
+    } else {
+      evidence.forEach((ev, i) => {
+        if (ev.signal === 'qb_check_error') { html += '<div class="rc-sub err">⚠ '+esc(ev.reason)+'</div>'; return; }
+        html += '<div class="rc-posting" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+          + '<span>🔍 '+esc(ev.reason)+'</span>'
+          + '<button class="btn small warnbtn" onclick="confirmDuplicateFromEvidence(\''+r.ID+'\', '+i+', this)">It\'s this one</button>'
+          + '</div>';
+      });
+    }
+    html += '</div>';
+  }
+
+  return html;
 }
 
 function rowCard(r){
@@ -402,6 +475,7 @@ function rowCard(r){
         + '<div>'+categoryPill(sug.category, sug.action)+'</div></div>';
 
   if (r.items && r.items.length) html += '<div class="rc-items">Items: '+r.items.map(esc).join(', ')+'</div>';
+  if (!isPendingLike && r.Notes) html += '<div class="rc-sub">'+esc(r.Notes)+'</div>';
 
   const flags = sug.flags || [];
   if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
@@ -413,22 +487,7 @@ function rowCard(r){
   // itself. Rendered whenever a check has already run (Duplicate_Checked_Date set), even if it
   // came back with zero matches, so "checked, nothing found" reads differently from "never
   // checked" — the empty-evidence case still shows the checked-date line, just no cards under it.
-  const evidence = rowEvidence[r.ID] || [];
-  if (r.Duplicate_Checked_Date || evidence.length) {
-    html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">';
-    if (!evidence.length) {
-      html += '<div class="rc-sub">🔍 Checked '+esc((r.Duplicate_Checked_Date||'').slice(0,10))+' — no matching Receipts/QuickBooks entries found.</div>';
-    } else {
-      evidence.forEach((ev, i) => {
-        if (ev.signal === 'qb_check_error') { html += '<div class="rc-sub err">⚠ '+esc(ev.reason)+'</div>'; return; }
-        html += '<div class="rc-posting" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
-          + '<span>🔍 '+esc(ev.reason)+'</span>'
-          + '<button class="btn small warnbtn" onclick="confirmDuplicateFromEvidence(\''+r.ID+'\', '+i+', this)">It\'s this one</button>'
-          + '</div>';
-      });
-    }
-    html += '</div>';
-  }
+  html += '<div id="rc'+r.ID+'-evidence">'+evidenceHtml(r)+'</div>';
 
   // Materials description default: the receipt's own OCR'd items, generalized into short
   // categories (e.g. "paint, primer, batteries") when the AI-cleaned Items_Summary is on file.
@@ -492,6 +551,7 @@ function rowCard(r){
     html += '<button class="btn secondary small" onclick="checkDuplicatesOne(\''+r.ID+'\', this)">🔍 Check duplicates</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
+    if (r.Status === 'skipped') html += '<button class="btn secondary small" onclick="unskipRow(\''+r.ID+'\', this)">↩ Move back to Pending</button>';
     html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+(r.Duplicate_Confirmed_Date?(' · purges '+esc(purgeDateLabel(r.Duplicate_Confirmed_Date))):'')+'</span>';
   }
   html += '</div></div>';
@@ -545,7 +605,7 @@ async function confirmRow(id, btn){
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already on that WO — skipped, not double-posted.</span>'
       : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.'+extra+'</span>';
-    setTimeout(loadQueue, 900);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
@@ -590,7 +650,7 @@ async function confirmExpense(id, btn, mode){
       const qbLine = qb.sent ? ' Sent to QuickBooks.' : ' ⚠ Recorded, but the QuickBooks email didn\'t go out'+(qb.error?' ('+esc(qb.error)+')':'')+' — the 7am sweep will retry it.';
       statusEl.innerHTML = '<span class="ok">✓ $'+esc(res.amount||amount)+' recorded as a '+esc(where)+' expense — no work order, no customer invoice.'+qbLine+'</span>';
     }
-    setTimeout(loadQueue, 1200);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; card.querySelectorAll('button').forEach(b => b.disabled = false); }
 }
 
@@ -613,7 +673,7 @@ async function confirmBusinessExpense(id, btn){
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already recorded — skipped, not double-posted.</span>'
       : '<span class="ok">✓ Recorded $'+esc(res.amount||amount)+' as a business expense'+(property_id?' on that property':'')+'. It\'ll go to QuickBooks in the next receipts sweep.</span>';
-    setTimeout(loadQueue, 900);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
@@ -626,7 +686,7 @@ async function skipRow(id, btn){
     const res = await post('/receipt-recon/skip', { id, reason: 'dismissed from Receipt Reconciler' });
     if (res.error) throw new Error(res.error);
     statusEl.innerHTML = '<span class="ok">Skipped.</span>';
-    setTimeout(loadQueue, 500);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
@@ -642,7 +702,7 @@ async function confirmDuplicate(id, btn){
     const res = await post('/receipt-recon/confirm-duplicate', { id });
     if (res.error) throw new Error(res.error);
     statusEl.innerHTML = '<span class="ok">✓ Confirmed duplicate — clears itself in 180 days.</span>';
-    setTimeout(loadQueue, 900);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
@@ -660,9 +720,13 @@ async function checkDuplicatesOne(id, btn){
     if (res.error) throw new Error(res.error);
     rowEvidence[id] = res.evidence || [];
     statusEl.innerHTML = res.evidence.length
-      ? '<span class="warn">Found '+res.evidence.length+' possible match(es) — see below.</span>'
+      ? '<span class="warn">Found '+res.evidence.length+' possible match(es) — see above.</span>'
       : '<span class="ok">✓ No matching Receipts/QuickBooks entries found.</span>';
-    setTimeout(loadQueue, 900);
+    // Update ONLY this card's evidence block — anything typed/picked in the card stays put.
+    const r = rowsById[id] || { ID: id };
+    r.Duplicate_Checked_Date = new Date().toISOString(); r.duplicate_evidence = rowEvidence[id];
+    const box = document.getElementById(idAttr+'-evidence'); if (box) box.innerHTML = evidenceHtml(r);
+    if (btn) btn.disabled = false;
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
@@ -682,7 +746,7 @@ async function confirmDuplicateFromEvidence(id, idx, btn){
     const res = await post('/receipt-recon/confirm-duplicate', { id, reason: ev.reason || '' });
     if (res.error) throw new Error(res.error);
     statusEl.innerHTML = '<span class="ok">✓ Confirmed duplicate — clears itself in 180 days.</span>';
-    setTimeout(loadQueue, 900);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 

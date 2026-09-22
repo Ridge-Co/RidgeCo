@@ -1,6 +1,25 @@
 # BrettOS Feature Log — What Works, Don't Break It
 **Version:** v2.05 | **Last Updated:** September 22, 2026 ([FL-20260922-1900-rm] — Receipt Mail → Hub: emailed receipts into the Reconciler folder via Gmail filters + Apps Script; receiptReconScan batch cap. Previous: [FL-20260922-0910-vp] — B-012 Vendor Performance dashboard: read-only GET /vendor-performance admin-only vendor scorecard + Hub UI, PR #19 open, not yet merged; prior: [FL-20260920-1710-sb] — HUB_TEST_TOKEN staging test-infra: found and fixed the real root cause of a day-long "/workorder always 403s" mystery — not a guard-logic bug, but maintenance-hub-staging's Cloudflare Build never actually deploying anything merged to main; prior: [FL-20260920-1700-sb] — Invoice Submitted vendor-bill status + per-audience notify controls, PR #9 open; prior: [FL-20260919-1315-sb] — Ops_Build_Queue → Start Build: fires a real Claude Code cloud session via Anthropic's Routines API from proposals.html, item-level status callback (held/done))
 
+**[FL-20260922-1620-ip] [receipt-reconciler] [ux] Reconciler actions update in place (no full-page reload); receipt-date cutoff (default 2026-07-01); ↩ Move back to Pending.**
+
+Brett: "it drives me crazy to have to scroll down through a whole bunch of receipts to get to the one I was just working on." Every action (Confirm, expense taps, business-expense confirm, Skip, Confirm duplicate, "It's this one") used to call `setTimeout(loadQueue, …)`, which rebuilt the whole list and threw him back to the top. The fix is `finishCard(id)`: it collapses just that card, so the next receipt slides up into the same spot with the scroll position kept. The result goes to a small toast at the bottom, so warnings like "already invoiced — flagged for repair" aren't lost when the card leaves. The pending count updates without a reload. "Check duplicates" now rewrites only that card's evidence block (`evidenceHtml(r)` in `#rcN-evidence`), so anything typed or picked in the card survives. ↻ Refresh and tab switches still do a full reload.
+
+Brett also saw 2023/2024/2025 receipts in Pending. Traced to folder scans (queued Aug 23–Sep 1 from `Receipt - …`/`Scanned_…` files), not the email pull, which never reaches before Jul 1 and contributed 0 of the 9 pre-July rows. Added a receipt-date cutoff:
+- Config `receipt_recon_min_date` (yyyy-mm-dd; default/garbage → `2026-07-01`).
+- `receiptReconScan` queues anything dated earlier as **skipped** with a plain note. A receipt with no readable date stays Pending and is never hidden.
+- New `POST /receipt-recon/skip-before-cutoff {dry_run?}` does the one-time cleanup of the rows already queued.
+- There was previously no way to un-skip, so `POST /receipt-recon/unskip {id}` was added (skipped → pending only). Skipped cards show the note and a **↩ Move back to Pending** button.
+
+Verified: `node --check` clean.
+- New `test/receipt-recon-cutoff-unskip.test.mjs` (11/11).
+- `test/receipt-recon-scan-cap.test.mjs` grew to 22/22 with the cutoff cases.
+- New headless `test/manual-verify-receipt-inplace-ui.mjs` (17/17, 390px). It covers: no queue reload on any action, scroll position unchanged (6080→6080), the next card landing in the same screen spot, typed text surviving both a neighbor's Skip and a duplicate check, the repair warning surviving in the toast, the cutoff note, and un-skip.
+- The earlier expense UI check still passes 13/13.
+- Full suite 85/85 on a fresh clone of the branch.
+
+`BUILD_VERSION` → `2026-09-22.4-receipt-inplace-cutoff`.
+
 **[FL-20260922-1545-ex] [receipt-reconciler] [quickbooks] [expense] One-tap expense receipts (Ridge Co / 1864 Kerns School Rd / picked property) sent to QuickBooks immediately; unreadable scan files stop retrying.**
 
 Brett's ask: attach receipts to Ridge Co or 1864 Kerns School Rd as an expense instead of picking a work order; route them to QuickBooks for the expense record, and put them on work orders only when he chooses to. Goal: clear the backlog faster. The pieces already existed, but three problems blocked this:
