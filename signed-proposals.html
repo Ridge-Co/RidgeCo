@@ -250,6 +250,7 @@ function load(){
         +'<div class="amt"><div class="lbl">'+invLabel+'</div><div class="big">'+money(invAmt)+'</div></div>'
         +'<div class="amt"><div class="lbl">'+billLabel+'</div><div class="big">'+money(billAmt)+'</div></div>'
         +'</div>';
+      if(r.kind==='scope') html+=materialsHtml(r);
       if(booked){
         html+='<div class="booked">✓ QuickBooks: invoice'+(r.qb_invoice_number?(' #'+esc(r.qb_invoice_number)):'')+(r.qb_bill_number?(' · bill #'+esc(r.qb_bill_number)):'')+' created. '
           +'<a href="#" onclick="undoBook(\''+esc(r.id)+'\',\''+r.kind+'\',\'\',this);return false;" style="color:var(--red);font-weight:700;text-decoration:none">Undo</a>'
