@@ -4423,10 +4423,12 @@ async function woCombine(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const survivor = findWO(workorders, survivorId);
   if (!survivor) return json({ error: `Survivor work order ${survivorId} not found` }, 404);
+  if (String(survivor.Voided || '').toUpperCase() === 'TRUE') return json({ error: `Survivor work order ${survivorId} is voided — cannot combine into it` }, 400);
   const combinedWOs = [];
   for (const id of combinedIds) {
     const w = findWO(workorders, id);
     if (!w) return json({ error: `Work order ${id} not found` }, 404);
+    if (String(w.Voided || '').toUpperCase() === 'TRUE') return json({ error: `Work order ${id} is already voided — cannot combine it again` }, 400);
     combinedWOs.push(w);
   }
   // Same same-Property_ID/Unit_ID scoping the existing single-WO Combined picker already
