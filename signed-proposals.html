@@ -152,6 +152,30 @@ function enterApp(){document.getElementById('login').classList.add('hide');docum
 // registry (/proposal/signatures + /proposal/book) and the newer generic scope e-sign system
 // (/scope-proposal/signed + /scope-proposal/book, Aug 19/21 2026). Same review/preview/confirm
 // UX either way — each row just remembers which API pair (`kind`) it books through.
+// Ridge Co materials budget vs actual (Sep 22 2026). r.materials comes from the Worker
+// (scopeMaterialsBudgetSummary): budget = Ridge Co's own cost priced into the signed proposal;
+// actual = receipts matched to this job's work order. Those receipts are already billed through
+// the proposal, so Review Bills won't invoice them again — this is where they stay visible.
+function materialsHtml(r){
+  var m=r&&r.materials; if(!m) return '';
+  if(m.state==='unknown'&&!(m.budget_cost>0)) return '';
+  if(m.state==='unknown') return '<div class="sub" style="margin-top:8px">Ridge Co materials: budget '+money(m.budget_cost)+' · couldn\'t load receipts to compare.</div>';
+  if(m.state==='none') return '';
+  var head='<div style="margin-top:10px;padding:8px 10px;border:1px dashed var(--line);border-radius:6px;font-size:12.5px;line-height:1.5">'
+    +'<div style="font-weight:700;margin-bottom:2px">Ridge Co materials</div>';
+  var body;
+  {
+    var line='Budget '+money(m.budget_cost)+' (owner pays '+money(m.budget_price)+', in the milestones) · Receipts '+money(m.actual)+' ('+m.receipt_count+')';
+    var tag='';
+    if(m.state==='not_bought') tag='<span class="chip signed" style="margin-left:6px">not bought yet</span>';
+    else if(m.state==='over') tag='<span class="chip gap" style="margin-left:6px">over by '+money(-m.variance)+'</span>';
+    else tag='<span class="chip booked" style="margin-left:6px">'+money(m.variance)+' left</span>';
+    body='<div>'+line+tag+'</div>';
+    body+='<div class="sub" style="margin-top:2px">Receipts on this job are already covered by the milestones, so Review Bills won\'t invoice them again.</div>';
+    if(m.state==='over') body+='<div class="sub" style="margin-top:2px">The overage is <b>not</b> billed to the owner. If they owe it, bill it manually in QuickBooks.</div>';
+  }
+  return head+body+'</div>';
+}
 function load(){
   Promise.all([
     api('GET','/proposal/signatures').catch(function(e){return {error:e.message};}),
