@@ -339,6 +339,8 @@ export default {
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
         if (path === '/qb/test')                return await qbTest(env);
         if (path === '/gmail/test')             return await gmailTest(env, url);
+        if (path === '/gmail/callback')         return await gmailOAuthCallback(env, url);
+        if (path === '/gmail/token-check')      return await gmailTokenCheck(env);
         if (path === '/qb/accounts')            return await qbListAccounts(env);
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
         if (path === '/qb/ready')               return await qbReadyQueue(env, url);
