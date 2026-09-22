@@ -2082,11 +2082,22 @@ function scopeCleanVariants(it) {
     ? raw.map((v, i) => {
         const po = v && v.price_override;
         const poNum = (po === '' || po === null || po === undefined) ? null : parseFloat(po);
-        return {
+        const out = {
           key: (v && v.key) || ('v' + (i + 1)), label: (v && v.label) || '',
           vendor_cost: Math.max(0, parseFloat(v && v.vendor_cost) || 0),
           price_override: (poNum != null && isFinite(poNum) && poNum >= 0) ? +poNum.toFixed(2) : null,
         };
+        // Ridge Co–supplied materials (Sep 22 2026, Brett: "no way to account for materials
+        // included in the estimate but to be paid for by ridge co rather than vendor"). Ridge Co's
+        // OWN cost for materials it buys itself — priced to the customer per the scope's
+        // Materials_Pricing_JSON mode (see scopeItemsPricing), shown to the customer as a separate
+        // "Includes materials" line, and NEVER part of vendor_cost, so it never reaches the vendor
+        // bill or a milestone's Vendor_Amount. Only attached when actually used, so every pre-existing
+        // variant keeps its exact old shape.
+        const mat = Math.max(0, parseFloat(v && v.rc_materials_cost) || 0);
+        const matDesc = String((v && v.rc_materials_desc) || '').trim().slice(0, 200);
+        if (mat > 0 || matDesc) { out.rc_materials_cost = +mat.toFixed(2); out.rc_materials_desc = matDesc; }
+        return out;
       })
     : [{ key: 'v1', label: '', vendor_cost: Math.max(0, parseFloat(it && (it.cost != null ? it.cost : it.vendor_cost)) || 0), price_override: null }];
   if (!variants.length) variants = [{ key: 'v1', label: '', vendor_cost: 0 }];
