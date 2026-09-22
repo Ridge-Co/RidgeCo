@@ -659,6 +659,7 @@ export default {
         if (path === '/scope/proposal/link')        return await scopeProposalLink(env, body);
         if (path === '/scope/proposal/link-revoke') return await scopeProposalLinkRevoke(env, body);
         if (path === '/scope/proposal/send')        return await scopeProposalSend(env, body);
+        if (path === '/gmail/connect-url')          return await gmailConnectUrl(env, url);
         if (path === '/scope-proposal/sign')      return await scopeProposalSign(env, body, _clientIP, _clientUA);
         if (path === '/scope-proposal/book')      return await scopeProposalBook(env, body);
         if (path === '/scope-proposal/unbook')    return await scopeProposalUnbook(env, body);
