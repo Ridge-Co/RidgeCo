@@ -1,3 +1,31 @@
+# WHERE THINGS STAND — Sep 22, 2026 (process fix: mandatory self-test loop + HUB_PROD_RO_TOKEN, staged as PRs, pending Brett's secret setup)
+
+## 🟡 Staged, pending Brett: credential-access gap closed (HUB_PROD_RO_TOKEN)
+Full detail: `context/PROD_READONLY_TOKEN_BUILD_BRIEF_v1.0.md`, [Ridge-Co/RidgeCo#20](https://github.com/Ridge-Co/RidgeCo/pull/20), [brett332/gh-broker#4](https://github.com/brett332/gh-broker/pull/4).
+Driven directly by Brett's B-012 session feedback (repeatedly asked for a pasted `WORKER_SECRET`
+mid-session to verify a just-merged production endpoint, then explicitly told Claude never to do
+that again). Adds `HUB_PROD_RO_TOKEN` — a new, independent, GET-only, allow-listed narrow token in
+`worker.js`'s existing auth-gate cascade (same pattern as `HUB_TEST_TOKEN`/`OPS_QUEUE_TOKEN`), plus
+a matching `hub_prod_get(path)` tool on `gh-broker`. Zero change to `WORKER_SECRET` or any existing
+narrow token — a fresh subagent verified both diffs are purely additive (`tsc --noEmit` clean on
+gh-broker, `node --check` clean on worker.js, exactly one hunk in each). Not merged autonomously —
+auth-adjacent, staged for Brett's review per `AUTONOMY_GUARDRAILS_v1.0`. **To finish (Brett only):**
+generate `HUB_PROD_RO_TOKEN`, set it on production `maintenance-hub` + on `gh-broker`, merge both
+PRs, refresh the connector's tool list.
+
+## 🟡 Process update: test-verified-builds + brett-flow — mandatory self-test loop
+Brett's Sep 22 instruction: no build gets shown to him until it has already passed every
+acceptance-criteria check, in a loop (fail → fix → retest → repeat until green), with the
+Playwright sandbox UI pass promoted from "fallback" to the standard method, and no more asking for
+credentials the session should already have a path to. Proposed as full-file updates to the
+`test-verified-builds` and `brett-flow` skills (via `propose_skills` — pending Brett's review/save
+in the client, same as this doc's own PRs). Once saved, every future build goes: generate tests →
+run them (via `hub_test_get`/`hub_test_post`/`hub_prod_get`, never a pasted secret) → Playwright UI
+pass → loop back and fix on any failure → only once all-green does `ridgeco-validate` run → only
+then push + report. See the two build briefs above for the credential-access half of this fix.
+
+---
+
 # WHERE THINGS STAND — Sep 22, 2026 (B-012 Vendor Performance dashboard — merged, deployed, and fully live-verified)
 
 ## 🟢 Shipped and live-verified: Vendor Performance dashboard — B-012
