@@ -62,7 +62,7 @@ const OWNERS = [{ ID: '5', QBO_Customer_ID: '55' }, { ID: '6', QBO_Customer_ID: 
   ok(resolveWOCustomerId('9999', WOS, PROPS, UNITS, OWNERS) === '', 'unknown WO id resolves to empty string, not a throw');
 }
 
-// ── receiptDuplicateAuditMatches ──────────────────────────────────────────────────────────
+// ── receiptDuplicateAuditMatches ─────────────────────────────────────────────────────────────
 const CACHE = [
   { Invoice_ID: '1', Doc_Number: '100', TxnDate: '2026-08-01', Customer_QB_ID: '55', Amount: '125.00', Line_Description: 'paint', Paid: 'TRUE', Active: 'TRUE' },
   { Invoice_ID: '2', Doc_Number: '101', TxnDate: '2026-07-01', Customer_QB_ID: '55', Amount: '125.00', Line_Description: 'earlier', Paid: 'FALSE', Active: 'TRUE' }, // BEFORE the receipt date — must be excluded
