@@ -11826,6 +11826,7 @@ function toggleBulkMode() {
   if (btn) btn.textContent = _bulkWOMode ? '✕ Cancel Bulk' : '☑ Bulk Edit';
   if (!_bulkWOMode) renderWOPage();
   else renderWOPage(); // re-render with checkboxes
+  updateBulkCombineBtn();
 }
 
 function getBulkCheckedWOIds() {
