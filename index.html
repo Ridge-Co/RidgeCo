@@ -11905,6 +11905,120 @@ function runBulkWOUpdate(ids, callFn, btn, verbLabel) {
   }).catch(function(e){ toast('Error: '+e.message,'error'); }).finally(function(){ if (btn) { btn.disabled=false; btn.textContent=origText; } });
 }
 
+// ── Bulk Combine (Sep 22 2026) — voids every non-survivor WO into the one Brett picks.
+// Selection scoping (same property/unit) is checked client-side here for the button's
+// enabled state and the toast reason, but the server (/wo/combine) re-checks and is the
+// real authority — this is UX, not the security boundary.
+var _bulkCombineIds = [];
+var BC_FIELDS = ['Managed_By','Vendor_ID','Scheduled_Date','Description','Priority','Status'];
+var BC_FIELD_LABELS = { Managed_By:'Managed By', Vendor_ID:'Assigned Vendor', Scheduled_Date:'Scheduled Date', Description:'Description', Priority:'Priority', Status:'Status' };
+
+function bulkCombineEligible(ids) {
+  var wos = ids.map(function(id){ return safeArray(state.workorders).find(function(w){return w.ID===id;}); }).filter(Boolean);
+  if (wos.length < 2) return { ok:false, reason:'Select at least 2 work orders to combine.', wos:wos };
+  var first = wos[0];
+  var mismatch = wos.some(function(w){ return String(w.Property_ID)!==String(first.Property_ID) || String(w.Unit_ID||'')!==String(first.Unit_ID||''); });
+  if (mismatch) return { ok:false, reason:'Selected work orders must all be at the same property/unit to combine.', wos:wos };
+  return { ok:true, wos:wos };
+}
+
+function updateBulkCombineBtn() {
+  var btn = document.getElementById('bc-open-btn');
+  var hint = document.getElementById('bc-hint');
+  if (!btn) return;
+  var ids = getBulkCheckedWOIds();
+  var check = bulkCombineEligible(ids);
+  btn.disabled = !check.ok;
+  if (hint) hint.textContent = check.ok ? '' : (ids.length ? check.reason : '');
+}
+
+function openBulkCombineModal() {
+  var ids = getBulkCheckedWOIds();
+  var check = bulkCombineEligible(ids);
+  if (!check.ok) { toast(check.reason,'error'); return; }
+  _bulkCombineIds = ids;
+  document.getElementById('bc-error').style.display = 'none';
+  document.getElementById('bc-conflicts-wrap').style.display = 'none';
+  document.getElementById('bc-conflicts-list').innerHTML = '';
+  var list = document.getElementById('bc-survivor-list');
+  list.innerHTML = check.wos.map(function(w){
+    return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="radio" name="bc-survivor" value="'+w.ID+'" onchange="bcRenderConflicts()" style="width:auto"/> '+w.ID+' — '+esc(w.Trade||'')+(w.Description?' · '+esc(w.Description.substring(0,50)):'')+' ('+(w.Status||'New')+')</label>';
+  }).join('');
+  document.getElementById('bc-confirm-btn').disabled = true;
+  openModal('modal-bulk-combine');
+}
+
+function bcSelectedSurvivor() {
+  var el = document.querySelector('input[name="bc-survivor"]:checked');
+  return el ? el.value : '';
+}
+
+// Client-side mirror of the server's resolveCombineFields() — used only to decide which
+// pickers to show and to pre-fill Confirm's enabled state; /wo/combine recomputes this
+// itself from the real rows and 409s with the authoritative conflict list if this ever
+// drifts (stale state.workorders, a race with another admin), so this never needs to be
+// perfectly in sync to stay safe — only to stay usable.
+function bcRenderConflicts() {
+  var survivorId = bcSelectedSurvivor();
+  var wrap = document.getElementById('bc-conflicts-wrap');
+  var listEl = document.getElementById('bc-conflicts-list');
+  var confirmBtn = document.getElementById('bc-confirm-btn');
+  if (!survivorId) { wrap.style.display='none'; confirmBtn.disabled = true; return; }
+  var wos = _bulkCombineIds.map(function(id){ return safeArray(state.workorders).find(function(w){return w.ID===id;}); }).filter(Boolean);
+  var conflicts = BC_FIELDS.filter(function(f){
+    var vals = wos.map(function(w){ return String(w[f]==null?'':w[f]); });
+    return vals.some(function(v){ return v !== vals[0]; });
+  });
+  if (!conflicts.length) { wrap.style.display='none'; listEl.innerHTML=''; confirmBtn.disabled = false; return; }
+  wrap.style.display = '';
+  listEl.innerHTML = conflicts.map(function(f){
+    var seen = {};
+    var opts = wos.map(function(w){
+      var val = w[f]==null?'':w[f];
+      var display = val || '(blank)';
+      if (f==='Vendor_ID' && val) { var v = safeArray(state.vendors).find(function(x){return x.ID===val;}); display = v ? v.Name : val; }
+      return { woId:w.ID, val:val, display:display };
+    }).filter(function(o){ var k=String(o.val); if (seen[k]) return false; seen[k]=true; return true; });
+    var rows = opts.map(function(o,i){
+      return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px"><input type="radio" name="bc-conflict-'+f+'" value="'+esc(String(o.val))+'" '+(i===0?'checked':'')+' style="width:auto"/> '+esc(o.display)+' <span style="color:var(--muted)">('+o.woId+')</span></label>';
+    }).join('');
+    return '<div><div style="font-size:12px;color:var(--text);margin-bottom:4px">'+(BC_FIELD_LABELS[f]||f)+'</div>'+rows+'</div>';
+  }).join('');
+  confirmBtn.disabled = false;
+}
+
+function submitBulkCombine() {
+  var survivorId = bcSelectedSurvivor();
+  if (!survivorId) { toast('Pick which work order survives','error'); return; }
+  var combinedIds = _bulkCombineIds.filter(function(id){ return id !== survivorId; });
+  var overrides = {};
+  BC_FIELDS.forEach(function(f){
+    var el = document.querySelector('input[name="bc-conflict-'+f+'"]:checked');
+    if (el) overrides[f] = el.value;
+  });
+  var btn = document.getElementById('bc-confirm-btn');
+  var origText = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Combining…';
+  document.getElementById('bc-error').style.display = 'none';
+  api('POST','/wo/combine',{ survivor_wo_id:survivorId, combined_wo_ids:combinedIds, field_overrides:overrides, updated_by:'Admin', updated_by_role:'admin' }).then(function(res){
+    if (res.success) {
+      toast('Combined '+combinedIds.length+' work order'+(combinedIds.length>1?'s':'')+' into '+survivorId,'success');
+      closeModal('modal-bulk-combine');
+      toggleBulkMode();
+      loadAll();
+    } else if (res.error === 'field_conflict') {
+      // The server's own reconciliation disagreed with the client's read (a race with another
+      // admin, or stale state.workorders) — re-render from the authoritative conflict list
+      // instead of silently retrying with a wrong pick.
+      toast('These fields still need a pick: '+(res.conflicts||[]).join(', '),'error');
+      bcRenderConflicts();
+    } else {
+      document.getElementById('bc-error').textContent = res.error || 'Combine failed';
+      document.getElementById('bc-error').style.display = '';
+    }
+  }).catch(function(e){ toast('Error: '+e.message,'error'); }).finally(function(){ btn.disabled=false; btn.textContent=origText; });
+}
+
 // ── Bulk Cancel — double protection (checkbox + typed confirmation) ────────
 var _bulkCancelIds = [];
 
