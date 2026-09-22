@@ -452,10 +452,37 @@ function filterVendorWOs() {
   renderWOs(filtered);
 }
 
+// "NEEDS INVOICE" tab (Sep 22 2026): jobs this vendor has finished but hasn't yet billed for --
+// Complete/Pending Invoice status AND no active Vendor_Bills row on file yet. Both the initial
+// load and the background poller (below) need the exact same set, so it's factored out once
+// rather than duplicated -- a mismatch between the two was exactly the kind of bug that made the
+// poller silently fight the tab's own view on a filtered list.
+function isCompleteNotInvoiced(w) {
+  var st = (w.Status || '').toLowerCase();
+  return st === 'complete' || st === 'pending invoice';
+}
+function fetchDueWOs() {
+  return Promise.all([
+    api('/vendor-workorders?vendor_id=' + session.vendor_id + '&include_closed=true'),
+    api('/vendor-bills?vendor_id=' + session.vendor_id)
+  ]).then(function(results) {
+    var wos = results[0] || [], bills = results[1] || [];
+    var billedWOIds = {};
+    bills.forEach(function(b) { if (b.WO_ID) billedWOIds[b.WO_ID] = true; });
+    return wos.filter(function(w) { return isCompleteNotInvoiced(w) && !billedWOIds[w.ID]; });
+  });
+}
+function loadWOsForCurrentTab() {
+  if (currentTab === 'due') return fetchDueWOs();
+  var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
+  return api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed);
+}
+
 function switchTab(tab) {
   currentTab = tab;
   document.getElementById('tabOpen').className = 'tab' + (tab === 'open' ? ' active' : '');
   document.getElementById('tabAll').className = 'tab' + (tab === 'all' ? ' active' : '');
+  document.getElementById('tabDue').className = 'tab' + (tab === 'due' ? ' active' : '');
   loadWorkOrders();
 }
 
@@ -465,8 +492,7 @@ function loadWorkOrders() {
   var list = document.getElementById('woList');
   list.innerHTML = '<div class="spinner">Loading…</div>';
   document.getElementById('woSearch').value = '';
-  var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
-  api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed)
+  loadWOsForCurrentTab()
     .then(function(wos) {
       renderWOs(wos);
     })
