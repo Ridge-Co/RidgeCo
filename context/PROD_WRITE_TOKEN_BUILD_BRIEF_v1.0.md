@@ -168,9 +168,12 @@ reason every other Hub-forwarding tool uses one — with `X-Auth-Token: HUB_PROD
       backfill result back (count of rows updated).
 - [ ] Re-running the same call is a no-op (0 rows updated) — confirms idempotency in practice, not
       just by code inspection.
+- [ ] `hub_prod_post('/admin/ensure-receipts-payment-source', {})` against production returns
+      `already_present: true` if the column already exists, or adds it cleanly if not — either way,
+      re-running it afterward returns `already_present: true`.
 - [ ] The same token, sent as a GET, or against any non-allow-listed path (including
-      `/admin/backfill-scope-wo-vendor`'s own read-adjacent neighbors), is rejected — falls through to
-      the normal `WORKER_SECRET`/session-token check, which then 401s it.
+      `/admin/merge-property` and the other excluded `/admin/*` endpoints), is rejected — falls
+      through to the normal `WORKER_SECRET`/session-token check, which then 401s it.
 - [ ] `HUB_PROD_RO_TOKEN`-, `WORKER_SECRET`-, and session-token-authenticated requests are completely
       unaffected — same behavior as before this change, on every existing path.
 - [ ] `CODEMAP.md` and `FEATURE_LOG.md` updated with a new rule entry once shipped.
@@ -185,14 +188,17 @@ reason every other Hub-forwarding tool uses one — with `X-Auth-Token: HUB_PROD
 5. Refresh the GH Broker connector's tool list so `hub_prod_post` becomes callable.
 6. Run `hub_prod_post('/admin/backfill-scope-wo-vendor', {})` once to close out the original Cesar
    Vendor_ID gap, and confirm his jobs now show up in both his portal and the admin vendor filter.
+7. Run `hub_prod_post('/admin/ensure-receipts-payment-source', {})` once, if it hasn't already been
+   run by hand, to close out the Payment_Source column gap flagged in rule 171.
 
 ## Open questions for Brett
 1. OK with a second, prod-scoped, WRITE-capable credential living in `gh-broker`'s secret store,
-   alongside `HUB_TEST_TOKEN` and `HUB_PROD_RO_TOKEN`? It's structurally narrow (one path today,
-   idempotent, additive-only, no money/SMS/QB/auth), but it's a strictly bigger step than the
+   alongside `HUB_TEST_TOKEN` and `HUB_PROD_RO_TOKEN`? It's structurally narrow (two paths today,
+   both idempotent, additive-only, no money/SMS/QB/auth), but it's a strictly bigger step than the
    read-only token was, and worth a deliberate yes rather than an assumed one.
-2. Is `/admin/backfill-scope-wo-vendor` the right — and only — path to start with, or is there
-   another narrow, already-built, idempotent utility write worth including in the same PR?
-3. Comfortable with the "no auto-expanding allow-list" posture (every new path is its own two-repo
-   PR, forever), or would you rather set a lighter-weight bar for additions once this first one has
-   proven out in practice?
+2. Should `/admin/share-attachments` be added now, or held out for its own look first? It plausibly
+   fits the same class but has more surface area (dry-run/limit/offset, live Drive permission
+   changes) than the other two, so it was left out of this PR pending your call.
+3. OK with the "same-PR addition" convention going forward (new qualifying paths ride along in the
+   PR that ships the endpoint, ordinary review, no separate build-brief), or would you rather keep
+   every addition to a dedicated brief like this one, at the cost of more process per addition?
