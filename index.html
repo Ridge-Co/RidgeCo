@@ -842,6 +842,25 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- SPLIT WORK ORDER MODAL -->
+<div class="modal-overlay" id="modal-split-wo">
+  <div class="modal" style="max-width:820px">
+    <div class="modal-header"><div class="modal-title" id="split-modal-title">SPLIT WORK ORDER</div><button class="modal-close" onclick="closeModal('modal-split-wo')">✕</button></div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Creates new work orders from this one, dividing the job between the original (which stays) and the new ones. Nothing is deleted — every field below defaults from the original and is editable per work order.</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <button class="btn small secondary" onclick="addSplitWO()">+ Add another new work order</button>
+      <span style="color:var(--muted);font-size:11px" id="split-count-label"></span>
+    </div>
+    <div id="split-cards"></div>
+    <div id="split-reassign-wrap" style="display:none;margin-top:14px">
+      <div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">TIME ENTRIES / VENDOR BILLS ALREADY ON THE ORIGINAL</div>
+      <div style="color:var(--muted);font-size:11px;margin-bottom:8px">Choose whether each already-logged item stays on the original or moves to one of the new work orders. Locked rows (already billed/reviewed/sent to QuickBooks) can't be reassigned.</div>
+      <div id="split-reassign-rows"></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-split-wo')">Cancel</button><button class="btn" id="split-submit-btn" onclick="submitSplitWO()">Confirm Split</button></div>
+  </div>
+</div>
+
 <!-- SEND WORK ORDER TO VENDOR (B-117 shareable WO) -->
 <div class="modal-overlay" id="modal-share-wo">
   <div class="modal">
@@ -2320,7 +2339,7 @@ function openWODetail(woId) {
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   if (wo.Voided==='TRUE') addBtn('↩ Restore','secondary',function(){unvoidWO(woId);});
-  else addBtn('🗑 Void / Hide','danger',function(){openVoidModal(woId);});
+  else { addBtn('✂ Split','secondary',function(){openSplitModal(woId);}); addBtn('🗑 Void / Hide','danger',function(){openVoidModal(woId);}); }
   openModal('modal-wo-detail');
   // Inject photo section after modal opens (deferred so modal always shows)
   setTimeout(function(){
@@ -2529,6 +2548,179 @@ function unvoidWO(woId) {
       loadAll();
     } else { toast('Error: '+(res.error||'restore failed'),'error'); }
   }).catch(function(e){logError('Unvoid WO',e.message);toast('Error: '+e.message,'error');});
+}
+
+var _splitWOId = null;
+var _splitNewCount = 1;
+var _splitTimeEntries = [];
+var _splitVendorBills = [];
+
+function openSplitModal(woId) {
+  var wo = safeArray(state.workorders).find(function(w){return w.ID===woId;});
+  if (!wo) { toast('Work order not found','error'); return; }
+  if (wo.Voided === 'TRUE') { toast('Cannot split a voided work order','error'); return; }
+  _splitWOId = woId;
+  _splitNewCount = 1;
+  document.getElementById('split-modal-title').textContent = 'SPLIT ' + woId;
+  closeModal('modal-wo-detail');
+  openModal('modal-split-wo');
+  renderSplitCards();
+  loadSplitReassignRows(woId);
+}
+
+function addSplitWO() {
+  if (_splitNewCount >= 10) { toast('Maximum 10 new work orders at once','error'); return; }
+  _splitNewCount++;
+  renderSplitCards();
+  renderSplitReassignOptions();
+}
+
+// Reassignment <select>s are keyed by new-WO INDEX, not id (the new WOs don't exist yet) — so
+// removing a card has to walk every already-picked target and either bump it down one slot or,
+// if it pointed at the card being removed, fall back to "stay on original" rather than silently
+// repointing it at a different new WO after renumbering.
+function removeSplitWO(idx) {
+  if (_splitNewCount <= 1) return;
+  document.querySelectorAll('.split-reassign-target').forEach(function(sel){
+    if (sel.value === 'original') return;
+    var v = parseInt(sel.value, 10);
+    if (v === idx) sel.value = 'original';
+    else if (v > idx) sel.value = String(v - 1);
+  });
+  _splitNewCount--;
+  renderSplitCards();
+  renderSplitReassignOptions();
+}
+
+function splitCardHtml(idx, isOriginal, wo) {
+  var label = isOriginal ? ('ORIGINAL — ' + wo.ID + ' (stays)') : ('NEW WORK ORDER ' + (idx + 1));
+  var prefix = isOriginal ? 'split-orig-' : ('split-new-' + idx + '-');
+  var removeBtn = (!isOriginal && _splitNewCount > 1)
+    ? '<button class="btn small secondary" style="margin-left:auto" onclick="removeSplitWO(' + idx + ')">Remove</button>' : '';
+  return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px">' +
+    '<div style="display:flex;align-items:center;margin-bottom:8px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">' + esc(label) + '</div>' + removeBtn + '</div>' +
+    '<div class="form-grid">' +
+      '<div class="form-group"><label>Trade</label><select id="' + prefix + 'trade">' + tradeOptions(wo.Trade || '', true) + '</select></div>' +
+      '<div class="form-group"><label>Priority</label><select id="' + prefix + 'priority">' +
+        ['normal', 'urgent', 'low'].map(function(p){ return '<option value="' + p + '"' + (p === (wo.Priority || 'normal') ? ' selected' : '') + '>' + p.charAt(0).toUpperCase() + p.slice(1) + '</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="form-group"><label>Vendor</label><select id="' + prefix + 'vendor">' +
+        '<option value="">— Unassigned —</option>' +
+        safeArray(state.vendors).filter(function(v){return v.Active !== 'FALSE';}).map(function(v){ return '<option value="' + v.ID + '"' + (v.ID === wo.Vendor_ID ? ' selected' : '') + '>' + esc(v.Name) + ' — ' + esc(v.Trade || '') + '</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="form-group"><label>Scheduled Date</label><input type="date" id="' + prefix + 'scheduled" value="' + esc((wo.Scheduled_Date || '').slice(0, 10)) + '"></div>' +
+      '<div class="form-group"><label>Managed By</label><select id="' + prefix + 'managed">' +
+        ['', 'RidgeCo', 'Owner'].map(function(m){ return '<option value="' + m + '"' + (m === (wo.Managed_By || '') ? ' selected' : '') + '>' + (m || '— Not set —') + '</option>'; }).join('') +
+      '</select></div>' +
+      '<div class="form-group full"><label>Description</label><textarea id="' + prefix + 'description" style="min-height:90px">' + esc(wo.Description || '') + '</textarea></div>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderSplitCards() {
+  var wo = safeArray(state.workorders).find(function(w){return w.ID === _splitWOId;});
+  if (!wo) return;
+  // Every new card pre-fills from the ORIGINAL's own current values (Brett's call — sensible
+  // defaults, not blank re-entry), including the full Description text; each card, including
+  // the original's own, stays independently editable from here on.
+  var html = splitCardHtml(0, true, wo);
+  for (var i = 0; i < _splitNewCount; i++) html += splitCardHtml(i, false, wo);
+  document.getElementById('split-cards').innerHTML = html;
+  document.getElementById('split-count-label').textContent = _splitNewCount + ' new work order' + (_splitNewCount === 1 ? '' : 's');
+}
+
+function loadSplitReassignRows(woId) {
+  Promise.all([
+    api('GET', '/time-entries?wo_id=' + encodeURIComponent(woId)).catch(function(){ return []; }),
+    api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(woId)).catch(function(){ return []; }),
+  ]).then(function(results){
+    _splitTimeEntries = safeArray(results[0]).filter(function(t){ return t.Active !== 'FALSE'; });
+    _splitVendorBills = safeArray(results[1]);
+    renderSplitReassignOptions();
+  });
+}
+
+// Mirrors the server's own timeEntryReassignLock/vendorBillReassignLock reasoning so a locked
+// row shows disabled with a reason BEFORE a submit attempt, not just as a 409 after the fact —
+// the server still re-checks and is the real gate; this is only for a faster, clearer no.
+function renderSplitReassignOptions() {
+  var wrap = document.getElementById('split-reassign-wrap');
+  var rows = document.getElementById('split-reassign-rows');
+  var liveBillIds = {};
+  _splitVendorBills.forEach(function(b){ if (b.Active !== 'FALSE') liveBillIds[String(b.ID)] = true; });
+  var items = [];
+  _splitTimeEntries.forEach(function(te){
+    var billId = String(te.Bill_ID || '').trim();
+    var locked = (billId && liveBillIds[billId]) ? ('Already linked to vendor bill ' + billId) : '';
+    items.push({ type: 'time_entry', id: te.ID,
+      label: 'Time entry — ' + (te.Hours || '?') + 'h on ' + (te.Created_Date ? te.Created_Date.split('T')[0] : '?') + (te.Entered_By ? ' by ' + te.Entered_By : ''),
+      locked: locked });
+  });
+  _splitVendorBills.forEach(function(b){
+    var locked = b.Active === 'FALSE' ? 'Voided/inactive' : (b.Status === 'reviewed' ? 'Already reviewed/approved for invoicing' : '');
+    items.push({ type: 'vendor_bill', id: b.ID, label: 'Vendor bill — ' + (b.Vendor_Name || b.Vendor_ID || '?') + ' — $' + (b.Total || '0'), locked: locked });
+  });
+  if (!items.length) { wrap.style.display = 'none'; rows.innerHTML = ''; return; }
+  wrap.style.display = '';
+  var newOpts = Array.from({length:_splitNewCount}, function(_, i){ return '<option value="' + i + '">New WO ' + (i + 1) + '</option>'; }).join('');
+  rows.innerHTML = items.map(function(it){
+    var opts = '<option value="original">Stay on original</option>' + newOpts;
+    return '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">' +
+      '<div style="flex:1">' + esc(it.label) + (it.locked ? ' <span style="color:var(--danger)">— ' + esc(it.locked) + '</span>' : '') + '</div>' +
+      '<select class="split-reassign-target" data-type="' + it.type + '" data-id="' + it.id + '"' + (it.locked ? ' disabled' : '') + ' style="width:auto">' + opts + '</select>' +
+    '</div>';
+  }).join('');
+}
+
+function submitSplitWO() {
+  var wo = safeArray(state.workorders).find(function(w){return w.ID === _splitWOId;});
+  if (!wo) { toast('Work order not found','error'); return; }
+  var newWorkOrders = [];
+  for (var i = 0; i < _splitNewCount; i++) {
+    var p = 'split-new-' + i + '-';
+    var desc = (document.getElementById(p + 'description').value || '').trim();
+    if (!desc) { toast('New work order ' + (i + 1) + ' needs a description','error'); return; }
+    newWorkOrders.push({
+      Trade: document.getElementById(p + 'trade').value,
+      Priority: document.getElementById(p + 'priority').value,
+      Vendor_ID: document.getElementById(p + 'vendor').value,
+      Scheduled_Date: document.getElementById(p + 'scheduled').value,
+      Managed_By: document.getElementById(p + 'managed').value,
+      Description: desc,
+    });
+  }
+  var originalOverrides = {
+    Trade: document.getElementById('split-orig-trade').value,
+    Priority: document.getElementById('split-orig-priority').value,
+    Vendor_ID: document.getElementById('split-orig-vendor').value,
+    Scheduled_Date: document.getElementById('split-orig-scheduled').value,
+    Managed_By: document.getElementById('split-orig-managed').value,
+    Description: (document.getElementById('split-orig-description').value || '').trim(),
+  };
+  var reassignments = [];
+  document.querySelectorAll('.split-reassign-target').forEach(function(sel){
+    if (sel.disabled) return;
+    if (sel.value === 'original') return; // default — nothing to send
+    reassignments.push({ type: sel.dataset.type, id: sel.dataset.id, target: parseInt(sel.value, 10) });
+  });
+  if (!confirm('Split ' + _splitWOId + ' into ' + _splitNewCount + ' new work order' + (_splitNewCount === 1 ? '' : 's') + '?')) return;
+  var btn = document.getElementById('split-submit-btn'); btn.disabled = true; btn.textContent = 'Splitting…';
+  api('POST', '/wo/split', {
+    original_wo_id: _splitWOId,
+    original_overrides: originalOverrides,
+    new_work_orders: newWorkOrders,
+    reassignments: reassignments,
+    updated_by: 'admin', updated_by_role: 'admin',
+  }).then(function(res){
+    btn.disabled = false; btn.textContent = 'Confirm Split';
+    if (res && res.success) {
+      toast(_splitWOId + ' split into ' + res.new_wo_ids.join(', '), 'success');
+      closeModal('modal-split-wo');
+      loadAll();
+    } else {
+      toast('Error: ' + ((res && res.error) || 'split failed') + (res && res.reason ? (' — ' + res.reason) : ''), 'error');
+    }
+  }).catch(function(e){ btn.disabled = false; btn.textContent = 'Confirm Split'; logError('Split WO', e.message); toast('Error: ' + e.message, 'error'); });
 }
 
 function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
