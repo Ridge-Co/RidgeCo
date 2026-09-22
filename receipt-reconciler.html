@@ -702,7 +702,7 @@ async function confirmDuplicate(id, btn){
     const res = await post('/receipt-recon/confirm-duplicate', { id });
     if (res.error) throw new Error(res.error);
     statusEl.innerHTML = '<span class="ok">✓ Confirmed duplicate — clears itself in 180 days.</span>';
-    setTimeout(loadQueue, 900);
+    finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
