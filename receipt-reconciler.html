@@ -183,7 +183,7 @@ async function scanNow(){
   try {
     const res = await post('/receipt-recon/scan', {});
     if (res.ok === false) throw new Error(res.error||'scan failed');
-    const msg = '✅ scanned '+res.scanned+' new file(s)'+((res.errors&&res.errors.length)?' — '+res.errors.length+' error(s)':'')+(res.remaining?' — '+res.remaining+' more waiting in the folder, tap Scan again':'')+((res.stuck&&res.stuck.length)?' — skipping '+res.stuck.length+' unreadable file(s): '+res.stuck.join(', '):'');
+    const msg = '✅ scanned '+res.scanned+' new file(s)'+((res.errors&&res.errors.length)?' — '+res.errors.length+' error(s)':'')+(res.remaining?' — '+res.remaining+' more waiting in the folder, tap Scan again':'')+(res.skipped_before_cutoff?' — '+res.skipped_before_cutoff+' dated before '+esc(res.cutoff||'')+' went straight to Skipped':'')+((res.stuck&&res.stuck.length)?' — skipping '+res.stuck.length+' unreadable file(s): '+res.stuck.join(', '):'');
     status.textContent = msg;
     // loadQueue() rewrites this same line with "✅ N pending" — put the scan result back in front
     // of it, or the "tap Scan again" / unreadable-file notes vanish the instant the list reloads.
