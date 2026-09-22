@@ -2605,7 +2605,18 @@ async function scopeProposal(env, body) {
 
   // Flat-text fallback doc (clipboard "Copy proposal" + legacy clients) — grand total + deposit
   // only, same no-leak shape as before; the interactive per-item/variant view is Proposal_Items_JSON.
-  const scopeText = priced.items.map(it => '- ' + (it.area ? it.area + ': ' : '') + it.description).join('\n');
+  // Ridge Co–supplied materials get their own customer line (Brett, Sep 22 2026: "owner gets NO
+  // transparency on markup info. just sees description and price to them") — description + the
+  // customer's materials price only, never Ridge Co's cost or the mode/markup used.
+  const scopeText = priced.items.map(it => {
+    let line = '- ' + (it.area ? it.area + ': ' : '') + it.description;
+    const multi = (it.variants || []).length > 1;
+    for (const v of (it.variants || [])) {
+      if (!(v.materials_price > 0)) continue;
+      line += '\n    Includes materials' + (multi && v.label ? ' (' + v.label + ' option)' : '') + ': ' + v.materials_desc + ' — $' + v.materials_price.toFixed(2);
+    }
+    return line;
+  }).join('\n');
   // Standing policy (Aug 21 2026, Brett): if only PART of a scope is approved/completed instead of
   // the full project, itemized pricing for those pieces is a best-efforts estimate, not a fixed
   // quote — the combined price is built to absorb small unknowns across a mixed batch of larger and
