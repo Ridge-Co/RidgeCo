@@ -436,6 +436,28 @@ function render(rows){
   rows.forEach(r => { rowSuggestions[r.ID] = r.suggestion || {}; rowEvidence[r.ID] = r.duplicate_evidence || []; if ((r.Status||'pending')==='pending') refreshWoSelect(r.ID); });
 }
 
+function evidenceHtml(r){
+  const evidence = rowEvidence[r.ID] || [];
+  let html = '';
+  if (r.Duplicate_Checked_Date || evidence.length) {
+    html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">';
+    if (!evidence.length) {
+      html += '<div class="rc-sub">🔍 Checked '+esc((r.Duplicate_Checked_Date||'').slice(0,10))+' — no matching Receipts/QuickBooks entries found.</div>';
+    } else {
+      evidence.forEach((ev, i) => {
+        if (ev.signal === 'qb_check_error') { html += '<div class="rc-sub err">⚠ '+esc(ev.reason)+'</div>'; return; }
+        html += '<div class="rc-posting" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+          + '<span>🔍 '+esc(ev.reason)+'</span>'
+          + '<button class="btn small warnbtn" onclick="confirmDuplicateFromEvidence(\''+r.ID+'\', '+i+', this)">It\'s this one</button>'
+          + '</div>';
+      });
+    }
+    html += '</div>';
+  }
+
+  return html;
+}
+
 function rowCard(r){
   const sug = r.suggestion || {};
   // 'company' (a Ridge Co business expense — no customer, sometimes no property either) now
