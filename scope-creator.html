@@ -967,6 +967,52 @@ async function saveEstimate(){
   }catch(e){ setStatus('est-status','⚠ '+e.message,'err'); }
 }
 
+/* Ridge Co materials pricing (Sep 22 2026) — per proposal: same markup / at cost / flat %. */
+function currentMatMode(){
+  var s=state.current||{}; var mp=null;
+  try{ mp=JSON.parse(s.Materials_Pricing_JSON||'null'); }catch(e){ mp=null; }
+  if(!mp || ['markup','at_cost','flat_pct'].indexOf(mp.mode)<0) mp={mode:'markup'};
+  return mp;
+}
+function renderMatMode(){
+  var mp=currentMatMode();
+  document.querySelectorAll('input[name="mat-mode"]').forEach(function(r){ r.checked=(r.value===mp.mode); });
+  document.getElementById('mat-pct').value=(mp.mode==='flat_pct' && mp.pct!=null)?mp.pct:'';
+  onMatModeChange();
+}
+function readMatMode(){
+  var picked=document.querySelector('input[name="mat-mode"]:checked');
+  var mode=picked?picked.value:'markup';
+  var out={mode:mode};
+  if(mode==='flat_pct'){ var p=parseFloat(document.getElementById('mat-pct').value); out.pct=isFinite(p)?p:NaN; }
+  return out;
+}
+function onMatModeChange(){
+  var mp=readMatMode();
+  if(mp.mode==='flat_pct' && !(isFinite(mp.pct) && mp.pct>=0 && mp.pct<=500)) setStatus('mat-summary','Enter a flat markup % (0–500) to use this option.','err');
+  else setStatus('mat-summary','','info');
+}
+
+/* Gmail reconnect (Sep 22 2026) — when the Ridge Co sender's Google sign-in has expired/been
+   revoked, the send fails with that reason; this opens Google's sign-in for the sender account.
+   The Worker stores the new token itself — nothing to paste anywhere. */
+function isGmailAuthError(msg){ return /gmail/i.test(msg||'') && /(expired|revoked|invalid_grant|reconnect|not configured|token refresh failed)/i.test(msg||''); }
+function showGmailReconnect(show){
+  document.getElementById('gmail-reconnect-btn').classList.toggle('hide', !show);
+  document.getElementById('gmail-reconnect-note').classList.toggle('hide', !show);
+}
+async function reconnectGmail(){
+  // Open the tab synchronously (inside the tap) so mobile Chrome doesn't block it as a popup,
+  // then point it at Google once the Worker hands back the signed sign-in URL.
+  var w=window.open('about:blank','_blank');
+  setStatus('send-status','Opening Google sign-in…');
+  try{
+    var r=await post('/gmail/connect-url',{});
+    if(w){ w.location.href=r.url; } else { window.location.href=r.url; return; }
+    setStatus('send-status','Finish signing in as '+(r.sender||'the Ridge Co sender')+' in the new tab, then tap Send again.','info');
+  }catch(e){ if(w) w.close(); setStatus('send-status','⚠ '+e.message,'err'); }
+}
+
 /* proposal */
 async function genProposal(){
   // Persist whatever's currently on screen FIRST — /scope/proposal always builds the customer
