@@ -3147,10 +3147,55 @@ async function scopeProposalSignedList(env, url) {
       qb_final_bill_id: r.QB_Final_Bill_ID || '', qb_final_bill_number: r.QB_Final_Bill_Number || '',
       bill_gap: gap.kind, bill_skip_reason: gap.reason,
       final_bill_gap: finalGap.kind, final_bill_skip_reason: finalGap.reason, milestones,
+      materials: scopeMaterialsBudgetSummary(+r.RC_Materials_Cost || 0, +r.RC_Materials_Price || 0, sc.WO_ID || '', allReceipts),
     };
   });
   out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
   return json(out);
+}
+
+// Pure: Ridge Co materials budget (what the signed proposal priced in) vs actual receipts matched
+// to the scope's work order (Sep 22 2026). Every receipt on a signed scope's WO counts — those are
+// blocked from being invoiced again via Review Bills (scopeCoveringSignature), so this is the one
+// place they stay visible. receipts === null means the Receipts read failed.
+function scopeMaterialsBudgetSummary(budgetCost, budgetPrice, woId, receipts) {
+  budgetCost = +(+budgetCost || 0).toFixed(2); budgetPrice = +(+budgetPrice || 0).toFixed(2);
+  if (receipts === null) return { budget_cost: budgetCost, budget_price: budgetPrice, actual: null, receipt_count: null, variance: null, state: 'unknown' };
+  // Vendor-logged receipts (Role 'vendor') are the vendor's own purchases, inside their cost — not
+  // Ridge Co spending — so they never count toward "actual" here.
+  const mine = woId ? (receipts || []).filter(rc => String(rc.WO_ID) === String(woId) && String(rc.Active || '').toUpperCase() !== 'FALSE' && (parseFloat(rc.Amount) || 0) > 0 && String(rc.Role || '').toLowerCase() !== 'vendor') : [];
+  const actual = +mine.reduce((sum, rc) => sum + (parseFloat(rc.Amount) || 0), 0).toFixed(2);
+  const variance = +(budgetCost - actual).toFixed(2); // + = under budget, - = over
+  // No materials budget → 'none': those receipts aren't part of the proposal and keep billing
+  // through Review Bills as always (scopeCoveringSignature doesn't cover the WO), so nothing to show.
+  let state = 'none';
+  if (budgetCost > 0) state = actual === 0 ? 'not_bought' : (variance < 0 ? 'over' : 'within');
+  return { budget_cost: budgetCost, budget_price: budgetPrice, actual, receipt_count: mine.length, variance, state };
+}
+
+// Pure: the active signed Scope_Signatures row (if any) whose scope owns this work order AND
+// priced Ridge Co materials into the proposal (RC_Materials_Cost > 0) — i.e. the owner already
+// pays for Ridge Co's materials through the proposal's payment milestones, so receipts on it must
+// never be invoiced a second time through Review Bills (Sep 22 2026, Brett: "track vs budget +
+// block double-billing"). A signed proposal with NO materials budget (every proposal signed before
+// this shipped) is deliberately NOT covered: its receipts were never priced in, so they keep
+// billing through Review Bills exactly as before — blocking them would lose the money instead.
+// Matches Scopes.WO_ID first, then Work_Orders.Scope_ID if given.
+function scopeCoveringSignature(scopes, sigs, woId, wo) {
+  if (!woId) return null;
+  const woScopeId = wo && wo.Scope_ID ? String(wo.Scope_ID) : '';
+  const scopeIds = (scopes || []).filter(s => String(s.WO_ID || '') === String(woId) || (woScopeId && String(s.ID) === woScopeId)).map(s => String(s.ID));
+  if (!scopeIds.length) return null;
+  const sig = (sigs || []).find(r => scopeIds.includes(String(r.Scope_ID)) && String(r.Active || '').toUpperCase() !== 'FALSE' && (parseFloat(r.RC_Materials_Cost) || 0) > 0);
+  return sig ? { scope_id: String(sig.Scope_ID), signature_id: String(sig.ID), materials_budget: +(parseFloat(sig.RC_Materials_Cost) || 0).toFixed(2) } : null;
+}
+async function scopeCoveringSignatureForWO(env, woId) {
+  if (!woId) return null;
+  // A tab that doesn't exist yet means "no signed scopes" — any OTHER read failure throws, so a
+  // caller never mistakes "couldn't check" for "not covered" (that would re-open double-billing).
+  const orEmpty = e => { if (isMissingTabError(e)) return []; throw e; };
+  const [scopes, sigs] = await Promise.all([fetchTab(env, 'Scopes').catch(orEmpty), fetchTab(env, 'Scope_Signatures').catch(orEmpty)]);
+  return scopeCoveringSignature(scopes, sigs, woId, null);
 }
 
 // Which trade to book the deposit/bill lines under. A Scope has no single Trade field of its
