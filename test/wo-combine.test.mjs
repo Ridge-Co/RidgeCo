@@ -295,6 +295,29 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   const body = await res.json();
   t('mismatched property/unit is rejected', res.status === 400 && /not the same property\/unit/.test(body.error));
 }
+// An already-voided WO cannot be combined again (regression: a repeat/double-tap call used to
+// silently return success:true instead of rejecting, re-running the void/audit logic on a WO
+// that was already combined elsewhere).
+{
+  const db = makeDb([
+    { ID: 'WO-1', Property_ID: '76', Unit_ID: 'U1', Voided: 'TRUE' },
+    { ID: 'WO-2', Property_ID: '76', Unit_ID: 'U1' },
+  ]);
+  const { woCombine } = build(db);
+  const res = await woCombine(env, { survivor_wo_id: 'WO-1', combined_wo_ids: ['WO-2'] });
+  const body = await res.json();
+  t('an already-voided survivor is rejected, not silently combined into', res.status === 400 && /is voided/.test(body.error));
+}
+{
+  const db = makeDb([
+    { ID: 'WO-1', Property_ID: '76', Unit_ID: 'U1' },
+    { ID: 'WO-2', Property_ID: '76', Unit_ID: 'U1', Voided: 'TRUE' },
+  ]);
+  const { woCombine } = build(db);
+  const res = await woCombine(env, { survivor_wo_id: 'WO-1', combined_wo_ids: ['WO-2'] });
+  const body = await res.json();
+  t('an already-voided combined_wo_id is rejected, not re-combined', res.status === 400 && /already voided/.test(body.error));
+}
 
 // ── 2. Field-agreement auto-resolve (silent) ─────────────────────────────────────────────────
 {
