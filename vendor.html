@@ -393,11 +393,28 @@ function doLogout() {
 }
 
 // Restore a persisted session so a reload / auto-refresh keeps the vendor logged in.
-(function restoreVendorSession(){
+// Sep 22 2026 fix: this used to run immediately as an IIFE, inline in this early <script>
+// block -- but onLoginSuccess() calls applyTranslations(), which isn't defined until a LATER
+// <script> block further down this document runs. On a completely fresh page load (not a
+// dev-tools re-run), that made onLoginSuccess() throw a ReferenceError on every automatic
+// session restore, silently swallowed by this function's own try/catch -- leaving loadWorkOrders()
+// (the very next line in onLoginSuccess) never called, and the static "Loading work orders…"
+// placeholder in the initial HTML on screen forever. This is also why the page looked
+// untranslated even for a Spanish-language vendor: applyTranslations() crashed before doing
+// its work. A vendor's own fresh manual login (clicking SIGN IN) never hit this, because by
+// the time a real click can happen every script tag -- including the one defining
+// applyTranslations -- has already run. Fix: defer the restore itself until DOMContentLoaded,
+// by which point the whole document (every <script> tag) has executed.
+function restoreVendorSession(){
   try { var raw = localStorage.getItem(SESS_KEY);
     if (raw) { var d = JSON.parse(raw); if (d && d.token) onLoginSuccess(d, false); }
   } catch(e){}
-})();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', restoreVendorSession);
+} else {
+  restoreVendorSession();
+}
 
 // Floating toast notification — used after async actions (estimate save, etc.)
 function toast(msg, type) {
