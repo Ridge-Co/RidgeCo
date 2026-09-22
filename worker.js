@@ -233,7 +233,17 @@ export default {
             (request.method === 'POST' && HUB_TEST_WRITE_PATHS.includes(path))
           );
         if (_hubTestOk) _viaHubTestToken = true;
-        const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance'];
+        // Narrow READ-ONLY token for self-test/verification of PRODUCTION read-only admin endpoints
+          // (credential-access gap closed Sep 22 2026, B-012 Vendor Performance follow-up — see
+          // PROD_READONLY_TOKEN_BUILD_BRIEF_v1.0.md). Lets a session run GET-only acceptance-
+          // criteria checks against live production without ever holding WORKER_SECRET. Strictly
+          // GET + allow-listed paths — cannot write anything, and cannot be escalated by a request
+          // body since it can never match a POST/PUT/DELETE handler. Deliberately NOT staging-
+          // gated (the opposite of HUB_TEST_TOKEN above) — its whole purpose is reaching
+          // production. Fully inert unless env.HUB_PROD_RO_TOKEN is set, so deploying this has
+          // zero effect until the secret exists on production maintenance-hub (and the matching
+          // value is set on the gh-broker Worker's own HUB_PROD_RO_TOKEN).
+          const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance'];
           const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && HUB_PROD_RO_READ_PATHS.includes(path);
           if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
