@@ -51,7 +51,15 @@
   .li .del{grid-column:2;justify-self:end;}
   .variants{background:#fff;border:1px dashed var(--border);border-radius:var(--radius);padding:8px;margin-top:4px;}
   .variants>label{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
-  .vrow{display:flex;gap:6px;margin-bottom:5px;align-items:center;}
+  .vrow{display:flex;gap:6px;margin-bottom:5px;align-items:center;flex-wrap:wrap;}
+  /* Ridge Co–supplied materials (Sep 22 2026): its own full-width line under each option's
+     vendor-cost/override inputs, so it stays readable at phone width. */
+  .vrow .vmat{flex-basis:100%;display:flex;gap:6px;align-items:center;}
+  .vrow .vmat input.v-mat-cost{flex:1;min-width:0;border-color:#166534;}
+  .vrow .vmat input.v-mat-desc{flex:1.6;min-width:0;border-color:#166534;}
+  .vrow .vmat input:not(:placeholder-shown){background:#eaf6ee;}
+  .mat-mode label{display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 0;cursor:pointer;}
+  .mat-mode input[type=radio]{width:auto;}
   .vrow input.v-label{flex:1.3;}
   .vrow input.v-cost{flex:1;}
   .vrow input.v-price-override{flex:1;border-color:#c8860d;}
@@ -261,6 +269,16 @@
       <button class="btn small" onclick="saveSchedule()">💾 Save payment schedule</button>
     </div>
     <div id="schedule-status" class="status"></div>
+    <div id="mat-pricing-box" style="margin-top:12px;border-top:1px dashed var(--border);padding-top:10px;">
+      <div style="font-size:11px;font-weight:bold;margin-bottom:4px;">Ridge Co materials — how to price them to the owner</div>
+      <div class="sub" style="margin-bottom:4px;">Only used for options with a green "RC materials $" amount in step 2. The owner sees a separate "Includes materials" line (description + price) — never your cost or markup. Saved when you generate.</div>
+      <div class="mat-mode">
+        <label><input type="radio" name="mat-mode" value="markup" onchange="onMatModeChange()"> Same markup as vendor cost (priced together with the vendor's part)</label>
+        <label><input type="radio" name="mat-mode" value="at_cost" onchange="onMatModeChange()"> At cost + card fee only (no markup)</label>
+        <label><input type="radio" name="mat-mode" value="flat_pct" onchange="onMatModeChange()"> Flat markup % <input id="mat-pct" type="number" step="0.01" min="0" max="500" style="width:72px;" placeholder="%" oninput="onMatModeChange()"> + card fee</label>
+      </div>
+      <div id="mat-summary" class="status"></div>
+    </div>
     <button class="btn" style="margin-top:10px;" onclick="genProposal()">📄 Generate proposal from scope + pricing</button>
     <div class="sub" style="margin-top:4px;">⚠ Generating recomputes pricing from the items above and overwrites the text below — if you've hand-edited it (e.g. a custom combined/standalone breakdown), edit the text box directly instead of regenerating.</div>
     <div id="prop-status" class="status"></div>
@@ -279,8 +297,10 @@
       </div>
       <div class="row" style="margin-top:10px;border-top:1px dashed var(--border);padding-top:10px;">
         <button class="btn" onclick="sendEstimateEmail()">📧 Send estimate to owner</button>
+        <button class="btn secondary hide" id="gmail-reconnect-btn" onclick="reconnectGmail()">🔑 Reconnect Gmail</button>
       </div>
       <div id="send-status" class="status"></div>
+      <div id="gmail-reconnect-note" class="sub hide" style="margin-top:4px;">Opens Google in a new tab — sign in as the Ridge Co sender, allow sending, then come back and tap Send again.</div>
       <div id="send-sent-note"></div>
       <div id="sig-status"></div>
     </div>
@@ -528,6 +548,8 @@ function renderEditor(){
   try{ var sched=JSON.parse(s.Payment_Schedule_JSON||'null'); scheduleState.milestones=(Array.isArray(sched)&&sched.length)?sched:scheduleDefault(); }
   catch(e){ scheduleState.milestones=scheduleDefault(); }
   renderSchedule();
+  // Ridge Co materials pricing mode (Sep 22 2026)
+  renderMatMode();
   // proposal
   if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').value=s.Proposal_Text; }
   else { document.getElementById('proposal-out').classList.add('hide'); document.getElementById('proposal-text').value=''; }
@@ -562,7 +584,9 @@ async function editTitle(){
 // proposal can be sent — separate from an optional "who referred this" field.
 function itemsFullyPriced(items){
   return !!(items && items.length) && items.every(function(it){
-    return (it.variants||[]).some(function(v){ return (parseFloat(v.vendor_cost)||0)>0; });
+    // Priced = some option has a vendor cost OR Ridge Co materials (a materials-only item has no
+    // vendor cost at all — Sep 22 2026; before, this forced a fake $1 vendor cost).
+    return (it.variants||[]).some(function(v){ return (parseFloat(v.vendor_cost)||0)>0 || (parseFloat(v.rc_materials_cost)||0)>0; });
   });
 }
 function ownerBillingStatus(){
@@ -734,12 +758,22 @@ function variantsBlock(it){
       '<input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $" value="'+(v.vendor_cost?esc(v.vendor_cost):'')+'">'+
       '<input class="v-price-override" type="number" step="0.01" placeholder="Override final price $ (optional)" value="'+(v.price_override?esc(v.price_override):'')+'">'+
       (multi?'<button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>':'')+
+      matInputsHtml(v)+
     '</div>';
   }).join('');
   return '<div class="variants"><label>Pricing — vendor cost per option (private; never shown to the customer)</label>'+
     '<div class="variant-rows">'+rows+'</div>'+
-    '<div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave "Override final price" blank to auto-calculate from vendor cost + standard markup. Set it to lock the exact customer price/invoice amount for that option instead — vendor cost still tracks correctly either way.</div>'+
+    '<div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave "Override final price" blank to auto-calculate from vendor cost + standard markup. Set it to lock the exact customer price/invoice amount for that option instead — vendor cost still tracks correctly either way. When the option has Ridge Co materials, the override covers the vendor/labor part only; materials are priced on top (step 7).</div>'+
+    '<div style="font-size:9px;color:#166534;margin-top:2px;">Green = "RC materials": materials <b>Ridge Co buys</b>, not the vendor. Never on the vendor bill. Owner sees description + price only. Vendor cost can be blank for a materials-only item.</div>'+
     '<button type="button" class="btn small secondary" onclick="addVariant(this)">+ Add alternate option (e.g. Repair vs Replace)</button></div>';
+}
+// Ridge Co–supplied materials inputs for one option (Sep 22 2026).
+function matInputsHtml(v){
+  v=v||{};
+  return '<div class="vmat">'+
+    '<input class="v-mat-cost" type="number" step="0.01" min="0" placeholder="RC mat. $" title="Ridge Co materials $ — what Ridge Co pays (not the vendor)" value="'+((+v.rc_materials_cost>0)?esc(v.rc_materials_cost):'')+'">'+
+    '<input class="v-mat-desc" maxlength="200" placeholder="Materials (owner sees)" title="Materials description — shown to the owner with their price" value="'+esc(v.rc_materials_desc||'')+'">'+
+  '</div>';
 }
 function renderItems(){
   var items=state.current.line_items||[];
@@ -766,11 +800,11 @@ function addVariant(btn){
     // becoming multi-option — the one existing row needs a label + remove button too
     var first=existing[0];
     if(!first.querySelector('.v-label')){ var lbl=document.createElement('input'); lbl.className='v-label'; lbl.placeholder='Option label (e.g. Repair Roof)'; first.insertBefore(lbl, first.firstChild); }
-    if(!first.querySelector('.danger')){ var rm=document.createElement('button'); rm.type='button'; rm.className='btn small danger'; rm.textContent='✕'; rm.onclick=function(){removeVariant(rm);}; first.appendChild(rm); }
+    if(!first.querySelector('.danger')){ var rm=document.createElement('button'); rm.type='button'; rm.className='btn small danger'; rm.textContent='✕'; rm.onclick=function(){removeVariant(rm);}; var vm=first.querySelector('.vmat'); if(vm) first.insertBefore(rm, vm); else first.appendChild(rm); }
   }
   var n=rows.querySelectorAll('.vrow').length;
   var div=document.createElement('div'); div.className='vrow'; div.dataset.key='v'+(n+1);
-  div.innerHTML='<input class="v-label" placeholder="Option label (e.g. Replace Roof)"><input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $"><input class="v-price-override" type="number" step="0.01" placeholder="Override final price $ (optional)"><button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>';
+  div.innerHTML='<input class="v-label" placeholder="Option label (e.g. Replace Roof)"><input class="v-cost" type="number" step="0.01" placeholder="Vendor cost $"><input class="v-price-override" type="number" step="0.01" placeholder="Override final price $ (optional)"><button type="button" class="btn small danger" onclick="removeVariant(this)">✕</button>'+matInputsHtml({});
   rows.appendChild(div);
 }
 function removeVariant(btn){
@@ -789,8 +823,12 @@ function collectItems(){
     var variants=[];
     el.querySelectorAll('.vrow').forEach(function(vr,i){
       var lblEl=vr.querySelector('.v-label'), costEl=vr.querySelector('.v-cost'), poEl=vr.querySelector('.v-price-override');
+      var matEl=vr.querySelector('.v-mat-cost'), matDescEl=vr.querySelector('.v-mat-desc');
       var poVal=poEl&&poEl.value!==''?parseFloat(poEl.value):null;
-      variants.push({ key:vr.dataset.key||('v'+(i+1)), label:lblEl?lblEl.value.trim():'', vendor_cost:parseFloat(costEl&&costEl.value)||0, price_override:(poVal!=null&&isFinite(poVal)&&poVal>=0)?poVal:null });
+      var vv={ key:vr.dataset.key||('v'+(i+1)), label:lblEl?lblEl.value.trim():'', vendor_cost:parseFloat(costEl&&costEl.value)||0, price_override:(poVal!=null&&isFinite(poVal)&&poVal>=0)?poVal:null };
+      var matVal=Math.max(0, parseFloat(matEl&&matEl.value)||0), matDesc=(matDescEl&&matDescEl.value||'').trim();
+      if(matVal>0 || matDesc){ vv.rc_materials_cost=matVal; vv.rc_materials_desc=matDesc; }
+      variants.push(vv);
     });
     if(!variants.length) variants=[{key:'v1',label:'',vendor_cost:0,price_override:null}];
     out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value, variants:variants, selected_key:variants[0].key });
@@ -929,6 +967,52 @@ async function saveEstimate(){
   }catch(e){ setStatus('est-status','⚠ '+e.message,'err'); }
 }
 
+/* Ridge Co materials pricing (Sep 22 2026) — per proposal: same markup / at cost / flat %. */
+function currentMatMode(){
+  var s=state.current||{}; var mp=null;
+  try{ mp=JSON.parse(s.Materials_Pricing_JSON||'null'); }catch(e){ mp=null; }
+  if(!mp || ['markup','at_cost','flat_pct'].indexOf(mp.mode)<0) mp={mode:'markup'};
+  return mp;
+}
+function renderMatMode(){
+  var mp=currentMatMode();
+  document.querySelectorAll('input[name="mat-mode"]').forEach(function(r){ r.checked=(r.value===mp.mode); });
+  document.getElementById('mat-pct').value=(mp.mode==='flat_pct' && mp.pct!=null)?mp.pct:'';
+  onMatModeChange();
+}
+function readMatMode(){
+  var picked=document.querySelector('input[name="mat-mode"]:checked');
+  var mode=picked?picked.value:'markup';
+  var out={mode:mode};
+  if(mode==='flat_pct'){ var p=parseFloat(document.getElementById('mat-pct').value); out.pct=isFinite(p)?p:NaN; }
+  return out;
+}
+function onMatModeChange(){
+  var mp=readMatMode();
+  if(mp.mode==='flat_pct' && !(isFinite(mp.pct) && mp.pct>=0 && mp.pct<=500)) setStatus('mat-summary','Enter a flat markup % (0–500) to use this option.','err');
+  else setStatus('mat-summary','','info');
+}
+
+/* Gmail reconnect (Sep 22 2026) — when the Ridge Co sender's Google sign-in has expired/been
+   revoked, the send fails with that reason; this opens Google's sign-in for the sender account.
+   The Worker stores the new token itself — nothing to paste anywhere. */
+function isGmailAuthError(msg){ return /gmail/i.test(msg||'') && /(expired|revoked|invalid_grant|reconnect|not configured|token refresh failed)/i.test(msg||''); }
+function showGmailReconnect(show){
+  document.getElementById('gmail-reconnect-btn').classList.toggle('hide', !show);
+  document.getElementById('gmail-reconnect-note').classList.toggle('hide', !show);
+}
+async function reconnectGmail(){
+  // Open the tab synchronously (inside the tap) so mobile Chrome doesn't block it as a popup,
+  // then point it at Google once the Worker hands back the signed sign-in URL.
+  var w=window.open('about:blank','_blank');
+  setStatus('send-status','Opening Google sign-in…');
+  try{
+    var r=await post('/gmail/connect-url',{});
+    if(w){ w.location.href=r.url; } else { window.location.href=r.url; return; }
+    setStatus('send-status','Finish signing in as '+(r.sender||'the Ridge Co sender')+' in the new tab, then tap Send again.','info');
+  }catch(e){ if(w) w.close(); setStatus('send-status','⚠ '+e.message,'err'); }
+}
+
 /* proposal */
 async function genProposal(){
   // Persist whatever's currently on screen FIRST — /scope/proposal always builds the customer
@@ -939,7 +1023,9 @@ async function genProposal(){
   // customer's page. Same save-before-act pattern applyCommand()/splitSelected() already use.
   setStatus('prop-status','Saving items…');
   var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
-  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items }); state.current.line_items=items; }
+  var mp=readMatMode();
+  if(mp.mode==='flat_pct' && !(isFinite(mp.pct) && mp.pct>=0 && mp.pct<=500)){ setStatus('prop-status','⚠ Enter the flat materials markup % (0–500), or pick another materials pricing option.','err'); return; }
+  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items, materials_pricing:mp }); state.current.line_items=items; state.current.Materials_Pricing_JSON=JSON.stringify(mp); }
   catch(e){ setStatus('prop-status','⚠ could not save your item edits, so the proposal was not generated — '+e.message,'err'); return; }
   setStatus('prop-status','Generating customer proposal…');
   try{
@@ -949,6 +1035,9 @@ async function genProposal(){
     state.current.Proposal_Text=r.proposal_text; state.current.Status='proposed'; document.getElementById('ed-status-pill').innerHTML=statusPill('proposed');
     var schedTxt=(r.schedule||[]).map(function(m){ return m.label+' $'+Number(m.customer_amount).toFixed(2); }).join(' · ');
     var msg='✅ proposal ready — total $'+Number(r.final_price).toFixed(2)+' — '+schedTxt;
+    if(r.materials && Number(r.materials.cost_total)>0){
+      msg+=' · Ridge Co materials: your cost $'+Number(r.materials.cost_total).toFixed(2)+' → owner pays $'+Number(r.materials.price_total).toFixed(2)+' (vendor bill basis $'+Number(r.materials.vendor_cost_total).toFixed(2)+', materials excluded)';
+    }
     if(r.schedule_warnings && r.schedule_warnings.length) msg+=' ⚠ '+r.schedule_warnings.join(' ');
     setStatus('prop-status',msg,(r.schedule_warnings&&r.schedule_warnings.length)?'warn':'ok');
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
@@ -1024,8 +1113,9 @@ async function sendEstimateEmail(){
     document.getElementById('link-out').classList.remove('hide');
     document.getElementById('link-text').value=r.url;
     setStatus('send-status','✅ sent to '+r.sent_to,'ok');
+    showGmailReconnect(false);
     renderSendStatus();
-  }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); }
+  }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
 }
 function renderSendStatus(){
   var el=document.getElementById('send-sent-note'); if(!el) return;

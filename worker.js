@@ -87,6 +87,10 @@ export default {
     // scope. Never set for a WORKER_SECRET or session-token call — those get full access as today.
     let _viaHubTestToken = false;
     const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
+      // Gmail "Reconnect" sign-in return (Sep 22 2026): Google redirects the browser here, so it
+      // can't carry the admin header — gmailOAuthCallback refuses anything without a valid signed,
+      // 15-minute gmail-oauth `state` minted by the ADMIN-gated POST /gmail/connect-url.
+      '/gmail/callback',
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
       // last-4-of-phone gate + per-WO lockout live INSIDE these handlers, not here.
@@ -256,7 +260,7 @@ export default {
     }
     try {
       if (request.method === 'GET') {
-        if (path === '/health')                 return await health(env);
+        if (path === '/health')                 return await health(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
@@ -335,6 +339,8 @@ export default {
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
         if (path === '/qb/test')                return await qbTest(env);
         if (path === '/gmail/test')             return await gmailTest(env, url);
+        if (path === '/gmail/callback')         return await gmailOAuthCallback(env, url);
+        if (path === '/gmail/token-check')      return await gmailTokenCheck(env);
         if (path === '/qb/accounts')            return await qbListAccounts(env);
         if (path === '/qb/setup-trades')        return await qbSetupTrades(env);
         if (path === '/qb/ready')               return await qbReadyQueue(env, url);
@@ -653,6 +659,7 @@ export default {
         if (path === '/scope/proposal/link')        return await scopeProposalLink(env, body);
         if (path === '/scope/proposal/link-revoke') return await scopeProposalLinkRevoke(env, body);
         if (path === '/scope/proposal/send')        return await scopeProposalSend(env, body);
+        if (path === '/gmail/connect-url')          return await gmailConnectUrl(env, url);
         if (path === '/scope-proposal/sign')      return await scopeProposalSign(env, body, _clientIP, _clientUA);
         if (path === '/scope-proposal/book')      return await scopeProposalBook(env, body);
         if (path === '/scope-proposal/unbook')    return await scopeProposalUnbook(env, body);
@@ -1561,7 +1568,20 @@ async function listBilledReceipts(env, url) {
       String(r.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean)
         .forEach(id => { billed[id] = String(r.ID); });
     });
-    return json({ ok: true, wo_id: woId, billed });
+    // Signed scope proposal WITH Ridge Co materials priced in (Sep 22 2026): the owner already
+    // pays for those materials through the proposal's payment milestones — so every receipt on
+    // this job counts as billed. index.html's invoice picker already renders any id in
+    // `billed` as disabled + "already invoiced", so no picker change is needed. A read failure
+    // here throws into the catch below → ok:false → the picker ticks nothing by default.
+    const covered = await scopeCoveringSignatureForWO(env, woId);
+    if (covered) {
+      const rcs = await fetchTab(env, 'Receipts');
+      rcs.filter(rc => String(rc.WO_ID) === String(woId) && rc.Active !== 'FALSE').forEach(rc => {
+        const id = String(rc.ID);
+        if (!billed[id]) billed[id] = 'signed proposal (Scope #' + covered.scope_id + ')';
+      });
+    }
+    return json({ ok: true, wo_id: woId, billed, scope_covered: covered || null });
   } catch (e) { return json({ ok: false, error: e.message, billed: {} }); }
 }
 
@@ -1953,7 +1973,14 @@ async function receiptReconConfirm(env, body) {
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
-    invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
+    // A signed scope proposal's WO is billed through its payment milestones — folding this
+    // receipt into a pending Invoice_Review row would charge the customer for it a second time.
+    // It still lands on the WO (counted in Signed Proposals' materials budget vs actual).
+    let covered = null, coverErr = null;
+    try { covered = await scopeCoveringSignatureForWO(env, wo_id); } catch (e) { coverErr = e; }
+    if (covered) invoiceLink = { linked: false, reason: 'covered_by_signed_proposal', scope_id: covered.scope_id };
+    else if (coverErr) invoiceLink = { linked: false, reason: 'scope_check_failed', error: String(coverErr && coverErr.message || coverErr) };
+    else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
   }
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
@@ -2066,11 +2093,22 @@ function scopeCleanVariants(it) {
     ? raw.map((v, i) => {
         const po = v && v.price_override;
         const poNum = (po === '' || po === null || po === undefined) ? null : parseFloat(po);
-        return {
+        const out = {
           key: (v && v.key) || ('v' + (i + 1)), label: (v && v.label) || '',
           vendor_cost: Math.max(0, parseFloat(v && v.vendor_cost) || 0),
           price_override: (poNum != null && isFinite(poNum) && poNum >= 0) ? +poNum.toFixed(2) : null,
         };
+        // Ridge Co–supplied materials (Sep 22 2026, Brett: "no way to account for materials
+        // included in the estimate but to be paid for by ridge co rather than vendor"). Ridge Co's
+        // OWN cost for materials it buys itself — priced to the customer per the scope's
+        // Materials_Pricing_JSON mode (see scopeItemsPricing), shown to the customer as a separate
+        // "Includes materials" line, and NEVER part of vendor_cost, so it never reaches the vendor
+        // bill or a milestone's Vendor_Amount. Only attached when actually used, so every pre-existing
+        // variant keeps its exact old shape.
+        const mat = Math.max(0, parseFloat(v && v.rc_materials_cost) || 0);
+        const matDesc = String((v && v.rc_materials_desc) || '').trim().slice(0, 200);
+        if (mat > 0 || matDesc) { out.rc_materials_cost = +mat.toFixed(2); out.rc_materials_desc = matDesc; }
+        return out;
       })
     : [{ key: 'v1', label: '', vendor_cost: Math.max(0, parseFloat(it && (it.cost != null ? it.cost : it.vendor_cost)) || 0), price_override: null }];
   if (!variants.length) variants = [{ key: 'v1', label: '', vendor_cost: 0 }];
@@ -2264,7 +2302,21 @@ async function scopeCommand(env, body) {
   const txt = await scopeClaude(env, prompt, null, 2000);
   const parsed = scopeParseJSON(txt);
   if (!parsed || !Array.isArray(parsed.items)) return json({ error: 'Could not apply command — model returned unparseable output', raw: String(txt).slice(0, 300) }, 502);
-  const clean = scopeCleanItems(parsed.items);
+  // The model is told to return only the text fields ("never add prices"), so a kept item comes
+  // back with no `variants` — which scopeCleanItems would reset to a single $0 option, silently
+  // wiping every vendor cost, override, and Ridge Co materials amount on items the command didn't
+  // even touch. Carry the saved priced variants back over by id for every kept item.
+  const prevById = {}; for (const it of items) if (it && it.id) prevById[it.id] = it;
+  const merged = parsed.items.map(it => {
+    // Kept item → ALWAYS its saved pricing (the model is told never to touch prices, so any
+    // variants it echoes back are at best a copy and at worst a mangled one).
+    const prev = it && it.id && prevById[it.id];
+    if (prev && Array.isArray(prev.variants) && prev.variants.length) {
+      return Object.assign({}, it, { variants: prev.variants, selected_key: prev.selected_key });
+    }
+    return it;
+  });
+  const clean = scopeCleanItems(merged);
   await updateRow(env, 'Scopes', id, { Line_Items: JSON.stringify(clean), Updated_Date: new Date().toISOString() });
   return json({ success: true, line_items: clean, summary: parsed.summary || 'Updated.' });
 }
@@ -2310,6 +2362,14 @@ async function scopeUpdate(env, body) {
   await scopesTab(env);
   const fields = { Updated_Date: new Date().toISOString() };
   if (Array.isArray(body.line_items)) fields.Line_Items = JSON.stringify(scopeCleanItems(body.line_items));
+  // How Ridge Co–supplied materials are priced to the customer on this proposal (Sep 22 2026):
+  // chosen per proposal on scope-creator.html step 7. Validated here, the one place it's written.
+  if (body.materials_pricing !== undefined) {
+    const mp = scopeCleanMaterialsPricing(body.materials_pricing);
+    if (mp.error) return json({ error: mp.error }, 400);
+    await ensureColumns(env, 'Scopes', ['Materials_Pricing_JSON']);
+    fields.Materials_Pricing_JSON = JSON.stringify(mp.value);
+  }
   if (body.title !== undefined) fields.Title = body.title;
   if (body.notes !== undefined) fields.Notes = body.notes;
   if (body.room !== undefined) fields.Room = body.room;
@@ -2421,8 +2481,27 @@ async function scopeEstimate(env, body) {
 // default-selected variant per item to compute a subtotal/deposit. Returns vendor_cost alongside
 // price for the ADMIN-only caller (scopeProposal) — the customer-facing boundary functions
 // (scopeProposalView, scopeProposalSign) are what strip it before anything leaves the server.
-function scopeItemsPricing(items, pc) {
-  let subtotal = 0, vendorCostTotal = 0;
+//
+// Ridge Co–supplied materials (Sep 22 2026): a variant may also carry rc_materials_cost — what
+// Ridge Co itself pays for materials (never the vendor). `mp` = the scope's materials pricing
+// choice {mode, pct}, picked per proposal on scope-creator.html:
+//   'markup'   — same tiered markup as vendor cost: the variant is priced as ONE job of
+//                (vendor_cost + materials) through calcTieredEstimate (so a small add-on never
+//                gets its own minimum-markup/admin fee), and the materials share of that price is
+//                split out proportionally for the customer's "Includes materials" line.
+//   'at_cost'  — pass-through: materials × cardFeeMult only, no markup.
+//   'flat_pct' — materials × (1 + pct/100) × cardFeeMult.
+// A price_override always covers the vendor/labor part only; materials are priced per mode on top.
+// Variant.price stays the TOTAL for the option (labor + materials) so every existing consumer
+// (scopeProposalView subtotal, scopeProposalSign) keeps working unchanged. vendorCostTotal never
+// includes materials — that is the whole point: the vendor is never billed for them.
+// Self-contained on purpose (only calcTieredEstimate) — test files extract this function alone.
+function scopeItemsPricing(items, pc, mp) {
+  const mode = (mp && ['markup', 'at_cost', 'flat_pct'].includes(mp.mode)) ? mp.mode : 'markup';
+  const pct = (mp && isFinite(+mp.pct) && +mp.pct >= 0) ? +mp.pct : 0;
+  const fee = (pc && pc.cardFeeMult != null) ? pc.cardFeeMult : 1;
+  const r2 = n => Math.round((+n || 0) * 100) / 100;
+  let subtotal = 0, vendorCostTotal = 0, rcMaterialsCostTotal = 0, rcMaterialsPriceTotal = 0;
   const priced = items.map(it => {
     const rawVariants = (it.variants && it.variants.length) ? it.variants : [{ key: 'v1', label: '', vendor_cost: 0 }];
     const variants = rawVariants.map(v => {
@@ -2430,18 +2509,62 @@ function scopeItemsPricing(items, pc) {
       // variant entirely. vendor_cost is still carried through unchanged for the later vendor-bill
       // proration at signing, so overriding the customer price never touches what the vendor is owed.
       const hasOverride = v.price_override != null && isFinite(v.price_override) && v.price_override >= 0;
-      const calc = hasOverride ? null : calcTieredEstimate(v.vendor_cost, pc);
-      const price = hasOverride ? +(+v.price_override).toFixed(2) : (calc ? calc.finalPrice : 0);
-      return { key: v.key, label: v.label, price, vendor_cost: +(v.vendor_cost || 0).toFixed(2), price_override: hasOverride ? price : null };
+      const vc = +(v.vendor_cost || 0);
+      const mat = Math.max(0, +(v.rc_materials_cost || 0) || 0);
+      if (!(mat > 0)) {
+        // No Ridge Co materials — byte-for-byte the pre-Sep-22 behavior.
+        const calc = hasOverride ? null : calcTieredEstimate(vc, pc);
+        const price = hasOverride ? +(+v.price_override).toFixed(2) : (calc ? calc.finalPrice : 0);
+        return { key: v.key, label: v.label, price, vendor_cost: +vc.toFixed(2), price_override: hasOverride ? price : null };
+      }
+      let labor, matPrice;
+      if (mode === 'markup') {
+        const combo = calcTieredEstimate(vc + mat, pc);
+        const comboPrice = combo ? combo.finalPrice : 0;
+        matPrice = r2(comboPrice * mat / (vc + mat));
+        labor = hasOverride ? r2(v.price_override) : r2(comboPrice - matPrice);
+      } else {
+        matPrice = mode === 'at_cost' ? r2(mat * fee) : r2(mat * (1 + pct / 100) * fee);
+        const calc = (hasOverride || !(vc > 0)) ? null : calcTieredEstimate(vc, pc);
+        labor = hasOverride ? r2(v.price_override) : (calc ? calc.finalPrice : 0);
+      }
+      const price = r2(labor + matPrice);
+      return {
+        key: v.key, label: v.label, price, vendor_cost: +vc.toFixed(2), price_override: hasOverride ? r2(v.price_override) : null,
+        rc_materials_cost: r2(mat), materials_price: matPrice, materials_desc: String(v.rc_materials_desc || '').trim() || 'Materials',
+      };
     });
     let selKey = it.selected_key || variants[0].key;
     if (!variants.some(v => v.key === selKey)) selKey = variants[0].key;
     const sel = variants.find(v => v.key === selKey) || variants[0];
     subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
+    rcMaterialsCostTotal += (sel.rc_materials_cost || 0); rcMaterialsPriceTotal += (sel.materials_price || 0);
     return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey };
   });
   subtotal = +subtotal.toFixed(2);
-  return { items: priced, subtotal, deposit: +(subtotal / 2).toFixed(2), vendorCostTotal: +vendorCostTotal.toFixed(2) };
+  return {
+    items: priced, subtotal, deposit: +(subtotal / 2).toFixed(2), vendorCostTotal: +vendorCostTotal.toFixed(2),
+    rcMaterialsCostTotal: +rcMaterialsCostTotal.toFixed(2), rcMaterialsPriceTotal: +rcMaterialsPriceTotal.toFixed(2),
+  };
+}
+
+// Materials pricing choice for a scope (Sep 22 2026). Validates what scope-creator.html sends.
+const SCOPE_MATERIALS_MODES = ['markup', 'at_cost', 'flat_pct'];
+function scopeCleanMaterialsPricing(mp) {
+  const mode = mp && mp.mode;
+  if (!SCOPE_MATERIALS_MODES.includes(mode)) return { error: 'materials_pricing.mode must be one of: ' + SCOPE_MATERIALS_MODES.join(', ') };
+  if (mode !== 'flat_pct') return { value: { mode } };
+  const pct = parseFloat(mp.pct);
+  if (!isFinite(pct) || pct < 0 || pct > 500) return { error: 'Flat materials % must be a number from 0 to 500.' };
+  return { value: { mode, pct: Math.round(pct * 100) / 100 } };
+}
+function scopeParseMaterialsPricing(s) {
+  try {
+    const v = JSON.parse((s && s.Materials_Pricing_JSON) || 'null');
+    const c = scopeCleanMaterialsPricing(v);
+    if (c.value) return c.value;
+  } catch (_) {}
+  return { mode: 'markup' };
 }
 
 // POST /scope/proposal — build the CUSTOMER proposal from scope + per-item vendor pricing.
@@ -2454,13 +2577,25 @@ async function scopeProposal(env, body) {
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
-  const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0));
-  if (unpriced.length) return json({ error: `Add vendor cost to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
+  // An item is priced once ANY option carries a vendor cost OR a Ridge Co materials cost — a
+  // materials-only item (Ridge Co buys it, no vendor labor) is legitimately $0 vendor cost
+  // (Sep 22 2026; before this, Brett had to type a fake $1 vendor cost, which then got paid to
+  // the vendor on the milestone bill).
+  const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0 || (parseFloat(v.rc_materials_cost) || 0) > 0));
+  if (unpriced.length) return json({ error: `Add vendor cost (or Ridge Co materials) to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
+  // The materials description is hand-typed and shown to the customer verbatim — same leak class
+  // as Proposal_Text (see findVendorPricingLeak). Gate it here, where it becomes customer-facing.
+  for (const it of items) for (const v of (it.variants || [])) {
+    if (!((parseFloat(v.rc_materials_cost) || 0) > 0)) continue;
+    const leak = findVendorPricingLeak(v.rc_materials_desc || '');
+    if (leak) return json({ error: `The materials description on "${it.description}" contains pricing language ("${leak}") that can never reach the customer — describe the materials only (e.g. "LVP flooring + underlayment").` }, 400);
+  }
   let addr = await scopeAddr(env, s);
   addr = addr || ('Property ' + s.Property_ID);
   const _pc = await getPricingConfig(env);
   if (!_pc) return json({ error: 'Pricing not configured — set PRICING_CONFIG (Cloudflare secret) or the Config sheet `pricing_config` row.' }, 400);
-  const priced = scopeItemsPricing(items, _pc); // markup applied here, server-side, per item
+  const materialsPricing = scopeParseMaterialsPricing(s);
+  const priced = scopeItemsPricing(items, _pc, materialsPricing); // markup applied here, server-side, per item
   const maxUpfront = await scopeMaxUpfrontPct(env);
   const rawSchedule = scopeParsePaymentSchedule(s);
   const scheduleCheck = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
@@ -2481,7 +2616,18 @@ async function scopeProposal(env, body) {
 
   // Flat-text fallback doc (clipboard "Copy proposal" + legacy clients) — grand total + deposit
   // only, same no-leak shape as before; the interactive per-item/variant view is Proposal_Items_JSON.
-  const scopeText = priced.items.map(it => '- ' + (it.area ? it.area + ': ' : '') + it.description).join('\n');
+  // Ridge Co–supplied materials get their own customer line (Brett, Sep 22 2026: "owner gets NO
+  // transparency on markup info. just sees description and price to them") — description + the
+  // customer's materials price only, never Ridge Co's cost or the mode/markup used.
+  const scopeText = priced.items.map(it => {
+    let line = '- ' + (it.area ? it.area + ': ' : '') + it.description;
+    const multi = (it.variants || []).length > 1;
+    for (const v of (it.variants || [])) {
+      if (!(v.materials_price > 0)) continue;
+      line += '\n    Includes materials' + (multi && v.label ? ' (' + v.label + ' option)' : '') + ': ' + v.materials_desc + ' — $' + v.materials_price.toFixed(2);
+    }
+    return line;
+  }).join('\n');
   // Standing policy (Aug 21 2026, Brett): if only PART of a scope is approved/completed instead of
   // the full project, itemized pricing for those pieces is a best-efforts estimate, not a fixed
   // quote — the combined price is built to absorb small unknowns across a mixed batch of larger and
@@ -2500,7 +2646,9 @@ async function scopeProposal(env, body) {
     Proposal_Text: doc, Proposal_Items_JSON: JSON.stringify(priced.items),
     Estimate_Amount: String(priced.vendorCostTotal), Status: 'proposed', Updated_Date: new Date().toISOString(),
   });
-  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: scheduleCheck.warnings || [], items: priced.items });
+  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: scheduleCheck.warnings || [], items: priced.items,
+    // Admin-only caller (scope-creator.html) — lets Brett see the materials split he just priced.
+    materials: { mode: materialsPricing.mode, pct: materialsPricing.pct, cost_total: priced.rcMaterialsCostTotal, price_total: priced.rcMaterialsPriceTotal, vendor_cost_total: priced.vendorCostTotal } });
 }
 
 // ── Scope proposal customer link (Aug 18 2026, rule 113) ───────────────────
@@ -2664,7 +2812,11 @@ async function scopeProposalView(env, url) {
   let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
   const items = rawItems.map(it => ({
     id: it.id, area: it.area, trade: it.trade, description: it.description,
-    variants: (it.variants || []).map(v => ({ key: v.key, label: v.label, price: v.price })), // no vendor_cost
+    // no vendor_cost, no rc_materials_cost (Ridge Co's own materials cost) — only the customer's
+    // materials PRICE + description, and only when the option actually includes materials.
+    variants: (it.variants || []).map(v => (+v.materials_price > 0)
+      ? { key: v.key, label: v.label, price: v.price, materials_price: +v.materials_price, materials_desc: String(v.materials_desc || 'Materials') }
+      : { key: v.key, label: v.label, price: v.price }),
     selected_key: it.selected_key,
   })); // no `note` — free-text field with no internal/customer split; never safe to echo back
   const photos = await scopeProposalPhotos(env, s);
@@ -2833,10 +2985,29 @@ async function scopeProposalSign(env, body, ip, ua) {
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) vendorCostTotal += (+v.vendor_cost || 0);
   }
+  // Ridge Co–supplied materials on the SIGNED options (Sep 22 2026) — never part of
+  // vendorCostTotal (so never on a vendor bill); recorded as the budget Signed Proposals tracks
+  // matched receipts against. Cost from private Line_Items, customer price from Proposal_Items_JSON.
+  let rcMaterialsCost = 0, rcMaterialsPrice = 0;
+  for (const it of scopeParseItems(s)) {
+    const key = finalSelections[it.id];
+    const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
+    if (v) rcMaterialsCost += (+v.rc_materials_cost || 0);
+  }
+  for (const it of items) {
+    const key = finalSelections[it.id];
+    const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
+    if (v) rcMaterialsPrice += (+v.materials_price || 0);
+  }
+  rcMaterialsCost = +rcMaterialsCost.toFixed(2); rcMaterialsPrice = +rcMaterialsPrice.toFixed(2);
   subtotal = +subtotal.toFixed(2); vendorCostTotal = +vendorCostTotal.toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2); // legacy column, kept for any old dashboard summing it — not used for new billing
   const now = new Date();
+  if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
+    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
+  }
   const sigResp = await addRow(env, 'Scope_Signatures', {
+    RC_Materials_Cost: rcMaterialsCost ? String(rcMaterialsCost) : '', RC_Materials_Price: rcMaterialsPrice ? String(rcMaterialsPrice) : '',
     Scope_ID: String(s.ID), Signer_Name: signer,
     Signature_PNG: sigPng.length <= 45000 ? sigPng : '', // Sheets cell cap ~50k chars; skip if oversized
     Selections_JSON: JSON.stringify(finalSelections),
@@ -2949,6 +3120,11 @@ async function scopeProposalSignedList(env, url) {
   // (signed-proposals.html branches on milestones.length).
   let allMilestones = [];
   try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (_) {}
+  // Receipts on each signed scope's work order = the ACTUAL side of Ridge Co materials budget
+  // vs actual (Sep 22 2026). null (not []) on a read failure so the page says "couldn't check"
+  // instead of a confident $0.
+  let allReceipts = null;
+  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (_) {}
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
@@ -2982,10 +3158,55 @@ async function scopeProposalSignedList(env, url) {
       qb_final_bill_id: r.QB_Final_Bill_ID || '', qb_final_bill_number: r.QB_Final_Bill_Number || '',
       bill_gap: gap.kind, bill_skip_reason: gap.reason,
       final_bill_gap: finalGap.kind, final_bill_skip_reason: finalGap.reason, milestones,
+      materials: scopeMaterialsBudgetSummary(+r.RC_Materials_Cost || 0, +r.RC_Materials_Price || 0, sc.WO_ID || '', allReceipts),
     };
   });
   out.sort((a, b) => String(b.signed_ts).localeCompare(String(a.signed_ts)));
   return json(out);
+}
+
+// Pure: Ridge Co materials budget (what the signed proposal priced in) vs actual receipts matched
+// to the scope's work order (Sep 22 2026). Every receipt on a signed scope's WO counts — those are
+// blocked from being invoiced again via Review Bills (scopeCoveringSignature), so this is the one
+// place they stay visible. receipts === null means the Receipts read failed.
+function scopeMaterialsBudgetSummary(budgetCost, budgetPrice, woId, receipts) {
+  budgetCost = +(+budgetCost || 0).toFixed(2); budgetPrice = +(+budgetPrice || 0).toFixed(2);
+  if (receipts === null) return { budget_cost: budgetCost, budget_price: budgetPrice, actual: null, receipt_count: null, variance: null, state: 'unknown' };
+  // Vendor-logged receipts (Role 'vendor') are the vendor's own purchases, inside their cost — not
+  // Ridge Co spending — so they never count toward "actual" here.
+  const mine = woId ? (receipts || []).filter(rc => String(rc.WO_ID) === String(woId) && String(rc.Active || '').toUpperCase() !== 'FALSE' && (parseFloat(rc.Amount) || 0) > 0 && String(rc.Role || '').toLowerCase() !== 'vendor') : [];
+  const actual = +mine.reduce((sum, rc) => sum + (parseFloat(rc.Amount) || 0), 0).toFixed(2);
+  const variance = +(budgetCost - actual).toFixed(2); // + = under budget, - = over
+  // No materials budget → 'none': those receipts aren't part of the proposal and keep billing
+  // through Review Bills as always (scopeCoveringSignature doesn't cover the WO), so nothing to show.
+  let state = 'none';
+  if (budgetCost > 0) state = actual === 0 ? 'not_bought' : (variance < 0 ? 'over' : 'within');
+  return { budget_cost: budgetCost, budget_price: budgetPrice, actual, receipt_count: mine.length, variance, state };
+}
+
+// Pure: the active signed Scope_Signatures row (if any) whose scope owns this work order AND
+// priced Ridge Co materials into the proposal (RC_Materials_Cost > 0) — i.e. the owner already
+// pays for Ridge Co's materials through the proposal's payment milestones, so receipts on it must
+// never be invoiced a second time through Review Bills (Sep 22 2026, Brett: "track vs budget +
+// block double-billing"). A signed proposal with NO materials budget (every proposal signed before
+// this shipped) is deliberately NOT covered: its receipts were never priced in, so they keep
+// billing through Review Bills exactly as before — blocking them would lose the money instead.
+// Matches Scopes.WO_ID first, then Work_Orders.Scope_ID if given.
+function scopeCoveringSignature(scopes, sigs, woId, wo) {
+  if (!woId) return null;
+  const woScopeId = wo && wo.Scope_ID ? String(wo.Scope_ID) : '';
+  const scopeIds = (scopes || []).filter(s => String(s.WO_ID || '') === String(woId) || (woScopeId && String(s.ID) === woScopeId)).map(s => String(s.ID));
+  if (!scopeIds.length) return null;
+  const sig = (sigs || []).find(r => scopeIds.includes(String(r.Scope_ID)) && String(r.Active || '').toUpperCase() !== 'FALSE' && (parseFloat(r.RC_Materials_Cost) || 0) > 0);
+  return sig ? { scope_id: String(sig.Scope_ID), signature_id: String(sig.ID), materials_budget: +(parseFloat(sig.RC_Materials_Cost) || 0).toFixed(2) } : null;
+}
+async function scopeCoveringSignatureForWO(env, woId) {
+  if (!woId) return null;
+  // A tab that doesn't exist yet means "no signed scopes" — any OTHER read failure throws, so a
+  // caller never mistakes "couldn't check" for "not covered" (that would re-open double-billing).
+  const orEmpty = e => { if (isMissingTabError(e)) return []; throw e; };
+  const [scopes, sigs] = await Promise.all([fetchTab(env, 'Scopes').catch(orEmpty), fetchTab(env, 'Scope_Signatures').catch(orEmpty)]);
+  return scopeCoveringSignature(scopes, sigs, woId, null);
 }
 
 // Which trade to book the deposit/bill lines under. A Scope has no single Trade field of its
@@ -5184,6 +5405,16 @@ async function approveInvoiceReview(env, body) {
   // account with no labor bill) has NO vendor bill — so bill_id is optional, but we still need
   // a work order to anchor the review row to.
   if (!customer_total || (!bill_id && !wo_id)) return json({ error: 'customer_total and a bill_id or wo_id are required' }, 400);
+  // Server-side backstop for the Sep 22 2026 double-billing block: receipts on a signed scope
+  // proposal's WO are already billed through its payment milestones. The picker disables them
+  // (listBilledReceipts), but a stale page could still send them — refuse rather than bill twice.
+  const _ownIds = String(own_material_ids || '').split(',').map(x => x.trim()).filter(Boolean);
+  if (_ownIds.length && wo_id) {
+    let covered = null;
+    try { covered = await scopeCoveringSignatureForWO(env, wo_id); }
+    catch (e) { return json({ error: 'Could not confirm whether this job is billed through a signed proposal, so its receipts were not billed — try again.' }, 503); }
+    if (covered) return json({ error: `This job is billed through signed proposal Scope #${covered.scope_id} (its payment milestones already include materials) — its receipts can't be invoiced again here. Reload and untick them.`, scope_covered: covered }, 409);
+  }
   const today = new Date().toISOString().split('T')[0];
 
   // Approving twice must not create a second Invoice_Review row — the Hub can now approve
@@ -5334,12 +5565,34 @@ async function approveInvoiceReviewBulk(env, body) {
   let nextIRId = nextSafeId(irData.values || []);
 
   const results = [], billUpdates = [], newIRRows = [];
+  // Same signed-scope-proposal receipt backstop as approveInvoiceReview (Sep 22 2026) — read
+  // Scopes/Scope_Signatures at most once for the whole batch, and only if some approval carries
+  // receipts. A failed read fails just the approvals that carry receipts, never silently passes them.
+  let _cover = null, _coverErr = null, _coverLoaded = false;
+  const coverFor = async woId => {
+    if (!_coverLoaded) {
+      _coverLoaded = true;
+      try {
+        const orEmpty = e => { if (isMissingTabError(e)) return []; throw e; };
+        const [scopes, sigs] = await Promise.all([fetchTab(env, 'Scopes').catch(orEmpty), fetchTab(env, 'Scope_Signatures').catch(orEmpty)]);
+        _cover = { scopes, sigs };
+      } catch (e) { _coverErr = e; }
+    }
+    if (_coverErr) throw _coverErr;
+    return scopeCoveringSignature(_cover.scopes, _cover.sigs, woId, null);
+  };
 
   for (const a of approvals) {
     const bill_id = a.bill_id, wo_id = a.wo_id;
     if (!a.customer_total || (!bill_id && !wo_id)) {
       results.push({ bill_id, wo_id, success: false, error: 'customer_total and a bill_id or wo_id are required' });
       continue;
+    }
+    if (wo_id && String(a.own_material_ids || '').split(',').map(x => x.trim()).filter(Boolean).length) {
+      let covered = null;
+      try { covered = await coverFor(wo_id); }
+      catch (e) { results.push({ bill_id, wo_id, success: false, error: 'Could not confirm whether this job is billed through a signed proposal — its receipts were not billed. Try again.' }); continue; }
+      if (covered) { results.push({ bill_id, wo_id, success: false, error: `Billed through signed proposal Scope #${covered.scope_id} — its receipts can't be invoiced again here. Untick them and re-approve.`, scope_covered: covered }); continue; }
     }
     // Same dedup rule as the single-item approve: approving the same bill/job twice hands
     // back the existing row instead of logging a duplicate.
@@ -10341,21 +10594,129 @@ async function runWeeklyArReport(env) {
 // call Gmail's users.messages.send with a base64url RFC822 message. FAILS LOUD (throws) when
 // misconfigured or rejected — this is a real customer-facing send path, not the internal
 // digest's silent stub, so a misconfiguration must surface, never look like "nothing to send."
+//
+// Refresh-token SOURCES (Sep 22 2026 — "Reconnect Gmail"): Config GMAIL_REFRESH_TOKEN (written
+// only by the /gmail/callback sign-in flow below) is tried FIRST, then the original Cloudflare
+// secret env.GMAIL_REFRESH_TOKEN. A dead token (invalid_grant) in one source falls through to the
+// other, so a stale Config token can never block a secret Brett updated by hand, and vice versa.
+// Same Config-first precedent as qbAccessToken. When every source is dead, the error says exactly
+// what to do ("Reconnect Gmail") instead of just echoing Google's JSON.
 let _gmailTokenCache = { token: null, at: 0 };
+const GMAIL_RECONNECT_HINT = 'Gmail sign-in for the Ridge Co sender has expired or was revoked — tap "Reconnect Gmail" (Scope Creator, next to Send) to sign it back in.';
+function gmailRefreshCandidates(cfgToken, envToken) {
+  const out = [];
+  const c = String(cfgToken || '').trim(), e = String(envToken || '').trim();
+  if (c) out.push({ source: 'config', token: c });
+  if (e && e !== c) out.push({ source: 'env', token: e });
+  return out;
+}
 async function gmailAccessToken(env) {
-  if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET || !env.GMAIL_REFRESH_TOKEN) {
-    throw new Error('Gmail not configured — set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN/GMAIL_SENDER in Cloudflare Worker secrets.');
-  }
   if (_gmailTokenCache.token && (Date.now() - _gmailTokenCache.at) < 50 * 60 * 1000) return _gmailTokenCache.token;
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  const candidates = gmailRefreshCandidates(cfg.GMAIL_REFRESH_TOKEN, env.GMAIL_REFRESH_TOKEN);
+  if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET || !candidates.length) {
+    throw new Error('Gmail not configured — set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_SENDER in Cloudflare Worker secrets, then use "Reconnect Gmail" (or set GMAIL_REFRESH_TOKEN).');
+  }
+  let lastErr = null, sawDead = false;
+  for (const c of candidates) {
+    const resp = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: c.token, grant_type: 'refresh_token' }),
+    });
+    const data = await resp.json().catch(() => null);
+    if (resp.ok && data && data.access_token) {
+      _gmailTokenCache = { token: data.access_token, at: Date.now(), source: c.source };
+      return data.access_token;
+    }
+    lastErr = data || {};
+    // Only a dead/revoked token is worth falling through on — anything else (bad client secret,
+    // Google outage) would fail the same way on the next source too, so surface it now. If an
+    // earlier source was already dead, keep the reconnect hint so the Reconnect button still shows.
+    if (!(data && data.error === 'invalid_grant')) {
+      throw new Error((sawDead ? GMAIL_RECONNECT_HINT + ' ' : '') + 'Gmail token refresh failed: ' + JSON.stringify(lastErr).slice(0, 200));
+    }
+    sawDead = true;
+  }
+  throw new Error(GMAIL_RECONNECT_HINT + ' (Gmail token refresh failed: ' + JSON.stringify(lastErr || {}).slice(0, 160) + ')');
+}
+
+// ── "Reconnect Gmail" sign-in flow (Sep 22 2026) ────────────────────────────────────────────
+// Replaces "mint a refresh token in OAuth Playground and paste it into a Cloudflare secret" with
+// a one-tap Google sign-in. POST /gmail/connect-url (ADMIN) returns Google's consent URL carrying
+// a signed, 15-minute, single-purpose `state`; Google redirects to GET /gmail/callback (PUBLIC at
+// the router, but it refuses anything without a valid state), which exchanges the code, CHECKS the
+// signed-in account is the Ridge Co sender (so nobody can wire a different Gmail in), and stores
+// the new refresh token in Config GMAIL_REFRESH_TOKEN (redacted from GET /config). The token value
+// is never shown on any page or response. One-time Google Cloud setup: add
+// <worker origin>/gmail/callback to the OAuth client's Authorized redirect URIs.
+const GMAIL_OAUTH_SCOPES = 'https://www.googleapis.com/auth/gmail.send openid email';
+function gmailExpectedSender(env) { return String((env && env.GMAIL_SENDER) || 'ridgecomaintenance@gmail.com').trim().toLowerCase(); }
+function gmailCallbackUrl(url) { return url.origin + '/gmail/callback'; }
+// Pure: decodes the (Google-issued, fetched directly over TLS from Google's token endpoint)
+// id_token's payload for the signed-in account's email. Not a signature check — it doesn't need
+// to be one, since the token came straight from Google in our own server-to-server exchange.
+function gmailIdTokenEmail(idToken) {
+  try {
+    const part = String(idToken || '').split('.')[1]; if (!part) return null;
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((part.length + 3) % 4);
+    const p = JSON.parse(atob(b64));
+    return { email: String(p.email || '').trim().toLowerCase(), verified: p.email_verified === true || p.email_verified === 'true' };
+  } catch (_) { return null; }
+}
+async function gmailConnectUrl(env, url) {
+  if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET) return json({ error: 'GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET are not set in Cloudflare Worker secrets.' }, 400);
+  const state = await makeSessionToken({ scope: 'gmail-oauth', id: 'gmail', rev: String(Date.now()) }, env.WORKER_SECRET, 15 * 60);
+  const q = new URLSearchParams({
+    client_id: env.GMAIL_CLIENT_ID, redirect_uri: gmailCallbackUrl(url), response_type: 'code',
+    scope: GMAIL_OAUTH_SCOPES, access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true',
+    login_hint: gmailExpectedSender(env), state,
+  });
+  return json({ success: true, url: 'https://accounts.google.com/o/oauth2/v2/auth?' + q.toString(), redirect_uri: gmailCallbackUrl(url), sender: gmailExpectedSender(env) });
+}
+function gmailCallbackPage(ok, title, detail) {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const color = ok ? '#166534' : '#b42318';
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ridge Co — Gmail</title></head>` +
+    `<body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#eceef1;margin:0;padding:24px;">` +
+    `<div style="max-width:480px;margin:40px auto;background:#fff;border:1px solid #dce0e6;border-radius:8px;padding:22px;">` +
+    `<div style="font-size:18px;font-weight:bold;color:${color};margin-bottom:8px;">${ok ? '✅' : '⚠'} ${esc(title)}</div>` +
+    `<div style="font-size:14px;line-height:1.5;color:#1b1f24;">${esc(detail)}</div></div></body></html>`;
+  return new Response(html, { status: ok ? 200 : 400, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
+}
+async function gmailOAuthCallback(env, url) {
+  const err = url.searchParams.get('error');
+  if (err) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google said: ' + err + '. Nothing changed — go back to the Hub and tap Reconnect Gmail again.');
+  const code = url.searchParams.get('code') || '';
+  const st = await verifySessionToken(url.searchParams.get('state') || '', env.WORKER_SECRET);
+  if (!st || st.scope !== 'gmail-oauth') return gmailCallbackPage(false, 'Link expired', 'This sign-in link is invalid or older than 15 minutes. Nothing changed — tap Reconnect Gmail in the Hub again.');
+  if (!code) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google did not send an authorization code. Nothing changed — try Reconnect Gmail again.');
   const resp = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: env.GMAIL_REFRESH_TOKEN, grant_type: 'refresh_token' }),
+    body: new URLSearchParams({ code, client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, redirect_uri: gmailCallbackUrl(url), grant_type: 'authorization_code' }),
   });
   const data = await resp.json().catch(() => null);
-  if (!resp.ok || !data || !data.access_token) throw new Error('Gmail token refresh failed: ' + JSON.stringify(data || {}).slice(0, 200));
-  _gmailTokenCache = { token: data.access_token, at: Date.now() };
-  return data.access_token;
+  if (!resp.ok || !data || !data.access_token) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google rejected the sign-in: ' + JSON.stringify(data || {}).slice(0, 200) + '. Nothing changed.');
+  const who = gmailIdTokenEmail(data.id_token);
+  const expected = gmailExpectedSender(env);
+  if (!who || !who.email || who.email !== expected || !who.verified) {
+    return gmailCallbackPage(false, 'Wrong Google account', `You signed in as ${who && who.email ? who.email : 'an unknown account'}, but the Hub sends as ${expected}. Nothing changed — tap Reconnect Gmail again and pick ${expected}.`);
+  }
+  if (!String(data.scope || '').includes('gmail.send')) return gmailCallbackPage(false, 'Permission not granted', 'Sending email permission was not granted on the Google screen. Nothing changed — try again and leave the "Send email on your behalf" box checked.');
+  if (!data.refresh_token) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google did not return a long-lived token. Nothing changed — try Reconnect Gmail again.');
+  await setConfigKey(env, { key: 'GMAIL_REFRESH_TOKEN', value: data.refresh_token });
+  try { await setConfigKey(env, { key: 'GMAIL_TOKEN_UPDATED', value: new Date().toISOString() }); } catch (_) {}
+  _gmailTokenCache = { token: data.access_token, at: Date.now(), source: 'config' };
+  return gmailCallbackPage(true, 'Gmail reconnected', `The Hub can send as ${expected} again. You can close this tab and retry the send.`);
 }
+// GET /gmail/token-check (ADMIN) — proves a stored token actually refreshes, WITHOUT sending
+// an email (/gmail/test is the real-send version). Reports which source worked, never the value.
+async function gmailTokenCheck(env) {
+  _gmailTokenCache = { token: null, at: 0 }; // force a real refresh, not a cached access token
+  try { await gmailAccessToken(env); return json({ ok: true, source: _gmailTokenCache.source || '' }); }
+  catch (e) { return json({ ok: false, error: String((e && e.message) || e) }, 200); }
+}
+// GET /config redaction: these keys hold live credentials and are never needed by a page.
+const CONFIG_REDACTED_KEYS = ['GMAIL_REFRESH_TOKEN'];
 
 function _utf8B64url(str) {
   const bytes = new TextEncoder().encode(str);
@@ -11638,7 +11999,7 @@ async function twilioAccountStatus(env) {
   return json({ ok: true, ...out });
 }
 
-async function health(env) {
+async function health(env, url) {
   // PUBLIC read-only self-check so an automated agent can verify the Worker
   // without a browser or auth. Row counts per key tab + which sheet it points at
   // (last 6 chars of SHEET_ID, so staging vs prod is visible without leaking it).
@@ -11666,6 +12027,14 @@ async function health(env) {
     out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
     out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
   } catch (_) {}
+  // "Reconnect Gmail" (Sep 22 2026): whether a sign-in-flow token is stored in Config, and when —
+  // presence/date only, never the value. The live no-send check is ADMIN-only: GET /gmail/token-check.
+  try {
+    const _cfg = await fetchConfig(env);
+    out.gmail.config_token_set = !!String(_cfg.GMAIL_REFRESH_TOKEN || '').trim();
+    out.gmail.config_token_updated = _cfg.GMAIL_TOKEN_UPDATED || '';
+  } catch (_) {}
+
   // Twilio (TWILIO_SMS_BUILD_BRIEF_v1.0) — same never-expose-values, presence-only pattern.
   // twilio_enabled reflects the live Config kill switch, not the secrets — lets Brett confirm
   // from a plain curl whether sends are actually live without opening the Hub.
@@ -11694,7 +12063,10 @@ async function health(env) {
 
 async function getConfig(env) {
   const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return json({});
-  const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';}); return json(config);
+  const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';});
+  // Live credentials stored in Config (Sep 22 2026: the Gmail sign-in token) never leave the Worker.
+  for (const k of CONFIG_REDACTED_KEYS) if (config[k]) config[k] = '(set — hidden)';
+  return json(config);
 }
 
 async function fetchConfig(env) {
@@ -15637,6 +16009,15 @@ async function qbSendInvoice(env, body) {
     // single-vendor job — falls straight through to the unchanged code beneath, zero
     // behavior change for the ~95% of jobs that only ever had one vendor bill.
     const groupRows = qbGroupOpenRows(irRows, ir);
+    // Sep 22 2026 backstop: a receipt approved onto this invoice BEFORE the job's scope proposal
+    // was signed with Ridge Co materials priced in would otherwise go out a second time here.
+    // Warn in the preview (never silently change a total that was already approved).
+    if (groupRows.some(r => String(r.Own_Material_IDs || '').trim())) {
+      try {
+        const covered = await scopeCoveringSignatureForWO(env, ir.WO_ID);
+        if (covered) warnings.push(`⚠ This job is on signed proposal Scope #${covered.scope_id}, which already charges the owner for Ridge Co materials ($${covered.materials_budget.toFixed(2)} budget) in its payment milestones — this invoice also itemises receipts. Make sure they aren't the same materials before sending.`);
+      } catch (e) { warnings.push('⚠ Could not check whether this job is on a signed proposal that already bills its materials — check before sending.'); }
+    }
     if (groupRows.length > 1) {
       return await qbSendCombinedInvoice(env, {
         groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName,

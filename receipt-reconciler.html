@@ -514,6 +514,13 @@ async function confirmRow(id, btn){
         ? ' ⚠ That WO was already invoiced — flagged for repair (check Repairable Invoices to push $'+esc(res.invoice_link.new_customer_total)+' to QuickBooks and the customer).'
         : ' Added to the pending invoice for that WO — will bill when you send it.';
     }
+    // Signed scope proposal job (Sep 22 2026): billed through the proposal's milestones, so the
+    // receipt is only counted against its materials budget (Signed Proposals), never invoiced again.
+    else if (res.invoice_link && res.invoice_link.reason === 'covered_by_signed_proposal') {
+      extra = ' This job is billed through signed proposal Scope #'+esc(res.invoice_link.scope_id)+' — counted against its materials budget on Signed Proposals, not invoiced again.';
+    } else if (res.invoice_link && res.invoice_link.reason === 'scope_check_failed') {
+      extra = ' ⚠ Couldn\'t check whether this job is on a signed proposal, so it was NOT added to any invoice — check the job before billing it.';
+    }
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already on that WO — skipped, not double-posted.</span>'
       : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.'+extra+'</span>';
