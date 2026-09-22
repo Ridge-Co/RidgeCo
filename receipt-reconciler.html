@@ -549,6 +549,51 @@ async function confirmRow(id, btn){
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// 1864 Kerns School Rd (Milam Ridge, Property 85 — Brett's own STR, no owner to bill). Found by
+// address rather than a hardcoded ID so a renumbered Properties tab can't silently point this
+// button at someone else's building.
+function kernsProperty(){
+  return allProperties.find(p => /1864\s+kerns\s+school/i.test(String(p.Address||''))) || null;
+}
+
+// One-tap expense (Sep 22 2026). mode: 'ridgeco' = general Ridge Co expense (no property),
+// 'kerns' = 1864 Kerns School Rd, 'selected' = whatever is in this card's Property picker.
+// Posts no_wo:true; the server records it as an expense (category 'company', never billable)
+// and emails it to QuickBooks' receipts inbox immediately.
+async function confirmExpense(id, btn, mode){
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  let property_id = '', where = 'Ridge Co';
+  if (mode === 'kerns') {
+    const k = kernsProperty();
+    if (!k) { statusEl.innerHTML = '<span class="err">1864 Kerns School Rd isn\'t in the Properties list.</span>'; return; }
+    property_id = String(k.ID); where = '1864 Kerns School Rd';
+  } else if (mode === 'selected') {
+    const sel = document.getElementById(idAttr+'-prop');
+    property_id = sel ? sel.value.trim() : '';
+    if (!property_id) { statusEl.innerHTML = '<span class="err">Pick a property above first (or use Ridge Co expense).</span>'; return; }
+    const p = allProperties.find(x => String(x.ID) === property_id); where = p ? (p.Address || ('Property '+property_id)) : ('Property '+property_id);
+  }
+  const card = document.getElementById(idAttr);
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+  const amount = document.getElementById(idAttr+'-amt').value.trim();
+  const store = document.getElementById(idAttr+'-store').value.trim();
+  const date = document.getElementById(idAttr+'-date').value.trim();
+  const description = document.getElementById(idAttr+'-desc').value.trim();
+  statusEl.innerHTML = '<span class="info">Recording as a '+esc(where)+' expense…</span>';
+  try {
+    const res = await post('/receipt-recon/confirm', { id, no_wo: true, property_id, amount, store, date, description });
+    if (res.error) throw new Error(res.error);
+    if (res.duplicate) { statusEl.innerHTML = '<span class="warn">Already recorded — skipped, not double-posted.</span>'; }
+    else {
+      const qb = res.qb_email || {};
+      const qbLine = qb.sent ? ' Sent to QuickBooks.' : ' ⚠ Recorded, but the QuickBooks email didn\'t go out'+(qb.error?' ('+esc(qb.error)+')':'')+' — the 7am sweep will retry it.';
+      statusEl.innerHTML = '<span class="ok">✓ $'+esc(res.amount||amount)+' recorded as a '+esc(where)+' expense — no work order, no customer invoice.'+qbLine+'</span>';
+    }
+    setTimeout(loadQueue, 1200);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; card.querySelectorAll('button').forEach(b => b.disabled = false); }
+}
+
 // Business-expense confirm (category 'company'): no work order, property optional. Posts
 // no_wo:true so the server skips the WO-required check entirely (receiptReconConfirm).
 async function confirmBusinessExpense(id, btn){
