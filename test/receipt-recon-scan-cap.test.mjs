@@ -97,5 +97,22 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   ok(w.downloads === before && r.scanned === 0 && r.errors === undefined && r.stuck.length === 1, '4th scan does not touch it again (no wasted OCR call)');
   ok(JSON.parse(cfg.receipt_recon_failures).f0.attempts === 3, 'failure count kept in Config');
 }
+{
+  // Date cutoff (Sep 22 2026): receipts dated before 2026-07-01 go straight to Skipped with a note.
+  const dates = { f0: '2023-09-25', f1: '2025-06-15', f2: '2026-06-30', f3: '2026-07-01', f4: '', f5: '2026-09-04' };
+  const w = world(6, {}, id => dates[id]);
+  const r = await w.scan({});
+  const byId = Object.fromEntries(w.queue.map(q => [q.Source_File_ID, q]));
+  ok(r.skipped_before_cutoff === 3 && r.cutoff === '2026-07-01', 'three pre-July-1 receipts reported as skipped (got ' + r.skipped_before_cutoff + ')');
+  ok(['f0','f1','f2'].every(k => byId[k].Status === 'skipped' && /before the 2026-07-01 cutoff/.test(byId[k].Notes)), '2023, 2025 and Jun 30 2026 queued as skipped with the cutoff note');
+  ok(byId.f3.Status === 'pending' && byId.f5.Status === 'pending', 'Jul 1 and later stay pending');
+  ok(byId.f4.Status === 'pending', 'receipt with no readable date stays pending (never hidden)');
+  const w2 = world(2, { receipt_recon_min_date: '2025-01-01' }, id => ({ f0: '2025-06-15', f1: '2024-12-31' })[id]);
+  await w2.scan({});
+  ok(w2.queue.find(q => q.Source_File_ID === 'f0').Status === 'pending' && w2.queue.find(q => q.Source_File_ID === 'f1').Status === 'skipped', 'Config receipt_recon_min_date moves the cutoff');
+  const w3 = world(1, { receipt_recon_min_date: 'garbage' }, () => '2026-06-01');
+  await w3.scan({});
+  ok(w3.queue[0].Status === 'skipped', 'a bad Config value falls back to 2026-07-01');
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
