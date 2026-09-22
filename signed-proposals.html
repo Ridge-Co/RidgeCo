@@ -235,6 +235,7 @@ function load(){
             +'</label>';
         });
         html+='</div>';
+        html+=materialsHtml(r);
         if(!msAllDone) html+='<div style="margin-top:12px"><button class="btn primary" id="msbtn-'+esc(r.id)+'" disabled onclick="previewMilestoneBill(\''+esc(r.id)+'\')">Bill selected (0)</button></div>';
         html+='</div>';
         return; // skip the legacy deposit/final rendering entirely for milestone rows
