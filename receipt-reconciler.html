@@ -720,9 +720,13 @@ async function checkDuplicatesOne(id, btn){
     if (res.error) throw new Error(res.error);
     rowEvidence[id] = res.evidence || [];
     statusEl.innerHTML = res.evidence.length
-      ? '<span class="warn">Found '+res.evidence.length+' possible match(es) — see below.</span>'
+      ? '<span class="warn">Found '+res.evidence.length+' possible match(es) — see above.</span>'
       : '<span class="ok">✓ No matching Receipts/QuickBooks entries found.</span>';
-    setTimeout(loadQueue, 900);
+    // Update ONLY this card's evidence block — anything typed/picked in the card stays put.
+    const r = rowsById[id] || { ID: id };
+    r.Duplicate_Checked_Date = new Date().toISOString(); r.duplicate_evidence = rowEvidence[id];
+    const box = document.getElementById(idAttr+'-evidence'); if (box) box.innerHTML = evidenceHtml(r);
+    if (btn) btn.disabled = false;
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
