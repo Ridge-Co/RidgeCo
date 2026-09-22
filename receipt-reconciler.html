@@ -470,6 +470,19 @@ function rowCard(r){
       + '</div>';
   }
 
+  // Brett, Sep 22 2026: one tap to record a receipt as an EXPENSE (no work order, no customer
+  // invoice) against Ridge Co or 1864 Kerns School Rd — it goes straight to QuickBooks' receipts
+  // inbox for the expense record. Offered on every pending receipt, including ones the scanner
+  // matched to a job address, so nothing is forced onto a work order unless Brett picks one.
+  if (!excluded && isPendingLike) {
+    const kerns = kernsProperty();
+    html += '<div class="rc-expense"><span class="rc-expense-label">Expense only — no work order, straight to QuickBooks:</span>'
+      + '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'ridgeco\')">🧾 Ridge Co expense</button>'
+      + (kerns ? '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'kerns\')">🏡 1864 Kerns School Rd</button>' : '')
+      + (!isCompany ? '<button class="btn small expbtn secondaryexp" onclick="confirmExpense(\''+r.ID+'\', this, \'selected\')">Expense to the property picked above</button>' : '')
+      + '</div>';
+  }
+
   const fileLink = r.Source_File_URL ? '<a href="'+esc(r.Source_File_URL)+'" target="_blank">View receipt →</a>' : '<span class="info">no file link</span>';
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
