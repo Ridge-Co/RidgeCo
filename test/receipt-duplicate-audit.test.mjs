@@ -25,7 +25,7 @@ const { qbInvoiceLineCacheRows, resolveWOCustomerId, receiptDuplicateAuditMatche
 
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 
-// ── qbInvoiceLineCacheRows ─────────────────────────────────────────────────────────
+// ── qbInvoiceLineCacheRows ───────────────────────────────────────────────────────────────────
 {
   const rows = qbInvoiceLineCacheRows({
     Id: '99', DocNumber: '1705', TxnDate: '2026-08-20', TotalAmt: 150, Balance: 0,
