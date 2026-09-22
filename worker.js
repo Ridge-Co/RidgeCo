@@ -631,6 +631,8 @@ export default {
         if (path === '/receipt-recon/check-duplicates')  return await receiptReconCheckDuplicates(env, body);
         if (path === '/receipt-recon/check-duplicates-bulk') return await receiptReconCheckDuplicatesBulk(env, body);
         if (path === '/receipt-recon/skip')       return await receiptReconSkip(env, body);
+        if (path === '/receipt-recon/unskip')     return await receiptReconUnskip(env, body);
+        if (path === '/receipt-recon/skip-before-cutoff') return await receiptReconSkipBeforeCutoff(env, body);
         if (path === '/receipt-recon/purge-duplicates')  return await purgeConfirmedDuplicateReceipts(env);
         if (path === '/receipts/send-to-qb-email') return await sendReceiptsToQBEmail(env, body);
         if (path === '/receipt-recon/backfill-items-summary') return await backfillItemsSummary(env, body);
