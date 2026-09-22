@@ -1876,9 +1876,17 @@ async function receiptReconScan(env, body) {
         Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: '', Active: 'TRUE',
       });
       n++;
-    } catch (e) { errs.push((f.name || f.id) + ': ' + (e.message || 'err')); }
+      if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
+    } catch (e) {
+      errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
+      const prior = failures[f.id];
+      failures[f.id] = { name: f.name || f.id, error: String(e && e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
+      failuresChanged = true;
+    }
   }
-  return json({ ok: true, folder_id: folder, scanned: n, remaining: allNew.length - newFiles.length, errors: errs });
+  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
+  return json({ ok: true, folder_id: folder, scanned: n, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
