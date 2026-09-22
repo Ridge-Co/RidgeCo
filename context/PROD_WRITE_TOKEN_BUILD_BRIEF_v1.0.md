@@ -77,9 +77,11 @@ pattern.
 3. Zero change to `WORKER_SECRET` itself, `HUB_PROD_RO_TOKEN`, or any other token already in the
    auth-gate cascade — purely additive, same verification discipline as the read-only token (a fresh
    diff-check confirming only additive lines changed).
-4. Conservative by default: starts with exactly one path. No mechanism auto-expands it — every future
-   addition is a deliberate, reviewed, two-repo change (Hub allow-list + broker allow-list), never a
-   config flip.
+4. Durably useful, not one-and-done: starts with every already-shipped endpoint that already meets
+   the safety bar. No mechanism auto-expands the list — every future addition is still a deliberate,
+   reviewed, two-repo change (Hub allow-list + broker allow-list) — but it rides along in the same PR
+   that ships the qualifying endpoint, the same convention `HUB_PROD_RO_TOKEN`'s read-list already
+   uses, rather than requiring its own dedicated build-brief cycle.
 
 ## Non-goals
 - Not a general-purpose production write credential. This is not `WORKER_SECRET` with a smaller
