@@ -12052,7 +12052,10 @@ async function health(env, url) {
 
 async function getConfig(env) {
   const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return json({});
-  const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';}); return json(config);
+  const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';});
+  // Live credentials stored in Config (Sep 22 2026: the Gmail sign-in token) never leave the Worker.
+  for (const k of CONFIG_REDACTED_KEYS) if (config[k]) config[k] = '(set — hidden)';
+  return json(config);
 }
 
 async function fetchConfig(env) {
