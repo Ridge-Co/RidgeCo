@@ -297,8 +297,10 @@
       </div>
       <div class="row" style="margin-top:10px;border-top:1px dashed var(--border);padding-top:10px;">
         <button class="btn" onclick="sendEstimateEmail()">📧 Send estimate to owner</button>
+        <button class="btn secondary hide" id="gmail-reconnect-btn" onclick="reconnectGmail()">🔑 Reconnect Gmail</button>
       </div>
       <div id="send-status" class="status"></div>
+      <div id="gmail-reconnect-note" class="sub hide" style="margin-top:4px;">Opens Google in a new tab — sign in as the Ridge Co sender, allow sending, then come back and tap Send again.</div>
       <div id="send-sent-note"></div>
       <div id="sig-status"></div>
     </div>
