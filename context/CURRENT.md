@@ -1,3 +1,11 @@
+# WHERE THINGS STAND — Sep 22, 2026 (Receipt Mail → Hub: emailed HD receipts into the Reconciler, filter-driven, off Cloudflare cron)
+
+## 🟡 Built + tested, pending Brett: Receipt Mail → Hub. Full detail `context/RECEIPT_MAIL_TO_HUB_v1.0.md`, FEATURE_LOG `[FL-20260922-1900-rm]`
+Home Depot e-receipts go to info@ now (brett@ has had none since Jun 30). This adds a Gmail-filter + Apps Script path that drops emailed receipts into "Receipts and Invoices" for the existing Reconciler, with no AI retrieval and no Cloudflare cron. It includes a weekly sender-approval list and a July 1 backfill. Worker change: `receiptReconScan` batch cap (8 per Scan tap, 5 in cron) so a backfill drop can't blow the subrequest budget. Shipped as a PR.
+**To finish (Brett):** merge the PR, then install the Apps Script in brett@ and then info@ (3 steps each, in the doc). Approve the Lowe's/Amazon rows he wants from the first discovery list, then tap Scan in the Reconciler until it says 0 waiting. Run the duplicate check on backfilled receipts that may already have been entered by hand.
+
+---
+
 # WHERE THINGS STAND — Sep 22, 2026 (process fix: mandatory self-test loop + HUB_PROD_RO_TOKEN, staged as PRs, pending Brett's secret setup)
 
 ## 🟡 Staged, pending Brett: credential-access gap closed (HUB_PROD_RO_TOKEN)

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-22.1-vendor-performance-dashboard';
+const BUILD_VERSION = '2026-09-22.2-receipt-scan-batch-cap';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -619,7 +619,7 @@ export default {
         if (path === '/receipt-intake')           return await receiptIntake(env, body);
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
-        if (path === '/receipt-recon/scan')       return await receiptReconScan(env);
+        if (path === '/receipt-recon/scan')       return await receiptReconScan(env, body);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
         if (path === '/receipt-recon/check-duplicates')  return await receiptReconCheckDuplicates(env, body);
@@ -747,7 +747,10 @@ export default {
     // real "Receipts and Invoices" Drive folder Brett drops purchase receipts into, OCRs new
     // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
     // read + queue only — nothing bills until Brett taps Confirm in the Hub.
-    try { await receiptReconScan(env); } catch (e) { /* non-fatal */ }
+    // Capped at 5 new files here (vs 8 for the Hub's Scan button): this cron invocation shares one
+    // Cloudflare subrequest budget with every other sweep in it, and an email backfill can drop
+    // dozens of files into the folder at once (Receipt Mail → Hub, Sep 22 2026).
+    try { await receiptReconScan(env, { max: 5 }); } catch (e) { /* non-fatal */ }
     // Backfill Items_Summary for any Receipt_Recon_Queue rows still missing it (Sep 10 2026) —
     // catches receipts scanned before this field existed, or a rare failed AI call. Cheap and
     // bounded; no-op once caught up.
@@ -1799,8 +1802,15 @@ const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
 
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
-async function receiptReconScan(env) {
+async function receiptReconScan(env, body) {
   const cfg = await fetchConfig(env).catch(() => ({}));
+  // Per-call cap on NEW files (Sep 22 2026). Each file costs ~4 subrequests (Drive download, OCR,
+  // Sheets append); uncapped, a big drop (e.g. an email backfill) blew Cloudflare's per-invocation
+  // subrequest limit partway through — same failure rule 155a hit at 25 for QB email forwarding.
+  // Files past the cap simply wait for the next scan (dedup is by Source_File_ID), and the
+  // response's `remaining` tells the Hub button to say "tap Scan again".
+  const want = [body && body.max, cfg.receipt_recon_scan_batch].map(Number).find(n => Number.isFinite(n) && n >= 1);
+  const cap = Math.min(10, Math.floor(want || 8));
   const folder = cfg.receipt_recon_folder_id || env.RECEIPT_RECON_FOLDER_ID || RECEIPT_RECON_FOLDER_ID_DEFAULT;
   const tok = await getAccessToken(env);
   await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
@@ -1816,8 +1826,9 @@ async function receiptReconScan(env) {
 
   let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
-  const newFiles = files.filter(f => !seen.has(f.id));
-  if (!newFiles.length) return json({ ok: true, folder_id: folder, scanned: 0, already_queued: files.length });
+  const allNew = files.filter(f => !seen.has(f.id));
+  if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length });
+  const newFiles = allNew.slice(0, cap);
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
@@ -1841,7 +1852,7 @@ async function receiptReconScan(env) {
       n++;
     } catch (e) { errs.push((f.name || f.id) + ': ' + (e.message || 'err')); }
   }
-  return json({ ok: true, folder_id: folder, scanned: n, errors: errs });
+  return json({ ok: true, folder_id: folder, scanned: n, remaining: allNew.length - newFiles.length, errors: errs });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
