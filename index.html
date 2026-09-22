@@ -253,7 +253,7 @@ window.addEventListener('pageshow', function(e){
     <div id="bulk-wo-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;flex-direction:column;gap:10px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span style="color:var(--accent);font-size:12px;font-weight:bold" id="bulk-count">0 selected</span>
-        <button class="btn small secondary" onclick="document.querySelectorAll('.wo-bulk-check').forEach(function(c){c.checked=false;});document.getElementById('bulk-count').textContent='0 selected'">Deselect All</button>
+        <button class="btn small secondary" onclick="document.querySelectorAll('.wo-bulk-check').forEach(function(c){c.checked=false;});document.getElementById('bulk-count').textContent='0 selected';updateBulkCombineBtn()">Deselect All</button>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span style="color:var(--muted);font-size:12px;min-width:90px">Status</span>
