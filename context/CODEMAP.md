@@ -184,6 +184,7 @@ secret gate at ≈38 (`if (!PUBLIC_PATHS.includes(path))`), then method +
 | POST /invoice-review/approve | approveInvoiceReview | Approve markup → Invoice_Review log | Vendor_Bills · W, Invoice_Review · W | secret | ≈1006 |
 | POST /qb/send-invoice | qbSendInvoice | Push invoice+bill to QuickBooks (preview-first) | Work_Orders · W, Invoice_Review · W; Properties/Owners/Vendors/Vendor_Bills · R; QB API | secret | ≈2137 |
 | POST /ops-queue/scout-submit | opsQueueScoutSubmit | Insert Scout & Reuse-Radar findings as `Status:'proposed'` backlog rows (max 20/call); best-effort logs a summary to Ops_Review_Log | Ops_Build_Queue · W; Ops_Review_Log · W (best-effort) | secret, narrow (`SCOUT_QUEUE_TOKEN` via `X-Auth-Token` — not `WORKER_SECRET`) | new, PR #14 (unmerged) |
+| POST /admin/gemini-context-update | adminGeminiContextUpdate | Writes `{content}` into Config as the Gemini-Notebook snapshot that GET /gemini-context serves; called by the daily scheduled refresh | Config (`Gemini_Context_Snapshot` key) · W | secret, narrow (`HUB_PROD_WRITE_TOKEN`, part of `HUB_PROD_WRITE_PATHS`) | new, Sep 22 2026, PR #33 + gh-broker #7 |
 
 Unmatched method/path → `json({error:'Not found'}, 404)` at ≈175.
 `PUBLIC_PATHS` (worker.js ≈37): `/sms-inbound`, `/qb/test`, `/qb/accounts`,
