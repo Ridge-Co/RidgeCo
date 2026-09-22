@@ -548,6 +548,8 @@ function renderEditor(){
   try{ var sched=JSON.parse(s.Payment_Schedule_JSON||'null'); scheduleState.milestones=(Array.isArray(sched)&&sched.length)?sched:scheduleDefault(); }
   catch(e){ scheduleState.milestones=scheduleDefault(); }
   renderSchedule();
+  // Ridge Co materials pricing mode (Sep 22 2026)
+  renderMatMode();
   // proposal
   if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').value=s.Proposal_Text; }
   else { document.getElementById('proposal-out').classList.add('hide'); document.getElementById('proposal-text').value=''; }
