@@ -5554,12 +5554,34 @@ async function approveInvoiceReviewBulk(env, body) {
   let nextIRId = nextSafeId(irData.values || []);
 
   const results = [], billUpdates = [], newIRRows = [];
+  // Same signed-scope-proposal receipt backstop as approveInvoiceReview (Sep 22 2026) — read
+  // Scopes/Scope_Signatures at most once for the whole batch, and only if some approval carries
+  // receipts. A failed read fails just the approvals that carry receipts, never silently passes them.
+  let _cover = null, _coverErr = null, _coverLoaded = false;
+  const coverFor = async woId => {
+    if (!_coverLoaded) {
+      _coverLoaded = true;
+      try {
+        const orEmpty = e => { if (isMissingTabError(e)) return []; throw e; };
+        const [scopes, sigs] = await Promise.all([fetchTab(env, 'Scopes').catch(orEmpty), fetchTab(env, 'Scope_Signatures').catch(orEmpty)]);
+        _cover = { scopes, sigs };
+      } catch (e) { _coverErr = e; }
+    }
+    if (_coverErr) throw _coverErr;
+    return scopeCoveringSignature(_cover.scopes, _cover.sigs, woId, null);
+  };
 
   for (const a of approvals) {
     const bill_id = a.bill_id, wo_id = a.wo_id;
     if (!a.customer_total || (!bill_id && !wo_id)) {
       results.push({ bill_id, wo_id, success: false, error: 'customer_total and a bill_id or wo_id are required' });
       continue;
+    }
+    if (wo_id && String(a.own_material_ids || '').split(',').map(x => x.trim()).filter(Boolean).length) {
+      let covered = null;
+      try { covered = await coverFor(wo_id); }
+      catch (e) { results.push({ bill_id, wo_id, success: false, error: 'Could not confirm whether this job is billed through a signed proposal — its receipts were not billed. Try again.' }); continue; }
+      if (covered) { results.push({ bill_id, wo_id, success: false, error: `Billed through signed proposal Scope #${covered.scope_id} — its receipts can't be invoiced again here. Untick them and re-approve.`, scope_covered: covered }); continue; }
     }
     // Same dedup rule as the single-item approve: approving the same bill/job twice hands
     // back the existing row instead of logging a duplicate.
