@@ -2026,6 +2026,51 @@ async function receiptReconConfirm(env, body) {
   return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
+// Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
+// Old receipts reach the queue when paper receipts get scanned into the folder (e.g. a Jun 2025
+// Surplus City receipt scanned Aug 26 2026) — the email pull never goes before Jul 1. Anything
+// dated before the cutoff is queued as SKIPPED with a plain note instead of landing in Pending,
+// and is one tap from coming back (↩ Move back to Pending). Config key receipt_recon_min_date
+// (yyyy-mm-dd); blank/missing = 2026-07-01, matching the email backfill start.
+const RECEIPT_RECON_MIN_DATE_DEFAULT = '2026-07-01';
+function receiptReconCutoff(cfg) {
+  const v = String((cfg && cfg.receipt_recon_min_date) || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : RECEIPT_RECON_MIN_DATE_DEFAULT;
+}
+function receiptBeforeCutoff(receiptDate, cutoff) {
+  const d = String(receiptDate || '').trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(d) && d.slice(0, 10) < cutoff;   // no/garbled date = keep it in Pending, never hide it
+}
+function receiptCutoffNote(receiptDate, cutoff) {
+  return `Receipt dated ${String(receiptDate).slice(0, 10)} is before the ${cutoff} cutoff — skipped automatically. Tap "Move back to Pending" if you need it.`;
+}
+
+// POST /receipt-recon/skip-before-cutoff { dry_run? } — one-time cleanup of pending rows that
+// predate the cutoff (they were queued before the cutoff existed). Skips only; writes nothing
+// else, and every row it touches can be moved back with /receipt-recon/unskip.
+async function receiptReconSkipBeforeCutoff(env, body) {
+  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cutoff = receiptReconCutoff(cfg);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const hits = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (r.Status || 'pending') === 'pending' && receiptBeforeCutoff(r.Receipt_Date, cutoff));
+  const list = hits.map(r => ({ id: r.ID, date: r.Receipt_Date, total: r.Total, vendor: r.Vendor }));
+  if (body && body.dry_run) return json({ ok: true, dry_run: true, cutoff, would_skip: list.length, rows: list });
+  for (const r of hits) await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Status: 'skipped', Notes: receiptCutoffNote(r.Receipt_Date, cutoff) });
+  return json({ ok: true, cutoff, skipped: list.length, rows: list });
+}
+
+// POST /receipt-recon/unskip { id } — undo a Skip (Sep 22 2026; before this a skipped receipt
+// could never come back). Only moves skipped → pending; confirmed/duplicate rows are untouched.
+async function receiptReconUnskip(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (row.Status !== 'skipped') return json({ error: `Only a skipped receipt can be moved back (this one is "${row.Status || 'pending'}").` }, 409);
+  await updateRow(env, 'Receipt_Recon_Queue', id, { Status: 'pending', Notes: '' });
+  return json({ ok: true, id });
+}
+
 // POST /receipt-recon/skip { id, reason? } — dismiss without billing anything.
 async function receiptReconSkip(env, body) {
   const id = body.id; if (!id) return json({ error: 'id required' }, 400);
