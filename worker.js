@@ -10583,21 +10583,129 @@ async function runWeeklyArReport(env) {
 // call Gmail's users.messages.send with a base64url RFC822 message. FAILS LOUD (throws) when
 // misconfigured or rejected — this is a real customer-facing send path, not the internal
 // digest's silent stub, so a misconfiguration must surface, never look like "nothing to send."
+//
+// Refresh-token SOURCES (Sep 22 2026 — "Reconnect Gmail"): Config GMAIL_REFRESH_TOKEN (written
+// only by the /gmail/callback sign-in flow below) is tried FIRST, then the original Cloudflare
+// secret env.GMAIL_REFRESH_TOKEN. A dead token (invalid_grant) in one source falls through to the
+// other, so a stale Config token can never block a secret Brett updated by hand, and vice versa.
+// Same Config-first precedent as qbAccessToken. When every source is dead, the error says exactly
+// what to do ("Reconnect Gmail") instead of just echoing Google's JSON.
 let _gmailTokenCache = { token: null, at: 0 };
+const GMAIL_RECONNECT_HINT = 'Gmail sign-in for the Ridge Co sender has expired or was revoked — tap "Reconnect Gmail" (Scope Creator, next to Send) to sign it back in.';
+function gmailRefreshCandidates(cfgToken, envToken) {
+  const out = [];
+  const c = String(cfgToken || '').trim(), e = String(envToken || '').trim();
+  if (c) out.push({ source: 'config', token: c });
+  if (e && e !== c) out.push({ source: 'env', token: e });
+  return out;
+}
 async function gmailAccessToken(env) {
-  if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET || !env.GMAIL_REFRESH_TOKEN) {
-    throw new Error('Gmail not configured — set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_REFRESH_TOKEN/GMAIL_SENDER in Cloudflare Worker secrets.');
-  }
   if (_gmailTokenCache.token && (Date.now() - _gmailTokenCache.at) < 50 * 60 * 1000) return _gmailTokenCache.token;
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  const candidates = gmailRefreshCandidates(cfg.GMAIL_REFRESH_TOKEN, env.GMAIL_REFRESH_TOKEN);
+  if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET || !candidates.length) {
+    throw new Error('Gmail not configured — set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_SENDER in Cloudflare Worker secrets, then use "Reconnect Gmail" (or set GMAIL_REFRESH_TOKEN).');
+  }
+  let lastErr = null, sawDead = false;
+  for (const c of candidates) {
+    const resp = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: c.token, grant_type: 'refresh_token' }),
+    });
+    const data = await resp.json().catch(() => null);
+    if (resp.ok && data && data.access_token) {
+      _gmailTokenCache = { token: data.access_token, at: Date.now(), source: c.source };
+      return data.access_token;
+    }
+    lastErr = data || {};
+    // Only a dead/revoked token is worth falling through on — anything else (bad client secret,
+    // Google outage) would fail the same way on the next source too, so surface it now. If an
+    // earlier source was already dead, keep the reconnect hint so the Reconnect button still shows.
+    if (!(data && data.error === 'invalid_grant')) {
+      throw new Error((sawDead ? GMAIL_RECONNECT_HINT + ' ' : '') + 'Gmail token refresh failed: ' + JSON.stringify(lastErr).slice(0, 200));
+    }
+    sawDead = true;
+  }
+  throw new Error(GMAIL_RECONNECT_HINT + ' (Gmail token refresh failed: ' + JSON.stringify(lastErr || {}).slice(0, 160) + ')');
+}
+
+// ── "Reconnect Gmail" sign-in flow (Sep 22 2026) ────────────────────────────────────────────
+// Replaces "mint a refresh token in OAuth Playground and paste it into a Cloudflare secret" with
+// a one-tap Google sign-in. POST /gmail/connect-url (ADMIN) returns Google's consent URL carrying
+// a signed, 15-minute, single-purpose `state`; Google redirects to GET /gmail/callback (PUBLIC at
+// the router, but it refuses anything without a valid state), which exchanges the code, CHECKS the
+// signed-in account is the Ridge Co sender (so nobody can wire a different Gmail in), and stores
+// the new refresh token in Config GMAIL_REFRESH_TOKEN (redacted from GET /config). The token value
+// is never shown on any page or response. One-time Google Cloud setup: add
+// <worker origin>/gmail/callback to the OAuth client's Authorized redirect URIs.
+const GMAIL_OAUTH_SCOPES = 'https://www.googleapis.com/auth/gmail.send openid email';
+function gmailExpectedSender(env) { return String((env && env.GMAIL_SENDER) || 'ridgecomaintenance@gmail.com').trim().toLowerCase(); }
+function gmailCallbackUrl(url) { return url.origin + '/gmail/callback'; }
+// Pure: decodes the (Google-issued, fetched directly over TLS from Google's token endpoint)
+// id_token's payload for the signed-in account's email. Not a signature check — it doesn't need
+// to be one, since the token came straight from Google in our own server-to-server exchange.
+function gmailIdTokenEmail(idToken) {
+  try {
+    const part = String(idToken || '').split('.')[1]; if (!part) return null;
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((part.length + 3) % 4);
+    const p = JSON.parse(atob(b64));
+    return { email: String(p.email || '').trim().toLowerCase(), verified: p.email_verified === true || p.email_verified === 'true' };
+  } catch (_) { return null; }
+}
+async function gmailConnectUrl(env, url) {
+  if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET) return json({ error: 'GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET are not set in Cloudflare Worker secrets.' }, 400);
+  const state = await makeSessionToken({ scope: 'gmail-oauth', id: 'gmail', rev: String(Date.now()) }, env.WORKER_SECRET, 15 * 60);
+  const q = new URLSearchParams({
+    client_id: env.GMAIL_CLIENT_ID, redirect_uri: gmailCallbackUrl(url), response_type: 'code',
+    scope: GMAIL_OAUTH_SCOPES, access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true',
+    login_hint: gmailExpectedSender(env), state,
+  });
+  return json({ success: true, url: 'https://accounts.google.com/o/oauth2/v2/auth?' + q.toString(), redirect_uri: gmailCallbackUrl(url), sender: gmailExpectedSender(env) });
+}
+function gmailCallbackPage(ok, title, detail) {
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const color = ok ? '#166534' : '#b42318';
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ridge Co — Gmail</title></head>` +
+    `<body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#eceef1;margin:0;padding:24px;">` +
+    `<div style="max-width:480px;margin:40px auto;background:#fff;border:1px solid #dce0e6;border-radius:8px;padding:22px;">` +
+    `<div style="font-size:18px;font-weight:bold;color:${color};margin-bottom:8px;">${ok ? '✅' : '⚠'} ${esc(title)}</div>` +
+    `<div style="font-size:14px;line-height:1.5;color:#1b1f24;">${esc(detail)}</div></div></body></html>`;
+  return new Response(html, { status: ok ? 200 : 400, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
+}
+async function gmailOAuthCallback(env, url) {
+  const err = url.searchParams.get('error');
+  if (err) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google said: ' + err + '. Nothing changed — go back to the Hub and tap Reconnect Gmail again.');
+  const code = url.searchParams.get('code') || '';
+  const st = await verifySessionToken(url.searchParams.get('state') || '', env.WORKER_SECRET);
+  if (!st || st.scope !== 'gmail-oauth') return gmailCallbackPage(false, 'Link expired', 'This sign-in link is invalid or older than 15 minutes. Nothing changed — tap Reconnect Gmail in the Hub again.');
+  if (!code) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google did not send an authorization code. Nothing changed — try Reconnect Gmail again.');
   const resp = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: env.GMAIL_REFRESH_TOKEN, grant_type: 'refresh_token' }),
+    body: new URLSearchParams({ code, client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, redirect_uri: gmailCallbackUrl(url), grant_type: 'authorization_code' }),
   });
   const data = await resp.json().catch(() => null);
-  if (!resp.ok || !data || !data.access_token) throw new Error('Gmail token refresh failed: ' + JSON.stringify(data || {}).slice(0, 200));
-  _gmailTokenCache = { token: data.access_token, at: Date.now() };
-  return data.access_token;
+  if (!resp.ok || !data || !data.access_token) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google rejected the sign-in: ' + JSON.stringify(data || {}).slice(0, 200) + '. Nothing changed.');
+  const who = gmailIdTokenEmail(data.id_token);
+  const expected = gmailExpectedSender(env);
+  if (!who || !who.email || who.email !== expected || !who.verified) {
+    return gmailCallbackPage(false, 'Wrong Google account', `You signed in as ${who && who.email ? who.email : 'an unknown account'}, but the Hub sends as ${expected}. Nothing changed — tap Reconnect Gmail again and pick ${expected}.`);
+  }
+  if (!String(data.scope || '').includes('gmail.send')) return gmailCallbackPage(false, 'Permission not granted', 'Sending email permission was not granted on the Google screen. Nothing changed — try again and leave the "Send email on your behalf" box checked.');
+  if (!data.refresh_token) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google did not return a long-lived token. Nothing changed — try Reconnect Gmail again.');
+  await setConfigKey(env, { key: 'GMAIL_REFRESH_TOKEN', value: data.refresh_token });
+  try { await setConfigKey(env, { key: 'GMAIL_TOKEN_UPDATED', value: new Date().toISOString() }); } catch (_) {}
+  _gmailTokenCache = { token: data.access_token, at: Date.now(), source: 'config' };
+  return gmailCallbackPage(true, 'Gmail reconnected', `The Hub can send as ${expected} again. You can close this tab and retry the send.`);
 }
+// GET /gmail/token-check (ADMIN) — proves a stored token actually refreshes, WITHOUT sending
+// an email (/gmail/test is the real-send version). Reports which source worked, never the value.
+async function gmailTokenCheck(env) {
+  _gmailTokenCache = { token: null, at: 0 }; // force a real refresh, not a cached access token
+  try { await gmailAccessToken(env); return json({ ok: true, source: _gmailTokenCache.source || '' }); }
+  catch (e) { return json({ ok: false, error: String((e && e.message) || e) }, 200); }
+}
+// GET /config redaction: these keys hold live credentials and are never needed by a page.
+const CONFIG_REDACTED_KEYS = ['GMAIL_REFRESH_TOKEN'];
 
 function _utf8B64url(str) {
   const bytes = new TextEncoder().encode(str);
