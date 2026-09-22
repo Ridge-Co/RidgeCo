@@ -1023,7 +1023,9 @@ async function genProposal(){
   // customer's page. Same save-before-act pattern applyCommand()/splitSelected() already use.
   setStatus('prop-status','Saving items…');
   var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
-  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items }); state.current.line_items=items; }
+  var mp=readMatMode();
+  if(mp.mode==='flat_pct' && !(isFinite(mp.pct) && mp.pct>=0 && mp.pct<=500)){ setStatus('prop-status','⚠ Enter the flat materials markup % (0–500), or pick another materials pricing option.','err'); return; }
+  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items, materials_pricing:mp }); state.current.line_items=items; state.current.Materials_Pricing_JSON=JSON.stringify(mp); }
   catch(e){ setStatus('prop-status','⚠ could not save your item edits, so the proposal was not generated — '+e.message,'err'); return; }
   setStatus('prop-status','Generating customer proposal…');
   try{
