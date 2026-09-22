@@ -1,6 +1,27 @@
 # BrettOS Feature Log — What Works, Don't Break It
 **Version:** v2.05 | **Last Updated:** September 22, 2026 ([FL-20260922-1900-rm] — Receipt Mail → Hub: emailed receipts into the Reconciler folder via Gmail filters + Apps Script; receiptReconScan batch cap. Previous: [FL-20260922-0910-vp] — B-012 Vendor Performance dashboard: read-only GET /vendor-performance admin-only vendor scorecard + Hub UI, PR #19 open, not yet merged; prior: [FL-20260920-1710-sb] — HUB_TEST_TOKEN staging test-infra: found and fixed the real root cause of a day-long "/workorder always 403s" mystery — not a guard-logic bug, but maintenance-hub-staging's Cloudflare Build never actually deploying anything merged to main; prior: [FL-20260920-1700-sb] — Invoice Submitted vendor-bill status + per-audience notify controls, PR #9 open; prior: [FL-20260919-1315-sb] — Ops_Build_Queue → Start Build: fires a real Claude Code cloud session via Anthropic's Routines API from proposals.html, item-level status callback (held/done))
 
+**[FL-20260922-1545-ex] [receipt-reconciler] [quickbooks] [expense] One-tap expense receipts (Ridge Co / 1864 Kerns School Rd / picked property) sent to QuickBooks immediately; unreadable scan files stop retrying.**
+
+Brett's ask: attach receipts to Ridge Co or 1864 Kerns School Rd as an expense instead of picking a work order; route them to QuickBooks for the expense record, and put them on work orders only when he chooses to. Goal: clear the backlog faster. The pieces already existed, but three problems blocked this:
+1. The no-WO confirm button only appeared when the scanner classified a receipt as `company` (a "bmore" PO). Home Depot receipts with an address never got it.
+2. When a `billable`-suggested receipt was confirmed with `no_wo`, `receiptReconConfirm` kept `category = billable`, leaving a billable row with nothing to bill.
+3. Receipts only reached QuickBooks through the 7am `sendReceiptsToQBEmail` sweep, which is capped at 8 a day.
+
+Fixed:
+- `receipt-reconciler.html`: every pending, non-excluded card gets a green "Expense only" bar with **🧾 Ridge Co expense** (no property), **🏡 1864 Kerns School Rd** (found by address, so no hardcoded ID), and, on billable cards, **Expense to the property picked above**. One tap posts `no_wo:true`.
+- `worker.js` `receiptReconConfirm`: `no_wo` now always records category `company`. After a successful expense record it calls `sendReceiptsToQBEmail(env, {ids:[newId], limit:1})`, sending **only that receipt** to QuickBooks immediately, and returns `qb_email: {sent, error}`, which the card shows ("Sent to QuickBooks", or a warning that the 7am sweep will retry).
+- `sendReceiptsToQBEmail` gains an optional `ids` filter. The QB email for a property receipt now reads "Expense — property: …".
+- Work-order confirms are unchanged: billable on the WO, folded into the invoice, and sent to QB by the daily sweep.
+
+Also fixed, from the same session:
+- **`receiptReconScan` retried unreadable files forever.** `recon_smoke_test.png` ("Could not process image") cost an OCR call and logged an error on every scan. It now uses the same 3-attempt Config tracker `receiptScan` already had (Config key `receipt_recon_failures`), and after that the file is skipped and listed under `stuck`.
+- **The Scan button's result line was being overwritten.** `loadQueue()` replaced it with "✅ N pending" the moment the list reloaded. That means PR #21's "N more waiting, tap Scan again" note never actually stayed on screen. Caught by the new headless test. The scan result now stays in front of the pending count.
+
+Verified: `node --check` clean on worker.js and the page script. New `test/receipt-expense-path.test.mjs` (14/14) extracts the real `receiptReconConfirm` + `sendReceiptsToQBEmail` and covers the expense category, send-only-this-one, the Kerns wording, the unchanged WO path, and the double-tap guard. `test/receipt-recon-scan-cap.test.mjs` grew to 16/16 with the unreadable-file cases. New `test/manual-verify-receipt-expense-ui.mjs` (headless Chromium, 390px phone width) passes 13/13: exact payloads per button, the refuse-with-no-property case, no sideways scroll, and the scan status line. Full suite 84/84. `BUILD_VERSION` → `2026-09-22.3-receipt-expense-path`.
+
+**Known, not built:** the Hub OCR reads Home Depot **return** receipts as positive purchases. The Aug 24 −$111.18 refund queued as +$111.18. Skip returns by hand until refund detection is built.
+
 **[FL-20260922-1900-rm] [receipt-reconciler] [email-intake] [apps-script] Receipt Mail → Hub — emailed receipts (Home Depot first) flow into the Reconciler scan folder via Gmail filters + Apps Script, no AI retrieval, no Cloudflare cron; plus a batch cap on `receiptReconScan`.**
 
 Brett needed Home Depot e-receipts out of email and into billing, and wanted a documented, filter-driven path with no AI retrieval, kept off Cloudflare cron. Found live on Sep 22: brett@ has had no HD e-receipts since Jun 30. Brett confirmed they now go to info@. HD e-receipts carry an `eReceipt.pdf` attachment. Lowe's "Ready for Pick Up" emails have no prices, and Amazon "Ordered:" emails have no tax, so those two are left to approval rather than pre-approved.
