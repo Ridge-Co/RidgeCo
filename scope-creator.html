@@ -1113,8 +1113,9 @@ async function sendEstimateEmail(){
     document.getElementById('link-out').classList.remove('hide');
     document.getElementById('link-text').value=r.url;
     setStatus('send-status','✅ sent to '+r.sent_to,'ok');
+    showGmailReconnect(false);
     renderSendStatus();
-  }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); }
+  }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
 }
 function renderSendStatus(){
   var el=document.getElementById('send-sent-note'); if(!el) return;
