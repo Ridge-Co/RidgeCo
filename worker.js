@@ -5032,9 +5032,18 @@ async function woCombine(env, body) {
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const survivorSnapshot = {};
   for (const f of WO_COMBINE_RECONCILE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
+  for (const f of WO_COMBINE_MERGE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
   const fieldsToApply = {};
   for (const f of WO_COMBINE_RECONCILE_FIELDS) {
     if (String(resolved[f] ?? '') !== String(survivorSnapshot[f] ?? '')) fieldsToApply[f] = resolved[f];
+  }
+  // Merge fields (Description/Room/Owner_WO_Ref): unconditional, order-preserving
+  // concatenation of every combined WO's own value onto the survivor's, regardless of
+  // whether they agree or disagree — there is no "conflict" state for these at all.
+  for (const f of WO_COMBINE_MERGE_FIELDS) {
+    let merged = survivorSnapshot[f];
+    for (const w of combinedWOs) merged = mergeWOTextField(merged, w.ID, w[f]);
+    if (merged !== survivorSnapshot[f]) fieldsToApply[f] = merged;
   }
 
   const voidedSoFar = [];
