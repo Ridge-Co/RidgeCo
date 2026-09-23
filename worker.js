@@ -16116,6 +16116,289 @@ async function receiptReconCheckDuplicatesBulk(env, body) {
 }
 
 
+// ── Receipt DUPLICATE AUDIT (Task 1, Sep 22 2026 handoff) ───────────────────────────────────
+// Read-only against QuickBooks, forever — this audit never writes an invoice, bill, credit memo,
+// or anything else to QB. It exists because receiptCheckDuplicatesOne above only ever looks at
+// (a) rows still sitting in Receipt_Recon_Queue, never confirmed Receipts rows, and (b) the
+// closest 5 invoices within a ±45-day window — a duplicate on the 6th invoice, or one billed
+// months later, is invisible to it. Brett caught a real receipt-billed-twice case that check
+// would never have found and believes there are more.
+//
+// Brett's answers to the design questions (Sep 22 2026, already collected — do not re-ask):
+//   1. Audit range: per-receipt, not a global cutoff. Each receipt only scans invoices dated ON
+//      OR AFTER that receipt's own date — a receipt can't be billed on an invoice that predates
+//      the purchase. No upper bound.
+//   2. Markup matching: exact amount only, same convention as receiptCheckDuplicatesOne — do NOT
+//      also check receipt-amount-plus-markup.
+//   3. Match strictness: amount alone is enough to flag for review. Do NOT also require a
+//      matching store/description — every same-amount hit surfaces; Brett eyeballs each one.
+//
+// Design decision on the "does a list query carry Line" question (handoff doc, verify-first
+// item): there is no read-only, credential-free path available to this build to run a raw
+// `SELECT * FROM Invoice` against QuickBooks and inspect the result outside of a full worker
+// deploy (hub_test_get/hub_prod_get are allow-listed to Hub JSON endpoints, not raw QB queries,
+// and asking Brett for WORKER_SECRET to check this is exactly what these tools exist to avoid).
+// So this defaults to the SAFER of the two designs per the handoff's own fallback instruction:
+// per-invoice opens, paged — never a bulk pull assumed to carry Line. `build-index` below still
+// reports `list_query_carried_line` on every real run (computed for free from the list call it
+// already makes) so the very first live run answers the question for good, and a future build
+// can switch to the cheaper bulk-with-Line path once that's confirmed TRUE across a real batch.
+//
+// Two BRAND-NEW, isolated Hub-only Sheet tabs (never touched by any other endpoint):
+//   QB_Invoice_Line_Cache    — one row per QuickBooks invoice SalesItemLineDetail line, rebuilt
+//                              by build-index. A cache, not a source of truth — safe to wipe and
+//                              rebuild any time.
+//   Receipt_Duplicate_Audit  — one row per FLAGGED receipt, with Brett's own "real duplicate" /
+//                              "not a duplicate" marker. This file is Brett's own judgment on
+//                              record, and a re-scan (see receiptDuplicateAuditScan below) never
+//                              overwrites a mark he already made — only clears a row he hasn't
+//                              reviewed yet if it no longer matches.
+//
+// Paging follows the exact shape /admin/share-attachments already uses (offset/next_offset,
+// "click again to continue") — the real cost here is the per-invoice QuickBooks opens in
+// build-index, capped well under Cloudflare's ~25-subrequest-per-invocation ceiling that has
+// failed this app live before at this scale (rule referenced in the handoff doc).
+
+const QB_INV_CACHE_HEADERS = ['ID', 'Invoice_ID', 'Doc_Number', 'TxnDate', 'Customer_QB_ID', 'Customer_Name', 'Line_Description', 'Amount', 'Paid', 'Cached_Date', 'Active'];
+const RECEIPT_AUDIT_HEADERS = ['ID', 'Receipt_ID', 'WO_ID', 'Store', 'Receipt_Date', 'Amount', 'Match_Count', 'Matches_JSON', 'Own_Customer_ID', 'Status', 'Flagged_Date', 'Reviewed_Date', 'Active'];
+const RECEIPT_AUDIT_STATUSES = ['pending', 'real_duplicate', 'not_duplicate'];
+
+async function ensureReceiptDuplicateAuditTabs(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  const need = [];
+  if (!titles.includes('QB_Invoice_Line_Cache')) need.push('QB_Invoice_Line_Cache');
+  if (!titles.includes('Receipt_Duplicate_Audit')) need.push('Receipt_Duplicate_Audit');
+  if (need.length) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  }
+  await ensureColumns(env, 'QB_Invoice_Line_Cache', QB_INV_CACHE_HEADERS);
+  await ensureColumns(env, 'Receipt_Duplicate_Audit', RECEIPT_AUDIT_HEADERS);
+}
+
+// PURE — one raw QuickBooks Invoice object (as returned by GET invoice/{id}) into flat cache
+// rows, one per SalesItemLineDetail line (the same DetailType qbInvoiceLineDuplicates above
+// matches on). No network, no Sheets — a fixture invoice payload is all this needs to test.
+function qbInvoiceLineCacheRows(invoice) {
+  if (!invoice || invoice.Id == null) return [];
+  const total = Number(invoice.TotalAmt || 0);
+  const balance = invoice.Balance != null ? Number(invoice.Balance) : total;
+  const paid = total > 0 && Math.abs(balance) < 0.005;
+  const custId = (invoice.CustomerRef && invoice.CustomerRef.value != null) ? String(invoice.CustomerRef.value) : '';
+  const custName = (invoice.CustomerRef && invoice.CustomerRef.name) || '';
+  const doc = invoice.DocNumber || '';
+  const date = String(invoice.TxnDate || '').slice(0, 10);
+  const out = [];
+  for (const line of (invoice.Line || [])) {
+    if (line.DetailType !== 'SalesItemLineDetail') continue;
+    const amt = Number(line.Amount || 0);
+    if (!(amt > 0)) continue;
+    out.push({
+      invoice_id: String(invoice.Id), doc, date,
+      customer_id: custId, customer_name: custName,
+      description: String(line.Description || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+      amount: amt, paid,
+    });
+  }
+  return out;
+}
+
+// PURE — resolves the QuickBooks customer id a work order's invoice WOULD be billed under,
+// mirroring the Unit > Property > Owner precedence qbEntities already uses for mapping (a unit's
+// own QBO_Customer_ID wins if set, else the property's, else the owner's). Returns '' when
+// nothing is mapped yet — callers must treat '' as "unknown", never as "different from the match".
+function resolveWOCustomerId(woId, workorders, properties, units, owners) {
+  const wo = (workorders || []).find(w => String(w.ID) === String(woId));
+  if (!wo) return '';
+  const propId = String(wo.Property_ID || '');
+  const unitId = String(wo.Unit_ID || '');
+  const unit = unitId ? (units || []).find(u => String(u.ID) === unitId) : null;
+  if (unit && (unit.QBO_Customer_ID || '').trim()) return unit.QBO_Customer_ID.trim();
+  const prop = propId ? (properties || []).find(p => String(p.ID) === propId) : null;
+  if (prop && (prop.QBO_Customer_ID || '').trim()) return prop.QBO_Customer_ID.trim();
+  const owner = prop ? (owners || []).find(o => String(o.ID) === String(prop.Owner_ID)) : null;
+  if (owner && (owner.QBO_Customer_ID || '').trim()) return owner.QBO_Customer_ID.trim();
+  return '';
+}
+
+// PURE — every cached invoice line whose amount equals the receipt's amount, on an invoice
+// dated ON OR AFTER the receipt's own date (Brett's answer to the audit-range question: a
+// receipt can't be billed on an invoice that predates the purchase; no upper bound, no global
+// cutoff — deliberately per-receipt). Operates on the same row shape fetchTab returns for
+// QB_Invoice_Line_Cache, same convention as receiptDuplicatesAtProperty operating on raw
+// Receipts rows above.
+function receiptDuplicateAuditMatches(receipt, cacheRows) {
+  const amt = (Number(receipt.amount) || 0).toFixed(2);
+  const rDate = String(receipt.date || '').slice(0, 10);
+  if (!(Number(amt) > 0) || !rDate) return [];
+  return (cacheRows || [])
+    .filter(c => c.Active !== 'FALSE')
+    .filter(c => (Number(c.Amount) || 0).toFixed(2) === amt)
+    .filter(c => String(c.TxnDate || '').slice(0, 10) >= rDate)
+    .map(c => ({
+      invoice_id: c.Invoice_ID, doc: c.Doc_Number, date: c.TxnDate,
+      customer_id: c.Customer_QB_ID, customer_name: c.Customer_Name,
+      description: c.Line_Description, amount: Number(c.Amount) || 0,
+      paid: String(c.Paid) === 'TRUE',
+    }));
+}
+
+// PURE — Brett's flag rule (Sep 22 2026 design answers): flag a receipt when its amount appears
+// on 2+ invoice lines, OR on an invoice billed to a different QuickBooks customer than the
+// receipt's own work order. Amount alone is enough to surface it for review — no store/
+// description match required, Brett eyeballs every hit himself.
+function receiptDuplicateAuditDecision(matches, ownCustomerId) {
+  if (!matches || !matches.length) return { flagged: false, reason: '' };
+  if (matches.length >= 2) return { flagged: true, reason: `Amount matches ${matches.length} separate invoice lines.` };
+  const own = String(ownCustomerId || '').trim();
+  const diff = matches.find(m => own && String(m.customer_id || '').trim() && String(m.customer_id).trim() !== own);
+  if (diff) return { flagged: true, reason: `Matches invoice #${diff.doc || diff.invoice_id} (${diff.date}) billed to a different customer than this receipt's own work order.` };
+  return { flagged: false, reason: '' };
+}
+
+// How many individual QuickBooks invoices build-index opens per call. 1 list query + this many
+// individual GETs + one Sheets append stays well under Cloudflare's ~25-subrequest ceiling per
+// invocation — that ceiling has failed this app live before at this scale (handoff doc).
+const RECEIPT_AUDIT_INVOICE_OPEN_LIMIT = 15;
+
+// POST /admin/receipt-duplicate-audit/build-index { offset, limit, reset } — rebuilds
+// QB_Invoice_Line_Cache from live QuickBooks invoices, one page at a time. Read-only against
+// QuickBooks (qbAllInvoicesRaw + individual GET invoice/{id} — never a write). Call repeatedly
+// with the returned next_offset until done:true, same "click again to continue" shape as
+// /admin/share-attachments.
+async function receiptDuplicateAuditBuildIndex(env, body) {
+  body = body || {};
+  const offset = Number.isInteger(body.offset) && body.offset >= 0 ? body.offset : 0;
+  const limit = Number.isInteger(body.limit) && body.limit > 0 && body.limit <= RECEIPT_AUDIT_INVOICE_OPEN_LIMIT ? body.limit : RECEIPT_AUDIT_INVOICE_OPEN_LIMIT;
+  try {
+    await ensureReceiptDuplicateAuditTabs(env);
+    const token = await qbAccessToken(env);
+    // One cheap list-only query, re-fetched every batch (not cached across calls) so a receipt
+    // or invoice added mid-audit is picked up by the very next batch rather than working off a
+    // stale list — mirrors qbAllInvoicesRaw's own "list once, match in memory" convention.
+    const invoices = await qbAllInvoicesRaw(env, token);
+    const listQueryCarriedLine = invoices.some(inv => Array.isArray(inv.Line) && inv.Line.length > 0);
+    if (offset === 0 && body.reset !== false) {
+      // Fresh run — clear stale rows from a previous audit before repopulating, so a second run
+      // never double-counts an invoice's lines against themselves.
+      try { await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache!A2:Z100000:clear', {}); } catch (_) { /* best-effort — a failed clear just means old + new rows coexist until the next reset */ }
+    }
+    const batch = invoices.slice(offset, offset + limit);
+    const newRows = [];
+    let opened = 0, lineCount = 0;
+    for (const inv of batch) {
+      opened++;
+      try {
+        const full = await qbApi(env, `invoice/${inv.Id}?minorversion=73`, 'GET', null, token);
+        for (const l of qbInvoiceLineCacheRows(full && full.Invoice)) { newRows.push(l); lineCount++; }
+      } catch (e) { /* one bad invoice open must not kill the rest of this batch */ }
+    }
+    if (newRows.length) {
+      const cached = new Date().toISOString();
+      const values = newRows.map((l, i) => [
+        String(offset + i + 1), l.invoice_id, l.doc, l.date, l.customer_id, l.customer_name,
+        l.description, String(l.amount), l.paid ? 'TRUE' : 'FALSE', cached, 'TRUE',
+      ]);
+      await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache:append?valueInputOption=RAW', { values });
+    }
+    const nextOffset = offset + opened;
+    const done = nextOffset >= invoices.length;
+    return json({
+      ok: true, total_invoices: invoices.length, offset, opened_this_batch: opened,
+      lines_cached_this_batch: lineCount, next_offset: done ? null : nextOffset, done,
+      list_query_carried_line: listQueryCarriedLine,
+    });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// Pure in-memory matching once the cache is built — no QuickBooks calls at all — so a much
+// larger batch than build-index's is safe under the same subrequest cap.
+const RECEIPT_AUDIT_SCAN_LIMIT = 200;
+
+// POST /admin/receipt-duplicate-audit/scan { offset, limit } — pages through every active
+// Receipts row with an Amount, matches each against QB_Invoice_Line_Cache (built by
+// build-index), and upserts a Receipt_Duplicate_Audit row for anything that flags. Never
+// overwrites Brett's own Status on a row he's already reviewed — only clears a still-pending
+// row that no longer matches (e.g. after a cache rebuild). Call repeatedly until done:true.
+async function receiptDuplicateAuditScan(env, body) {
+  body = body || {};
+  const offset = Number.isInteger(body.offset) && body.offset >= 0 ? body.offset : 0;
+  const limit = Number.isInteger(body.limit) && body.limit > 0 && body.limit <= RECEIPT_AUDIT_SCAN_LIMIT ? body.limit : RECEIPT_AUDIT_SCAN_LIMIT;
+  try {
+    await ensureReceiptDuplicateAuditTabs(env);
+    const [receipts, workorders, properties, units, owners, cacheRows, existingFlags] = await fetchTabs(env,
+      ['Receipts', 'Work_Orders', 'Properties', 'Units', 'Owners', 'QB_Invoice_Line_Cache', 'Receipt_Duplicate_Audit']);
+    const activeReceipts = (receipts || []).filter(r => r.Active !== 'FALSE' && Number(r.Amount) > 0);
+    const batch = activeReceipts.slice(offset, offset + limit);
+    const existingByReceiptId = {};
+    (existingFlags || []).forEach(f => { if (f.Active !== 'FALSE') existingByReceiptId[String(f.Receipt_ID)] = f; });
+    let flaggedNew = 0, flaggedUpdated = 0, clearedStale = 0;
+    for (const r of batch) {
+      const ownCustomerId = resolveWOCustomerId(r.WO_ID, workorders, properties, units, owners);
+      const matches = receiptDuplicateAuditMatches({ amount: r.Amount, date: r.Date }, cacheRows);
+      const decision = receiptDuplicateAuditDecision(matches, ownCustomerId);
+      const existing = existingByReceiptId[String(r.ID)];
+      if (decision.flagged) {
+        const fields = {
+          WO_ID: r.WO_ID || '', Store: r.Store || '', Receipt_Date: r.Date || '', Amount: r.Amount || '',
+          Match_Count: String(matches.length), Matches_JSON: JSON.stringify(matches).slice(0, 8000),
+          Own_Customer_ID: ownCustomerId, Flagged_Date: new Date().toISOString(), Active: 'TRUE',
+        };
+        if (existing) {
+          await updateRow(env, 'Receipt_Duplicate_Audit', existing.ID, fields); // Status field omitted — preserves Brett's own mark
+          flaggedUpdated++;
+        } else {
+          await addRow(env, 'Receipt_Duplicate_Audit', Object.assign({ Receipt_ID: r.ID, Status: 'pending' }, fields));
+          flaggedNew++;
+        }
+      } else if (existing && existing.Status === 'pending') {
+        await updateRow(env, 'Receipt_Duplicate_Audit', existing.ID, { Active: 'FALSE' });
+        clearedStale++;
+      }
+    }
+    const nextOffset = offset + batch.length;
+    const done = nextOffset >= activeReceipts.length;
+    return json({
+      ok: true, total_receipts: activeReceipts.length, offset, scanned_this_batch: batch.length,
+      flagged_new: flaggedNew, flagged_updated: flaggedUpdated, cleared_stale: clearedStale,
+      next_offset: done ? null : nextOffset, done,
+    });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// GET /admin/receipt-duplicate-audit/flags?status=pending|real_duplicate|not_duplicate|all —
+// lists flagged receipts for the "Audit older receipts" view. Read-only, no QuickBooks call.
+async function receiptDuplicateAuditFlags(env, url) {
+  await ensureReceiptDuplicateAuditTabs(env);
+  const status = url && url.searchParams.get('status');
+  const rows = await fetchTab(env, 'Receipt_Duplicate_Audit');
+  let out = rows.filter(r => r.Active !== 'FALSE');
+  if (status && status !== 'all') out = out.filter(r => (r.Status || 'pending') === status);
+  out.sort((a, b) => String(b.Flagged_Date || '').localeCompare(String(a.Flagged_Date || '')));
+  return json({
+    ok: true, count: out.length, flags: out.map(f => ({
+      id: f.ID, receipt_id: f.Receipt_ID, wo_id: f.WO_ID, store: f.Store, receipt_date: f.Receipt_Date,
+      amount: Number(f.Amount) || 0, match_count: Number(f.Match_Count) || 0,
+      matches: (() => { try { return JSON.parse(f.Matches_JSON || '[]'); } catch (_) { return []; } })(),
+      status: f.Status || 'pending', flagged_date: f.Flagged_Date || '', reviewed_date: f.Reviewed_Date || '',
+    })),
+  });
+}
+
+// POST /admin/receipt-duplicate-audit/mark { id, status } — Brett's own "real duplicate" /
+// "not a duplicate" judgment on a flagged row. Writes ONLY to Receipt_Duplicate_Audit — never
+// touches QuickBooks, Receipts, or Work_Orders. Fixing an actual duplicate in QuickBooks (credit
+// memo / invoice repair) stays Brett's own tap in QuickBooks itself — explicitly out of scope.
+async function receiptDuplicateAuditMark(env, body) {
+  body = body || {};
+  const id = body.id;
+  const status = body.status;
+  if (!id) return json({ error: 'id required' }, 400);
+  if (!RECEIPT_AUDIT_STATUSES.includes(status)) return json({ error: `status must be one of ${RECEIPT_AUDIT_STATUSES.join(', ')}` }, 400);
+  await ensureReceiptDuplicateAuditTabs(env);
+  await updateRow(env, 'Receipt_Duplicate_Audit', id, { Status: status, Reviewed_Date: new Date().toISOString() });
+  return json({ ok: true, id, status });
+}
 
 // Shared "was there ever a payment against this txn" guard, used before ANY delete-based undo —
 // a vendor bill, a customer invoice, doesn't matter. A txn whose remaining Balance differs from
