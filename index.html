@@ -12115,8 +12115,15 @@ var BC_FIELD_LABELS = { Managed_By:'Managed By', Vendor_ID:'Assigned Vendor', Sc
 // Free-text fields that are NEVER shown as a conflict — always auto-concatenated onto the
 // survivor server-side (mirrors WO_COMBINE_MERGE_FIELDS in worker.js), same "nothing lost"
 // treatment as Notes. Shown as an informational note only, never a picker.
-var BC_MERGE_FIELDS = ['Description','Room','Owner_WO_Ref'];
-var BC_MERGE_FIELD_LABELS = { Description:'Description', Room:'Room', Owner_WO_Ref:'Owner Reference' };
+// Owner_WO_Ref is deliberately NOT in this list (Sep 23 2026, Brett's follow-up) — the owner
+// has their own reference numbers on their end, and concatenating several onto one WO's
+// Owner_WO_Ref wouldn't match anything the owner recognizes. It's excluded from the combine
+// entirely, like Trade: the survivor keeps its own original ref untouched, and instead the
+// server sends the owner a one-time notice (owner_wo_combined_ref) naming which of their old
+// WO+ref pairs were absorbed into the surviving WO+ref, whenever a combine actually abandons
+// a distinct owner reference.
+var BC_MERGE_FIELDS = ['Description','Room'];
+var BC_MERGE_FIELD_LABELS = { Description:'Description', Room:'Room' };
 // Same ranking woCombine/getWorkOrdersList already use server-side (PRIORITY_ORDER) — used
 // here only to pre-select the most urgent value in the Priority picker below, never to
 // silently apply it without a picker: Brett can still leave it as-is (preserves the most
