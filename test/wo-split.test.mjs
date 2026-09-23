@@ -73,6 +73,7 @@ const splitOrigFieldsSrc       = grabConst(wsrc, 'const WO_SPLIT_ORIGINAL_FIELDS
 const splitMaxNewSrc           = grabConst(wsrc, 'const WO_SPLIT_MAX_NEW');
 const timeEntryLockSrc         = grab(wsrc, 'function timeEntryReassignLock(');
 const vendorBillLockSrc        = grab(wsrc, 'function vendorBillReassignLock(');
+const findLockedVendorBillSrc  = grab(wsrc, 'async function findLockedVendorBillForWOs(');
 const woSplitSrc               = grab(wsrc, 'async function woSplit(');
 const isTenantCurrentSrc       = grab(wsrc, 'function isTenantCurrent(');
 const currentTenantSrc         = grab(wsrc, 'function currentTenantForDispatch(');
