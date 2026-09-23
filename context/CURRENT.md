@@ -1,3 +1,45 @@
+# ⭐⭐ LATE-NIGHT UPDATE — Sep 22, 2026, 23:50 ET (supersedes the "end of day" FULL PICTURE directly below — that one was already stale by the time it was written; six more PRs landed after it)
+
+**Live build:** `/version`/`/health` confirmed via `HUB_PROD_RO_TOKEN` at 23:47 ET: `build_version: "2026-09-22.10-receipt-recon-refunds"`. This is the real current state — the `.4` figure quoted in the FULL PICTURE section below is long superseded.
+
+## PR #27 → closed. Superseded by PR #36, which is merged.
+PR #27 (the original duplicate-audit branch) hit an unresolvable conflict with #25/#26 (they landed on main after #27's branch was cut). Rather than rebase, a later session rebuilt it clean as **PR #36** (`receipt-duplicate-audit-v2`), which absorbed the full `RECEIPT_RECONCILER_DUP_REFUND_BULK_BUILD_BRIEF_v1.0.md` scope — not just the duplicate audit:
+- Part 0: intake-time rescan guard (a processed receipt can't re-appear as a fresh Pending row) — triggered by a live $56.04 Home Depot re-scan Brett caught that evening.
+- Parts 1+2: image-attached indicator on duplicate-flagged receipts + `POST /receipt/attach-only` (attach the image without billing).
+- Part 3: refund detection — force-detects negative-TOTAL/REFUND/RETURN/ORIG REC receipts, suggests a match-and-reverse flow gated on Brett's explicit tap (Rung-3 money write, never autonomous), plus a negative-expense fallback reusing PR #23's existing flow.
+- Part 4: bulk checkbox selection scoped to the Reconciler's own list (existing rule 184-185 pattern) + `POST /receipt-recon/bulk-action` (mark-duplicate / expense / move-to-pending / skip).
+- Part 5: WO picker gets opened/closed dates, a deep-link, and a date-mismatch warning.
+- The original duplicate-audit itself: `/admin/receipt-duplicate-audit/build-index`, `/scan`, `/mark`, `GET /flags` — per Brett's answers, per-receipt date floor, exact-amount match only, amount alone is enough to surface a flag.
+
+Each sub-part was built + tested by its own sub-agent (node tests + headless Playwright at 390px), ~350+ assertions total. Merged same session ("merge 36"). **PR #27 itself is now closed** (Brett closed it directly — the `close_pull_request` GH Broker tool doesn't actually work server-side yet, schema exists but the call errors `unknown tool`, so this had to be done from GitHub directly, not from here).
+
+**Still open on this thread:** no FEATURE_LOG entry yet for #36's six sub-parts, same gap #25/#26 already have. The Home Depot return / Apps Script sender-noise follow-ups from the original receipts handoff were *not* part of this build and are still open (see the FULL PICTURE section below).
+
+## Five more PRs merged today that the "end of day" FULL PICTURE below never mentions
+| PR | Branch | What |
+|---|---|---|
+| #28 | `feat/hub-prod-write-token` | `HUB_PROD_WRITE_TOKEN` worker-side (paired with gh-broker's own PR) — same one described as "gh-broker #5 + worker" in the FULL PICTURE section below; this is that PR's actual number. |
+| #29 → #30 | `feature/wo-split` → `feature/wo-split-v2` | Work Order Split (divide one WO into N): original editable alongside new WOs, descriptions pre-filled/independently editable, per-WO field overrides, optional time-entry/vendor-bill reassignment (blocked if invoiced/locked), batched tenant SMS gated on notify settings. #29 superseded by the `-v2` rebuild, #30 merged. Same session also shipped **WO Combine** (PR #25, already in the record below) with matching field-reconciliation design. |
+| #31 | `fix/vendor-portal-session-restore-timing` | Root-caused Cesar's "no work orders" complaint down to a SECOND bug beyond #26's Vendor_ID sync: `restoreVendorSession()` ran before `applyTranslations()` was defined, threw a silently-swallowed `ReferenceError` on every auto session-restore, which killed `loadWorkOrders()` right after it — explains both the stuck spinner and the portal staying in English. Fixed by deferring restore to `DOMContentLoaded`; also added missing `data-i18n` on the OPEN JOBS/ALL JOBS/NEEDS INVOICE tabs. **Live-verified** against production with a real headless-Chromium pass on Cesar's own session: 12 WOs loaded, full Spanish UI. |
+| #32 | `fix/wo-combine-voided-guard` | Staging verification of #25 found `/wo/combine` allowed a repeat call on an already-voided WO to silently return `success:true` instead of rejecting (Split already had this guard, Combine was missing it). Fixed, 54/54 tests. |
+| #33 | `feature/gemini-context-endpoint` | New Worker endpoint feeding Brett's Drive/context snapshot to Gemini (nightly ~1am ET), the "Claude → Gemini" half of the cross-tool context project; paired with the new `sync-gemini` skill for the "Gemini → Claude" half (reads Brett's Gemini conversations via Claude in Chrome, merges into `brett332/data/gemini-archive`). Both directions now scheduled nightly at 1am ET (`sync-gemini` trigger created tonight, first fire ~05:00 UTC). |
+| #34 | `feature/hub-test-token-ui-login` | Staging-only UI login using `HUB_TEST_TOKEN` so a headless Playwright pass can click through the admin Hub against `TEST-` records without ever needing the real `WORKER_SECRET` — this had been blocked earlier in the day by the safety classifier treating any auth-gate change as high-risk; a later session got it through. |
+
+## Both production tokens — live-tested tonight, confirmed matching
+- `HUB_PROD_RO_TOKEN`: `GET /health` via `hub_prod_get` → real data back (16 vendors, current build version). **Working.**
+- `HUB_PROD_WRITE_TOKEN`: `POST /admin/ensure-receipts-payment-source` via `hub_prod_post` (idempotent, `already_present:true`, touched nothing) → `success:true`. **Working.** The real backfill (`/admin/backfill-scope-wo-vendor`) was deliberately *not* run as part of this test — Brett is running it tomorrow along with the rest of the Cesar-portal confirmation.
+
+## Skills — confirmed already saved, no action needed
+Checked the live skill files directly (not just the proposing sessions): both `test-verified-builds` (mandatory self-test loop + today's later concurrency update — `[I]`/`[D]` row tagging, Step 2/3 parallel checks) and `brett-flow` (the hard-gate Step 6 tying to it) are already saved and live in Brett's skill store. The "still needs to save" note in the FULL PICTURE section below is stale.
+
+## Revised Brett-only to-dos (in order) — supersedes the list below
+1. Run `POST /admin/backfill-scope-wo-vendor` for real, then confirm Cesar's portal (both the Vendor_ID sync from #26 AND the session-restore fix from #31 need this to look right) and the NEEDS INVOICE tab.
+2. Skip the Aug 24 HD return if still pending; approve the real supply vendors in the Receipt Mail → Hub Rules sheet.
+3. No PR to rebase/merge anymore — #27's work all shipped via #36. FEATURE_LOG entries still owed for #25, #26, and #36's six sub-parts.
+4. Optional: decide whether to widen `sync-gemini` beyond the new nightly 1am ET schedule, and check tomorrow that the first run (fires ~05:00 UTC / 1am ET tonight) actually completed.
+
+---
+
 # ⭐ FULL PICTURE — end of day Sep 22, 2026 (consolidated across all of today's sessions; read this first, the dated sections below are the detail/history)
 
 **Live build:** `/version` = `2026-09-22.4-receipt-inplace-cutoff`. PRs #25 and #26 merged after that without bumping `BUILD_VERSION`, so `/version` alone can't prove they deployed. Check a feature from each instead.
