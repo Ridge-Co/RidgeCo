@@ -900,6 +900,36 @@ async function confirmRow(id, btn){
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// Part 2 (Sep 22 2026 brief): attaches this receipt's own scanned image to the WO picked in this
+// card's picker WITHOUT billing it — same WO-selection reading as confirmRow (picker select, or
+// the manual-override field), posted to /receipt/attach-only instead of /receipt-recon/confirm.
+// Never touches Invoice_Review/Vendor_Bills — see receiptAttachOnly's own comment in worker.js.
+async function attachOnlyRow(id, btn){
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const woSel = document.getElementById(idAttr+'-wo');
+  const woManual = document.getElementById(idAttr+'-wo-manual');
+  const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
+  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) first.</span>'; if (btn) btn.disabled = false; return; }
+  if (!allWOs.some(w => String(w.ID) === wo_id)){
+    statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const amount = document.getElementById(idAttr+'-amt').value.trim();
+  const store = document.getElementById(idAttr+'-store').value.trim();
+  const date = document.getElementById(idAttr+'-date').value.trim();
+  const description = document.getElementById(idAttr+'-desc').value.trim();
+  statusEl.innerHTML = '<span class="info">Attaching image, not billing…</span>';
+  try {
+    const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Image attached to '+esc(wo_id)+' — not billed, no invoice line added.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 // 1864 Kerns School Rd (Milam Ridge, Property 85 — Brett's own STR, no owner to bill). Found by
 // address rather than a hardcoded ID so a renumbered Properties tab can't silently point this
 // button at someone else's building.
