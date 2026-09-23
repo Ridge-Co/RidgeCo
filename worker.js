@@ -678,6 +678,8 @@ export default {
         if (path === '/receipt/attach-only')      return await receiptAttachOnly(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
         if (path === '/receipt-recon/bulk-action')       return await receiptReconBulkAction(env, body);
+        if (path === '/receipt-recon/refund-candidates') return await receiptReconRefundCandidates(env, body);
+        if (path === '/receipt-recon/refund-reverse')    return await receiptReconRefundReverse(env, body);
         if (path === '/receipt-recon/check-duplicates')  return await receiptReconCheckDuplicates(env, body);
         if (path === '/receipt-recon/check-duplicates-bulk') return await receiptReconCheckDuplicatesBulk(env, body);
         if (path === '/admin/receipt-duplicate-audit/build-index') return await receiptDuplicateAuditBuildIndex(env, body);
