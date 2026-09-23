@@ -465,6 +465,7 @@ export default {
           if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing', debug: _hubTestErr || undefined }, 403);
         }
         if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
+        if (path === '/admin/seed-test-receipt') return await seedTestReceipt(env, url, body);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
         // captured once here, harmlessly unused by every other POST route.
         const _clientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
