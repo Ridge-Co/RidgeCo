@@ -293,6 +293,10 @@ window.addEventListener('pageshow', function(e){
         <button class="btn small secondary" id="bc-open-btn" disabled onclick="openBulkCombineModal()">Combine Selected…</button>
         <span id="bc-hint" style="color:var(--muted);font-size:11px"></span>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:12px;min-width:90px">Void</span>
+        <button class="btn small danger" id="bv-open-btn" disabled onclick="openBulkVoidModal()">Void Selected…</button>
+      </div>
     </div>
     <!-- Filter Panel -->
     <div id="filterPanel" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px">
