@@ -2847,7 +2847,6 @@ async function seedTestReceipt(env, url, body) {
     note: 'Call again anytime — each call creates a fresh pending row (not idempotent like seed-test-fixtures, since a receipt queue is naturally many rows).',
   });
 }
-}
 
 const DUPLICATE_RETENTION_DAYS = 180;
 
