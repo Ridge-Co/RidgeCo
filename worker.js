@@ -5690,8 +5690,8 @@ async function woSplit(env, body) {
       const dupeGuardMarker = '​'.repeat(i + 1);
       const createRes = await createWorkOrder(env, {
         property_id: original.Property_ID || '', unit_id: original.Unit_ID || '', tenant_id: original.Tenant_ID || '',
-        type: original.Type || 'manual', trade: spec.Trade || '', description: (spec.Description || '') + dupeGuardMarker,
-        priority: spec.Priority || 'normal', room: original.Room || '',
+        type: original.Type || 'manual', trade: spec.Trade || effectiveOriginalTrade || '', description: (spec.Description || '') + dupeGuardMarker,
+        priority: spec.Priority || effectiveOriginalPriority || 'normal', room: original.Room || '',
         created_by: changedBy, notes: `Created via split from ${originalId}`,
       });
       const created = await createRes.clone().json();
