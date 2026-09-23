@@ -769,8 +769,10 @@ function rowCard(r){
   const propId = (sug.property && sug.property.id) || '';
   const idAttr = 'rc'+r.ID;
   let html = '<div class="rcard'+(excluded?' excl':'')+'" id="'+idAttr+'">';
-  html += '<div class="rc-top"><div><div class="rc-title">'+esc(r.Vendor||'(vendor unknown)')+' — $'+money(r.Total)+'</div>'
-        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(r.PO_Reference?' · '+esc(r.PO_Reference):'')+' · '+esc(entrySourceLabel(r))+'</div></div>'
+  html += '<div class="rc-top"><div style="display:flex;gap:8px;align-items:flex-start">'
+        + '<input type="checkbox" class="rc-check" data-id="'+esc(r.ID)+'" onchange="updateBulkBar()" title="Select for bulk action">'
+        + '<div><div class="rc-title">'+esc(r.Vendor||'(vendor unknown)')+' — $'+money(r.Total)+'</div>'
+        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(r.PO_Reference?' · '+esc(r.PO_Reference):'')+' · '+esc(entrySourceLabel(r))+'</div></div></div>'
         + '<div>'+categoryPill(sug.category, sug.action)+'</div></div>';
 
   if (r.items && r.items.length) html += '<div class="rc-items">Items: '+r.items.map(esc).join(', ')+'</div>';
