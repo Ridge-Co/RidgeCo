@@ -5862,7 +5862,7 @@ async function sendPropertyNotice(env, body) {
   const results = { sms_sent: 0, sms_failed: 0, sms_queued_quiet_hours: 0, email_sent: 0, email_failed: 0 };
   for (const tenant of smsRecipients) {
     try {
-      const r = await smsGatedSend(env, { wo_id: '', message_type: 'property_notice', recipient_type: 'tenant', tenant, owner, property, message_body: smsBody, bypassQuietHours: true });
+      const r = await smsGatedSend(env, { wo_id: body.wo_id || '', message_type: 'property_notice', recipient_type: 'tenant', tenant, owner, property, message_body: smsBody, bypassQuietHours: true });
       if (r.sent) results.sms_sent++; else if (r.held_for_quiet_hours) results.sms_queued_quiet_hours++; else results.sms_failed++;
     } catch (e) { results.sms_failed++; }
   }
