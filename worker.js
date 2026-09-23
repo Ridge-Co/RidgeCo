@@ -5432,7 +5432,9 @@ async function woCombine(env, body) {
       await logWOAuditMany(env, Object.entries(fieldsToApply).map(([field, newVal]) => ({
         woId: survivorId, changedBy, changedByRole, field,
         oldValue: survivorSnapshot[field], newValue: newVal,
-        notes: `Combine: reconciled from ${combinedIds.join(', ')}`,
+        notes: WO_COMBINE_MERGE_FIELDS.includes(field)
+          ? `Combine: merged from ${combinedIds.join(', ')}`
+          : `Combine: reconciled from ${combinedIds.join(', ')}`,
       })));
     }
     for (const w of combinedWOs) {
