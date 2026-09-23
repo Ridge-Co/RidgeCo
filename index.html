@@ -12255,6 +12255,10 @@ function submitBulkCombine() {
       // instead of silently retrying with a wrong pick.
       toast('These fields still need a pick: '+(res.conflicts||[]).join(', '),'error');
       bcRenderConflicts();
+    } else if (res.error === 'already_invoiced') {
+      // Sep 23 2026 — billing-state guard, no picker/override possible for this one.
+      document.getElementById('bc-error').textContent = res.message || ('Already invoiced: ' + (res.wo_ids||[]).join(', '));
+      document.getElementById('bc-error').style.display = '';
     } else {
       document.getElementById('bc-error').textContent = res.error || 'Combine failed';
       document.getElementById('bc-error').style.display = '';
