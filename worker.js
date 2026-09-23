@@ -2210,12 +2210,19 @@ async function receiptReconConfirm(env, body) {
   // rather than selecting a work order". A no-WO confirm is ALWAYS an expense record, even when
   // the scanner suggested 'billable' (a Home Depot receipt with a job address on it) — otherwise
   // it would sit in Receipts marked billable with nothing to bill it to.
-  const category = noWo ? 'company' : ((suggestion && suggestion.category) || 'billable');
+  // Part 3 (Sep 22 2026 brief): a refund row (category 'refund' from receiptSuggestCore, or a
+  // negative Total that predates this build) posted through the no-WO expense path is money
+  // coming BACK — it stays category 'refund' (never folded into generic 'company') and the
+  // amount is force-negated no matter what was typed/pre-filled, so a refund can never reach
+  // addReceipt as a positive charge from this path.
+  const isRefundRow = (suggestion && suggestion.category === 'refund') || Number(row.Total) < 0;
+  const category = noWo ? (isRefundRow ? 'refund' : 'company') : ((suggestion && suggestion.category) || 'billable');
+  const finalAmount = (noWo && isRefundRow) ? -Math.abs(Number(amount) || 0) : amount;
   const addResp = await addReceipt(env, {
-    wo_id: wo_id || '', property_id, amount, description, store, date,
+    wo_id: wo_id || '', property_id, amount: finalAmount, description, store, date,
     added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
-    payment_source: body.payment_source,
+    payment_source: body.payment_source, allow_negative: (noWo && isRefundRow),
   });
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
