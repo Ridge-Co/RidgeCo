@@ -5675,6 +5675,16 @@ async function woSplit(env, body) {
     //    the identical pre-filled text — createWorkOrder's own accidental-double-tap duplicate
     //    guard (findRecentDuplicate) has no way to know this is 1-of-N intentional creates in
     //    one Split, not a resubmit, and would otherwise collapse them into the same WO id.
+    // Fallback for a new WO spec that omits Trade/Priority entirely (the shipped index.html
+    // Split UI always sends both, pre-filled from the original's own values — see
+    // splitCardHtml — so this only matters for a direct/future API caller): Sep 23 2026 field
+    // audit gap, structurally the same class of bug Brett hit in Combine — silently defaulting
+    // to 'normal'/'' would downgrade an Urgent original's children to Normal, or leave a new
+    // WO with no Trade at all, with no signal that happened. Falls back to the original's own
+    // (post-override) value instead, same "inherit unless told otherwise" rule the rest of
+    // Split already applies to Property/Unit/Tenant/Room.
+    const effectiveOriginalTrade = Object.prototype.hasOwnProperty.call(originalFieldsToApply, 'Trade') ? originalFieldsToApply.Trade : originalSnapshot.Trade;
+    const effectiveOriginalPriority = Object.prototype.hasOwnProperty.call(originalFieldsToApply, 'Priority') ? originalFieldsToApply.Priority : originalSnapshot.Priority;
     for (let i = 0; i < newSpecs.length; i++) {
       const spec = newSpecs[i] || {};
       const dupeGuardMarker = '​'.repeat(i + 1);
