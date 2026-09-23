@@ -6270,7 +6270,7 @@ async function sendPinMessage(env, body) {
     const propId = t.Property_ID || (unit && unit.Property_ID) || '';
     const property = properties.find(p => p.ID === propId) || null;
     owner = property ? (owners.find(o => o.ID === property.Owner_ID) || null) : null;
-    address = property ? property.Address + (unit ? ' Unit ' + unit.Unit_Label : '') : '';
+    address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : '';
   } else if (type === 'vendor') {
     const vendors = await fetchTab(env, 'Vendors'); const v = vendors.find(r => r.ID === id);
     if (!v) return json({ error: 'Vendor not found' }, 404);
