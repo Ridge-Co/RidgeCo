@@ -5376,6 +5376,33 @@ async function woCombine(env, body) {
     }
   }
 
+  // Billing-state guard (Sep 23 2026, Brett — field audit gap #3; widened same day after
+  // Brett's follow-up to also cover vendor-bill state). QBO_Invoice_Number is the
+  // Work_Orders-level signal that a WO has actually been invoiced (customer-facing) in
+  // QuickBooks (written by qbSendInvoice/qbSendFinalInvoice). Combining across that boundary
+  // would fold a survivor's Description/Priority/etc (and any future combine-driven edits)
+  // into a WO QuickBooks already has a final invoice number for, silently changing what's
+  // already been billed. Separately, a WO can have vendor-bill-side billing state already
+  // reviewed/sent to QuickBooks (Vendor_Bills/Invoice_Review — a BILL, the vendor-paid side,
+  // distinct from the customer-facing INVOICE above) without necessarily having an invoice
+  // number on the WO itself yet — findLockedVendorBillForWOs reuses the exact same
+  // vendorBillReassignLock logic Split's reassignment guard already trusts for "is this bill
+  // already committed". Either signal blocks the whole combine outright, no override possible
+  // — there's no safe auto-reconciliation for already-billed state either way.
+  const alreadyInvoiced = [survivor, ...combinedWOs].filter(w => String(w.QBO_Invoice_Number || '').trim());
+  const lockedBill = await findLockedVendorBillForWOs(env, [survivor.ID, ...combinedWOs.map(w => w.ID)]);
+  if (alreadyInvoiced.length || lockedBill) {
+    const reasons = [];
+    if (alreadyInvoiced.length) reasons.push(`${alreadyInvoiced.map(w => w.ID).join(', ')} already ${alreadyInvoiced.length > 1 ? 'have' : 'has'} a QuickBooks invoice number`);
+    if (lockedBill) reasons.push(`WO ${lockedBill.WO_ID} has a vendor bill (${lockedBill.ID}) already reviewed/sent to QuickBooks`);
+    return json({
+      error: 'already_invoiced',
+      wo_ids: alreadyInvoiced.map(w => w.ID),
+      locked_bill_id: lockedBill ? lockedBill.ID : undefined,
+      message: `Cannot combine — ${reasons.join('; ')}. Handle billing manually before combining.`,
+    }, 400);
+  }
+
   const { resolved, conflicts } = resolveCombineFields([survivor, ...combinedWOs], body.field_overrides);
   if (conflicts.length) {
     return json({ error: 'field_conflict', conflicts, message: `These fields disagree across the selected work orders — field_overrides required for: ${conflicts.join(', ')}` }, 409);
