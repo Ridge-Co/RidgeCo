@@ -1067,6 +1067,63 @@ async function attachOnlyRow(id, btn){
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// Part 3 (Sep 22 2026 brief) — READ-ONLY search for the original purchase a refund might be
+// reversing. Renders each candidate with enough to eyeball at a glance (store/date/amount, exact-
+// amount flag, description) and a per-candidate confirm button; picking one is the only thing
+// that ever writes anything (reverseRefund below). Never auto-selects or auto-confirms.
+async function findRefundMatches(id, btn){
+  if (btn) btn.disabled = true;
+  const box = document.getElementById('rc'+id+'-refund-matches');
+  box.innerHTML = '<span class="info">Searching for the original purchase…</span>';
+  try {
+    const res = await post('/receipt-recon/refund-candidates', { id });
+    if (res.error) throw new Error(res.error);
+    const cands = res.candidates || [];
+    if (!cands.length) {
+      box.innerHTML = '<span class="info">No matching purchase found at this store/date/amount — post this as a negative expense below.</span>';
+    } else {
+      box.innerHTML = cands.map(c => (
+        '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin-top:6px">'
+        + '<div class="rc-sub">' + esc(c.store||'') + ' — $' + money(c.amount) + ' · ' + esc((c.date||'').slice(0,10))
+          + (c.wo_id ? ' · WO ' + esc(c.wo_id) : '') + (c.exact_amount ? ' <span class="pill suggest">exact amount</span>' : ' <span class="pill warn">amount differs — partial?</span>') + '</div>'
+        + (c.description ? '<div class="info">' + esc(c.description) + '</div>' : '')
+        + '<button class="btn small warnbtn" onclick="reverseRefund(\''+id+'\',\''+esc(String(c.receipt_id))+'\',this)">✅ This matches — reverse the billed amount</button>'
+        + '</div>'
+      )).join('');
+    }
+  } catch(e){ box.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; }
+  if (btn) btn.disabled = false;
+}
+
+// Part 3 (Sep 22 2026 brief) — Rung-3 money write: reverses the billed amount of the ORIGINAL
+// purchase (receiptId) to credit this refund against it. Never fires except from this explicit
+// button tap on a specific candidate — a native confirm() dialog is the second, unmistakable
+// "yes, do this" on top of the button click itself, since this credits a real customer invoice.
+async function reverseRefund(id, receiptId, btn){
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  if (!confirm('Reverse the billed amount against receipt #'+receiptId+'? This credits the customer\'s invoice for that work order and cannot be undone automatically.')) return;
+  if (btn) btn.disabled = true;
+  statusEl.innerHTML = '<span class="info">Reversing…</span>';
+  try {
+    const res = await post('/receipt-recon/refund-reverse', { id, receipt_id: receiptId, reason: 'Refund matched to original purchase — confirmed by Brett via Receipt Reconciler.' });
+    if (res.error) throw new Error(res.error);
+    let extra = '';
+    const il = res.invoice_link;
+    if (il && il.linked && !il.already) {
+      extra = il.already_sent
+        ? ' ⚠ That WO was already invoiced — flagged for repair (check Repairable Invoices to push the credit to QuickBooks).'
+        : ' Credited against the pending invoice for that WO.';
+    } else if (il && il.reason === 'would_go_negative') {
+      extra = ' ⚠ Recorded on the WO, but the pending invoice couldn\'t safely absorb the full credit — check it by hand.';
+    } else if (il && il.reason === 'covered_by_signed_proposal') {
+      extra = ' This job is billed through a signed proposal — counted against its materials budget, not invoiced again.';
+    }
+    statusEl.innerHTML = '<span class="ok">✓ Reversed $'+esc(money(Math.abs(Number(res.amount)||0)))+' against WO '+esc(res.wo_id||'')+'.'+extra+'</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 // 1864 Kerns School Rd (Milam Ridge, Property 85 — Brett's own STR, no owner to bill). Found by
 // address rather than a hardcoded ID so a renumbered Properties tab can't silently point this
 // button at someone else's building.
