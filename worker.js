@@ -4980,7 +4980,36 @@ async function createWorkOrder(env, body) {
   // permanently unreachable by any endpoint in the app — no button could ever touch it again
   // (WO-1192, 2026-09-14). Same pattern/window as Receipts and Time_Entries: short window,
   // full signature match, hand back the row that already exists instead of appending a twin.
-  const dupe = await findRecentDuplicate(env, 'Work_Orders', {
+  //
+  // Root cause of WO-1213/WO-1214 (2026-09-23, Lance Serafica, identical description, 30s
+  // apart) — a pure TOCTOU race between this Sheets-backed check and the append it guards.
+  // findRecentDuplicate's "is there already a matching row?" read and this function's own
+  // append are two separate round trips with nothing in between stopping a second request from
+  // reading the sheet before the first request's write has landed — exactly the class of bug
+  // rule 179's cronSweep claim exists for, just never applied here. The tenant `/workorder`
+  // path makes it worse: session→tenant resolution and the tenant-WO-toggle access check both
+  // run first and are themselves awaited Sheets reads, so a second submission arriving ~30s
+  // later (a tenant who saw no confirmation and tried again) does its OWN duplicate check even
+  // later than that, right at or past the edge of the 30s window rule 162 set. Live-reproduced
+  // against staging pre-fix: two identical /workorder submissions 30s apart both created a
+  // fresh WO (WO-1094 -> WO-1095), confirming this analysis before writing the fix below.
+  //
+  // Fix has two parts:
+  //  1. A synchronous, same-isolate claim below. Cloudflare Workers are single-threaded within
+  //     an isolate — a plain Map check-and-set with no `await` between them cannot race with
+  //     itself, unlike the Sheets read/append pair. This is a REAL lock for the common case
+  //     (a tenant's own two taps land on the same isolate) and is checked before any network
+  //     call at all, so it can't be starved by upstream latency the way the sheet-based check
+  //     can. It is not cross-isolate durable — see claimWOSignature's own comment — so it's a
+  //     fast first line of defense layered on top of findRecentDuplicate below, not a
+  //     replacement for it.
+  //  2. The window itself: widened 30s -> 60s for Work_Orders specifically (findRecentDuplicate
+  //     also got its own latency fix — see its comment — but the tenant path's pre-check
+  //     latency happens before findRecentDuplicate is even called, so a wider nominal window is
+  //     the only way to keep real margin here). Still a full-signature match (property + unit +
+  //     tenant + trade + description + type), so two genuinely different tenant requests close
+  //     in time are never blocked by this — only an exact repeat of the same complaint is.
+  const _woSig = {
     Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Tenant_ID: body.tenant_id || '',
     Trade: body.trade || '', Description: body.description || '', Type: body.type || 'manual',
   }, 30);
