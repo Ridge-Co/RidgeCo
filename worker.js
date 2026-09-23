@@ -1868,7 +1868,7 @@ async function receiptSuggest(env, body) {
 // Confirm (POST /receipt-recon/confirm, which calls the same addReceipt() the vendor portal and
 // every manual entry this session used) or Skip. A pending row costs one OCR call and zero other
 // AI tokens; the daily sweep of an empty folder costs nothing at all.
-const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date'];
+const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date','Gmail_Message_ID','Entry_Source','Rescan_Match_JSON'];
 // "Receipts and Invoices" under PAYABLES Inbox (Drive) — the folder Brett has been dropping
 // scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
 const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
