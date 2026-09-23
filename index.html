@@ -12209,6 +12209,7 @@ function openBulkCombineModal() {
   document.getElementById('bc-error').style.display = 'none';
   document.getElementById('bc-conflicts-wrap').style.display = 'none';
   document.getElementById('bc-conflicts-list').innerHTML = '';
+  document.getElementById('bc-merge-note').style.display = 'none';
   var list = document.getElementById('bc-survivor-list');
   list.innerHTML = check.wos.map(function(w){
     return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="radio" name="bc-survivor" value="'+w.ID+'" onchange="bcRenderConflicts()" style="width:auto"/> '+w.ID+' — '+esc(w.Trade||'')+(w.Description?' · '+esc(w.Description.substring(0,50)):'')+' ('+(w.Status||'New')+')</label>';
