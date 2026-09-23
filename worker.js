@@ -268,7 +268,7 @@ export default {
           // production. Fully inert unless env.HUB_PROD_RO_TOKEN is set, so deploying this has
           // zero effect until the secret exists on production maintenance-hub (and the matching
           // value is set on the gh-broker Worker's own HUB_PROD_RO_TOKEN).
-          const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance'];
+          const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance','/admin/receipt-duplicate-audit/flags'];
           const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && HUB_PROD_RO_READ_PATHS.includes(path);
           // Narrow WRITE-CAPABLE token for safe, allow-listed production writes (Sep 22 2026,
           // follow-on to HUB_PROD_RO_TOKEN above — see context/PROD_WRITE_TOKEN_BUILD_BRIEF_v1.0.md).
