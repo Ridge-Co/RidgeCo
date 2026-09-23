@@ -303,7 +303,22 @@ export default {
           // (Brett only — no session can set a Cloudflare secret).
           const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk) {
+          // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
+          // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
+          // touching QuickBooks (see its own comment: "touch no money, SMS, QuickBooks, or
+          // auth/vendor-assignment fields"), so QuickBooks reconciliation reads need their own
+          // token rather than an exception carved into that one. Structurally POST-only (both
+          // qbFindBills and qbVendorReconcile take a JSON body), but every path on this list was
+          // read by hand before being added here and is a pure QuickBooks/Sheets READ — no write,
+          // no QB mutation, no Sheets write. qbFindBills issues a QuickBooks `select ... from Bill`
+          // query only; qbVendorReconcile reads Sheets tabs (Vendors/Vendor_Bills/Work_Orders/
+          // Properties/Units/Invoice_Review) plus the same kind of QB read. Same Rung-3
+          // PR-not-autonomous-merge discipline as every other narrow token in this cascade — this
+          // is fully inert until Brett sets HUB_PROD_QB_RO_TOKEN on both production maintenance-hub
+          // and the gh-broker Worker (Brett only — no session can set a Cloudflare secret).
+          const HUB_PROD_QB_RO_PATHS = ['/qb/find-bills', '/qb/vendor-reconcile'];
+          const _qbRoOk = !!env.HUB_PROD_QB_RO_TOKEN && _tok === env.HUB_PROD_QB_RO_TOKEN && request.method === 'POST' && HUB_PROD_QB_RO_PATHS.includes(path);
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
