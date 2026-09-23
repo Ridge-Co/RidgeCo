@@ -14065,6 +14065,47 @@ async function hubTestWriteAllowed(env, path, body) {
     }
     return true;
   }
+  if (path === '/admin/seed-test-receipt') return true; // self-scoped to TEST-PROPERTY-001 internally, staging-only (see seedTestReceipt)
+  if (path === '/receipt-recon/confirm') {
+    // Confirm can create a fresh Receipts row without a WO (a company/BMore expense) or bill an
+    // existing WO — gate on whichever applies, same isTestRecord pattern as /workorder above.
+    if (body && body.wo_id) {
+      const wos = await fetchTab(env, 'Work_Orders');
+      const wo = wos.find(w => String(w.ID) === String(body.wo_id));
+      if (!wo) return false;
+      return await isTestRecord(env, 'Properties', wo.Property_ID);
+    }
+    if (body && body.property_id) return await isTestRecord(env, 'Properties', body.property_id);
+    return false;
+  }
+  if (path === '/receipt-recon/reassign') {
+    // Reassign always requires property_id (see receiptReconReassign) and optionally a wo_id —
+    // both must resolve to TEST- records, or this token can never touch the row.
+    if (!(body && body.property_id && await isTestRecord(env, 'Properties', body.property_id))) return false;
+    if (body && body.wo_id) {
+      const wos = await fetchTab(env, 'Work_Orders');
+      const wo = wos.find(w => String(w.ID) === String(body.wo_id));
+      if (!wo || String(wo.Property_ID) !== String(body.property_id)) return false;
+    }
+    return true;
+  }
+  if (path === '/receipt-recon/mark-refund') {
+    // Never touches Receipts (see receiptReconMarkRefund's own comment) — same SAFE-class
+    // reasoning as the duplicate-audit paths above, no protected record to gate on.
+    return true;
+  }
+  if (path === '/receipt-recon/mark-refund-confirmed') {
+    // Can void a real Receipts row for a 'confirmed' queue row — resolve it the same way
+    // findReceiptForQueueRow does and require that Receipts row's own Property to be TEST-.
+    const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+    const row = rows.find(r => String(r.ID) === String(body && body.id));
+    if (!row) return false;
+    if (row.Status !== 'confirmed') return true; // attached_only never touches Receipts either
+    const receipts = await fetchTab(env, 'Receipts');
+    const rc = row.Confirmed_Receipt_ID ? receipts.find(r => String(r.ID) === String(row.Confirmed_Receipt_ID)) : null;
+    if (!rc) return false;
+    return await isTestRecord(env, 'Properties', rc.Property_ID);
+  }
   return false;
 }
 
