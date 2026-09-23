@@ -543,8 +543,11 @@ export default {
         // are new Vendors columns — addRow/updateRow map fields by existing header only, so a
         // write to a not-yet-created column stores nothing silently (same trap Vendor_Invoice_No
         // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
-        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await addRow(env, 'Vendors', body); }
-        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        // VENDOR_ONBOARDING_COLS (Sep 23 2026, Phase 1) folded into the same ensureColumns call
+        // every vendor add/update already makes — additive, no-op once the headers exist.
+        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; return await addRow(env, 'Vendors', body); }
+        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address'].concat(VENDOR_ONBOARDING_COLS)); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        if (path === '/vendor/complete-onboarding') return await vendorCompleteOnboarding(env, body);
         // Contact-card upload (Sept 2 2026) — business-card/contact-photo OCR shared by the
         // Add Tenant / Add Owner / Add Vendor contact-card buttons in index.html. Admin-gated
         // (not in PUBLIC_PATHS) since it's called from already-authenticated Hub forms. The
