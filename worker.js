@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-22.10-receipt-recon-refunds';
+const BUILD_VERSION = '2026-09-23.12-receipt-recon-reassign-refund-search';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -248,8 +248,15 @@ export default {
         // mirroring the whole app's GET surface. Brett's explicit call (raised when a UI test
         // hit this exact gap): staging-only + already-TEST-record-scoped writes is protection
         // enough, so this is intentionally broader than a pure API smoke-test token needs to be.
-        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only'];
+        // Sep 23 2026: the receipt-recon family (beyond /receipt/attach-only, which was already
+        // here) had never been wired for HUB_TEST_TOKEN at all — not a missing secret, just an
+        // allow-list gap that predates this session's own reassign/mark-refund/search build.
+        // Added here + matching hubTestWriteAllowed() cases below, plus /admin/seed-test-receipt
+        // (creates a synthetic PENDING Receipt_Recon_Queue row scoped to TEST-PROPERTY-001, since
+        // a real one only ever arrives via scanning a Drive file — there was no way to get a
+        // testable row onto staging otherwise).
+        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
@@ -406,6 +413,7 @@ export default {
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
+        if (path === '/receipt-recon/search')   return await receiptReconSearch(env, url);
         if (path === '/admin/receipt-duplicate-audit/flags') return await receiptDuplicateAuditFlags(env, url);
         if (path === '/trash/properties')       return await trashListProperties(env);
         if (path === '/trash/week')             return await trashWeek(env, url);
@@ -457,6 +465,7 @@ export default {
           if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing', debug: _hubTestErr || undefined }, 403);
         }
         if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
+        if (path === '/admin/seed-test-receipt') return await seedTestReceipt(env, url, body);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
         // captured once here, harmlessly unused by every other POST route.
         const _clientIP = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
@@ -564,6 +573,7 @@ export default {
         if (path === '/wo/set-tenant-visibility') return await setTenantVisibility(env, body);
         if (path === '/wo/void')                  return await woVoid(env, body);
         if (path === '/wo/unvoid')                return await woUnvoid(env, body);
+        if (path === '/wo/bulk-void')             return await woBulkVoid(env, body);
         if (path === '/wo/combine')               return await woCombine(env, body);
         if (path === '/wo/split')                 return await woSplit(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
@@ -607,6 +617,7 @@ export default {
         if (path === '/vendor-bill/extract')      return await vendorBillExtract(env, body);
         if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
+        if (path === '/vendor-bill/edit-receipts') return await editVendorBillReceipts(env, body);
         if (path === '/vendor-bill/move-to-new-wo') return await moveVendorBillToNewWO(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
         // Code (Aug 24, 2026): Master_Keys previously had only Name/Owner/Notes — no actual
@@ -677,6 +688,9 @@ export default {
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
         if (path === '/receipt/attach-only')      return await receiptAttachOnly(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
+        if (path === '/receipt-recon/reassign')            return await receiptReconReassign(env, body);
+        if (path === '/receipt-recon/mark-refund')          return await receiptReconMarkRefund(env, body);
+        if (path === '/receipt-recon/mark-refund-confirmed') return await receiptReconMarkRefundConfirmed(env, body);
         if (path === '/receipt-recon/bulk-action')       return await receiptReconBulkAction(env, body);
         if (path === '/receipt-recon/refund-candidates') return await receiptReconRefundCandidates(env, body);
         if (path === '/receipt-recon/refund-reverse')    return await receiptReconRefundReverse(env, body);
@@ -1959,7 +1973,7 @@ async function receiptSuggest(env, body) {
 // Confirm (POST /receipt-recon/confirm, which calls the same addReceipt() the vendor portal and
 // every manual entry this session used) or Skip. A pending row costs one OCR call and zero other
 // AI tokens; the daily sweep of an empty folder costs nothing at all.
-const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date','Gmail_Message_ID','Entry_Source','Rescan_Match_JSON'];
+const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date','Gmail_Message_ID','Entry_Source','Rescan_Match_JSON','Confirmed_Receipt_ID','Manual_Refund'];
 // "Receipts and Invoices" under PAYABLES Inbox (Drive) — the folder Brett has been dropping
 // scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
 const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
@@ -2137,6 +2151,14 @@ async function listReceiptReconQueue(env, url) {
       let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
       let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
       let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
+      // Sep 23 2026 build: Brett's manual "mark as refund" override for a row the automatic
+      // refund detection (receiptExtract's refund_signal_text / negative-total check) missed.
+      // Only ever flips the category the frontend reads to decide which card to render — never
+      // touches the original OCR'd Suggestion JSON itself, so un-marking it restores exactly
+      // what the scanner originally decided.
+      if (String(r.Manual_Refund || '').toUpperCase() === 'TRUE') {
+        suggestion = Object.assign({}, suggestion || {}, { category: 'refund', manual_refund: true });
+      }
       return { ...r, suggestion, items, items_summary, duplicate_evidence, rescan_matches };
     }));
 }
@@ -2260,6 +2282,7 @@ async function receiptReconConfirm(env, body) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: addJson.duplicate ? 'skipped' : 'confirmed',
       Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
+      Confirmed_Receipt_ID: addJson.duplicate ? '' : String(addJson.id || ''),
       Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
     });
   }
@@ -2572,6 +2595,277 @@ async function receiptReconRefundReverse(env, body) {
     });
   }
   return json({ ok: true, wo_id: original.WO_ID, original_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink });
+}
+
+// ── Sep 23 2026 build: reassign a confirmed BMore/Ridge Co expense + manual refund marking ────
+// Brett's three asks this session: (1) un-flip a receipt that was confirmed as a BMore/Ridge Co
+// business expense (no work order) and rebill it to a property + work order instead, without
+// losing the ability to flag receipts as BMore/Ridge Co in the first place; (2) a search over
+// every processed receipt, so "did I already process this $101.28 receipt" can be checked
+// directly instead of eyeballing tabs; (3) a way to manually mark a receipt as a refund when the
+// automatic OCR-based detection (receiptExtract's refund_signal_text / negative-total check)
+// misses one, including undoing a receipt that was already confirmed/expensed by mistake.
+//
+// Brett's own scoping answers (Sep 23 2026): reassigning/un-confirming only works while the
+// original Receipts row hasn't been emailed to QuickBooks yet (QB_Email_Sent) — once QuickBooks
+// has it, these refuse and tell him to fix it there directly rather than silently trying to
+// unwind an already-sent expense. Reassign is an inline action on the confirmed card itself
+// (not a "move back to Pending" reset). Converting an already-confirmed receipt to a refund
+// reuses the existing Pending refund flow (find-match / negative-expense) rather than building a
+// second, parallel refund-posting path — it voids the original (if eligible) and drops the row
+// back into Pending with Manual_Refund set, which is exactly what the pending "Mark as refund"
+// toggle also sets.
+
+// Finds the real Receipts row a confirmed Receipt_Recon_Queue row actually wrote. Prefers the
+// stored Confirmed_Receipt_ID (every confirm/reassign from this build forward sets it); falls
+// back to signature matching (amount/store/date) for rows confirmed before that column existed.
+async function findReceiptForQueueRow(env, row) {
+  const receipts = await fetchTab(env, 'Receipts');
+  if (row.Confirmed_Receipt_ID) {
+    const hit = receipts.find(rc => String(rc.ID) === String(row.Confirmed_Receipt_ID));
+    if (hit) return hit;
+  }
+  const amt = Number(row.Confirmed_Amount || row.Total || 0).toFixed(2);
+  return receipts.find(rc => String(rc.Active || '').toUpperCase() !== 'FALSE'
+    && Number(rc.Amount).toFixed(2) === amt
+    && _rcNorm(rc.Store) === _rcNorm(row.Vendor)
+    && String(rc.Date || '').slice(0, 10) === String(row.Receipt_Date || '').slice(0, 10)) || null;
+}
+
+// POST /receipt-recon/reassign { id, wo_id?, property_id, amount?, description?, store?, date? }
+// property_id is always required (even a "no work order, just fix the property" reassign needs
+// one — that's still an expense, just a corrected one). wo_id is optional — omit it to leave this
+// as an expense but move it off general Ridge Co overhead onto a specific property (or vice
+// versa); include it to bill it to that work order like any other receipt.
+async function receiptReconReassign(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const property_id = body.property_id || '';
+  if (!property_id) return json({ error: 'property_id required' }, 400);
+  const wo_id = body.wo_id || '';
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (row.Status !== 'confirmed') return json({ error: `only a confirmed row can be reassigned (this one is ${row.Status || 'pending'})` }, 409);
+
+  if (wo_id) {
+    const workorders = await fetchTab(env, 'Work_Orders');
+    const wo = workorders.find(w => String(w.ID) === String(wo_id));
+    if (!wo) {
+      return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
+    }
+    if (String(wo.Property_ID) !== String(property_id)) {
+      return json({ error: `Work order ${wo_id} belongs to a different property than the one you're reassigning to (Property ${wo.Property_ID}, not ${property_id}) — check the property/WO pairing.` }, 400);
+    }
+  }
+
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
+  const original = await findReceiptForQueueRow(env, row);
+  if (!original) return json({ error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.' }, 404);
+  if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
+    return json({ error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here (reassigning would double it up).` }, 409);
+  }
+
+  const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : (row.Confirmed_Amount || row.Total);
+  const description = body.description || row.Confirmed_Description || row.PO_Reference || row.Vendor || '';
+  const store = body.store || row.Vendor || '';
+  const date = body.date || row.Receipt_Date || '';
+
+  // Void the original expense row — same soft-delete pattern used everywhere else (Active:
+  // 'FALSE'), never a hard delete, so it stays visible/auditable on the Receipts tab.
+  await updateRow(env, 'Receipts', original.ID, {
+    Active: 'FALSE',
+    Description: (original.Description || '') + ` [reassigned ${new Date().toISOString().slice(0, 10)} — replaced by a new Receipts row on ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + ']',
+  });
+
+  const category = wo_id ? 'billable' : 'company';
+  const addResp = await addReceipt(env, {
+    wo_id, property_id, amount, description, store, date,
+    added_by: 'Receipt Reconciler (reassign)', added_by_id: 'receipt-recon-reassign', role: 'hub', category,
+    source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
+    payment_source: original.Payment_Source,
+  });
+  const addJson = await addResp.json().catch(() => ({}));
+
+  let invoiceLink = null;
+  if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
+    let covered = null, coverErr = null;
+    try { covered = await scopeCoveringSignatureForWO(env, wo_id); } catch (e) { coverErr = e; }
+    if (covered) invoiceLink = { linked: false, reason: 'covered_by_signed_proposal', scope_id: covered.scope_id };
+    else if (coverErr) invoiceLink = { linked: false, reason: 'scope_check_failed', error: String(coverErr && coverErr.message || coverErr) };
+    else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
+  }
+
+  // Same "expense goes to QuickBooks right away" behavior receiptReconConfirm already uses for a
+  // no-WO receipt (Sep 22 2026) — a WO-bound reassign follows the normal daily sweep instead.
+  let qbEmail = null;
+  if (!wo_id && addJson && addJson.success && !addJson.duplicate && addJson.id) {
+    try {
+      const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
+      const j = await r.json().catch(() => ({}));
+      qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
+    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
+  }
+
+  if (addJson && addJson.success) {
+    await updateRow(env, 'Receipt_Recon_Queue', id, {
+      Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
+      Confirmed_Receipt_ID: String(addJson.id || row.Confirmed_Receipt_ID || ''),
+      Notes: `Reassigned ${new Date().toISOString().slice(0, 10)} from a BMore/Ridge Co expense to ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + '.',
+    });
+  }
+
+  return json({ ok: true, wo_id, property_id, voided_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
+}
+
+// POST /receipt-recon/mark-refund { id, refund } — manual override for a PENDING receipt the
+// automatic refund detection missed or got wrong. Never touches Receipts — a pending row hasn't
+// billed anything yet — just flips the flag GET /receipt-recon/queue reads to decide which card
+// (normal vs refund) to render. refund:false undoes it and restores the scanner's own original
+// category, since the underlying Suggestion JSON is never modified.
+async function receiptReconMarkRefund(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if ((row.Status || 'pending') !== 'pending') return json({ error: `only a pending row can be toggled this way (this one is ${row.Status})` }, 409);
+  const refund = body.refund !== false;
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Manual_Refund']);
+  await updateRow(env, 'Receipt_Recon_Queue', id, { Manual_Refund: refund ? 'TRUE' : 'FALSE' });
+  return json({ ok: true, id, manual_refund: refund });
+}
+
+// POST /receipt-recon/mark-refund-confirmed { id } — undo a receipt that was wrongly confirmed
+// or expensed and route it into the refund flow instead. Reuses the exact Pending refund UI
+// (find matching purchase / post as a negative expense) rather than a second parallel posting
+// path: if it was actually billed (Status 'confirmed'), the original Receipts row is voided
+// (same not-yet-sent-to-QuickBooks guard as reassign above) and the queue row drops back to
+// Pending with Manual_Refund set. An 'attached_only' row never billed anything in the first
+// place (see receiptAttachOnly) — nothing to void, it just goes back to Pending flagged.
+async function receiptReconMarkRefundConfirmed(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (!['confirmed', 'attached_only'].includes(row.Status)) return json({ error: `only a confirmed or attached-only receipt can be marked as a refund this way (this one is ${row.Status || 'pending'})` }, 409);
+
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
+  let voidedId = null;
+  if (row.Status === 'confirmed') {
+    const original = await findReceiptForQueueRow(env, row);
+    if (!original) return json({ error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.' }, 404);
+    if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
+      return json({ error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here.` }, 409);
+    }
+    await updateRow(env, 'Receipts', original.ID, {
+      Active: 'FALSE',
+      Description: (original.Description || '') + ` [marked refund ${new Date().toISOString().slice(0, 10)} — pulled back into Receipt Reconciler for reversal]`,
+    });
+    voidedId = original.ID;
+  }
+
+  await updateRow(env, 'Receipt_Recon_Queue', id, {
+    Status: 'pending', Manual_Refund: 'TRUE',
+    Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
+    Notes: `Marked as a refund ${new Date().toISOString().slice(0, 10)} — was ${row.Status}.`,
+  });
+  return json({ ok: true, id, voided_receipt_id: voidedId });
+}
+
+// GET /receipt-recon/search?q=<amount|store|description text>&date=<yyyy-mm-dd> — Brett, Sep 23
+// 2026: "let me manually check whether I already processed this receipt" (he keeps hitting cases
+// where no duplicate flag comes back but he's fairly sure he already handled one). Searches the
+// canonical Receipts ledger, not just this session's own queue — that's the real record of what
+// actually got billed/expensed/refunded/attached, including anything entered outside the
+// Reconciler (vendor-submitted, manually keyed, older pre-Reconciler receipts). Read-only.
+async function receiptReconSearch(env, url) {
+  const qRaw = (url.searchParams.get('q') || '').trim();
+  const dateParam = (url.searchParams.get('date') || '').trim();
+  if (!qRaw && !dateParam) return json({ error: 'q or date required' }, 400);
+  let rows = []; try { rows = await fetchTab(env, 'Receipts'); } catch (e) { return json({ error: String(e && e.message || e) }, 500); }
+  const qNorm = _rcNorm(qRaw);
+  // A bare number is very likely an amount search ("$101.28" / "101.28") — match it against
+  // Amount with cent-level tolerance, in addition to the normal text match, so Brett doesn't have
+  // to strip the $ or guess how it's formatted.
+  const qAmount = parseFloat(qRaw.replace(/[^0-9.\-]/g, ''));
+  const hasAmount = qRaw.replace(/[^0-9.]/g, '').length > 0 && !isNaN(qAmount);
+
+  let properties = [], workorders = [];
+  try { properties = await fetchTab(env, 'Properties'); } catch (e) {}
+  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) {}
+  const propById = new Map(properties.map(p => [String(p.ID), p]));
+  const woById = new Map(workorders.map(w => [String(w.ID), w]));
+
+  const results = rows.filter(r => {
+    if (dateParam && String(r.Date || '').slice(0, 10) !== dateParam) return false;
+    if (!qRaw) return true;
+    if (hasAmount && Math.abs(Number(r.Amount) - qAmount) < 0.01) return true;
+    const blob = _rcNorm([r.Store, r.Description, r.WO_ID, r.Property_ID].filter(Boolean).join(' '));
+    return !!(qNorm && blob.indexOf(qNorm) >= 0);
+  }).map(r => {
+    const prop = r.Property_ID ? propById.get(String(r.Property_ID)) : null;
+    const wo = r.WO_ID ? woById.get(String(r.WO_ID)) : null;
+    return {
+      id: r.ID, amount: r.Amount, store: r.Store, description: r.Description, date: r.Date,
+      category: r.Category, active: String(r.Active || '').toUpperCase() !== 'FALSE',
+      wo_id: r.WO_ID || '', wo_description: wo ? (wo.Description || '') : '',
+      property_id: r.Property_ID || '', property_address: prop ? (prop.Address || '') : '',
+      qb_email_sent: String(r.QB_Email_Sent || '').toUpperCase() === 'TRUE',
+      qb_email_sent_date: r.QB_Email_Sent_Date || '', created_date: r.Created_Date || '',
+      added_by: r.Added_By || '', source_file_url: r.Source_File_URL || '',
+    };
+  }).sort((a, b) => new Date(b.date || b.created_date || 0) - new Date(a.date || a.created_date || 0));
+
+  return json({ ok: true, count: results.length, results: results.slice(0, 200) });
+}
+
+// POST /admin/seed-test-receipt { wo_id?, total?, vendor?, receipt_date? } — Sep 23 2026, test-
+// infra fix. A real Receipt_Recon_Queue row only ever arrives via receiptReconScan() pulling a
+// file out of Drive — there was no way to get a testable PENDING row onto staging for
+// hub_test_post smoke tests of confirm/reassign/mark-refund. This creates one directly,
+// self-scoped to TEST-PROPERTY-001 (no TEST_MARKER_FIELD entry exists for Receipt_Recon_Queue
+// itself, same limitation noted on receiptAttachOnly's guard above, so scoping happens here at
+// creation time instead of being checked afterward). If wo_id is given it must already belong to
+// TEST-PROPERTY-001 — this never creates a Work_Orders row of its own, only reuses one. Staging-
+// only by construction, same as seedTestFixtures.
+async function seedTestReceipt(env, url, body) {
+  if (!isStaging(env, url)) return json({ error: 'seed-test-receipt only runs on staging' }, 403);
+  const properties = await fetchTab(env, 'Properties');
+  const testProp = properties.find(p => String(p.Access_Notes || '') === 'TEST-PROPERTY-001');
+  if (!testProp) return json({ error: 'TEST-PROPERTY-001 not seeded — call /admin/seed-test-fixtures first' }, 400);
+
+  let woId = '';
+  if (body && body.wo_id) {
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body.wo_id));
+    if (!wo || String(wo.Property_ID) !== String(testProp.ID)) {
+      return json({ error: 'wo_id, if given, must already belong to TEST-PROPERTY-001' }, 400);
+    }
+    woId = wo.ID;
+  }
+
+  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+
+  const total = (body && body.total !== undefined && body.total !== null && body.total !== '') ? String(body.total) : '12.34';
+  const vendor = (body && body.vendor) ? String(body.vendor) : 'TEST-VENDOR-001';
+  const receiptDate = (body && body.receipt_date) ? String(body.receipt_date) : new Date().toISOString().slice(0, 10);
+  const suggestion = { property_id: testProp.ID, wo_id: woId || undefined, confidence: 'test' };
+
+  const addRes = await (await addRow(env, 'Receipt_Recon_Queue', {
+    Source_File_ID: 'TEST-SEEDED-' + Date.now(), Source_File_URL: '', File_Name: 'test-seed-receipt.png',
+    Received_Date: new Date().toISOString(), Vendor: vendor, Receipt_Date: receiptDate,
+    Total: total, PO_Reference: woId || '', Items: '[]', Items_Summary: '[]', Card_Last4: '', Invoice_Number: '',
+    Suggestion: JSON.stringify(suggestion), Status: 'pending',
+    Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: 'Seeded by /admin/seed-test-receipt for HUB_TEST_TOKEN smoke tests — safe to ignore/delete.',
+    Active: 'TRUE', Duplicate_Confirmed_Date: '', Duplicate_Evidence_JSON: '', Duplicate_Checked_Date: '',
+    Gmail_Message_ID: '', Entry_Source: 'test_seed', Rescan_Match_JSON: '', Confirmed_Receipt_ID: '', Manual_Refund: 'FALSE',
+  })).json();
+
+  return json({
+    ok: true, id: addRes.id, property_id: testProp.ID, wo_id: woId || null,
+    total, vendor, receipt_date: receiptDate,
+    note: 'Call again anytime — each call creates a fresh pending row (not idempotent like seed-test-fixtures, since a receipt queue is naturally many rows).',
+  });
 }
 
 const DUPLICATE_RETENTION_DAYS = 180;
@@ -4660,6 +4954,25 @@ async function tenantWOSettingsSummary(env) {
   return json({ owners: ownerRows, properties: propRows });
 }
 
+// Same-isolate, synchronous claim against the WO-create duplicate race — see the long comment
+// in createWorkOrder for why this exists alongside findRecentDuplicate rather than instead of
+// it. Keyed on the exact same signature fields findRecentDuplicate matches on, so it can never
+// be stricter than that check (a genuinely different description/property/unit never collides).
+// TTL is a little longer than the Work_Orders findRecentDuplicate window (60s) so a slow first
+// request can't have its claim expire out from under it while still mid-flight.
+const __woClaimCache = new Map(); // signatureKey -> expiry (ms epoch)
+const WO_CLAIM_TTL_MS = 75000;
+function claimWOSignature(sig) {
+  const key = ['Property_ID', 'Unit_ID', 'Tenant_ID', 'Trade', 'Description', 'Type']
+    .map(k => String(sig[k] || '')).join('\u0001');
+  const now = Date.now();
+  for (const [k, exp] of __woClaimCache) if (exp <= now) __woClaimCache.delete(k); // opportunistic sweep, keeps the Map from growing forever
+  const existing = __woClaimCache.get(key);
+  if (existing && existing > now) return false; // already claimed and still live
+  __woClaimCache.set(key, now + WO_CLAIM_TTL_MS);
+  return true;
+}
+
 async function createWorkOrder(env, body) {
   const _t0 = Date.now();
   // Same property/unit/tenant, same trade/description, seconds apart = a double-tap on
@@ -4671,10 +4984,54 @@ async function createWorkOrder(env, body) {
   // permanently unreachable by any endpoint in the app — no button could ever touch it again
   // (WO-1192, 2026-09-14). Same pattern/window as Receipts and Time_Entries: short window,
   // full signature match, hand back the row that already exists instead of appending a twin.
-  const dupe = await findRecentDuplicate(env, 'Work_Orders', {
+  //
+  // Root cause of WO-1213/WO-1214 (2026-09-23, Lance Serafica, identical description, 30s
+  // apart) — a pure TOCTOU race between this Sheets-backed check and the append it guards.
+  // findRecentDuplicate's "is there already a matching row?" read and this function's own
+  // append are two separate round trips with nothing in between stopping a second request from
+  // reading the sheet before the first request's write has landed — exactly the class of bug
+  // rule 179's cronSweep claim exists for, just never applied here. The tenant `/workorder`
+  // path makes it worse: session→tenant resolution and the tenant-WO-toggle access check both
+  // run first and are themselves awaited Sheets reads, so a second submission arriving ~30s
+  // later (a tenant who saw no confirmation and tried again) does its OWN duplicate check even
+  // later than that, right at or past the edge of the 30s window rule 162 set. Live-reproduced
+  // against staging pre-fix: two identical /workorder submissions 30s apart both created a
+  // fresh WO (WO-1094 -> WO-1095), confirming this analysis before writing the fix below.
+  //
+  // Fix has two parts:
+  //  1. A synchronous, same-isolate claim below. Cloudflare Workers are single-threaded within
+  //     an isolate — a plain Map check-and-set with no `await` between them cannot race with
+  //     itself, unlike the Sheets read/append pair. This is a REAL lock for the common case
+  //     (a tenant's own two taps land on the same isolate) and is checked before any network
+  //     call at all, so it can't be starved by upstream latency the way the sheet-based check
+  //     can. It is not cross-isolate durable — see claimWOSignature's own comment — so it's a
+  //     fast first line of defense layered on top of findRecentDuplicate below, not a
+  //     replacement for it.
+  //  2. The window itself: widened 30s -> 60s for Work_Orders specifically (findRecentDuplicate
+  //     also got its own latency fix — see its comment — but the tenant path's pre-check
+  //     latency happens before findRecentDuplicate is even called, so a wider nominal window is
+  //     the only way to keep real margin here). Still a full-signature match (property + unit +
+  //     tenant + trade + description + type), so two genuinely different tenant requests close
+  //     in time are never blocked by this — only an exact repeat of the same complaint is.
+  const _woSig = {
     Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Tenant_ID: body.tenant_id || '',
     Trade: body.trade || '', Description: body.description || '', Type: body.type || 'manual',
-  }, 30);
+  };
+  const _gotClaim = claimWOSignature(_woSig);
+  if (!_gotClaim) {
+    // Another request in this isolate already claimed this exact signature and may still be
+    // mid-flight (not necessarily finished writing yet), so a single check right now could
+    // still miss it. Poll briefly for it to land instead of racing ahead to append a twin.
+    for (let i = 0; i < 6; i++) {
+      await new Promise(r => setTimeout(r, 350));
+      const found = await findRecentDuplicate(env, 'Work_Orders', _woSig, 60);
+      if (found) return json({ success: true, duplicate: true, id: found.ID });
+    }
+    // Gave up waiting (the "owner" of the claim errored out, or this really is a stale claim
+    // slot getting reused) — fall through to the normal single-source-of-truth check below
+    // rather than blocking a legitimate write forever.
+  }
+  const dupe = await findRecentDuplicate(env, 'Work_Orders', _woSig, 60);
   if (dupe) return json({ success: true, duplicate: true, id: dupe.ID });
 
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
@@ -4825,11 +5182,135 @@ async function woUnvoid(env, body) {
   return json({ success: true });
 }
 
-// Combine (bulk void-into-one, Sep 22 2026 build — index.html bulk-select toolbar). Only
-// these fields are ever compared/reconciled across the selected work orders; Trade is
-// deliberately excluded — the survivor always keeps its own original Trade, no picker, no
-// comparison (Brett, explicit — every selected WO can have a different Trade and that's fine).
-const WO_COMBINE_RECONCILE_FIELDS = ['Managed_By', 'Vendor_ID', 'Scheduled_Date', 'Description', 'Priority', 'Status'];
+// Bulk Void (Sep 23 2026 build — index.html WO bulk-select toolbar, "Void Selected…"). Brett's
+// main use case: clearing out old test/junk work orders (duplicate-guard artifacts, manual
+// test rows) a handful at a time, without hand-opening each one's own Void modal. This is a
+// thin per-WO loop over the real woVoid() (same shape woCombine already uses to fold N WOs
+// into one) — it does not reimplement the void/audit-log logic, so a bulk void is byte-for-byte
+// identical, per WO, to a manual single Void.
+//
+// Money-attached guard (Brett, explicit): a WO that already has money on it must be SKIPPED,
+// never silently voided — voiding it would hide it from `/workorders` and every WO picker
+// while it's still owed money or already billed. "Money attached" is any of:
+//   1. a non-blank Work_Orders.Customer_Charge
+//   2. a non-blank Work_Orders.QBO_Invoice_Number (already invoiced in QuickBooks)
+//   3. a linked, active Vendor_Bills row (Active !== 'FALSE', WO_ID matches) — reviewed or not;
+//      even an unreviewed bill means a vendor already submitted charges against this WO.
+// Every skip is reported back with its specific reason so Brett can see which WO IDs were
+// skipped and why — never a silent drop. WOs that pass the check still go through in the same
+// batch as the ones that are skipped.
+function woBulkVoidMoneyBlockReason(wo, linkedBill) {
+  if (String(wo.Customer_Charge || '').trim()) return `Customer charge on file ($${String(wo.Customer_Charge).trim()})`;
+  if (String(wo.QBO_Invoice_Number || '').trim()) return `Already invoiced in QuickBooks (${String(wo.QBO_Invoice_Number).trim()})`;
+  if (linkedBill) return `Has a linked vendor bill (${linkedBill.ID}${linkedBill.Status === 'reviewed' ? ', reviewed' : ''})`;
+  return null;
+}
+
+// POST /wo/bulk-void {ids:[...], reason, detail?, combined_into_wo_id?, updated_by?,
+// updated_by_role?} — admin-gated same as /wo/void (not in PUBLIC_PATHS, no ROLE_SCOPES entry).
+// `reason` is the same WO_VOID_REASONS enum as the single-WO Void modal, applied to the whole
+// batch — not per-WO. If reason is 'Combined', `combined_into_wo_id` is required and is the
+// SAME target for every WO in the batch (voiding several stray duplicates into one real WO);
+// for combining different WOs into different survivors, use the existing /wo/combine picker
+// instead. Returns {success, voided:[ids], skipped:[{id, reason}]} — never throws for an
+// individual bad WO, only for a malformed request as a whole.
+async function woBulkVoid(env, body) {
+  const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(x => String(x || '')).filter(Boolean))];
+  if (!ids.length) return json({ error: 'ids required (at least one)' }, 400);
+  const reason = body.reason;
+  if (!WO_VOID_REASONS.includes(reason)) return json({ error: `reason must be one of: ${WO_VOID_REASONS.join(', ')}` }, 400);
+  const combinedInto = reason === 'Combined' ? String(body.combined_into_wo_id || '') : '';
+  if (reason === 'Combined' && !combinedInto) return json({ error: 'combined_into_wo_id required when reason is Combined' }, 400);
+
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  const workorders = await fetchTab(env, 'Work_Orders');
+  if (combinedInto && !findWO(workorders, combinedInto)) return json({ error: `Target work order ${combinedInto} not found` }, 404);
+
+  // Best-effort — a Vendor_Bills read failure must never block voiding WOs that have no money
+  // issue at all; it just means the vendor-bill leg of the money check can't run (Customer_Charge
+  // / QBO_Invoice_Number still do), same fail-open posture findRecentDuplicate uses.
+  let vendorBills = [];
+  try { vendorBills = await fetchTab(env, 'Vendor_Bills'); } catch (e) {}
+
+  const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
+  const voided = [], skipped = [];
+
+  for (const id of ids) {
+    const wo = findWO(workorders, id);
+    if (!wo) { skipped.push({ id, reason: 'Work order not found' }); continue; }
+    if (String(wo.Voided || '').toUpperCase() === 'TRUE') { skipped.push({ id, reason: 'Already voided' }); continue; }
+    if (combinedInto && id === combinedInto) { skipped.push({ id, reason: 'Cannot combine a work order into itself' }); continue; }
+    const linkedBill = vendorBills.find(b => b.Active !== 'FALSE' && String(b.WO_ID) === String(id));
+    const moneyReason = woBulkVoidMoneyBlockReason(wo, linkedBill);
+    if (moneyReason) { skipped.push({ id, reason: moneyReason }); continue; }
+    try {
+      const res = await woVoid(env, { wo_id: id, reason, detail: body.detail || '', combined_into_wo_id: combinedInto, updated_by: changedBy, updated_by_role: changedByRole });
+      const resBody = await res.json();
+      if (resBody && resBody.success) voided.push(id);
+      else skipped.push({ id, reason: (resBody && resBody.error) || 'Void failed' });
+    } catch (e) { skipped.push({ id, reason: e.message || 'Void failed' }); }
+  }
+
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_bulk_void', Skill_Or_Endpoint: '/wo/bulk-void', Success: 'TRUE', Notes: `voided=${voided.length} skipped=${skipped.length}` }); } catch (_) {}
+
+  return json({ success: true, voided, skipped, voided_count: voided.length, skipped_count: skipped.length });
+}
+
+// Combine (bulk void-into-one, Sep 22 2026 build — index.html bulk-select toolbar; field
+// audit Sep 23 2026 after Brett hit two real bugs — see PR description). Only these fields
+// are ever compared/reconciled across the selected work orders — each one requires either
+// unanimous agreement (silent auto-resolve) or an explicit field_overrides pick when they
+// disagree; a real disagreement with no override 409s rather than guessing. Trade and
+// Checklist are deliberately excluded from BOTH this list and WO_COMBINE_MERGE_FIELDS below —
+// the survivor always keeps its own original Trade/Checklist, no picker, no comparison, no
+// merge (Brett, explicit for Trade — every selected WO can have a different Trade and that's
+// fine; Checklist follows the same logic because it's a trade-specific structured JSON blob
+// that blending across different Trades would corrupt, not free text that's safe to
+// concatenate). Money/identity fields (Vendor_ID, Customer_Charge, Deposit_Amount,
+// Deposit_Vendor_ID, Scope_ID) are here rather than in WO_COMBINE_MERGE_FIELDS on purpose —
+// an auto-pick could produce a real billing/assignment error, so they always force an
+// explicit choice, never a silent default.
+const WO_COMBINE_RECONCILE_FIELDS = [
+  'Managed_By', 'Vendor_ID', 'Scheduled_Date', 'Scheduled_Window', 'Priority', 'Status',
+  'WO_Contact_Name', 'WO_Contact_Phone', 'Customer_Charge', 'Deposit_Amount',
+  'Deposit_Vendor_ID', 'Scope_ID', 'Tenant_Visible',
+];
+
+// Free-text fields that are NEVER a conflict — every selected WO's own value (if non-blank)
+// is unconditionally concatenated onto the survivor's, same "nothing lost" treatment Notes
+// already gets via woVoid's Combined path (see the Notes-merge block in woVoid above), rather
+// than reducing N values down to one picked winner. Description is the direct fix for
+// Brett's Sep 23 2026 bug report: 3 genuinely different tenant complaints (garbage disposal /
+// door / shelving) were being collapsed to a single radio pick, silently discarding the other
+// two. Room gets the same treatment for the same underlying reason — a room name is
+// information the combine could easily be losing, not a setting with one objectively-correct
+// value.
+//
+// Owner_WO_Ref is deliberately NOT here (Brett, Sep 23 2026, after reviewing the first draft
+// of this PR which DID auto-merge it): the owner has their OWN reference numbers on their own
+// side, and concatenating several onto one WO wouldn't match what the owner actually expects
+// to see on any single surviving WO — unlike Description/Room, blending these together makes
+// the field actively wrong, not just long. Owner_WO_Ref is excluded from BOTH this list and
+// WO_COMBINE_RECONCILE_FIELDS entirely — same treatment as Trade/Checklist, survivor keeps its
+// own value untouched, no picker, no merge. Instead, see the "owner ref notice" block in
+// woCombine below: when a combine actually abandons a distinct owner reference (a combined
+// WO's own Owner_WO_Ref is non-blank and differs from the survivor's), the owner gets a
+// one-time notice naming which of their WO+ref pairs were folded into the surviving one, so
+// they can update their own records — the notice replaces silently merging or silently
+// dropping the ref.
+const WO_COMBINE_MERGE_FIELDS = ['Description', 'Room'];
+
+// Pure — no I/O. Same timestamped-prefix convention woVoid's Notes-merge already uses,
+// reused here for every WO_COMBINE_MERGE_FIELDS field so Description/Room merges look and
+// audit exactly like a Notes merge already does. Returns the survivor's value unchanged when
+// the incoming WO's value for this field is blank — nothing to add.
+function mergeWOTextField(survivorVal, sourceWoId, incomingVal) {
+  const val = String(incomingVal == null ? '' : incomingVal).trim();
+  if (!val) return survivorVal || '';
+  const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const prefix = `[${ts} — combined from ${sourceWoId}] `;
+  return survivorVal ? `${survivorVal}\n${prefix}${val}` : `${prefix}${val}`;
+}
 
 // Pure — no I/O — so it's directly unit-testable without mocking Sheets. `wos` is
 // [survivor, ...combined], each a plain Work_Orders row object; `overrides` is the client's
@@ -4899,6 +5380,33 @@ async function woCombine(env, body) {
     }
   }
 
+  // Billing-state guard (Sep 23 2026, Brett — field audit gap #3; widened same day after
+  // Brett's follow-up to also cover vendor-bill state). QBO_Invoice_Number is the
+  // Work_Orders-level signal that a WO has actually been invoiced (customer-facing) in
+  // QuickBooks (written by qbSendInvoice/qbSendFinalInvoice). Combining across that boundary
+  // would fold a survivor's Description/Priority/etc (and any future combine-driven edits)
+  // into a WO QuickBooks already has a final invoice number for, silently changing what's
+  // already been billed. Separately, a WO can have vendor-bill-side billing state already
+  // reviewed/sent to QuickBooks (Vendor_Bills/Invoice_Review — a BILL, the vendor-paid side,
+  // distinct from the customer-facing INVOICE above) without necessarily having an invoice
+  // number on the WO itself yet — findLockedVendorBillForWOs reuses the exact same
+  // vendorBillReassignLock logic Split's reassignment guard already trusts for "is this bill
+  // already committed". Either signal blocks the whole combine outright, no override possible
+  // — there's no safe auto-reconciliation for already-billed state either way.
+  const alreadyInvoiced = [survivor, ...combinedWOs].filter(w => String(w.QBO_Invoice_Number || '').trim());
+  const lockedBill = await findLockedVendorBillForWOs(env, [survivor.ID, ...combinedWOs.map(w => w.ID)]);
+  if (alreadyInvoiced.length || lockedBill) {
+    const reasons = [];
+    if (alreadyInvoiced.length) reasons.push(`${alreadyInvoiced.map(w => w.ID).join(', ')} already ${alreadyInvoiced.length > 1 ? 'have' : 'has'} a QuickBooks invoice number`);
+    if (lockedBill) reasons.push(`WO ${lockedBill.WO_ID} has a vendor bill (${lockedBill.ID}) already reviewed/sent to QuickBooks`);
+    return json({
+      error: 'already_invoiced',
+      wo_ids: alreadyInvoiced.map(w => w.ID),
+      locked_bill_id: lockedBill ? lockedBill.ID : undefined,
+      message: `Cannot combine — ${reasons.join('; ')}. Handle billing manually before combining.`,
+    }, 400);
+  }
+
   const { resolved, conflicts } = resolveCombineFields([survivor, ...combinedWOs], body.field_overrides);
   if (conflicts.length) {
     return json({ error: 'field_conflict', conflicts, message: `These fields disagree across the selected work orders — field_overrides required for: ${conflicts.join(', ')}` }, 409);
@@ -4907,9 +5415,18 @@ async function woCombine(env, body) {
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const survivorSnapshot = {};
   for (const f of WO_COMBINE_RECONCILE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
+  for (const f of WO_COMBINE_MERGE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
   const fieldsToApply = {};
   for (const f of WO_COMBINE_RECONCILE_FIELDS) {
     if (String(resolved[f] ?? '') !== String(survivorSnapshot[f] ?? '')) fieldsToApply[f] = resolved[f];
+  }
+  // Merge fields (Description/Room/Owner_WO_Ref): unconditional, order-preserving
+  // concatenation of every combined WO's own value onto the survivor's, regardless of
+  // whether they agree or disagree — there is no "conflict" state for these at all.
+  for (const f of WO_COMBINE_MERGE_FIELDS) {
+    let merged = survivorSnapshot[f];
+    for (const w of combinedWOs) merged = mergeWOTextField(merged, w.ID, w[f]);
+    if (merged !== survivorSnapshot[f]) fieldsToApply[f] = merged;
   }
 
   const voidedSoFar = [];
@@ -4919,7 +5436,9 @@ async function woCombine(env, body) {
       await logWOAuditMany(env, Object.entries(fieldsToApply).map(([field, newVal]) => ({
         woId: survivorId, changedBy, changedByRole, field,
         oldValue: survivorSnapshot[field], newValue: newVal,
-        notes: `Combine: reconciled from ${combinedIds.join(', ')}`,
+        notes: WO_COMBINE_MERGE_FIELDS.includes(field)
+          ? `Combine: merged from ${combinedIds.join(', ')}`
+          : `Combine: reconciled from ${combinedIds.join(', ')}`,
       })));
     }
     for (const w of combinedWOs) {
@@ -4955,9 +5474,46 @@ async function woCombine(env, body) {
     }
   } catch (e) { /* non-fatal — combine already succeeded */ }
 
+  // Owner ref notice (Sep 23 2026, Brett's follow-up) — Owner_WO_Ref is excluded from both
+  // WO_COMBINE_RECONCILE_FIELDS and WO_COMBINE_MERGE_FIELDS (see the comment above
+  // WO_COMBINE_MERGE_FIELDS): the survivor keeps its own ref completely untouched. When that
+  // means a combine is actually abandoning a distinct owner reference — a combined WO's own
+  // Owner_WO_Ref is non-blank AND differs from the survivor's — the owner gets a one-time
+  // notice naming exactly which of their WO+ref pairs were folded into which surviving WO+ref,
+  // so they can update their own records; matches the existing owner_job_scheduled/
+  // owner_managed_by_changed pattern (smsGatedSend, recipient_type:'owner', same Global+
+  // Property+Customer gate hierarchy — no bypass). Skipped entirely (with an explicit
+  // WO_Audit note, same "log it either way" convention as the rest of this endpoint) when
+  // nothing is actually being abandoned — every combined WO's ref is blank or already matches
+  // the survivor's — so this never fires on the common case of one shared/absent ref.
+  try {
+    const survivorForRef = findWO(await fetchTab(env, 'Work_Orders'), survivorId) || survivor;
+    const survivorRef = String(survivorForRef.Owner_WO_Ref || '').trim();
+    const abandonedWOs = combinedWOs.filter(w => {
+      const ref = String(w.Owner_WO_Ref || '').trim();
+      return ref && ref !== survivorRef;
+    });
+    if (!abandonedWOs.length) {
+      await logWOAudit(env, survivorId, changedBy, changedByRole, 'Owner_Ref_Notice', '', 'skipped', 'No distinct owner reference abandoned by this combine — nothing to notify the owner about');
+    } else {
+      const properties = await fetchTab(env, 'Properties'), owners = await fetchTab(env, 'Owners');
+      const property = properties.find(p => p.ID === survivorForRef.Property_ID);
+      const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+      if (owner && owner.Phone && property) {
+        const pairs = abandonedWOs.map(w => `${w.ID} (owner ref ${String(w.Owner_WO_Ref).trim()})`);
+        const pairList = pairs.length > 1 ? pairs.slice(0, -1).join(', ') + ' and ' + pairs[pairs.length - 1] : pairs[0];
+        const survivorRefText = survivorRef ? `owner ref ${survivorRef}` : 'no owner ref on file';
+        const msg = `Hi ${owner.First_Name}, ${pairList} ${abandonedWOs.length > 1 ? 'were' : 'was'} combined into ${survivorId} (${survivorRefText}). Please update your records — future updates will only come on ${survivorId}. Thank you!`;
+        await smsGatedSend(env, { wo_id: survivorId, message_type: 'owner_wo_combined_ref', recipient_type: 'owner', owner, property, message_body: msg });
+      }
+    }
+  } catch (e) { /* non-fatal — combine already succeeded */ }
+
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {}
 
-  return json({ success: true, survivor_wo_id: survivorId, combined_wo_ids: combinedIds, resolved_fields: resolved });
+  const mergedFieldsApplied = {};
+  for (const f of WO_COMBINE_MERGE_FIELDS) if (Object.prototype.hasOwnProperty.call(fieldsToApply, f)) mergedFieldsApplied[f] = fieldsToApply[f];
+  return json({ success: true, survivor_wo_id: survivorId, combined_wo_ids: combinedIds, resolved_fields: resolved, merged_fields: mergedFieldsApplied });
 }
 
 // Split (inverse of Combine, Sep 22 2026 build — WO detail "Split" action). Takes ONE existing
@@ -4999,6 +5555,27 @@ function vendorBillReassignLock(bill, invoiceReviewRows) {
   return null;
 }
 
+// Billing-state guard helper shared by woCombine and woSplit (Sep 23 2026, Brett's follow-up
+// to widen the invoice-only check both endpoints started with). Reuses vendorBillReassignLock
+// above — the same "is this bill already committed" logic Split's own reassignment guard
+// already trusts — against every LIVE Vendor_Bills row tied to any of the given WO ids.
+// Voided/inactive bills are filtered out before the check (moot for a billing-state block,
+// unlike for reassignment safety where vendorBillReassignLock's own Active==='FALSE' branch
+// matters). Returns the first locked bill found, or null if none of the given WOs has one.
+async function findLockedVendorBillForWOs(env, woIds) {
+  const ids = new Set((woIds || []).map(String));
+  if (!ids.size) return null;
+  const vendorBills = await fetchTab(env, 'Vendor_Bills');
+  const relevant = vendorBills.filter(b => ids.has(String(b.WO_ID)) && b.Active !== 'FALSE');
+  if (!relevant.length) return null;
+  let invoiceReview = [];
+  try { invoiceReview = await fetchTab(env, 'Invoice_Review'); } catch (e) {}
+  for (const bill of relevant) {
+    if (vendorBillReassignLock(bill, invoiceReview)) return bill;
+  }
+  return null;
+}
+
 // POST /wo/split {original_wo_id, original_overrides?:{Trade,Priority,Vendor_ID,Scheduled_Date,
 // Managed_By,Description}, new_work_orders:[{Trade,Priority,Vendor_ID?,Scheduled_Date?,
 // Managed_By,Description}, ...], reassignments?:[{type:'time_entry'|'vendor_bill', id,
@@ -5023,6 +5600,27 @@ async function woSplit(env, body) {
   const original = findWO(workorders, originalId);
   if (!original) return json({ error: `Work order ${originalId} not found` }, 404);
   if (original.Voided === 'TRUE') return json({ error: `Work order ${originalId} is voided — cannot split it` }, 400);
+  // Same billing-state guard as woCombine (Sep 23 2026 field audit, widened same day to also
+  // cover vendor-bill state) — splitting a WO that QuickBooks already has a final invoice
+  // number for would leave that invoice referring to a job that's now spread across N work
+  // orders, with no way to tell which one(s) it actually covers; a vendor bill already
+  // reviewed/sent to QuickBooks has the same problem on the vendor-paid side. Blocked outright
+  // rather than offered a picker, same reasoning as Combine.
+  {
+    const alreadyInvoicedOriginal = !!String(original.QBO_Invoice_Number || '').trim();
+    const lockedBillOriginal = await findLockedVendorBillForWOs(env, [originalId]);
+    if (alreadyInvoicedOriginal || lockedBillOriginal) {
+      const reasons = [];
+      if (alreadyInvoicedOriginal) reasons.push(`${originalId} already has a QuickBooks invoice number`);
+      if (lockedBillOriginal) reasons.push(`vendor bill ${lockedBillOriginal.ID} is already reviewed/sent to QuickBooks`);
+      return json({
+        error: 'already_invoiced',
+        wo_ids: [originalId],
+        locked_bill_id: lockedBillOriginal ? lockedBillOriginal.ID : undefined,
+        message: `Cannot split ${originalId} — ${reasons.join('; ')}. Handle billing manually before splitting.`,
+      }, 400);
+    }
+  }
 
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const overrides = body.original_overrides && typeof body.original_overrides === 'object' ? body.original_overrides : {};
@@ -5081,13 +5679,23 @@ async function woSplit(env, body) {
     //    the identical pre-filled text — createWorkOrder's own accidental-double-tap duplicate
     //    guard (findRecentDuplicate) has no way to know this is 1-of-N intentional creates in
     //    one Split, not a resubmit, and would otherwise collapse them into the same WO id.
+    // Fallback for a new WO spec that omits Trade/Priority entirely (the shipped index.html
+    // Split UI always sends both, pre-filled from the original's own values — see
+    // splitCardHtml — so this only matters for a direct/future API caller): Sep 23 2026 field
+    // audit gap, structurally the same class of bug Brett hit in Combine — silently defaulting
+    // to 'normal'/'' would downgrade an Urgent original's children to Normal, or leave a new
+    // WO with no Trade at all, with no signal that happened. Falls back to the original's own
+    // (post-override) value instead, same "inherit unless told otherwise" rule the rest of
+    // Split already applies to Property/Unit/Tenant/Room.
+    const effectiveOriginalTrade = Object.prototype.hasOwnProperty.call(originalFieldsToApply, 'Trade') ? originalFieldsToApply.Trade : originalSnapshot.Trade;
+    const effectiveOriginalPriority = Object.prototype.hasOwnProperty.call(originalFieldsToApply, 'Priority') ? originalFieldsToApply.Priority : originalSnapshot.Priority;
     for (let i = 0; i < newSpecs.length; i++) {
       const spec = newSpecs[i] || {};
       const dupeGuardMarker = '​'.repeat(i + 1);
       const createRes = await createWorkOrder(env, {
         property_id: original.Property_ID || '', unit_id: original.Unit_ID || '', tenant_id: original.Tenant_ID || '',
-        type: original.Type || 'manual', trade: spec.Trade || '', description: (spec.Description || '') + dupeGuardMarker,
-        priority: spec.Priority || 'normal', room: original.Room || '',
+        type: original.Type || 'manual', trade: spec.Trade || effectiveOriginalTrade || '', description: (spec.Description || '') + dupeGuardMarker,
+        priority: spec.Priority || effectiveOriginalPriority || 'normal', room: original.Room || '',
         created_by: changedBy, notes: `Created via split from ${originalId}`,
       });
       const created = await createRes.clone().json();
@@ -6126,6 +6734,99 @@ async function addVendorBill(env, body) {
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
   try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
   return res;
+}
+
+// POST /vendor-bill/edit-receipts { bill_id, receipts:[{amount,desc,pay,url}], edited_by? }
+// Sep 23 2026, Brett's ask: a vendor's mistaken/duplicate receipt entry on a submitted bill
+// (e.g. a blank-description receipt whose amount just re-states her own flat-rate/labor
+// invoice) was inflating the customer-facing pass-through price, and the only existing fix
+// was Void — which throws away the whole bill (labor, invoice file, notes) to drop one bad
+// line. This replaces the bill's ENTIRE Receipts_JSON with the corrected array the caller
+// sends (edit an amount/desc/pay-mode, delete a line, or add a missed one — all the same
+// "send the corrected list back" shape) and recomputes every field that is derived from it,
+// the same way doActualBillSubmit() in vendor.html originally computed them:
+//   Receipts_Total            = sum of every receipt's amount (both pay modes)
+//   Receipts_Reimburse_Total  = sum of receipts NOT marked 'account' (what's owed to the vendor)
+//   Total                     = laborOrFlat + Truck_Stock + Receipts_Reimburse_Total
+// Editable at ANY pre-QB stage — submitted OR already reviewed/markup-priced — per Brett's
+// explicit answer (Sep 23 2026 session). The one hard stop is a bill that's actually been
+// sent to QuickBooks: Invoice_Review is what /qb/send-invoice acts on and stamps QB_Invoice_ID
+// onto, so a live Invoice_Review row carrying one means real QB records already exist off the
+// old numbers — same convention the same-day Receipt Reconciler reassign/mark-refund build
+// (FL rule, PR #44) already uses ("hasn't been emailed to QuickBooks yet"). Once sent, this
+// refuses and points at QuickBooks directly, same as that build.
+// If the bill was already reviewed (Status:'reviewed', a markup/Customer_Total was already
+// computed and frozen onto Vendor_Bills + a live Invoice_Review row) but NOT yet sent to QB,
+// editing receipts here invalidates that frozen pricing — so this resets Status back to
+// 'submitted' and deactivates the stale Invoice_Review row, forcing a fresh Review Bills pass
+// (with the corrected numbers) before it can go to QB. Never silently leaves a stale approved
+// price sitting on a bill whose underlying cost just changed.
+async function editVendorBillReceipts(env, body) {
+  const billId = String((body && body.bill_id) || '').trim();
+  if (!billId) return json({ error: 'bill_id required' }, 400);
+  if (!Array.isArray(body.receipts)) return json({ error: 'receipts must be an array' }, 400);
+
+  const bills = await fetchTab(env, 'Vendor_Bills');
+  const bill = bills.find(b => String(b.ID) === billId);
+  if (!bill) return json({ error: `No vendor bill ${billId}` }, 404);
+  if (bill.Active === 'FALSE') return json({ error: `Bill ${billId} is voided — nothing to edit. Submit a new bill instead.` }, 409);
+
+  // Hard stop: already sent to QuickBooks. Same check moveVendorBillToNewWO/vendorBillReassignLock
+  // use — a live Invoice_Review row for this bill carrying a QB_Invoice_ID.
+  let invoiceReviewRows = [];
+  try { invoiceReviewRows = await fetchTab(env, 'Invoice_Review'); } catch (e) { invoiceReviewRows = []; }
+  const liveIR = invoiceReviewRows.find(ir => ir.Active !== 'FALSE' && String(ir.Bill_ID) === billId);
+  if (liveIR && String(liveIR.QB_Invoice_ID || '').trim()) {
+    return json({ error: `Already sent to QuickBooks (invoice ${liveIR.QB_Invoice_ID}) — fix this in QuickBooks directly, or void this bill and have the vendor resubmit.` }, 409);
+  }
+
+  // Sanitize the incoming receipt list — same shape doActualBillSubmit() builds client-side.
+  const receipts = body.receipts.map(r => ({
+    amount: Math.round((parseFloat(r && r.amount) || 0) * 100) / 100,
+    desc: String((r && r.desc) || '').trim(),
+    pay: (r && r.pay === 'account') ? 'account' : 'reimburse',
+    url: String((r && r.url) || ''),
+  })).filter(r => r.amount > 0 || r.desc);
+
+  const receiptsTotal = receipts.reduce((s, r) => s + r.amount, 0);
+  const receiptsReimburse = receipts.reduce((s, r) => s + (r.pay === 'account' ? 0 : r.amount), 0);
+  const laborOrFlat = bill.Bill_Type === 'flat' ? (parseFloat(bill.Flat_Rate) || 0) : (parseFloat(bill.Labor_Total) || 0);
+  const truckStock = parseFloat(bill.Truck_Stock) || 0;
+  const newTotal = laborOrFlat + truckStock + receiptsReimburse;
+  const oldTotal = parseFloat(bill.Total) || 0;
+
+  try { await ensureColumns(env, 'Vendor_Bills', ['Receipts_Reimburse_Total']); } catch (e) {}
+
+  const fields = {
+    Receipts_JSON: JSON.stringify(receipts),
+    Receipts_Total: receiptsTotal.toFixed(2),
+    Receipts_Reimburse_Total: receiptsReimburse.toFixed(2),
+    Total: newTotal.toFixed(2),
+  };
+
+  let resetToSubmitted = false;
+  if (bill.Status === 'reviewed') {
+    fields.Status = 'submitted';
+    resetToSubmitted = true;
+    if (liveIR) {
+      try { await updateRow(env, 'Invoice_Review', liveIR.ID, { Active: 'FALSE' }); } catch (e) { /* non-fatal — the stale row is now orphaned but harmless; Review Bills re-derives from Vendor_Bills */ }
+    }
+  }
+
+  await updateRow(env, 'Vendor_Bills', billId, fields);
+
+  try {
+    await logWOAudit(env, bill.WO_ID || '', body.edited_by || 'Brett', 'admin', 'Vendor_Bill_Receipts',
+      `$${oldTotal.toFixed(2)} (${(JSON.parse(bill.Receipts_JSON || '[]') || []).length} receipt line(s))`,
+      `$${newTotal.toFixed(2)} (${receipts.length} receipt line(s))`,
+      resetToSubmitted ? 'Receipts edited on bill ' + billId + ' — reset to submitted, needs re-review before QuickBooks.' : 'Receipts edited on bill ' + billId + '.');
+  } catch (e) { /* audit is best-effort — the fix itself already landed */ }
+
+  return json({
+    success: true, bill_id: billId, total: newTotal.toFixed(2),
+    receipts_total: receiptsTotal.toFixed(2), receipts_reimburse_total: receiptsReimburse.toFixed(2),
+    reset_to_submitted: resetToSubmitted,
+  });
 }
 
 async function listVendorBills(env, url) {
@@ -13152,8 +13853,18 @@ function missingTabResponse(tab) {
 // caller proceeds to append.
 async function findRecentDuplicate(env, tab, signature, windowSeconds) {
   try {
-    const rows = await fetchTab(env, tab);
+    // Root-caused Sep 23 2026 (WO-1213/WO-1214, Lance Serafica, 30s apart, rule 162's guard
+    // never fired): cutoff used to be computed AFTER `await fetchTab`. That await is a real
+    // network round trip to Sheets (retried with backoff under a 429), so every millisecond it
+    // takes silently SHRINKS the window from what the caller asked for — a 30s window becomes
+    // effectively "30s minus however long this fetch took." On the tenant `/workorder` path
+    // there are several awaited Sheets reads ahead of this one too (session→tenant resolve,
+    // the tenant-WO-toggle access check), so by the time this cutoff was computed, real elapsed
+    // time since the first submission could already exceed the nominal window even though the
+    // two requests looked ~30s apart end-to-end. Compute cutoff from the moment the check
+    // STARTS, before any awaits, so the promised window is the actual window.
     const cutoff = Date.now() - (windowSeconds || 120) * 1000;
+    const rows = await fetchTab(env, tab);
     const keys = Object.keys(signature);
     for (let i = rows.length - 1; i >= 0; i--) {   // newest first — duplicates are recent
       const r = rows[i];
@@ -13322,6 +14033,81 @@ async function hubTestWriteAllowed(env, path, body) {
     const wo = wos.find(w => String(w.ID) === String(body && body.original_wo_id));
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/vendor-bill/add') {
+    // A brand-new Vendor_Bills row targets an existing Work_Orders row (never creates one),
+    // same shape as /status and /schedule: gate on that WO's own Property being a TEST- fixture.
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && (body.WO_ID || body.wo_id)));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/vendor-bill/edit-receipts') {
+    // Edits an existing Vendor_Bills row by bill_id. Resolve bill -> WO_ID -> Work_Orders ->
+    // Property_ID, same chain as /vendor-bill/add above, so this token can only ever touch a
+    // bill sitting on a TEST- fixture WO/Property, never a real one.
+    const bills = await fetchTab(env, 'Vendor_Bills');
+    const bill = bills.find(b => String(b.ID) === String(body && body.bill_id));
+    if (!bill) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(bill.WO_ID));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/wo/bulk-void') {
+    // Same shape as /wo/combine above: every id in the batch must itself resolve (via its
+    // Property) to a TEST- record, or this token can never touch it -- a mixed batch with even
+    // one real WO in it is refused outright, not silently trimmed down to the safe subset.
+    const ids = Array.isArray(body && body.ids) ? body.ids : [];
+    if (!ids.length) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    for (const id of ids) {
+      const w = wos.find(x => String(x.ID) === String(id));
+      if (!w) return false;
+      if (!(await isTestRecord(env, 'Properties', w.Property_ID))) return false;
+    }
+    return true;
+  }
+  if (path === '/admin/seed-test-receipt') return true; // self-scoped to TEST-PROPERTY-001 internally, staging-only (see seedTestReceipt)
+  if (path === '/receipt-recon/confirm') {
+    // Confirm can create a fresh Receipts row without a WO (a company/BMore expense) or bill an
+    // existing WO — gate on whichever applies, same isTestRecord pattern as /workorder above.
+    if (body && body.wo_id) {
+      const wos = await fetchTab(env, 'Work_Orders');
+      const wo = wos.find(w => String(w.ID) === String(body.wo_id));
+      if (!wo) return false;
+      return await isTestRecord(env, 'Properties', wo.Property_ID);
+    }
+    if (body && body.property_id) return await isTestRecord(env, 'Properties', body.property_id);
+    return false;
+  }
+  if (path === '/receipt-recon/reassign') {
+    // Reassign always requires property_id (see receiptReconReassign) and optionally a wo_id —
+    // both must resolve to TEST- records, or this token can never touch the row.
+    if (!(body && body.property_id && await isTestRecord(env, 'Properties', body.property_id))) return false;
+    if (body && body.wo_id) {
+      const wos = await fetchTab(env, 'Work_Orders');
+      const wo = wos.find(w => String(w.ID) === String(body.wo_id));
+      if (!wo || String(wo.Property_ID) !== String(body.property_id)) return false;
+    }
+    return true;
+  }
+  if (path === '/receipt-recon/mark-refund') {
+    // Never touches Receipts (see receiptReconMarkRefund's own comment) — same SAFE-class
+    // reasoning as the duplicate-audit paths above, no protected record to gate on.
+    return true;
+  }
+  if (path === '/receipt-recon/mark-refund-confirmed') {
+    // Can void a real Receipts row for a 'confirmed' queue row — resolve it the same way
+    // findReceiptForQueueRow does and require that Receipts row's own Property to be TEST-.
+    const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+    const row = rows.find(r => String(r.ID) === String(body && body.id));
+    if (!row) return false;
+    if (row.Status !== 'confirmed') return true; // attached_only never touches Receipts either
+    const receipts = await fetchTab(env, 'Receipts');
+    const rc = row.Confirmed_Receipt_ID ? receipts.find(r => String(r.ID) === String(row.Confirmed_Receipt_ID)) : null;
+    if (!rc) return false;
+    return await isTestRecord(env, 'Properties', rc.Property_ID);
   }
   return false;
 }

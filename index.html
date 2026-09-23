@@ -253,7 +253,7 @@ window.addEventListener('pageshow', function(e){
     <div id="bulk-wo-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;flex-direction:column;gap:10px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span style="color:var(--accent);font-size:12px;font-weight:bold" id="bulk-count">0 selected</span>
-        <button class="btn small secondary" onclick="document.querySelectorAll('.wo-bulk-check').forEach(function(c){c.checked=false;});document.getElementById('bulk-count').textContent='0 selected';updateBulkCombineBtn()">Deselect All</button>
+        <button class="btn small secondary" onclick="document.querySelectorAll('.wo-bulk-check').forEach(function(c){c.checked=false;});document.getElementById('bulk-count').textContent='0 selected';updateBulkCombineBtn();updateBulkVoidBtn()">Deselect All</button>
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span style="color:var(--muted);font-size:12px;min-width:90px">Status</span>
@@ -292,6 +292,10 @@ window.addEventListener('pageshow', function(e){
         <span style="color:var(--muted);font-size:12px;min-width:90px">Combine</span>
         <button class="btn small secondary" id="bc-open-btn" disabled onclick="openBulkCombineModal()">Combine Selected…</button>
         <span id="bc-hint" style="color:var(--muted);font-size:11px"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:12px;min-width:90px">Void</span>
+        <button class="btn small danger" id="bv-open-btn" disabled onclick="openBulkVoidModal()">Void Selected…</button>
       </div>
     </div>
     <!-- Filter Panel -->
@@ -828,17 +832,53 @@ window.addEventListener('pageshow', function(e){
 <div class="modal-overlay" id="modal-bulk-combine">
   <div class="modal">
     <div class="modal-header"><div class="modal-title">COMBINE WORK ORDERS</div><button class="modal-close" onclick="closeModal('modal-bulk-combine')">✕</button></div>
-    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Every work order below except the one you pick as survivor will be voided (reason: Combined) into it. Notes from each voided work order are appended onto the survivor. Only work orders at the same property/unit can be combined.</div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Every work order below except the one you pick as survivor will be voided (reason: Combined) into it. Notes, Description, and Room from each voided work order are appended onto the survivor — nothing is discarded. The survivor keeps its own Owner Reference # untouched; if a voided work order had a different owner reference, the owner is automatically notified which of their reference numbers were absorbed into the survivor. Only work orders at the same property/unit can be combined.</div>
     <div class="form-group full">
       <label>Which work order survives?</label>
       <div id="bc-survivor-list" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
+    <div id="bc-merge-note" style="display:none;color:var(--muted);font-size:11px;margin-top:8px;font-style:italic"></div>
     <div id="bc-conflicts-wrap" style="display:none;margin-top:10px">
       <div style="color:var(--accent);font-size:12px;font-weight:bold;margin-bottom:6px">These fields disagree across the selected work orders — pick one value for each:</div>
       <div id="bc-conflicts-list" style="display:flex;flex-direction:column;gap:10px"></div>
     </div>
     <div id="bc-error" style="color:#e55;font-size:12px;margin-top:8px;display:none"></div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-bulk-combine')">Cancel</button><button class="btn" id="bc-confirm-btn" onclick="submitBulkCombine()" disabled>Confirm Combine</button></div>
+  </div>
+</div>
+
+<!-- BULK VOID WORK ORDERS (Sep 23 2026) — the bulk-select toolbar's Void button. Reuses the
+     existing single-WO Void/Hide endpoint per WO (never a parallel void mechanism) and blocks/
+     skips any selected WO that already has money attached (Customer_Charge, QBO_Invoice_Number,
+     or a linked vendor bill) rather than silently voiding it — the preview below shows exactly
+     which WO IDs will be voided vs. skipped, and why, before Brett confirms. -->
+<div class="modal-overlay" id="modal-bulk-void">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">VOID SELECTED WORK ORDERS</div><button class="modal-close" onclick="closeModal('modal-bulk-void')">✕</button></div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">This removes each one from every list and search — rows are never deleted, only hidden (restorable). Any selected work order that already has money attached (a customer charge, a QuickBooks invoice, or a linked vendor bill) is automatically skipped, not voided.</div>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>Reason (applies to the whole batch)</label>
+        <select id="bv-reason" onchange="onBulkVoidReasonChange()">
+          <option value="">— Select reason —</option>
+          <option value="Duplicate">Duplicate</option>
+          <option value="Combined">Combined with other work order</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-group full" id="bv-combined-wrap" style="display:none">
+        <label>Combine into which work order?</label>
+        <input type="text" id="bv-combined-wo" placeholder="e.g. WO-1042" oninput="bvUpdateConfirmGate()">
+        <div style="color:var(--muted);font-size:11px;margin-top:4px">Every voided work order in this batch is folded into this one target. To combine different work orders into different survivors, use Combine Selected instead.</div>
+      </div>
+      <div class="form-group full" id="bv-other-wrap" style="display:none">
+        <label>Reason detail</label>
+        <textarea id="bv-other-detail" placeholder="What happened?" oninput="bvUpdateConfirmGate()"></textarea>
+      </div>
+    </div>
+    <div id="bv-preview" style="margin-top:6px"><div style="color:var(--muted);font-size:12px">Checking for money attached…</div></div>
+    <div id="bv-error" style="color:#e55;font-size:12px;margin-top:8px;display:none"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-bulk-void')">Cancel</button><button class="btn danger" id="bv-confirm-btn" onclick="submitBulkVoid()" disabled>Void Selected</button></div>
   </div>
 </div>
 
@@ -1780,7 +1820,7 @@ function woCard(w) {
   }
   return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
     (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
-    ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\';updateBulkCombineBtn()" style="width:auto;flex:none;cursor:pointer" />' : '') +
+    ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\';updateBulkCombineBtn();updateBulkVoidBtn()" style="width:auto;flex:none;cursor:pointer" />' : '') +
     '<div class="wo-id">'+w.ID+(w.Voided==='TRUE'?' <span style="background:#eee;border:1px solid #999;color:#666;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">VOIDED — '+esc(w.Void_Reason||'')+'</span>':'')+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+(w.Turnover_Group_ID?' <span style="background:#e8f0fb;color:var(--accent);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">🔄 '+esc(w.Turnover_Group_ID)+' · '+esc(w.Turnover_Role||'')+'</span>':'')+'</div></div>' +
@@ -2087,17 +2127,20 @@ function openWODetail(woId) {
   // Load vendor bills — show ALL bills for this WO, not just most recent
   api('GET','/vendor-bills?wo_id='+woId).then(function(bills){
     if (!Array.isArray(bills)||!bills.length) return;
+    window._billCache = window._billCache || {};
     var billsHtml = bills.map(function(bill) {
       var items = [];
       try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+      window._billCache[bill.ID] = bill;   // so the receipt editor below can read this bill's current fields without a re-fetch
+      var qbSent = !!bill.QB_Invoice_ID;   // Vendor_Bills itself never carries this; harmless if absent — the real guard is server-side (Invoice_Review)
       var statusLabel = (bill.Status||'submitted').toUpperCase();
       var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#b45309)';
       var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
       var typeLabel = bill.Bill_Type === 'hourly' ? '⏱ By the hour' : '📋 Flat rate';
-      return '<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
+      return '<div id="bill-card-'+bill.ID+'" style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
           '<div style="color:var(--accent2);font-size:11px;letter-spacing:.1em;font-weight:bold">💰 VENDOR BILL — <span style="color:' + statusColor + '">' + statusLabel + '</span></div>' +
-          '<div style="color:var(--accent2);font-size:1.5rem;font-weight:bold">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
+          '<div id="bill-total-'+bill.ID+'" style="color:var(--accent2);font-size:1.5rem;font-weight:bold">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
         '</div>' +
         vendorLine +
         '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">' + typeLabel + '</div>' +
@@ -2105,14 +2148,18 @@ function openWODetail(woId) {
           (parseFloat(bill.Labor_Total||0)>0 ? '<div>⏱ Labor: ' + esc(bill.Hours||'0') + ' hrs × $' + esc(bill.Rate||'0') + '/hr = <span style="color:var(--text)">$' + parseFloat(bill.Labor_Total).toFixed(2) + '</span></div>' : '') +
           (parseFloat(bill.Flat_Rate||0)>0 && bill.Bill_Type==='flat' ? '<div>📋 Flat: <span style="color:var(--text)">$' + parseFloat(bill.Flat_Rate).toFixed(2) + '</span></div>' : '') +
           (parseFloat(bill.Truck_Stock||0)>0 ? '<div>🚚 Truck stock' + (bill.Truck_Desc?' ('+esc(bill.Truck_Desc)+')':'') + ': <span style="color:var(--text)">$' + parseFloat(bill.Truck_Stock).toFixed(2) + '</span></div>' : '') +
+          '<div id="bill-receipts-view-'+bill.ID+'">' +
           (parseFloat(bill.Receipts_Total||0)>0 ? '<div>🧾 Receipts subtotal: <span style="color:var(--text)">$' + parseFloat(bill.Receipts_Total).toFixed(2) + '</span></div>' : '') +
-          items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(internalReceiptUrl(woId,r.url))+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+          items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.pay==='account' ? ' <span style="color:var(--muted)">(Ridge Co card)</span>' : ' <span style="color:var(--muted)">(reimburse vendor)</span>') + (r.url?'<a href="'+esc(internalReceiptUrl(woId,r.url))+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+          '</div>' +
           (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + esc(bill.Notes) + '</div>' : '') +
         '</div>' +
-        '<div style="display:flex;gap:8px;margin-top:10px">' +
+        '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">' +
         '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
+        '<button onclick="openEditReceiptsPanel(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✎ Edit receipts</button>' +
         '<button onclick="voidVendorBill(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✕ Void</button>' +
         '</div>' +
+        '<div id="bill-receipts-edit-'+bill.ID+'"></div>' +
       '</div>';
     }).join('');
     var db = document.getElementById('detail-body');
@@ -9240,6 +9287,7 @@ function renderIRCard(b, i) {
       noteLine +
       vendorInvLine +
       renderReceiptsJsonBreakdown(b) +
+      (b.ID ? '<div style="margin-top:4px"><a href="javascript:void(0)" onclick="openWODetail(\''+esc(woId)+'\')" style="color:var(--info);font-size:11px">✎ Something wrong with these receipts? Edit them on the work order →</a></div>' : '') +
       '<div style="margin-top:8px">' +
         '<button onclick="irLoadWOReceipts('+i+',\''+esc(woId)+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;font-family:var(--font);font-size:10.5px;padding:4px 8px;cursor:pointer">🧾 Check for separate receipts logged on this WO</button>' +
         '<div id="ir-wo-receipts-'+i+'" style="margin-top:4px"></div>' +
@@ -12023,6 +12071,7 @@ function toggleBulkMode() {
   if (!_bulkWOMode) renderWOPage();
   else renderWOPage(); // re-render with checkboxes
   updateBulkCombineBtn();
+  updateBulkVoidBtn();
 }
 
 function getBulkCheckedWOIds() {
@@ -12107,8 +12156,31 @@ function runBulkWOUpdate(ids, callFn, btn, verbLabel) {
 // enabled state and the toast reason, but the server (/wo/combine) re-checks and is the
 // real authority — this is UX, not the security boundary.
 var _bulkCombineIds = [];
-var BC_FIELDS = ['Managed_By','Vendor_ID','Scheduled_Date','Description','Priority','Status'];
-var BC_FIELD_LABELS = { Managed_By:'Managed By', Vendor_ID:'Assigned Vendor', Scheduled_Date:'Scheduled Date', Description:'Description', Priority:'Priority', Status:'Status' };
+// Sep 23 2026 field audit (Brett hit two real bugs — see PR description): mirrors the
+// server's WO_COMBINE_RECONCILE_FIELDS exactly — Description moved OUT of this list (it's
+// never a conflict, see BC_MERGE_FIELDS below) and Scheduled_Window/WO_Contact_Name/
+// WO_Contact_Phone/Customer_Charge/Deposit_Amount/Deposit_Vendor_ID/Scope_ID/Tenant_Visible
+// were added — those were previously silently dropped/left at the survivor's own value with
+// no picker at all when they disagreed.
+var BC_FIELDS = ['Managed_By','Vendor_ID','Scheduled_Date','Scheduled_Window','Priority','Status','WO_Contact_Name','WO_Contact_Phone','Customer_Charge','Deposit_Amount','Deposit_Vendor_ID','Scope_ID','Tenant_Visible'];
+var BC_FIELD_LABELS = { Managed_By:'Managed By', Vendor_ID:'Assigned Vendor', Scheduled_Date:'Scheduled Date', Scheduled_Window:'Scheduled Window', Priority:'Priority', Status:'Status', WO_Contact_Name:'Contact Name', WO_Contact_Phone:'Contact Phone', Customer_Charge:'Customer Charge', Deposit_Amount:'Deposit Amount', Deposit_Vendor_ID:'Deposit Vendor', Scope_ID:'Scope', Tenant_Visible:'Tenant Visible' };
+// Free-text fields that are NEVER shown as a conflict — always auto-concatenated onto the
+// survivor server-side (mirrors WO_COMBINE_MERGE_FIELDS in worker.js), same "nothing lost"
+// treatment as Notes. Shown as an informational note only, never a picker.
+// Owner_WO_Ref is deliberately NOT in this list (Sep 23 2026, Brett's follow-up) — the owner
+// has their own reference numbers on their end, and concatenating several onto one WO's
+// Owner_WO_Ref wouldn't match anything the owner recognizes. It's excluded from the combine
+// entirely, like Trade: the survivor keeps its own original ref untouched, and instead the
+// server sends the owner a one-time notice (owner_wo_combined_ref) naming which of their old
+// WO+ref pairs were absorbed into the surviving WO+ref, whenever a combine actually abandons
+// a distinct owner reference.
+var BC_MERGE_FIELDS = ['Description','Room'];
+var BC_MERGE_FIELD_LABELS = { Description:'Description', Room:'Room' };
+// Same ranking woCombine/getWorkOrdersList already use server-side (PRIORITY_ORDER) — used
+// here only to pre-select the most urgent value in the Priority picker below, never to
+// silently apply it without a picker: Brett can still leave it as-is (preserves the most
+// urgent value with zero clicks) or pick a lower one himself.
+var BC_PRIORITY_ORDER = { urgent:0, high:1, normal:2, low:3 };
 
 function bulkCombineEligible(ids) {
   var wos = ids.map(function(id){ return safeArray(state.workorders).find(function(w){return w.ID===id;}); }).filter(Boolean);
@@ -12137,6 +12209,7 @@ function openBulkCombineModal() {
   document.getElementById('bc-error').style.display = 'none';
   document.getElementById('bc-conflicts-wrap').style.display = 'none';
   document.getElementById('bc-conflicts-list').innerHTML = '';
+  document.getElementById('bc-merge-note').style.display = 'none';
   var list = document.getElementById('bc-survivor-list');
   list.innerHTML = check.wos.map(function(w){
     return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="radio" name="bc-survivor" value="'+w.ID+'" onchange="bcRenderConflicts()" style="width:auto"/> '+w.ID+' — '+esc(w.Trade||'')+(w.Description?' · '+esc(w.Description.substring(0,50)):'')+' ('+(w.Status||'New')+')</label>';
@@ -12160,8 +12233,23 @@ function bcRenderConflicts() {
   var wrap = document.getElementById('bc-conflicts-wrap');
   var listEl = document.getElementById('bc-conflicts-list');
   var confirmBtn = document.getElementById('bc-confirm-btn');
-  if (!survivorId) { wrap.style.display='none'; confirmBtn.disabled = true; return; }
+  var mergeNote = document.getElementById('bc-merge-note');
+  if (!survivorId) { wrap.style.display='none'; mergeNote.style.display='none'; confirmBtn.disabled = true; return; }
   var wos = _bulkCombineIds.map(function(id){ return safeArray(state.workorders).find(function(w){return w.ID===id;}); }).filter(Boolean);
+
+  // Informational only — these are never a conflict, always auto-combined server-side. Shown
+  // so Brett knows it's happening, not so he can pick anything.
+  var mergeFieldsPresent = BC_MERGE_FIELDS.filter(function(f){
+    return wos.some(function(w){ return String(w[f]||'').trim(); });
+  });
+  if (mergeFieldsPresent.length) {
+    mergeNote.style.display = '';
+    mergeNote.textContent = 'Automatically combined onto the survivor (nothing discarded): ' +
+      mergeFieldsPresent.map(function(f){ return BC_MERGE_FIELD_LABELS[f]||f; }).join(', ') + '.';
+  } else {
+    mergeNote.style.display = 'none';
+  }
+
   var conflicts = BC_FIELDS.filter(function(f){
     var vals = wos.map(function(w){ return String(w[f]==null?'':w[f]); });
     return vals.some(function(v){ return v !== vals[0]; });
@@ -12174,10 +12262,27 @@ function bcRenderConflicts() {
       var val = w[f]==null?'':w[f];
       var display = val || '(blank)';
       if (f==='Vendor_ID' && val) { var v = safeArray(state.vendors).find(function(x){return x.ID===val;}); display = v ? v.Name : val; }
+      if (f==='Deposit_Vendor_ID' && val) { var dv = safeArray(state.vendors).find(function(x){return x.ID===val;}); display = dv ? dv.Name : val; }
       return { woId:w.ID, val:val, display:display };
     }).filter(function(o){ var k=String(o.val); if (seen[k]) return false; seen[k]=true; return true; });
+    // Priority (Brett, Sep 23 2026): pre-select the highest-urgency candidate rather than
+    // whichever value happened to appear first, so leaving the picker untouched and
+    // confirming still preserves the most urgent value across the combined set — he can
+    // still pick a lower one himself.
+    var defaultIdx = 0;
+    if (f === 'Priority') {
+      var best = 0;
+      opts.forEach(function(o, i){
+        var rank = BC_PRIORITY_ORDER[String(o.val).toLowerCase()];
+        if (rank == null) rank = BC_PRIORITY_ORDER.normal;
+        var bestRank = BC_PRIORITY_ORDER[String(opts[best].val).toLowerCase()];
+        if (bestRank == null) bestRank = BC_PRIORITY_ORDER.normal;
+        if (rank < bestRank) best = i;
+      });
+      defaultIdx = best;
+    }
     var rows = opts.map(function(o,i){
-      return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px"><input type="radio" name="bc-conflict-'+f+'" value="'+esc(String(o.val))+'" '+(i===0?'checked':'')+' style="width:auto"/> '+esc(o.display)+' <span style="color:var(--muted)">('+o.woId+')</span></label>';
+      return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px"><input type="radio" name="bc-conflict-'+f+'" value="'+esc(String(o.val))+'" '+(i===defaultIdx?'checked':'')+' style="width:auto"/> '+esc(o.display)+' <span style="color:var(--muted)">('+o.woId+')</span></label>';
     }).join('');
     return '<div><div style="font-size:12px;color:var(--text);margin-bottom:4px">'+(BC_FIELD_LABELS[f]||f)+'</div>'+rows+'</div>';
   }).join('');
@@ -12209,11 +12314,140 @@ function submitBulkCombine() {
       // instead of silently retrying with a wrong pick.
       toast('These fields still need a pick: '+(res.conflicts||[]).join(', '),'error');
       bcRenderConflicts();
+    } else if (res.error === 'already_invoiced') {
+      // Sep 23 2026 — billing-state guard, no picker/override possible for this one.
+      document.getElementById('bc-error').textContent = res.message || ('Already invoiced: ' + (res.wo_ids||[]).join(', '));
+      document.getElementById('bc-error').style.display = '';
     } else {
       document.getElementById('bc-error').textContent = res.error || 'Combine failed';
       document.getElementById('bc-error').style.display = '';
     }
   }).catch(function(e){ toast('Error: '+e.message,'error'); }).finally(function(){ btn.disabled=false; btn.textContent=origText; });
+}
+
+// -- Bulk Void (Sep 23 2026) -- voids every selected WO that has no money attached, reusing
+// the real single-WO /wo/void per WO server-side (see woBulkVoid in worker.js) -- this file
+// never re-derives the void logic itself, only the preview shown before Confirm. The preview
+// (which WOs will void vs. skip, and why) is a client-side mirror of the server's own check --
+// UX only; /wo/bulk-void re-validates authoritatively and is the real boundary, same
+// preview-vs-authority split as Combine's field-conflict picker above.
+var _bulkVoidIds = [];
+var _bulkVoidVoidableIds = [];
+
+function updateBulkVoidBtn() {
+  var btn = document.getElementById('bv-open-btn');
+  if (!btn) return;
+  btn.disabled = getBulkCheckedWOIds().length === 0;
+}
+
+function bvComputeMoneyReason(wo, linkedBill) {
+  if (!wo) return 'Work order not found';
+  if (String(wo.Voided || '').toUpperCase() === 'TRUE') return 'Already voided';
+  var charge = String(wo.Customer_Charge || '').trim();
+  if (charge) return 'Customer charge on file ($' + charge + ')';
+  var qbo = String(wo.QBO_Invoice_Number || '').trim();
+  if (qbo) return 'Already invoiced in QuickBooks (' + qbo + ')';
+  if (linkedBill) return 'Has a linked vendor bill (' + linkedBill.ID + (linkedBill.Status === 'reviewed' ? ', reviewed' : '') + ')';
+  return null;
+}
+
+function openBulkVoidModal() {
+  var ids = getBulkCheckedWOIds();
+  if (!ids.length) { toast('Select at least one WO', 'error'); return; }
+  _bulkVoidIds = ids;
+  _bulkVoidVoidableIds = [];
+  document.getElementById('bv-reason').value = '';
+  document.getElementById('bv-combined-wrap').style.display = 'none';
+  document.getElementById('bv-other-wrap').style.display = 'none';
+  document.getElementById('bv-other-detail').value = '';
+  document.getElementById('bv-combined-wo').value = '';
+  document.getElementById('bv-error').style.display = 'none';
+  document.getElementById('bv-preview').innerHTML = '<div style="color:var(--muted);font-size:12px">Checking for money attached...</div>';
+  document.getElementById('bv-confirm-btn').disabled = true;
+  openModal('modal-bulk-void');
+  bvRenderPreview();
+}
+
+function onBulkVoidReasonChange() {
+  var reason = document.getElementById('bv-reason').value;
+  document.getElementById('bv-combined-wrap').style.display = reason === 'Combined' ? '' : 'none';
+  document.getElementById('bv-other-wrap').style.display = reason === 'Other' ? '' : 'none';
+  bvUpdateConfirmGate();
+}
+
+function bvUpdateConfirmGate() {
+  var reason = document.getElementById('bv-reason').value;
+  var btn = document.getElementById('bv-confirm-btn');
+  if (!btn) return;
+  if (!reason) { btn.disabled = true; return; }
+  if (reason === 'Combined' && !(document.getElementById('bv-combined-wo').value || '').trim()) { btn.disabled = true; return; }
+  if (reason === 'Other' && !(document.getElementById('bv-other-detail').value || '').trim()) { btn.disabled = true; return; }
+  btn.disabled = _bulkVoidVoidableIds.length === 0;
+}
+
+// Fetches each selected WO's vendor bills (small N -- Brett's use case is clearing a handful
+// of junk/test WOs at a time, not hundreds) to mirror the server's linked-vendor-bill check,
+// alongside the already-loaded Customer_Charge/QBO_Invoice_Number fields from state.workorders.
+function bvRenderPreview() {
+  var ids = _bulkVoidIds;
+  Promise.all(ids.map(function(id) {
+    return api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(id)).catch(function() { return []; });
+  })).then(function(billLists) {
+    var voidable = [], skips = [];
+    ids.forEach(function(id, i) {
+      var wo = safeArray(state.workorders).find(function(w) { return w.ID === id; });
+      var bills = safeArray(billLists[i]).filter(function(b) { return b.Active !== 'FALSE'; });
+      var reason = bvComputeMoneyReason(wo, bills[0]);
+      if (reason) skips.push({ id: id, reason: reason }); else voidable.push(id);
+    });
+    _bulkVoidVoidableIds = voidable;
+    var html = '<div style="font-size:12px;margin-bottom:6px"><b style="color:#2a7">' + voidable.length + '</b> will be voided' +
+      (skips.length ? ', <b style="color:#c80">' + skips.length + '</b> skipped (money attached)' : '') + '.</div>';
+    if (skips.length) {
+      html += '<div style="max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px 8px">' +
+        skips.map(function(s) { return '<div style="font-size:11px;color:var(--muted);padding:2px 0">' + esc(s.id) + ' -- ' + esc(s.reason) + '</div>'; }).join('') +
+        '</div>';
+    }
+    document.getElementById('bv-preview').innerHTML = html;
+    bvUpdateConfirmGate();
+  }).catch(function(e) {
+    // Fail open on the preview only -- Customer_Charge/QBO_Invoice_Number were still checked
+    // client-side, and /wo/bulk-void re-checks vendor bills authoritatively server-side
+    // regardless of whether this preview call succeeded.
+    document.getElementById('bv-preview').innerHTML = '<div style="color:#e55;font-size:12px">Could not preview vendor bills (' + esc(e.message) + ') -- the server will still check them on submit.</div>';
+    _bulkVoidVoidableIds = ids.slice();
+    bvUpdateConfirmGate();
+  });
+}
+
+function submitBulkVoid() {
+  var reason = document.getElementById('bv-reason').value;
+  if (!reason) { toast('Select a reason', 'error'); return; }
+  var detail = '', combinedInto = '';
+  if (reason === 'Combined') {
+    combinedInto = (document.getElementById('bv-combined-wo').value || '').trim();
+    if (!combinedInto) { toast('Enter the work order ID to combine into', 'error'); return; }
+  } else if (reason === 'Other') {
+    detail = (document.getElementById('bv-other-detail').value || '').trim();
+    if (!detail) { toast('Enter a reason', 'error'); return; }
+  }
+  if (!_bulkVoidVoidableIds.length) { toast('Nothing to void -- every selected work order has money attached', 'error'); return; }
+  var btn = document.getElementById('bv-confirm-btn');
+  var origText = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Voiding...';
+  document.getElementById('bv-error').style.display = 'none';
+  api('POST', '/wo/bulk-void', { ids: _bulkVoidIds, reason: reason, detail: detail, combined_into_wo_id: combinedInto, updated_by: 'Admin', updated_by_role: 'admin' }).then(function(res) {
+    if (res.success) {
+      var skippedN = (res.skipped || []).length;
+      toast('Voided ' + res.voided_count + ' work order' + (res.voided_count === 1 ? '' : 's') + (skippedN ? ' -- ' + skippedN + ' skipped (money attached)' : ''), 'success');
+      closeModal('modal-bulk-void');
+      toggleBulkMode();
+      loadAll();
+    } else {
+      document.getElementById('bv-error').textContent = res.error || 'Bulk void failed';
+      document.getElementById('bv-error').style.display = '';
+    }
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); }).finally(function() { btn.disabled = false; btn.textContent = origText; });
 }
 
 // ── Bulk Cancel — double protection (checkbox + typed confirmation) ────────
@@ -12328,6 +12562,104 @@ function voidVendorBill(billId, woId) {
       toast('Could not void bill','error');
     }
   }).catch(function(e){ toast('Error: '+e.message,'error'); });
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  EDIT RECEIPTS ON A VENDOR BILL (Sep 23 2026, Brett's ask)
+// Fixes a mistaken/duplicate receipt line without voiding the whole bill — reachable from the
+// WO detail's vendor-bill card at any pre-QB-send stage (submitted or already reviewed; once a
+// bill is actually sent to QuickBooks the server refuses and this points at QuickBooks
+// directly). Review Bills links back here rather than duplicating the editor — see renderIRCard.
+// ══════════════════════════════════════════════════════════════
+window._billReceiptsEdit = window._billReceiptsEdit || {};
+
+function openEditReceiptsPanel(billId, woId) {
+  var bill = (window._billCache || {})[billId];
+  if (!bill) { toast('Bill data not loaded — reopen the work order and try again.', 'error'); return; }
+  var items = [];
+  try { items = JSON.parse(bill.Receipts_JSON || '[]'); } catch (e) {}
+  // A fresh editable copy each time the panel opens, so Cancel truly discards unsaved edits.
+  window._billReceiptsEdit[billId] = items.map(function(r) {
+    return { amount: parseFloat(r.amount) || 0, desc: r.desc || '', pay: r.pay === 'account' ? 'account' : 'reimburse', url: r.url || '' };
+  });
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function renderEditReceiptsPanel(billId, woId) {
+  var host = document.getElementById('bill-receipts-edit-' + billId);
+  if (!host) return;
+  var rows = window._billReceiptsEdit[billId] || [];
+  var rowsHtml = rows.map(function(r, i) {
+    return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">' +
+      '<span style="color:var(--muted);font-size:13px">$</span>' +
+      '<input type="number" min="0" step="0.01" value="' + (r.amount || '') + '" oninput="editReceiptField(\'' + billId + '\',' + i + ',\'amount\',this.value)" style="width:80px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:6px;border-radius:5px">' +
+      '<input type="text" placeholder="What was this for?" value="' + esc(r.desc || '') + '" oninput="editReceiptField(\'' + billId + '\',' + i + ',\'desc\',this.value)" style="flex:1;min-width:120px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px;border-radius:5px">' +
+      '<select onchange="editReceiptField(\'' + billId + '\',' + i + ',\'pay\',this.value)" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:11px;padding:6px;border-radius:5px">' +
+        '<option value="account"' + (r.pay === 'account' ? ' selected' : '') + '>Ridge Co card</option>' +
+        '<option value="reimburse"' + (r.pay !== 'account' ? ' selected' : '') + '>Reimburse vendor</option>' +
+      '</select>' +
+      (r.url ? '<a href="'+esc(internalReceiptUrl(woId, r.url))+'" target="_blank" style="color:var(--info);font-size:11px">View</a>' : '') +
+      '<button onclick="removeEditReceiptRow(\'' + billId + '\',' + i + ',\'' + woId + '\')" title="Remove this line" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:15px">✕</button>' +
+    '</div>';
+  }).join('') || '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">No receipt lines.</div>';
+
+  host.innerHTML =
+    '<div style="margin-top:10px;background:var(--surface);border:1px dashed var(--accent2);border-radius:8px;padding:12px">' +
+      '<div style="color:var(--accent2);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:bold;margin-bottom:8px">✎ Edit receipts</div>' +
+      rowsHtml +
+      '<button onclick="addEditReceiptRow(\'' + billId + '\',\'' + woId + '\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:5px;font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;margin-top:2px">+ Add line</button>' +
+      '<div style="display:flex;gap:8px;margin-top:12px">' +
+        '<button onclick="cancelEditReceipts(\'' + billId + '\')" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:8px;cursor:pointer">Cancel</button>' +
+        '<button id="save-receipts-' + billId + '" onclick="saveEditedReceipts(\'' + billId + '\',\'' + woId + '\')" style="flex:2;background:var(--accent2);border:none;color:#fff;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px;cursor:pointer">Save receipts</button>' +
+      '</div>' +
+      '<div id="save-receipts-msg-' + billId + '" style="font-size:11px;margin-top:6px"></div>' +
+    '</div>';
+}
+
+function editReceiptField(billId, idx, field, value) {
+  var rows = window._billReceiptsEdit[billId];
+  if (!rows || !rows[idx]) return;
+  rows[idx][field] = field === 'amount' ? (parseFloat(value) || 0) : value;
+}
+
+function addEditReceiptRow(billId, woId) {
+  window._billReceiptsEdit[billId] = window._billReceiptsEdit[billId] || [];
+  window._billReceiptsEdit[billId].push({ amount: 0, desc: '', pay: 'reimburse', url: '' });
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function removeEditReceiptRow(billId, idx, woId) {
+  var rows = window._billReceiptsEdit[billId];
+  if (!rows) return;
+  rows.splice(idx, 1);
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function cancelEditReceipts(billId) {
+  var host = document.getElementById('bill-receipts-edit-' + billId);
+  if (host) host.innerHTML = '';
+  delete window._billReceiptsEdit[billId];
+}
+
+function saveEditedReceipts(billId, woId) {
+  var rows = window._billReceiptsEdit[billId] || [];
+  var btn = document.getElementById('save-receipts-' + billId);
+  var msgEl = document.getElementById('save-receipts-msg-' + billId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  api('POST', '/vendor-bill/edit-receipts', { bill_id: billId, receipts: rows, edited_by: 'Brett' }).then(function(res) {
+    if (res && res.success) {
+      toast('Receipts updated — bill is now $' + parseFloat(res.total).toFixed(2) + (res.reset_to_submitted ? ' (reset to Submitted — re-review before sending to QuickBooks)' : ''), 'success');
+      delete window._billReceiptsEdit[billId];
+      loadAll().then(function() { openWODetail(woId); });
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = 'Save receipts'; }
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">' + esc((res && res.error) || 'Could not save.') + '</span>';
+    }
+  }).catch(function(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save receipts'; }
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Error: ' + esc(e.message) + '</span>';
+  });
 }
 
 
