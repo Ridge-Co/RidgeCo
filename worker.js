@@ -4826,6 +4826,80 @@ async function woUnvoid(env, body) {
   return json({ success: true });
 }
 
+// Bulk Void (Sep 23 2026 build — index.html WO bulk-select toolbar, "Void Selected…"). Brett's
+// main use case: clearing out old test/junk work orders (duplicate-guard artifacts, manual
+// test rows) a handful at a time, without hand-opening each one's own Void modal. This is a
+// thin per-WO loop over the real woVoid() (same shape woCombine already uses to fold N WOs
+// into one) — it does not reimplement the void/audit-log logic, so a bulk void is byte-for-byte
+// identical, per WO, to a manual single Void.
+//
+// Money-attached guard (Brett, explicit): a WO that already has money on it must be SKIPPED,
+// never silently voided — voiding it would hide it from `/workorders` and every WO picker
+// while it's still owed money or already billed. "Money attached" is any of:
+//   1. a non-blank Work_Orders.Customer_Charge
+//   2. a non-blank Work_Orders.QBO_Invoice_Number (already invoiced in QuickBooks)
+//   3. a linked, active Vendor_Bills row (Active !== 'FALSE', WO_ID matches) — reviewed or not;
+//      even an unreviewed bill means a vendor already submitted charges against this WO.
+// Every skip is reported back with its specific reason so Brett can see which WO IDs were
+// skipped and why — never a silent drop. WOs that pass the check still go through in the same
+// batch as the ones that are skipped.
+function woBulkVoidMoneyBlockReason(wo, linkedBill) {
+  if (String(wo.Customer_Charge || '').trim()) return `Customer charge on file ($${String(wo.Customer_Charge).trim()})`;
+  if (String(wo.QBO_Invoice_Number || '').trim()) return `Already invoiced in QuickBooks (${String(wo.QBO_Invoice_Number).trim()})`;
+  if (linkedBill) return `Has a linked vendor bill (${linkedBill.ID}${linkedBill.Status === 'reviewed' ? ', reviewed' : ''})`;
+  return null;
+}
+
+// POST /wo/bulk-void {ids:[...], reason, detail?, combined_into_wo_id?, updated_by?,
+// updated_by_role?} — admin-gated same as /wo/void (not in PUBLIC_PATHS, no ROLE_SCOPES entry).
+// `reason` is the same WO_VOID_REASONS enum as the single-WO Void modal, applied to the whole
+// batch — not per-WO. If reason is 'Combined', `combined_into_wo_id` is required and is the
+// SAME target for every WO in the batch (voiding several stray duplicates into one real WO);
+// for combining different WOs into different survivors, use the existing /wo/combine picker
+// instead. Returns {success, voided:[ids], skipped:[{id, reason}]} — never throws for an
+// individual bad WO, only for a malformed request as a whole.
+async function woBulkVoid(env, body) {
+  const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(x => String(x || '')).filter(Boolean))];
+  if (!ids.length) return json({ error: 'ids required (at least one)' }, 400);
+  const reason = body.reason;
+  if (!WO_VOID_REASONS.includes(reason)) return json({ error: `reason must be one of: ${WO_VOID_REASONS.join(', ')}` }, 400);
+  const combinedInto = reason === 'Combined' ? String(body.combined_into_wo_id || '') : '';
+  if (reason === 'Combined' && !combinedInto) return json({ error: 'combined_into_wo_id required when reason is Combined' }, 400);
+
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  const workorders = await fetchTab(env, 'Work_Orders');
+  if (combinedInto && !findWO(workorders, combinedInto)) return json({ error: `Target work order ${combinedInto} not found` }, 404);
+
+  // Best-effort — a Vendor_Bills read failure must never block voiding WOs that have no money
+  // issue at all; it just means the vendor-bill leg of the money check can't run (Customer_Charge
+  // / QBO_Invoice_Number still do), same fail-open posture findRecentDuplicate uses.
+  let vendorBills = [];
+  try { vendorBills = await fetchTab(env, 'Vendor_Bills'); } catch (e) {}
+
+  const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
+  const voided = [], skipped = [];
+
+  for (const id of ids) {
+    const wo = findWO(workorders, id);
+    if (!wo) { skipped.push({ id, reason: 'Work order not found' }); continue; }
+    if (String(wo.Voided || '').toUpperCase() === 'TRUE') { skipped.push({ id, reason: 'Already voided' }); continue; }
+    if (combinedInto && id === combinedInto) { skipped.push({ id, reason: 'Cannot combine a work order into itself' }); continue; }
+    const linkedBill = vendorBills.find(b => b.Active !== 'FALSE' && String(b.WO_ID) === String(id));
+    const moneyReason = woBulkVoidMoneyBlockReason(wo, linkedBill);
+    if (moneyReason) { skipped.push({ id, reason: moneyReason }); continue; }
+    try {
+      const res = await woVoid(env, { wo_id: id, reason, detail: body.detail || '', combined_into_wo_id: combinedInto, updated_by: changedBy, updated_by_role: changedByRole });
+      const resBody = await res.json();
+      if (resBody && resBody.success) voided.push(id);
+      else skipped.push({ id, reason: (resBody && resBody.error) || 'Void failed' });
+    } catch (e) { skipped.push({ id, reason: e.message || 'Void failed' }); }
+  }
+
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_bulk_void', Skill_Or_Endpoint: '/wo/bulk-void', Success: 'TRUE', Notes: `voided=${voided.length} skipped=${skipped.length}` }); } catch (_) {}
+
+  return json({ success: true, voided, skipped, voided_count: voided.length, skipped_count: skipped.length });
+}
+
 // Combine (bulk void-into-one, Sep 22 2026 build — index.html bulk-select toolbar). Only
 // these fields are ever compared/reconciled across the selected work orders; Trade is
 // deliberately excluded — the survivor always keeps its own original Trade, no picker, no
