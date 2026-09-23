@@ -1,3 +1,38 @@
+# ⭐⭐⭐ Sep 23, 2026, ~11:20 ET — Receipt Reconciler: PR #44 open (reassign BMore expense to WO, manual refund marking, ledger search)
+
+Brett's voice memo (Sep 23, 11:05am ET) raised three Receipt Reconciler gaps, all addressed in
+one build, staged as [PR #44](https://github.com/Ridge-Co/RidgeCo/pull/44)
+(`feature/receipt-recon-reassign-refund-search`), **not merged — Brett's call per PAT-033** (this
+touches money-movement: voids/reposts Receipts rows):
+
+1. **Reassign a confirmed BMore/Ridge Co expense to a property + work order.** New 🔁 Reassign
+   button on a confirmed `company`-category card opens the same property/unit/WO picker Pending
+   rows use. Brett's own scoping answer: only works while the original Receipts row **hasn't been
+   emailed to QuickBooks yet** — already-sent ones refuse with a message telling him to fix it in
+   QuickBooks directly. `POST /receipt-recon/reassign` voids the original (soft-delete,
+   `Active:'FALSE'`) and reposts through the same `addReceipt()` every path uses. The BMore/Ridge
+   Co one-tap-expense flow itself is untouched.
+2. **Manual "mark as refund".** 🔄 toggle on any Pending card (the OCR-based refund detection
+   sometimes misses one); ↩ on a confirmed/attached_only card undoes a wrongly-billed receipt by
+   voiding it (same QB-sent guard as #1) and dropping it back to Pending flagged as a refund — 100%
+   reuses the existing Sep 22 refund UI (find-match / negative-expense), no new posting path.
+3. **🔎 Search tab** — searches the canonical `Receipts` ledger (not just the queue) by
+   amount/store/description, so "did I already process this $101.28 receipt" is a direct lookup.
+   Also a lightweight client-side filter box on every status tab.
+
+Two new additive `Receipt_Recon_Queue` columns: `Confirmed_Receipt_ID` (lets reassign/mark-refund
+find the exact Receipts row a confirmation wrote, instead of guessing) and `Manual_Refund`.
+`node --check` clean on worker.js + the reconciler's inline script.
+`test/receipt-recon-reassign-refund-search.test.mjs` — 25 static/route-wiring assertions (no live
+Sheets credentials in this build sandbox, same standing limitation as most builds here).
+
+**Needs Brett:** merge PR #44 when ready, then a live pass — reassign a real BMore-flagged test
+receipt to a WO (confirm the old Receipts row goes inactive, new one bills correctly); confirm
+reassign refuses cleanly on an already-QB-sent receipt; mark a pending receipt as a refund and
+confirm the find-match UI appears; search for a receipt by a known dollar amount.
+
+---
+
 # ⭐⭐ LATE-NIGHT UPDATE — Sep 22, 2026, 23:50 ET (supersedes the "end of day" FULL PICTURE directly below — that one was already stale by the time it was written; six more PRs landed after it)
 
 **Live build:** `/version`/`/health` confirmed via `HUB_PROD_RO_TOKEN` at 23:47 ET: `build_version: "2026-09-22.10-receipt-recon-refunds"`. This is the real current state — the `.4` figure quoted in the FULL PICTURE section below is long superseded.
