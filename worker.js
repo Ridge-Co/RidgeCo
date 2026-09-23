@@ -87,6 +87,13 @@ export default {
     // scope. Never set for a WORKER_SECRET or session-token call — those get full access as today.
     let _viaHubTestToken = false;
     const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
+      // Gemini context snapshot (Sep 22 2026): public at the gate like the other entries below,
+      // but geminiContext() self-verifies a query-string token against env.GEMINI_CONTEXT_TOKEN
+      // before returning anything. Query-string (not header) auth is required here because this
+      // URL is fetched as a plain website source by a Gemini Notebook, which cannot send custom
+      // headers. Read-only; 404s (not 401) on a missing/wrong token so the endpoint doesn't
+      // announce itself to anyone probing it.
+      '/gemini-context',
       // Gmail "Reconnect" sign-in return (Sep 22 2026): Google redirects the browser here, so it
       // can't carry the admin header — gmailOAuthCallback refuses anything without a valid signed,
       // 15-minute gmail-oauth `state` minted by the ADMIN-gated POST /gmail/connect-url.
