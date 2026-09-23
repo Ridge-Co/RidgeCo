@@ -22,12 +22,15 @@ never been extended for the receipt-recon endpoint family:
    date (missing `/receipt/attach-only` and the duplicate-audit paths too, from an earlier build).
    Extended to match worker.js's list.
 
-**Needs Brett — this is NOT live yet:** (a) gh-broker is a Cloudflare Worker with no CI/auto-deploy
-wired to this repo (no `.github/workflows`) — the `main` commit above needs `wrangler deploy` run
-by Brett before `hub_test_post` will actually accept these paths (confirmed still rejecting as of
-this write-up). (b) staging only ever deploys from a `staging` branch, never `main` or a feature
-branch — so even after PR #44 is reviewed, the worker.js side of this needs staging synced before
-it's testable end-to-end either.
+**Correction, same day:** gh-broker DOES auto-deploy from `main` (Brett: he never runs
+`wrangler deploy` himself, only disconnects/reconnects the Claude connector when its code
+changes — some Cloudflare-side integration handles the actual deploy). Confirmed live within
+minutes of the `main` commit above: `hub_test_post('/admin/seed-test-receipt', {})` went from
+"path not allow-listed" (gh-broker's old list) to a 401 from the Hub itself (gh-broker now
+forwards it — the Hub rejects only because staging hasn't synced the feature branch yet). **Only
+remaining blocker:** staging deploys exclusively from a `staging` branch, never `main` or a
+feature branch — so PR #44's worker.js side (the new allow-list entries + `seedTestReceipt`) isn't
+live-testable until Brett reviews/merges it and staging gets synced.
 
 # ⭐⭐⭐ Sep 23, 2026, ~11:20 ET — Receipt Reconciler: PR #44 open (reassign BMore expense to WO, manual refund marking, ledger search)
 
