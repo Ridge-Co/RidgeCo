@@ -846,6 +846,41 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- BULK VOID WORK ORDERS (Sep 23 2026) — the bulk-select toolbar's Void button. Reuses the
+     existing single-WO Void/Hide endpoint per WO (never a parallel void mechanism) and blocks/
+     skips any selected WO that already has money attached (Customer_Charge, QBO_Invoice_Number,
+     or a linked vendor bill) rather than silently voiding it — the preview below shows exactly
+     which WO IDs will be voided vs. skipped, and why, before Brett confirms. -->
+<div class="modal-overlay" id="modal-bulk-void">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">VOID SELECTED WORK ORDERS</div><button class="modal-close" onclick="closeModal('modal-bulk-void')">✕</button></div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">This removes each one from every list and search — rows are never deleted, only hidden (restorable). Any selected work order that already has money attached (a customer charge, a QuickBooks invoice, or a linked vendor bill) is automatically skipped, not voided.</div>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>Reason (applies to the whole batch)</label>
+        <select id="bv-reason" onchange="onBulkVoidReasonChange()">
+          <option value="">— Select reason —</option>
+          <option value="Duplicate">Duplicate</option>
+          <option value="Combined">Combined with other work order</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-group full" id="bv-combined-wrap" style="display:none">
+        <label>Combine into which work order?</label>
+        <input type="text" id="bv-combined-wo" placeholder="e.g. WO-1042" oninput="bvUpdateConfirmGate()">
+        <div style="color:var(--muted);font-size:11px;margin-top:4px">Every voided work order in this batch is folded into this one target. To combine different work orders into different survivors, use Combine Selected instead.</div>
+      </div>
+      <div class="form-group full" id="bv-other-wrap" style="display:none">
+        <label>Reason detail</label>
+        <textarea id="bv-other-detail" placeholder="What happened?" oninput="bvUpdateConfirmGate()"></textarea>
+      </div>
+    </div>
+    <div id="bv-preview" style="margin-top:6px"><div style="color:var(--muted);font-size:12px">Checking for money attached…</div></div>
+    <div id="bv-error" style="color:#e55;font-size:12px;margin-top:8px;display:none"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-bulk-void')">Cancel</button><button class="btn danger" id="bv-confirm-btn" onclick="submitBulkVoid()" disabled>Void Selected</button></div>
+  </div>
+</div>
+
 <!-- SPLIT WORK ORDER MODAL -->
 <div class="modal-overlay" id="modal-split-wo">
   <div class="modal" style="max-width:820px">
