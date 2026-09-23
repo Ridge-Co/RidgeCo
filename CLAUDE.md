@@ -75,6 +75,15 @@ push to main."* So, going forward:
   that actually reaches production. That merge-to-`main` decision is still always his call, per
   PAT-033's original intent; everything before it (branch → staging → test → fix → retest) is not.
 
+**Open question, confirmed Sep 23, 2026 — do NOT assume staging auto-deploys on push.** A direct
+push to `staging` (via GH Broker) does NOT reliably show up on `hub_test_get('/health')`'s
+`build_version` within several minutes — tested live, still stale after 2+ minutes. `main` and
+`gh-broker` both auto-deploy on push (confirmed separately); `maintenance-hub-staging` may not, or
+may need a manual trigger in the Cloudflare dashboard, or may just be slower than tested here. A
+session that pushes to `staging` should verify `build_version` actually changed via `hub_test_get`
+before trusting any other staging test result — and if it's stuck, that's a "can't resolve myself"
+case to surface to Brett, not something to keep retrying silently.
+
 ## Regression rules — DON'T break working features (full log in /context/FEATURE_LOG.md)
 - **A silent `catch(e){}`/`catch(_){}` around a Sheets/Drive write is a real blind spot, not a
   safe default** (rule 174, Sep 15 2026): `Payment_Source` never actually got created on the
