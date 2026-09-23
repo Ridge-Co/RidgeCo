@@ -1509,6 +1509,21 @@ function isTenantCurrent(t) {
   return true;
 }
 
+// Unit_Label formatting (Sep 23 2026): real Unit_Label data is a genuine mix — most read like
+// full labels already ("Apt 3R", "Apt B") but a real subset (931 Saint Paul St, 1305 N Calvert
+// St) are bare identifiers ("3R", "1F", "2nd") with no "Apt"/"Unit"/word prefix at all. Blindly
+// prepending "Unit " onto every label double-prefixed the already-full ones ("...St Unit Apt
+// 3R"); blindly stripping it would have read badly on the bare ones ("...St 3R" reads fine
+// actually, but a bare ordinal like "2nd" reads oddly with no word at all — "Unit 2nd" is the
+// clearer text). This keeps a bare label prefixed with "Unit " and leaves an already-worded
+// label (Apt/Unit/Suite/#) exactly as-is. Use this everywhere a unit label is appended onto an
+// address instead of raw string concatenation.
+function formatUnitLabel(label) {
+  const l = String(label || '').trim();
+  if (!l) return '';
+  return (/^(apt|unit|suite|ste)\b/i.test(l) || l[0] === '#') ? l : `Unit ${l}`;
+}
+
 // The tenant to hand a VENDOR. Deliberately stricter than "whoever the work order names":
 // a vendor going to an address today needs the person living there today. A moved-out
 // tenant's name and phone must not travel out to a third party — they no longer live
@@ -4716,15 +4731,15 @@ async function createWorkOrder(env, body) {
     // Tenant Received: separate from tenant_job_assigned — tells the tenant only that the
     // request landed and is pending assignment/scheduling. Not scoped to Type='tenant' (unlike
     // Owner Received above) — applies to any new WO with a notifiable tenant, same scope the
-    // existing Tenant_Notify_Created toggle already covers. Delayed 8h so a fast assignment can
+    // existing Tenant_Notify_Created toggle already covers. Delayed 1h so a fast assignment can
     // supersede/bump it (see the tenant_job_received check in processPendingNotifications)
     // instead of the tenant getting "we got it" immediately followed by "you're assigned".
     const tenant = currentTenantForDispatch(tenants, unit, woLike);
     const tenantNotifyCreated = body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE';
     if (isTenantNotifiable(tenant, woLike) && tenantNotifyCreated) {
-      const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+      const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
       const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
-      const sendAfter = new Date(Date.now() + 8*3600000).toISOString();
+      const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
       await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
     }
   } catch (e) { /* non-fatal */ }
@@ -5183,7 +5198,7 @@ async function assignVendor(env, body) {
   const unit     = units.find(u => u.ID === wo.Unit_ID);
   const tenant   = currentTenantForDispatch(tenants, unit, wo);
   const room     = (wo.Room||'').trim();
-  const address  = property ? `${property.Address}${unit ? ' Unit '+unit.Unit_Label : ''}${room ? ' ('+room+')' : ''}` : 'the property';
+  const address  = property ? `${property.Address}${unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''}${room ? ' ('+room+')' : ''}` : 'the property';
   // Access info (lockbox codes, master key status, etc.) is deliberately NOT built or sent
   // here — this initial dispatch text withholds it on purpose (see the Access-gate comment
   // below); it only unlocks in the vendor's own portal once they accept. Removed a dead
@@ -5275,7 +5290,7 @@ async function updateStatus(env, body) {
   const [units, tenants, properties, owners] = await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
   const unit = units.find(u => u.ID === wo.Unit_ID), property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-  const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+  const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
   if (body.status === 'Complete') {
     const tenant = currentTenantForDispatch(tenants, unit, wo);
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
@@ -5651,7 +5666,7 @@ async function sendPinMessage(env, body) {
     const propId = t.Property_ID || (unit && unit.Property_ID) || '';
     const property = properties.find(p => p.ID === propId) || null;
     owner = property ? (owners.find(o => o.ID === property.Owner_ID) || null) : null;
-    address = property ? property.Address + (unit ? ' Unit ' + unit.Unit_Label : '') : '';
+    address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : '';
   } else if (type === 'vendor') {
     const vendors = await fetchTab(env, 'Vendors'); const v = vendors.find(r => r.ID === id);
     if (!v) return json({ error: 'Vendor not found' }, 404);
@@ -5728,7 +5743,7 @@ async function welcomeSend(env, body) {
     const propId = recipient.Property_ID || (unit && unit.Property_ID) || '';
     property = properties.find(p => p.ID === propId) || null;
     owner = property ? owners.find(o => o.ID === property.Owner_ID) || null : null;
-    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+    const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
     // Sep 16 2026 (Brett): dropped the "text us anytime with a request" / "reply here" promise
     // — handleInboundSMS only recognizes vendor phone numbers today, so a tenant texting in
     // a new request or a question currently gets a nonsensical "could not find your vendor
@@ -5799,16 +5814,29 @@ async function sendPropertyNotice(env, body) {
   const propertyId = body.property_id;
   if (!propertyId) return json({ error: 'property_id required' }, 400);
   const channels = Array.isArray(body.channels) && body.channels.length ? body.channels : ['sms'];
-  const [properties, owners, tenants] = await fetchTabs(env, ['Properties', 'Owners', 'Tenants']);
+  // unit_id (Sep 23 2026, additive): when passed, narrows the broadcast down to that one unit's
+  // tenant(s) instead of every active tenant in the building, and adds a {Unit} token so a
+  // template can reference it. No unit_id (the pre-existing default) still means the original
+  // building-wide broadcast with no Unit token — unchanged for every existing caller.
+  const unitId = body.unit_id || '';
+  const [properties, owners, tenants, units] = await fetchTabs(env, ['Properties', 'Owners', 'Tenants', 'Units']);
   const property = properties.find(p => p.ID === propertyId);
   if (!property) return json({ error: 'Property not found' }, 404);
   const owner = property ? (owners.find(o => o.ID === property.Owner_ID) || null) : null;
-  const activeTenants = tenants.filter(t => t.Active !== 'FALSE' && String(t.Property_ID) === String(propertyId));
+  const unit = unitId ? units.find(u => u.ID === unitId) : null;
+  if (unitId && !unit) return json({ error: 'Unit not found' }, 404);
+  const activeTenants = tenants.filter(t => {
+    if (t.Active === 'FALSE') return false;
+    if (String(t.Property_ID) !== String(propertyId)) return false;
+    if (unitId) return t.Unit_ID === unitId;
+    return true;
+  });
 
   const cfg = await fetchConfig(env);
   const assistantName = cfg.ASSISTANT_NAME || 'Riley';
   const ownerLabel = (owner && (owner.Company || owner.First_Name)) || 'your property owner';
-  const tokens = { Address: property.Address || '', Owner: ownerLabel, AssistantName: assistantName };
+  const unitToken = unit && unit.Unit_Label ? formatUnitLabel(unit.Unit_Label) : '';
+  const tokens = { Address: property.Address || '', Owner: ownerLabel, AssistantName: assistantName, Unit: unitToken };
 
   const smsTpl = await getMessageTemplate(env, 'property_notice', 'sms');
   const emailTpl = await getMessageTemplate(env, 'property_notice', 'email');
@@ -5834,7 +5862,7 @@ async function sendPropertyNotice(env, body) {
   const results = { sms_sent: 0, sms_failed: 0, sms_queued_quiet_hours: 0, email_sent: 0, email_failed: 0 };
   for (const tenant of smsRecipients) {
     try {
-      const r = await smsGatedSend(env, { wo_id: '', message_type: 'property_notice', recipient_type: 'tenant', tenant, owner, property, message_body: smsBody, bypassQuietHours: true });
+      const r = await smsGatedSend(env, { wo_id: body.wo_id || '', message_type: 'property_notice', recipient_type: 'tenant', tenant, owner, property, message_body: smsBody, bypassQuietHours: true });
       if (r.sent) results.sms_sent++; else if (r.held_for_quiet_hours) results.sms_queued_quiet_hours++; else results.sms_failed++;
     } catch (e) { results.sms_failed++; }
   }
@@ -8284,7 +8312,7 @@ async function scheduleWO(env, body) {
   const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
     const tenant=currentTenantForDispatch(tenants, unit, wo);
-    const address=property?property.Address+(unit?' Unit '+unit.Unit_Label:''):'your address';
+    const address=property?property.Address+(unit&&unit.Unit_Label?' '+formatUnitLabel(unit.Unit_Label):''):'your address';
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       // woJobLabel keeps two same-trade/same-address jobs distinguishable in the text.
@@ -8489,7 +8517,7 @@ async function createVendorRequest(env, body) {
   if (!vendor.Phone) return json({ error: 'Vendor has no phone number on file' }, 400);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const unit = units.find(u => u.ID === wo.Unit_ID);
-  const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'the property';
+  const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'the property';
   const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || 'there');
   const msg = reqType === 'photos'
     ? `Hi ${vname}, could you upload before/after photos for ${woId} at ${address} when you get a chance? You can add them from your vendor portal. ${vendorPortalLink(woId)}`
@@ -8583,7 +8611,7 @@ async function processVendorNudges(env) {
     }
     const property = properties.find(p => p.ID === wo.Property_ID);
     const unit = units.find(u => u.ID === wo.Unit_ID);
-    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'the property';
+    const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'the property';
     const vname = vendor.First_Name || (vendor.Name||'').split(' ')[0] || 'there';
     let msg, msgType, repeatHours;
     if (row.Request_Type === 'status_update') {
@@ -12365,7 +12393,7 @@ async function woShareLink(env, body){
   const token = await makeSessionToken({ scope:'wo-share-link', wo:woId, rev }, env.WORKER_SECRET, WO_SHARE_LINK_TTL);
   const base = (body.page_base || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/,'');
   const link = `${base}/wo.html?wo=${encodeURIComponent(woId)}&t=${encodeURIComponent(token)}`;
-  const addr = (prop.Address||'the property') + (unit.Unit_Label?(' Unit '+unit.Unit_Label):'');
+  const addr = (prop.Address||'the property') + (unit.Unit_Label?(' '+formatUnitLabel(unit.Unit_Label)):'');
   const lang = (vendor.Language==='es') ? 'es' : 'en';
   const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || '').trim();
   const msgEn = `Hi${vname?' '+vname:''}, here's the work order for ${addr}. Everything you need — job details, access, photos, and billing — is here:\n${link}\nTo open it, enter the last 4 digits of your phone (one time per day).`;
