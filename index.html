@@ -2109,14 +2109,18 @@ function openWODetail(woId) {
           (parseFloat(bill.Labor_Total||0)>0 ? '<div>⏱ Labor: ' + esc(bill.Hours||'0') + ' hrs × $' + esc(bill.Rate||'0') + '/hr = <span style="color:var(--text)">$' + parseFloat(bill.Labor_Total).toFixed(2) + '</span></div>' : '') +
           (parseFloat(bill.Flat_Rate||0)>0 && bill.Bill_Type==='flat' ? '<div>📋 Flat: <span style="color:var(--text)">$' + parseFloat(bill.Flat_Rate).toFixed(2) + '</span></div>' : '') +
           (parseFloat(bill.Truck_Stock||0)>0 ? '<div>🚚 Truck stock' + (bill.Truck_Desc?' ('+esc(bill.Truck_Desc)+')':'') + ': <span style="color:var(--text)">$' + parseFloat(bill.Truck_Stock).toFixed(2) + '</span></div>' : '') +
+          '<div id="bill-receipts-view-'+bill.ID+'">' +
           (parseFloat(bill.Receipts_Total||0)>0 ? '<div>🧾 Receipts subtotal: <span style="color:var(--text)">$' + parseFloat(bill.Receipts_Total).toFixed(2) + '</span></div>' : '') +
-          items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(internalReceiptUrl(woId,r.url))+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+          items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.pay==='account' ? ' <span style="color:var(--muted)">(Ridge Co card)</span>' : ' <span style="color:var(--muted)">(reimburse vendor)</span>') + (r.url?'<a href="'+esc(internalReceiptUrl(woId,r.url))+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+          '</div>' +
           (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + esc(bill.Notes) + '</div>' : '') +
         '</div>' +
-        '<div style="display:flex;gap:8px;margin-top:10px">' +
+        '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">' +
         '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
+        '<button onclick="openEditReceiptsPanel(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✎ Edit receipts</button>' +
         '<button onclick="voidVendorBill(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✕ Void</button>' +
         '</div>' +
+        '<div id="bill-receipts-edit-'+bill.ID+'"></div>' +
       '</div>';
     }).join('');
     var db = document.getElementById('detail-body');
