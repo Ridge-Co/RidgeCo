@@ -3096,7 +3096,11 @@ function openUnitDetail(propId, unitId) {
       (unitId ? String(w.Unit_ID)===String(unitId) : !w.Unit_ID);
   });
   var isVacant = !tenants.length;
-  var unitLabel = unit ? 'Unit '+esc(unit.Unit_Label) : 'Single Family';
+  // Sep 23 2026: real Unit_Label data is a mix — most already read like full labels ("Apt 3R")
+  // and blindly prepending "Unit " double-prefixed them ("Unit Apt 3R"); a real subset (e.g.
+  // 931 Saint Paul St, 1305 N Calvert St) are bare identifiers ("3R", "2nd") that still want the
+  // "Unit " word. Mirrors worker.js's formatUnitLabel — keep the two in sync if either changes.
+  var unitLabel = unit ? (/^(apt|unit|suite|ste)\b/i.test(unit.Unit_Label||'') || (unit.Unit_Label||'')[0]==='#' ? esc(unit.Unit_Label) : 'Unit '+esc(unit.Unit_Label)) : 'Single Family';
   var addr = (prop ? esc(prop.Address) : '') + (prop && prop.City ? ', '+esc(prop.City) : '');
 
   // Header
