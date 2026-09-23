@@ -975,7 +975,7 @@ function rowCard(r){
     // the WO picked above WITHOUT billing it. Reuses the same Part 5 WO picker already rendered
     // for this card (property/unit/WO selects + dates/link/warning), since picking which WO to
     // attach to is the same interaction Confirm already uses.
-    if (!excluded && !isCompany && isDuplicateFlagged) html += '<button class="btn secondary small" onclick="attachOnlyRow(\''+r.ID+'\', this)">📎 Attach image only, don\'t bill</button>';
+    if (!excluded && !isCompany && !isRefund && isDuplicateFlagged) html += '<button class="btn secondary small" onclick="attachOnlyRow(\''+r.ID+'\', this)">📎 Attach image only, don\'t bill</button>';
     html += '<button class="btn secondary small" onclick="checkDuplicatesOne(\''+r.ID+'\', this)">🔍 Check duplicates</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
