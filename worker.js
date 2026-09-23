@@ -13963,7 +13963,6 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!rc) return false;
     return await isTestRecord(env, 'Properties', rc.Property_ID);
   }
-  }
   return false;
 }
 
