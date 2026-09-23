@@ -119,7 +119,7 @@ const sendSMSRawSrc            = grab(wsrc, 'async function sendSMSRaw(');
 const WO_HEADERS = ['ID','Property_ID','Unit_ID','Tenant_ID','Vendor_ID','Type','Trade','Description','Priority','Status',
   'Scheduled_Date','Scheduled_Window','Completed_Date','Invoice_ID','Owner_WO_Ref','WO_Contact_Name','WO_Contact_Phone',
   'Tenant_Visible','Tenant_Notify_Created','Tenant_Notify_Updates','Vendor_SMS_Sent','Tenant_SMS_Sent','Owner_Notified',
-  'Created_By','Created_Date','Notes','Room','Vendor_Needs_Access','Checklist','Managed_By',
+  'Created_By','Created_Date','Notes','Room','Vendor_Needs_Access','Checklist','Managed_By','QBO_Invoice_Number',
   'Voided','Void_Reason','Void_Reason_Detail','Void_Combined_Into_WO_ID','Voided_By','Voided_Date'];
 const AUDIT_HEADERS = ['ID','WO_ID','Changed_By','Changed_By_Role','Field','Old_Value','New_Value','Timestamp','Notes',
   'Channel','Recipient_Name','Recipient_Type','Message_Type','Message_Body','Outcome'];
