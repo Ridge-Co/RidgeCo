@@ -119,7 +119,7 @@ const sendSMSRawSrc            = grab(wsrc, 'async function sendSMSRaw(');
 const WO_HEADERS = ['ID','Property_ID','Unit_ID','Tenant_ID','Vendor_ID','Type','Trade','Description','Priority','Status',
   'Scheduled_Date','Scheduled_Window','Completed_Date','Invoice_ID','Owner_WO_Ref','WO_Contact_Name','WO_Contact_Phone',
   'Tenant_Visible','Tenant_Notify_Created','Tenant_Notify_Updates','Vendor_SMS_Sent','Tenant_SMS_Sent','Owner_Notified',
-  'Created_By','Created_Date','Notes','Room','Vendor_Needs_Access','Checklist','Managed_By',
+  'Created_By','Created_Date','Notes','Room','Vendor_Needs_Access','Checklist','Managed_By','QBO_Invoice_Number',
   'Voided','Void_Reason','Void_Reason_Detail','Void_Combined_Into_WO_ID','Voided_By','Voided_Date'];
 const AUDIT_HEADERS = ['ID','WO_ID','Changed_By','Changed_By_Role','Field','Old_Value','New_Value','Timestamp','Notes',
   'Channel','Recipient_Name','Recipient_Type','Message_Type','Message_Body','Outcome'];
@@ -254,6 +254,32 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   const res = await woSplit(env, { original_wo_id: 'WO-1', new_work_orders: [{ Description: 'x' }] });
   t('a voided original cannot be split', res.status === 400);
 }
+{
+  const db = makeDb([{ ID: 'WO-1c', Property_ID: '76', Unit_ID: 'U1', QBO_Invoice_Number: 'INV-7' }]);
+  const { woSplit } = build(db);
+  const res = await woSplit(env, { original_wo_id: 'WO-1c', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
+  const body = await res.json();
+  t('an already-invoiced original cannot be split (same billing-state guard as Combine)', res.status === 400 && body.error === 'already_invoiced' && body.wo_ids.includes('WO-1c'));
+}
+// Billing guard widened (Sep 23 2026, Brett's follow-up): an already-reviewed vendor bill on
+// the original also blocks the split outright, even with NO QBO_Invoice_Number set at all.
+{
+  const db = makeDb([{ ID: 'WO-1d', Property_ID: '76', Unit_ID: 'U1' }],
+    { vendorBills: [{ ID: 'VB-1d', WO_ID: 'WO-1d', Vendor_ID: 'V1', Status: 'reviewed', Active: 'TRUE' }] });
+  const { woSplit } = build(db);
+  const res = await woSplit(env, { original_wo_id: 'WO-1d', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
+  const body = await res.json();
+  t('an already-reviewed vendor bill on the original blocks the split, with no QBO invoice number involved at all', res.status === 400 && body.error === 'already_invoiced' && body.locked_bill_id === 'VB-1d');
+}
+{
+  // A voided/inactive vendor bill does not block.
+  const db = makeDb([{ ID: 'WO-1e', Property_ID: '76', Unit_ID: 'U1' }],
+    { vendorBills: [{ ID: 'VB-1e', WO_ID: 'WO-1e', Vendor_ID: 'V1', Status: 'reviewed', Active: 'FALSE' }] });
+  const { woSplit } = build(db);
+  const res = await woSplit(env, { original_wo_id: 'WO-1e', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
+  const body = await res.json();
+  t('a voided/inactive vendor bill does not block the split', body.success === true);
+}
 
 // ── 2. Happy path: inheritance, per-new-WO fields, original stays, description independence ──
 {
@@ -288,6 +314,60 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   t('the original is untouched on fields with no override (Trade)', wf(db, 'WO-100', 'Trade') === 'Plumbing');
   t('an audit row exists on the original naming both new WOs', db.WO_Audit.rows.some(r => r[1] === 'WO-100' && r[4] === 'Split' && r[8].includes(newA) && r[8].includes(newB)));
   t('an audit row exists on each new WO naming the original', db.WO_Audit.rows.some(r => r[1] === newA && /from WO-100/.test(r[8])) && db.WO_Audit.rows.some(r => r[1] === newB && /from WO-100/.test(r[8])));
+}
+
+// ── 2b. Priority/Trade fallback — a new-WO spec that omits them inherits from the (possibly
+//        overridden) original instead of silently defaulting to 'normal'/'' (Sep 23 2026 field
+//        audit — same class of bug as Combine's Priority/Description issues, just for Split's
+//        direction). The shipped UI always sends both explicitly (pre-filled selects), so this
+//        exercises the server-side safety net a direct/future API caller would otherwise hit.
+{
+  const db = makeDb([
+    { ID: 'WO-150', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Description: 'urgent leak', Status: 'New' },
+  ]);
+  const { woSplit } = build(db);
+  const res = await woSplit(env, {
+    original_wo_id: 'WO-150',
+    new_work_orders: [{ Description: 'no trade or priority given' }], // Trade/Priority omitted entirely
+  });
+  const body = await res.json();
+  t('split with an omitted Trade/Priority on the new spec still succeeds', body.success === true);
+  const newId = body.new_wo_ids[0];
+  t('the new WO inherits Priority from the original (urgent), NOT a silent normal default', wf(db, newId, 'Priority') === 'urgent');
+  t('the new WO inherits Trade from the original (Plumbing), NOT a silent blank', wf(db, newId, 'Trade') === 'Plumbing');
+}
+{
+  // Same, but the original's OWN Priority is simultaneously being downgraded via
+  // original_overrides — the new WO should inherit the POST-override value, not the pre-
+  // override snapshot, since that's the value the original itself ends up holding.
+  const db = makeDb([
+    { ID: 'WO-151', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Description: 'urgent leak', Status: 'New' },
+  ]);
+  const { woSplit } = build(db);
+  const res = await woSplit(env, {
+    original_wo_id: 'WO-151',
+    original_overrides: { Priority: 'low' },
+    new_work_orders: [{ Description: 'no priority given, original was just downgraded' }],
+  });
+  const body = await res.json();
+  const newId = body.new_wo_ids[0];
+  t('the new WO inherits the POST-override original Priority (low), not the pre-override one (urgent)', wf(db, newId, 'Priority') === 'low');
+}
+{
+  // An explicit Priority/Trade on the spec always wins over inheritance — the fallback only
+  // fires when the field is entirely omitted.
+  const db = makeDb([
+    { ID: 'WO-152', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Description: 'x', Status: 'New' },
+  ]);
+  const { woSplit } = build(db);
+  const res = await woSplit(env, {
+    original_wo_id: 'WO-152',
+    new_work_orders: [{ Trade: 'HVAC', Priority: 'low', Description: 'explicit low priority HVAC job' }],
+  });
+  const body = await res.json();
+  const newId = body.new_wo_ids[0];
+  t('an explicitly-provided Priority overrides the inherited fallback', wf(db, newId, 'Priority') === 'low');
+  t('an explicitly-provided Trade overrides the inherited fallback', wf(db, newId, 'Trade') === 'HVAC');
 }
 
 // ── 3. Two new WOs with IDENTICAL trade+description don't collide into the same WO id ────────
@@ -358,6 +438,13 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   t('no new WO was created — validation happens before anything is created', db.Work_Orders.rows.length === 1);
 }
 {
+  // Sep 23 2026, Brett's follow-up: the billing-state guard now checks for ANY already-
+  // reviewed vendor bill on the original before anything else runs, so a reviewed bill on
+  // WO-410 now blocks the split outright at the entry gate (already_invoiced, 400) rather than
+  // reaching the reassignment table's own more specific reassign_locked check — same
+  // all-or-nothing behavior Brett asked for. The reassignment-specific reassign_locked path
+  // (exercised above with an unreviewed-but-billed time entry, which the blanket guard doesn't
+  // catch) is still live for lock states the billing guard doesn't cover.
   const db = makeDb([
     { ID: 'WO-410', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Description: 'x', Status: 'New' },
   ], {
@@ -370,7 +457,7 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
     reassignments: [{ type: 'vendor_bill', id: 'VB-10', target: 0 }],
   });
   const body = await res.json();
-  t('a reviewed/approved vendor bill reassignment is refused', res.status === 409 && body.error === 'reassign_locked' && body.type === 'vendor_bill');
+  t('a reviewed/approved vendor bill on the original blocks the whole split at the billing guard, before reassignment validation runs', res.status === 400 && body.error === 'already_invoiced' && body.locked_bill_id === 'VB-10');
   t('no new WO was created for the reviewed-bill case either', db.Work_Orders.rows.length === 1);
 }
 
