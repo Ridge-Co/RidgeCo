@@ -2088,17 +2088,20 @@ function openWODetail(woId) {
   // Load vendor bills — show ALL bills for this WO, not just most recent
   api('GET','/vendor-bills?wo_id='+woId).then(function(bills){
     if (!Array.isArray(bills)||!bills.length) return;
+    window._billCache = window._billCache || {};
     var billsHtml = bills.map(function(bill) {
       var items = [];
       try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+      window._billCache[bill.ID] = bill;   // so the receipt editor below can read this bill's current fields without a re-fetch
+      var qbSent = !!bill.QB_Invoice_ID;   // Vendor_Bills itself never carries this; harmless if absent — the real guard is server-side (Invoice_Review)
       var statusLabel = (bill.Status||'submitted').toUpperCase();
       var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#b45309)';
       var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
       var typeLabel = bill.Bill_Type === 'hourly' ? '⏱ By the hour' : '📋 Flat rate';
-      return '<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
+      return '<div id="bill-card-'+bill.ID+'" style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
           '<div style="color:var(--accent2);font-size:11px;letter-spacing:.1em;font-weight:bold">💰 VENDOR BILL — <span style="color:' + statusColor + '">' + statusLabel + '</span></div>' +
-          '<div style="color:var(--accent2);font-size:1.5rem;font-weight:bold">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
+          '<div id="bill-total-'+bill.ID+'" style="color:var(--accent2);font-size:1.5rem;font-weight:bold">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
         '</div>' +
         vendorLine +
         '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">' + typeLabel + '</div>' +
