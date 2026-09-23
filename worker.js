@@ -2816,6 +2816,56 @@ async function receiptReconSearch(env, url) {
   return json({ ok: true, count: results.length, results: results.slice(0, 200) });
 }
 
+// POST /admin/seed-test-receipt { wo_id?, total?, vendor?, receipt_date? } — Sep 23 2026, test-
+// infra fix. A real Receipt_Recon_Queue row only ever arrives via receiptReconScan() pulling a
+// file out of Drive — there was no way to get a testable PENDING row onto staging for
+// hub_test_post smoke tests of confirm/reassign/mark-refund. This creates one directly,
+// self-scoped to TEST-PROPERTY-001 (no TEST_MARKER_FIELD entry exists for Receipt_Recon_Queue
+// itself, same limitation noted on receiptAttachOnly's guard above, so scoping happens here at
+// creation time instead of being checked afterward). If wo_id is given it must already belong to
+// TEST-PROPERTY-001 — this never creates a Work_Orders row of its own, only reuses one. Staging-
+// only by construction, same as seedTestFixtures.
+async function seedTestReceipt(env, url, body) {
+  if (!isStaging(env, url)) return json({ error: 'seed-test-receipt only runs on staging' }, 403);
+  const properties = await fetchTab(env, 'Properties');
+  const testProp = properties.find(p => String(p.Access_Notes || '') === 'TEST-PROPERTY-001');
+  if (!testProp) return json({ error: 'TEST-PROPERTY-001 not seeded — call /admin/seed-test-fixtures first' }, 400);
+
+  let woId = '';
+  if (body && body.wo_id) {
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body.wo_id));
+    if (!wo || String(wo.Property_ID) !== String(testProp.ID)) {
+      return json({ error: 'wo_id, if given, must already belong to TEST-PROPERTY-001' }, 400);
+    }
+    woId = wo.ID;
+  }
+
+  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+
+  const total = (body && body.total !== undefined && body.total !== null && body.total !== '') ? String(body.total) : '12.34';
+  const vendor = (body && body.vendor) ? String(body.vendor) : 'TEST-VENDOR-001';
+  const receiptDate = (body && body.receipt_date) ? String(body.receipt_date) : new Date().toISOString().slice(0, 10);
+  const suggestion = { property_id: testProp.ID, wo_id: woId || undefined, confidence: 'test' };
+
+  const addRes = await (await addRow(env, 'Receipt_Recon_Queue', {
+    Source_File_ID: 'TEST-SEEDED-' + Date.now(), Source_File_URL: '', File_Name: 'test-seed-receipt.png',
+    Received_Date: new Date().toISOString(), Vendor: vendor, Receipt_Date: receiptDate,
+    Total: total, PO_Reference: woId || '', Items: '[]', Items_Summary: '[]', Card_Last4: '', Invoice_Number: '',
+    Suggestion: JSON.stringify(suggestion), Status: 'pending',
+    Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: 'Seeded by /admin/seed-test-receipt for HUB_TEST_TOKEN smoke tests — safe to ignore/delete.',
+    Active: 'TRUE', Duplicate_Confirmed_Date: '', Duplicate_Evidence_JSON: '', Duplicate_Checked_Date: '',
+    Gmail_Message_ID: '', Entry_Source: 'test_seed', Rescan_Match_JSON: '', Confirmed_Receipt_ID: '', Manual_Refund: 'FALSE',
+  })).json();
+
+  return json({
+    ok: true, id: addRes.id, property_id: testProp.ID, wo_id: woId || null,
+    total, vendor, receipt_date: receiptDate,
+    note: 'Call again anytime — each call creates a fresh pending row (not idempotent like seed-test-fixtures, since a receipt queue is naturally many rows).',
+  });
+}
+
 const DUPLICATE_RETENTION_DAYS = 180;
 
 // PURE — is this queue row due for the 180-day retention purge right now? Factored out of
