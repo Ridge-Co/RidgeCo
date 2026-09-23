@@ -16750,14 +16750,21 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
       }
       try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) {}
     }
+    // Push billing email/address/tax ID (Phase 1 onboarding, brief section 3b) onto a vendor
+    // that already has a linked QuickBooks Vendor — a brand-new vendor gets these baked into
+    // the create payload below instead. Best-effort; never fails this lookup.
+    await qbSyncVendorOnboardingFields(env, vendor, found, token);
     return found;
   }
 
   const payload = { DisplayName: dn };
   const phone = vendor.Phone || '';
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };
-  const email = vendor.Email || '';
+  const email = vendor.Billing_Email || vendor.Email || '';
   if (email) payload.PrimaryEmailAddr = { Address: email };
+  const onboarding = vendorQBOnboardingFields(vendor);
+  if (onboarding.BillAddr) payload.BillAddr = onboarding.BillAddr;
+  if (onboarding.TaxIdentifier) payload.TaxIdentifier = onboarding.TaxIdentifier;
   const r = await qbApi(env, 'vendor?minorversion=73', 'POST', payload, token);
   const id = r?.Vendor?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB vendor');
