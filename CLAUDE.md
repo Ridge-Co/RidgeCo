@@ -49,8 +49,31 @@ never a direct push to `main`. Verify on the staging Worker (`?api=staging` on t
 curl the staging URL directly for the backend) BEFORE merging to `main`, which is what actually
 triggers the production deploy. Not optional, not feature-specific — this is what closed the gap
 after the Sept 1, 2026 incident (a push straight to `main`, tested against production only after
-the fact). Full detail: `context/Brett_Context_Document_v1.13.md` PAT-033; the "Staging sandbox"
-credentials note now lives in `brett332/data/CREDENTIALS_MAP.md` (moved off this public repo Sep 16).
+the fact). The "Staging sandbox" credentials note lives in `brett332/data/CREDENTIALS_MAP.md`
+(moved off this public repo Sep 16).
+
+**Sep 23, 2026 update — staging is now self-serve, Brett's gate moved to the main-merge only.**
+`maintenance-hub-staging`'s Cloudflare Build deploys from the `staging` git branch (not `main`,
+not the feature branch itself), and `HUB_TEST_TOKEN`/`hub_test_get`/`hub_test_post` (via GH
+Broker) give credential-free read+write access to it. Brett's own words: *"push everything to
+staging now that we have this safe staging mechanism... find problems during testing on the
+staging branch and fix them and come back to me with either problems that need to be resolved
+that you cannot resolve yourself, or you can tell me that things are tested and ready and we can
+push to main."* So, going forward:
+- **Push the feature branch into `staging` yourself, no confirmation needed** — open a PR with
+  `base: staging`, `head: <feature branch>` and merge it immediately (`create_pull_request` +
+  `merge_pull_request` via GH Broker). This is the step that used to wait on Brett manually
+  syncing `staging`; it no longer does.
+- **Test on staging and iterate autonomously.** Run `test-verified-builds` against
+  `maintenance-hub-staging` (`hub_test_get`/`hub_test_post`, plus Playwright against
+  `?api=staging` for UI). If something fails, fix it on the feature branch, re-merge into
+  `staging`, and retest — loop until green, same as any other self-test loop. Don't stop to ask
+  permission for any of this.
+- **Only pause and surface to Brett when:** (a) something is broken that can't be resolved without
+  his input (a real decision, a missing credential, an ambiguous requirement), or (b) the build is
+  fully tested and green on staging and ready for his go/no-go on merging into `main` — the step
+  that actually reaches production. That merge-to-`main` decision is still always his call, per
+  PAT-033's original intent; everything before it (branch → staging → test → fix → retest) is not.
 
 ## Regression rules — DON'T break working features (full log in /context/FEATURE_LOG.md)
 - **A silent `catch(e){}`/`catch(_){}` around a Sheets/Drive write is a real blind spot, not a
