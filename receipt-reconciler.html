@@ -726,9 +726,10 @@ function rowCard(r){
       + '<div><label>Work order</label><select id="'+idAttr+'-wo" onchange="document.getElementById(\''+idAttr+'-wo-manual\').value=\'\';checkManualWo(\''+r.ID+'\')"></select></div>'
       + '<div class="full"><label class="rc-closed-toggle" style="display:inline-flex"><input type="checkbox" id="'+idAttr+'-showclosed" onchange="refreshWoSelect(\''+r.ID+'\')"> Also show closed/past work orders at this property</label></div>'
       + '<div class="full"><label>...or type a WO number directly to override</label><input id="'+idAttr+'-wo-manual" list="wo-datalist" placeholder="e.g. 1234" oninput="document.getElementById(\''+idAttr+'-wo\').value=\'\';checkManualWo(\''+r.ID+'\')"><div class="rc-wo-check" id="'+idAttr+'-wo-check"></div></div>'
+      + '<div class="full rc-wo-detail" id="'+idAttr+'-wo-detail"></div>'
       + '<div><label>Amount</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
       + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
-      + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
+      + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'" oninput="updateWoDetail(\''+r.ID+'\')"></div>'
       + '<div class="full"><label>Description (materials — goes on the WO and the invoice line)</label><textarea id="'+idAttr+'-desc">'+esc(descDefault)+'</textarea></div>'
       + '<div class="full rc-posting" id="'+idAttr+'-posting"></div>'
       + '</div>';
