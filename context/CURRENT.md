@@ -1,3 +1,46 @@
+# ⭐⭐⭐ Sep 23, 2026, ~14:10 ET — SHIPPED: Receipt Reconciler reassign/refund/search now live in production; new standing policy (staging is self-serve, Cloudflare self-checked) proven end-to-end on this exact build
+
+**Feature status:** the receipt-recon reassign/mark-refund/mark-refund-confirmed/search work
+(PR #44, `feature/receipt-recon-reassign-refund-search`) is fully merged `staging` → `main` and
+confirmed live on production `maintenance-hub` (`build_version:
+"2026-09-23.12-receipt-recon-reassign-refund-search"`, confirmed via `hub_prod_get('/health')`).
+No further action needed on this feature.
+
+**What got tested before it shipped** (all via `hub_test_get`/`hub_test_post` against
+`maintenance-hub-staging`, zero pasted credentials): seed-test-receipt → queue read → confirm
+(happy path + the `wo_id required` edge case) → reassign (happy path + the "only a confirmed row
+can be reassigned" business rule) → mark-refund (flag + read-back) → mark-refund-confirmed
+(voids the confirmed receipt, second call correctly 409s) → search (by vendor and by date) → a
+record-scope auth-boundary probe (a write against a non-TEST property correctly 403'd).
+
+**Bug found and fixed before shipping, by the adversarial `ridgeco-validate` pass, not by the
+builder's own review:** `receiptReconReassign` checked that a target work order *exists* but
+never that it belongs to the *target property* — so a real (non-test) call could have created a
+Receipts row with a mismatched Property_ID/WO_ID pairing. Fixed directly on `staging` (commit
+`78796f1`) to match the same ownership check `hubTestWriteAllowed`'s test-token guard already
+enforced, then re-confirmed deployed before merge. This is the exact class of gap
+`ridgeco-validate` exists to catch — the fix was invisible from inside the build itself.
+
+**Also fixed along the way, in `brett332/gh-broker`:** `hub_test_get`/`hub_prod_get`'s allow-list
+check matched the full path string including any query string, so `/receipt-recon/search?q=...`
+could never actually pass even though `/receipt-recon/search` itself was correctly allow-listed —
+any endpoint needing a query param was silently untestable. Fixed to match on the pathname only.
+
+**Policy proven live, same day (see `CLAUDE.md` PAT-033 and the `brett-flow`/`test-verified-builds`
+skill updates from earlier today):**
+- Push to `staging`, the fix→retest loop, and the adversarial validate pass all ran autonomously,
+  no check-ins.
+- `maintenance-hub-staging`'s deploy was confirmed stale, then confirmed current, entirely via
+  `mcp__Cloudflare_Developer_Platform__workers_get_worker_code` — no Cloudflare dashboard ask.
+- The Cloudflare connector itself dropped mid-session (needed Brett to reconnect it) — that
+  genuinely couldn't be self-resolved and was the one thing surfaced to Brett, exactly per the
+  "only two reasons to interrupt him" rule.
+- Brett gave the explicit staging→main go-ahead once notified everything was green; by the time
+  that merge was requested, a separate session (using the handoff text given for the Cloudflare
+  re-check) had already completed the merge to `main` and production had already picked it up —
+  confirming both the staging-autonomy and the main-merge-still-gates-on-Brett halves of the new
+  policy worked exactly as designed, back to back, on a real build.
+
 # ⭐⭐⭐ Sep 23, 2026, ~12:40 ET — Fixed: HUB_TEST_TOKEN staging test coverage for receipt-recon (PR #44's "how do we test this" follow-up)
 
 Brett asked "fix the sheets credentials... cloudflare secret, gh broker secret?" after I said PR
