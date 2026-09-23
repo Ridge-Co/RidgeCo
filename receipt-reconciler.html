@@ -933,16 +933,35 @@ function rowCard(r){
       + '</div>';
   }
 
+  // Part 3 (Sep 22 2026 brief): a refund's own card — find the original purchase it might be
+  // reversing (read-only search, renders candidates for Brett to eyeball) as the FIRST option,
+  // and the negative-expense fields (reused by the "Expense only" buttons below, which already
+  // render for every non-excluded pending row) as the fallback for a partial refund or no match.
+  if (isRefund && isPendingLike) {
+    html += '<div class="rc-fields">'
+      + '<div><label>Amount (negative = money back to the customer)</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
+      + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
+      + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
+      + '<div class="full"><label>Description</label><textarea id="'+idAttr+'-desc">'+esc(descDefault)+'</textarea></div>'
+      + '</div>';
+    html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">'
+      + '<button class="btn secondary small" onclick="findRefundMatches(\''+r.ID+'\', this)">🔎 Find matching purchase</button>'
+      + '<div id="rc'+r.ID+'-refund-matches"></div>'
+      + '</div>';
+  }
+
   // Brett, Sep 22 2026: one tap to record a receipt as an EXPENSE (no work order, no customer
   // invoice) against Ridge Co or 1864 Kerns School Rd — it goes straight to QuickBooks' receipts
   // inbox for the expense record. Offered on every pending receipt, including ones the scanner
   // matched to a job address, so nothing is forced onto a work order unless Brett picks one.
+  // For a refund (Part 3), this is the "no match / partial — post as expense" path: same button,
+  // same endpoint, but the amount field above is negative so it posts as money back.
   if (!excluded && isPendingLike) {
     const kerns = kernsProperty();
-    html += '<div class="rc-expense"><span class="rc-expense-label">Expense only — no work order, straight to QuickBooks:</span>'
+    html += '<div class="rc-expense"><span class="rc-expense-label">'+(isRefund ? 'No match, or only a partial refund? Post as a negative expense — no work order:' : 'Expense only — no work order, straight to QuickBooks:')+'</span>'
       + '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'ridgeco\')">🧾 Ridge Co expense</button>'
       + (kerns ? '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'kerns\')">🏡 1864 Kerns School Rd</button>' : '')
-      + (!isCompany ? '<button class="btn small expbtn secondaryexp" onclick="confirmExpense(\''+r.ID+'\', this, \'selected\')">Expense to the property picked above</button>' : '')
+      + (!isCompany && !isRefund ? '<button class="btn small expbtn secondaryexp" onclick="confirmExpense(\''+r.ID+'\', this, \'selected\')">Expense to the property picked above</button>' : '')
       + '</div>';
   }
 
