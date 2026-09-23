@@ -989,6 +989,11 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
       <div class="form-group"><label>Vendor Type</label><select id="v-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
       <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="v-payaddr" placeholder="123 Main St, City, ST 00000"></div>
+      <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">ONBOARDING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— required before this vendor's first bill can be paid. Banking is handled separately, not here.</span></div></div>
+      <div class="form-group"><label>Billing Email</label><input type="email" id="v-billing-email" placeholder="billing@vendorcompany.com"></div>
+      <div class="form-group"><label>Billing Address</label><input type="text" id="v-billing-address" placeholder="123 Main St, City, ST 00000"></div>
+      <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="v-tax-id" placeholder="12-3456789"></div>
+      <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="v-tax-doc-url" placeholder="https://drive.google.com/..."></div>
       <div class="form-group full"><label>Trades — check all that apply</label><div id="v-trades-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;margin-top:4px"></div></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="v-rates" placeholder="Hourly rate, trip charge, etc..."></textarea></div>
     </div>
