@@ -75,14 +75,36 @@ push to main."* So, going forward:
   that actually reaches production. That merge-to-`main` decision is still always his call, per
   PAT-033's original intent; everything before it (branch → staging → test → fix → retest) is not.
 
-**Open question, confirmed Sep 23, 2026 — do NOT assume staging auto-deploys on push.** A direct
-push to `staging` (via GH Broker) does NOT reliably show up on `hub_test_get('/health')`'s
-`build_version` within several minutes — tested live, still stale after 2+ minutes. `main` and
-`gh-broker` both auto-deploy on push (confirmed separately); `maintenance-hub-staging` may not, or
-may need a manual trigger in the Cloudflare dashboard, or may just be slower than tested here. A
-session that pushes to `staging` should verify `build_version` actually changed via `hub_test_get`
-before trusting any other staging test result — and if it's stuck, that's a "can't resolve myself"
-case to surface to Brett, not something to keep retrying silently.
+**Confirmed Sep 23, 2026 — do NOT assume staging auto-deploys on push, and check this yourself,
+never by asking Brett to look at the Cloudflare dashboard.** A direct push to `staging` (via GH
+Broker) does NOT reliably show up live within minutes — a push sat undeployed for 2+ minutes in
+this session's own test. `main` and `gh-broker` both auto-deploy on push (confirmed separately);
+`maintenance-hub-staging` does not reliably, at least not quickly.
+
+**How to check it yourself (the `mcp__Cloudflare_Developer_Platform__*` tools, available in every
+session — Brett has never had to open the dashboard for this and shouldn't be asked to):**
+1. `workers_get_worker_code(scriptName: "maintenance-hub-staging")` — pulls the ACTUAL deployed
+   source directly from Cloudflare's API (the ground truth, not `hub_test_get('/health')`'s
+   `build_version`, which is just as reliable but slower to grep through). Grep it for
+   `BUILD_VERSION =` and compare against the `staging` branch's own current value. This is the
+   right first move whenever a staging test isn't showing an expected change — before assuming
+   the code push failed, before asking Brett anything.
+2. `workers_list()` / `workers_get_worker(scriptName: ...)` for basic metadata (a recent
+   `modified_on` timestamp does NOT mean the code content actually changed — confirmed the two can
+   disagree; always verify with `workers_get_worker_code`, don't infer from the timestamp alone).
+3. If step 1 shows the deployed code is genuinely stale relative to the `staging` branch, that is
+   now a confirmed, narrow finding — not a hunch — and only THEN is it worth telling Brett, and
+   only naming the specific unresolved piece: no tool in this session can see Cloudflare's own
+   Build logs or trigger a manual redeploy, so if a re-push doesn't resolve it, that specific
+   capability gap (build visibility / manual trigger) is what to ask him about — never "can you
+   check Cloudflare for me" as a first move when steps 1-2 haven't been tried.
+
+Brett's own words on this (Sep 23, 2026): *"You've come to me several times today to check the
+Cloudflare dashboard, but you can check it yourself... I don't want you coming to me with these
+issues unless you have already checked, and know why the issue is happening, and cannot resolve
+it without my direct intervention."* Treat that as the standing bar for anything infrastructure-
+shaped, not staging-specific — diagnose with the tools already in the session before naming an
+issue to Brett, and when it does need him, name the exact narrow gap, not the whole symptom.
 
 ## Regression rules — DON'T break working features (full log in /context/FEATURE_LOG.md)
 - **A silent `catch(e){}`/`catch(_){}` around a Sheets/Drive write is a real blind spot, not a
