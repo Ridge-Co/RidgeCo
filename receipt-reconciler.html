@@ -756,6 +756,15 @@ function rowCard(r){
   const flags = sug.flags || [];
   if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
 
+  // Part 1 (Sep 22 2026 brief): when this receipt is flagged as a possible duplicate, show
+  // whether ITS OWN image field is actually populated yet — checked against the Receipts row's
+  // own attachment field the same way the "Audit older" tab does (Source_File_ID/Source_File_URL,
+  // already present on this queue row — carries straight over onto Receipts when confirmed). An
+  // amount matching is not the same thing as the picture actually being filed anywhere.
+  if (isDuplicateFlagged) {
+    html += '<div class="rc-flags">' + imageAttachedPill(!!(r.Source_File_ID || r.Source_File_URL)) + '</div>';
+  }
+
   // Cross-source duplicate evidence (Sep 16 2026) — the broader, on-demand check Brett asked
   // for on top of the flags above, which only ever compare against the ONE work order a receipt
   // is being posted to. Each signal here is independent evidence, not a verdict — Brett reads
