@@ -2042,7 +2042,8 @@ async function listReceiptReconQueue(env, url) {
       let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
       let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
       let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
-      return { ...r, suggestion, items, items_summary, duplicate_evidence };
+      let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
+      return { ...r, suggestion, items, items_summary, duplicate_evidence, rescan_matches };
     }));
 }
 
