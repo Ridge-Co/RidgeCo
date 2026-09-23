@@ -14031,6 +14031,26 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/vendor-bill/add') {
+    // A brand-new Vendor_Bills row targets an existing Work_Orders row (never creates one),
+    // same shape as /status and /schedule: gate on that WO's own Property being a TEST- fixture.
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && (body.WO_ID || body.wo_id)));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/vendor-bill/edit-receipts') {
+    // Edits an existing Vendor_Bills row by bill_id. Resolve bill -> WO_ID -> Work_Orders ->
+    // Property_ID, same chain as /vendor-bill/add above, so this token can only ever touch a
+    // bill sitting on a TEST- fixture WO/Property, never a real one.
+    const bills = await fetchTab(env, 'Vendor_Bills');
+    const bill = bills.find(b => String(b.ID) === String(body && body.bill_id));
+    if (!bill) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(bill.WO_ID));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
   if (path === '/wo/bulk-void') {
     // Same shape as /wo/combine above: every id in the batch must itself resolve (via its
     // Property) to a TEST- record, or this token can never touch it -- a mixed batch with even
