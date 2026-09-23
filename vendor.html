@@ -2670,6 +2670,49 @@ function billFlowTruckAnswer(usedTruck) {
   document.getElementById('bill-truck-section').scrollIntoView({block:'center'});
 }
 
+// Sep 23 2026, Brett's ask: a vendor entered her own $250 invoice amount a SECOND time as a
+// receipt (blank description, no photo), which doubled what the job showed as costing. Nothing
+// in the flow used to catch that before submit. This looks for the same shape — a receipt whose
+// amount is close to the vendor's own labor/flat total — and separately checks the running
+// total against this WO's approved estimate, if one exists. Returns a warning string, or null
+// when nothing looks off.
+function billOverageWarning() {
+  var laborOrFlat = 0;
+  if (_billType === 'hourly') {
+    var hrs = parseFloat(document.getElementById('bill-hours').value) || 0;
+    laborOrFlat = hrs * _vendorRate;
+  } else {
+    laborOrFlat = parseFloat(document.getElementById('bill-flat').value) || 0;
+  }
+  var closeMatch = null;
+  if (laborOrFlat > 0) {
+    for (var i = 1; i <= _receiptCount; i++) {
+      var amtEl = document.getElementById('r-amt-' + i);
+      if (!amtEl) continue;
+      var amt = parseFloat(amtEl.value) || 0;
+      if (amt <= 0) continue;
+      if (Math.abs(amt - laborOrFlat) <= Math.max(1, laborOrFlat * 0.1)) { closeMatch = amt; break; }
+    }
+  }
+  var estimates = (window._estimates && window._estimates[_billWOId]) || [];
+  var current = estimates.length ? estimates[estimates.length - 1] : null;
+  var estTotal = (current && current.Status === 'Approved' && Array.isArray(current.Line_Items))
+    ? current.Line_Items.reduce(function(s, li) { return s + (parseFloat(li.amount) || 0); }, 0) : null;
+  var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$', '')) || 0;
+  var overEstimate = (estTotal != null && estTotal > 0 && total > estTotal * 1.05);
+
+  if (closeMatch == null && !overEstimate) return null;
+
+  var msg = t('This adds up to more than expected for this job.') + ' ';
+  if (closeMatch != null) {
+    msg += t('One of your receipts ($') + closeMatch.toFixed(2) + t(') is close to your own invoice amount. If that receipt is really your invoice entered again, remove it above — receipts are only for materials you bought.') + ' ';
+  }
+  if (overEstimate) {
+    msg += t('This total is more than the approved amount for this job ($') + estTotal.toFixed(2) + t(').');
+  }
+  return msg;
+}
+
 // Step 2: one consolidated summary of everything about to be submitted — the actual
 // "checking entries and images to make sure nothing was missed" pass. Re-validates the photo
 // reconciliation (in case a row was edited since the last check) before showing Confirm.
