@@ -6427,7 +6427,14 @@ async function sendPropertyNotice(env, body) {
   const property = properties.find(p => p.ID === propertyId);
   if (!property) return json({ error: 'Property not found' }, 404);
   const owner = property ? (owners.find(o => o.ID === property.Owner_ID) || null) : null;
-  const activeTenants = tenants.filter(t => t.Active !== 'FALSE' && String(t.Property_ID) === String(propertyId));
+  const unit = unitId ? units.find(u => u.ID === unitId) : null;
+  if (unitId && !unit) return json({ error: 'Unit not found' }, 404);
+  const activeTenants = tenants.filter(t => {
+    if (t.Active === 'FALSE') return false;
+    if (String(t.Property_ID) !== String(propertyId)) return false;
+    if (unitId) return t.Unit_ID === unitId;
+    return true;
+  });
 
   const cfg = await fetchConfig(env);
   const assistantName = cfg.ASSISTANT_NAME || 'Riley';
