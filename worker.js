@@ -2300,6 +2300,70 @@ async function receiptReconConfirmDuplicate(env, body) {
   return json({ ok: true, id, status: 'duplicate_confirmed' });
 }
 
+// POST /receipt-recon/bulk-action { ids:[...], action, property_id?, reason? } — Part 4 of the
+// Sep 22 2026 dup/refund/bulk brief (bulk checkboxes on the Reconciler). One dispatch endpoint,
+// matching the /wo/combine-style batched-write convention already used in this file, rather than
+// a separate endpoint per action. Deliberately does NOT reimplement any of the four actions —
+// it fans each id out to the SAME single-row handler the Reconciler's own row buttons already
+// call, so a bulk action behaves byte-for-byte like N taps of the existing button, with the same
+// guardrails (e.g. only a 'skipped' row can move back to pending; a no-WO confirm is always an
+// expense; a confirm-duplicate on an already-duplicate row is a harmless no-op):
+//   mark_duplicate   -> receiptReconConfirmDuplicate (same status the single "Confirm duplicate"
+//                        button writes: 'duplicate_confirmed')
+//   expense          -> receiptReconConfirm({ no_wo:true, property_id }) — PR #23's one-tap
+//                        expense flow, applied to the whole batch against ONE property choice
+//                        (Ridge Co: property_id ''; 1864 Kerns School Rd: its real property id,
+//                        resolved client-side by kernsProperty() exactly like the single-tap
+//                        buttons already do — no new property lookup here).
+//   move_to_pending  -> receiptReconUnskip — PR #24's single-row ↩ undo; only ever moves a
+//                        'skipped' row back to 'pending', so an id that isn't currently skipped
+//                        lands in `failed` with that handler's own real error, same as tapping
+//                        the single-row button on it would.
+//   skip             -> receiptReconSkip
+// Respects the Cloudflare subrequest cap the same way /admin/share-attachments' limit/offset
+// does: only the first RECEIPT_BULK_ACTION_MAX ids are processed per call; the rest come back as
+// remaining_ids for the client to call again with (same "click again to continue" shape as the
+// Reconciler's own runFullAudit loop), rather than looping unbounded server-side in one request.
+const RECEIPT_BULK_ACTIONS = ['mark_duplicate', 'expense', 'move_to_pending', 'skip'];
+const RECEIPT_BULK_ACTION_MAX = 20;
+async function receiptReconBulkAction(env, body) {
+  body = body || {};
+  const action = String(body.action || '');
+  if (!RECEIPT_BULK_ACTIONS.includes(action)) {
+    return json({ error: `action must be one of: ${RECEIPT_BULK_ACTIONS.join(', ')}` }, 400);
+  }
+  const allIds = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(x => String(x || '')).filter(Boolean))];
+  if (!allIds.length) return json({ error: 'ids required (array)' }, 400);
+  // property_id may legitimately be '' (Ridge Co overhead, no property) — only reject when the
+  // key is missing entirely, same as receiptReconConfirm's own no_wo validation shape.
+  if (action === 'expense' && body.property_id === undefined) {
+    return json({ error: "property_id required for expense (pass '' for Ridge Co / general overhead)" }, 400);
+  }
+  const batch = allIds.slice(0, RECEIPT_BULK_ACTION_MAX);
+  const remaining = allIds.slice(RECEIPT_BULK_ACTION_MAX);
+
+  const succeeded = [], failed = [];
+  for (const id of batch) {
+    try {
+      let res;
+      if (action === 'mark_duplicate') res = await receiptReconConfirmDuplicate(env, { id, reason: body.reason || '' });
+      else if (action === 'expense') res = await receiptReconConfirm(env, { id, no_wo: true, property_id: body.property_id || '' });
+      else if (action === 'move_to_pending') res = await receiptReconUnskip(env, { id });
+      else res = await receiptReconSkip(env, { id, reason: body.reason || 'bulk skip from Receipt Reconciler' });
+      const resJson = await res.json().catch(() => ({}));
+      if (resJson && resJson.error) failed.push({ id, error: resJson.error });
+      else succeeded.push({ id, result: resJson });
+    } catch (e) {
+      failed.push({ id, error: String(e && e.message || e) });
+    }
+  }
+  return json({
+    ok: true, action, processed: batch.length,
+    succeeded, failed,
+    remaining_ids: remaining, remaining: remaining.length,
+  });
+}
+
 const DUPLICATE_RETENTION_DAYS = 180;
 
 // PURE — is this queue row due for the 180-day retention purge right now? Factored out of
