@@ -6347,7 +6347,7 @@ async function welcomeSend(env, body) {
     const propId = recipient.Property_ID || (unit && unit.Property_ID) || '';
     property = properties.find(p => p.ID === propId) || null;
     owner = property ? owners.find(o => o.ID === property.Owner_ID) || null : null;
-    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+    const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
     // Sep 16 2026 (Brett): dropped the "text us anytime with a request" / "reply here" promise
     // — handleInboundSMS only recognizes vendor phone numbers today, so a tenant texting in
     // a new request or a question currently gets a nonsensical "could not find your vendor
