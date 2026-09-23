@@ -564,6 +564,7 @@ export default {
         if (path === '/wo/set-tenant-visibility') return await setTenantVisibility(env, body);
         if (path === '/wo/void')                  return await woVoid(env, body);
         if (path === '/wo/unvoid')                return await woUnvoid(env, body);
+        if (path === '/wo/bulk-void')             return await woBulkVoid(env, body);
         if (path === '/wo/combine')               return await woCombine(env, body);
         if (path === '/wo/split')                 return await woSplit(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
