@@ -1798,6 +1798,7 @@ function showPage(name, btn) {
   // "Check and save to the sheet" buttons remain for a manual re-run any time after that.
   if (name === 'payables') { loadPayables(false); }
   if (name === 'vendor-performance') { loadVendorPerformance(); }
+  if (name === 'vendor-onboarding') { loadVendorOnboardingGaps(); }
   if (name === 'messaging') { loadMessagingPage(); }
 }
 
