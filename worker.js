@@ -585,6 +585,8 @@ export default {
         if (path === '/admin/migrate-trades')     return await adminMigrateTrades(env, body);
         if (path === '/admin/share-attachments')  return await adminShareAttachments(env, body);
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
+        if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
+        if (path === '/admin/gemini-context-update') return await adminGeminiContextUpdate(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
