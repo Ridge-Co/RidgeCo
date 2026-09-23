@@ -12104,8 +12104,31 @@ function runBulkWOUpdate(ids, callFn, btn, verbLabel) {
 // enabled state and the toast reason, but the server (/wo/combine) re-checks and is the
 // real authority — this is UX, not the security boundary.
 var _bulkCombineIds = [];
-var BC_FIELDS = ['Managed_By','Vendor_ID','Scheduled_Date','Description','Priority','Status'];
-var BC_FIELD_LABELS = { Managed_By:'Managed By', Vendor_ID:'Assigned Vendor', Scheduled_Date:'Scheduled Date', Description:'Description', Priority:'Priority', Status:'Status' };
+// Sep 23 2026 field audit (Brett hit two real bugs — see PR description): mirrors the
+// server's WO_COMBINE_RECONCILE_FIELDS exactly — Description moved OUT of this list (it's
+// never a conflict, see BC_MERGE_FIELDS below) and Scheduled_Window/WO_Contact_Name/
+// WO_Contact_Phone/Customer_Charge/Deposit_Amount/Deposit_Vendor_ID/Scope_ID/Tenant_Visible
+// were added — those were previously silently dropped/left at the survivor's own value with
+// no picker at all when they disagreed.
+var BC_FIELDS = ['Managed_By','Vendor_ID','Scheduled_Date','Scheduled_Window','Priority','Status','WO_Contact_Name','WO_Contact_Phone','Customer_Charge','Deposit_Amount','Deposit_Vendor_ID','Scope_ID','Tenant_Visible'];
+var BC_FIELD_LABELS = { Managed_By:'Managed By', Vendor_ID:'Assigned Vendor', Scheduled_Date:'Scheduled Date', Scheduled_Window:'Scheduled Window', Priority:'Priority', Status:'Status', WO_Contact_Name:'Contact Name', WO_Contact_Phone:'Contact Phone', Customer_Charge:'Customer Charge', Deposit_Amount:'Deposit Amount', Deposit_Vendor_ID:'Deposit Vendor', Scope_ID:'Scope', Tenant_Visible:'Tenant Visible' };
+// Free-text fields that are NEVER shown as a conflict — always auto-concatenated onto the
+// survivor server-side (mirrors WO_COMBINE_MERGE_FIELDS in worker.js), same "nothing lost"
+// treatment as Notes. Shown as an informational note only, never a picker.
+// Owner_WO_Ref is deliberately NOT in this list (Sep 23 2026, Brett's follow-up) — the owner
+// has their own reference numbers on their end, and concatenating several onto one WO's
+// Owner_WO_Ref wouldn't match anything the owner recognizes. It's excluded from the combine
+// entirely, like Trade: the survivor keeps its own original ref untouched, and instead the
+// server sends the owner a one-time notice (owner_wo_combined_ref) naming which of their old
+// WO+ref pairs were absorbed into the surviving WO+ref, whenever a combine actually abandons
+// a distinct owner reference.
+var BC_MERGE_FIELDS = ['Description','Room'];
+var BC_MERGE_FIELD_LABELS = { Description:'Description', Room:'Room' };
+// Same ranking woCombine/getWorkOrdersList already use server-side (PRIORITY_ORDER) — used
+// here only to pre-select the most urgent value in the Priority picker below, never to
+// silently apply it without a picker: Brett can still leave it as-is (preserves the most
+// urgent value with zero clicks) or pick a lower one himself.
+var BC_PRIORITY_ORDER = { urgent:0, high:1, normal:2, low:3 };
 
 function bulkCombineEligible(ids) {
   var wos = ids.map(function(id){ return safeArray(state.workorders).find(function(w){return w.ID===id;}); }).filter(Boolean);
