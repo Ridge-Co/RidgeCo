@@ -5551,6 +5551,27 @@ function vendorBillReassignLock(bill, invoiceReviewRows) {
   return null;
 }
 
+// Billing-state guard helper shared by woCombine and woSplit (Sep 23 2026, Brett's follow-up
+// to widen the invoice-only check both endpoints started with). Reuses vendorBillReassignLock
+// above — the same "is this bill already committed" logic Split's own reassignment guard
+// already trusts — against every LIVE Vendor_Bills row tied to any of the given WO ids.
+// Voided/inactive bills are filtered out before the check (moot for a billing-state block,
+// unlike for reassignment safety where vendorBillReassignLock's own Active==='FALSE' branch
+// matters). Returns the first locked bill found, or null if none of the given WOs has one.
+async function findLockedVendorBillForWOs(env, woIds) {
+  const ids = new Set((woIds || []).map(String));
+  if (!ids.size) return null;
+  const vendorBills = await fetchTab(env, 'Vendor_Bills');
+  const relevant = vendorBills.filter(b => ids.has(String(b.WO_ID)) && b.Active !== 'FALSE');
+  if (!relevant.length) return null;
+  let invoiceReview = [];
+  try { invoiceReview = await fetchTab(env, 'Invoice_Review'); } catch (e) {}
+  for (const bill of relevant) {
+    if (vendorBillReassignLock(bill, invoiceReview)) return bill;
+  }
+  return null;
+}
+
 // POST /wo/split {original_wo_id, original_overrides?:{Trade,Priority,Vendor_ID,Scheduled_Date,
 // Managed_By,Description}, new_work_orders:[{Trade,Priority,Vendor_ID?,Scheduled_Date?,
 // Managed_By,Description}, ...], reassignments?:[{type:'time_entry'|'vendor_bill', id,
