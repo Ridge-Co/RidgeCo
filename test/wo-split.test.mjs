@@ -254,6 +254,32 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   const res = await woSplit(env, { original_wo_id: 'WO-1', new_work_orders: [{ Description: 'x' }] });
   t('a voided original cannot be split', res.status === 400);
 }
+{
+  const db = makeDb([{ ID: 'WO-1c', Property_ID: '76', Unit_ID: 'U1', QBO_Invoice_Number: 'INV-7' }]);
+  const { woSplit } = build(db);
+  const res = await woSplit(env, { original_wo_id: 'WO-1c', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
+  const body = await res.json();
+  t('an already-invoiced original cannot be split (same billing-state guard as Combine)', res.status === 400 && body.error === 'already_invoiced' && body.wo_ids.includes('WO-1c'));
+}
+// Billing guard widened (Sep 23 2026, Brett's follow-up): an already-reviewed vendor bill on
+// the original also blocks the split outright, even with NO QBO_Invoice_Number set at all.
+{
+  const db = makeDb([{ ID: 'WO-1d', Property_ID: '76', Unit_ID: 'U1' }],
+    { vendorBills: [{ ID: 'VB-1d', WO_ID: 'WO-1d', Vendor_ID: 'V1', Status: 'reviewed', Active: 'TRUE' }] });
+  const { woSplit } = build(db);
+  const res = await woSplit(env, { original_wo_id: 'WO-1d', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
+  const body = await res.json();
+  t('an already-reviewed vendor bill on the original blocks the split, with no QBO invoice number involved at all', res.status === 400 && body.error === 'already_invoiced' && body.locked_bill_id === 'VB-1d');
+}
+{
+  // A voided/inactive vendor bill does not block.
+  const db = makeDb([{ ID: 'WO-1e', Property_ID: '76', Unit_ID: 'U1' }],
+    { vendorBills: [{ ID: 'VB-1e', WO_ID: 'WO-1e', Vendor_ID: 'V1', Status: 'reviewed', Active: 'FALSE' }] });
+  const { woSplit } = build(db);
+  const res = await woSplit(env, { original_wo_id: 'WO-1e', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
+  const body = await res.json();
+  t('a voided/inactive vendor bill does not block the split', body.success === true);
+}
 
 // ── 2. Happy path: inheritance, per-new-WO fields, original stays, description independence ──
 {
