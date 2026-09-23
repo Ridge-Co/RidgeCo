@@ -93,6 +93,41 @@ ok(!await findRecentDuplicate({}, 'Work_Orders', { Property_ID: '76', Unit_ID: '
      Trade: 'General', Description: 'Install built-in microwave', Type: 'manual' }, 30),
    'creating the same-looking WO again two minutes later (outside the window) is allowed through');
 
+// ── 2c. Work_Orders — the WO-1213/WO-1214 incident (Sep 23 2026) ───────────
+// Real production duplicate: tenant Lance Serafica submitted the identical complaint twice,
+// 30 seconds apart, at 115 W 29th St Unit Apt 3, and both landed as separate WOs. Root cause
+// was NOT the signature match (property+unit+tenant+trade+description+type all matched) — it
+// was the 30s window itself being right at its own edge once real Sheets-API latency on the
+// tenant `/workorder` path (session→tenant resolve, tenant-WO-toggle check, THEN this check)
+// is accounted for. createWorkOrder now calls findRecentDuplicate with a 60s window for
+// Work_Orders specifically — this reproduces the exact incident (30s apart, full signature
+// match) and confirms it is now caught, and that findRecentDuplicate's cutoff-before-fetch fix
+// (see its own comment) doesn't change what a call with a stale-but-real Created_Date resolves.
+console.log('\nWork_Orders — the WO-1213/WO-1214 incident (tenant double-submit, 30s apart)');
+TABS = { Work_Orders: [
+  { ID: 'WO-1213', Property_ID: 'P-115W29', Unit_ID: 'U-APT3', Tenant_ID: 'T-LSERAFICA', Trade: 'General',
+    Description: "Left towel holder in Lance's bathroom needs to be screwed in", Type: 'manual', Created_Date: agoIso(30) },
+] };
+ok(await findRecentDuplicate({}, 'Work_Orders', { Property_ID: 'P-115W29', Unit_ID: 'U-APT3', Tenant_ID: 'T-LSERAFICA',
+     Trade: 'General', Description: "Left towel holder in Lance's bathroom needs to be screwed in", Type: 'manual' }, 60),
+   'the WO-1213/WO-1214 resubmission, 30s later, is now caught with the widened 60s Work_Orders window');
+// Push it further out to confirm the window has real margin now, not just enough for exactly
+// this incident's numbers.
+TABS.Work_Orders[0].Created_Date = agoIso(55);
+ok(await findRecentDuplicate({}, 'Work_Orders', { Property_ID: 'P-115W29', Unit_ID: 'U-APT3', Tenant_ID: 'T-LSERAFICA',
+     Trade: 'General', Description: "Left towel holder in Lance's bathroom needs to be screwed in", Type: 'manual' }, 60),
+   'still caught 55s later — real margin, not just barely past the old 30s edge');
+TABS.Work_Orders[0].Created_Date = agoIso(65);
+ok(!await findRecentDuplicate({}, 'Work_Orders', { Property_ID: 'P-115W29', Unit_ID: 'U-APT3', Tenant_ID: 'T-LSERAFICA',
+     Trade: 'General', Description: "Left towel holder in Lance's bathroom needs to be screwed in", Type: 'manual' }, 60),
+   'a genuine resubmission outside the (widened) window is still allowed through');
+// Two genuinely different tenant requests close in time must never be blocked — signature
+// requires description+property+unit(+tenant/trade/type) match, not just timing.
+TABS.Work_Orders[0].Created_Date = agoIso(5);
+ok(!await findRecentDuplicate({}, 'Work_Orders', { Property_ID: 'P-115W29', Unit_ID: 'U-APT3', Tenant_ID: 'T-LSERAFICA',
+     Trade: 'Plumbing', Description: 'Kitchen sink is leaking under the cabinet, urgent', Type: 'manual' }, 60),
+   'a genuinely different urgent issue from the same tenant seconds later is NOT blocked');
+
 // ── 3. receipts ──────────────────────────────────────────────────────────────
 console.log('\nReceipts');
 TABS = { Receipts: [
