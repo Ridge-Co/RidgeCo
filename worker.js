@@ -65,20 +65,6 @@ export default {
     const url  = new URL(request.url);
     const path = url.pathname;
     env.__STAGING__ = isStaging(env, url);
-    if (path === '/debug/vendor-onboarding-diag') {
-      const _diagReadPaths = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search','/vendor-onboarding-status'];
-      const _diagWritePaths = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts','/vendor/complete-onboarding'];
-      return new Response(JSON.stringify({
-        method: request.method,
-        pathname: url.pathname,
-        hostname: url.hostname,
-        isStaging: isStaging(env, url),
-        hasTestToken: !!env.HUB_TEST_TOKEN,
-        checkStatusLiteral: _diagReadPaths.includes('/vendor-onboarding-status'),
-        checkCompleteLiteral: _diagWritePaths.includes('/vendor/complete-onboarding'),
-        buildVersion: (typeof BUILD_VERSION !== 'undefined' ? BUILD_VERSION : null)
-      }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
-    }
     // Role of the caller for this request — null for the admin secret (full access) or a
     // narrow service token; 'tenant'/'vendor'/'owner' when a PIN-issued session token was
     // used. Set inside the auth gate below. Used by the tenant-work-order-submission toggle
