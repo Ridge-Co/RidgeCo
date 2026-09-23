@@ -283,6 +283,14 @@ function renderAudit(flags){
   list.innerHTML = html;
 }
 
+// Part 1 (Sep 22 2026 brief): whether the flagged receipt's own image field (Receipts row's
+// Source_File_ID/Source_File_URL, confirmed live — see receiptImageAttachedInfo in worker.js) is
+// actually populated, so Brett doesn't have to open the receipt to find out an amount matched
+// but the picture never got filed anywhere.
+function imageAttachedPill(attached){
+  return attached ? '<span class="pill suggest">✅ Image attached</span>' : '<span class="pill warn">⚠️ No image attached</span>';
+}
+
 function auditCard(f){
   const idAttr = 'aud' + f.id;
   let html = '<div class="rcard" id="' + idAttr + '">';
@@ -290,6 +298,7 @@ function auditCard(f){
     + '<div class="rc-sub">Receipt ' + esc(f.receipt_id) + (f.wo_id ? ' · WO ' + esc(f.wo_id) : '') + ' · ' + esc(f.receipt_date||'') + '</div></div>'
     + '<div><span class="pill ' + (f.status==='real_duplicate'?'danger':f.status==='not_duplicate'?'muted':'warn') + '">'
     + esc(f.status==='real_duplicate'?'Real duplicate':f.status==='not_duplicate'?'Not a duplicate':'Needs review') + '</span></div></div>';
+  html += '<div class="rc-flags">' + imageAttachedPill(f.image_attached) + (f.image_url ? ' <a href="'+esc(f.image_url)+'" target="_blank">View receipt →</a>' : '') + '</div>';
   html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">';
   (f.matches||[]).forEach(m => {
     html += '<div class="rc-posting">Invoice #' + esc(m.doc||m.invoice_id) + ' — ' + esc(m.customer_name||'(customer unknown)')
@@ -297,13 +306,62 @@ function auditCard(f){
       + (m.description ? '<div class="rc-sub">' + esc(m.description) + '</div>' : '') + '</div>';
   });
   html += '</div>';
+  // Part 2: when this flagged receipt's own image isn't on file, offer attaching a matching
+  // scanned receipt from the Reconciler's own queue to its WO WITHOUT re-billing it — an
+  // alternative to the Real/Not-a-duplicate judgment below, same as the brief asks for.
+  html += '<div id="' + idAttr + '-attach"></div>';
   html += '<div class="rc-foot"><span></span><div class="actions">'
+    + (!f.image_attached && f.wo_id ? '<button class="btn secondary small" onclick="openAttachOnlyPicker(\'' + f.id + '\',\'' + esc(f.wo_id) + '\',\'' + esc(f.store||'').replace(/'/g,"\\'") + '\',' + (Number(f.amount)||0) + ',this)">📎 Attach image only, don\'t bill</button>' : '')
     + '<button class="btn small warnbtn" onclick="markAudit(\'' + f.id + '\',\'real_duplicate\',this)"' + (f.status==='real_duplicate'?' disabled':'') + '>Real duplicate</button>'
     + '<button class="btn secondary small" onclick="markAudit(\'' + f.id + '\',\'not_duplicate\',this)"' + (f.status==='not_duplicate'?' disabled':'') + '>Not a duplicate</button>'
     + '</div></div>';
   html += '<div class="rc-status" id="' + idAttr + '-status"></div>';
   html += '</div>';
   return html;
+}
+
+// Part 2 (audit view): the flagged receipt already has its own WO (f.wo_id) — the target WO
+// isn't something Brett needs to pick here (unlike the pending-queue flow below, which reuses
+// the full Part 5 WO picker because the target WO genuinely isn't known yet). What's missing is
+// WHICH scanned image to attach, so this looks for a Receipt_Recon_Queue row with a file on file
+// that matches this flag's store+amount, and lets Brett pick among candidates.
+async function openAttachOnlyPicker(auditId, woId, store, amount, btn){
+  if (btn) btn.disabled = true;
+  const box = document.getElementById('aud' + auditId + '-attach');
+  if (box) box.innerHTML = '<div class="rc-sub info">Looking for a matching scanned receipt…</div>';
+  try {
+    const rows = await get('/receipt-recon/queue?status=all');
+    const stNorm = String(store||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const amt = (Number(amount)||0).toFixed(2);
+    const candidates = (rows||[]).filter(r => (r.Source_File_ID || r.Source_File_URL)
+      && (Number(r.Total)||0).toFixed(2) === amt
+      && (!stNorm || String(r.Vendor||'').toLowerCase().replace(/[^a-z0-9]/g,'').indexOf(stNorm) >= 0 || stNorm.indexOf(String(r.Vendor||'').toLowerCase().replace(/[^a-z0-9]/g,'')) >= 0));
+    if (!box) { if (btn) btn.disabled = false; return; }
+    if (!candidates.length){
+      box.innerHTML = '<div class="rc-sub warn">No scanned receipt on file matches this amount/store yet — scan it into the Reconciler\'s Pending queue first, then try again.</div>';
+      if (btn) btn.disabled = false;
+      return;
+    }
+    const opts = candidates.map(r => '<option value="'+esc(r.ID)+'">'+esc(r.Vendor||'(vendor unknown)')+' · $'+money(r.Total)+' · '+esc((r.Receipt_Date||'').slice(0,10))+' · '+esc(r.Status||'pending')+'</option>').join('');
+    box.innerHTML = '<div class="row"><label>Source scan</label><select id="aud'+auditId+'-src">'+opts+'</select>'
+      + '<button class="btn small" onclick="confirmAuditAttachOnly(\''+auditId+'\',\''+esc(woId)+'\',this)">Attach to WO '+esc(woId)+', don\'t bill</button></div>';
+    if (btn) btn.disabled = false;
+  } catch(e){ if (box) box.innerHTML = '<div class="rc-sub err">❌ ' + esc(e.message) + '</div>'; if (btn) btn.disabled = false; }
+}
+
+async function confirmAuditAttachOnly(auditId, woId, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('aud' + auditId + '-status');
+  const srcSel = document.getElementById('aud'+auditId+'-src');
+  const queueId = srcSel ? srcSel.value : '';
+  if (!queueId){ statusEl.innerHTML = '<span class="err">Pick a source scan first.</span>'; if (btn) btn.disabled = false; return; }
+  statusEl.innerHTML = '<span class="info">Attaching…</span>';
+  try {
+    const res = await post('/receipt/attach-only', { id: queueId, wo_id: woId });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Image attached to WO '+esc(woId)+' — not billed, no invoice line added.</span>';
+    const box = document.getElementById('aud' + auditId + '-attach'); if (box) box.innerHTML = '';
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
 async function markAudit(id, status, btn){
