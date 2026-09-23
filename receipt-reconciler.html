@@ -138,7 +138,7 @@
 <datalist id="wo-datalist"></datalist>
 
 <script>
-const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'], ['trucks','🚚 Truck Stock'] ];
+const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'], ['trucks','🚚 Truck Stock'], ['audit','🔍 Audit older'] ];
 // Mirrors worker.js's OPEN_WO_STATUSES/RECEIPT_OPEN_STATUSES exactly — keep in sync if that
 // list ever changes server-side. Used only to split the WO picker into open vs closed/past.
 const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
@@ -202,6 +202,7 @@ async function loadQueue(){
   const list = document.getElementById('list');
   list.innerHTML = '<div class="empty">Loading…</div>';
   if (curStatus === 'trucks') { await loadTruckStock(status, list); return; }
+  if (curStatus === 'audit') { await loadAudit(status, list); return; }
   try {
     const [rows, wos, props, units] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
@@ -232,6 +233,125 @@ async function loadTruckStock(status, list){
         + (r.truck_desc ? '<div class="rc-items">'+esc(r.truck_desc)+'</div>' : '') + '</div>').join('');
     status.textContent = '✅ '+rows.length+' truck stock';
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
+}
+
+// ── Audit older receipts (Task 1, Sep 22 2026 handoff) ────────────────────────────────────────────────────────
+// Read-only against QuickBooks — never writes an invoice/bill/credit-memo. "Run full audit"
+// pages through build-index (rebuilds the invoice-line cache from live QuickBooks, one batch of
+// invoices at a time) then scan (matches every active receipt against that cache, in memory),
+// looping the client side exactly like /admin/share-attachments' own "click again to continue"
+// shape, just automated instead of manual. Marking a flag "real duplicate" / "not a duplicate"
+// only ever writes to the Hub's own Receipt_Duplicate_Audit tab — fixing an actual duplicate in
+// QuickBooks stays Brett's own tap in QuickBooks itself.
+let auditStatusFilter = 'pending';
+let auditRunning = false;
+
+async function loadAudit(statusEl, list){
+  list.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const res = await get('/admin/receipt-duplicate-audit/flags?status=' + encodeURIComponent(auditStatusFilter));
+    if (res.error) throw new Error(res.error);
+    renderAudit(res.flags || []);
+    statusEl.textContent = '✅ ' + (res.flags || []).length + ' ' + auditStatusFilter + ' flag(s)';
+  } catch(e){ list.innerHTML = '<div class="empty err">❌ ' + esc(e.message) + '</div>'; }
+}
+
+function auditSubTabs(){
+  const opts = [ ['pending','Pending'], ['real_duplicate','Real duplicate'], ['not_duplicate','Not a duplicate'], ['all','All'] ];
+  return '<div class="tabs" style="margin-bottom:10px">' + opts.map(([k,label]) =>
+    '<div class="tab' + (k===auditStatusFilter?' active':'') + '" onclick="setAuditFilter(\'' + k + '\')">' + esc(label) + '</div>').join('') + '</div>';
+}
+function setAuditFilter(s){ auditStatusFilter = s; loadQueue(); }
+
+function auditRunnerHtml(){
+  return '<div class="section" style="margin-bottom:10px;padding:12px">'
+    + '<div class="row"><button class="btn" id="audit-run-btn" onclick="runFullAudit()"' + (auditRunning?' disabled':'') + '>▶ Run full audit</button>'
+    + '<span style="font-size:11px;color:var(--muted)">Rebuilds the QuickBooks invoice-line cache, then rescans every receipt. Read-only against QuickBooks — pages itself in the background; safe to leave this tab open. Rerunning is safe any time.</span></div>'
+    + '<div id="audit-progress" style="font-size:11px;color:var(--muted);margin-top:4px"></div>'
+    + '</div>';
+}
+
+function renderAudit(flags){
+  const list = document.getElementById('list');
+  let html = auditRunnerHtml() + auditSubTabs();
+  if (!flags.length) { html += '<div class="empty">No ' + esc(auditStatusFilter==='all'?'':auditStatusFilter+' ') + 'flags.' + (auditStatusFilter==='pending' ? ' Tap "Run full audit" to scan.' : '') + '</div>'; list.innerHTML = html; return; }
+  html += flags.map(auditCard).join('');
+  list.innerHTML = html;
+}
+
+function auditCard(f){
+  const idAttr = 'aud' + f.id;
+  let html = '<div class="rcard" id="' + idAttr + '">';
+  html += '<div class="rc-top"><div><div class="rc-title">' + esc(f.store||'(store unknown)') + ' — $' + money(f.amount) + '</div>'
+    + '<div class="rc-sub">Receipt ' + esc(f.receipt_id) + (f.wo_id ? ' · WO ' + esc(f.wo_id) : '') + ' · ' + esc(f.receipt_date||'') + '</div></div>'
+    + '<div><span class="pill ' + (f.status==='real_duplicate'?'danger':f.status==='not_duplicate'?'muted':'warn') + '">'
+    + esc(f.status==='real_duplicate'?'Real duplicate':f.status==='not_duplicate'?'Not a duplicate':'Needs review') + '</span></div></div>';
+  html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">';
+  (f.matches||[]).forEach(m => {
+    html += '<div class="rc-posting">Invoice #' + esc(m.doc||m.invoice_id) + ' — ' + esc(m.customer_name||'(customer unknown)')
+      + ' · ' + esc(m.date||'') + ' · $' + money(m.amount) + (m.paid ? ' <span class="pill suggest">paid</span>' : ' <span class="pill warn">unpaid</span>')
+      + (m.description ? '<div class="rc-sub">' + esc(m.description) + '</div>' : '') + '</div>';
+  });
+  html += '</div>';
+  html += '<div class="rc-foot"><span></span><div class="actions">'
+    + '<button class="btn small warnbtn" onclick="markAudit(\'' + f.id + '\',\'real_duplicate\',this)"' + (f.status==='real_duplicate'?' disabled':'') + '>Real duplicate</button>'
+    + '<button class="btn secondary small" onclick="markAudit(\'' + f.id + '\',\'not_duplicate\',this)"' + (f.status==='not_duplicate'?' disabled':'') + '>Not a duplicate</button>'
+    + '</div></div>';
+  html += '<div class="rc-status" id="' + idAttr + '-status"></div>';
+  html += '</div>';
+  return html;
+}
+
+async function markAudit(id, status, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('aud' + id + '-status');
+  statusEl.innerHTML = '<span class="info">Saving…</span>';
+  try {
+    const res = await post('/admin/receipt-duplicate-audit/mark', { id, status });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Marked ' + esc(status==='real_duplicate'?'real duplicate':'not a duplicate') + '.</span>';
+    await loadQueue();
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ ' + esc(e.message) + '</span>'; if (btn) btn.disabled = false; }
+}
+
+async function runFullAudit(){
+  if (auditRunning) return;
+  auditRunning = true;
+  const btn = document.getElementById('audit-run-btn'); if (btn) btn.disabled = true;
+  const prog = document.getElementById('audit-progress');
+  const setProg = (s) => { if (prog) prog.textContent = s; };
+  try {
+    setProg('Rebuilding QuickBooks invoice-line cache…');
+    let offset = 0, reset = true, invTotal = 0, invOpened = 0, lineCarried = null;
+    while (true) {
+      const res = await post('/admin/receipt-duplicate-audit/build-index', { offset, reset });
+      if (res.error) throw new Error(res.error);
+      reset = false;
+      invTotal = res.total_invoices; invOpened += res.opened_this_batch;
+      if (lineCarried === null) lineCarried = res.list_query_carried_line;
+      setProg('Indexing invoices: ' + invOpened + ' / ' + invTotal + '…');
+      if (res.done) break;
+      offset = res.next_offset;
+    }
+    setProg('Invoice cache built (' + invOpened + '/' + invTotal + '). Scanning receipts…');
+    let sOffset = 0, recvTotal = 0, recvScanned = 0, flaggedNew = 0;
+    while (true) {
+      const res = await post('/admin/receipt-duplicate-audit/scan', { offset: sOffset });
+      if (res.error) throw new Error(res.error);
+      recvTotal = res.total_receipts; recvScanned += res.scanned_this_batch; flaggedNew += res.flagged_new;
+      setProg('Scanning receipts: ' + recvScanned + ' / ' + recvTotal + ' — ' + flaggedNew + ' new flag(s) so far…');
+      if (res.done) break;
+      sOffset = res.next_offset;
+    }
+    const doneMsg = '✅ Done — ' + invOpened + ' invoices indexed' + (lineCarried!=null ? ' (list query carried Line: ' + (lineCarried?'yes':'no') + ')' : '') + ', ' + recvScanned + ' receipts scanned, ' + flaggedNew + ' new flag(s).';
+    auditStatusFilter = 'pending';
+    // loadQueue() re-renders #list from scratch (a fresh #audit-progress node with empty text) —
+    // write the done message into the NEW node afterward, or it's overwritten the instant it appears.
+    await loadQueue();
+    const prog2 = document.getElementById('audit-progress');
+    if (prog2) prog2.textContent = doneMsg;
+  } catch(e){ setProg('❌ ' + e.message); }
+  finally { auditRunning = false; if (btn) btn.disabled = false; }
 }
 
 function flagPill(f){
@@ -547,7 +667,7 @@ function rowCard(r){
   if (isPendingLike) {
     if (!excluded && !isCompany) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
     if (isCompany) html += '<button class="btn small" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>';
-    if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🗐 Confirm duplicate</button>';
+    if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🖐 Confirm duplicate</button>';
     html += '<button class="btn secondary small" onclick="checkDuplicatesOne(\''+r.ID+'\', this)">🔍 Check duplicates</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
