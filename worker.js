@@ -5894,7 +5894,7 @@ async function updateStatus(env, body) {
   const [units, tenants, properties, owners] = await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
   const unit = units.find(u => u.ID === wo.Unit_ID), property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-  const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+  const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
   if (body.status === 'Complete') {
     const tenant = currentTenantForDispatch(tenants, unit, wo);
     if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
