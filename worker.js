@@ -12960,6 +12960,17 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/assign') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  if (path === '/receipt/attach-only') {
+    // Same reasoning as /status below: the write only ever lands on Receipts (never Vendor_Bills
+    // or Invoice_Review — see receiptAttachOnly's own comment), tied to an existing Work_Orders
+    // row, so gate on that WO's own Property being a TEST- fixture. The Receipt_Recon_Queue row
+    // itself carries no TEST- marker of its own (that tab isn't in TEST_MARKER_FIELD), so this is
+    // the only safe check available here.
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
   if (path === '/status') {
     const wos = await fetchTab(env, 'Work_Orders');
     const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
