@@ -4873,11 +4873,61 @@ async function woUnvoid(env, body) {
   return json({ success: true });
 }
 
-// Combine (bulk void-into-one, Sep 22 2026 build — index.html bulk-select toolbar). Only
-// these fields are ever compared/reconciled across the selected work orders; Trade is
-// deliberately excluded — the survivor always keeps its own original Trade, no picker, no
-// comparison (Brett, explicit — every selected WO can have a different Trade and that's fine).
-const WO_COMBINE_RECONCILE_FIELDS = ['Managed_By', 'Vendor_ID', 'Scheduled_Date', 'Description', 'Priority', 'Status'];
+// Combine (bulk void-into-one, Sep 22 2026 build — index.html bulk-select toolbar; field
+// audit Sep 23 2026 after Brett hit two real bugs — see PR description). Only these fields
+// are ever compared/reconciled across the selected work orders — each one requires either
+// unanimous agreement (silent auto-resolve) or an explicit field_overrides pick when they
+// disagree; a real disagreement with no override 409s rather than guessing. Trade and
+// Checklist are deliberately excluded from BOTH this list and WO_COMBINE_MERGE_FIELDS below —
+// the survivor always keeps its own original Trade/Checklist, no picker, no comparison, no
+// merge (Brett, explicit for Trade — every selected WO can have a different Trade and that's
+// fine; Checklist follows the same logic because it's a trade-specific structured JSON blob
+// that blending across different Trades would corrupt, not free text that's safe to
+// concatenate). Money/identity fields (Vendor_ID, Customer_Charge, Deposit_Amount,
+// Deposit_Vendor_ID, Scope_ID) are here rather than in WO_COMBINE_MERGE_FIELDS on purpose —
+// an auto-pick could produce a real billing/assignment error, so they always force an
+// explicit choice, never a silent default.
+const WO_COMBINE_RECONCILE_FIELDS = [
+  'Managed_By', 'Vendor_ID', 'Scheduled_Date', 'Scheduled_Window', 'Priority', 'Status',
+  'WO_Contact_Name', 'WO_Contact_Phone', 'Customer_Charge', 'Deposit_Amount',
+  'Deposit_Vendor_ID', 'Scope_ID', 'Tenant_Visible',
+];
+
+// Free-text fields that are NEVER a conflict — every selected WO's own value (if non-blank)
+// is unconditionally concatenated onto the survivor's, same "nothing lost" treatment Notes
+// already gets via woVoid's Combined path (see the Notes-merge block in woVoid above), rather
+// than reducing N values down to one picked winner. Description is the direct fix for
+// Brett's Sep 23 2026 bug report: 3 genuinely different tenant complaints (garbage disposal /
+// door / shelving) were being collapsed to a single radio pick, silently discarding the other
+// two. Room gets the same treatment for the same underlying reason — a room name is
+// information the combine could easily be losing, not a setting with one objectively-correct
+// value.
+//
+// Owner_WO_Ref is deliberately NOT here (Brett, Sep 23 2026, after reviewing the first draft
+// of this PR which DID auto-merge it): the owner has their OWN reference numbers on their own
+// side, and concatenating several onto one WO wouldn't match what the owner actually expects
+// to see on any single surviving WO — unlike Description/Room, blending these together makes
+// the field actively wrong, not just long. Owner_WO_Ref is excluded from BOTH this list and
+// WO_COMBINE_RECONCILE_FIELDS entirely — same treatment as Trade/Checklist, survivor keeps its
+// own value untouched, no picker, no merge. Instead, see the "owner ref notice" block in
+// woCombine below: when a combine actually abandons a distinct owner reference (a combined
+// WO's own Owner_WO_Ref is non-blank and differs from the survivor's), the owner gets a
+// one-time notice naming which of their WO+ref pairs were folded into the surviving one, so
+// they can update their own records — the notice replaces silently merging or silently
+// dropping the ref.
+const WO_COMBINE_MERGE_FIELDS = ['Description', 'Room'];
+
+// Pure — no I/O. Same timestamped-prefix convention woVoid's Notes-merge already uses,
+// reused here for every WO_COMBINE_MERGE_FIELDS field so Description/Room merges look and
+// audit exactly like a Notes merge already does. Returns the survivor's value unchanged when
+// the incoming WO's value for this field is blank — nothing to add.
+function mergeWOTextField(survivorVal, sourceWoId, incomingVal) {
+  const val = String(incomingVal == null ? '' : incomingVal).trim();
+  if (!val) return survivorVal || '';
+  const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const prefix = `[${ts} — combined from ${sourceWoId}] `;
+  return survivorVal ? `${survivorVal}\n${prefix}${val}` : `${prefix}${val}`;
+}
 
 // Pure — no I/O — so it's directly unit-testable without mocking Sheets. `wos` is
 // [survivor, ...combined], each a plain Work_Orders row object; `overrides` is the client's
