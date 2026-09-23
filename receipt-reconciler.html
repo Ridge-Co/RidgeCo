@@ -521,10 +521,12 @@ function refreshWoSelect(id){
   const woSel = document.getElementById(idAttr+'-wo');
   const unitSel = document.getElementById(idAttr+'-unit');
   const showClosed = document.getElementById(idAttr+'-showclosed');
+  const dateEl = document.getElementById(idAttr+'-date');
   if (!propSel || !woSel) return;
   const propId = propSel.value;
   const unitId = unitSel ? unitSel.value : '';
-  woSel.innerHTML = woSelectHTML(propId, '', showClosed && showClosed.checked, rowSuggestions[id], unitId);
+  const receiptDate = dateEl ? dateEl.value.trim() : '';
+  woSel.innerHTML = woSelectHTML(propId, '', showClosed && showClosed.checked, rowSuggestions[id], unitId, receiptDate);
   checkManualWo(id);
 }
 
