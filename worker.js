@@ -8862,7 +8862,7 @@ async function createUploadSession(env, body) {
 }
 
 // File types whose media stays PRIVATE — vendor cost docs never go anyone-with-link (FEATURE_LOG rule 13).
-const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice'];
+const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice','tax_id_doc'];
 
 async function logAttachment(env, body) {
   try {
