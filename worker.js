@@ -5028,6 +5028,41 @@ async function woCombine(env, body) {
     }
   } catch (e) { /* non-fatal — combine already succeeded */ }
 
+  // Owner ref notice (Sep 23 2026, Brett's follow-up) — Owner_WO_Ref is excluded from both
+  // WO_COMBINE_RECONCILE_FIELDS and WO_COMBINE_MERGE_FIELDS (see the comment above
+  // WO_COMBINE_MERGE_FIELDS): the survivor keeps its own ref completely untouched. When that
+  // means a combine is actually abandoning a distinct owner reference — a combined WO's own
+  // Owner_WO_Ref is non-blank AND differs from the survivor's — the owner gets a one-time
+  // notice naming exactly which of their WO+ref pairs were folded into which surviving WO+ref,
+  // so they can update their own records; matches the existing owner_job_scheduled/
+  // owner_managed_by_changed pattern (smsGatedSend, recipient_type:'owner', same Global+
+  // Property+Customer gate hierarchy — no bypass). Skipped entirely (with an explicit
+  // WO_Audit note, same "log it either way" convention as the rest of this endpoint) when
+  // nothing is actually being abandoned — every combined WO's ref is blank or already matches
+  // the survivor's — so this never fires on the common case of one shared/absent ref.
+  try {
+    const survivorForRef = findWO(await fetchTab(env, 'Work_Orders'), survivorId) || survivor;
+    const survivorRef = String(survivorForRef.Owner_WO_Ref || '').trim();
+    const abandonedWOs = combinedWOs.filter(w => {
+      const ref = String(w.Owner_WO_Ref || '').trim();
+      return ref && ref !== survivorRef;
+    });
+    if (!abandonedWOs.length) {
+      await logWOAudit(env, survivorId, changedBy, changedByRole, 'Owner_Ref_Notice', '', 'skipped', 'No distinct owner reference abandoned by this combine — nothing to notify the owner about');
+    } else {
+      const properties = await fetchTab(env, 'Properties'), owners = await fetchTab(env, 'Owners');
+      const property = properties.find(p => p.ID === survivorForRef.Property_ID);
+      const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+      if (owner && owner.Phone && property) {
+        const pairs = abandonedWOs.map(w => `${w.ID} (owner ref ${String(w.Owner_WO_Ref).trim()})`);
+        const pairList = pairs.length > 1 ? pairs.slice(0, -1).join(', ') + ' and ' + pairs[pairs.length - 1] : pairs[0];
+        const survivorRefText = survivorRef ? `owner ref ${survivorRef}` : 'no owner ref on file';
+        const msg = `Hi ${owner.First_Name}, ${pairList} ${abandonedWOs.length > 1 ? 'were' : 'was'} combined into ${survivorId} (${survivorRefText}). Please update your records — future updates will only come on ${survivorId}. Thank you!`;
+        await smsGatedSend(env, { wo_id: survivorId, message_type: 'owner_wo_combined_ref', recipient_type: 'owner', owner, property, message_body: msg });
+      }
+    }
+  } catch (e) { /* non-fatal — combine already succeeded */ }
+
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {}
 
   const mergedFieldsApplied = {};
