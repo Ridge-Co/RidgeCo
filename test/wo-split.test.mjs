@@ -457,7 +457,7 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
     reassignments: [{ type: 'vendor_bill', id: 'VB-10', target: 0 }],
   });
   const body = await res.json();
-  t('a reviewed/approved vendor bill reassignment is refused', res.status === 409 && body.error === 'reassign_locked' && body.type === 'vendor_bill');
+  t('a reviewed/approved vendor bill on the original blocks the whole split at the billing guard, before reassignment validation runs', res.status === 400 && body.error === 'already_invoiced' && body.locked_bill_id === 'VB-10');
   t('no new WO was created for the reviewed-bill case either', db.Work_Orders.rows.length === 1);
 }
 
