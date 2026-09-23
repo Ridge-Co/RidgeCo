@@ -50,6 +50,10 @@
   .rc-posting{font-size:12px;padding:8px 10px;background:#f5f7fa;border-radius:6px;border:1px solid #e5e9ef;}
   .rc-closed-toggle{font-size:10px;color:var(--accent);cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin:2px 0 8px;user-select:none;}
   .rc-closed-toggle input{width:auto;padding:0;min-height:auto;}
+  .rc-wo-detail{font-size:11px;padding:6px 10px;background:#f5f7fa;border-radius:6px;border:1px solid #e5e9ef;margin-bottom:4px;line-height:1.5;}
+  .rc-wo-detail a{color:var(--info);font-weight:bold;text-decoration:none;}
+  .rc-wo-detail a:hover{text-decoration:underline;}
+  .rc-wo-warn{color:#9a6b00;font-weight:bold;margin-top:2px;}
   .rc-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:8px;}
   .rc-foot a{color:var(--info);text-decoration:none;font-weight:bold;font-size:11px;}
   .rc-foot .actions{display:flex;gap:8px;flex-wrap:wrap;}
@@ -60,6 +64,11 @@
   .btn.expbtn{background:var(--accent2);}
   .btn.expbtn.secondaryexp{background:var(--surface);color:var(--accent2);border:1px solid #9fcfb0;}
   .rc-status{font-size:11px;min-height:14px;margin-top:4px;}
+  .rc-check{width:16px;height:16px;margin:2px 0 0;flex:none;cursor:pointer;}
+  .rc-bulk-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#eef2ff;border:1px solid #c7d2fe;border-radius:var(--radius);padding:8px 10px;margin-bottom:10px;}
+  .rc-bulk-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .rc-count-label{font-size:11px;font-weight:bold;color:var(--accent);white-space:nowrap;}
+  .rc-bulk-exp{display:flex;gap:6px;align-items:center;}
 </style>
 </head>
 <body>
@@ -132,13 +141,32 @@
 
 <div class="section">
   <div class="tabs" id="tabs"></div>
+  <!-- Part 4 (Sep 22 2026 bulk-actions brief). Scoped to THIS page's own #list container only,
+       same discipline as the Tenants/Vendors/Owners bulk-select fix (rule 184-185, see
+       pinCheckScopeEl in index.html) — every checkbox/count/action here reads from #list, never
+       document-wide, and is a single-page app besides, so there's no other list/checkbox set on
+       this page it could ever bleed into. -->
+  <div id="rc-bulk-bar" class="rc-bulk-bar" style="display:none">
+    <span class="rc-count-label" id="rc-bulk-count">0 selected</span>
+    <div class="rc-bulk-actions">
+      <button class="btn small warnbtn" onclick="bulkAction('mark_duplicate')">🖐 Mark as duplicate</button>
+      <span class="rc-bulk-exp">
+        <span style="font-size:11px;color:var(--muted)">Expense to:</span>
+        <button class="btn small expbtn" onclick="bulkExpense('ridgeco')">🧾 Ridge Co</button>
+        <button class="btn small expbtn" id="rc-bulk-kerns-btn" onclick="bulkExpense('kerns')" style="display:none">🏡 1864 Kerns</button>
+      </span>
+      <button class="btn small secondary" onclick="bulkAction('move_to_pending')">↩ Move back to Pending</button>
+      <button class="btn small secondary" onclick="bulkAction('skip')">Skip</button>
+      <button class="btn small secondary" onclick="clearBulkSelection()">Clear</button>
+    </div>
+  </div>
   <div id="list"><div class="empty">Loading…</div></div>
 </div>
 
 <datalist id="wo-datalist"></datalist>
 
 <script>
-const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'], ['trucks','🚚 Truck Stock'] ];
+const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['attached_only','📎 Attached only'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'], ['trucks','🚚 Truck Stock'], ['audit','🔍 Audit older'] ];
 // Mirrors worker.js's OPEN_WO_STATUSES/RECEIPT_OPEN_STATUSES exactly — keep in sync if that
 // list ever changes server-side. Used only to split the WO picker into open vs closed/past.
 const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
@@ -175,7 +203,7 @@ function renderTabs(){
   document.getElementById('tabs').innerHTML = STATUSES.map(([k,label]) =>
     '<div class="tab'+(k===curStatus?' active':'')+'" onclick="setStatus(\''+k+'\')">'+esc(label)+'</div>').join('');
 }
-function setStatus(s){ curStatus = s; renderTabs(); loadQueue(); }
+function setStatus(s){ curStatus = s; clearBulkSelection(); renderTabs(); loadQueue(); }
 
 async function scanNow(){
   const status = document.getElementById('conn-status');
@@ -202,6 +230,7 @@ async function loadQueue(){
   const list = document.getElementById('list');
   list.innerHTML = '<div class="empty">Loading…</div>';
   if (curStatus === 'trucks') { await loadTruckStock(status, list); return; }
+  if (curStatus === 'audit') { await loadAudit(status, list); return; }
   try {
     const [rows, wos, props, units] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
@@ -234,6 +263,205 @@ async function loadTruckStock(status, list){
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
 }
 
+// ── Audit older receipts (Task 1, Sep 22 2026 handoff) ────────────────────────────────────────────────────────
+// Read-only against QuickBooks — never writes an invoice/bill/credit-memo. "Run full audit"
+// pages through build-index (rebuilds the invoice-line cache from live QuickBooks, one batch of
+// invoices at a time) then scan (matches every active receipt against that cache, in memory),
+// looping the client side exactly like /admin/share-attachments' own "click again to continue"
+// shape, just automated instead of manual. Marking a flag "real duplicate" / "not a duplicate"
+// only ever writes to the Hub's own Receipt_Duplicate_Audit tab — fixing an actual duplicate in
+// QuickBooks stays Brett's own tap in QuickBooks itself.
+let auditStatusFilter = 'pending';
+let auditRunning = false;
+
+async function loadAudit(statusEl, list){
+  list.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const res = await get('/admin/receipt-duplicate-audit/flags?status=' + encodeURIComponent(auditStatusFilter));
+    if (res.error) throw new Error(res.error);
+    renderAudit(res.flags || []);
+    statusEl.textContent = '✅ ' + (res.flags || []).length + ' ' + auditStatusFilter + ' flag(s)';
+  } catch(e){ list.innerHTML = '<div class="empty err">❌ ' + esc(e.message) + '</div>'; }
+}
+
+function auditSubTabs(){
+  const opts = [ ['pending','Pending'], ['real_duplicate','Real duplicate'], ['not_duplicate','Not a duplicate'], ['all','All'] ];
+  return '<div class="tabs" style="margin-bottom:10px">' + opts.map(([k,label]) =>
+    '<div class="tab' + (k===auditStatusFilter?' active':'') + '" onclick="setAuditFilter(\'' + k + '\')">' + esc(label) + '</div>').join('') + '</div>';
+}
+function setAuditFilter(s){ auditStatusFilter = s; loadQueue(); }
+
+function auditRunnerHtml(){
+  return '<div class="section" style="margin-bottom:10px;padding:12px">'
+    + '<div class="row"><button class="btn" id="audit-run-btn" onclick="runFullAudit()"' + (auditRunning?' disabled':'') + '>▶ Run full audit</button>'
+    + '<span style="font-size:11px;color:var(--muted)">Rebuilds the QuickBooks invoice-line cache, then rescans every receipt. Read-only against QuickBooks — pages itself in the background; safe to leave this tab open. Rerunning is safe any time.</span></div>'
+    + '<div id="audit-progress" style="font-size:11px;color:var(--muted);margin-top:4px"></div>'
+    + '</div>';
+}
+
+function renderAudit(flags){
+  const list = document.getElementById('list');
+  let html = auditRunnerHtml() + auditSubTabs();
+  if (!flags.length) { html += '<div class="empty">No ' + esc(auditStatusFilter==='all'?'':auditStatusFilter+' ') + 'flags.' + (auditStatusFilter==='pending' ? ' Tap "Run full audit" to scan.' : '') + '</div>'; list.innerHTML = html; return; }
+  html += flags.map(auditCard).join('');
+  list.innerHTML = html;
+}
+
+// Part 1 (Sep 22 2026 brief): whether the flagged receipt's own image field (Receipts row's
+// Source_File_ID/Source_File_URL, confirmed live — see receiptImageAttachedInfo in worker.js) is
+// actually populated, so Brett doesn't have to open the receipt to find out an amount matched
+// but the picture never got filed anywhere.
+function imageAttachedPill(attached){
+  return attached ? '<span class="pill suggest">✅ Image attached</span>' : '<span class="pill warn">⚠️ No image attached</span>';
+}
+
+function auditCard(f){
+  const idAttr = 'aud' + f.id;
+  let html = '<div class="rcard" id="' + idAttr + '">';
+  html += '<div class="rc-top"><div><div class="rc-title">' + esc(f.store||'(store unknown)') + ' — $' + money(f.amount) + '</div>'
+    + '<div class="rc-sub">Receipt ' + esc(f.receipt_id) + (f.wo_id ? ' · WO ' + esc(f.wo_id) : '') + ' · ' + esc(f.receipt_date||'') + '</div></div>'
+    + '<div><span class="pill ' + (f.status==='real_duplicate'?'danger':f.status==='not_duplicate'?'muted':'warn') + '">'
+    + esc(f.status==='real_duplicate'?'Real duplicate':f.status==='not_duplicate'?'Not a duplicate':'Needs review') + '</span></div></div>';
+  html += '<div class="rc-flags">' + imageAttachedPill(f.image_attached) + (f.image_url ? ' <a href="'+esc(f.image_url)+'" target="_blank">View receipt →</a>' : '') + '</div>';
+  html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">';
+  (f.matches||[]).forEach(m => {
+    html += '<div class="rc-posting">Invoice #' + esc(m.doc||m.invoice_id) + ' — ' + esc(m.customer_name||'(customer unknown)')
+      + ' · ' + esc(m.date||'') + ' · $' + money(m.amount) + (m.paid ? ' <span class="pill suggest">paid</span>' : ' <span class="pill warn">unpaid</span>')
+      + (m.description ? '<div class="rc-sub">' + esc(m.description) + '</div>' : '') + '</div>';
+  });
+  html += '</div>';
+  // Part 2: when this flagged receipt's own image isn't on file, offer attaching a matching
+  // scanned receipt from the Reconciler's own queue to its WO WITHOUT re-billing it — an
+  // alternative to the Real/Not-a-duplicate judgment below, same as the brief asks for.
+  html += '<div id="' + idAttr + '-attach"></div>';
+  html += '<div class="rc-foot"><span></span><div class="actions">'
+    + (!f.image_attached && f.wo_id ? '<button class="btn secondary small" onclick="openAttachOnlyPicker(\'' + f.id + '\',\'' + esc(f.wo_id) + '\',\'' + esc(f.store||'').replace(/'/g,"\\'") + '\',' + (Number(f.amount)||0) + ',this)">📎 Attach image only, don\'t bill</button>' : '')
+    + '<button class="btn small warnbtn" onclick="markAudit(\'' + f.id + '\',\'real_duplicate\',this)"' + (f.status==='real_duplicate'?' disabled':'') + '>Real duplicate</button>'
+    + '<button class="btn secondary small" onclick="markAudit(\'' + f.id + '\',\'not_duplicate\',this)"' + (f.status==='not_duplicate'?' disabled':'') + '>Not a duplicate</button>'
+    + '</div></div>';
+  html += '<div class="rc-status" id="' + idAttr + '-status"></div>';
+  html += '</div>';
+  return html;
+}
+
+// Part 2 (audit view): the flagged receipt already has its own WO (f.wo_id) — the target WO
+// isn't something Brett needs to pick here (unlike the pending-queue flow below, which reuses
+// the full Part 5 WO picker because the target WO genuinely isn't known yet). What's missing is
+// WHICH scanned image to attach, so this looks for a Receipt_Recon_Queue row with a file on file
+// that matches this flag's store+amount, and lets Brett pick among candidates.
+async function openAttachOnlyPicker(auditId, woId, store, amount, btn){
+  if (btn) btn.disabled = true;
+  const box = document.getElementById('aud' + auditId + '-attach');
+  if (box) box.innerHTML = '<div class="rc-sub info">Looking for a matching scanned receipt…</div>';
+  try {
+    const rows = await get('/receipt-recon/queue?status=all');
+    const stNorm = String(store||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const amt = (Number(amount)||0).toFixed(2);
+    const candidates = (rows||[]).filter(r => (r.Source_File_ID || r.Source_File_URL)
+      && (Number(r.Total)||0).toFixed(2) === amt
+      && (!stNorm || String(r.Vendor||'').toLowerCase().replace(/[^a-z0-9]/g,'').indexOf(stNorm) >= 0 || stNorm.indexOf(String(r.Vendor||'').toLowerCase().replace(/[^a-z0-9]/g,'')) >= 0));
+    if (!box) { if (btn) btn.disabled = false; return; }
+    if (!candidates.length){
+      box.innerHTML = '<div class="rc-sub warn">No scanned receipt on file matches this amount/store yet — scan it into the Reconciler\'s Pending queue first, then try again.</div>';
+      if (btn) btn.disabled = false;
+      return;
+    }
+    const opts = candidates.map(r => '<option value="'+esc(r.ID)+'">'+esc(r.Vendor||'(vendor unknown)')+' · $'+money(r.Total)+' · '+esc((r.Receipt_Date||'').slice(0,10))+' · '+esc(r.Status||'pending')+'</option>').join('');
+    box.innerHTML = '<div class="row"><label>Source scan</label><select id="aud'+auditId+'-src">'+opts+'</select>'
+      + '<button class="btn small" onclick="confirmAuditAttachOnly(\''+auditId+'\',\''+esc(woId)+'\',this)">Attach to WO '+esc(woId)+', don\'t bill</button></div>';
+    if (btn) btn.disabled = false;
+  } catch(e){ if (box) box.innerHTML = '<div class="rc-sub err">❌ ' + esc(e.message) + '</div>'; if (btn) btn.disabled = false; }
+}
+
+async function confirmAuditAttachOnly(auditId, woId, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('aud' + auditId + '-status');
+  const srcSel = document.getElementById('aud'+auditId+'-src');
+  const queueId = srcSel ? srcSel.value : '';
+  if (!queueId){ statusEl.innerHTML = '<span class="err">Pick a source scan first.</span>'; if (btn) btn.disabled = false; return; }
+  statusEl.innerHTML = '<span class="info">Attaching…</span>';
+  try {
+    const res = await post('/receipt/attach-only', { id: queueId, wo_id: woId });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Image attached to WO '+esc(woId)+' — not billed, no invoice line added.</span>';
+    const box = document.getElementById('aud' + auditId + '-attach'); if (box) box.innerHTML = '';
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+async function markAudit(id, status, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('aud' + id + '-status');
+  statusEl.innerHTML = '<span class="info">Saving…</span>';
+  try {
+    const res = await post('/admin/receipt-duplicate-audit/mark', { id, status });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Marked ' + esc(status==='real_duplicate'?'real duplicate':'not a duplicate') + '.</span>';
+    await loadQueue();
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ ' + esc(e.message) + '</span>'; if (btn) btn.disabled = false; }
+}
+
+async function runFullAudit(){
+  if (auditRunning) return;
+  auditRunning = true;
+  const btn = document.getElementById('audit-run-btn'); if (btn) btn.disabled = true;
+  const prog = document.getElementById('audit-progress');
+  const setProg = (s) => { if (prog) prog.textContent = s; };
+  try {
+    setProg('Rebuilding QuickBooks invoice-line cache…');
+    let offset = 0, reset = true, invTotal = 0, invOpened = 0, lineCarried = null;
+    while (true) {
+      const res = await post('/admin/receipt-duplicate-audit/build-index', { offset, reset });
+      if (res.error) throw new Error(res.error);
+      reset = false;
+      invTotal = res.total_invoices; invOpened += res.opened_this_batch;
+      if (lineCarried === null) lineCarried = res.list_query_carried_line;
+      setProg('Indexing invoices: ' + invOpened + ' / ' + invTotal + '…');
+      if (res.done) break;
+      offset = res.next_offset;
+    }
+    setProg('Invoice cache built (' + invOpened + '/' + invTotal + '). Scanning receipts…');
+    let sOffset = 0, recvTotal = 0, recvScanned = 0, flaggedNew = 0;
+    while (true) {
+      const res = await post('/admin/receipt-duplicate-audit/scan', { offset: sOffset });
+      if (res.error) throw new Error(res.error);
+      recvTotal = res.total_receipts; recvScanned += res.scanned_this_batch; flaggedNew += res.flagged_new;
+      setProg('Scanning receipts: ' + recvScanned + ' / ' + recvTotal + ' — ' + flaggedNew + ' new flag(s) so far…');
+      if (res.done) break;
+      sOffset = res.next_offset;
+    }
+    const doneMsg = '✅ Done — ' + invOpened + ' invoices indexed' + (lineCarried!=null ? ' (list query carried Line: ' + (lineCarried?'yes':'no') + ')' : '') + ', ' + recvScanned + ' receipts scanned, ' + flaggedNew + ' new flag(s).';
+    auditStatusFilter = 'pending';
+    // loadQueue() re-renders #list from scratch (a fresh #audit-progress node with empty text) —
+    // write the done message into the NEW node afterward, or it's overwritten the instant it appears.
+    await loadQueue();
+    const prog2 = document.getElementById('audit-progress');
+    if (prog2) prog2.textContent = doneMsg;
+  } catch(e){ setProg('❌ ' + e.message); }
+  finally { auditRunning = false; if (btn) btn.disabled = false; }
+}
+
+// Part 0 (Sep 22 2026 incident) — a fast "how did this get here" cue on EVERY row (not just
+// flagged ones), per Brett's ask, so he has a visual cross-check even for rows the automated
+// match below misses.
+function entrySourceLabel(r){
+  const when = String(r.Received_Date || '').slice(0, 10) || '?';
+  if (r.Entry_Source === 'email_scan') return 'via email scan, ' + when;
+  if (r.Entry_Source === 'manual_drop') return 'dropped in Drive manually, ' + when;
+  return 'received ' + when;   // older rows scanned before Entry_Source existed
+}
+
+// Part 0 — the intake-time rescan guard's flag. Rendered on EVERY status (pending included —
+// this is the whole point: the flag must be visible the instant Brett looks at a fresh Pending
+// card, not hidden behind a Notes line that's normally suppressed while pending). Never implies
+// the row was auto-skipped; it always still needs Brett's own Confirm/Skip tap.
+function rescanBannerHtml(r){
+  const matches = r.rescan_matches || [];
+  if (!matches.length) return '';
+  return '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">'
+    + matches.map(m => '<div class="rc-sub err" style="font-weight:600">⚠️ ' + esc(m.reason) + '</div>').join('')
+    + '</div>';
+}
+
 function flagPill(f){
   const map = {
     duplicate_on_wo: ['danger','Duplicate — already on that WO'],
@@ -244,7 +472,7 @@ function flagPill(f){
   return '<span class="pill '+cls+'">'+esc(label)+'</span>';
 }
 function categoryPill(cat, action){
-  if (cat === 'refund') return '<span class="pill muted">Refund/return — skip</span>';
+  if (cat === 'refund') return '<span class="pill warn">🔄 REFUND — find a match or post as expense</span>';
   if (cat === 'company') return '<span class="pill muted">BMore business expense — not billable</span>';
   if (cat === 'customer_paid') return '<span class="pill muted">Paid on customer card — not billable</span>';
   if (action === 'need_property') return '<span class="pill warn">Can\'t resolve property — assign manually</span>';
@@ -280,7 +508,42 @@ function unitOptions(propId, selectedUnitId){
 // not just the top 3 — then, only if showClosed is true, a second optgroup of every CLOSED/past
 // work order there too (issue B: previously only the top-3 keyword-ranked open WOs at the
 // system's one auto-guessed property were ever visible; nothing else was browsable).
-function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId){
+// Part 5 (Sep 22 2026, Brett 7:57pm): "I can't see when that WO was opened/closed — I want to
+// eyeball whether the receipt date makes sense next to the WO's own dates." Pure, no I/O —
+// confirmed live against worker.js that Work_Orders really does use Created_Date for opened and
+// Completed_Date for closed (both already used that way throughout worker.js, e.g. the Complete
+// transition at "Status: 'Complete', Completed_Date: ..." — not assumed, per PAT-024). Dates are
+// compared as plain ISO yyyy-mm-dd substrings (they sort/compare correctly as strings) so this
+// never trips over timezone conversion the way `new Date(...)` comparisons can.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function woDatesLabel(wo){
+  const opened = String((wo && wo.Created_Date) || '').slice(0, 10);
+  const closed = String((wo && wo.Completed_Date) || '').slice(0, 10);
+  const parts = [];
+  if (ISO_DATE_RE.test(opened)) parts.push('opened ' + opened);
+  if (ISO_DATE_RE.test(closed)) parts.push('closed ' + closed);
+  return parts.join(' · ');
+}
+// Warning only, never a block (Brett keeps the final call — a late-filed receipt or a
+// backdated WO are both legitimate). Returns null when there's nothing to warn about, including
+// whenever either date is missing/unparseable — a missing date must never itself read as a
+// mismatch.
+function woDateWindowWarning(receiptDate, wo){
+  if (!wo) return null;
+  const rd = String(receiptDate || '').slice(0, 10);
+  if (!ISO_DATE_RE.test(rd)) return null;
+  const opened = String(wo.Created_Date || '').slice(0, 10);
+  const closed = String(wo.Completed_Date || '').slice(0, 10);
+  if (ISO_DATE_RE.test(opened) && rd < opened) {
+    return { type: 'before_open', message: '⚠️ Receipt predates this WO (opened ' + opened + ')' };
+  }
+  if (ISO_DATE_RE.test(closed) && rd > closed) {
+    return { type: 'after_close', message: '⚠️ Receipt is dated after this WO closed (' + closed + ')' };
+  }
+  return null;
+}
+
+function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate){
   if (!propId) return '<option value="">— pick a property first —</option>';
   const atProp = allWOs.filter(w => String(w.Property_ID) === String(propId) && (!unitId || String(w.Unit_ID) === String(unitId)));
   const open = atProp.filter(w => OPEN_WO_STATUSES.includes(w.Status));
@@ -297,8 +560,14 @@ function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId){
   const openOrdered = rankedFirst.concat(rest);
 
   const seen = new Set();
+  // Dates + a ⚠ marker are appended to the option TEXT itself (an <option> can't hold a link or
+  // rich HTML) so the mismatch is visible while browsing the dropdown; the clickable WO link and
+  // the full warning sentence render in the "Selected WO" panel below once one is picked —
+  // see updateWoDetail().
   const opt = (w, tag) => { if (seen.has(String(w.ID))) return ''; seen.add(String(w.ID));
-    return '<option value="'+esc(w.ID)+'"'+(String(w.ID)===String(selectedWoId)?' selected':'')+'>'+esc(w.ID)+' — '+esc((w.Description||'').slice(0,55))+' ('+esc(w.Status)+')'+tag+'</option>'; };
+    const dl = woDatesLabel(w);
+    const warn = woDateWindowWarning(receiptDate, w);
+    return '<option value="'+esc(w.ID)+'"'+(String(w.ID)===String(selectedWoId)?' selected':'')+'>'+esc(w.ID)+' — '+esc((w.Description||'').slice(0,55))+' ('+esc(w.Status)+')'+tag+(dl?' · '+esc(dl):'')+(warn?' · ⚠':'')+'</option>'; };
 
   let html = '<option value="">— pick a work order —</option>';
   if (openOrdered.length) {
@@ -334,10 +603,12 @@ function refreshWoSelect(id){
   const woSel = document.getElementById(idAttr+'-wo');
   const unitSel = document.getElementById(idAttr+'-unit');
   const showClosed = document.getElementById(idAttr+'-showclosed');
+  const dateEl = document.getElementById(idAttr+'-date');
   if (!propSel || !woSel) return;
   const propId = propSel.value;
   const unitId = unitSel ? unitSel.value : '';
-  woSel.innerHTML = woSelectHTML(propId, '', showClosed && showClosed.checked, rowSuggestions[id], unitId);
+  const receiptDate = dateEl ? dateEl.value.trim() : '';
+  woSel.innerHTML = woSelectHTML(propId, '', showClosed && showClosed.checked, rowSuggestions[id], unitId, receiptDate);
   checkManualWo(id);
 }
 
@@ -372,12 +643,40 @@ function checkManualWo(id){
   const checkEl = document.getElementById(idAttr+'-wo-check');
   if (!manual || !checkEl) return;
   const v = manual.value.trim();
-  if (!v){ checkEl.innerHTML = ''; updatePostingLine(id); return; }
+  if (!v){ checkEl.innerHTML = ''; updatePostingLine(id); updateWoDetail(id); return; }
   const hit = allWOs.find(w => String(w.ID) === v);
   checkEl.innerHTML = hit
     ? '<span class="ok">✓ '+esc(v)+' — '+esc((hit.Description||'').slice(0,60))+' ('+esc(hit.Status)+')</span>'
     : '<span class="err">✗ No work order with that ID exists.</span>';
   updatePostingLine(id);
+  updateWoDetail(id);
+}
+
+// Part 5: the "Selected WO" detail panel under the picker — a clickable link to the WO's own
+// admin detail view (reusing index.html's existing `?wo=<id>` deep link, e.g. from
+// maybeOpenWOFromURL — not a new link scheme), its opened/closed dates spelled out, and the
+// inline mismatch warning. Called from checkManualWo, which already fires on every path that can
+// change the effective WO selection (the select's onchange, the manual-override input, and
+// refreshWoSelect after a property/unit/show-closed change) or the receipt date field.
+function updateWoDetail(id){
+  const idAttr = 'rc'+id;
+  const el = document.getElementById(idAttr+'-wo-detail');
+  if (!el) return;
+  const woSel = document.getElementById(idAttr+'-wo');
+  const manual = document.getElementById(idAttr+'-wo-manual');
+  const dateEl = document.getElementById(idAttr+'-date');
+  const woId = (manual && manual.value.trim()) || (woSel ? woSel.value : '');
+  if (!woId){ el.innerHTML = ''; return; }
+  const wo = allWOs.find(w => String(w.ID) === String(woId));
+  if (!wo){ el.innerHTML = ''; return; }
+  const receiptDate = dateEl ? dateEl.value.trim() : '';
+  const link = 'index.html?wo=' + encodeURIComponent(wo.ID);
+  const dl = woDatesLabel(wo);
+  let html = '<a href="'+esc(link)+'" target="_blank" rel="noopener">Open WO '+esc(wo.ID)+' ↗</a>'
+    + ' · ' + (dl ? esc(dl.charAt(0).toUpperCase()+dl.slice(1)) : '<span class="warn">no opened/closed date on file for this WO</span>');
+  const warn = woDateWindowWarning(receiptDate, wo);
+  if (warn) html += '<div class="rc-wo-warn">'+esc(warn.message)+'</div>';
+  el.innerHTML = html;
 }
 
 // Brett, Sep 22 2026: "it drives me crazy to have to scroll down through a whole bunch of
@@ -430,10 +729,98 @@ async function unskipRow(id, btn){
 
 function render(rows){
   const list = document.getElementById('list');
-  if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; return; }
+  if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; updateBulkBar(); return; }
   rowsById = {}; rows.forEach(r => { rowsById[r.ID] = r; });
   list.innerHTML = rows.map(r => rowCard(r)).join('');
   rows.forEach(r => { rowSuggestions[r.ID] = r.suggestion || {}; rowEvidence[r.ID] = r.duplicate_evidence || []; if ((r.Status||'pending')==='pending') refreshWoSelect(r.ID); });
+  updateBulkBar();
+}
+
+// ── Bulk actions (Part 4, Sep 22 2026 brief) ────────────────────────────────────────────────
+// Scoped to THIS page's own #list container (the only list this single-page app ever renders),
+// following the same read-from-the-actual-container discipline as index.html's
+// pinCheckScopeEl/selectAllPinChecks (rule 184-185) rather than trusting a JS-side selection
+// object that could survive a tab switch or a re-render and silently apply to the wrong rows.
+// selectedIds is always REBUILT from the live DOM in updateBulkBar(), never trusted as its own
+// source of truth — so a stale id from a previous render can never sneak into a bulk call.
+let selectedIds = new Set();
+let bulkBusy = false;
+
+function updateBulkBar(){
+  const scope = document.getElementById('list');
+  const boxes = scope ? scope.querySelectorAll('.rc-check') : [];
+  selectedIds = new Set(Array.from(boxes).filter(cb => cb.checked).map(cb => cb.dataset.id));
+  const bar = document.getElementById('rc-bulk-bar');
+  if (!bar) return;
+  bar.style.display = selectedIds.size ? 'flex' : 'none';
+  const lbl = document.getElementById('rc-bulk-count');
+  if (lbl) lbl.textContent = selectedIds.size + ' selected';
+  const kernsBtn = document.getElementById('rc-bulk-kerns-btn');
+  if (kernsBtn) kernsBtn.style.display = kernsProperty() ? '' : 'none';
+}
+
+// Called on every tab switch and before every fresh list load — clears both the checkboxes in
+// THIS page's #list and the bar, so a selection from one status tab (or from before a refresh)
+// can never ride along into a different tab's bulk action.
+function clearBulkSelection(){
+  const scope = document.getElementById('list');
+  if (scope) scope.querySelectorAll('.rc-check').forEach(cb => { cb.checked = false; });
+  updateBulkBar();
+}
+
+async function bulkAction(action, extra){
+  if (bulkBusy) return;
+  const ids = Array.from(selectedIds);
+  if (!ids.length) return;
+  const n = ids.length;
+  if (action === 'skip' && !confirm('Skip '+n+' selected receipt(s)? Nothing gets billed.')) return;
+  if (action === 'mark_duplicate' && !confirm('Mark '+n+' selected receipt(s) as duplicates? This does not bill anything — same as tapping "Confirm duplicate" on each.')) return;
+  if (action === 'move_to_pending' && !confirm('Move '+n+' selected receipt(s) back to Pending? Only rows currently Skipped will actually move — others will show as failed.')) return;
+  bulkBusy = true;
+  const bar = document.getElementById('rc-bulk-bar');
+  if (bar) bar.querySelectorAll('button').forEach(b => b.disabled = true);
+  let remaining = ids.slice();
+  const allSucceeded = [], allFailed = [];
+  try {
+    // Loops the same "call again with what's left" shape as runFullAudit/admin/share-attachments
+    // — /receipt-recon/bulk-action only ever processes its own capped batch per call to respect
+    // the Cloudflare subrequest limit, never an unbounded loop server-side.
+    while (remaining.length) {
+      const body = Object.assign({ ids: remaining, action }, extra || {});
+      const res = await post('/receipt-recon/bulk-action', body);
+      if (res.error) throw new Error(res.error);
+      allSucceeded.push(...(res.succeeded || []));
+      allFailed.push(...(res.failed || []));
+      remaining = res.remaining_ids || [];
+    }
+    const failSummary = allFailed.length ? ' — ' + allFailed.length + ' failed: ' + allFailed.map(f => esc(f.id) + ' (' + esc(f.error) + ')').join('; ') : '';
+    toast('<b>Bulk ' + esc(action.replace(/_/g,' ')) + '</b> — ' + allSucceeded.length + ' of ' + n + ' succeeded' + failSummary);
+    clearBulkSelection();
+    await loadQueue();
+  } catch (e) {
+    toast('<b>Bulk ' + esc(action.replace(/_/g,' ')) + ' failed</b> — ' + esc(e.message));
+  } finally {
+    bulkBusy = false;
+    if (bar) bar.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
+
+// "Expense to Ridge Co / 1864 Kerns School Rd" — the brief's small picker: one property choice
+// applies to the whole selection, not per-row. Reuses the SAME kernsProperty() lookup and the
+// same real money-posting write (PR #23's one-tap flow via /receipt-recon/confirm no_wo:true)
+// the single-row buttons already use — applied N times per Brett's own bulk selection and his
+// own confirm, never autonomously.
+function bulkExpense(mode){
+  const ids = Array.from(selectedIds);
+  if (!ids.length) return;
+  let property_id = '', where = 'Ridge Co';
+  if (mode === 'kerns') {
+    const k = kernsProperty();
+    if (!k) { toast('<span class="err">1864 Kerns School Rd isn\'t in the Properties list.</span>'); return; }
+    property_id = String(k.ID); where = '1864 Kerns School Rd';
+  }
+  if (!confirm('Post ' + ids.length + ' selected receipt(s) as a ' + where + ' expense straight to QuickBooks — no work order, no customer invoice? This really posts to QuickBooks, same as the single-tap expense button, ' + ids.length + ' time(s).')) return;
+  bulkAction('expense', { property_id });
 }
 
 function evidenceHtml(r){
@@ -464,21 +851,37 @@ function rowCard(r){
   // gets its own lightweight confirm path below instead of being excluded outright. 'refund'
   // and 'customer_paid' still have nothing to confirm here — those stay Skip-only.
   const isCompany = sug.category === 'company';
-  const excluded = ['refund','customer_paid'].includes(sug.category);
+  // Part 3 (Sep 22 2026 brief): 'refund' now gets its own real actions below (find a matching
+  // original purchase to reverse, or post as a negative expense) — it is NEVER skip-only
+  // anymore. 'customer_paid' is the only category left with nothing to confirm here.
+  const isRefund = sug.category === 'refund';
+  const excluded = ['customer_paid'].includes(sug.category);
   const isPendingLike = (r.Status||'pending') === 'pending';
   const isDuplicateFlagged = (sug.flags||[]).includes('duplicate_on_wo');
   const propId = (sug.property && sug.property.id) || '';
   const idAttr = 'rc'+r.ID;
   let html = '<div class="rcard'+(excluded?' excl':'')+'" id="'+idAttr+'">';
-  html += '<div class="rc-top"><div><div class="rc-title">'+esc(r.Vendor||'(vendor unknown)')+' — $'+money(r.Total)+'</div>'
-        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(r.PO_Reference?' · '+esc(r.PO_Reference):'')+'</div></div>'
+  html += '<div class="rc-top"><div style="display:flex;gap:8px;align-items:flex-start">'
+        + '<input type="checkbox" class="rc-check" data-id="'+esc(r.ID)+'" onchange="updateBulkBar()" title="Select for bulk action">'
+        + '<div><div class="rc-title">'+esc(r.Vendor||'(vendor unknown)')+' — $'+money(r.Total)+'</div>'
+        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(r.PO_Reference?' · '+esc(r.PO_Reference):'')+' · '+esc(entrySourceLabel(r))+'</div></div></div>'
         + '<div>'+categoryPill(sug.category, sug.action)+'</div></div>';
 
   if (r.items && r.items.length) html += '<div class="rc-items">Items: '+r.items.map(esc).join(', ')+'</div>';
+  html += rescanBannerHtml(r);
   if (!isPendingLike && r.Notes) html += '<div class="rc-sub">'+esc(r.Notes)+'</div>';
 
   const flags = sug.flags || [];
   if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
+
+  // Part 1 (Sep 22 2026 brief): when this receipt is flagged as a possible duplicate, show
+  // whether ITS OWN image field is actually populated yet — checked against the Receipts row's
+  // own attachment field the same way the "Audit older" tab does (Source_File_ID/Source_File_URL,
+  // already present on this queue row — carries straight over onto Receipts when confirmed). An
+  // amount matching is not the same thing as the picture actually being filed anywhere.
+  if (isDuplicateFlagged) {
+    html += '<div class="rc-flags">' + imageAttachedPill(!!(r.Source_File_ID || r.Source_File_URL)) + '</div>';
+  }
 
   // Cross-source duplicate evidence (Sep 16 2026) — the broader, on-demand check Brett asked
   // for on top of the flags above, which only ever compare against the ONE work order a receipt
@@ -501,16 +904,17 @@ function rowCard(r){
       ).filter(Boolean).join(', ')
     : (r.PO_Reference || '');
 
-  if (!excluded && !isCompany && isPendingLike) {
+  if (!excluded && !isCompany && !isRefund && isPendingLike) {
     html += '<div class="rc-fields">'
       + '<div><label>Property</label><select id="'+idAttr+'-prop" onchange="refreshUnitSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
       + '<div><label>Unit (optional — narrows the work-order list)</label><select id="'+idAttr+'-unit" onchange="refreshWoSelect(\''+r.ID+'\')">'+unitOptions(propId, '')+'</select></div>'
       + '<div><label>Work order</label><select id="'+idAttr+'-wo" onchange="document.getElementById(\''+idAttr+'-wo-manual\').value=\'\';checkManualWo(\''+r.ID+'\')"></select></div>'
       + '<div class="full"><label class="rc-closed-toggle" style="display:inline-flex"><input type="checkbox" id="'+idAttr+'-showclosed" onchange="refreshWoSelect(\''+r.ID+'\')"> Also show closed/past work orders at this property</label></div>'
       + '<div class="full"><label>...or type a WO number directly to override</label><input id="'+idAttr+'-wo-manual" list="wo-datalist" placeholder="e.g. 1234" oninput="document.getElementById(\''+idAttr+'-wo\').value=\'\';checkManualWo(\''+r.ID+'\')"><div class="rc-wo-check" id="'+idAttr+'-wo-check"></div></div>'
+      + '<div class="full rc-wo-detail" id="'+idAttr+'-wo-detail"></div>'
       + '<div><label>Amount</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
       + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
-      + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
+      + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'" oninput="updateWoDetail(\''+r.ID+'\')"></div>'
       + '<div class="full"><label>Description (materials — goes on the WO and the invoice line)</label><textarea id="'+idAttr+'-desc">'+esc(descDefault)+'</textarea></div>'
       + '<div class="full rc-posting" id="'+idAttr+'-posting"></div>'
       + '</div>';
@@ -529,25 +933,49 @@ function rowCard(r){
       + '</div>';
   }
 
+  // Part 3 (Sep 22 2026 brief): a refund's own card — find the original purchase it might be
+  // reversing (read-only search, renders candidates for Brett to eyeball) as the FIRST option,
+  // and the negative-expense fields (reused by the "Expense only" buttons below, which already
+  // render for every non-excluded pending row) as the fallback for a partial refund or no match.
+  if (isRefund && isPendingLike) {
+    html += '<div class="rc-fields">'
+      + '<div><label>Amount (negative = money back to the customer)</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
+      + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
+      + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
+      + '<div class="full"><label>Description</label><textarea id="'+idAttr+'-desc">'+esc(descDefault)+'</textarea></div>'
+      + '</div>';
+    html += '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">'
+      + '<button class="btn secondary small" onclick="findRefundMatches(\''+r.ID+'\', this)">🔎 Find matching purchase</button>'
+      + '<div id="rc'+r.ID+'-refund-matches"></div>'
+      + '</div>';
+  }
+
   // Brett, Sep 22 2026: one tap to record a receipt as an EXPENSE (no work order, no customer
   // invoice) against Ridge Co or 1864 Kerns School Rd — it goes straight to QuickBooks' receipts
   // inbox for the expense record. Offered on every pending receipt, including ones the scanner
   // matched to a job address, so nothing is forced onto a work order unless Brett picks one.
+  // For a refund (Part 3), this is the "no match / partial — post as expense" path: same button,
+  // same endpoint, but the amount field above is negative so it posts as money back.
   if (!excluded && isPendingLike) {
     const kerns = kernsProperty();
-    html += '<div class="rc-expense"><span class="rc-expense-label">Expense only — no work order, straight to QuickBooks:</span>'
+    html += '<div class="rc-expense"><span class="rc-expense-label">'+(isRefund ? 'No match, or only a partial refund? Post as a negative expense — no work order:' : 'Expense only — no work order, straight to QuickBooks:')+'</span>'
       + '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'ridgeco\')">🧾 Ridge Co expense</button>'
       + (kerns ? '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'kerns\')">🏡 1864 Kerns School Rd</button>' : '')
-      + (!isCompany ? '<button class="btn small expbtn secondaryexp" onclick="confirmExpense(\''+r.ID+'\', this, \'selected\')">Expense to the property picked above</button>' : '')
+      + (!isCompany && !isRefund ? '<button class="btn small expbtn secondaryexp" onclick="confirmExpense(\''+r.ID+'\', this, \'selected\')">Expense to the property picked above</button>' : '')
       + '</div>';
   }
 
   const fileLink = r.Source_File_URL ? '<a href="'+esc(r.Source_File_URL)+'" target="_blank">View receipt →</a>' : '<span class="info">no file link</span>';
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
-    if (!excluded && !isCompany) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    if (!excluded && !isCompany && !isRefund) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
     if (isCompany) html += '<button class="btn small" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>';
-    if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🗐 Confirm duplicate</button>';
+    if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🖐 Confirm duplicate</button>';
+    // Part 2: an alternative to Confirm/Confirm-duplicate — attach this receipt's own image to
+    // the WO picked above WITHOUT billing it. Reuses the same Part 5 WO picker already rendered
+    // for this card (property/unit/WO selects + dates/link/warning), since picking which WO to
+    // attach to is the same interaction Confirm already uses.
+    if (!excluded && !isCompany && !isRefund && isDuplicateFlagged) html += '<button class="btn secondary small" onclick="attachOnlyRow(\''+r.ID+'\', this)">📎 Attach image only, don\'t bill</button>';
     html += '<button class="btn secondary small" onclick="checkDuplicatesOne(\''+r.ID+'\', this)">🔍 Check duplicates</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
@@ -605,6 +1033,93 @@ async function confirmRow(id, btn){
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already on that WO — skipped, not double-posted.</span>'
       : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.'+extra+'</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Part 2 (Sep 22 2026 brief): attaches this receipt's own scanned image to the WO picked in this
+// card's picker WITHOUT billing it — same WO-selection reading as confirmRow (picker select, or
+// the manual-override field), posted to /receipt/attach-only instead of /receipt-recon/confirm.
+// Never touches Invoice_Review/Vendor_Bills — see receiptAttachOnly's own comment in worker.js.
+async function attachOnlyRow(id, btn){
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const woSel = document.getElementById(idAttr+'-wo');
+  const woManual = document.getElementById(idAttr+'-wo-manual');
+  const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
+  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) first.</span>'; if (btn) btn.disabled = false; return; }
+  if (!allWOs.some(w => String(w.ID) === wo_id)){
+    statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const amount = document.getElementById(idAttr+'-amt').value.trim();
+  const store = document.getElementById(idAttr+'-store').value.trim();
+  const date = document.getElementById(idAttr+'-date').value.trim();
+  const description = document.getElementById(idAttr+'-desc').value.trim();
+  statusEl.innerHTML = '<span class="info">Attaching image, not billing…</span>';
+  try {
+    const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Image attached to '+esc(wo_id)+' — not billed, no invoice line added.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Part 3 (Sep 22 2026 brief) — READ-ONLY search for the original purchase a refund might be
+// reversing. Renders each candidate with enough to eyeball at a glance (store/date/amount, exact-
+// amount flag, description) and a per-candidate confirm button; picking one is the only thing
+// that ever writes anything (reverseRefund below). Never auto-selects or auto-confirms.
+async function findRefundMatches(id, btn){
+  if (btn) btn.disabled = true;
+  const box = document.getElementById('rc'+id+'-refund-matches');
+  box.innerHTML = '<span class="info">Searching for the original purchase…</span>';
+  try {
+    const res = await post('/receipt-recon/refund-candidates', { id });
+    if (res.error) throw new Error(res.error);
+    const cands = res.candidates || [];
+    if (!cands.length) {
+      box.innerHTML = '<span class="info">No matching purchase found at this store/date/amount — post this as a negative expense below.</span>';
+    } else {
+      box.innerHTML = cands.map(c => (
+        '<div style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin-top:6px">'
+        + '<div class="rc-sub">' + esc(c.store||'') + ' — $' + money(c.amount) + ' · ' + esc((c.date||'').slice(0,10))
+          + (c.wo_id ? ' · WO ' + esc(c.wo_id) : '') + (c.exact_amount ? ' <span class="pill suggest">exact amount</span>' : ' <span class="pill warn">amount differs — partial?</span>') + '</div>'
+        + (c.description ? '<div class="info">' + esc(c.description) + '</div>' : '')
+        + '<button class="btn small warnbtn" onclick="reverseRefund(\''+id+'\',\''+esc(String(c.receipt_id))+'\',this)">✅ This matches — reverse the billed amount</button>'
+        + '</div>'
+      )).join('');
+    }
+  } catch(e){ box.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; }
+  if (btn) btn.disabled = false;
+}
+
+// Part 3 (Sep 22 2026 brief) — Rung-3 money write: reverses the billed amount of the ORIGINAL
+// purchase (receiptId) to credit this refund against it. Never fires except from this explicit
+// button tap on a specific candidate — a native confirm() dialog is the second, unmistakable
+// "yes, do this" on top of the button click itself, since this credits a real customer invoice.
+async function reverseRefund(id, receiptId, btn){
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  if (!confirm('Reverse the billed amount against receipt #'+receiptId+'? This credits the customer\'s invoice for that work order and cannot be undone automatically.')) return;
+  if (btn) btn.disabled = true;
+  statusEl.innerHTML = '<span class="info">Reversing…</span>';
+  try {
+    const res = await post('/receipt-recon/refund-reverse', { id, receipt_id: receiptId, reason: 'Refund matched to original purchase — confirmed by Brett via Receipt Reconciler.' });
+    if (res.error) throw new Error(res.error);
+    let extra = '';
+    const il = res.invoice_link;
+    if (il && il.linked && !il.already) {
+      extra = il.already_sent
+        ? ' ⚠ That WO was already invoiced — flagged for repair (check Repairable Invoices to push the credit to QuickBooks).'
+        : ' Credited against the pending invoice for that WO.';
+    } else if (il && il.reason === 'would_go_negative') {
+      extra = ' ⚠ Recorded on the WO, but the pending invoice couldn\'t safely absorb the full credit — check it by hand.';
+    } else if (il && il.reason === 'covered_by_signed_proposal') {
+      extra = ' This job is billed through a signed proposal — counted against its materials budget, not invoiced again.';
+    }
+    statusEl.innerHTML = '<span class="ok">✓ Reversed $'+esc(money(Math.abs(Number(res.amount)||0)))+' against WO '+esc(res.wo_id||'')+'.'+extra+'</span>';
     finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }

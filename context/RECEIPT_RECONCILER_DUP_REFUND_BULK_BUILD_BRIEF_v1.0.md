@@ -11,6 +11,22 @@ Brett's answers to PR #27's own open questions (from the handoff doc), now settl
 - **Markup match:** exact amount only, no markup-adjusted matching.
 - **Match strictness:** require the store/description to roughly line up too, not amount alone — cuts noise.
 
+## Part 0 — URGENT: intake-time cross-check against already-processed receipts (real duplicates happening now)
+
+**Sep 22, 8:05pm, Brett live-testing:** found a $56.04 Home Depot receipt sitting in the Pending queue that he knows he already processed — and nothing on the card indicates it was already scanned/handled. Root cause almost certainly the Receipt Mail → Hub email pull (PR #21, `receiptReconScan`): it's adding rows from info@/brett@ into `Receipt_Recon_Queue` with no check against receipts that are already sitting in `Receipts` (confirmed/expensed) or already-dispositioned rows in the recon queue itself (Skipped/Duplicate). A receipt processed by hand, or confirmed before the mailbox scan ever ran, can still get pulled back in fresh next scan and look indistinguishable from a brand-new Pending item.
+
+This is a live, active duplicate-creation risk — Brett is actively expensing/confirming receipts while unprocessed lookalikes keep reappearing in the same queue. **Treat this as higher priority than Parts 1-5 below** — it's the front door those parts are trying to catch problems behind; fixing intake stops new duplicates from being created in the first place, which matters more than better tools for finding ones that already got through.
+
+**Decision/design:**
+- Before `receiptReconScan` (or whatever inserts a new Pending row from an emailed/scanned receipt) writes a row, cross-check it against:
+  1. Already-confirmed `Receipts` rows (store + amount + date, and file/attachment identity if the email attachment can be fingerprinted — e.g. a hash of the PDF/image bytes, or the Gmail message ID if that's already tracked anywhere) — the $56.04 HD example is exactly this case.
+  2. Already-dispositioned `Receipt_Recon_Queue` rows (Skipped, Duplicate, or the new "attached only" status from Part 2) — a receipt Brett already decided about shouldn't resurface as if it were new.
+- On a match, don't silently drop it (a false match could hide a real second purchase at the same store for the same amount) — instead land it in the queue already flagged, e.g. "⚠️ Possible re-scan — matches an already-processed receipt from <date>" with a link/reference to the existing row, so Brett sees the flag the instant he looks at the card rather than discovering it by memory.
+- Every row in the Pending queue (not just flagged ones) should show **when/how it entered the queue** (e.g. "via email scan, Sep 22" vs. "already confirmed") so Brett has a fast visual cross-check even for rows the automated match misses.
+- Investigate whether the Apps Script / `receiptReconScan` already tracks a stable identifier per source email (Gmail message ID) that could be used to hard-block true re-adds of the exact same email — if so, that's a cheap first-layer guard on top of the amount/date/store fuzzy check above.
+
+**Do this part first**, before Parts 1-5 — confirm the real cause (read `receiptReconScan` and the Apps Script live, don't guess) and ship the intake guard, then come back to the rest of this brief.
+
 ## Part 1 — Duplicate flag must confirm the image is actually attached, not just the amount
 
 Today, when a receipt is flagged as a possible duplicate (by amount, via `receiptCheckDuplicatesOne` or the new PR #27 audit), Brett has no fast way to tell whether the receipt IMAGE is actually attached anywhere yet — only that an amount matches. He needs that distinguished before deciding anything.
@@ -79,11 +95,12 @@ Build:
 ## Suggested build order
 
 1. Rebase PR #27 onto `main` first (blocking everything else — it owns the auth-gate/router lines everything below will also touch).
-2. Part 5 (WO picker: links + dates + mismatch warning) — read-only, no new write path, and it directly informs every other part's "which WO is this" decision, so do it right after the rebase.
-3. Part 1 (image-attached indicator) — smallest, and both Part 1 and Part 2 read from the same `Receipts` attachment field, so do them together.
-4. Part 2 (attach-only action).
-5. Part 4 (bulk actions) — self-contained, doesn't depend on refund work.
-6. Part 3 (refund detection + matching) — the most open-ended piece (OCR + fuzzy matching), do it last so the simpler wins ship first.
+2. **Part 0 (intake-time duplicate cross-check) — do this immediately after the rebase, ahead of everything else.** It's the only part of this brief responding to an active, ongoing problem (real duplicates landing in Pending right now) rather than a workflow improvement.
+3. Part 5 (WO picker: links + dates + mismatch warning) — read-only, no new write path, and it directly informs every other part's "which WO is this" decision.
+4. Part 1 (image-attached indicator) — smallest, and both Part 1 and Part 2 read from the same `Receipts` attachment field, so do them together.
+5. Part 2 (attach-only action).
+6. Part 4 (bulk actions) — self-contained, doesn't depend on refund work.
+7. Part 3 (refund detection + matching) — the most open-ended piece (OCR + fuzzy matching), do it last so the simpler wins ship first.
 
 ## Notes for whoever builds this
 

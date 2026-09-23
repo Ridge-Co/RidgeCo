@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-22.4-receipt-inplace-cutoff';
+const BUILD_VERSION = '2026-09-22.10-receipt-recon-refunds';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -248,8 +248,8 @@ export default {
         // mirroring the whole app's GET surface. Brett's explicit call (raised when a UI test
         // hit this exact gap): staging-only + already-TEST-record-scoped writes is protection
         // enough, so this is intentionally broader than a pure API smoke-test token needs to be.
-        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split'];
+        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
@@ -268,7 +268,7 @@ export default {
           // production. Fully inert unless env.HUB_PROD_RO_TOKEN is set, so deploying this has
           // zero effect until the secret exists on production maintenance-hub (and the matching
           // value is set on the gh-broker Worker's own HUB_PROD_RO_TOKEN).
-          const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance'];
+          const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance','/admin/receipt-duplicate-audit/flags'];
           const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && HUB_PROD_RO_READ_PATHS.includes(path);
           // Narrow WRITE-CAPABLE token for safe, allow-listed production writes (Sep 22 2026,
           // follow-on to HUB_PROD_RO_TOKEN above — see context/PROD_WRITE_TOKEN_BUILD_BRIEF_v1.0.md).
@@ -406,6 +406,7 @@ export default {
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
+        if (path === '/admin/receipt-duplicate-audit/flags') return await receiptDuplicateAuditFlags(env, url);
         if (path === '/trash/properties')       return await trashListProperties(env);
         if (path === '/trash/week')             return await trashWeek(env, url);
         if (path === '/trash/unbilled')         return await trashUnbilled(env, url);
@@ -674,9 +675,16 @@ export default {
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
         if (path === '/receipt-recon/scan')       return await receiptReconScan(env, body);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
+        if (path === '/receipt/attach-only')      return await receiptAttachOnly(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
+        if (path === '/receipt-recon/bulk-action')       return await receiptReconBulkAction(env, body);
+        if (path === '/receipt-recon/refund-candidates') return await receiptReconRefundCandidates(env, body);
+        if (path === '/receipt-recon/refund-reverse')    return await receiptReconRefundReverse(env, body);
         if (path === '/receipt-recon/check-duplicates')  return await receiptReconCheckDuplicates(env, body);
         if (path === '/receipt-recon/check-duplicates-bulk') return await receiptReconCheckDuplicatesBulk(env, body);
+        if (path === '/admin/receipt-duplicate-audit/build-index') return await receiptDuplicateAuditBuildIndex(env, body);
+        if (path === '/admin/receipt-duplicate-audit/scan')        return await receiptDuplicateAuditScan(env, body);
+        if (path === '/admin/receipt-duplicate-audit/mark')        return await receiptDuplicateAuditMark(env, body);
         if (path === '/receipt-recon/skip')       return await receiptReconSkip(env, body);
         if (path === '/receipt-recon/unskip')     return await receiptReconUnskip(env, body);
         if (path === '/receipt-recon/skip-before-cutoff') return await receiptReconSkipBeforeCutoff(env, body);
@@ -1657,10 +1665,17 @@ async function listReceipts(env, url) {
 // paid out of pocket and needs it added to what they're owed) — never silently inferred from
 // role, since Brett himself sometimes logs an entry on a vendor's behalf.
 async function addReceipt(env, body) {
-  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source } = body;
-  if (!amount) return json({ error: 'amount required' }, 400);
+  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative } = body;
+  if (!amount && amount !== 0) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
-  if (isNaN(amt) || amt <= 0) return json({ error: 'amount must be a positive number' }, 400);
+  if (isNaN(amt) || amt === 0) return json({ error: 'amount must be non-zero' }, 400);
+  // Part 3 (Sep 22 2026 brief): a refund posts as a genuine NEGATIVE amount — money coming back,
+  // not a charge (never a positive number silently standing in for it). Every other caller of
+  // addReceipt (vendor portal, manual entry, ordinary WO receipts) still gets the original
+  // positive-only guard; allow_negative is only ever passed by the refund expense path
+  // (receiptReconConfirm's no_wo refund case) and the refund-reversal write
+  // (receiptReconRefundReverse) — both Rung-3/Brett's-tap gated, never automatic.
+  if (amt < 0 && !allow_negative) return json({ error: 'amount must be a positive number' }, 400);
   const paymentSource = (payment_source === 'vendor_reimburse') ? 'vendor_reimburse' : 'company_card';
 
   // Same receipt, same job/property, same store, seconds apart = a double-tap, not two
@@ -1747,6 +1762,58 @@ function receiptIsDuplicate(receipts, woId, amount, date, store) {
     (Number(r.Amount)||0).toFixed(2) === amt && String(r.Date||'') === String(date||'') && _rcNorm(r.Store) === st);
 }
 
+// PURE — Part 3 matching step: given a refund (store/amount/date/items), find candidate ORIGINAL
+// purchase receipts it might be reversing. Same-store required; a candidate purchase must date
+// on-or-before the refund and within `windowDays` (default 120 — returns commonly lag weeks to a
+// couple months); a candidate must be a real positive purchase (never another refund) whose
+// amount is at least the refund amount (a receipt for less than what's being refunded can't be
+// the source of a full or partial return of it). Scored, not decided — this only ever SUGGESTS;
+// Brett's own tap on the returned receipt_id is what actually reverses anything (see
+// receiptReconRefundReverse). No I/O — everything is passed in, so this is fully unit-testable.
+function receiptRefundFindMatches(refund, existingReceipts, opts) {
+  opts = opts || {};
+  const windowDays = opts.windowDays || 120;
+  const refundAmt = Math.abs(Number(refund && refund.amount) || 0);
+  const refundStore = _rcNorm(refund && refund.store);
+  const refundDate = String((refund && refund.date) || '').trim();
+  const refundDateMs = refundDate ? Date.parse(refundDate + 'T00:00:00Z') : NaN;
+  const refundItemsBlob = _rcNorm(Array.isArray(refund && refund.items) ? refund.items.join(' ') : ((refund && refund.items) || ''));
+  const refundKw = new Set(refundItemsBlob.split(' ').filter(w => w.length >= 3 && !RECEIPT_STOP.has(w)));
+  if (!refundStore || !refundAmt) return [];
+
+  const candidates = [];
+  for (const r of (existingReceipts || [])) {
+    if (!r || r.Active === 'FALSE') continue;
+    const amt = Number(r.Amount) || 0;
+    if (amt <= 0) continue; // only match against real purchases, never another refund/negative row
+    if (_rcNorm(r.Store) !== refundStore) continue;
+    if (amt + 0.01 < refundAmt) continue; // a smaller purchase can't be the source of this refund
+    const purchaseDateMs = r.Date ? Date.parse(String(r.Date) + 'T00:00:00Z') : NaN;
+    let hasDateRelation = false;
+    if (!isNaN(refundDateMs) && !isNaN(purchaseDateMs)) {
+      const diffDays = (refundDateMs - purchaseDateMs) / 86400000;
+      if (diffDays < 0 || diffDays > windowDays) continue; // must precede the refund, within the window
+      hasDateRelation = true;
+    }
+    let score = 0;
+    const amountDiff = Math.abs(amt - refundAmt);
+    const exactAmount = amountDiff < 0.02;
+    score += exactAmount ? 3 : 1;
+    if (hasDateRelation) score += 1;
+    const descBlob = _rcNorm(String(r.Description || ''));
+    let itemOverlap = 0;
+    for (const k of refundKw) if (descBlob.indexOf(k) >= 0) itemOverlap++;
+    score += itemOverlap;
+    candidates.push({
+      receipt_id: r.ID, wo_id: r.WO_ID || '', property_id: r.Property_ID || '',
+      amount: amt, date: r.Date || '', store: r.Store || '', description: r.Description || '',
+      exact_amount: exactAmount, item_overlap: itemOverlap, score,
+    });
+  }
+  candidates.sort((a, b) => b.score - a.score || Math.abs(a.amount - refundAmt) - Math.abs(b.amount - refundAmt));
+  return candidates.slice(0, 5);
+}
+
 // ── Receipt duplicate CHECKER (Sep 2 2026 design, built Sep 16 2026) ────────────────────────
 // PURE — property-wide duplicate check, deliberately WIDER than receiptIsDuplicate above (which
 // only ever compares against the ONE work order a receipt is being posted to). Brett re-scanning
@@ -1799,7 +1866,7 @@ function qbInvoiceCandidatesByDate(invoices, date, windowDays) {
 // (receiptReconScan) below — one source of truth, and fully unit-testable with no live Sheets.
 function receiptSuggestCore(input, properties, workorders, receipts, custCards) {
   const po = String(input.po || '').trim();
-  const total = Number(input.total) || 0;
+  let total = Number(input.total) || 0;
   const date = String(input.date || '').trim();
   const store = String(input.store || '').trim();
   const items = Array.isArray(input.items) ? input.items : (input.items ? [String(input.items)] : []);
@@ -1807,7 +1874,20 @@ function receiptSuggestCore(input, properties, workorders, receipts, custCards) 
   const cc = custCards || [];
 
   // Exclusions first — never propose a WO for spend that isn't customer-billable.
-  if (total < 0) return { ok: true, category: 'refund', action: 'skip', reason: 'Negative total (return/refund).', po, total };
+  // Part 3 (Sep 22 2026 brief): a refund is NEVER skip-only anymore — it has two real actions
+  // (match-and-reverse the original purchase, or post as a negative expense), both offered by
+  // the Reconciler UI off this category. Defense-in-depth on the sign: whether the negative
+  // total came from receiptExtract's own refund detection or from input.refund being passed
+  // explicitly (e.g. by a caller that didn't go through receiptExtract), the total returned
+  // here is always forced negative — never a positive refund amount reaching addReceipt.
+  if (total < 0 || input.refund === true) {
+    total = total ? -Math.abs(total) : total;
+    return {
+      ok: true, category: 'refund', action: 'refund_review',
+      reason: 'Return/refund receipt — confirm a matching original purchase to reverse the bill, or post as a negative expense.',
+      po, total, store, date, items,
+    };
+  }
   if (/\bbmore\b/i.test(po) || /\bbmore\b/i.test(String(input.customer_name||''))) return { ok: true, category: 'company', action: 'exclude', reason: 'PO "bmore" = company expense, not customer-billable.', po, total };
   if (card && cc.includes(card)) return { ok: true, category: 'customer_paid', action: 'exclude', reason: `Paid on a customer card (…${card}).`, po, total };
 
@@ -1864,10 +1944,88 @@ async function receiptSuggest(env, body) {
 // Confirm (POST /receipt-recon/confirm, which calls the same addReceipt() the vendor portal and
 // every manual entry this session used) or Skip. A pending row costs one OCR call and zero other
 // AI tokens; the daily sweep of an empty folder costs nothing at all.
-const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date'];
+const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date','Gmail_Message_ID','Entry_Source','Rescan_Match_JSON'];
 // "Receipts and Invoices" under PAYABLES Inbox (Drive) — the folder Brett has been dropping
 // scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
 const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
+
+// ── Part 0 (Sep 22 2026 incident) — intake-time rescan guard ───────────────────────────────
+// Brett caught a $56.04 Home Depot receipt he'd already processed reappearing as a fresh
+// Pending row with no indication it had already been handled. Root cause: receiptReconScan only
+// ever deduped on Source_File_ID (the Drive file), so a receipt processed by hand, or confirmed
+// before a mailbox scan ever ran, could get pulled back in through a NEW Drive file (a re-forward,
+// a second manual drop, an email backfill re-run) and look indistinguishable from brand-new. The
+// functions below cross-check a receipt BEFORE it's queued and, on a match, flag it — never
+// silently drop it (a false match could hide a real second purchase at the same store).
+
+// PURE — the Apps Script (ReceiptMailToHub.gs, saveMessage_) already writes a Gmail link into
+// every emailed receipt's Drive file description, e.g. "...| https://mail.google.com/mail/u/?
+// authuser=...#all/19abcdef0123456". This reads that existing metadata — no Apps Script redeploy
+// needed. Returns '' when the file wasn't produced by the email pipeline (a manual Drive drop).
+function receiptReconGmailIdFromDescription(desc) {
+  const m = String(desc || '').match(/#all\/([A-Za-z0-9_-]+)/);
+  return m ? m[1] : '';
+}
+
+// PURE — same description text (see receiptReconGmailIdFromDescription) distinguishes a file the
+// email pipeline saved from one Brett dropped into the Drive folder by hand. Used only to show
+// Brett a fast "how did this get here" cue on every Pending row, per his Sep 22 ask — never
+// changes any routing/matching decision.
+function receiptReconEntrySource(desc) {
+  return /From email .* Hub/.test(String(desc || '')) ? 'email_scan' : 'manual_drop';
+}
+
+// PURE — cross-checks one about-to-be-queued receipt against (a) an exact re-add of the same
+// source email (Gmail message ID, cheapest/highest-confidence, layer 1), (b) already-confirmed
+// Receipts rows with the same store+amount+date, and (c) Receipt_Recon_Queue rows Brett already
+// dispositioned (skipped / confirmed / duplicate_confirmed — NOT still pending) with the same
+// store+amount+date. Returns a flat array of match objects, each with a ready-to-show `reason`
+// string (same shape as receiptCheckDuplicatesOne's evidence array below). Never decides
+// anything — the caller always still queues the row as 'pending'; this only adds the flag.
+function receiptReconFindRescanMatches(candidate, existingReceipts, existingQueueRows) {
+  const amt = (Number(candidate.total) || 0).toFixed(2);
+  const st = _rcNorm(candidate.store);
+  const date = String(candidate.date || '').trim();
+  const matches = [];
+
+  if (candidate.gmailMessageId) {
+    for (const r of (existingQueueRows || [])) {
+      if (r.Gmail_Message_ID && r.Gmail_Message_ID === candidate.gmailMessageId) {
+        const status = r.Status || 'pending';
+        matches.push({
+          type: 'gmail_exact', queue_id: r.ID, status, received_date: r.Received_Date || '',
+          reason: `This exact email was already processed on ${String(r.Received_Date || '').slice(0, 10)} (queue #${r.ID}, status: ${status}).`,
+        });
+      }
+    }
+  }
+
+  if (date && st && Number(amt) > 0) {
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Date || '') !== date) continue;
+      if (_rcNorm(r.Store) !== st) continue;
+      matches.push({
+        type: 'receipts', receipt_id: r.ID, wo_id: r.WO_ID || '', date: r.Date, amount: r.Amount, store: r.Store,
+        reason: `Possible re-scan — matches an already-processed receipt from ${r.Date} ($${(Number(r.Amount) || 0).toFixed(2)} at ${r.Store || 'that store'}${r.WO_ID ? ', WO ' + r.WO_ID : ''}).`,
+      });
+    }
+    for (const r of (existingQueueRows || [])) {
+      const status = r.Status || 'pending';
+      if (status === 'pending') continue;
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Receipt_Date || '') !== date) continue;
+      if (_rcNorm(r.Vendor) !== st) continue;
+      matches.push({
+        type: 'queue_dispositioned', queue_id: r.ID, status, date: r.Receipt_Date, amount: r.Total, store: r.Vendor,
+        reason: `Possible re-scan — matches a previously ${status.replace(/_/g, ' ')} queue entry from ${r.Receipt_Date} ($${(Number(r.Total) || 0).toFixed(2)} at ${r.Vendor || 'that store'}).`,
+      });
+    }
+  }
+  return matches;
+}
 
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
@@ -1887,7 +2045,7 @@ async function receiptReconScan(env, body) {
   // ensureTab only writes headers on a brand-new/empty tab, so an existing tab needs the
   // explicit widen-and-append-header path or the new column silently never appears (rule 37/78).
   await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
-  const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType,webViewLink)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '100' });
+  const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType,webViewLink,description)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '100' });
   const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${tok}` } });
   const data = await res.json();
   if (data.error) return json({ ok: false, error: 'Drive list failed: ' + (data.error.message || JSON.stringify(data.error)) }, 500);
@@ -1907,7 +2065,7 @@ async function receiptReconScan(env, body) {
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
-  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0;
+  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0;
   const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
@@ -1916,16 +2074,28 @@ async function receiptReconScan(env, body) {
       const po = ex.po_reference || ex.handwritten_note || '';
       const items = Array.isArray(ex.items) ? ex.items : [];
       const itemsSummary = Array.isArray(ex.items_summary) ? ex.items_summary : [];
-      const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '' }, properties, workorders, receipts, custCards);
+      const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '', refund: ex.refund === true }, properties, workorders, receipts, custCards);
       const tooOld = receiptBeforeCutoff(ex.date, cutoff);
       if (tooOld) skippedOld++;
+      // Part 0 (Sep 22 2026 incident) — cross-check BEFORE this lands as a fresh Pending row.
+      // Never auto-skips on a match (a false positive could hide a real second purchase) — only
+      // flags the row so Brett sees it the instant he looks at the card, not by memory.
+      const gmailId = receiptReconGmailIdFromDescription(f.description);
+      const entrySource = receiptReconEntrySource(f.description);
+      const rescanMatches = receiptReconFindRescanMatches({ total: ex.total, store: ex.vendor, date: ex.date, gmailMessageId: gmailId }, receipts, existing);
+      if (rescanMatches.length) flaggedRescan++;
+      // Part 3 (Sep 22 2026 brief) — surface the refund detection in Notes too, not just the
+      // Suggestion JSON the card's badge reads, so it's visible even before the UI renders.
+      const refundNote = (!tooOld && ex.refund) ? ('🔄 Refund/return detected — ' + (ex.refund_reason || 'review the suggested match or post as a negative expense.')) : '';
+      const notes = tooOld ? receiptCutoffNote(ex.date, cutoff) : [rescanMatches.length ? rescanMatches.map(m => '⚠️ ' + m.reason).join(' ') : '', refundNote].filter(Boolean).join(' ');
       await addRow(env, 'Receipt_Recon_Queue', {
         Source_File_ID: f.id, Source_File_URL: f.webViewLink || '', File_Name: f.name || '',
         Received_Date: new Date().toISOString(), Vendor: ex.vendor || '', Receipt_Date: ex.date || '',
         Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
         PO_Reference: po, Items: JSON.stringify(items), Items_Summary: JSON.stringify(itemsSummary), Card_Last4: ex.card_last4 || '', Invoice_Number: ex.invoice_number || '',
         Suggestion: JSON.stringify(suggestion).slice(0, 4000), Status: tooOld ? 'skipped' : 'pending',
-        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: tooOld ? receiptCutoffNote(ex.date, cutoff) : '', Active: 'TRUE',
+        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: notes, Active: 'TRUE',
+        Gmail_Message_ID: gmailId, Entry_Source: entrySource, Rescan_Match_JSON: JSON.stringify(rescanMatches).slice(0, 4000),
       });
       n++;
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
@@ -1938,7 +2108,7 @@ async function receiptReconScan(env, body) {
   }
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
-  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
+  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
@@ -1951,7 +2121,8 @@ async function listReceiptReconQueue(env, url) {
       let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
       let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
       let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
-      return { ...r, suggestion, items, items_summary, duplicate_evidence };
+      let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
+      return { ...r, suggestion, items, items_summary, duplicate_evidence, rescan_matches };
     }));
 }
 
@@ -1978,12 +2149,23 @@ async function appendReceiptToInvoiceReview(env, { wo_id, receipt_id, amount }) 
     candidates.sort((a, b) => new Date(b.Approved_Date || 0) - new Date(a.Approved_Date || 0));
     const ir = candidates[0];
     const amt = +(Number(amount) || 0).toFixed(2);
-    if (amt <= 0) return { linked: false, reason: 'no_amount' };
+    // Part 3 (Sep 22 2026 brief): a refund reversal calls this with a NEGATIVE amt to credit
+    // the pending invoice back down — the only real change from the original (always-positive)
+    // shape. Still reject a literal zero; a negative amt is otherwise handled the same as a
+    // positive one below, with an added floor so a reversal can never push the invoice negative.
+    if (!amt) return { linked: false, reason: 'no_amount' };
     const ids = String(ir.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
     if (ids.includes(String(receipt_id))) return { linked: true, ir_id: ir.ID, already: true };
     ids.push(String(receipt_id));
     const newOwnMaterials = +((Number(ir.Own_Materials) || 0) + amt).toFixed(2);
     const newCustomerTotal = +((Number(ir.Customer_Total) || 0) + amt).toFixed(2);
+    if (newOwnMaterials < 0 || newCustomerTotal < 0) {
+      // A refund larger than what's still pending on this invoice — the Receipts row itself
+      // (the source of truth) is still written by the caller; this just can't safely fold the
+      // credit into Invoice_Review without taking it below $0. Surfaced so the UI can tell Brett
+      // to check the invoice by hand rather than silently under-crediting it.
+      return { linked: false, reason: 'would_go_negative', attempted_delta: amt };
+    }
     const alreadySent = !!(ir.QB_Invoice_ID || '').trim();
     const fields = { Own_Material_IDs: ids.join(','), Own_Materials: String(newOwnMaterials), Customer_Total: String(newCustomerTotal) };
     if (alreadySent) {
@@ -2033,12 +2215,19 @@ async function receiptReconConfirm(env, body) {
   // rather than selecting a work order". A no-WO confirm is ALWAYS an expense record, even when
   // the scanner suggested 'billable' (a Home Depot receipt with a job address on it) — otherwise
   // it would sit in Receipts marked billable with nothing to bill it to.
-  const category = noWo ? 'company' : ((suggestion && suggestion.category) || 'billable');
+  // Part 3 (Sep 22 2026 brief): a refund row (category 'refund' from receiptSuggestCore, or a
+  // negative Total that predates this build) posted through the no-WO expense path is money
+  // coming BACK — it stays category 'refund' (never folded into generic 'company') and the
+  // amount is force-negated no matter what was typed/pre-filled, so a refund can never reach
+  // addReceipt as a positive charge from this path.
+  const isRefundRow = (suggestion && suggestion.category === 'refund') || Number(row.Total) < 0;
+  const category = noWo ? (isRefundRow ? 'refund' : 'company') : ((suggestion && suggestion.category) || 'billable');
+  const finalAmount = (noWo && isRefundRow) ? -Math.abs(Number(amount) || 0) : amount;
   const addResp = await addReceipt(env, {
-    wo_id: wo_id || '', property_id, amount, description, store, date,
+    wo_id: wo_id || '', property_id, amount: finalAmount, description, store, date,
     added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
-    payment_source: body.payment_source,
+    payment_source: body.payment_source, allow_negative: (noWo && isRefundRow),
   });
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
@@ -2071,6 +2260,62 @@ async function receiptReconConfirm(env, body) {
     } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
   }
   return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
+}
+
+// POST /receipt/attach-only { id, wo_id, property_id?, amount?, description?, store?, date? } —
+// Part 2 of the Sep 22 2026 dup/refund/bulk brief. The alternative Brett needs when a receipt is
+// flagged as a possible duplicate (Part 1's "image attached?" indicator, right below) but the
+// image itself was never actually filed anywhere: attach it to the matched WO WITHOUT billing it
+// a second time. Reuses ONLY the file-attach half of the normal confirm flow — addReceipt(),
+// which writes Source_File_ID/Source_File_URL onto the new Receipts row (confirmed live as the
+// REAL column names on Receipts, not the brief's guessed File_Url/Drive_File_Id — PAT-024; see
+// addReceipt above). Deliberately does NOT call appendReceiptToInvoiceReview (the billing half
+// receiptReconConfirm uses to fold a receipt into a pending customer invoice) and does NOT call
+// sendReceiptsToQBEmail — addReceipt itself never touches Vendor_Bills or Invoice_Review, and
+// this function adds nothing that would. Verified by test/receipt-attach-only.test.mjs, not just
+// by this comment (Brett's standing rule: don't just assert a no-billing-side-effect claim).
+//
+// Category 'attached_only' is a NEW Receipts.Category value (checked the existing enum first —
+// 'billable'/'company'/'customer_paid'/'refund' — none of them mean "image on file, deliberately
+// never billed", so a new value is the right call here, not a misuse of an existing one). Marks
+// the row so it's never re-suggested for billing and shows up in the Reconciler's own history —
+// the Receipt_Recon_Queue row gets the matching Status 'attached_only' (excluded from the default
+// ?status=pending view, same as 'confirmed'/'skipped', and browsable via its own tab/status=all).
+async function receiptAttachOnly(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const wo_id = body.wo_id; if (!wo_id) return json({ error: 'wo_id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (['confirmed', 'attached_only'].includes(row.Status)) return json({ error: `already ${row.Status}`, id }, 409);
+  // Same pre-write existence check receiptReconConfirm uses — a typo'd WO number must never
+  // silently post a real Receipts row against a nonexistent job.
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const wo = workorders.find(w => String(w.ID) === String(wo_id));
+  if (!wo) return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
+  if (!row.Source_File_ID && !row.Source_File_URL) {
+    return json({ error: 'This queue row has no scanned image on file — nothing to attach.' }, 400);
+  }
+  const property_id = body.property_id || wo.Property_ID || '';
+  const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : row.Total;
+  const description = body.description || row.PO_Reference || row.Vendor || '';
+  const store = body.store || row.Vendor || '';
+  const date = body.date || row.Receipt_Date || '';
+  const addResp = await addReceipt(env, {
+    wo_id, property_id, amount, description, store, date,
+    added_by: 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
+    category: 'attached_only',
+    source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
+    payment_source: body.payment_source,
+  });
+  const addJson = await addResp.json().catch(() => ({}));
+  if (addJson && addJson.success) {
+    await updateRow(env, 'Receipt_Recon_Queue', id, {
+      Status: 'attached_only', Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
+      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.' : 'Image attached only — not billed, no invoice line added.',
+    });
+  }
+  return json({ ok: true, wo_id, property_id, attached_only: true, ...addJson });
 }
 
 // Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
@@ -2148,6 +2393,170 @@ async function receiptReconConfirmDuplicate(env, body) {
     Notes: (reason ? reason + ' ' : '') + 'Confirmed duplicate by Brett — not billed. Auto-purges from the queue after 180 days.',
   });
   return json({ ok: true, id, status: 'duplicate_confirmed' });
+}
+
+// POST /receipt-recon/bulk-action { ids:[...], action, property_id?, reason? } — Part 4 of the
+// Sep 22 2026 dup/refund/bulk brief (bulk checkboxes on the Reconciler). One dispatch endpoint,
+// matching the /wo/combine-style batched-write convention already used in this file, rather than
+// a separate endpoint per action. Deliberately does NOT reimplement any of the four actions —
+// it fans each id out to the SAME single-row handler the Reconciler's own row buttons already
+// call, so a bulk action behaves byte-for-byte like N taps of the existing button, with the same
+// guardrails (e.g. only a 'skipped' row can move back to pending; a no-WO confirm is always an
+// expense; a confirm-duplicate on an already-duplicate row is a harmless no-op):
+//   mark_duplicate   -> receiptReconConfirmDuplicate (same status the single "Confirm duplicate"
+//                        button writes: 'duplicate_confirmed')
+//   expense          -> receiptReconConfirm({ no_wo:true, property_id }) — PR #23's one-tap
+//                        expense flow, applied to the whole batch against ONE property choice
+//                        (Ridge Co: property_id ''; 1864 Kerns School Rd: its real property id,
+//                        resolved client-side by kernsProperty() exactly like the single-tap
+//                        buttons already do — no new property lookup here).
+//   move_to_pending  -> receiptReconUnskip — PR #24's single-row ↩ undo; only ever moves a
+//                        'skipped' row back to 'pending', so an id that isn't currently skipped
+//                        lands in `failed` with that handler's own real error, same as tapping
+//                        the single-row button on it would.
+//   skip             -> receiptReconSkip
+// Respects the Cloudflare subrequest cap the same way /admin/share-attachments' limit/offset
+// does: only the first RECEIPT_BULK_ACTION_MAX ids are processed per call; the rest come back as
+// remaining_ids for the client to call again with (same "click again to continue" shape as the
+// Reconciler's own runFullAudit loop), rather than looping unbounded server-side in one request.
+const RECEIPT_BULK_ACTIONS = ['mark_duplicate', 'expense', 'move_to_pending', 'skip'];
+const RECEIPT_BULK_ACTION_MAX = 20;
+async function receiptReconBulkAction(env, body) {
+  body = body || {};
+  const action = String(body.action || '');
+  if (!RECEIPT_BULK_ACTIONS.includes(action)) {
+    return json({ error: `action must be one of: ${RECEIPT_BULK_ACTIONS.join(', ')}` }, 400);
+  }
+  const allIds = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(x => String(x || '')).filter(Boolean))];
+  if (!allIds.length) return json({ error: 'ids required (array)' }, 400);
+  // property_id may legitimately be '' (Ridge Co overhead, no property) — only reject when the
+  // key is missing entirely, same as receiptReconConfirm's own no_wo validation shape.
+  if (action === 'expense' && body.property_id === undefined) {
+    return json({ error: "property_id required for expense (pass '' for Ridge Co / general overhead)" }, 400);
+  }
+  const batch = allIds.slice(0, RECEIPT_BULK_ACTION_MAX);
+  const remaining = allIds.slice(RECEIPT_BULK_ACTION_MAX);
+
+  const succeeded = [], failed = [];
+  for (const id of batch) {
+    try {
+      let res;
+      if (action === 'mark_duplicate') res = await receiptReconConfirmDuplicate(env, { id, reason: body.reason || '' });
+      else if (action === 'expense') res = await receiptReconConfirm(env, { id, no_wo: true, property_id: body.property_id || '' });
+      else if (action === 'move_to_pending') res = await receiptReconUnskip(env, { id });
+      else res = await receiptReconSkip(env, { id, reason: body.reason || 'bulk skip from Receipt Reconciler' });
+      const resJson = await res.json().catch(() => ({}));
+      if (resJson && resJson.error) failed.push({ id, error: resJson.error });
+      else succeeded.push({ id, result: resJson });
+    } catch (e) {
+      failed.push({ id, error: String(e && e.message || e) });
+    }
+  }
+  return json({
+    ok: true, action, processed: batch.length,
+    succeeded, failed,
+    remaining_ids: remaining, remaining: remaining.length,
+  });
+}
+
+// POST /receipt-recon/refund-candidates { id } — READ-ONLY. Part 3 of the Sep 22 2026 brief.
+// Given a refund row in Receipt_Recon_Queue, searches the Receipts tab for candidate ORIGINAL
+// purchases it might be reversing (receiptRefundFindMatches, pure/unit-tested above) and returns
+// them for Brett to eyeball — store/date/amount/description, ranked, never a verdict. Writes
+// nothing. The UI calls this on demand (same on-demand convention as checkDuplicatesOne), not
+// embedded in every queue-list render, to keep GET /receipt-recon/queue cheap.
+async function receiptReconRefundCandidates(env, body) {
+  body = body || {};
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  let items = []; try { items = JSON.parse(row.Items || '[]'); } catch (e) {}
+  const receipts = await fetchTab(env, 'Receipts');
+  const candidates = receiptRefundFindMatches({ store: row.Vendor, amount: row.Total, date: row.Receipt_Date, items }, receipts);
+  return json({ ok: true, id, refund: { store: row.Vendor || '', amount: row.Total || '', date: row.Receipt_Date || '', items }, candidates });
+}
+
+// POST /receipt-recon/refund-reverse { id, receipt_id, reason, preview_only? } — Rung-3 money
+// write (AUTONOMY_GUARDRAILS): reverses the billed amount of an earlier purchase to credit a
+// refund against it. Same admin-gated / Brett-taps-Confirm shape as every other QuickBooks/
+// customer-invoice write in this file (see scopeProposalAdjustBill) — this path is NOT in
+// PUBLIC_PATHS or any ROLE_SCOPES entry, so it requires the admin secret exactly like every
+// other write here, and it is never called from receiptExtract/receiptSuggestCore/receiptReconScan
+// detection or matching — only from the Reconciler UI's own explicit "This matches — reverse the
+// billed amount" button tap, after Brett has reviewed receiptReconRefundCandidates' suggestions.
+//
+// What "reverse" means concretely: writes a NEW negative Receipts row on the SAME WO as the
+// original purchase (reusing addReceipt with allow_negative:true — the exact mechanism every
+// other Receipts write in this file uses, not a bespoke QuickBooks call), then folds it into the
+// same pending Invoice_Review row the original purchase's receipt was folded into via
+// appendReceiptToInvoiceReview (now negative-delta aware — see its own comment), crediting the
+// customer's pending invoice back down by the refunded amount. If that invoice was already sent
+// to QuickBooks, appendReceiptToInvoiceReview's existing Repair_Flagged convention picks it up
+// exactly like a receipt added after the fact does — Brett pushes the correction himself via the
+// existing Repairable Invoices path, same as every other post-send correction in this app. The
+// Receipts row itself is always written regardless of whether the Invoice_Review fold succeeds —
+// it's the audit-trail source of truth even if the pending invoice couldn't safely absorb the
+// full credit (see 'would_go_negative').
+async function receiptReconRefundReverse(env, body) {
+  body = body || {};
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const receiptId = body.receipt_id; if (!receiptId) return json({ error: 'receipt_id required — pick the original purchase this refund matches' }, 400);
+  const reason = String(body.reason || '').trim();
+  if (!reason) return json({ error: 'A reason is required — it goes on the reversing Receipts row, not just in the Hub.' }, 400);
+
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (['confirmed', 'attached_only', 'refund_reversed'].includes(row.Status)) return json({ error: `already ${row.Status}`, id }, 409);
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  const isRefundRow = (suggestion && suggestion.category === 'refund') || Number(row.Total) < 0;
+  if (!isRefundRow) return json({ error: 'This queue row is not flagged as a refund.' }, 400);
+
+  const receipts = await fetchTab(env, 'Receipts');
+  const original = receipts.find(r => String(r.ID) === String(receiptId) && r.Active !== 'FALSE');
+  if (!original) return json({ error: `No active Receipts row with ID "${receiptId}" found.` }, 404);
+  if (!original.WO_ID) return json({ error: 'That original receipt has no WO_ID — nothing to reverse a bill against.' }, 400);
+
+  const reverseAmount = -Math.abs(Number(row.Total) || 0);
+  if (!reverseAmount) return json({ error: 'This refund has no usable amount — fix the Total on the queue row first.' }, 400);
+
+  const preview = {
+    queue_id: id, original_receipt_id: original.ID, wo_id: original.WO_ID, property_id: original.Property_ID || '',
+    original_amount: Number(original.Amount) || 0, reverse_amount: reverseAmount,
+    store: row.Vendor || original.Store || '', date: row.Receipt_Date || '', reason,
+  };
+  if (body.preview_only) return json({ ok: true, preview });
+
+  const addResp = await addReceipt(env, {
+    wo_id: original.WO_ID, property_id: original.Property_ID || '', amount: reverseAmount,
+    description: `REFUND — reverses receipt #${original.ID} (${reason})`.slice(0, 500),
+    store: row.Vendor || original.Store || '', date: row.Receipt_Date || new Date().toISOString().split('T')[0],
+    added_by: 'Receipt Reconciler (refund reverse)', added_by_id: 'receipt-recon-refund-reverse', role: 'hub',
+    category: 'refund', source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
+    payment_source: body.payment_source, allow_negative: true,
+  });
+  const addJson = await addResp.json().catch(() => ({}));
+  let invoiceLink = null;
+  if (addJson && addJson.success && !addJson.duplicate && addJson.id) {
+    // Same signed-scope-proposal carve-out receiptReconConfirm uses: a job billed through
+    // proposal milestones is never folded into Invoice_Review (it would double-count against
+    // the milestone billing instead of the ordinary per-receipt invoice).
+    let covered = null, coverErr = null;
+    try { covered = await scopeCoveringSignatureForWO(env, original.WO_ID); } catch (e) { coverErr = e; }
+    if (covered) invoiceLink = { linked: false, reason: 'covered_by_signed_proposal', scope_id: covered.scope_id };
+    else if (coverErr) invoiceLink = { linked: false, reason: 'scope_check_failed', error: String(coverErr && coverErr.message || coverErr) };
+    else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id: original.WO_ID, receipt_id: addJson.id, amount: reverseAmount });
+  }
+  if (addJson && addJson.success) {
+    await updateRow(env, 'Receipt_Recon_Queue', id, {
+      Status: 'refund_reversed', Confirmed_WO_ID: original.WO_ID, Confirmed_Amount: String(reverseAmount),
+      Confirmed_Description: `Reverses receipt #${original.ID}`,
+      Notes: `Confirmed match by Brett — reversed $${Math.abs(reverseAmount).toFixed(2)} against receipt #${original.ID} on WO ${original.WO_ID}. ${reason}`,
+    });
+  }
+  return json({ ok: true, wo_id: original.WO_ID, original_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink });
 }
 
 const DUPLICATE_RETENTION_DAYS = 180;
@@ -4236,6 +4645,25 @@ async function tenantWOSettingsSummary(env) {
   return json({ owners: ownerRows, properties: propRows });
 }
 
+// Same-isolate, synchronous claim against the WO-create duplicate race — see the long comment
+// in createWorkOrder for why this exists alongside findRecentDuplicate rather than instead of
+// it. Keyed on the exact same signature fields findRecentDuplicate matches on, so it can never
+// be stricter than that check (a genuinely different description/property/unit never collides).
+// TTL is a little longer than the Work_Orders findRecentDuplicate window (60s) so a slow first
+// request can't have its claim expire out from under it while still mid-flight.
+const __woClaimCache = new Map(); // signatureKey -> expiry (ms epoch)
+const WO_CLAIM_TTL_MS = 75000;
+function claimWOSignature(sig) {
+  const key = ['Property_ID', 'Unit_ID', 'Tenant_ID', 'Trade', 'Description', 'Type']
+    .map(k => String(sig[k] || '')).join('\u0001');
+  const now = Date.now();
+  for (const [k, exp] of __woClaimCache) if (exp <= now) __woClaimCache.delete(k); // opportunistic sweep, keeps the Map from growing forever
+  const existing = __woClaimCache.get(key);
+  if (existing && existing > now) return false; // already claimed and still live
+  __woClaimCache.set(key, now + WO_CLAIM_TTL_MS);
+  return true;
+}
+
 async function createWorkOrder(env, body) {
   const _t0 = Date.now();
   // Same property/unit/tenant, same trade/description, seconds apart = a double-tap on
@@ -4247,10 +4675,54 @@ async function createWorkOrder(env, body) {
   // permanently unreachable by any endpoint in the app — no button could ever touch it again
   // (WO-1192, 2026-09-14). Same pattern/window as Receipts and Time_Entries: short window,
   // full signature match, hand back the row that already exists instead of appending a twin.
-  const dupe = await findRecentDuplicate(env, 'Work_Orders', {
+  //
+  // Root cause of WO-1213/WO-1214 (2026-09-23, Lance Serafica, identical description, 30s
+  // apart) — a pure TOCTOU race between this Sheets-backed check and the append it guards.
+  // findRecentDuplicate's "is there already a matching row?" read and this function's own
+  // append are two separate round trips with nothing in between stopping a second request from
+  // reading the sheet before the first request's write has landed — exactly the class of bug
+  // rule 179's cronSweep claim exists for, just never applied here. The tenant `/workorder`
+  // path makes it worse: session→tenant resolution and the tenant-WO-toggle access check both
+  // run first and are themselves awaited Sheets reads, so a second submission arriving ~30s
+  // later (a tenant who saw no confirmation and tried again) does its OWN duplicate check even
+  // later than that, right at or past the edge of the 30s window rule 162 set. Live-reproduced
+  // against staging pre-fix: two identical /workorder submissions 30s apart both created a
+  // fresh WO (WO-1094 -> WO-1095), confirming this analysis before writing the fix below.
+  //
+  // Fix has two parts:
+  //  1. A synchronous, same-isolate claim below. Cloudflare Workers are single-threaded within
+  //     an isolate — a plain Map check-and-set with no `await` between them cannot race with
+  //     itself, unlike the Sheets read/append pair. This is a REAL lock for the common case
+  //     (a tenant's own two taps land on the same isolate) and is checked before any network
+  //     call at all, so it can't be starved by upstream latency the way the sheet-based check
+  //     can. It is not cross-isolate durable — see claimWOSignature's own comment — so it's a
+  //     fast first line of defense layered on top of findRecentDuplicate below, not a
+  //     replacement for it.
+  //  2. The window itself: widened 30s -> 60s for Work_Orders specifically (findRecentDuplicate
+  //     also got its own latency fix — see its comment — but the tenant path's pre-check
+  //     latency happens before findRecentDuplicate is even called, so a wider nominal window is
+  //     the only way to keep real margin here). Still a full-signature match (property + unit +
+  //     tenant + trade + description + type), so two genuinely different tenant requests close
+  //     in time are never blocked by this — only an exact repeat of the same complaint is.
+  const _woSig = {
     Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Tenant_ID: body.tenant_id || '',
     Trade: body.trade || '', Description: body.description || '', Type: body.type || 'manual',
-  }, 30);
+  };
+  const _gotClaim = claimWOSignature(_woSig);
+  if (!_gotClaim) {
+    // Another request in this isolate already claimed this exact signature and may still be
+    // mid-flight (not necessarily finished writing yet), so a single check right now could
+    // still miss it. Poll briefly for it to land instead of racing ahead to append a twin.
+    for (let i = 0; i < 6; i++) {
+      await new Promise(r => setTimeout(r, 350));
+      const found = await findRecentDuplicate(env, 'Work_Orders', _woSig, 60);
+      if (found) return json({ success: true, duplicate: true, id: found.ID });
+    }
+    // Gave up waiting (the "owner" of the claim errored out, or this really is a stale claim
+    // slot getting reused) — fall through to the normal single-source-of-truth check below
+    // rather than blocking a legitimate write forever.
+  }
+  const dupe = await findRecentDuplicate(env, 'Work_Orders', _woSig, 60);
   if (dupe) return json({ success: true, duplicate: true, id: dupe.ID });
 
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
@@ -11549,16 +12021,41 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
 // data starts flowing from here). routeAI throws on a hard failure (missing key, fetch error)
 // exactly like the old direct call did — only the final JSON.parse of the model's own text is
 // caught, unchanged from before.
+// PURE — Part 3 of the Sep 22 2026 dup/refund/bulk brief. The live incident: the Aug 24 Home
+// Depot return (`2026-08-24_HomeDepot_85eb0166.pdf`, TOTAL −$111.18, "REFUND-CUSTOMER COPY",
+// "ORIG REC:" lines) OCR'd as +$111.18 — the model read the printed digits but missed that they
+// represented money coming BACK, not a charge. Rather than trust the model's sign alone, this is
+// a second, code-level guard run on every extracted receipt: given the already-extracted fields
+// (including the new refund_signal_text field the prompt below now asks for), decide definitively
+// whether this is a refund/return and FORCE the total negative — never let a refund amount reach
+// addReceipt/billing as a positive charge, no matter what the model returned. Pure and testable
+// with no live model call: feed it a plain object shaped like receiptExtract's own output.
+function receiptApplyRefundDetection(ex) {
+  ex = ex || {};
+  const total = (typeof ex.total === 'number' && isFinite(ex.total)) ? ex.total
+    : (ex.total !== null && ex.total !== undefined && ex.total !== '' && isFinite(Number(ex.total)) ? Number(ex.total) : null);
+  const blob = [ex.refund_signal_text, ex.handwritten_note, ex.po_reference, ex.invoice_number].filter(Boolean).join(' ');
+  const hasRefundLanguage = /\b(REFUND|RETURN|ORIG\s*REC|CREDIT\s*MEMO)\b/i.test(blob);
+  const isNegative = total !== null && total < 0;
+  const refund = hasRefundLanguage || isNegative;
+  return {
+    ...ex,
+    total: (refund && total !== null) ? -Math.abs(total) : total,
+    refund,
+    refund_reason: refund ? (String(ex.refund_signal_text || '').trim() || (hasRefundLanguage ? 'Refund/return language detected on receipt.' : 'Negative total (return/refund).')) : '',
+  };
+}
+
 async function receiptExtract(env, bytes, mime) {
   const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
   const media = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
-  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased, VERBATIM as printed — e.g. "GLIDDEN PREMIUM INT PAINT"; empty array if unreadable), items_summary (array of short GENERALIZED category words for what was bought, one per distinct item/group — e.g. "paint", "primer", "batteries", "tape" instead of the verbatim brand/SKU text in items; collapse near-duplicates, e.g. two paint SKUs both become one "paint" entry; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased, VERBATIM as printed — e.g. "GLIDDEN PREMIUM INT PAINT"; empty array if unreadable), items_summary (array of short GENERALIZED category words for what was bought, one per distinct item/group — e.g. "paint", "primer", "batteries", "tape" instead of the verbatim brand/SKU text in items; collapse near-duplicates, e.g. two paint SKUs both become one "paint" entry; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), refund_signal_text (verbatim any text on the receipt indicating this is a RETURN/REFUND rather than a purchase — e.g. "REFUND-CUSTOMER COPY", "RETURN", "ORIG REC:", "CREDIT MEMO" — else ""; if present, also make `+"`total`"+` the NEGATIVE amount refunded to the customer even if the printed digits show it as positive), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
   const r = await routeAI(env, { type: 'receipt_parse', moneyFacing: true, media, prompt, maxTokens: 700, source: 'receiptExtract' });
   const txt = (r.result || '').trim();
-  try { return JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim()); }
-  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0 }; }
+  try { return receiptApplyRefundDetection(JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim())); }
+  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0, refund: false, refund_reason: '' }; }
 }
 
 // Read a VENDOR INVOICE (photo or PDF) with Claude vision → strict JSON suggestion. This is the
@@ -12690,8 +13187,18 @@ function missingTabResponse(tab) {
 // caller proceeds to append.
 async function findRecentDuplicate(env, tab, signature, windowSeconds) {
   try {
-    const rows = await fetchTab(env, tab);
+    // Root-caused Sep 23 2026 (WO-1213/WO-1214, Lance Serafica, 30s apart, rule 162's guard
+    // never fired): cutoff used to be computed AFTER `await fetchTab`. That await is a real
+    // network round trip to Sheets (retried with backoff under a 429), so every millisecond it
+    // takes silently SHRINKS the window from what the caller asked for — a 30s window becomes
+    // effectively "30s minus however long this fetch took." On the tenant `/workorder` path
+    // there are several awaited Sheets reads ahead of this one too (session→tenant resolve,
+    // the tenant-WO-toggle access check), so by the time this cutoff was computed, real elapsed
+    // time since the first submission could already exceed the nominal window even though the
+    // two requests looked ~30s apart end-to-end. Compute cutoff from the moment the check
+    // STARTS, before any awaits, so the promised window is the actual window.
     const cutoff = Date.now() - (windowSeconds || 120) * 1000;
+    const rows = await fetchTab(env, tab);
     const keys = Object.keys(signature);
     for (let i = rows.length - 1; i >= 0; i--) {   // newest first — duplicates are recent
       const r = rows[i];
@@ -12781,6 +13288,14 @@ async function isTestRecord(env, tab, id) {
 // false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  if (['/admin/receipt-duplicate-audit/build-index', '/admin/receipt-duplicate-audit/scan', '/admin/receipt-duplicate-audit/mark'].includes(path)) {
+    // These only ever write to two brand-new, isolated, non-PII cache/audit tabs
+    // (QB_Invoice_Line_Cache, Receipt_Duplicate_Audit) and never touch a real
+    // customer/vendor/tenant/property/WO row — there is no protected record for a
+    // TEST- check to gate here, same SAFE-class reasoning as Ops_Telemetry. QuickBooks
+    // calls made along the way are GET-only (build-index never writes to QB).
+    return true;
+  }
   if (['/property/add', '/owner/add', '/vendor/add', '/tenant/add', '/unit/add'].includes(path)) {
     // Creating a brand-new row: the token may only ever create rows that self-identify as
     // test data by name — never anything that could pass as a real record.
@@ -12802,6 +13317,17 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   if (path === '/assign') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
+  if (path === '/receipt/attach-only') {
+    // Same reasoning as /status below: the write only ever lands on Receipts (never Vendor_Bills
+    // or Invoice_Review — see receiptAttachOnly's own comment), tied to an existing Work_Orders
+    // row, so gate on that WO's own Property being a TEST- fixture. The Receipt_Recon_Queue row
+    // itself carries no TEST- marker of its own (that tab isn't in TEST_MARKER_FIELD), so this is
+    // the only safe check available here.
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
   if (path === '/status') {
     const wos = await fetchTab(env, 'Work_Orders');
@@ -16104,6 +16630,307 @@ async function receiptReconCheckDuplicatesBulk(env, body) {
 }
 
 
+// ── Receipt DUPLICATE AUDIT (Task 1, Sep 22 2026 handoff) ───────────────────────────────────
+// Read-only against QuickBooks, forever — this audit never writes an invoice, bill, credit memo,
+// or anything else to QB. It exists because receiptCheckDuplicatesOne above only ever looks at
+// (a) rows still sitting in Receipt_Recon_Queue, never confirmed Receipts rows, and (b) the
+// closest 5 invoices within a ±45-day window — a duplicate on the 6th invoice, or one billed
+// months later, is invisible to it. Brett caught a real receipt-billed-twice case that check
+// would never have found and believes there are more.
+//
+// Brett's answers to the design questions (Sep 22 2026, already collected — do not re-ask):
+//   1. Audit range: per-receipt, not a global cutoff. Each receipt only scans invoices dated ON
+//      OR AFTER that receipt's own date — a receipt can't be billed on an invoice that predates
+//      the purchase. No upper bound.
+//   2. Markup matching: exact amount only, same convention as receiptCheckDuplicatesOne — do NOT
+//      also check receipt-amount-plus-markup.
+//   3. Match strictness: amount alone is enough to flag for review. Do NOT also require a
+//      matching store/description — every same-amount hit surfaces; Brett eyeballs each one.
+//
+// Design decision on the "does a list query carry Line" question (handoff doc, verify-first
+// item): there is no read-only, credential-free path available to this build to run a raw
+// `SELECT * FROM Invoice` against QuickBooks and inspect the result outside of a full worker
+// deploy (hub_test_get/hub_prod_get are allow-listed to Hub JSON endpoints, not raw QB queries,
+// and asking Brett for WORKER_SECRET to check this is exactly what these tools exist to avoid).
+// So this defaults to the SAFER of the two designs per the handoff's own fallback instruction:
+// per-invoice opens, paged — never a bulk pull assumed to carry Line. `build-index` below still
+// reports `list_query_carried_line` on every real run (computed for free from the list call it
+// already makes) so the very first live run answers the question for good, and a future build
+// can switch to the cheaper bulk-with-Line path once that's confirmed TRUE across a real batch.
+//
+// Two BRAND-NEW, isolated Hub-only Sheet tabs (never touched by any other endpoint):
+//   QB_Invoice_Line_Cache    — one row per QuickBooks invoice SalesItemLineDetail line, rebuilt
+//                              by build-index. A cache, not a source of truth — safe to wipe and
+//                              rebuild any time.
+//   Receipt_Duplicate_Audit  — one row per FLAGGED receipt, with Brett's own "real duplicate" /
+//                              "not a duplicate" marker. This file is Brett's own judgment on
+//                              record, and a re-scan (see receiptDuplicateAuditScan below) never
+//                              overwrites a mark he already made — only clears a row he hasn't
+//                              reviewed yet if it no longer matches.
+//
+// Paging follows the exact shape /admin/share-attachments already uses (offset/next_offset,
+// "click again to continue") — the real cost here is the per-invoice QuickBooks opens in
+// build-index, capped well under Cloudflare's ~25-subrequest-per-invocation ceiling that has
+// failed this app live before at this scale (rule referenced in the handoff doc).
+
+const QB_INV_CACHE_HEADERS = ['ID', 'Invoice_ID', 'Doc_Number', 'TxnDate', 'Customer_QB_ID', 'Customer_Name', 'Line_Description', 'Amount', 'Paid', 'Cached_Date', 'Active'];
+const RECEIPT_AUDIT_HEADERS = ['ID', 'Receipt_ID', 'WO_ID', 'Store', 'Receipt_Date', 'Amount', 'Match_Count', 'Matches_JSON', 'Own_Customer_ID', 'Status', 'Flagged_Date', 'Reviewed_Date', 'Active'];
+const RECEIPT_AUDIT_STATUSES = ['pending', 'real_duplicate', 'not_duplicate'];
+
+async function ensureReceiptDuplicateAuditTabs(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  const need = [];
+  if (!titles.includes('QB_Invoice_Line_Cache')) need.push('QB_Invoice_Line_Cache');
+  if (!titles.includes('Receipt_Duplicate_Audit')) need.push('Receipt_Duplicate_Audit');
+  if (need.length) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  }
+  await ensureColumns(env, 'QB_Invoice_Line_Cache', QB_INV_CACHE_HEADERS);
+  await ensureColumns(env, 'Receipt_Duplicate_Audit', RECEIPT_AUDIT_HEADERS);
+}
+
+// PURE — one raw QuickBooks Invoice object (as returned by GET invoice/{id}) into flat cache
+// rows, one per SalesItemLineDetail line (the same DetailType qbInvoiceLineDuplicates above
+// matches on). No network, no Sheets — a fixture invoice payload is all this needs to test.
+function qbInvoiceLineCacheRows(invoice) {
+  if (!invoice || invoice.Id == null) return [];
+  const total = Number(invoice.TotalAmt || 0);
+  const balance = invoice.Balance != null ? Number(invoice.Balance) : total;
+  const paid = total > 0 && Math.abs(balance) < 0.005;
+  const custId = (invoice.CustomerRef && invoice.CustomerRef.value != null) ? String(invoice.CustomerRef.value) : '';
+  const custName = (invoice.CustomerRef && invoice.CustomerRef.name) || '';
+  const doc = invoice.DocNumber || '';
+  const date = String(invoice.TxnDate || '').slice(0, 10);
+  const out = [];
+  for (const line of (invoice.Line || [])) {
+    if (line.DetailType !== 'SalesItemLineDetail') continue;
+    const amt = Number(line.Amount || 0);
+    if (!(amt > 0)) continue;
+    out.push({
+      invoice_id: String(invoice.Id), doc, date,
+      customer_id: custId, customer_name: custName,
+      description: String(line.Description || '').replace(/\s+/g, ' ').trim().slice(0, 200),
+      amount: amt, paid,
+    });
+  }
+  return out;
+}
+
+// PURE — resolves the QuickBooks customer id a work order's invoice WOULD be billed under,
+// mirroring the Unit > Property > Owner precedence qbEntities already uses for mapping (a unit's
+// own QBO_Customer_ID wins if set, else the property's, else the owner's). Returns '' when
+// nothing is mapped yet — callers must treat '' as "unknown", never as "different from the match".
+function resolveWOCustomerId(woId, workorders, properties, units, owners) {
+  const wo = (workorders || []).find(w => String(w.ID) === String(woId));
+  if (!wo) return '';
+  const propId = String(wo.Property_ID || '');
+  const unitId = String(wo.Unit_ID || '');
+  const unit = unitId ? (units || []).find(u => String(u.ID) === unitId) : null;
+  if (unit && (unit.QBO_Customer_ID || '').trim()) return unit.QBO_Customer_ID.trim();
+  const prop = propId ? (properties || []).find(p => String(p.ID) === propId) : null;
+  if (prop && (prop.QBO_Customer_ID || '').trim()) return prop.QBO_Customer_ID.trim();
+  const owner = prop ? (owners || []).find(o => String(o.ID) === String(prop.Owner_ID)) : null;
+  if (owner && (owner.QBO_Customer_ID || '').trim()) return owner.QBO_Customer_ID.trim();
+  return '';
+}
+
+// PURE — every cached invoice line whose amount equals the receipt's amount, on an invoice
+// dated ON OR AFTER the receipt's own date (Brett's answer to the audit-range question: a
+// receipt can't be billed on an invoice that predates the purchase; no upper bound, no global
+// cutoff — deliberately per-receipt). Operates on the same row shape fetchTab returns for
+// QB_Invoice_Line_Cache, same convention as receiptDuplicatesAtProperty operating on raw
+// Receipts rows above.
+function receiptDuplicateAuditMatches(receipt, cacheRows) {
+  const amt = (Number(receipt.amount) || 0).toFixed(2);
+  const rDate = String(receipt.date || '').slice(0, 10);
+  if (!(Number(amt) > 0) || !rDate) return [];
+  return (cacheRows || [])
+    .filter(c => c.Active !== 'FALSE')
+    .filter(c => (Number(c.Amount) || 0).toFixed(2) === amt)
+    .filter(c => String(c.TxnDate || '').slice(0, 10) >= rDate)
+    .map(c => ({
+      invoice_id: c.Invoice_ID, doc: c.Doc_Number, date: c.TxnDate,
+      customer_id: c.Customer_QB_ID, customer_name: c.Customer_Name,
+      description: c.Line_Description, amount: Number(c.Amount) || 0,
+      paid: String(c.Paid) === 'TRUE',
+    }));
+}
+
+// PURE — Brett's flag rule (Sep 22 2026 design answers): flag a receipt when its amount appears
+// on 2+ invoice lines, OR on an invoice billed to a different QuickBooks customer than the
+// receipt's own work order. Amount alone is enough to surface it for review — no store/
+// description match required, Brett eyeballs every hit himself.
+function receiptDuplicateAuditDecision(matches, ownCustomerId) {
+  if (!matches || !matches.length) return { flagged: false, reason: '' };
+  if (matches.length >= 2) return { flagged: true, reason: `Amount matches ${matches.length} separate invoice lines.` };
+  const own = String(ownCustomerId || '').trim();
+  const diff = matches.find(m => own && String(m.customer_id || '').trim() && String(m.customer_id).trim() !== own);
+  if (diff) return { flagged: true, reason: `Matches invoice #${diff.doc || diff.invoice_id} (${diff.date}) billed to a different customer than this receipt's own work order.` };
+  return { flagged: false, reason: '' };
+}
+
+// How many individual QuickBooks invoices build-index opens per call. 1 list query + this many
+// individual GETs + one Sheets append stays well under Cloudflare's ~25-subrequest ceiling per
+// invocation — that ceiling has failed this app live before at this scale (handoff doc).
+const RECEIPT_AUDIT_INVOICE_OPEN_LIMIT = 15;
+
+// POST /admin/receipt-duplicate-audit/build-index { offset, limit, reset } — rebuilds
+// QB_Invoice_Line_Cache from live QuickBooks invoices, one page at a time. Read-only against
+// QuickBooks (qbAllInvoicesRaw + individual GET invoice/{id} — never a write). Call repeatedly
+// with the returned next_offset until done:true, same "click again to continue" shape as
+// /admin/share-attachments.
+async function receiptDuplicateAuditBuildIndex(env, body) {
+  body = body || {};
+  const offset = Number.isInteger(body.offset) && body.offset >= 0 ? body.offset : 0;
+  const limit = Number.isInteger(body.limit) && body.limit > 0 && body.limit <= RECEIPT_AUDIT_INVOICE_OPEN_LIMIT ? body.limit : RECEIPT_AUDIT_INVOICE_OPEN_LIMIT;
+  try {
+    await ensureReceiptDuplicateAuditTabs(env);
+    const token = await qbAccessToken(env);
+    // One cheap list-only query, re-fetched every batch (not cached across calls) so a receipt
+    // or invoice added mid-audit is picked up by the very next batch rather than working off a
+    // stale list — mirrors qbAllInvoicesRaw's own "list once, match in memory" convention.
+    const invoices = await qbAllInvoicesRaw(env, token);
+    const listQueryCarriedLine = invoices.some(inv => Array.isArray(inv.Line) && inv.Line.length > 0);
+    if (offset === 0 && body.reset !== false) {
+      // Fresh run — clear stale rows from a previous audit before repopulating, so a second run
+      // never double-counts an invoice's lines against themselves.
+      try { await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache!A2:Z100000:clear', {}); } catch (_) { /* best-effort — a failed clear just means old + new rows coexist until the next reset */ }
+    }
+    const batch = invoices.slice(offset, offset + limit);
+    const newRows = [];
+    let opened = 0, lineCount = 0;
+    for (const inv of batch) {
+      opened++;
+      try {
+        const full = await qbApi(env, `invoice/${inv.Id}?minorversion=73`, 'GET', null, token);
+        for (const l of qbInvoiceLineCacheRows(full && full.Invoice)) { newRows.push(l); lineCount++; }
+      } catch (e) { /* one bad invoice open must not kill the rest of this batch */ }
+    }
+    if (newRows.length) {
+      const cached = new Date().toISOString();
+      const values = newRows.map((l, i) => [
+        String(offset + i + 1), l.invoice_id, l.doc, l.date, l.customer_id, l.customer_name,
+        l.description, String(l.amount), l.paid ? 'TRUE' : 'FALSE', cached, 'TRUE',
+      ]);
+      await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache:append?valueInputOption=RAW', { values });
+    }
+    const nextOffset = offset + opened;
+    const done = nextOffset >= invoices.length;
+    return json({
+      ok: true, total_invoices: invoices.length, offset, opened_this_batch: opened,
+      lines_cached_this_batch: lineCount, next_offset: done ? null : nextOffset, done,
+      list_query_carried_line: listQueryCarriedLine,
+    });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// Pure in-memory matching once the cache is built — no QuickBooks calls at all — so a much
+// larger batch than build-index's is safe under the same subrequest cap.
+const RECEIPT_AUDIT_SCAN_LIMIT = 200;
+
+// POST /admin/receipt-duplicate-audit/scan { offset, limit } — pages through every active
+// Receipts row with an Amount, matches each against QB_Invoice_Line_Cache (built by
+// build-index), and upserts a Receipt_Duplicate_Audit row for anything that flags. Never
+// overwrites Brett's own Status on a row he's already reviewed — only clears a still-pending
+// row that no longer matches (e.g. after a cache rebuild). Call repeatedly until done:true.
+async function receiptDuplicateAuditScan(env, body) {
+  body = body || {};
+  const offset = Number.isInteger(body.offset) && body.offset >= 0 ? body.offset : 0;
+  const limit = Number.isInteger(body.limit) && body.limit > 0 && body.limit <= RECEIPT_AUDIT_SCAN_LIMIT ? body.limit : RECEIPT_AUDIT_SCAN_LIMIT;
+  try {
+    await ensureReceiptDuplicateAuditTabs(env);
+    const [receipts, workorders, properties, units, owners, cacheRows, existingFlags] = await fetchTabs(env,
+      ['Receipts', 'Work_Orders', 'Properties', 'Units', 'Owners', 'QB_Invoice_Line_Cache', 'Receipt_Duplicate_Audit']);
+    const activeReceipts = (receipts || []).filter(r => r.Active !== 'FALSE' && Number(r.Amount) > 0);
+    const batch = activeReceipts.slice(offset, offset + limit);
+    const existingByReceiptId = {};
+    (existingFlags || []).forEach(f => { if (f.Active !== 'FALSE') existingByReceiptId[String(f.Receipt_ID)] = f; });
+    let flaggedNew = 0, flaggedUpdated = 0, clearedStale = 0;
+    for (const r of batch) {
+      const ownCustomerId = resolveWOCustomerId(r.WO_ID, workorders, properties, units, owners);
+      const matches = receiptDuplicateAuditMatches({ amount: r.Amount, date: r.Date }, cacheRows);
+      const decision = receiptDuplicateAuditDecision(matches, ownCustomerId);
+      const existing = existingByReceiptId[String(r.ID)];
+      if (decision.flagged) {
+        const fields = {
+          WO_ID: r.WO_ID || '', Store: r.Store || '', Receipt_Date: r.Date || '', Amount: r.Amount || '',
+          Match_Count: String(matches.length), Matches_JSON: JSON.stringify(matches).slice(0, 8000),
+          Own_Customer_ID: ownCustomerId, Flagged_Date: new Date().toISOString(), Active: 'TRUE',
+        };
+        if (existing) {
+          await updateRow(env, 'Receipt_Duplicate_Audit', existing.ID, fields); // Status field omitted — preserves Brett's own mark
+          flaggedUpdated++;
+        } else {
+          await addRow(env, 'Receipt_Duplicate_Audit', Object.assign({ Receipt_ID: r.ID, Status: 'pending' }, fields));
+          flaggedNew++;
+        }
+      } else if (existing && existing.Status === 'pending') {
+        await updateRow(env, 'Receipt_Duplicate_Audit', existing.ID, { Active: 'FALSE' });
+        clearedStale++;
+      }
+    }
+    const nextOffset = offset + batch.length;
+    const done = nextOffset >= activeReceipts.length;
+    return json({
+      ok: true, total_receipts: activeReceipts.length, offset, scanned_this_batch: batch.length,
+      flagged_new: flaggedNew, flagged_updated: flaggedUpdated, cleared_stale: clearedStale,
+      next_offset: done ? null : nextOffset, done,
+    });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// GET /admin/receipt-duplicate-audit/flags?status=pending|real_duplicate|not_duplicate|all —
+// lists flagged receipts for the "Audit older receipts" view. Read-only, no QuickBooks call.
+// PURE — Part 1 (Sep 22 2026 brief): is a flagged receipt's own image actually on file? Checks
+// the Receipts row's own attachment field — confirmed live as Source_File_ID/Source_File_URL
+// (NOT the brief's guessed File_Url/Drive_File_Id, PAT-024) — never a separate scan of the WO's
+// Photos & Files. Factored out so it's unit-testable with no live Sheets I/O.
+function receiptImageAttachedInfo(receiptRow) {
+  const url = receiptRow ? String(receiptRow.Source_File_URL || '') : '';
+  const fid = receiptRow ? String(receiptRow.Source_File_ID || '') : '';
+  return { image_attached: !!(url || fid), image_url: url };
+}
+
+async function receiptDuplicateAuditFlags(env, url) {
+  await ensureReceiptDuplicateAuditTabs(env);
+  const status = url && url.searchParams.get('status');
+  const [rows, receipts] = await Promise.all([
+    fetchTab(env, 'Receipt_Duplicate_Audit'),
+    fetchTab(env, 'Receipts').catch(() => []),
+  ]);
+  let out = rows.filter(r => r.Active !== 'FALSE');
+  if (status && status !== 'all') out = out.filter(r => (r.Status || 'pending') === status);
+  out.sort((a, b) => String(b.Flagged_Date || '').localeCompare(String(a.Flagged_Date || '')));
+  const receiptById = {}; (receipts || []).forEach(r => { receiptById[String(r.ID)] = r; });
+  return json({
+    ok: true, count: out.length, flags: out.map(f => {
+      const img = receiptImageAttachedInfo(receiptById[String(f.Receipt_ID)]);
+      return {
+        id: f.ID, receipt_id: f.Receipt_ID, wo_id: f.WO_ID, store: f.Store, receipt_date: f.Receipt_Date,
+        amount: Number(f.Amount) || 0, match_count: Number(f.Match_Count) || 0,
+        matches: (() => { try { return JSON.parse(f.Matches_JSON || '[]'); } catch (_) { return []; } })(),
+        status: f.Status || 'pending', flagged_date: f.Flagged_Date || '', reviewed_date: f.Reviewed_Date || '',
+        image_attached: img.image_attached, image_url: img.image_url,
+      };
+    }),
+  });
+}
+
+// POST /admin/receipt-duplicate-audit/mark { id, status } — Brett's own "real duplicate" /
+// "not a duplicate" judgment on a flagged row. Writes ONLY to Receipt_Duplicate_Audit — never
+// touches QuickBooks, Receipts, or Work_Orders. Fixing an actual duplicate in QuickBooks (credit
+// memo / invoice repair) stays Brett's own tap in QuickBooks itself — explicitly out of scope.
+async function receiptDuplicateAuditMark(env, body) {
+  body = body || {};
+  const id = body.id;
+  const status = body.status;
+  if (!id) return json({ error: 'id required' }, 400);
+  if (!RECEIPT_AUDIT_STATUSES.includes(status)) return json({ error: `status must be one of ${RECEIPT_AUDIT_STATUSES.join(', ')}` }, 400);
+  await ensureReceiptDuplicateAuditTabs(env);
+  await updateRow(env, 'Receipt_Duplicate_Audit', id, { Status: status, Reviewed_Date: new Date().toISOString() });
+  return json({ ok: true, id, status });
+}
 
 // Shared "was there ever a payment against this txn" guard, used before ANY delete-based undo —
 // a vendor bill, a customer invoice, doesn't matter. A txn whose remaining Balance differs from
