@@ -354,6 +354,28 @@ async function runFullAudit(){
   finally { auditRunning = false; if (btn) btn.disabled = false; }
 }
 
+// Part 0 (Sep 22 2026 incident) — a fast "how did this get here" cue on EVERY row (not just
+// flagged ones), per Brett's ask, so he has a visual cross-check even for rows the automated
+// match below misses.
+function entrySourceLabel(r){
+  const when = String(r.Received_Date || '').slice(0, 10) || '?';
+  if (r.Entry_Source === 'email_scan') return 'via email scan, ' + when;
+  if (r.Entry_Source === 'manual_drop') return 'dropped in Drive manually, ' + when;
+  return 'received ' + when;   // older rows scanned before Entry_Source existed
+}
+
+// Part 0 — the intake-time rescan guard's flag. Rendered on EVERY status (pending included —
+// this is the whole point: the flag must be visible the instant Brett looks at a fresh Pending
+// card, not hidden behind a Notes line that's normally suppressed while pending). Never implies
+// the row was auto-skipped; it always still needs Brett's own Confirm/Skip tap.
+function rescanBannerHtml(r){
+  const matches = r.rescan_matches || [];
+  if (!matches.length) return '';
+  return '<div class="rc-flags" style="flex-direction:column;align-items:stretch;gap:6px">'
+    + matches.map(m => '<div class="rc-sub err" style="font-weight:600">⚠️ ' + esc(m.reason) + '</div>').join('')
+    + '</div>';
+}
+
 function flagPill(f){
   const map = {
     duplicate_on_wo: ['danger','Duplicate — already on that WO'],
