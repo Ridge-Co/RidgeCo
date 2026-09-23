@@ -6418,7 +6418,12 @@ async function sendPropertyNotice(env, body) {
   const propertyId = body.property_id;
   if (!propertyId) return json({ error: 'property_id required' }, 400);
   const channels = Array.isArray(body.channels) && body.channels.length ? body.channels : ['sms'];
-  const [properties, owners, tenants] = await fetchTabs(env, ['Properties', 'Owners', 'Tenants']);
+  // unit_id (Sep 23 2026, additive): when passed, narrows the broadcast down to that one unit's
+  // tenant(s) instead of every active tenant in the building, and adds a {Unit} token so a
+  // template can reference it. No unit_id (the pre-existing default) still means the original
+  // building-wide broadcast with no Unit token — unchanged for every existing caller.
+  const unitId = body.unit_id || '';
+  const [properties, owners, tenants, units] = await fetchTabs(env, ['Properties', 'Owners', 'Tenants', 'Units']);
   const property = properties.find(p => p.ID === propertyId);
   if (!property) return json({ error: 'Property not found' }, 404);
   const owner = property ? (owners.find(o => o.ID === property.Owner_ID) || null) : null;
