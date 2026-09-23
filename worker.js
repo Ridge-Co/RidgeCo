@@ -16400,7 +16400,6 @@ async function receiptDuplicateAuditMark(env, body) {
   return json({ ok: true, id, status });
 }
 
-
 // Shared "was there ever a payment against this txn" guard, used before ANY delete-based undo —
 // a vendor bill, a customer invoice, doesn't matter. A txn whose remaining Balance differs from
 // its TotalAmt by more than a penny had SOME payment/credit applied against it; deleting it would
