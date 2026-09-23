@@ -13546,6 +13546,20 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/wo/bulk-void') {
+    // Same shape as /wo/combine above: every id in the batch must itself resolve (via its
+    // Property) to a TEST- record, or this token can never touch it -- a mixed batch with even
+    // one real WO in it is refused outright, not silently trimmed down to the safe subset.
+    const ids = Array.isArray(body && body.ids) ? body.ids : [];
+    if (!ids.length) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    for (const id of ids) {
+      const w = wos.find(x => String(x.ID) === String(id));
+      if (!w) return false;
+      if (!(await isTestRecord(env, 'Properties', w.Property_ID))) return false;
+    }
+    return true;
+  }
   return false;
 }
 
