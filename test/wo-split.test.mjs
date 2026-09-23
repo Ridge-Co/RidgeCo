@@ -64,6 +64,10 @@ const woUnvoidSrc              = grab(wsrc, 'async function woUnvoid(');
 const findRecentDupeSrc        = grab(wsrc, 'async function findRecentDuplicate(');
 const addRowSrc                = grab(wsrc, 'async function addRow(');
 const updateRowSrc             = grab(wsrc, 'async function updateRow(');
+// Root cause fix for WO-1213/WO-1214 (rule 162 follow-up, Sep 23 2026) added a same-isolate
+// synchronous claim that createWorkOrder now calls before its own dupe check — grab it
+// alongside createWorkOrder itself, same convention turnover.test.mjs follows.
+const claimCacheSrc            = grabRange(wsrc, 'const __woClaimCache = new Map();', 'async function createWorkOrder(');
 const createWorkOrderSrc       = grab(wsrc, 'async function createWorkOrder(');
 const splitOrigFieldsSrc       = grabConst(wsrc, 'const WO_SPLIT_ORIGINAL_FIELDS');
 const splitMaxNewSrc           = grabConst(wsrc, 'const WO_SPLIT_MAX_NEW');
