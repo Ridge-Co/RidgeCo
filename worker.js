@@ -270,7 +270,28 @@ export default {
           // value is set on the gh-broker Worker's own HUB_PROD_RO_TOKEN).
           const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance','/admin/receipt-duplicate-audit/flags'];
           const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && HUB_PROD_RO_READ_PATHS.includes(path);
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk) {
+          // Narrow WRITE-CAPABLE token for safe, allow-listed production writes (Sep 22 2026,
+          // follow-on to HUB_PROD_RO_TOKEN above — see context/PROD_WRITE_TOKEN_BUILD_BRIEF_v1.0.md).
+          // Lets a session run a specific, pre-reviewed production write (one-time backfills and
+          // admin-fixup utilities — the recurring category this repo keeps shipping, e.g. the
+          // scope→WO Vendor_ID backfill and the Receipts Payment_Source column repair) WITHOUT
+          // ever holding WORKER_SECRET. Deliberately a DISTINCT token from every other narrow
+          // token in this cascade — never reuse HUB_PROD_RO_TOKEN, HUB_TEST_TOKEN, or any of the
+          // others for this. Structurally POST only (can never satisfy a GET handler check).
+          // Every path on this list must be idempotent, additive-only, and touch no money, SMS,
+          // QuickBooks, or auth/vendor-assignment fields — the bar this repo already applies to
+          // OPS_QUEUE_TOKEN/SCOUT_QUEUE_TOKEN above — verified by reading the actual handler, not
+          // assumed from its name. CONVENTION GOING FORWARD (mirrors HUB_PROD_RO_TOKEN's own
+          // read-list convention): a future one-time backfill/admin-fixup endpoint that meets this
+          // same bar may be added to this array in the same PR that ships the endpoint, under
+          // ordinary review — this doesn't need its own dedicated build-brief cycle each time, only
+          // the same Rung-3 PR-not-autonomous-merge discipline every auth-gate change already gets.
+          // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
+          // until the secret is set on both production maintenance-hub AND the gh-broker Worker
+          // (Brett only — no session can set a Cloudflare secret).
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update'];
+          const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
