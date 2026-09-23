@@ -5575,6 +5575,27 @@ async function woSplit(env, body) {
   const original = findWO(workorders, originalId);
   if (!original) return json({ error: `Work order ${originalId} not found` }, 404);
   if (original.Voided === 'TRUE') return json({ error: `Work order ${originalId} is voided — cannot split it` }, 400);
+  // Same billing-state guard as woCombine (Sep 23 2026 field audit, widened same day to also
+  // cover vendor-bill state) — splitting a WO that QuickBooks already has a final invoice
+  // number for would leave that invoice referring to a job that's now spread across N work
+  // orders, with no way to tell which one(s) it actually covers; a vendor bill already
+  // reviewed/sent to QuickBooks has the same problem on the vendor-paid side. Blocked outright
+  // rather than offered a picker, same reasoning as Combine.
+  {
+    const alreadyInvoicedOriginal = !!String(original.QBO_Invoice_Number || '').trim();
+    const lockedBillOriginal = await findLockedVendorBillForWOs(env, [originalId]);
+    if (alreadyInvoicedOriginal || lockedBillOriginal) {
+      const reasons = [];
+      if (alreadyInvoicedOriginal) reasons.push(`${originalId} already has a QuickBooks invoice number`);
+      if (lockedBillOriginal) reasons.push(`vendor bill ${lockedBillOriginal.ID} is already reviewed/sent to QuickBooks`);
+      return json({
+        error: 'already_invoiced',
+        wo_ids: [originalId],
+        locked_bill_id: lockedBillOriginal ? lockedBillOriginal.ID : undefined,
+        message: `Cannot split ${originalId} — ${reasons.join('; ')}. Handle billing manually before splitting.`,
+      }, 400);
+    }
+  }
 
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const overrides = body.original_overrides && typeof body.original_overrides === 'object' ? body.original_overrides : {};
