@@ -438,6 +438,13 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   t('no new WO was created — validation happens before anything is created', db.Work_Orders.rows.length === 1);
 }
 {
+  // Sep 23 2026, Brett's follow-up: the billing-state guard now checks for ANY already-
+  // reviewed vendor bill on the original before anything else runs, so a reviewed bill on
+  // WO-410 now blocks the split outright at the entry gate (already_invoiced, 400) rather than
+  // reaching the reassignment table's own more specific reassign_locked check — same
+  // all-or-nothing behavior Brett asked for. The reassignment-specific reassign_locked path
+  // (exercised above with an unreviewed-but-billed time entry, which the blanket guard doesn't
+  // catch) is still live for lock states the billing guard doesn't cover.
   const db = makeDb([
     { ID: 'WO-410', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Description: 'x', Status: 'New' },
   ], {
