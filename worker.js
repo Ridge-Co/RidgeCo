@@ -16524,20 +16524,38 @@ async function receiptDuplicateAuditScan(env, body) {
 
 // GET /admin/receipt-duplicate-audit/flags?status=pending|real_duplicate|not_duplicate|all —
 // lists flagged receipts for the "Audit older receipts" view. Read-only, no QuickBooks call.
+// PURE — Part 1 (Sep 22 2026 brief): is a flagged receipt's own image actually on file? Checks
+// the Receipts row's own attachment field — confirmed live as Source_File_ID/Source_File_URL
+// (NOT the brief's guessed File_Url/Drive_File_Id, PAT-024) — never a separate scan of the WO's
+// Photos & Files. Factored out so it's unit-testable with no live Sheets I/O.
+function receiptImageAttachedInfo(receiptRow) {
+  const url = receiptRow ? String(receiptRow.Source_File_URL || '') : '';
+  const fid = receiptRow ? String(receiptRow.Source_File_ID || '') : '';
+  return { image_attached: !!(url || fid), image_url: url };
+}
+
 async function receiptDuplicateAuditFlags(env, url) {
   await ensureReceiptDuplicateAuditTabs(env);
   const status = url && url.searchParams.get('status');
-  const rows = await fetchTab(env, 'Receipt_Duplicate_Audit');
+  const [rows, receipts] = await Promise.all([
+    fetchTab(env, 'Receipt_Duplicate_Audit'),
+    fetchTab(env, 'Receipts').catch(() => []),
+  ]);
   let out = rows.filter(r => r.Active !== 'FALSE');
   if (status && status !== 'all') out = out.filter(r => (r.Status || 'pending') === status);
   out.sort((a, b) => String(b.Flagged_Date || '').localeCompare(String(a.Flagged_Date || '')));
+  const receiptById = {}; (receipts || []).forEach(r => { receiptById[String(r.ID)] = r; });
   return json({
-    ok: true, count: out.length, flags: out.map(f => ({
-      id: f.ID, receipt_id: f.Receipt_ID, wo_id: f.WO_ID, store: f.Store, receipt_date: f.Receipt_Date,
-      amount: Number(f.Amount) || 0, match_count: Number(f.Match_Count) || 0,
-      matches: (() => { try { return JSON.parse(f.Matches_JSON || '[]'); } catch (_) { return []; } })(),
-      status: f.Status || 'pending', flagged_date: f.Flagged_Date || '', reviewed_date: f.Reviewed_Date || '',
-    })),
+    ok: true, count: out.length, flags: out.map(f => {
+      const img = receiptImageAttachedInfo(receiptById[String(f.Receipt_ID)]);
+      return {
+        id: f.ID, receipt_id: f.Receipt_ID, wo_id: f.WO_ID, store: f.Store, receipt_date: f.Receipt_Date,
+        amount: Number(f.Amount) || 0, match_count: Number(f.Match_Count) || 0,
+        matches: (() => { try { return JSON.parse(f.Matches_JSON || '[]'); } catch (_) { return []; } })(),
+        status: f.Status || 'pending', flagged_date: f.Flagged_Date || '', reviewed_date: f.Reviewed_Date || '',
+        image_attached: img.image_attached, image_url: img.image_url,
+      };
+    }),
   });
 }
 
