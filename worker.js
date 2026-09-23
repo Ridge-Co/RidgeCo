@@ -1805,7 +1805,7 @@ function qbInvoiceCandidatesByDate(invoices, date, windowDays) {
 // (receiptReconScan) below — one source of truth, and fully unit-testable with no live Sheets.
 function receiptSuggestCore(input, properties, workorders, receipts, custCards) {
   const po = String(input.po || '').trim();
-  const total = Number(input.total) || 0;
+  let total = Number(input.total) || 0;
   const date = String(input.date || '').trim();
   const store = String(input.store || '').trim();
   const items = Array.isArray(input.items) ? input.items : (input.items ? [String(input.items)] : []);
@@ -1813,7 +1813,20 @@ function receiptSuggestCore(input, properties, workorders, receipts, custCards) 
   const cc = custCards || [];
 
   // Exclusions first — never propose a WO for spend that isn't customer-billable.
-  if (total < 0) return { ok: true, category: 'refund', action: 'skip', reason: 'Negative total (return/refund).', po, total };
+  // Part 3 (Sep 22 2026 brief): a refund is NEVER skip-only anymore — it has two real actions
+  // (match-and-reverse the original purchase, or post as a negative expense), both offered by
+  // the Reconciler UI off this category. Defense-in-depth on the sign: whether the negative
+  // total came from receiptExtract's own refund detection or from input.refund being passed
+  // explicitly (e.g. by a caller that didn't go through receiptExtract), the total returned
+  // here is always forced negative — never a positive refund amount reaching addReceipt.
+  if (total < 0 || input.refund === true) {
+    total = total ? -Math.abs(total) : total;
+    return {
+      ok: true, category: 'refund', action: 'refund_review',
+      reason: 'Return/refund receipt — confirm a matching original purchase to reverse the bill, or post as a negative expense.',
+      po, total, store, date, items,
+    };
+  }
   if (/\bbmore\b/i.test(po) || /\bbmore\b/i.test(String(input.customer_name||''))) return { ok: true, category: 'company', action: 'exclude', reason: 'PO "bmore" = company expense, not customer-billable.', po, total };
   if (card && cc.includes(card)) return { ok: true, category: 'customer_paid', action: 'exclude', reason: `Paid on a customer card (…${card}).`, po, total };
 
