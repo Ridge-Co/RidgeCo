@@ -156,7 +156,7 @@ function build(db, callLog) {
     "const TELEMETRY_TAB = 'Ops_Telemetry';",
     'async function logTelemetry(){ /* no-op in tests */ }',
     cacheSrc, srSrc, ensureInnerSrc, ensureSrc, colSrc, idcSrc, jsonSrc, fetchTabSrc, fetchTabsSrc,
-    updateRowSrc, updateWOFieldsSrc, findRecentDupSrc,
+    updateRowSrc, updateWOFieldsSrc, findRecentDupSrc, claimCacheSrc,
     'async function addRow(){ return { success:true, id:"X" }; }', // WO_Tenants linking side-effect — not under test
     createWOSrc,
     rolesSrc, tradeMapSrc, descMapSrc, doneStatusesSrc,
