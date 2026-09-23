@@ -2266,6 +2266,7 @@ async function receiptReconConfirm(env, body) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: addJson.duplicate ? 'skipped' : 'confirmed',
       Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
+      Confirmed_Receipt_ID: addJson.duplicate ? '' : String(addJson.id || ''),
       Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
     });
   }
