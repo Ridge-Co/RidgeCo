@@ -14149,6 +14149,9 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/assign') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  if (path === '/vendor/complete-onboarding') {
+    return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
   if (path === '/receipt/attach-only') {
     // Same reasoning as /status below: the write only ever lands on Receipts (never Vendor_Bills
     // or Invoice_Review — see receiptAttachOnly's own comment), tied to an existing Work_Orders
