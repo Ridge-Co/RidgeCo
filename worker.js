@@ -9295,7 +9295,7 @@ async function processVendorNudges(env) {
     }
     const property = properties.find(p => p.ID === wo.Property_ID);
     const unit = units.find(u => u.ID === wo.Unit_ID);
-    const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'the property';
+    const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'the property';
     const vname = vendor.First_Name || (vendor.Name||'').split(' ')[0] || 'there';
     let msg, msgType, repeatHours;
     if (row.Request_Type === 'status_update') {
