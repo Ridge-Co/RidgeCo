@@ -1873,6 +1873,84 @@ const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','Fi
 // scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
 const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
 
+// ── Part 0 (Sep 22 2026 incident) — intake-time rescan guard ───────────────────────────────
+// Brett caught a $56.04 Home Depot receipt he'd already processed reappearing as a fresh
+// Pending row with no indication it had already been handled. Root cause: receiptReconScan only
+// ever deduped on Source_File_ID (the Drive file), so a receipt processed by hand, or confirmed
+// before a mailbox scan ever ran, could get pulled back in through a NEW Drive file (a re-forward,
+// a second manual drop, an email backfill re-run) and look indistinguishable from brand-new. The
+// functions below cross-check a receipt BEFORE it's queued and, on a match, flag it — never
+// silently drop it (a false match could hide a real second purchase at the same store).
+
+// PURE — the Apps Script (ReceiptMailToHub.gs, saveMessage_) already writes a Gmail link into
+// every emailed receipt's Drive file description, e.g. "...| https://mail.google.com/mail/u/?
+// authuser=...#all/19abcdef0123456". This reads that existing metadata — no Apps Script redeploy
+// needed. Returns '' when the file wasn't produced by the email pipeline (a manual Drive drop).
+function receiptReconGmailIdFromDescription(desc) {
+  const m = String(desc || '').match(/#all\/([A-Za-z0-9_-]+)/);
+  return m ? m[1] : '';
+}
+
+// PURE — same description text (see receiptReconGmailIdFromDescription) distinguishes a file the
+// email pipeline saved from one Brett dropped into the Drive folder by hand. Used only to show
+// Brett a fast "how did this get here" cue on every Pending row, per his Sep 22 ask — never
+// changes any routing/matching decision.
+function receiptReconEntrySource(desc) {
+  return /From email .* Hub/.test(String(desc || '')) ? 'email_scan' : 'manual_drop';
+}
+
+// PURE — cross-checks one about-to-be-queued receipt against (a) an exact re-add of the same
+// source email (Gmail message ID, cheapest/highest-confidence, layer 1), (b) already-confirmed
+// Receipts rows with the same store+amount+date, and (c) Receipt_Recon_Queue rows Brett already
+// dispositioned (skipped / confirmed / duplicate_confirmed — NOT still pending) with the same
+// store+amount+date. Returns a flat array of match objects, each with a ready-to-show `reason`
+// string (same shape as receiptCheckDuplicatesOne's evidence array below). Never decides
+// anything — the caller always still queues the row as 'pending'; this only adds the flag.
+function receiptReconFindRescanMatches(candidate, existingReceipts, existingQueueRows) {
+  const amt = (Number(candidate.total) || 0).toFixed(2);
+  const st = _rcNorm(candidate.store);
+  const date = String(candidate.date || '').trim();
+  const matches = [];
+
+  if (candidate.gmailMessageId) {
+    for (const r of (existingQueueRows || [])) {
+      if (r.Gmail_Message_ID && r.Gmail_Message_ID === candidate.gmailMessageId) {
+        const status = r.Status || 'pending';
+        matches.push({
+          type: 'gmail_exact', queue_id: r.ID, status, received_date: r.Received_Date || '',
+          reason: `This exact email was already processed on ${String(r.Received_Date || '').slice(0, 10)} (queue #${r.ID}, status: ${status}).`,
+        });
+      }
+    }
+  }
+
+  if (date && st && Number(amt) > 0) {
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Date || '') !== date) continue;
+      if (_rcNorm(r.Store) !== st) continue;
+      matches.push({
+        type: 'receipts', receipt_id: r.ID, wo_id: r.WO_ID || '', date: r.Date, amount: r.Amount, store: r.Store,
+        reason: `Possible re-scan — matches an already-processed receipt from ${r.Date} ($${(Number(r.Amount) || 0).toFixed(2)} at ${r.Store || 'that store'}${r.WO_ID ? ', WO ' + r.WO_ID : ''}).`,
+      });
+    }
+    for (const r of (existingQueueRows || [])) {
+      const status = r.Status || 'pending';
+      if (status === 'pending') continue;
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Receipt_Date || '') !== date) continue;
+      if (_rcNorm(r.Vendor) !== st) continue;
+      matches.push({
+        type: 'queue_dispositioned', queue_id: r.ID, status, date: r.Receipt_Date, amount: r.Total, store: r.Vendor,
+        reason: `Possible re-scan — matches a previously ${status.replace(/_/g, ' ')} queue entry from ${r.Receipt_Date} ($${(Number(r.Total) || 0).toFixed(2)} at ${r.Vendor || 'that store'}).`,
+      });
+    }
+  }
+  return matches;
+}
+
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
