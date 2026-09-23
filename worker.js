@@ -303,6 +303,7 @@ export default {
     try {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
+        if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
