@@ -13564,6 +13564,61 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/admin/seed-test-receipt') return true; // self-scoped to TEST-PROPERTY-001 internally, staging-only (see seedTestReceipt)
+  if (path === '/receipt-recon/confirm') {
+    // Gate on whichever record this write actually touches: wo_id's Property, or (no_wo) the
+    // given property_id. A no_wo confirm with no property_id at all (general Ridge Co overhead,
+    // no property to scope to) is refused outright for this token — seed a wo_id or property_id
+    // explicitly (via /admin/seed-test-receipt + /workorder on TEST-PROPERTY-001) instead.
+    const woId = body && body.wo_id;
+    const propId = body && body.property_id;
+    if (woId) {
+      const wos = await fetchTab(env, 'Work_Orders');
+      const wo = wos.find(w => String(w.ID) === String(woId));
+      if (!wo) return false;
+      return await isTestRecord(env, 'Properties', wo.Property_ID);
+    }
+    if (propId) return await isTestRecord(env, 'Properties', propId);
+    return false;
+  }
+  if (path === '/receipt-recon/reassign') {
+    // property_id is always required by the endpoint itself; wo_id is optional.
+    const propId = body && body.property_id;
+    if (!propId || !(await isTestRecord(env, 'Properties', propId))) return false;
+    const woId = body && body.wo_id;
+    if (woId) {
+      const wos = await fetchTab(env, 'Work_Orders');
+      const wo = wos.find(w => String(w.ID) === String(woId));
+      if (!wo) return false;
+      if (!(await isTestRecord(env, 'Properties', wo.Property_ID))) return false;
+    }
+    return true;
+  }
+  if (path === '/receipt-recon/mark-refund') {
+    // Pending-only, never writes to Receipts (see receiptReconMarkRefund) — same reasoning as
+    // the duplicate-audit paths above: no protected record to gate here, it only flips a flag
+    // on the Receipt_Recon_Queue row itself.
+    return true;
+  }
+  if (path === '/receipt-recon/mark-refund-confirmed') {
+    // May void a real Receipts row (see receiptReconMarkRefundConfirmed) — resolve the queue
+    // row's own confirmation to find what it would actually touch, same pattern as
+    // /receipt/attach-only above.
+    const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+    const row = rows.find(r => String(r.ID) === String(body && body.id));
+    if (!row) return false;
+    if (row.Status === 'attached_only') return true; // never billed anything — nothing to void
+    const receipt = await findReceiptForQueueRow(env, row);
+    if (!receipt) return false;
+    if (receipt.WO_ID) {
+      const wos = await fetchTab(env, 'Work_Orders');
+      const wo = wos.find(w => String(w.ID) === String(receipt.WO_ID));
+      if (!wo) return false;
+      return await isTestRecord(env, 'Properties', wo.Property_ID);
+    }
+    if (receipt.Property_ID) return await isTestRecord(env, 'Properties', receipt.Property_ID);
+    return false;
+  }
   return false;
 }
 
