@@ -1753,6 +1753,58 @@ function receiptIsDuplicate(receipts, woId, amount, date, store) {
     (Number(r.Amount)||0).toFixed(2) === amt && String(r.Date||'') === String(date||'') && _rcNorm(r.Store) === st);
 }
 
+// PURE — Part 3 matching step: given a refund (store/amount/date/items), find candidate ORIGINAL
+// purchase receipts it might be reversing. Same-store required; a candidate purchase must date
+// on-or-before the refund and within `windowDays` (default 120 — returns commonly lag weeks to a
+// couple months); a candidate must be a real positive purchase (never another refund) whose
+// amount is at least the refund amount (a receipt for less than what's being refunded can't be
+// the source of a full or partial return of it). Scored, not decided — this only ever SUGGESTS;
+// Brett's own tap on the returned receipt_id is what actually reverses anything (see
+// receiptReconRefundReverse). No I/O — everything is passed in, so this is fully unit-testable.
+function receiptRefundFindMatches(refund, existingReceipts, opts) {
+  opts = opts || {};
+  const windowDays = opts.windowDays || 120;
+  const refundAmt = Math.abs(Number(refund && refund.amount) || 0);
+  const refundStore = _rcNorm(refund && refund.store);
+  const refundDate = String((refund && refund.date) || '').trim();
+  const refundDateMs = refundDate ? Date.parse(refundDate + 'T00:00:00Z') : NaN;
+  const refundItemsBlob = _rcNorm(Array.isArray(refund && refund.items) ? refund.items.join(' ') : ((refund && refund.items) || ''));
+  const refundKw = new Set(refundItemsBlob.split(' ').filter(w => w.length >= 3 && !RECEIPT_STOP.has(w)));
+  if (!refundStore || !refundAmt) return [];
+
+  const candidates = [];
+  for (const r of (existingReceipts || [])) {
+    if (!r || r.Active === 'FALSE') continue;
+    const amt = Number(r.Amount) || 0;
+    if (amt <= 0) continue; // only match against real purchases, never another refund/negative row
+    if (_rcNorm(r.Store) !== refundStore) continue;
+    if (amt + 0.01 < refundAmt) continue; // a smaller purchase can't be the source of this refund
+    const purchaseDateMs = r.Date ? Date.parse(String(r.Date) + 'T00:00:00Z') : NaN;
+    let hasDateRelation = false;
+    if (!isNaN(refundDateMs) && !isNaN(purchaseDateMs)) {
+      const diffDays = (refundDateMs - purchaseDateMs) / 86400000;
+      if (diffDays < 0 || diffDays > windowDays) continue; // must precede the refund, within the window
+      hasDateRelation = true;
+    }
+    let score = 0;
+    const amountDiff = Math.abs(amt - refundAmt);
+    const exactAmount = amountDiff < 0.02;
+    score += exactAmount ? 3 : 1;
+    if (hasDateRelation) score += 1;
+    const descBlob = _rcNorm(String(r.Description || ''));
+    let itemOverlap = 0;
+    for (const k of refundKw) if (descBlob.indexOf(k) >= 0) itemOverlap++;
+    score += itemOverlap;
+    candidates.push({
+      receipt_id: r.ID, wo_id: r.WO_ID || '', property_id: r.Property_ID || '',
+      amount: amt, date: r.Date || '', store: r.Store || '', description: r.Description || '',
+      exact_amount: exactAmount, item_overlap: itemOverlap, score,
+    });
+  }
+  candidates.sort((a, b) => b.score - a.score || Math.abs(a.amount - refundAmt) - Math.abs(b.amount - refundAmt));
+  return candidates.slice(0, 5);
+}
+
 // ── Receipt duplicate CHECKER (Sep 2 2026 design, built Sep 16 2026) ────────────────────────
 // PURE — property-wide duplicate check, deliberately WIDER than receiptIsDuplicate above (which
 // only ever compares against the ONE work order a receipt is being posted to). Brett re-scanning
