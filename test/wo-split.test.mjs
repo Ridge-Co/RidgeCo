@@ -69,6 +69,7 @@ const splitOrigFieldsSrc       = grabConst(wsrc, 'const WO_SPLIT_ORIGINAL_FIELDS
 const splitMaxNewSrc           = grabConst(wsrc, 'const WO_SPLIT_MAX_NEW');
 const timeEntryLockSrc         = grab(wsrc, 'function timeEntryReassignLock(');
 const vendorBillLockSrc        = grab(wsrc, 'function vendorBillReassignLock(');
+const findLockedVendorBillSrc  = grab(wsrc, 'async function findLockedVendorBillForWOs(');
 const woSplitSrc               = grab(wsrc, 'async function woSplit(');
 const isTenantCurrentSrc       = grab(wsrc, 'function isTenantCurrent(');
 const currentTenantSrc         = grab(wsrc, 'function currentTenantForDispatch(');
@@ -198,7 +199,7 @@ function build(db, fetchOpts) {
     updateWOFieldsSrc, nextSafeIdSrc, logAuditSrc, logAuditManySrc, logMsgAuditSrc,
     reasonsSrc, columnsSrc, woVoidSrc, woUnvoidSrc,
     findRecentDupeSrc, addRowSrc, updateRowSrc, createWorkOrderSrc,
-    splitOrigFieldsSrc, splitMaxNewSrc, timeEntryLockSrc, vendorBillLockSrc, woSplitSrc,
+    splitOrigFieldsSrc, splitMaxNewSrc, timeEntryLockSrc, vendorBillLockSrc, findLockedVendorBillSrc, woSplitSrc,
     isTenantCurrentSrc, currentTenantSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc,
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
@@ -255,6 +256,25 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   const res = await woSplit(env, { original_wo_id: 'WO-1c', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
   const body = await res.json();
   t('an already-invoiced original cannot be split (same billing-state guard as Combine)', res.status === 400 && body.error === 'already_invoiced' && body.wo_ids.includes('WO-1c'));
+}
+// Billing guard widened (Sep 23 2026, Brett's follow-up): an already-reviewed vendor bill on
+// the original also blocks the split outright, even with NO QBO_Invoice_Number set at all.
+{
+  const db = makeDb([{ ID: 'WO-1d', Property_ID: '76', Unit_ID: 'U1' }],
+    { vendorBills: [{ ID: 'VB-1d', WO_ID: 'WO-1d', Vendor_ID: 'V1', Status: 'reviewed', Active: 'TRUE' }] });
+  const { woSplit } = build(db);
+  const res = await woSplit(env, { original_wo_id: 'WO-1d', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
+  const body = await res.json();
+  t('an already-reviewed vendor bill on the original blocks the split, with no QBO invoice number involved at all', res.status === 400 && body.error === 'already_invoiced' && body.locked_bill_id === 'VB-1d');
+}
+{
+  // A voided/inactive vendor bill does not block.
+  const db = makeDb([{ ID: 'WO-1e', Property_ID: '76', Unit_ID: 'U1' }],
+    { vendorBills: [{ ID: 'VB-1e', WO_ID: 'WO-1e', Vendor_ID: 'V1', Status: 'reviewed', Active: 'FALSE' }] });
+  const { woSplit } = build(db);
+  const res = await woSplit(env, { original_wo_id: 'WO-1e', new_work_orders: [{ Trade: 'Plumbing', Description: 'x' }] });
+  const body = await res.json();
+  t('a voided/inactive vendor bill does not block the split', body.success === true);
 }
 
 // ── 2. Happy path: inheritance, per-new-WO fields, original stays, description independence ──
@@ -414,6 +434,13 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   t('no new WO was created — validation happens before anything is created', db.Work_Orders.rows.length === 1);
 }
 {
+  // Sep 23 2026, Brett's follow-up: the billing-state guard now checks for ANY already-
+  // reviewed vendor bill on the original before anything else runs, so a reviewed bill on
+  // WO-410 now blocks the split outright at the entry gate (already_invoiced, 400) rather than
+  // reaching the reassignment table's own more specific reassign_locked check — same
+  // all-or-nothing behavior Brett asked for. The reassignment-specific reassign_locked path
+  // (exercised above with an unreviewed-but-billed time entry, which the blanket guard doesn't
+  // catch) is still live for lock states the billing guard doesn't cover.
   const db = makeDb([
     { ID: 'WO-410', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Description: 'x', Status: 'New' },
   ], {
@@ -426,7 +453,7 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
     reassignments: [{ type: 'vendor_bill', id: 'VB-10', target: 0 }],
   });
   const body = await res.json();
-  t('a reviewed/approved vendor bill reassignment is refused', res.status === 409 && body.error === 'reassign_locked' && body.type === 'vendor_bill');
+  t('a reviewed/approved vendor bill on the original blocks the whole split at the billing guard, before reassignment validation runs', res.status === 400 && body.error === 'already_invoiced' && body.locked_bill_id === 'VB-10');
   t('no new WO was created for the reviewed-bill case either', db.Work_Orders.rows.length === 1);
 }
 
@@ -541,4 +568,3 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
-</content>
