@@ -561,12 +561,40 @@ function checkManualWo(id){
   const checkEl = document.getElementById(idAttr+'-wo-check');
   if (!manual || !checkEl) return;
   const v = manual.value.trim();
-  if (!v){ checkEl.innerHTML = ''; updatePostingLine(id); return; }
+  if (!v){ checkEl.innerHTML = ''; updatePostingLine(id); updateWoDetail(id); return; }
   const hit = allWOs.find(w => String(w.ID) === v);
   checkEl.innerHTML = hit
     ? '<span class="ok">✓ '+esc(v)+' — '+esc((hit.Description||'').slice(0,60))+' ('+esc(hit.Status)+')</span>'
     : '<span class="err">✗ No work order with that ID exists.</span>';
   updatePostingLine(id);
+  updateWoDetail(id);
+}
+
+// Part 5: the "Selected WO" detail panel under the picker — a clickable link to the WO's own
+// admin detail view (reusing index.html's existing `?wo=<id>` deep link, e.g. from
+// maybeOpenWOFromURL — not a new link scheme), its opened/closed dates spelled out, and the
+// inline mismatch warning. Called from checkManualWo, which already fires on every path that can
+// change the effective WO selection (the select's onchange, the manual-override input, and
+// refreshWoSelect after a property/unit/show-closed change) or the receipt date field.
+function updateWoDetail(id){
+  const idAttr = 'rc'+id;
+  const el = document.getElementById(idAttr+'-wo-detail');
+  if (!el) return;
+  const woSel = document.getElementById(idAttr+'-wo');
+  const manual = document.getElementById(idAttr+'-wo-manual');
+  const dateEl = document.getElementById(idAttr+'-date');
+  const woId = (manual && manual.value.trim()) || (woSel ? woSel.value : '');
+  if (!woId){ el.innerHTML = ''; return; }
+  const wo = allWOs.find(w => String(w.ID) === String(woId));
+  if (!wo){ el.innerHTML = ''; return; }
+  const receiptDate = dateEl ? dateEl.value.trim() : '';
+  const link = 'index.html?wo=' + encodeURIComponent(wo.ID);
+  const dl = woDatesLabel(wo);
+  let html = '<a href="'+esc(link)+'" target="_blank" rel="noopener">Open WO '+esc(wo.ID)+' ↗</a>'
+    + ' · ' + (dl ? esc(dl.charAt(0).toUpperCase()+dl.slice(1)) : '<span class="warn">no opened/closed date on file for this WO</span>');
+  const warn = woDateWindowWarning(receiptDate, wo);
+  if (warn) html += '<div class="rc-wo-warn">'+esc(warn.message)+'</div>';
+  el.innerHTML = html;
 }
 
 // Brett, Sep 22 2026: "it drives me crazy to have to scroll down through a whole bunch of
