@@ -28,7 +28,7 @@ function extractSync(name) {
   for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
   return src.slice(start, i);
 }
-const helpers = new Function(`const RECEIPT_RECON_MIN_DATE_DEFAULT = '2026-07-01'; ${extractSync('receiptReconCutoff')}; ${extractSync('receiptBeforeCutoff')}; ${extractSync('receiptCutoffNote')}; return { receiptReconCutoff, receiptBeforeCutoff, receiptCutoffNote };`)();
+const helpers = new Function(`const RECEIPT_RECON_MIN_DATE_DEFAULT = '2026-07-01'; ${extractSync('receiptReconCutoff')}; ${extractSync('receiptBeforeCutoff')}; ${extractSync('receiptCutoffNote')}; ${extractSync('_rcNorm')}; ${extractSync('receiptReconGmailIdFromDescription')}; ${extractSync('receiptReconEntrySource')}; ${extractSync('receiptReconFindRescanMatches')}; return { receiptReconCutoff, receiptBeforeCutoff, receiptCutoffNote, _rcNorm, receiptReconGmailIdFromDescription, receiptReconEntrySource, receiptReconFindRescanMatches };`)();
 
 function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const queue = [];
