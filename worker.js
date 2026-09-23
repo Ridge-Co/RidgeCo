@@ -4645,6 +4645,25 @@ async function tenantWOSettingsSummary(env) {
   return json({ owners: ownerRows, properties: propRows });
 }
 
+// Same-isolate, synchronous claim against the WO-create duplicate race — see the long comment
+// in createWorkOrder for why this exists alongside findRecentDuplicate rather than instead of
+// it. Keyed on the exact same signature fields findRecentDuplicate matches on, so it can never
+// be stricter than that check (a genuinely different description/property/unit never collides).
+// TTL is a little longer than the Work_Orders findRecentDuplicate window (60s) so a slow first
+// request can't have its claim expire out from under it while still mid-flight.
+const __woClaimCache = new Map(); // signatureKey -> expiry (ms epoch)
+const WO_CLAIM_TTL_MS = 75000;
+function claimWOSignature(sig) {
+  const key = ['Property_ID', 'Unit_ID', 'Tenant_ID', 'Trade', 'Description', 'Type']
+    .map(k => String(sig[k] || '')).join('\u0001');
+  const now = Date.now();
+  for (const [k, exp] of __woClaimCache) if (exp <= now) __woClaimCache.delete(k); // opportunistic sweep, keeps the Map from growing forever
+  const existing = __woClaimCache.get(key);
+  if (existing && existing > now) return false; // already claimed and still live
+  __woClaimCache.set(key, now + WO_CLAIM_TTL_MS);
+  return true;
+}
+
 async function createWorkOrder(env, body) {
   const _t0 = Date.now();
   // Same property/unit/tenant, same trade/description, seconds apart = a double-tap on
