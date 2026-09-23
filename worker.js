@@ -2578,7 +2578,7 @@ async function receiptReconRefundReverse(env, body) {
       Notes: `Confirmed match by Brett — reversed $${Math.abs(reverseAmount).toFixed(2)} against receipt #${original.ID} on WO ${original.WO_ID}. ${reason}`,
     });
   }
-  return json({ ok: true, wo_id: original.WO_ID, original_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink });
+PLACEHOLDER
 }
 
 const DUPLICATE_RETENTION_DAYS = 180;
