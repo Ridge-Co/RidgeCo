@@ -2135,6 +2135,14 @@ async function listReceiptReconQueue(env, url) {
       let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
       let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
       let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
+      // Sep 23 2026 build: Brett's manual "mark as refund" override for a row the automatic
+      // refund detection (receiptExtract's refund_signal_text / negative-total check) missed.
+      // Only ever flips the category the frontend reads to decide which card to render — never
+      // touches the original OCR'd Suggestion JSON itself, so un-marking it restores exactly
+      // what the scanner originally decided.
+      if (String(r.Manual_Refund || '').toUpperCase() === 'TRUE') {
+        suggestion = Object.assign({}, suggestion || {}, { category: 'refund', manual_refund: true });
+      }
       return { ...r, suggestion, items, items_summary, duplicate_evidence, rescan_matches };
     }));
 }
