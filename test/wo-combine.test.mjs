@@ -67,6 +67,8 @@ const columnsSrc            = grabConst(wsrc, 'const WO_VOID_COLUMNS');
 const woVoidSrc             = grab(wsrc, 'async function woVoid(');
 const woUnvoidSrc           = grab(wsrc, 'async function woUnvoid(');
 const combineFieldsConstSrc = grabConst(wsrc, 'const WO_COMBINE_RECONCILE_FIELDS');
+const combineMergeConstSrc  = grabConst(wsrc, 'const WO_COMBINE_MERGE_FIELDS');
+const mergeTextFieldSrc     = grab(wsrc, 'function mergeWOTextField(');
 const resolveCombineSrc     = grab(wsrc, 'function resolveCombineFields(');
 const woCombineSrc          = grab(wsrc, 'async function woCombine(');
 const isTenantCurrentSrc    = grab(wsrc, 'function isTenantCurrent(');
@@ -100,13 +102,12 @@ const getWorkOrdersListSrc  = grab(wsrc, 'async function getWorkOrdersList(');
   //    what matters is unanimity, not majority.
   {
     const wos = [
-      { Managed_By: 'me', Vendor_ID: 'V1', Scheduled_Date: '', Description: 'Leak', Priority: 'normal', Status: 'New', Trade: 'Plumbing' },
-      { Managed_By: 'me', Vendor_ID: 'V1', Scheduled_Date: '', Description: 'x', Priority: 'urgent', Status: 'New', Trade: 'Electrical' },
+      { Managed_By: 'me', Vendor_ID: 'V1', Scheduled_Date: '', Priority: 'normal', Status: 'New', Trade: 'Plumbing' },
+      { Managed_By: 'me', Vendor_ID: 'V1', Scheduled_Date: '', Priority: 'urgent', Status: 'New', Trade: 'Electrical' },
     ];
     const { resolved, conflicts } = resolveCombineFields(wos, {});
     t('Managed_By auto-resolves when all agree', resolved.Managed_By === 'me');
     t('Vendor_ID auto-resolves when all agree', resolved.Vendor_ID === 'V1');
-    t('Description is a conflict (differs)', conflicts.includes('Description'));
     t('Priority is a conflict (differs)', conflicts.includes('Priority'));
     t('Status auto-resolves when all agree', resolved.Status === 'New');
   }
@@ -120,6 +121,17 @@ const getWorkOrdersListSrc  = grab(wsrc, 'async function getWorkOrdersList(');
     const { resolved, conflicts } = resolveCombineFields(wos, {});
     t('Trade never appears in resolved', !('Trade' in resolved));
     t('Trade never appears in conflicts', !conflicts.includes('Trade'));
+  }
+  // 2b. Description is NEVER compared or returned either (Sep 23 2026 — it's a merge field
+  //     now, not a reconcile field at all).
+  {
+    const wos = [
+      { Managed_By: 'me', Description: 'Garbage disposal broken' },
+      { Managed_By: 'me', Description: 'Door needs rescrewing' },
+    ];
+    const { resolved, conflicts } = resolveCombineFields(wos, {});
+    t('Description never appears in resolved (moved to merge fields)', !('Description' in resolved));
+    t('Description never appears in conflicts (moved to merge fields)', !conflicts.includes('Description'));
   }
   // 3. Disagreement with no override -> conflict, not a guess.
   {
@@ -151,9 +163,24 @@ const getWorkOrdersListSrc  = grab(wsrc, 'async function getWorkOrdersList(');
   }
 }
 
+// ── Pure mergeWOTextField() — no Sheets involved ─────────────────────────────────────────────
+{
+  const src = mergeTextFieldSrc + '\nreturn { mergeWOTextField };';
+  const { mergeWOTextField } = new Function(src)();
+  t('a blank incoming value leaves the survivor value untouched', mergeWOTextField('keep me', 'WO-1', '') === 'keep me');
+  t('a blank incoming value on an empty survivor value stays empty', mergeWOTextField('', 'WO-1', '   ') === '');
+  const merged = mergeWOTextField('original text', 'WO-99', 'new text');
+  t('a non-blank incoming value is appended, original text preserved', merged.startsWith('original text') && merged.includes('new text'));
+  t('the appended text is prefixed with the source WO id', /combined from WO-99/.test(merged));
+  const mergedFromEmpty = mergeWOTextField('', 'WO-5', 'first thing');
+  t('merging onto an empty survivor value still gets the source-WO prefix, no leading blank line', mergedFromEmpty.startsWith('[') && /combined from WO-5/.test(mergedFromEmpty) && mergedFromEmpty.includes('first thing'));
+}
+
 // ── woCombine() integration — in-memory fake Sheets backend ─────────────────────────────────
 const WO_HEADERS = ['ID','Property_ID','Unit_ID','Vendor_ID','Trade','Description','Status','Priority',
-  'Managed_By','Scheduled_Date','Notes','Tenant_Notify_Updates',
+  'Managed_By','Scheduled_Date','Scheduled_Window','Notes','Room','Owner_WO_Ref','WO_Contact_Name','WO_Contact_Phone',
+  'Customer_Charge','Deposit_Amount','Deposit_Vendor_ID','Scope_ID','Tenant_Visible','QBO_Invoice_Number',
+  'Tenant_Notify_Updates',
   'Voided','Void_Reason','Void_Reason_Detail','Void_Combined_Into_WO_ID','Voided_By','Voided_Date'];
 const AUDIT_HEADERS = ['ID','WO_ID','Changed_By','Changed_By_Role','Field','Old_Value','New_Value','Timestamp','Notes',
   'Channel','Recipient_Name','Recipient_Type','Message_Type','Message_Body','Outcome'];
@@ -239,7 +266,7 @@ function build(db, fetchOpts) {
     idcSrc, colSrc, jsonSrc, fetchTabSrc, findWOSrc,
     updateWOFieldsSrc, nextSafeIdSrc, logAuditSrc, logAuditManySrc, logMsgAuditSrc,
     reasonsSrc, columnsSrc, woVoidSrc, woUnvoidSrc,
-    combineFieldsConstSrc, resolveCombineSrc, woCombineSrc,
+    combineFieldsConstSrc, combineMergeConstSrc, mergeTextFieldSrc, resolveCombineSrc, woCombineSrc,
     isTenantCurrentSrc, currentTenantSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc,
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
@@ -317,6 +344,38 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   const res = await woCombine(env, { survivor_wo_id: 'WO-1', combined_wo_ids: ['WO-2'] });
   const body = await res.json();
   t('an already-voided combined_wo_id is rejected, not re-combined', res.status === 400 && /already voided/.test(body.error));
+}
+
+// ── 1b. Billing-state guard: any selected WO already invoiced blocks the whole combine ───────
+{
+  const db = makeDb([
+    { ID: 'WO-1b', Property_ID: '76', Unit_ID: 'U1', QBO_Invoice_Number: 'INV-42' },
+    { ID: 'WO-2b', Property_ID: '76', Unit_ID: 'U1' },
+  ]);
+  const { woCombine } = build(db);
+  const res = await woCombine(env, { survivor_wo_id: 'WO-1b', combined_wo_ids: ['WO-2b'] });
+  const body = await res.json();
+  t('an already-invoiced survivor blocks the combine outright (400, no override possible)', res.status === 400 && body.error === 'already_invoiced' && body.wo_ids.includes('WO-1b'));
+}
+{
+  const db = makeDb([
+    { ID: 'WO-3b', Property_ID: '76', Unit_ID: 'U1' },
+    { ID: 'WO-4b', Property_ID: '76', Unit_ID: 'U1', QBO_Invoice_Number: 'INV-99' },
+  ]);
+  const { woCombine } = build(db);
+  const res = await woCombine(env, { survivor_wo_id: 'WO-3b', combined_wo_ids: ['WO-4b'], field_overrides: {} });
+  const body = await res.json();
+  t('an already-invoiced combined WO also blocks it, even with field_overrides supplied', res.status === 400 && body.error === 'already_invoiced' && body.wo_ids.includes('WO-4b'));
+}
+{
+  const db = makeDb([
+    { ID: 'WO-5b', Property_ID: '76', Unit_ID: 'U1' },
+    { ID: 'WO-6b', Property_ID: '76', Unit_ID: 'U1' },
+  ]);
+  const { woCombine } = build(db);
+  const res = await woCombine(env, { survivor_wo_id: 'WO-5b', combined_wo_ids: ['WO-6b'] });
+  const body = await res.json();
+  t('with no QBO invoice number anywhere in the selection, combine proceeds normally', body.success === true);
 }
 
 // ── 2. Field-agreement auto-resolve (silent) ─────────────────────────────────────────────────
@@ -423,12 +482,49 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   t('WO-72\'s note text is present too', notes.includes('second voided note'));
 }
 
+// ── 5b. Description/Room/Owner_WO_Ref auto-merge — Brett's actual bug report ─────────────────
+{
+  const db = makeDb([
+    { ID: 'WO-73', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Description: 'Garbage disposal broken', Room: 'Kitchen', Owner_WO_Ref: 'OWN-1' },
+    { ID: 'WO-74', Property_ID: '76', Unit_ID: 'U1', Trade: 'Carpentry', Description: 'Door needs rescrewing', Room: 'Hallway', Owner_WO_Ref: 'OWN-2' },
+    { ID: 'WO-75', Property_ID: '76', Unit_ID: 'U1', Trade: 'General', Description: 'Shelving fell out', Room: 'Closet', Owner_WO_Ref: '' },
+  ]);
+  const { woCombine } = build(db);
+  const res = await woCombine(env, { survivor_wo_id: 'WO-73', combined_wo_ids: ['WO-74', 'WO-75'], updated_by: 'Brett' });
+  const body = await res.json();
+  t('combine with 3 genuinely different Descriptions succeeds with NO field_overrides at all (no picker forced)', body.success === true);
+  const desc = wf(db, 'WO-73', 'Description');
+  t('none of the 3 original complaints is discarded — all 3 texts present on the survivor', desc.includes('Garbage disposal broken') && desc.includes('Door needs rescrewing') && desc.includes('Shelving fell out'));
+  t('order preserved (WO-74 before WO-75)', desc.indexOf('Door needs rescrewing') < desc.indexOf('Shelving fell out'));
+  t('Description merge is source-attributed the same way Notes already is', /combined from WO-74/.test(desc) && /combined from WO-75/.test(desc));
+  const room = wf(db, 'WO-73', 'Room');
+  t('Room is also auto-merged, not silently dropped', room.includes('Kitchen') && room.includes('Hallway') && room.includes('Closet'));
+  const ref = wf(db, 'WO-73', 'Owner_WO_Ref');
+  t('Owner_WO_Ref merges non-blank values and skips the blank one', ref.includes('OWN-1') && ref.includes('OWN-2'));
+  t('merged_fields in the response names Description/Room/Owner_WO_Ref', body.merged_fields && 'Description' in body.merged_fields && 'Room' in body.merged_fields && 'Owner_WO_Ref' in body.merged_fields);
+  t('resolved_fields (the reconcile-field response key) does NOT include Description', !('Description' in body.resolved_fields));
+}
+{
+  // Same scenario but the SURVIVOR's own Description starts blank — merge still produces a
+  // clean result (no leading blank line / stray separator from the empty starting value).
+  const db = makeDb([
+    { ID: 'WO-76', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Description: '' },
+    { ID: 'WO-77', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Description: 'Only complaint' },
+  ]);
+  const { woCombine } = build(db);
+  const res = await woCombine(env, { survivor_wo_id: 'WO-76', combined_wo_ids: ['WO-77'] });
+  const body = await res.json();
+  t('combine from a blank survivor Description still succeeds', body.success === true);
+  t('the merged Description does not start with a blank line', !wf(db, 'WO-76', 'Description').startsWith('\n'));
+  t('the merged Description contains the combined WO\'s text', wf(db, 'WO-76', 'Description').includes('Only complaint'));
+}
+
 // ── 6. Rollback on partial failure ────────────────────────────────────────────────────────────
 {
   const db = makeDb([
-    { ID: 'WO-80', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'normal', Notes: 'keep me' },
-    { ID: 'WO-81', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Notes: 'n1' },
-    { ID: 'WO-82', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Notes: 'n2' },
+    { ID: 'WO-80', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'normal', Notes: 'keep me', Description: 'keep desc' },
+    { ID: 'WO-81', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Notes: 'n1', Description: 'd1' },
+    { ID: 'WO-82', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Notes: 'n2', Description: 'd2' },
   ]);
   // WO-81 voids fine; WO-82's own Voided-flag write is made to fail (simulating a Sheets
   // error mid-batch) — pinpointed by sheet row + column so it fires ONLY on that one write,
@@ -454,6 +550,7 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   t('a partial failure is reported as combine_failed with rolled_back:true', res.status === 500 && body.error === 'combine_failed' && body.rolled_back === true);
   t('WO-81 was unvoided again (rollback undid the partial void)', wf(db, 'WO-81', 'Voided') !== 'TRUE');
   t("the survivor's Priority was restored to its ORIGINAL value, not left at the reconciled override", wf(db, 'WO-80', 'Priority') === 'normal');
+  t("the survivor's Description (a merge field) was also restored to its ORIGINAL value, not left partially merged", wf(db, 'WO-80', 'Description') === 'keep desc');
 }
 
 // ── 7. Tenant SMS — one batched notice, gated exactly like other tenant status SMS ─────────
@@ -546,7 +643,11 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   t('the target still gets the voided note merged in, single-target style', field(WO_HEADERS, 'Notes', target).includes('solo note') && field(WO_HEADERS, 'Notes', target).includes('target note'));
   // /wo/void never reconciles Priority/Managed_By/etc — that's woCombine-only behavior.
   t('/wo/void performs no field reconciliation on the target (Priority untouched)', field(WO_HEADERS, 'Priority', target) === '');
+  // /wo/void does NOT auto-merge Description either — that's woCombine-only, not extended to
+  // the single-target manual flow (left completely untouched, per the comment in worker.js).
+  t('/wo/void performs no Description merge on the target either', field(WO_HEADERS, 'Description', target) === '');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
+</content>
