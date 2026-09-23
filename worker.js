@@ -2144,12 +2144,23 @@ async function appendReceiptToInvoiceReview(env, { wo_id, receipt_id, amount }) 
     candidates.sort((a, b) => new Date(b.Approved_Date || 0) - new Date(a.Approved_Date || 0));
     const ir = candidates[0];
     const amt = +(Number(amount) || 0).toFixed(2);
-    if (amt <= 0) return { linked: false, reason: 'no_amount' };
+    // Part 3 (Sep 22 2026 brief): a refund reversal calls this with a NEGATIVE amt to credit
+    // the pending invoice back down — the only real change from the original (always-positive)
+    // shape. Still reject a literal zero; a negative amt is otherwise handled the same as a
+    // positive one below, with an added floor so a reversal can never push the invoice negative.
+    if (!amt) return { linked: false, reason: 'no_amount' };
     const ids = String(ir.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
-    if (ids.includes(String(receipt_id))) return { linked: true, ir_id: ir.ID, already: true };
-    ids.push(String(receipt_id));
+    if (amt > 0 && ids.includes(String(receipt_id))) return { linked: true, ir_id: ir.ID, already: true };
+    if (amt > 0) ids.push(String(receipt_id));
     const newOwnMaterials = +((Number(ir.Own_Materials) || 0) + amt).toFixed(2);
     const newCustomerTotal = +((Number(ir.Customer_Total) || 0) + amt).toFixed(2);
+    if (newOwnMaterials < 0 || newCustomerTotal < 0) {
+      // A refund larger than what's still pending on this invoice — the Receipts row itself
+      // (the source of truth) is still written by the caller; this just can't safely fold the
+      // credit into Invoice_Review without taking it below $0. Surfaced so the UI can tell Brett
+      // to check the invoice by hand rather than silently under-crediting it.
+      return { linked: false, reason: 'would_go_negative', attempted_delta: amt };
+    }
     const alreadySent = !!(ir.QB_Invoice_ID || '').trim();
     const fields = { Own_Material_IDs: ids.join(','), Own_Materials: String(newOwnMaterials), Customer_Total: String(newCustomerTotal) };
     if (alreadySent) {
