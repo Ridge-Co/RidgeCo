@@ -4836,16 +4836,28 @@ const WO_COMBINE_RECONCILE_FIELDS = [
 // than reducing N values down to one picked winner. Description is the direct fix for
 // Brett's Sep 23 2026 bug report: 3 genuinely different tenant complaints (garbage disposal /
 // door / shelving) were being collapsed to a single radio pick, silently discarding the other
-// two. Room and Owner_WO_Ref get the same treatment for the same underlying reason — a room
-// name or an owner's own reference number is information the combine could easily be losing,
-// not a setting with one objectively-correct value (see the PR description for why these two
-// were added beyond what Brett explicitly flagged — flagged there for Brett to confirm).
-const WO_COMBINE_MERGE_FIELDS = ['Description', 'Room', 'Owner_WO_Ref'];
+// two. Room gets the same treatment for the same underlying reason — a room name is
+// information the combine could easily be losing, not a setting with one objectively-correct
+// value.
+//
+// Owner_WO_Ref is deliberately NOT here (Brett, Sep 23 2026, after reviewing the first draft
+// of this PR which DID auto-merge it): the owner has their OWN reference numbers on their own
+// side, and concatenating several onto one WO wouldn't match what the owner actually expects
+// to see on any single surviving WO — unlike Description/Room, blending these together makes
+// the field actively wrong, not just long. Owner_WO_Ref is excluded from BOTH this list and
+// WO_COMBINE_RECONCILE_FIELDS entirely — same treatment as Trade/Checklist, survivor keeps its
+// own value untouched, no picker, no merge. Instead, see the "owner ref notice" block in
+// woCombine below: when a combine actually abandons a distinct owner reference (a combined
+// WO's own Owner_WO_Ref is non-blank and differs from the survivor's), the owner gets a
+// one-time notice naming which of their WO+ref pairs were folded into the surviving one, so
+// they can update their own records — the notice replaces silently merging or silently
+// dropping the ref.
+const WO_COMBINE_MERGE_FIELDS = ['Description', 'Room'];
 
 // Pure — no I/O. Same timestamped-prefix convention woVoid's Notes-merge already uses,
-// reused here for every WO_COMBINE_MERGE_FIELDS field so Description/Room/Owner_WO_Ref merges
-// look and audit exactly like a Notes merge already does. Returns the survivor's value
-// unchanged when the incoming WO's value for this field is blank — nothing to add.
+// reused here for every WO_COMBINE_MERGE_FIELDS field so Description/Room merges look and
+// audit exactly like a Notes merge already does. Returns the survivor's value unchanged when
+// the incoming WO's value for this field is blank — nothing to add.
 function mergeWOTextField(survivorVal, sourceWoId, incomingVal) {
   const val = String(incomingVal == null ? '' : incomingVal).trim();
   if (!val) return survivorVal || '';
