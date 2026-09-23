@@ -1,3 +1,76 @@
+# Sep 23, 2026, ~19:15 ET — BUILT (not merged): Vendor Onboarding Phase 1 — required-field gate on Submit Bill, admin gap report, QuickBooks field push (PR open on `Ridge-Co/RidgeCo`, branch `feature/vendor-onboarding-phase1`)
+
+**Scope:** Phase 1 only, per `context/VENDOR_ONBOARDING_BANKING_BUILD_BRIEF_v1.0.md` section 5.
+Phase 2 (encrypted banking capture / QuickBooks-manual-entry pipeline) and Phase 3 (automatic
+SMS/email nudge sweep) are explicitly NOT built — both stay GATED pending Brett's own review.
+This is a PII/QuickBooks-adjacent change, so per `AUTONOMY_GUARDRAILS_v1.0` it ships as a PR for
+Brett's own reviewed merge, not auto-merged.
+
+**What's in the PR:**
+- New additive Vendors columns (ensureColumns pattern, existing rows untouched): `Billing_Email`,
+  `Billing_Address`, `Tax_ID`, `Tax_ID_Document_URL`, `Insurance_Cert_URL`, `Insurance_Expiry`,
+  `Bank_Info_Status` (default `not_started`), `Bank_Info_Submitted_Date`,
+  `Bank_Info_Verified_Date`, `Bank_Info_Drive_Pointer`, `Onboarding_Nudge_Sent_Date`. The banking
+  columns are schema-only — no encryption/capture logic (Phase 2, not built).
+- `vendorOnboardingComplete(vendor)` — pure helper, required-now fields are Phone/Billing_Email/
+  Billing_Address/Tax_ID (typed value only, not the doc upload, not banking).
+- `vendorQBOnboardingFields(vendor)` — pure helper mapping Billing_Email/Billing_Address/Tax_ID
+  onto QuickBooks Vendor's `PrimaryEmailAddr`/`BillAddr`/`TaxIdentifier` fields (verified against
+  current QBO Vendor API docs, not assumed from training data — PAT-028). `qbFindOrCreateVendor`
+  now pushes these on both the create-vendor path and, via a new best-effort sparse update
+  (`qbSyncVendorOnboardingFields`), onto an already-linked QuickBooks vendor. Failures are logged
+  to `Ops_Telemetry`, never silently swallowed (rule-174/175 lesson).
+- `GET /vendor-onboarding-status?vendor_id=` (secret-gated) — single-vendor completeness check,
+  used by the vendor portal's Submit-Bill gate.
+- `GET /vendor-onboarding-gaps` (secret-gated) — bulk report of every active vendor missing a
+  required field, in one call (no N+1 over the per-vendor endpoint).
+- `POST /vendor/complete-onboarding` (secret-gated) — writes phone/billing email/billing
+  address/tax ID (+ optional tax ID doc URL) onto the Vendors row, then best-effort pushes to
+  QuickBooks.
+- `vendor.html`: `openBillModal` now checks `/vendor-onboarding-status` before opening the real
+  bill modal (renamed to `_openBillModalReal`); if incomplete, a new "Complete Your Info" modal
+  shows instead (phone prefilled/readonly if already known, billing email, billing address, tax
+  ID, optional tax ID document upload reusing the existing `/create-upload-session` Drive-upload
+  path). Submitting it opens the real bill modal immediately in the same tap. Full EN/ES i18n.
+  Never gates anything except Submit Bill — work-order visibility/progress/scheduling/photos all
+  stay unaffected, per the brief. Fails open (opens the bill modal anyway) on a network error
+  checking the gate, so a Worker hiccup never blocks billing outright.
+- `index.html`: new "📋 VENDOR ONBOARDING" nav tab / admin gap-report page (same fetch-on-open
+  pattern as Vendor Performance), and the same 4 fields added to both the Add Vendor and Edit
+  Vendor modals so Brett can fill a vendor in himself.
+- `test/vendor-onboarding.test.mjs` — 14 assertions covering `vendorOnboardingComplete` and
+  `vendorQBOnboardingFields`, source-sliced from `worker.js` the same way
+  `test/qb-address.test.mjs`/`test/trade-map.test.mjs` already do. All 14 pass.
+
+**What was actually verified (not just "should work"):**
+- `node --check` on `worker.js`, `vendor.html` (all 11 inline `<script>` blocks), and `index.html`
+  (all 5 inline `<script>` blocks) — clean on both the locally-edited copies and the versions
+  actually committed to the branch (re-fetched and diffed byte-for-byte identical after every
+  commit_patch call).
+- `node test/vendor-onboarding.test.mjs` — 14/14 pass.
+- Per `test-verified-builds` Step 0a, closed the recurring gh-broker-allow-list gap in the SAME
+  build: `brett332/gh-broker`'s own client-side `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS`
+  (`src/index.ts`) were missing `/vendor-onboarding-status` and `/vendor/complete-onboarding` —
+  added and pushed directly to `gh-broker`'s `main` (auto-deploys).
+- Confirmed live, via `hub_test_get`/`hub_test_post` against `maintenance-hub-staging`: both new
+  paths now clear gh-broker's allow-list (the earlier "path not allow-listed" error is gone) and
+  correctly reach the staging Hub's own auth gate, which 401s them — expected, since this PR is
+  unmerged and `maintenance-hub-staging` is still running the pre-Phase-1 code. This confirms the
+  whole plumbing end-to-end short of the deploy itself.
+- **What still needs Brett's own live pass, after he merges to `main` (staging) and it
+  auto-deploys:** re-run the same `hub_test_get`/`hub_test_post` calls against a seeded
+  `TEST-VENDOR-001` and confirm (a) the Vendors row actually gains the new columns and values
+  (read-back, not just `success:true`), (b) a real QuickBooks sandbox/production vendor record
+  actually receives `PrimaryEmailAddr`/`BillAddr`/`TaxIdentifier` on save — this build sandbox
+  has no real QuickBooks credentials to confirm that leg live, same standing limitation as most
+  builds in this repo — and (c) a click-through of the vendor-portal Complete-Your-Info modal and
+  the new admin Vendor Onboarding page on the actual deployed pages.
+
+**PR:** `Ridge-Co/RidgeCo`, branch `feature/vendor-onboarding-phase1` — left open per
+`AUTONOMY_GUARDRAILS_v1.0` for Brett's own reviewed merge (PII + QuickBooks-adjacent).
+
+---
+
 # ⭐⭐⭐ Sep 23, 2026, ~14:10 ET — SHIPPED: Receipt Reconciler reassign/refund/search now live in production; new standing policy (staging is self-serve, Cloudflare self-checked) proven end-to-end on this exact build
 
 **Feature status:** the receipt-recon reassign/mark-refund/mark-refund-confirmed/search work
