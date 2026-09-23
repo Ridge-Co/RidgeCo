@@ -426,7 +426,42 @@ function unitOptions(propId, selectedUnitId){
 // not just the top 3 — then, only if showClosed is true, a second optgroup of every CLOSED/past
 // work order there too (issue B: previously only the top-3 keyword-ranked open WOs at the
 // system's one auto-guessed property were ever visible; nothing else was browsable).
-function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId){
+// Part 5 (Sep 22 2026, Brett 7:57pm): "I can't see when that WO was opened/closed — I want to
+// eyeball whether the receipt date makes sense next to the WO's own dates." Pure, no I/O —
+// confirmed live against worker.js that Work_Orders really does use Created_Date for opened and
+// Completed_Date for closed (both already used that way throughout worker.js, e.g. the Complete
+// transition at "Status: 'Complete', Completed_Date: ..." — not assumed, per PAT-024). Dates are
+// compared as plain ISO yyyy-mm-dd substrings (they sort/compare correctly as strings) so this
+// never trips over timezone conversion the way `new Date(...)` comparisons can.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function woDatesLabel(wo){
+  const opened = String((wo && wo.Created_Date) || '').slice(0, 10);
+  const closed = String((wo && wo.Completed_Date) || '').slice(0, 10);
+  const parts = [];
+  if (ISO_DATE_RE.test(opened)) parts.push('opened ' + opened);
+  if (ISO_DATE_RE.test(closed)) parts.push('closed ' + closed);
+  return parts.join(' · ');
+}
+// Warning only, never a block (Brett keeps the final call — a late-filed receipt or a
+// backdated WO are both legitimate). Returns null when there's nothing to warn about, including
+// whenever either date is missing/unparseable — a missing date must never itself read as a
+// mismatch.
+function woDateWindowWarning(receiptDate, wo){
+  if (!wo) return null;
+  const rd = String(receiptDate || '').slice(0, 10);
+  if (!ISO_DATE_RE.test(rd)) return null;
+  const opened = String(wo.Created_Date || '').slice(0, 10);
+  const closed = String(wo.Completed_Date || '').slice(0, 10);
+  if (ISO_DATE_RE.test(opened) && rd < opened) {
+    return { type: 'before_open', message: '⚠️ Receipt predates this WO (opened ' + opened + ')' };
+  }
+  if (ISO_DATE_RE.test(closed) && rd > closed) {
+    return { type: 'after_close', message: '⚠️ Receipt is dated after this WO closed (' + closed + ')' };
+  }
+  return null;
+}
+
+function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate){
   if (!propId) return '<option value="">— pick a property first —</option>';
   const atProp = allWOs.filter(w => String(w.Property_ID) === String(propId) && (!unitId || String(w.Unit_ID) === String(unitId)));
   const open = atProp.filter(w => OPEN_WO_STATUSES.includes(w.Status));
@@ -443,8 +478,14 @@ function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId){
   const openOrdered = rankedFirst.concat(rest);
 
   const seen = new Set();
+  // Dates + a ⚠ marker are appended to the option TEXT itself (an <option> can't hold a link or
+  // rich HTML) so the mismatch is visible while browsing the dropdown; the clickable WO link and
+  // the full warning sentence render in the "Selected WO" panel below once one is picked —
+  // see updateWoDetail().
   const opt = (w, tag) => { if (seen.has(String(w.ID))) return ''; seen.add(String(w.ID));
-    return '<option value="'+esc(w.ID)+'"'+(String(w.ID)===String(selectedWoId)?' selected':'')+'>'+esc(w.ID)+' — '+esc((w.Description||'').slice(0,55))+' ('+esc(w.Status)+')'+tag+'</option>'; };
+    const dl = woDatesLabel(w);
+    const warn = woDateWindowWarning(receiptDate, w);
+    return '<option value="'+esc(w.ID)+'"'+(String(w.ID)===String(selectedWoId)?' selected':'')+'>'+esc(w.ID)+' — '+esc((w.Description||'').slice(0,55))+' ('+esc(w.Status)+')'+tag+(dl?' · '+esc(dl):'')+(warn?' · ⚠':'')+'</option>'; };
 
   let html = '<option value="">— pick a work order —</option>';
   if (openOrdered.length) {
