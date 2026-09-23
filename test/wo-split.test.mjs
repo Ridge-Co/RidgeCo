@@ -201,7 +201,7 @@ function build(db, fetchOpts) {
     idcSrc, colSrc, jsonSrc, fetchTabSrc, findWOSrc,
     updateWOFieldsSrc, nextSafeIdSrc, logAuditSrc, logAuditManySrc, logMsgAuditSrc,
     reasonsSrc, columnsSrc, woVoidSrc, woUnvoidSrc,
-    findRecentDupeSrc, addRowSrc, updateRowSrc, createWorkOrderSrc,
+    findRecentDupeSrc, claimCacheSrc, addRowSrc, updateRowSrc, createWorkOrderSrc,
     splitOrigFieldsSrc, splitMaxNewSrc, timeEntryLockSrc, vendorBillLockSrc, woSplitSrc,
     isTenantCurrentSrc, currentTenantSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc,
