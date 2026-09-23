@@ -2088,17 +2088,20 @@ function openWODetail(woId) {
   // Load vendor bills — show ALL bills for this WO, not just most recent
   api('GET','/vendor-bills?wo_id='+woId).then(function(bills){
     if (!Array.isArray(bills)||!bills.length) return;
+    window._billCache = window._billCache || {};
     var billsHtml = bills.map(function(bill) {
       var items = [];
       try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+      window._billCache[bill.ID] = bill;   // so the receipt editor below can read this bill's current fields without a re-fetch
+      var qbSent = !!bill.QB_Invoice_ID;   // Vendor_Bills itself never carries this; harmless if absent — the real guard is server-side (Invoice_Review)
       var statusLabel = (bill.Status||'submitted').toUpperCase();
       var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#b45309)';
       var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
       var typeLabel = bill.Bill_Type === 'hourly' ? '⏱ By the hour' : '📋 Flat rate';
-      return '<div style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
+      return '<div id="bill-card-'+bill.ID+'" style="margin-top:10px;background:var(--surface2);border:1px solid var(--accent2);border-radius:8px;padding:14px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
           '<div style="color:var(--accent2);font-size:11px;letter-spacing:.1em;font-weight:bold">💰 VENDOR BILL — <span style="color:' + statusColor + '">' + statusLabel + '</span></div>' +
-          '<div style="color:var(--accent2);font-size:1.5rem;font-weight:bold">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
+          '<div id="bill-total-'+bill.ID+'" style="color:var(--accent2);font-size:1.5rem;font-weight:bold">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
         '</div>' +
         vendorLine +
         '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">' + typeLabel + '</div>' +
@@ -2106,14 +2109,18 @@ function openWODetail(woId) {
           (parseFloat(bill.Labor_Total||0)>0 ? '<div>⏱ Labor: ' + esc(bill.Hours||'0') + ' hrs × $' + esc(bill.Rate||'0') + '/hr = <span style="color:var(--text)">$' + parseFloat(bill.Labor_Total).toFixed(2) + '</span></div>' : '') +
           (parseFloat(bill.Flat_Rate||0)>0 && bill.Bill_Type==='flat' ? '<div>📋 Flat: <span style="color:var(--text)">$' + parseFloat(bill.Flat_Rate).toFixed(2) + '</span></div>' : '') +
           (parseFloat(bill.Truck_Stock||0)>0 ? '<div>🚚 Truck stock' + (bill.Truck_Desc?' ('+esc(bill.Truck_Desc)+')':'') + ': <span style="color:var(--text)">$' + parseFloat(bill.Truck_Stock).toFixed(2) + '</span></div>' : '') +
+          '<div id="bill-receipts-view-'+bill.ID+'">' +
           (parseFloat(bill.Receipts_Total||0)>0 ? '<div>🧾 Receipts subtotal: <span style="color:var(--text)">$' + parseFloat(bill.Receipts_Total).toFixed(2) + '</span></div>' : '') +
-          items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(internalReceiptUrl(woId,r.url))+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+          items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.pay==='account' ? ' <span style="color:var(--muted)">(Ridge Co card)</span>' : ' <span style="color:var(--muted)">(reimburse vendor)</span>') + (r.url?'<a href="'+esc(internalReceiptUrl(woId,r.url))+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
+          '</div>' +
           (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + esc(bill.Notes) + '</div>' : '') +
         '</div>' +
-        '<div style="display:flex;gap:8px;margin-top:10px">' +
+        '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">' +
         '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
+        '<button onclick="openEditReceiptsPanel(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✎ Edit receipts</button>' +
         '<button onclick="voidVendorBill(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✕ Void</button>' +
         '</div>' +
+        '<div id="bill-receipts-edit-'+bill.ID+'"></div>' +
       '</div>';
     }).join('');
     var db = document.getElementById('detail-body');
@@ -9237,6 +9244,7 @@ function renderIRCard(b, i) {
       noteLine +
       vendorInvLine +
       renderReceiptsJsonBreakdown(b) +
+      (b.ID ? '<div style="margin-top:4px"><a href="javascript:void(0)" onclick="openWODetail(\''+esc(woId)+'\')" style="color:var(--info);font-size:11px">✎ Something wrong with these receipts? Edit them on the work order →</a></div>' : '') +
       '<div style="margin-top:8px">' +
         '<button onclick="irLoadWOReceipts('+i+',\''+esc(woId)+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;font-family:var(--font);font-size:10.5px;padding:4px 8px;cursor:pointer">🧾 Check for separate receipts logged on this WO</button>' +
         '<div id="ir-wo-receipts-'+i+'" style="margin-top:4px"></div>' +
@@ -12385,6 +12393,104 @@ function voidVendorBill(billId, woId) {
       toast('Could not void bill','error');
     }
   }).catch(function(e){ toast('Error: '+e.message,'error'); });
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  EDIT RECEIPTS ON A VENDOR BILL (Sep 23 2026, Brett's ask)
+// Fixes a mistaken/duplicate receipt line without voiding the whole bill — reachable from the
+// WO detail's vendor-bill card at any pre-QB-send stage (submitted or already reviewed; once a
+// bill is actually sent to QuickBooks the server refuses and this points at QuickBooks
+// directly). Review Bills links back here rather than duplicating the editor — see renderIRCard.
+// ══════════════════════════════════════════════════════════════
+window._billReceiptsEdit = window._billReceiptsEdit || {};
+
+function openEditReceiptsPanel(billId, woId) {
+  var bill = (window._billCache || {})[billId];
+  if (!bill) { toast('Bill data not loaded — reopen the work order and try again.', 'error'); return; }
+  var items = [];
+  try { items = JSON.parse(bill.Receipts_JSON || '[]'); } catch (e) {}
+  // A fresh editable copy each time the panel opens, so Cancel truly discards unsaved edits.
+  window._billReceiptsEdit[billId] = items.map(function(r) {
+    return { amount: parseFloat(r.amount) || 0, desc: r.desc || '', pay: r.pay === 'account' ? 'account' : 'reimburse', url: r.url || '' };
+  });
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function renderEditReceiptsPanel(billId, woId) {
+  var host = document.getElementById('bill-receipts-edit-' + billId);
+  if (!host) return;
+  var rows = window._billReceiptsEdit[billId] || [];
+  var rowsHtml = rows.map(function(r, i) {
+    return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">' +
+      '<span style="color:var(--muted);font-size:13px">$</span>' +
+      '<input type="number" min="0" step="0.01" value="' + (r.amount || '') + '" oninput="editReceiptField(\'' + billId + '\',' + i + ',\'amount\',this.value)" style="width:80px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:6px;border-radius:5px">' +
+      '<input type="text" placeholder="What was this for?" value="' + esc(r.desc || '') + '" oninput="editReceiptField(\'' + billId + '\',' + i + ',\'desc\',this.value)" style="flex:1;min-width:120px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px;border-radius:5px">' +
+      '<select onchange="editReceiptField(\'' + billId + '\',' + i + ',\'pay\',this.value)" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:11px;padding:6px;border-radius:5px">' +
+        '<option value="account"' + (r.pay === 'account' ? ' selected' : '') + '>Ridge Co card</option>' +
+        '<option value="reimburse"' + (r.pay !== 'account' ? ' selected' : '') + '>Reimburse vendor</option>' +
+      '</select>' +
+      (r.url ? '<a href="'+esc(internalReceiptUrl(woId, r.url))+'" target="_blank" style="color:var(--info);font-size:11px">View</a>' : '') +
+      '<button onclick="removeEditReceiptRow(\'' + billId + '\',' + i + ',\'' + woId + '\')" title="Remove this line" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:15px">✕</button>' +
+    '</div>';
+  }).join('') || '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">No receipt lines.</div>';
+
+  host.innerHTML =
+    '<div style="margin-top:10px;background:var(--surface);border:1px dashed var(--accent2);border-radius:8px;padding:12px">' +
+      '<div style="color:var(--accent2);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:bold;margin-bottom:8px">✎ Edit receipts</div>' +
+      rowsHtml +
+      '<button onclick="addEditReceiptRow(\'' + billId + '\',\'' + woId + '\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:5px;font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;margin-top:2px">+ Add line</button>' +
+      '<div style="display:flex;gap:8px;margin-top:12px">' +
+        '<button onclick="cancelEditReceipts(\'' + billId + '\')" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:8px;cursor:pointer">Cancel</button>' +
+        '<button id="save-receipts-' + billId + '" onclick="saveEditedReceipts(\'' + billId + '\',\'' + woId + '\')" style="flex:2;background:var(--accent2);border:none;color:#fff;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px;cursor:pointer">Save receipts</button>' +
+      '</div>' +
+      '<div id="save-receipts-msg-' + billId + '" style="font-size:11px;margin-top:6px"></div>' +
+    '</div>';
+}
+
+function editReceiptField(billId, idx, field, value) {
+  var rows = window._billReceiptsEdit[billId];
+  if (!rows || !rows[idx]) return;
+  rows[idx][field] = field === 'amount' ? (parseFloat(value) || 0) : value;
+}
+
+function addEditReceiptRow(billId, woId) {
+  window._billReceiptsEdit[billId] = window._billReceiptsEdit[billId] || [];
+  window._billReceiptsEdit[billId].push({ amount: 0, desc: '', pay: 'reimburse', url: '' });
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function removeEditReceiptRow(billId, idx, woId) {
+  var rows = window._billReceiptsEdit[billId];
+  if (!rows) return;
+  rows.splice(idx, 1);
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function cancelEditReceipts(billId) {
+  var host = document.getElementById('bill-receipts-edit-' + billId);
+  if (host) host.innerHTML = '';
+  delete window._billReceiptsEdit[billId];
+}
+
+function saveEditedReceipts(billId, woId) {
+  var rows = window._billReceiptsEdit[billId] || [];
+  var btn = document.getElementById('save-receipts-' + billId);
+  var msgEl = document.getElementById('save-receipts-msg-' + billId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  api('POST', '/vendor-bill/edit-receipts', { bill_id: billId, receipts: rows, edited_by: 'Brett' }).then(function(res) {
+    if (res && res.success) {
+      toast('Receipts updated — bill is now $' + parseFloat(res.total).toFixed(2) + (res.reset_to_submitted ? ' (reset to Submitted — re-review before sending to QuickBooks)' : ''), 'success');
+      delete window._billReceiptsEdit[billId];
+      loadAll().then(function() { openWODetail(woId); });
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = 'Save receipts'; }
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">' + esc((res && res.error) || 'Could not save.') + '</span>';
+    }
+  }).catch(function(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save receipts'; }
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Error: ' + esc(e.message) + '</span>';
+  });
 }
 
 

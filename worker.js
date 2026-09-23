@@ -256,7 +256,7 @@ export default {
         // a real one only ever arrives via scanning a Drive file — there was no way to get a
         // testable row onto staging otherwise).
         const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
@@ -617,6 +617,7 @@ export default {
         if (path === '/vendor-bill/extract')      return await vendorBillExtract(env, body);
         if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
+        if (path === '/vendor-bill/edit-receipts') return await editVendorBillReceipts(env, body);
         if (path === '/vendor-bill/move-to-new-wo') return await moveVendorBillToNewWO(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
         // Code (Aug 24, 2026): Master_Keys previously had only Name/Owner/Notes — no actual
@@ -6701,6 +6702,99 @@ async function addVendorBill(env, body) {
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
   try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
   return res;
+}
+
+// POST /vendor-bill/edit-receipts { bill_id, receipts:[{amount,desc,pay,url}], edited_by? }
+// Sep 23 2026, Brett's ask: a vendor's mistaken/duplicate receipt entry on a submitted bill
+// (e.g. a blank-description receipt whose amount just re-states her own flat-rate/labor
+// invoice) was inflating the customer-facing pass-through price, and the only existing fix
+// was Void — which throws away the whole bill (labor, invoice file, notes) to drop one bad
+// line. This replaces the bill's ENTIRE Receipts_JSON with the corrected array the caller
+// sends (edit an amount/desc/pay-mode, delete a line, or add a missed one — all the same
+// "send the corrected list back" shape) and recomputes every field that is derived from it,
+// the same way doActualBillSubmit() in vendor.html originally computed them:
+//   Receipts_Total            = sum of every receipt's amount (both pay modes)
+//   Receipts_Reimburse_Total  = sum of receipts NOT marked 'account' (what's owed to the vendor)
+//   Total                     = laborOrFlat + Truck_Stock + Receipts_Reimburse_Total
+// Editable at ANY pre-QB stage — submitted OR already reviewed/markup-priced — per Brett's
+// explicit answer (Sep 23 2026 session). The one hard stop is a bill that's actually been
+// sent to QuickBooks: Invoice_Review is what /qb/send-invoice acts on and stamps QB_Invoice_ID
+// onto, so a live Invoice_Review row carrying one means real QB records already exist off the
+// old numbers — same convention the same-day Receipt Reconciler reassign/mark-refund build
+// (FL rule, PR #44) already uses ("hasn't been emailed to QuickBooks yet"). Once sent, this
+// refuses and points at QuickBooks directly, same as that build.
+// If the bill was already reviewed (Status:'reviewed', a markup/Customer_Total was already
+// computed and frozen onto Vendor_Bills + a live Invoice_Review row) but NOT yet sent to QB,
+// editing receipts here invalidates that frozen pricing — so this resets Status back to
+// 'submitted' and deactivates the stale Invoice_Review row, forcing a fresh Review Bills pass
+// (with the corrected numbers) before it can go to QB. Never silently leaves a stale approved
+// price sitting on a bill whose underlying cost just changed.
+async function editVendorBillReceipts(env, body) {
+  const billId = String((body && body.bill_id) || '').trim();
+  if (!billId) return json({ error: 'bill_id required' }, 400);
+  if (!Array.isArray(body.receipts)) return json({ error: 'receipts must be an array' }, 400);
+
+  const bills = await fetchTab(env, 'Vendor_Bills');
+  const bill = bills.find(b => String(b.ID) === billId);
+  if (!bill) return json({ error: `No vendor bill ${billId}` }, 404);
+  if (bill.Active === 'FALSE') return json({ error: `Bill ${billId} is voided — nothing to edit. Submit a new bill instead.` }, 409);
+
+  // Hard stop: already sent to QuickBooks. Same check moveVendorBillToNewWO/vendorBillReassignLock
+  // use — a live Invoice_Review row for this bill carrying a QB_Invoice_ID.
+  let invoiceReviewRows = [];
+  try { invoiceReviewRows = await fetchTab(env, 'Invoice_Review'); } catch (e) { invoiceReviewRows = []; }
+  const liveIR = invoiceReviewRows.find(ir => ir.Active !== 'FALSE' && String(ir.Bill_ID) === billId);
+  if (liveIR && String(liveIR.QB_Invoice_ID || '').trim()) {
+    return json({ error: `Already sent to QuickBooks (invoice ${liveIR.QB_Invoice_ID}) — fix this in QuickBooks directly, or void this bill and have the vendor resubmit.` }, 409);
+  }
+
+  // Sanitize the incoming receipt list — same shape doActualBillSubmit() builds client-side.
+  const receipts = body.receipts.map(r => ({
+    amount: Math.round((parseFloat(r && r.amount) || 0) * 100) / 100,
+    desc: String((r && r.desc) || '').trim(),
+    pay: (r && r.pay === 'account') ? 'account' : 'reimburse',
+    url: String((r && r.url) || ''),
+  })).filter(r => r.amount > 0 || r.desc);
+
+  const receiptsTotal = receipts.reduce((s, r) => s + r.amount, 0);
+  const receiptsReimburse = receipts.reduce((s, r) => s + (r.pay === 'account' ? 0 : r.amount), 0);
+  const laborOrFlat = bill.Bill_Type === 'flat' ? (parseFloat(bill.Flat_Rate) || 0) : (parseFloat(bill.Labor_Total) || 0);
+  const truckStock = parseFloat(bill.Truck_Stock) || 0;
+  const newTotal = laborOrFlat + truckStock + receiptsReimburse;
+  const oldTotal = parseFloat(bill.Total) || 0;
+
+  try { await ensureColumns(env, 'Vendor_Bills', ['Receipts_Reimburse_Total']); } catch (e) {}
+
+  const fields = {
+    Receipts_JSON: JSON.stringify(receipts),
+    Receipts_Total: receiptsTotal.toFixed(2),
+    Receipts_Reimburse_Total: receiptsReimburse.toFixed(2),
+    Total: newTotal.toFixed(2),
+  };
+
+  let resetToSubmitted = false;
+  if (bill.Status === 'reviewed') {
+    fields.Status = 'submitted';
+    resetToSubmitted = true;
+    if (liveIR) {
+      try { await updateRow(env, 'Invoice_Review', liveIR.ID, { Active: 'FALSE' }); } catch (e) { /* non-fatal — the stale row is now orphaned but harmless; Review Bills re-derives from Vendor_Bills */ }
+    }
+  }
+
+  await updateRow(env, 'Vendor_Bills', billId, fields);
+
+  try {
+    await logWOAudit(env, bill.WO_ID || '', body.edited_by || 'Brett', 'admin', 'Vendor_Bill_Receipts',
+      `$${oldTotal.toFixed(2)} (${(JSON.parse(bill.Receipts_JSON || '[]') || []).length} receipt line(s))`,
+      `$${newTotal.toFixed(2)} (${receipts.length} receipt line(s))`,
+      resetToSubmitted ? 'Receipts edited on bill ' + billId + ' — reset to submitted, needs re-review before QuickBooks.' : 'Receipts edited on bill ' + billId + '.');
+  } catch (e) { /* audit is best-effort — the fix itself already landed */ }
+
+  return json({
+    success: true, bill_id: billId, total: newTotal.toFixed(2),
+    receipts_total: receiptsTotal.toFixed(2), receipts_reimburse_total: receiptsReimburse.toFixed(2),
+    reset_to_submitted: resetToSubmitted,
+  });
 }
 
 async function listVendorBills(env, url) {
@@ -13905,6 +13999,26 @@ async function hubTestWriteAllowed(env, path, body) {
     // Property covers the whole operation, same as /status and /schedule above.
     const wos = await fetchTab(env, 'Work_Orders');
     const wo = wos.find(w => String(w.ID) === String(body && body.original_wo_id));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/vendor-bill/add') {
+    // A brand-new Vendor_Bills row targets an existing Work_Orders row (never creates one),
+    // same shape as /status and /schedule: gate on that WO's own Property being a TEST- fixture.
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && (body.WO_ID || body.wo_id)));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/vendor-bill/edit-receipts') {
+    // Edits an existing Vendor_Bills row by bill_id. Resolve bill -> WO_ID -> Work_Orders ->
+    // Property_ID, same chain as /vendor-bill/add above, so this token can only ever touch a
+    // bill sitting on a TEST- fixture WO/Property, never a real one.
+    const bills = await fetchTab(env, 'Vendor_Bills');
+    const bill = bills.find(b => String(b.ID) === String(body && body.bill_id));
+    if (!bill) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(bill.WO_ID));
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
