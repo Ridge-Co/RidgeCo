@@ -904,7 +904,7 @@ function rowCard(r){
       ).filter(Boolean).join(', ')
     : (r.PO_Reference || '');
 
-  if (!excluded && !isCompany && isPendingLike) {
+  if (!excluded && !isCompany && !isRefund && isPendingLike) {
     html += '<div class="rc-fields">'
       + '<div><label>Property</label><select id="'+idAttr+'-prop" onchange="refreshUnitSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
       + '<div><label>Unit (optional — narrows the work-order list)</label><select id="'+idAttr+'-unit" onchange="refreshWoSelect(\''+r.ID+'\')">'+unitOptions(propId, '')+'</select></div>'
