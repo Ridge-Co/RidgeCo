@@ -681,6 +681,9 @@ export default {
         if (path === '/receipt-recon/bulk-action')       return await receiptReconBulkAction(env, body);
         if (path === '/receipt-recon/refund-candidates') return await receiptReconRefundCandidates(env, body);
         if (path === '/receipt-recon/refund-reverse')    return await receiptReconRefundReverse(env, body);
+        if (path === '/receipt-recon/reassign')            return await receiptReconReassign(env, body);
+        if (path === '/receipt-recon/mark-refund')          return await receiptReconMarkRefund(env, body);
+        if (path === '/receipt-recon/mark-refund-confirmed') return await receiptReconMarkRefundConfirmed(env, body);
         if (path === '/receipt-recon/check-duplicates')  return await receiptReconCheckDuplicates(env, body);
         if (path === '/receipt-recon/check-duplicates-bulk') return await receiptReconCheckDuplicatesBulk(env, body);
         if (path === '/admin/receipt-duplicate-audit/build-index') return await receiptDuplicateAuditBuildIndex(env, body);
