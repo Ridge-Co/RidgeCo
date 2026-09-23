@@ -832,7 +832,8 @@ window.addEventListener('pageshow', function(e){
 <div class="modal-overlay" id="modal-bulk-combine">
   <div class="modal">
     <div class="modal-header"><div class="modal-title">COMBINE WORK ORDERS</div><button class="modal-close" onclick="closeModal('modal-bulk-combine')">✕</button></div>
-    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Every work order below except the one you pick as survivor will be voided (reason: Combined) into it. Notes from each voided work order are appended onto the survivor. Only work orders at the same property/unit can be combined.</div>
+    <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Every work order below except the one you pick as survivor will be voided (reason: Combined) into it. Notes, Description, and Room from each voided work order are appended onto the survivor — nothing is discarded. The survivor keeps its own Owner Reference # untouched; if a voided work order had a different owner reference, the owner is automatically notified which of their reference numbers were absorbed into the survivor. Only work orders at the same property/unit can be combined.</div>
+    <div id="bc-merge-note" style="display:none;color:var(--muted);font-size:11px;margin-top:8px;font-style:italic"></div>
     <div class="form-group full">
       <label>Which work order survives?</label>
       <div id="bc-survivor-list" style="display:flex;flex-direction:column;gap:6px"></div>
