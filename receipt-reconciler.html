@@ -729,10 +729,98 @@ async function unskipRow(id, btn){
 
 function render(rows){
   const list = document.getElementById('list');
-  if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; return; }
+  if (!rows.length){ list.innerHTML = '<div class="empty">Nothing '+esc(curStatus)+'.</div>'; updateBulkBar(); return; }
   rowsById = {}; rows.forEach(r => { rowsById[r.ID] = r; });
   list.innerHTML = rows.map(r => rowCard(r)).join('');
   rows.forEach(r => { rowSuggestions[r.ID] = r.suggestion || {}; rowEvidence[r.ID] = r.duplicate_evidence || []; if ((r.Status||'pending')==='pending') refreshWoSelect(r.ID); });
+  updateBulkBar();
+}
+
+// ── Bulk actions (Part 4, Sep 22 2026 brief) ────────────────────────────────────────────────
+// Scoped to THIS page's own #list container (the only list this single-page app ever renders),
+// following the same read-from-the-actual-container discipline as index.html's
+// pinCheckScopeEl/selectAllPinChecks (rule 184-185) rather than trusting a JS-side selection
+// object that could survive a tab switch or a re-render and silently apply to the wrong rows.
+// selectedIds is always REBUILT from the live DOM in updateBulkBar(), never trusted as its own
+// source of truth — so a stale id from a previous render can never sneak into a bulk call.
+let selectedIds = new Set();
+let bulkBusy = false;
+
+function updateBulkBar(){
+  const scope = document.getElementById('list');
+  const boxes = scope ? scope.querySelectorAll('.rc-check') : [];
+  selectedIds = new Set(Array.from(boxes).filter(cb => cb.checked).map(cb => cb.dataset.id));
+  const bar = document.getElementById('rc-bulk-bar');
+  if (!bar) return;
+  bar.style.display = selectedIds.size ? 'flex' : 'none';
+  const lbl = document.getElementById('rc-bulk-count');
+  if (lbl) lbl.textContent = selectedIds.size + ' selected';
+  const kernsBtn = document.getElementById('rc-bulk-kerns-btn');
+  if (kernsBtn) kernsBtn.style.display = kernsProperty() ? '' : 'none';
+}
+
+// Called on every tab switch and before every fresh list load — clears both the checkboxes in
+// THIS page's #list and the bar, so a selection from one status tab (or from before a refresh)
+// can never ride along into a different tab's bulk action.
+function clearBulkSelection(){
+  const scope = document.getElementById('list');
+  if (scope) scope.querySelectorAll('.rc-check').forEach(cb => { cb.checked = false; });
+  updateBulkBar();
+}
+
+async function bulkAction(action, extra){
+  if (bulkBusy) return;
+  const ids = Array.from(selectedIds);
+  if (!ids.length) return;
+  const n = ids.length;
+  if (action === 'skip' && !confirm('Skip '+n+' selected receipt(s)? Nothing gets billed.')) return;
+  if (action === 'mark_duplicate' && !confirm('Mark '+n+' selected receipt(s) as duplicates? This does not bill anything — same as tapping "Confirm duplicate" on each.')) return;
+  if (action === 'move_to_pending' && !confirm('Move '+n+' selected receipt(s) back to Pending? Only rows currently Skipped will actually move — others will show as failed.')) return;
+  bulkBusy = true;
+  const bar = document.getElementById('rc-bulk-bar');
+  if (bar) bar.querySelectorAll('button').forEach(b => b.disabled = true);
+  let remaining = ids.slice();
+  const allSucceeded = [], allFailed = [];
+  try {
+    // Loops the same "call again with what's left" shape as runFullAudit/admin/share-attachments
+    // — /receipt-recon/bulk-action only ever processes its own capped batch per call to respect
+    // the Cloudflare subrequest limit, never an unbounded loop server-side.
+    while (remaining.length) {
+      const body = Object.assign({ ids: remaining, action }, extra || {});
+      const res = await post('/receipt-recon/bulk-action', body);
+      if (res.error) throw new Error(res.error);
+      allSucceeded.push(...(res.succeeded || []));
+      allFailed.push(...(res.failed || []));
+      remaining = res.remaining_ids || [];
+    }
+    const failSummary = allFailed.length ? ' — ' + allFailed.length + ' failed: ' + allFailed.map(f => esc(f.id) + ' (' + esc(f.error) + ')').join('; ') : '';
+    toast('<b>Bulk ' + esc(action.replace(/_/g,' ')) + '</b> — ' + allSucceeded.length + ' of ' + n + ' succeeded' + failSummary);
+    clearBulkSelection();
+    await loadQueue();
+  } catch (e) {
+    toast('<b>Bulk ' + esc(action.replace(/_/g,' ')) + ' failed</b> — ' + esc(e.message));
+  } finally {
+    bulkBusy = false;
+    if (bar) bar.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
+
+// "Expense to Ridge Co / 1864 Kerns School Rd" — the brief's small picker: one property choice
+// applies to the whole selection, not per-row. Reuses the SAME kernsProperty() lookup and the
+// same real money-posting write (PR #23's one-tap flow via /receipt-recon/confirm no_wo:true)
+// the single-row buttons already use — applied N times per Brett's own bulk selection and his
+// own confirm, never autonomously.
+function bulkExpense(mode){
+  const ids = Array.from(selectedIds);
+  if (!ids.length) return;
+  let property_id = '', where = 'Ridge Co';
+  if (mode === 'kerns') {
+    const k = kernsProperty();
+    if (!k) { toast('<span class="err">1864 Kerns School Rd isn\'t in the Properties list.</span>'); return; }
+    property_id = String(k.ID); where = '1864 Kerns School Rd';
+  }
+  if (!confirm('Post ' + ids.length + ' selected receipt(s) as a ' + where + ' expense straight to QuickBooks — no work order, no customer invoice? This really posts to QuickBooks, same as the single-tap expense button, ' + ids.length + ' time(s).')) return;
+  bulkAction('expense', { property_id });
 }
 
 function evidenceHtml(r){
