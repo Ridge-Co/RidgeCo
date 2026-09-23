@@ -12397,6 +12397,104 @@ function voidVendorBill(billId, woId) {
 
 
 // ══════════════════════════════════════════════════════════════
+//  EDIT RECEIPTS ON A VENDOR BILL (Sep 23 2026, Brett's ask)
+// Fixes a mistaken/duplicate receipt line without voiding the whole bill — reachable from the
+// WO detail's vendor-bill card at any pre-QB-send stage (submitted or already reviewed; once a
+// bill is actually sent to QuickBooks the server refuses and this points at QuickBooks
+// directly). Review Bills links back here rather than duplicating the editor — see renderIRCard.
+// ══════════════════════════════════════════════════════════════
+window._billReceiptsEdit = window._billReceiptsEdit || {};
+
+function openEditReceiptsPanel(billId, woId) {
+  var bill = (window._billCache || {})[billId];
+  if (!bill) { toast('Bill data not loaded — reopen the work order and try again.', 'error'); return; }
+  var items = [];
+  try { items = JSON.parse(bill.Receipts_JSON || '[]'); } catch (e) {}
+  // A fresh editable copy each time the panel opens, so Cancel truly discards unsaved edits.
+  window._billReceiptsEdit[billId] = items.map(function(r) {
+    return { amount: parseFloat(r.amount) || 0, desc: r.desc || '', pay: r.pay === 'account' ? 'account' : 'reimburse', url: r.url || '' };
+  });
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function renderEditReceiptsPanel(billId, woId) {
+  var host = document.getElementById('bill-receipts-edit-' + billId);
+  if (!host) return;
+  var rows = window._billReceiptsEdit[billId] || [];
+  var rowsHtml = rows.map(function(r, i) {
+    return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">' +
+      '<span style="color:var(--muted);font-size:13px">$</span>' +
+      '<input type="number" min="0" step="0.01" value="' + (r.amount || '') + '" oninput="editReceiptField(\'' + billId + '\',' + i + ',\'amount\',this.value)" style="width:80px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:6px;border-radius:5px">' +
+      '<input type="text" placeholder="What was this for?" value="' + esc(r.desc || '') + '" oninput="editReceiptField(\'' + billId + '\',' + i + ',\'desc\',this.value)" style="flex:1;min-width:120px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px;border-radius:5px">' +
+      '<select onchange="editReceiptField(\'' + billId + '\',' + i + ',\'pay\',this.value)" style="background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:11px;padding:6px;border-radius:5px">' +
+        '<option value="account"' + (r.pay === 'account' ? ' selected' : '') + '>Ridge Co card</option>' +
+        '<option value="reimburse"' + (r.pay !== 'account' ? ' selected' : '') + '>Reimburse vendor</option>' +
+      '</select>' +
+      (r.url ? '<a href="'+esc(internalReceiptUrl(woId, r.url))+'" target="_blank" style="color:var(--info);font-size:11px">View</a>' : '') +
+      '<button onclick="removeEditReceiptRow(\'' + billId + '\',' + i + ',\'' + woId + '\')" title="Remove this line" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:15px">✕</button>' +
+    '</div>';
+  }).join('') || '<div style="color:var(--muted);font-size:12px;margin-bottom:8px">No receipt lines.</div>';
+
+  host.innerHTML =
+    '<div style="margin-top:10px;background:var(--surface);border:1px dashed var(--accent2);border-radius:8px;padding:12px">' +
+      '<div style="color:var(--accent2);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:bold;margin-bottom:8px">✎ Edit receipts</div>' +
+      rowsHtml +
+      '<button onclick="addEditReceiptRow(\'' + billId + '\',\'' + woId + '\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:5px;font-family:var(--font);font-size:11px;padding:5px 10px;cursor:pointer;margin-top:2px">+ Add line</button>' +
+      '<div style="display:flex;gap:8px;margin-top:12px">' +
+        '<button onclick="cancelEditReceipts(\'' + billId + '\')" style="flex:1;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:8px;cursor:pointer">Cancel</button>' +
+        '<button id="save-receipts-' + billId + '" onclick="saveEditedReceipts(\'' + billId + '\',\'' + woId + '\')" style="flex:2;background:var(--accent2);border:none;color:#fff;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px;cursor:pointer">Save receipts</button>' +
+      '</div>' +
+      '<div id="save-receipts-msg-' + billId + '" style="font-size:11px;margin-top:6px"></div>' +
+    '</div>';
+}
+
+function editReceiptField(billId, idx, field, value) {
+  var rows = window._billReceiptsEdit[billId];
+  if (!rows || !rows[idx]) return;
+  rows[idx][field] = field === 'amount' ? (parseFloat(value) || 0) : value;
+}
+
+function addEditReceiptRow(billId, woId) {
+  window._billReceiptsEdit[billId] = window._billReceiptsEdit[billId] || [];
+  window._billReceiptsEdit[billId].push({ amount: 0, desc: '', pay: 'reimburse', url: '' });
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function removeEditReceiptRow(billId, idx, woId) {
+  var rows = window._billReceiptsEdit[billId];
+  if (!rows) return;
+  rows.splice(idx, 1);
+  renderEditReceiptsPanel(billId, woId);
+}
+
+function cancelEditReceipts(billId) {
+  var host = document.getElementById('bill-receipts-edit-' + billId);
+  if (host) host.innerHTML = '';
+  delete window._billReceiptsEdit[billId];
+}
+
+function saveEditedReceipts(billId, woId) {
+  var rows = window._billReceiptsEdit[billId] || [];
+  var btn = document.getElementById('save-receipts-' + billId);
+  var msgEl = document.getElementById('save-receipts-msg-' + billId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  api('POST', '/vendor-bill/edit-receipts', { bill_id: billId, receipts: rows, edited_by: 'Brett' }).then(function(res) {
+    if (res && res.success) {
+      toast('Receipts updated — bill is now $' + parseFloat(res.total).toFixed(2) + (res.reset_to_submitted ? ' (reset to Submitted — re-review before sending to QuickBooks)' : ''), 'success');
+      delete window._billReceiptsEdit[billId];
+      loadAll().then(function() { openWODetail(woId); });
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = 'Save receipts'; }
+      if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">' + esc((res && res.error) || 'Could not save.') + '</span>';
+    }
+  }).catch(function(e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save receipts'; }
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger)">Error: ' + esc(e.message) + '</span>';
+  });
+}
+
+
+// ══════════════════════════════════════════════════════════════
 //  PHOTO UPLOAD / ATTACHMENTS
 // ══════════════════════════════════════════════════════════════
 
