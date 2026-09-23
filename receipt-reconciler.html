@@ -472,7 +472,7 @@ function flagPill(f){
   return '<span class="pill '+cls+'">'+esc(label)+'</span>';
 }
 function categoryPill(cat, action){
-  if (cat === 'refund') return '<span class="pill muted">Refund/return — skip</span>';
+  if (cat === 'refund') return '<span class="pill warn">🔄 REFUND — find a match or post as expense</span>';
   if (cat === 'company') return '<span class="pill muted">BMore business expense — not billable</span>';
   if (cat === 'customer_paid') return '<span class="pill muted">Paid on customer card — not billable</span>';
   if (action === 'need_property') return '<span class="pill warn">Can\'t resolve property — assign manually</span>';
