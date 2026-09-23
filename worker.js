@@ -2454,6 +2454,106 @@ async function receiptReconBulkAction(env, body) {
   });
 }
 
+// POST /receipt-recon/refund-candidates { id } — READ-ONLY. Part 3 of the Sep 22 2026 brief.
+// Given a refund row in Receipt_Recon_Queue, searches the Receipts tab for candidate ORIGINAL
+// purchases it might be reversing (receiptRefundFindMatches, pure/unit-tested above) and returns
+// them for Brett to eyeball — store/date/amount/description, ranked, never a verdict. Writes
+// nothing. The UI calls this on demand (same on-demand convention as checkDuplicatesOne), not
+// embedded in every queue-list render, to keep GET /receipt-recon/queue cheap.
+async function receiptReconRefundCandidates(env, body) {
+  body = body || {};
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  let items = []; try { items = JSON.parse(row.Items || '[]'); } catch (e) {}
+  const receipts = await fetchTab(env, 'Receipts');
+  const candidates = receiptRefundFindMatches({ store: row.Vendor, amount: row.Total, date: row.Receipt_Date, items }, receipts);
+  return json({ ok: true, id, refund: { store: row.Vendor || '', amount: row.Total || '', date: row.Receipt_Date || '', items }, candidates });
+}
+
+// POST /receipt-recon/refund-reverse { id, receipt_id, reason, preview_only? } — Rung-3 money
+// write (AUTONOMY_GUARDRAILS): reverses the billed amount of an earlier purchase to credit a
+// refund against it. Same admin-gated / Brett-taps-Confirm shape as every other QuickBooks/
+// customer-invoice write in this file (see scopeProposalAdjustBill) — this path is NOT in
+// PUBLIC_PATHS or any ROLE_SCOPES entry, so it requires the admin secret exactly like every
+// other write here, and it is never called from receiptExtract/receiptSuggestCore/receiptReconScan
+// detection or matching — only from the Reconciler UI's own explicit "This matches — reverse the
+// billed amount" button tap, after Brett has reviewed receiptReconRefundCandidates' suggestions.
+//
+// What "reverse" means concretely: writes a NEW negative Receipts row on the SAME WO as the
+// original purchase (reusing addReceipt with allow_negative:true — the exact mechanism every
+// other Receipts write in this file uses, not a bespoke QuickBooks call), then folds it into the
+// same pending Invoice_Review row the original purchase's receipt was folded into via
+// appendReceiptToInvoiceReview (now negative-delta aware — see its own comment), crediting the
+// customer's pending invoice back down by the refunded amount. If that invoice was already sent
+// to QuickBooks, appendReceiptToInvoiceReview's existing Repair_Flagged convention picks it up
+// exactly like a receipt added after the fact does — Brett pushes the correction himself via the
+// existing Repairable Invoices path, same as every other post-send correction in this app. The
+// Receipts row itself is always written regardless of whether the Invoice_Review fold succeeds —
+// it's the audit-trail source of truth even if the pending invoice couldn't safely absorb the
+// full credit (see 'would_go_negative').
+async function receiptReconRefundReverse(env, body) {
+  body = body || {};
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const receiptId = body.receipt_id; if (!receiptId) return json({ error: 'receipt_id required — pick the original purchase this refund matches' }, 400);
+  const reason = String(body.reason || '').trim();
+  if (!reason) return json({ error: 'A reason is required — it goes on the reversing Receipts row, not just in the Hub.' }, 400);
+
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (['confirmed', 'attached_only', 'refund_reversed'].includes(row.Status)) return json({ error: `already ${row.Status}`, id }, 409);
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  const isRefundRow = (suggestion && suggestion.category === 'refund') || Number(row.Total) < 0;
+  if (!isRefundRow) return json({ error: 'This queue row is not flagged as a refund.' }, 400);
+
+  const receipts = await fetchTab(env, 'Receipts');
+  const original = receipts.find(r => String(r.ID) === String(receiptId) && r.Active !== 'FALSE');
+  if (!original) return json({ error: `No active Receipts row with ID "${receiptId}" found.` }, 404);
+  if (!original.WO_ID) return json({ error: 'That original receipt has no WO_ID — nothing to reverse a bill against.' }, 400);
+
+  const reverseAmount = -Math.abs(Number(row.Total) || 0);
+  if (!reverseAmount) return json({ error: 'This refund has no usable amount — fix the Total on the queue row first.' }, 400);
+
+  const preview = {
+    queue_id: id, original_receipt_id: original.ID, wo_id: original.WO_ID, property_id: original.Property_ID || '',
+    original_amount: Number(original.Amount) || 0, reverse_amount: reverseAmount,
+    store: row.Vendor || original.Store || '', date: row.Receipt_Date || '', reason,
+  };
+  if (body.preview_only) return json({ ok: true, preview });
+
+  const addResp = await addReceipt(env, {
+    wo_id: original.WO_ID, property_id: original.Property_ID || '', amount: reverseAmount,
+    description: `REFUND — reverses receipt #${original.ID} (${reason})`.slice(0, 500),
+    store: row.Vendor || original.Store || '', date: row.Receipt_Date || new Date().toISOString().split('T')[0],
+    added_by: 'Receipt Reconciler (refund reverse)', added_by_id: 'receipt-recon-refund-reverse', role: 'hub',
+    category: 'refund', source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
+    payment_source: body.payment_source, allow_negative: true,
+  });
+  const addJson = await addResp.json().catch(() => ({}));
+  let invoiceLink = null;
+  if (addJson && addJson.success && !addJson.duplicate && addJson.id) {
+    // Same signed-scope-proposal carve-out receiptReconConfirm uses: a job billed through
+    // proposal milestones is never folded into Invoice_Review (it would double-count against
+    // the milestone billing instead of the ordinary per-receipt invoice).
+    let covered = null, coverErr = null;
+    try { covered = await scopeCoveringSignatureForWO(env, original.WO_ID); } catch (e) { coverErr = e; }
+    if (covered) invoiceLink = { linked: false, reason: 'covered_by_signed_proposal', scope_id: covered.scope_id };
+    else if (coverErr) invoiceLink = { linked: false, reason: 'scope_check_failed', error: String(coverErr && coverErr.message || coverErr) };
+    else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id: original.WO_ID, receipt_id: addJson.id, amount: reverseAmount });
+  }
+  if (addJson && addJson.success) {
+    await updateRow(env, 'Receipt_Recon_Queue', id, {
+      Status: 'refund_reversed', Confirmed_WO_ID: original.WO_ID, Confirmed_Amount: String(reverseAmount),
+      Confirmed_Description: `Reverses receipt #${original.ID}`,
+      Notes: `Confirmed match by Brett — reversed $${Math.abs(reverseAmount).toFixed(2)} against receipt #${original.ID} on WO ${original.WO_ID}. ${reason}`,
+    });
+  }
+  return json({ ok: true, wo_id: original.WO_ID, original_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink });
+}
+
 const DUPLICATE_RETENTION_DAYS = 180;
 
 // PURE — is this queue row due for the 180-day retention purge right now? Factored out of
