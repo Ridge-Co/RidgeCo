@@ -5084,7 +5084,7 @@ async function createWorkOrder(env, body) {
     // Tenant Received: separate from tenant_job_assigned — tells the tenant only that the
     // request landed and is pending assignment/scheduling. Not scoped to Type='tenant' (unlike
     // Owner Received above) — applies to any new WO with a notifiable tenant, same scope the
-    // existing Tenant_Notify_Created toggle already covers. Delayed 1h so a fast assignment can
+    // existing Tenant_Notify_Created toggle already covers. Delayed 8h so a fast assignment can
     // supersede/bump it (see the tenant_job_received check in processPendingNotifications)
     // instead of the tenant getting "we got it" immediately followed by "you're assigned".
     const tenant = currentTenantForDispatch(tenants, unit, woLike);
