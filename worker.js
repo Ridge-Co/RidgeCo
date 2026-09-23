@@ -255,8 +255,13 @@ export default {
         // (creates a synthetic PENDING Receipt_Recon_Queue row scoped to TEST-PROPERTY-001, since
         // a real one only ever arrives via scanning a Drive file — there was no way to get a
         // testable row onto staging otherwise).
-        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts'];
+        // /vendor-onboarding-status + /vendor/complete-onboarding added Sep 23 2026 (Vendor
+        // Onboarding Phase 1) so a staging smoke test can exercise the new endpoints on a real
+        // TEST- vendor. /vendor-onboarding-status is a read keyed by vendor_id, no PII exposure
+        // beyond what /vendors already returns wholesale. /vendor/complete-onboarding is gated
+        // below in hubTestWriteAllowed to a TEST- vendor only, same as every other write here.
+        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search','/vendor-onboarding-status'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts','/vendor/complete-onboarding'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
