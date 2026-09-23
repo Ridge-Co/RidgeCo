@@ -3470,6 +3470,54 @@ function renderVendorPerformanceTable() {
     }).join('') + '</tbody></table></div>';
 }
 
+// ── Vendor Onboarding gap report (Phase 1, Sep 23 2026) — fetch-on-open like Vendor Performance.
+// One bulk call (/vendor-onboarding-gaps) instead of N per-vendor /vendor-onboarding-status
+// calls — same reasoning as vendor-performance/arAging on the Worker side.
+var _vendorOnboardingRows = null;
+
+function loadVendorOnboardingGaps() {
+  var el = document.getElementById('vendor-onboarding-body');
+  if (el) el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading...</div>';
+  var summary = document.getElementById('vendor-onboarding-summary');
+  if (summary) summary.textContent = '';
+  api('GET', '/vendor-onboarding-gaps').then(function(res) {
+    if (!res || res.ok === false) {
+      if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Could not load vendor onboarding gaps') + '</div>';
+      return;
+    }
+    _vendorOnboardingRows = safeArray(res.vendors);
+    if (summary) {
+      summary.textContent = 'As of ' + res.as_of + ' · ' + res.gap_count + ' of ' + res.total_active_vendors + ' active vendors missing something';
+    }
+    renderVendorOnboardingTable();
+  }).catch(function(e) {
+    if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
+  });
+}
+
+function renderVendorOnboardingTable() {
+  var el = document.getElementById('vendor-onboarding-body');
+  if (!el) return;
+  var rows = safeArray(_vendorOnboardingRows);
+  if (!rows.length) { el.innerHTML = '<div class="loading">No gaps — every active vendor has phone, billing email, billing address, and tax ID on file.</div>'; return; }
+  var missingLabel = { Phone: 'Phone', Billing_Email: 'Billing Email', Billing_Address: 'Billing Address', Tax_ID: 'Tax ID' };
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+    '<th>Vendor</th><th>Phone</th><th>Missing</th><th>Bank Info</th><th></th>' +
+    '</tr></thead><tbody>' +
+    rows.map(function(v) {
+      var missingHtml = safeArray(v.missing).map(function(f) {
+        return '<span class="badge" style="background:#fdecea;border:1px solid var(--danger);color:var(--danger);margin-right:4px">' + esc(missingLabel[f] || f) + '</span>';
+      }).join('');
+      return '<tr>' +
+        '<td>' + esc(v.name) + '</td>' +
+        '<td>' + esc(v.phone || '—') + '</td>' +
+        '<td>' + missingHtml + '</td>' +
+        '<td style="color:var(--muted);font-size:11px">' + esc(v.bank_info_status || 'not_started') + '</td>' +
+        '<td><button class="btn small" onclick="openEditVendorModal(\'' + v.vendor_id + '\')">Fix</button></td>' +
+        '</tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
 // ── Tenants ──────────────────────────────────────────────────
 function renderTenantsPage() {
   var el = document.getElementById('tenants-list');
