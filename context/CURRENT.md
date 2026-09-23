@@ -1,3 +1,60 @@
+# Sep 23, 2026, ~19:25 ET — INVESTIGATED: staging 401 on the two brand-new Vendor Onboarding Phase 1 endpoints, right after PR #52 merged to `main` — root cause was Cloudflare deploy propagation lag, not a code bug
+
+**Symptom:** ~15 minutes after PR #52 ("Vendor Onboarding Phase 1") merged to `main` and both
+`maintenance-hub` and `maintenance-hub-staging` showed the new code via `workers_get_worker_code`
+(new functions, correct `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS` entries, byte-verified clean
+ASCII, no stray characters), `hub_test_get('/vendor-onboarding-status?vendor_id=7')` and
+`hub_test_post('/vendor/complete-onboarding', {...})` both 401'd with `{"error":"Unauthorized"}`,
+100% reproducible across repeated retries, while every pre-existing `HUB_TEST_*` path
+(`/vendors`, `/workorders`, `/receipt-recon/queue`, etc.) kept working fine on the same deploy
+with the same `HUB_TEST_TOKEN`.
+
+**Investigation:** Read worker.js's auth gate line-by-line (operator precedence on `_hubTestOk`,
+byte-level hex/ASCII check on both new path literals in the array, `isStaging()`, the whole
+`if (!PUBLIC_PATHS.includes(path))` block) and `gh-broker`'s own `src/index.ts` (its separate
+client-side `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS` allow-list, `hubTestGet`/`hubTestPost`,
+the `HUB_STAGING` Service Binding). Everything was byte-for-byte correct in both repos, and
+matched between GitHub source and the Cloudflare-deployed bundle. Direct `curl` straight to
+`https://maintenance-hub-staging.brett-2f8.workers.dev/version` also showed the live worker
+already serving the post-merge `BUILD_VERSION` string, which briefly looked like it ruled out a
+stale deploy.
+
+**Confirmed root cause:** it *was* a stale/incompletely-propagated deploy after all — just not one
+`workers_get_worker_code`, `/version`, or a 15-minute wait exposed. Pushed a temporary, harmless
+diagnostic endpoint (`/debug/vendor-onboarding-diag`, public, no secrets, just booleans/echo) via
+`commit_patch` to `main`. It confirmed live that `HUB_TEST_READ_PATHS.includes('/vendor-onboarding-status')`
+and the write-path equivalent were both already `true` in the exact code Cloudflare's API said was
+live — yet the *actual edge-serving* worker was still 401'ing real requests to those two paths at
+that same moment. The very next commit (removing that diagnostic endpoint) reproduced the same
+pattern in reverse: `workers_get_worker_code` reflected the removal within seconds, but the live
+edge kept serving the pre-removal (diagnostic-endpoint-enabled) version for **over 10 minutes**
+before catching up. This is a real, empirically-reproduced case of Cloudflare Workers Builds'
+git-triggered auto-deploy updating the account-level "current script" record quickly while actual
+global edge propagation lags — sometimes by under a minute, sometimes by 10+ minutes — well beyond
+the ~15 minutes Brett's original retries had already covered. There was no bug in worker.js's auth
+gate, no bug in gh-broker's client-side allow-list, no gradual-deployment version-percentage split,
+no WAF/Access rule, and no caching layer involved — all of those were checked and ruled out.
+
+**Fix:** none needed to application code — PR #52's merged code was correct from the moment it
+landed. Pushed and then cleanly reverted a temporary public diagnostic endpoint
+(`/debug/vendor-onboarding-diag`, two commits, `60e11252` add → `1ee700fd` remove, net diff = zero
+vs. the PR #52 merge commit) directly to `main` on `Ridge-Co/RidgeCo` purely to observe live
+runtime state without needing the real `HUB_TEST_TOKEN`; it exposed no secrets, only booleans/echo
+data, and was removed as soon as it had done its job.
+
+**Verified end-to-end on staging** (after propagation caught up, ~30–60 min post PR #52 merge):
+- `GET /vendor-onboarding-status?vendor_id=7` → `{"vendor_id":"7","complete":false,"missing":["Billing_Email","Billing_Address","Tax_ID"]}` (correct — TEST-VENDOR-001 genuinely had those fields blank).
+- `POST /vendor/complete-onboarding` with phone/billing_email/billing_address/tax_id for vendor 7 → `{"success":true,"id":"7","complete":true,"missing":[],"qb_push":{"ok":false,"error":"QB env vars missing..."}}` (QB push correctly no-ops on staging, which has no QuickBooks sandbox creds — expected).
+- `GET /vendors` read back afterward → vendor ID 7's row now genuinely shows `"Billing_Email":"test@example.com"`, `"Billing_Address":"123 Test St, Baltimore, MD 21201"`, `"Tax_ID":"12-3456789"`.
+- `GET /vendor-onboarding-status?vendor_id=7` again → `{"vendor_id":"7","complete":true,"missing":[]}`.
+
+**Takeaway for future same-day-deploy debugging on this repo:** if a just-merged endpoint 401s
+immediately after `workers_get_worker_code` already shows the correct code, don't trust that read
+as proof the live edge has caught up — it can lag by significantly more than 15 minutes with zero
+in-between successes. The reliable next step is a harmless temporary public diagnostic route (or
+just waiting longer / retrying over a longer window) rather than re-auditing already-correct auth
+logic a second or third time.
+
 # Sep 23, 2026, ~19:15 ET — BUILT (not merged): Vendor Onboarding Phase 1 — required-field gate on Submit Bill, admin gap report, QuickBooks field push (PR open on `Ridge-Co/RidgeCo`, branch `feature/vendor-onboarding-phase1`)
 
 **Scope:** Phase 1 only, per `context/VENDOR_ONBOARDING_BANKING_BUILD_BRIEF_v1.0.md` section 5.
