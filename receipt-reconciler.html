@@ -141,6 +141,25 @@
 
 <div class="section">
   <div class="tabs" id="tabs"></div>
+  <!-- Part 4 (Sep 22 2026 bulk-actions brief). Scoped to THIS page's own #list container only,
+       same discipline as the Tenants/Vendors/Owners bulk-select fix (rule 184-185, see
+       pinCheckScopeEl in index.html) — every checkbox/count/action here reads from #list, never
+       document-wide, and is a single-page app besides, so there's no other list/checkbox set on
+       this page it could ever bleed into. -->
+  <div id="rc-bulk-bar" class="rc-bulk-bar" style="display:none">
+    <span class="rc-count-label" id="rc-bulk-count">0 selected</span>
+    <div class="rc-bulk-actions">
+      <button class="btn small warnbtn" onclick="bulkAction('mark_duplicate')">🖐 Mark as duplicate</button>
+      <span class="rc-bulk-exp">
+        <span style="font-size:11px;color:var(--muted)">Expense to:</span>
+        <button class="btn small expbtn" onclick="bulkExpense('ridgeco')">🧾 Ridge Co</button>
+        <button class="btn small expbtn" id="rc-bulk-kerns-btn" onclick="bulkExpense('kerns')" style="display:none">🏡 1864 Kerns</button>
+      </span>
+      <button class="btn small secondary" onclick="bulkAction('move_to_pending')">↩ Move back to Pending</button>
+      <button class="btn small secondary" onclick="bulkAction('skip')">Skip</button>
+      <button class="btn small secondary" onclick="clearBulkSelection()">Clear</button>
+    </div>
+  </div>
   <div id="list"><div class="empty">Loading…</div></div>
 </div>
 
