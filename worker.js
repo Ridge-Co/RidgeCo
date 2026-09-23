@@ -5411,6 +5411,7 @@ async function woCombine(env, body) {
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const survivorSnapshot = {};
   for (const f of WO_COMBINE_RECONCILE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
+  for (const f of WO_COMBINE_MERGE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
   const fieldsToApply = {};
   for (const f of WO_COMBINE_RECONCILE_FIELDS) {
     if (String(resolved[f] ?? '') !== String(survivorSnapshot[f] ?? '')) fieldsToApply[f] = resolved[f];
