@@ -1969,7 +1969,7 @@ async function receiptReconScan(env, body) {
   // ensureTab only writes headers on a brand-new/empty tab, so an existing tab needs the
   // explicit widen-and-append-header path or the new column silently never appears (rule 37/78).
   await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
-  const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType,webViewLink)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '100' });
+  const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType,webViewLink,description)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '100' });
   const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${tok}` } });
   const data = await res.json();
   if (data.error) return json({ ok: false, error: 'Drive list failed: ' + (data.error.message || JSON.stringify(data.error)) }, 500);
