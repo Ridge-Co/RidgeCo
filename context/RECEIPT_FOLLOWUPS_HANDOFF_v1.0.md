@@ -2,6 +2,8 @@
 
 Start the next session with: **"resume ridgeco receipt follow-ups"**. Load context light (brett-context), then read this file and nothing else up front.
 
+**Sep 22, 7:57pm update:** Brett added a further round of design asks on top of Task 1 (below) — image-attached confirmation before flagging duplicates, an attach-without-billing action, refund detection/auto-match/negative-expense handling, bulk-select actions on the Reconciler, and a WO picker showing links + open/close dates so a receipt never gets matched to a date-mismatched WO. Full spec with his answers to every open design question: `context/RECEIPT_RECONCILER_DUP_REFUND_BULK_BUILD_BRIEF_v1.0.md`. Read that file too, not just this one — it supersedes/expands Task 1's own open design questions below and should be built on the same PR #27 branch.
+
 ## Where things stand (all merged + live-verified Sep 22)
 
 | PR | What | Live |

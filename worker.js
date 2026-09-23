@@ -87,6 +87,13 @@ export default {
     // scope. Never set for a WORKER_SECRET or session-token call — those get full access as today.
     let _viaHubTestToken = false;
     const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
+      // Gemini context snapshot (Sep 22 2026): public at the gate like the other entries below,
+      // but geminiContext() self-verifies a query-string token against env.GEMINI_CONTEXT_TOKEN
+      // before returning anything. Query-string (not header) auth is required here because this
+      // URL is fetched as a plain website source by a Gemini Notebook, which cannot send custom
+      // headers. Read-only; 404s (not 401) on a missing/wrong token so the endpoint doesn't
+      // announce itself to anyone probing it.
+      '/gemini-context',
       // Gmail "Reconnect" sign-in return (Sep 22 2026): Google redirects the browser here, so it
       // can't carry the admin header — gmailOAuthCallback refuses anything without a valid signed,
       // 15-minute gmail-oauth `state` minted by the ADMIN-gated POST /gmail/connect-url.
@@ -227,7 +234,21 @@ export default {
         // though the path itself is shared with the real, WORKER_SECRET-authenticated route.
         // Fully inert unless env.HUB_TEST_TOKEN is set, so deploying this has zero effect until
         // the secret exists — and it never exists on production's env at all.
-        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices'];
+        //
+        // /config and /hub-bootstrap added Sep 22 2026 (Brett, WO Combine/Split UI click-through
+        // build): this token now also works as a staging-only admin UI login credential for
+        // headless Playwright testing. /config is what index.html's doLogin() calls to verify
+        // the entered value before accepting it — without it this token could never log into the
+        // Hub UI at all, only call the API directly. /hub-bootstrap is the one batched call the
+        // UI makes right after login to populate every list (replacing 8 separate per-tab reads);
+        // without it the UI would render but sit empty. Every other GET the UI issues (audit
+        // trail, vendor bills, materials, receipts, etc.) is unguarded but non-blocking client
+        // code — it fails silently into a "Loading…" state rather than breaking the page — so
+        // this stays the minimal read surface needed for a real click-through rather than
+        // mirroring the whole app's GET surface. Brett's explicit call (raised when a UI test
+        // hit this exact gap): staging-only + already-TEST-record-scoped writes is protection
+        // enough, so this is intentionally broader than a pure API smoke-test token needs to be.
+        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap'];
         const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
@@ -268,7 +289,7 @@ export default {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
@@ -282,6 +303,7 @@ export default {
     try {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
+        if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
@@ -563,6 +585,7 @@ export default {
         if (path === '/admin/share-attachments')  return await adminShareAttachments(env, body);
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
+        if (path === '/admin/gemini-context-update') return await adminGeminiContextUpdate(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
@@ -2610,6 +2633,18 @@ function scopeBackfillEligible(scope, wo) {
 // actually did the job) is known. Read-mostly: only ever writes Work_Orders.Vendor_ID, and only
 // when it's currently blank on a WO whose linked Scope has a Vendor_ID on file — never overwrites
 // an existing value, never touches anything else on the WO or the Scope.
+// POST /admin/gemini-context-update — writes the daily-refreshed Brett-context snapshot that
+// GET /gemini-context serves. Gated by HUB_PROD_WRITE_TOKEN (see HUB_PROD_WRITE_PATHS above),
+// same narrow-token cascade as the other prod-write admin routes. Body: { content: "<markdown>" }.
+// Stored in Config (not a dedicated tab) since it's a single blob, same pattern as other
+// singleton settings — see fetchConfig/setConfigKey.
+async function adminGeminiContextUpdate(env, body) {
+  const content = body && body.content;
+  if (!content || typeof content !== 'string') return json({ error: 'content (string) required' }, 400);
+  await setConfigKey(env, { key: 'Gemini_Context_Snapshot', value: content });
+  return json({ success: true, bytes: content.length });
+}
+
 async function backfillScopeWOVendor(env) {
   const [scopes, workorders] = await Promise.all([
     fetchTab(env, 'Scopes').catch(() => []),
@@ -4423,10 +4458,12 @@ async function woCombine(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const survivor = findWO(workorders, survivorId);
   if (!survivor) return json({ error: `Survivor work order ${survivorId} not found` }, 404);
+  if (String(survivor.Voided || '').toUpperCase() === 'TRUE') return json({ error: `Survivor work order ${survivorId} is voided — cannot combine into it` }, 400);
   const combinedWOs = [];
   for (const id of combinedIds) {
     const w = findWO(workorders, id);
     if (!w) return json({ error: `Work order ${id} not found` }, 404);
+    if (String(w.Voided || '').toUpperCase() === 'TRUE') return json({ error: `Work order ${id} is already voided — cannot combine it again` }, 400);
     combinedWOs.push(w);
   }
   // Same same-Property_ID/Unit_ID scoping the existing single-WO Combined picker already
@@ -12485,6 +12522,25 @@ async function twilioAccountStatus(env) {
   } catch (e) { out.messaging_services = { error: String((e && e.message) || e) }; }
 
   return json({ ok: true, ...out });
+}
+
+// GET /gemini-context?token=... — public at the router gate (see PUBLIC_PATHS), self-verifies
+// here. Query-string token, not a header, because this URL is added to a Gemini Notebook as a
+// plain "website" source, and Notebook website-sources are fetched as an unauthenticated GET
+// with no custom headers available — the token has to travel in the URL itself. Read-only;
+// returns the latest Brett-context snapshot (Config key Gemini_Context_Snapshot, written by
+// POST /admin/gemini-context-update) as plain text for Gemini to ground on. Wrong/missing token
+// gets a plain 404, not 401, so the endpoint doesn't announce its own existence to a prober.
+async function geminiContext(env, url) {
+  const tok = url.searchParams.get('token') || '';
+  if (!env.GEMINI_CONTEXT_TOKEN || tok !== env.GEMINI_CONTEXT_TOKEN) {
+    return new Response('Not found', { status: 404 });
+  }
+  const config = await fetchConfig(env);
+  const content = config.Gemini_Context_Snapshot || 'No snapshot has been published yet.';
+  return new Response(content, {
+    headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+  });
 }
 
 async function health(env, url) {
