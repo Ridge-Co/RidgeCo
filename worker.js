@@ -16115,6 +16115,7 @@ async function receiptReconCheckDuplicatesBulk(env, body) {
   return json({ ok: true, checked: results.length, results });
 }
 
+
 // ── Receipt DUPLICATE AUDIT (Task 1, Sep 22 2026 handoff) ───────────────────────────────────
 // Read-only against QuickBooks, forever — this audit never writes an invoice, bill, credit memo,
 // or anything else to QB. It exists because receiptCheckDuplicatesOne above only ever looks at
