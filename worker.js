@@ -2166,6 +2166,62 @@ async function receiptReconConfirm(env, body) {
   return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
+// POST /receipt/attach-only { id, wo_id, property_id?, amount?, description?, store?, date? } —
+// Part 2 of the Sep 22 2026 dup/refund/bulk brief. The alternative Brett needs when a receipt is
+// flagged as a possible duplicate (Part 1's "image attached?" indicator, right below) but the
+// image itself was never actually filed anywhere: attach it to the matched WO WITHOUT billing it
+// a second time. Reuses ONLY the file-attach half of the normal confirm flow — addReceipt(),
+// which writes Source_File_ID/Source_File_URL onto the new Receipts row (confirmed live as the
+// REAL column names on Receipts, not the brief's guessed File_Url/Drive_File_Id — PAT-024; see
+// addReceipt above). Deliberately does NOT call appendReceiptToInvoiceReview (the billing half
+// receiptReconConfirm uses to fold a receipt into a pending customer invoice) and does NOT call
+// sendReceiptsToQBEmail — addReceipt itself never touches Vendor_Bills or Invoice_Review, and
+// this function adds nothing that would. Verified by test/receipt-attach-only.test.mjs, not just
+// by this comment (Brett's standing rule: don't just assert a no-billing-side-effect claim).
+//
+// Category 'attached_only' is a NEW Receipts.Category value (checked the existing enum first —
+// 'billable'/'company'/'customer_paid'/'refund' — none of them mean "image on file, deliberately
+// never billed", so a new value is the right call here, not a misuse of an existing one). Marks
+// the row so it's never re-suggested for billing and shows up in the Reconciler's own history —
+// the Receipt_Recon_Queue row gets the matching Status 'attached_only' (excluded from the default
+// ?status=pending view, same as 'confirmed'/'skipped', and browsable via its own tab/status=all).
+async function receiptAttachOnly(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const wo_id = body.wo_id; if (!wo_id) return json({ error: 'wo_id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (['confirmed', 'attached_only'].includes(row.Status)) return json({ error: `already ${row.Status}`, id }, 409);
+  // Same pre-write existence check receiptReconConfirm uses — a typo'd WO number must never
+  // silently post a real Receipts row against a nonexistent job.
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const wo = workorders.find(w => String(w.ID) === String(wo_id));
+  if (!wo) return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
+  if (!row.Source_File_ID && !row.Source_File_URL) {
+    return json({ error: 'This queue row has no scanned image on file — nothing to attach.' }, 400);
+  }
+  const property_id = body.property_id || wo.Property_ID || '';
+  const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : row.Total;
+  const description = body.description || row.PO_Reference || row.Vendor || '';
+  const store = body.store || row.Vendor || '';
+  const date = body.date || row.Receipt_Date || '';
+  const addResp = await addReceipt(env, {
+    wo_id, property_id, amount, description, store, date,
+    added_by: 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
+    category: 'attached_only',
+    source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
+    payment_source: body.payment_source,
+  });
+  const addJson = await addResp.json().catch(() => ({}));
+  if (addJson && addJson.success) {
+    await updateRow(env, 'Receipt_Recon_Queue', id, {
+      Status: 'attached_only', Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
+      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.' : 'Image attached only — not billed, no invoice line added.',
+    });
+  }
+  return json({ ok: true, wo_id, property_id, attached_only: true, ...addJson });
+}
+
 // Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
 // Old receipts reach the queue when paper receipts get scanned into the folder (e.g. a Jun 2025
 // Surplus City receipt scanned Aug 26 2026) — the email pull never goes before Jul 1. Anything
