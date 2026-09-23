@@ -12262,6 +12262,7 @@ function bcRenderConflicts() {
       var val = w[f]==null?'':w[f];
       var display = val || '(blank)';
       if (f==='Vendor_ID' && val) { var v = safeArray(state.vendors).find(function(x){return x.ID===val;}); display = v ? v.Name : val; }
+      if (f==='Deposit_Vendor_ID' && val) { var dv = safeArray(state.vendors).find(function(x){return x.ID===val;}); display = dv ? dv.Name : val; }
       return { woId:w.ID, val:val, display:display };
     }).filter(function(o){ var k=String(o.val); if (seen[k]) return false; seen[k]=true; return true; });
     var rows = opts.map(function(o,i){
