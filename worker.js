@@ -255,8 +255,13 @@ export default {
         // (creates a synthetic PENDING Receipt_Recon_Queue row scoped to TEST-PROPERTY-001, since
         // a real one only ever arrives via scanning a Drive file — there was no way to get a
         // testable row onto staging otherwise).
-        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts'];
+        // /vendor-onboarding-status + /vendor/complete-onboarding added Sep 23 2026 (Vendor
+        // Onboarding Phase 1) so a staging smoke test can exercise the new endpoints on a real
+        // TEST- vendor. /vendor-onboarding-status is a read keyed by vendor_id, no PII exposure
+        // beyond what /vendors already returns wholesale. /vendor/complete-onboarding is gated
+        // below in hubTestWriteAllowed to a TEST- vendor only, same as every other write here.
+        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search','/vendor-onboarding-status'];
+        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts','/vendor/complete-onboarding'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
@@ -410,6 +415,8 @@ export default {
         if (path === '/ar/report/opt-in')       return await arReportOptInRead(env, url);
         if (path === '/ar-report/view')         return await arReportView(env, url);
         if (path === '/vendor-performance')     return await vendorPerformance(env, url);
+        if (path === '/vendor-onboarding-status') return await vendorOnboardingStatus(env, url);
+        if (path === '/vendor-onboarding-gaps') return await vendorOnboardingGaps(env);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
@@ -543,8 +550,11 @@ export default {
         // are new Vendors columns — addRow/updateRow map fields by existing header only, so a
         // write to a not-yet-created column stores nothing silently (same trap Vendor_Invoice_No
         // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
-        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await addRow(env, 'Vendors', body); }
-        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        // VENDOR_ONBOARDING_COLS (Sep 23 2026, Phase 1) folded into the same ensureColumns call
+        // every vendor add/update already makes — additive, no-op once the headers exist.
+        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; return await addRow(env, 'Vendors', body); }
+        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address'].concat(VENDOR_ONBOARDING_COLS)); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        if (path === '/vendor/complete-onboarding') return await vendorCompleteOnboarding(env, body);
         // Contact-card upload (Sept 2 2026) — business-card/contact-photo OCR shared by the
         // Add Tenant / Add Owner / Add Vendor contact-card buttons in index.html. Admin-gated
         // (not in PUBLIC_PATHS) since it's called from already-authenticated Hub forms. The
@@ -8852,7 +8862,7 @@ async function createUploadSession(env, body) {
 }
 
 // File types whose media stays PRIVATE — vendor cost docs never go anyone-with-link (FEATURE_LOG rule 13).
-const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice'];
+const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice','tax_id_doc'];
 
 async function logAttachment(env, body) {
   try {
@@ -11739,6 +11749,161 @@ async function arAging(env, url) {
   return json({ ok: true, as_of: new Date(now).toISOString().slice(0, 10), total_open: +totalOpen.toFixed(2), open_count: list.length, buckets, by_customer: customers, invoices: list.slice(0, 100) });
 }
 
+// ── VENDOR ONBOARDING — Phase 1 (Sep 23 2026, VENDOR_ONBOARDING_BANKING_BUILD_BRIEF_v1.0) ──
+// Phase 1 ONLY: the non-banking required fields, Submit-Bill gating, and an admin gap report.
+// Banking capture/encryption (Phase 2) and the automatic nudge sweep (Phase 3) are NOT built
+// here — both stay GATED per the brief until Brett's own live walkthrough.
+//
+// New Vendors columns (additive — ensureColumns backfills on write, existing rows untouched).
+// The banking-status columns are schema-only in this phase: written with safe defaults so
+// Phase 2 has somewhere to land, but no encryption/capture/QuickBooks-manual-entry logic
+// exists yet, per the brief's Build Sequence.
+const VENDOR_ONBOARDING_COLS = [
+  'Billing_Email', 'Billing_Address', 'Tax_ID', 'Tax_ID_Document_URL',
+  'Insurance_Cert_URL', 'Insurance_Expiry',
+  'Bank_Info_Status', 'Bank_Info_Submitted_Date', 'Bank_Info_Verified_Date', 'Bank_Info_Drive_Pointer',
+  'Onboarding_Nudge_Sent_Date',
+];
+
+// The required-now fields per Brett (section 3c/5 of the brief): phone, billing email, billing
+// address, tax ID (the typed value only — NOT the uploaded document, NOT banking, which is
+// Phase 2 and never blocks bill submission). PURE — no I/O — so it's directly unit-testable.
+const VENDOR_ONBOARDING_REQUIRED_FIELDS = ['Phone', 'Billing_Email', 'Billing_Address', 'Tax_ID'];
+
+function vendorOnboardingComplete(vendor) {
+  vendor = vendor || {};
+  const missing = VENDOR_ONBOARDING_REQUIRED_FIELDS.filter(f => !String(vendor[f] || '').trim());
+  return { complete: missing.length === 0, missing };
+}
+
+// PURE — the subset of QuickBooks Vendor fields the required-now onboarding inputs map to.
+// Confirmed against current QuickBooks Online Vendor API docs (Sep 23 2026, PAT-028 — verified
+// live rather than assumed from training data): PrimaryEmailAddr.Address, BillAddr.Line1, and
+// TaxIdentifier (a plain string) are all real, writable Vendor fields on the standard Accounting
+// API — unlike bank routing/account number, which QuickBooks does not expose for third-party
+// writes at all (see brief section 2). Deliberately does NOT fall back to the legacy `Email`
+// field — that already has its own fallback in qbFindOrCreateVendor's create payload below, and
+// mixing it in here would make an existing vendor's unrelated `Email` trigger a sparse
+// onboarding-field push with nothing new to actually write.
+function vendorQBOnboardingFields(vendor) {
+  vendor = vendor || {};
+  const out = {};
+  const email = String(vendor.Billing_Email || '').trim();
+  if (email) out.PrimaryEmailAddr = { Address: email };
+  const addr = String(vendor.Billing_Address || '').trim();
+  if (addr) out.BillAddr = { Line1: addr };
+  const taxId = String(vendor.Tax_ID || '').trim();
+  if (taxId) out.TaxIdentifier = taxId;
+  return out;
+}
+
+// Best-effort sparse push of the onboarding fields onto an ALREADY-LINKED QuickBooks vendor
+// (the qbFindOrCreateVendor "found" path — a brand-new vendor gets these baked into its create
+// payload instead, see below). Never throws — a QuickBooks outage or fault must not fail vendor
+// onboarding itself — but always logs the failure to Ops_Telemetry rather than swallowing it
+// silently (the rule-174/175 lesson in this repo: a silently-swallowed catch around a
+// Sheets/Drive/QB write is exactly how past regressions went unnoticed for weeks).
+async function qbSyncVendorOnboardingFields(env, vendor, qbId, token) {
+  const patch = vendorQBOnboardingFields(vendor);
+  if (!Object.keys(patch).length) return { skipped: true };
+  try {
+    const got = await qbApi(env, `vendor/${encodeURIComponent(qbId)}?minorversion=73`, 'GET', null, token);
+    const v = got && got.Vendor;
+    if (!v) throw new Error('vendor not found in QuickBooks for onboarding sparse update');
+    const body = Object.assign({ Id: String(qbId), SyncToken: v.SyncToken, sparse: true }, patch);
+    const r = await qbApi(env, 'vendor?minorversion=73', 'POST', body, token);
+    if (!r || !r.Vendor) throw new Error(qbFault(r) || 'QuickBooks vendor onboarding sparse update failed');
+    return { ok: true };
+  } catch (e) {
+    try {
+      await logTelemetry(env, {
+        Source: 'worker', Job_Type: 'vendor_onboarding_qb_push_failed',
+        Skill_Or_Endpoint: 'qbSyncVendorOnboardingFields', Success: 'FALSE',
+        Notes: `vendorId=${(vendor && vendor.ID) || ''} qbId=${qbId} err=${String((e && e.message) || e)}`,
+      });
+    } catch (_) { /* logging itself failing must not mask the original error path */ }
+    return { ok: false, error: e.message };
+  }
+}
+
+// GET /vendor-onboarding-status?vendor_id= — secret-gated (omitted from PUBLIC_PATHS, same
+// convention as every other admin/vendor-portal read). Single-vendor completeness check for the
+// vendor-portal Submit-Bill gate.
+async function vendorOnboardingStatus(env, url) {
+  const vendorId = url.searchParams.get('vendor_id') || '';
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => String(v.ID) === String(vendorId));
+  if (!vendor) return json({ error: 'Vendor not found', vendor_id: vendorId }, 404);
+  const status = vendorOnboardingComplete(vendor);
+  return json({ vendor_id: vendorId, complete: status.complete, missing: status.missing });
+}
+
+// GET /vendor-onboarding-gaps — admin-only bulk report (index.html's new gap-report page). Every
+// active vendor missing any required-now field, in ONE call — avoids an N+1 loop over
+// /vendor-onboarding-status for every vendor, same reasoning as vendor-performance/arAging above.
+async function vendorOnboardingGaps(env) {
+  const vendors = await fetchTab(env, 'Vendors');
+  const active = vendors.filter(v => String(v.Active || '').toUpperCase() !== 'FALSE');
+  const rows = active.map(v => {
+    const status = vendorOnboardingComplete(v);
+    return {
+      vendor_id: String(v.ID), name: v.Name || v.Company || '', phone: v.Phone || '',
+      complete: status.complete, missing: status.missing,
+      bank_info_status: v.Bank_Info_Status || 'not_started',
+    };
+  }).filter(r => !r.complete);
+  return json({ ok: true, as_of: new Date().toISOString().slice(0, 10), total_active_vendors: active.length, gap_count: rows.length, vendors: rows });
+}
+
+// POST /vendor/complete-onboarding — secret-gated. The vendor-portal "Complete your info" form
+// (gates Submit Bill) AND the admin Add/Edit Vendor modal in index.html both write through here.
+// Body: {vendor_id, phone?, billing_email?, billing_address?, tax_id?, tax_id_document_url?}.
+// Only vendor_id is required — the form re-submits whichever fields the vendor/admin filled in;
+// blank/omitted fields are left untouched on the row (same "only write what's given" behavior
+// as the existing updateRow chokepoint this wraps).
+async function vendorCompleteOnboarding(env, body) {
+  const vendorId = body && body.vendor_id;
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  await ensureColumns(env, 'Vendors', VENDOR_ONBOARDING_COLS);
+
+  const fields = {};
+  if (body.phone) fields.Phone = body.phone;
+  if (body.billing_email) fields.Billing_Email = body.billing_email;
+  if (body.billing_address) fields.Billing_Address = body.billing_address;
+  if (body.tax_id) fields.Tax_ID = body.tax_id;
+  if (body.tax_id_document_url) fields.Tax_ID_Document_URL = body.tax_id_document_url;
+  if (!Object.keys(fields).length) return json({ error: 'No fields to update' }, 400);
+
+  const updateRes = await updateRow(env, 'Vendors', vendorId, fields);
+  let landed = updateRes && updateRes.status === 200;
+  if (landed) { try { const j = await updateRes.clone().json(); landed = !!(j && j.success); } catch (_) { landed = false; } }
+  if (!landed) return updateRes; // pass the real error straight through — never claim success on a write that didn't land
+
+  // Best-effort QuickBooks push (brief section 3b). Never fails this request — a vendor's
+  // onboarding info is saved on the Vendors row regardless of QuickBooks' availability — but
+  // every failure is logged (see qbSyncVendorOnboardingFields), never silently swallowed.
+  let qbPush = { skipped: true };
+  try {
+    const vendors = await fetchTab(env, 'Vendors');
+    const vendor = vendors.find(v => String(v.ID) === String(vendorId));
+    if (vendor) {
+      const dn = qbVendorDisplayName ? qbVendorDisplayName(vendor) : (vendor.Name || vendor.Company || '');
+      if (dn) {
+        const token = await qbAccessToken(env);
+        const qbId = await qbFindOrCreateVendor(env, vendor, dn, token);
+        qbPush = qbId ? { ok: true, qb_vendor_id: qbId } : { ok: false };
+      }
+    }
+  } catch (e) {
+    qbPush = { ok: false, error: e.message };
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_onboarding_qb_push_failed', Skill_Or_Endpoint: '/vendor/complete-onboarding', Success: 'FALSE', Notes: `vendorId=${vendorId} err=${String((e && e.message) || e)}` }); } catch (_) {}
+  }
+
+  const status = vendorOnboardingComplete(Object.assign({}, (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(vendorId)) || {}));
+  return json({ success: true, id: String(vendorId), complete: status.complete, missing: status.missing, qb_push: qbPush });
+}
+
 // GET /vendor-performance (B-012) — READ-ONLY vendor scorecard. Ranks Brett's vendors by
 // reliability, speed, volume, and cost — aggregated live from data the Hub already stores
 // (Work_Orders + Vendor_Bills + Time_Entries). No new tab, no new column, no writes. Admin-gated
@@ -13982,6 +14147,9 @@ async function hubTestWriteAllowed(env, path, body) {
     return { ok: true, debug: _debug };
   }
   if (path === '/assign') {
+    return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
+  if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
   if (path === '/receipt/attach-only') {
@@ -16595,14 +16763,21 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
       }
       try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) {}
     }
+    // Push billing email/address/tax ID (Phase 1 onboarding, brief section 3b) onto a vendor
+    // that already has a linked QuickBooks Vendor — a brand-new vendor gets these baked into
+    // the create payload below instead. Best-effort; never fails this lookup.
+    await qbSyncVendorOnboardingFields(env, vendor, found, token);
     return found;
   }
 
   const payload = { DisplayName: dn };
   const phone = vendor.Phone || '';
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };
-  const email = vendor.Email || '';
+  const email = vendor.Billing_Email || vendor.Email || '';
   if (email) payload.PrimaryEmailAddr = { Address: email };
+  const onboarding = vendorQBOnboardingFields(vendor);
+  if (onboarding.BillAddr) payload.BillAddr = onboarding.BillAddr;
+  if (onboarding.TaxIdentifier) payload.TaxIdentifier = onboarding.TaxIdentifier;
   const r = await qbApi(env, 'vendor?minorversion=73', 'POST', payload, token);
   const id = r?.Vendor?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB vendor');

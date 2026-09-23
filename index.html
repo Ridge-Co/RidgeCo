@@ -209,6 +209,7 @@ window.addEventListener('pageshow', function(e){
       <button class="nav-btn" onclick="showPage('qb-map',this)">🔗 QB MAPPING</button>
       <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
       <button class="nav-btn" onclick="showPage('vendor-performance',this)">📊 VENDOR PERFORMANCE</button>
+      <button class="nav-btn" onclick="showPage('vendor-onboarding',this)">📋 VENDOR ONBOARDING</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
       <button class="nav-btn" onclick="showPage('messaging',this)">📢 MESSAGING</button>
@@ -618,6 +619,21 @@ window.addEventListener('pageshow', function(e){
     <div id="vendor-perf-body"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 
+  <div class="page" id="page-vendor-onboarding">
+    <div class="section-title" style="margin-bottom:4px">📋 VENDOR ONBOARDING — MISSING INFO</div>
+    <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:780px">
+      Every active vendor missing phone, billing email, billing address, or tax ID — the fields
+      required before a bill can actually be paid (Vendor Onboarding Phase 1). Banking is tracked
+      separately and is not part of this list yet. Fix a vendor here, or the vendor can fill it in
+      themselves the next time they tap Bill in the portal.
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <button class="btn small" onclick="loadVendorOnboardingGaps()">↻ Refresh</button>
+    </div>
+    <div id="vendor-onboarding-summary" style="color:var(--muted);font-size:11.5px;margin-bottom:10px"></div>
+    <div id="vendor-onboarding-body"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
   <div class="page" id="page-qb-map">
     <div class="section-title" style="margin-bottom:4px">QUICKBOOKS MAPPING</div>
     <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:760px">
@@ -973,6 +989,11 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
       <div class="form-group"><label>Vendor Type</label><select id="v-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
       <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="v-payaddr" placeholder="123 Main St, City, ST 00000"></div>
+      <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">ONBOARDING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— required before this vendor's first bill can be paid. Banking is handled separately, not here.</span></div></div>
+      <div class="form-group"><label>Billing Email</label><input type="email" id="v-billing-email" placeholder="billing@vendorcompany.com"></div>
+      <div class="form-group"><label>Billing Address</label><input type="text" id="v-billing-address" placeholder="123 Main St, City, ST 00000"></div>
+      <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="v-tax-id" placeholder="12-3456789"></div>
+      <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="v-tax-doc-url" placeholder="https://drive.google.com/..."></div>
       <div class="form-group full"><label>Trades — check all that apply</label><div id="v-trades-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;margin-top:4px"></div></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="v-rates" placeholder="Hourly rate, trip charge, etc..."></textarea></div>
     </div>
@@ -1087,6 +1108,11 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Markets</label><input type="text" id="ev-markets"></div>
       <div class="form-group"><label>Vendor Type</label><select id="ev-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
       <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="ev-payaddr"></div>
+      <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">ONBOARDING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— required before this vendor's first bill can be paid. Banking is handled separately, not here.</span></div></div>
+      <div class="form-group"><label>Billing Email</label><input type="email" id="ev-billing-email"></div>
+      <div class="form-group"><label>Billing Address</label><input type="text" id="ev-billing-address"></div>
+      <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
+      <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
@@ -1782,6 +1808,7 @@ function showPage(name, btn) {
   // "Check and save to the sheet" buttons remain for a manual re-run any time after that.
   if (name === 'payables') { loadPayables(false); }
   if (name === 'vendor-performance') { loadVendorPerformance(); }
+  if (name === 'vendor-onboarding') { loadVendorOnboardingGaps(); }
   if (name === 'messaging') { loadMessagingPage(); }
 }
 
@@ -3453,6 +3480,54 @@ function renderVendorPerformanceTable() {
     }).join('') + '</tbody></table></div>';
 }
 
+// ── Vendor Onboarding gap report (Phase 1, Sep 23 2026) — fetch-on-open like Vendor Performance.
+// One bulk call (/vendor-onboarding-gaps) instead of N per-vendor /vendor-onboarding-status
+// calls — same reasoning as vendor-performance/arAging on the Worker side.
+var _vendorOnboardingRows = null;
+
+function loadVendorOnboardingGaps() {
+  var el = document.getElementById('vendor-onboarding-body');
+  if (el) el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading...</div>';
+  var summary = document.getElementById('vendor-onboarding-summary');
+  if (summary) summary.textContent = '';
+  api('GET', '/vendor-onboarding-gaps').then(function(res) {
+    if (!res || res.ok === false) {
+      if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Could not load vendor onboarding gaps') + '</div>';
+      return;
+    }
+    _vendorOnboardingRows = safeArray(res.vendors);
+    if (summary) {
+      summary.textContent = 'As of ' + res.as_of + ' · ' + res.gap_count + ' of ' + res.total_active_vendors + ' active vendors missing something';
+    }
+    renderVendorOnboardingTable();
+  }).catch(function(e) {
+    if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
+  });
+}
+
+function renderVendorOnboardingTable() {
+  var el = document.getElementById('vendor-onboarding-body');
+  if (!el) return;
+  var rows = safeArray(_vendorOnboardingRows);
+  if (!rows.length) { el.innerHTML = '<div class="loading">No gaps — every active vendor has phone, billing email, billing address, and tax ID on file.</div>'; return; }
+  var missingLabel = { Phone: 'Phone', Billing_Email: 'Billing Email', Billing_Address: 'Billing Address', Tax_ID: 'Tax ID' };
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+    '<th>Vendor</th><th>Phone</th><th>Missing</th><th>Bank Info</th><th></th>' +
+    '</tr></thead><tbody>' +
+    rows.map(function(v) {
+      var missingHtml = safeArray(v.missing).map(function(f) {
+        return '<span class="badge" style="background:#fdecea;border:1px solid var(--danger);color:var(--danger);margin-right:4px">' + esc(missingLabel[f] || f) + '</span>';
+      }).join('');
+      return '<tr>' +
+        '<td>' + esc(v.name) + '</td>' +
+        '<td>' + esc(v.phone || '—') + '</td>' +
+        '<td>' + missingHtml + '</td>' +
+        '<td style="color:var(--muted);font-size:11px">' + esc(v.bank_info_status || 'not_started') + '</td>' +
+        '<td><button class="btn small" onclick="openEditVendorModal(\'' + v.vendor_id + '\')">Fix</button></td>' +
+        '</tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
 // ── Tenants ──────────────────────────────────────────────────
 function renderTenantsPage() {
   var el = document.getElementById('tenants-list');
@@ -3674,7 +3749,7 @@ var onTenantCardUpload = bindContactCardFields({first:'mi-first', last:'mi-last'
 function openAddVendorModal(){openModal('modal-add-vendor');}
 function submitAddVendor(){
   var trades = Array.from(document.querySelectorAll('.v-trade-check:checked')).map(function(c){return c.value;}).join(',');
-  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Vendor_Type:document.getElementById('v-type').value||'labor',Payment_Address:document.getElementById('v-payaddr').value.trim(),Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
+  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Vendor_Type:document.getElementById('v-type').value||'labor',Payment_Address:document.getElementById('v-payaddr').value.trim(),Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE',Billing_Email:document.getElementById('v-billing-email').value.trim(),Billing_Address:document.getElementById('v-billing-address').value.trim(),Tax_ID:document.getElementById('v-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('v-tax-doc-url').value.trim()};
   if(!body.Name){toast('Name required','error');return;}
   if(!body.Phone){toast('Phone required','error');return;}
   api('POST','/vendor/add',body).then(function(res){
@@ -3810,11 +3885,13 @@ function openEditVendorModal(id) {
   evTrade.value = v.Trade || 'General';
   document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
   document.getElementById('ev-type').value=v.Vendor_Type||'labor'; document.getElementById('ev-payaddr').value=v.Payment_Address||'';
+  document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
+  document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
   openModal('modal-edit-vendor');
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
-  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value};
+  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim()};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
     toast('Vendor updated','success');closeModal('modal-edit-vendor');loadAll();
