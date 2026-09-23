@@ -12785,6 +12785,14 @@ async function isTestRecord(env, tab, id) {
 // false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  if (['/admin/receipt-duplicate-audit/build-index', '/admin/receipt-duplicate-audit/scan', '/admin/receipt-duplicate-audit/mark'].includes(path)) {
+    // These only ever write to two brand-new, isolated, non-PII cache/audit tabs
+    // (QB_Invoice_Line_Cache, Receipt_Duplicate_Audit) and never touch a real
+    // customer/vendor/tenant/property/WO row — there is no protected record for a
+    // TEST- check to gate here, same SAFE-class reasoning as Ops_Telemetry. QuickBooks
+    // calls made along the way are GET-only (build-index never writes to QB).
+    return true;
+  }
   if (['/property/add', '/owner/add', '/vendor/add', '/tenant/add', '/unit/add'].includes(path)) {
     // Creating a brand-new row: the token may only ever create rows that self-identify as
     // test data by name — never anything that could pass as a real record.
