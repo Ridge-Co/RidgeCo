@@ -13740,7 +13740,6 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds) {
     // STARTS, before any awaits, so the promised window is the actual window.
     const cutoff = Date.now() - (windowSeconds || 120) * 1000;
     const rows = await fetchTab(env, tab);
-    const cutoff = Date.now() - (windowSeconds || 120) * 1000;
     const keys = Object.keys(signature);
     for (let i = rows.length - 1; i >= 0; i--) {   // newest first — duplicates are recent
       const r = rows[i];
