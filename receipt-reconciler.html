@@ -1057,12 +1057,26 @@ function rowCard(r){
     // attach to is the same interaction Confirm already uses.
     if (!excluded && !isCompany && !isRefund && isDuplicateFlagged) html += '<button class="btn secondary small" onclick="attachOnlyRow(\''+r.ID+'\', this)">📎 Attach image only, don\'t bill</button>';
     html += '<button class="btn secondary small" onclick="checkDuplicatesOne(\''+r.ID+'\', this)">🔍 Check duplicates</button>';
+    // Sep 23 2026 build: manual refund override for a row the automatic OCR-based refund
+    // detection missed. sug.manual_refund only appears when Brett himself flipped it (see
+    // listReceiptReconQueue in worker.js) — an auto-detected refund doesn't get an "undo" here,
+    // since that's a real scanner finding, not a manual guess.
+    if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', true, this)">🔄 Mark as refund</button>';
+    if (isRefund && sug.manual_refund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', false, this)">↩ Not a refund</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
     if (r.Status === 'skipped') html += '<button class="btn secondary small" onclick="unskipRow(\''+r.ID+'\', this)">↩ Move back to Pending</button>';
+    // Sep 23 2026 build: un-flip a confirmed BMore/Ridge Co expense and rebill it to a property +
+    // work order (Brett's ask — only offered for 'company'-category confirmed rows, and only
+    // works server-side while the original hasn't been emailed to QuickBooks yet).
+    if (r.Status === 'confirmed' && sug.category === 'company') html += '<button class="btn secondary small" onclick="toggleReassign(\''+r.ID+'\')">🔁 Reassign to a work order</button>';
+    // Undo a wrongly confirmed/expensed receipt into the refund flow — reuses the exact Pending
+    // refund UI once it drops back to Pending (see markRefundConfirmed).
+    if (['confirmed','attached_only'].includes(r.Status) && sug.category !== 'refund') html += '<button class="btn secondary small" onclick="markRefundConfirmed(\''+r.ID+'\', this)">↩ Mark as refund</button>';
     html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+(r.Duplicate_Confirmed_Date?(' · purges '+esc(purgeDateLabel(r.Duplicate_Confirmed_Date))):'')+'</span>';
   }
   html += '</div></div>';
+  html += '<div id="'+idAttr+'-reassign"></div>';
   html += '<div class="rc-status" id="'+idAttr+'-status"></div>';
   html += '</div>';
   return html;
