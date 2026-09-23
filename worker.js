@@ -4922,6 +4922,26 @@ async function woCombine(env, body) {
     }
   }
 
+  // Billing-state guard (Sep 23 2026, Brett — field audit gap #3). QBO_Invoice_Number is the
+  // one Work_Orders-level signal that a WO has actually been invoiced in QuickBooks (written
+  // by qbSendInvoice/qbSendFinalInvoice). Combining across that boundary would fold a
+  // survivor's Description/Priority/etc (and any future combine-driven edits) into a WO
+  // QuickBooks already has a final invoice number for, silently changing what's already been
+  // billed — there's no safe auto-reconciliation for that, so the whole combine is blocked
+  // outright rather than offered a picker. NOTE: this only checks the Work_Orders-level
+  // invoice number; a WO can also have vendor-bill-side billing state already reviewed/sent
+  // to QuickBooks (Vendor_Bills/Invoice_Review — a BILL, distinct from the customer-facing
+  // INVOICE checked here) that this guard does NOT check, because that isn't a Work_Orders
+  // column. Flagged in the PR description as a judgment call, not fixed here.
+  const alreadyInvoiced = [survivor, ...combinedWOs].filter(w => String(w.QBO_Invoice_Number || '').trim());
+  if (alreadyInvoiced.length) {
+    return json({
+      error: 'already_invoiced',
+      wo_ids: alreadyInvoiced.map(w => w.ID),
+      message: `Cannot combine — ${alreadyInvoiced.map(w => w.ID).join(', ')} already ${alreadyInvoiced.length > 1 ? 'have' : 'has'} a QuickBooks invoice number. Handle billing manually before combining.`,
+    }, 400);
+  }
+
   const { resolved, conflicts } = resolveCombineFields([survivor, ...combinedWOs], body.field_overrides);
   if (conflicts.length) {
     return json({ error: 'field_conflict', conflicts, message: `These fields disagree across the selected work orders — field_overrides required for: ${conflicts.join(', ')}` }, 409);
@@ -4930,9 +4950,18 @@ async function woCombine(env, body) {
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const survivorSnapshot = {};
   for (const f of WO_COMBINE_RECONCILE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
+  for (const f of WO_COMBINE_MERGE_FIELDS) survivorSnapshot[f] = survivor[f] ?? '';
   const fieldsToApply = {};
   for (const f of WO_COMBINE_RECONCILE_FIELDS) {
     if (String(resolved[f] ?? '') !== String(survivorSnapshot[f] ?? '')) fieldsToApply[f] = resolved[f];
+  }
+  // Merge fields (Description/Room/Owner_WO_Ref): unconditional, order-preserving
+  // concatenation of every combined WO's own value onto the survivor's, regardless of
+  // whether they agree or disagree — there is no "conflict" state for these at all.
+  for (const f of WO_COMBINE_MERGE_FIELDS) {
+    let merged = survivorSnapshot[f];
+    for (const w of combinedWOs) merged = mergeWOTextField(merged, w.ID, w[f]);
+    if (merged !== survivorSnapshot[f]) fieldsToApply[f] = merged;
   }
 
   const voidedSoFar = [];
@@ -4942,7 +4971,9 @@ async function woCombine(env, body) {
       await logWOAuditMany(env, Object.entries(fieldsToApply).map(([field, newVal]) => ({
         woId: survivorId, changedBy, changedByRole, field,
         oldValue: survivorSnapshot[field], newValue: newVal,
-        notes: `Combine: reconciled from ${combinedIds.join(', ')}`,
+        notes: WO_COMBINE_MERGE_FIELDS.includes(field)
+          ? `Combine: merged from ${combinedIds.join(', ')}`
+          : `Combine: reconciled from ${combinedIds.join(', ')}`,
       })));
     }
     for (const w of combinedWOs) {
