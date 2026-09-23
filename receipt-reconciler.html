@@ -184,7 +184,7 @@ function renderTabs(){
   document.getElementById('tabs').innerHTML = STATUSES.map(([k,label]) =>
     '<div class="tab'+(k===curStatus?' active':'')+'" onclick="setStatus(\''+k+'\')">'+esc(label)+'</div>').join('');
 }
-function setStatus(s){ curStatus = s; renderTabs(); loadQueue(); }
+function setStatus(s){ curStatus = s; clearBulkSelection(); renderTabs(); loadQueue(); }
 
 async function scanNow(){
   const status = document.getElementById('conn-status');
