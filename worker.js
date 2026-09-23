@@ -2591,6 +2591,223 @@ async function receiptReconRefundReverse(env, body) {
   return json({ ok: true, wo_id: original.WO_ID, original_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink });
 }
 
+// ── Sep 23 2026 build: reassign a confirmed BMore/Ridge Co expense + manual refund marking ────
+// Brett's three asks this session: (1) un-flip a receipt that was confirmed as a BMore/Ridge Co
+// business expense (no work order) and rebill it to a property + work order instead, without
+// losing the ability to flag receipts as BMore/Ridge Co in the first place; (2) a search over
+// every processed receipt, so "did I already process this $101.28 receipt" can be checked
+// directly instead of eyeballing tabs; (3) a way to manually mark a receipt as a refund when the
+// automatic OCR-based detection (receiptExtract's refund_signal_text / negative-total check)
+// misses one, including undoing a receipt that was already confirmed/expensed by mistake.
+//
+// Brett's own scoping answers (Sep 23 2026): reassigning/un-confirming only works while the
+// original Receipts row hasn't been emailed to QuickBooks yet (QB_Email_Sent) — once QuickBooks
+// has it, these refuse and tell him to fix it there directly rather than silently trying to
+// unwind an already-sent expense. Reassign is an inline action on the confirmed card itself
+// (not a "move back to Pending" reset). Converting an already-confirmed receipt to a refund
+// reuses the existing Pending refund flow (find-match / negative-expense) rather than building a
+// second, parallel refund-posting path — it voids the original (if eligible) and drops the row
+// back into Pending with Manual_Refund set, which is exactly what the pending "Mark as refund"
+// toggle also sets.
+
+// Finds the real Receipts row a confirmed Receipt_Recon_Queue row actually wrote. Prefers the
+// stored Confirmed_Receipt_ID (every confirm/reassign from this build forward sets it); falls
+// back to signature matching (amount/store/date) for rows confirmed before that column existed.
+async function findReceiptForQueueRow(env, row) {
+  const receipts = await fetchTab(env, 'Receipts');
+  if (row.Confirmed_Receipt_ID) {
+    const hit = receipts.find(rc => String(rc.ID) === String(row.Confirmed_Receipt_ID));
+    if (hit) return hit;
+  }
+  const amt = Number(row.Confirmed_Amount || row.Total || 0).toFixed(2);
+  return receipts.find(rc => String(rc.Active || '').toUpperCase() !== 'FALSE'
+    && Number(rc.Amount).toFixed(2) === amt
+    && _rcNorm(rc.Store) === _rcNorm(row.Vendor)
+    && String(rc.Date || '').slice(0, 10) === String(row.Receipt_Date || '').slice(0, 10)) || null;
+}
+
+// POST /receipt-recon/reassign { id, wo_id?, property_id, amount?, description?, store?, date? }
+// property_id is always required (even a "no work order, just fix the property" reassign needs
+// one — that's still an expense, just a corrected one). wo_id is optional — omit it to leave this
+// as an expense but move it off general Ridge Co overhead onto a specific property (or vice
+// versa); include it to bill it to that work order like any other receipt.
+async function receiptReconReassign(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const property_id = body.property_id || '';
+  if (!property_id) return json({ error: 'property_id required' }, 400);
+  const wo_id = body.wo_id || '';
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (row.Status !== 'confirmed') return json({ error: `only a confirmed row can be reassigned (this one is ${row.Status || 'pending'})` }, 409);
+
+  if (wo_id) {
+    const workorders = await fetchTab(env, 'Work_Orders');
+    if (!workorders.some(w => String(w.ID) === String(wo_id))) {
+      return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
+    }
+  }
+
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
+  const original = await findReceiptForQueueRow(env, row);
+  if (!original) return json({ error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.' }, 404);
+  if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
+    return json({ error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here (reassigning would double it up).` }, 409);
+  }
+
+  const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : (row.Confirmed_Amount || row.Total);
+  const description = body.description || row.Confirmed_Description || row.PO_Reference || row.Vendor || '';
+  const store = body.store || row.Vendor || '';
+  const date = body.date || row.Receipt_Date || '';
+
+  // Void the original expense row — same soft-delete pattern used everywhere else (Active:
+  // 'FALSE'), never a hard delete, so it stays visible/auditable on the Receipts tab.
+  await updateRow(env, 'Receipts', original.ID, {
+    Active: 'FALSE',
+    Description: (original.Description || '') + ` [reassigned ${new Date().toISOString().slice(0, 10)} — replaced by a new Receipts row on ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + ']',
+  });
+
+  const category = wo_id ? 'billable' : 'company';
+  const addResp = await addReceipt(env, {
+    wo_id, property_id, amount, description, store, date,
+    added_by: 'Receipt Reconciler (reassign)', added_by_id: 'receipt-recon-reassign', role: 'hub', category,
+    source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
+    payment_source: original.Payment_Source,
+  });
+  const addJson = await addResp.json().catch(() => ({}));
+
+  let invoiceLink = null;
+  if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
+    let covered = null, coverErr = null;
+    try { covered = await scopeCoveringSignatureForWO(env, wo_id); } catch (e) { coverErr = e; }
+    if (covered) invoiceLink = { linked: false, reason: 'covered_by_signed_proposal', scope_id: covered.scope_id };
+    else if (coverErr) invoiceLink = { linked: false, reason: 'scope_check_failed', error: String(coverErr && coverErr.message || coverErr) };
+    else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
+  }
+
+  // Same "expense goes to QuickBooks right away" behavior receiptReconConfirm already uses for a
+  // no-WO receipt (Sep 22 2026) — a WO-bound reassign follows the normal daily sweep instead.
+  let qbEmail = null;
+  if (!wo_id && addJson && addJson.success && !addJson.duplicate && addJson.id) {
+    try {
+      const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
+      const j = await r.json().catch(() => ({}));
+      qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
+    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
+  }
+
+  if (addJson && addJson.success) {
+    await updateRow(env, 'Receipt_Recon_Queue', id, {
+      Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
+      Confirmed_Receipt_ID: String(addJson.id || row.Confirmed_Receipt_ID || ''),
+      Notes: `Reassigned ${new Date().toISOString().slice(0, 10)} from a BMore/Ridge Co expense to ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + '.',
+    });
+  }
+
+  return json({ ok: true, wo_id, property_id, voided_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
+}
+
+// POST /receipt-recon/mark-refund { id, refund } — manual override for a PENDING receipt the
+// automatic refund detection missed or got wrong. Never touches Receipts — a pending row hasn't
+// billed anything yet — just flips the flag GET /receipt-recon/queue reads to decide which card
+// (normal vs refund) to render. refund:false undoes it and restores the scanner's own original
+// category, since the underlying Suggestion JSON is never modified.
+async function receiptReconMarkRefund(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if ((row.Status || 'pending') !== 'pending') return json({ error: `only a pending row can be toggled this way (this one is ${row.Status})` }, 409);
+  const refund = body.refund !== false;
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Manual_Refund']);
+  await updateRow(env, 'Receipt_Recon_Queue', id, { Manual_Refund: refund ? 'TRUE' : 'FALSE' });
+  return json({ ok: true, id, manual_refund: refund });
+}
+
+// POST /receipt-recon/mark-refund-confirmed { id } — undo a receipt that was wrongly confirmed
+// or expensed and route it into the refund flow instead. Reuses the exact Pending refund UI
+// (find matching purchase / post as a negative expense) rather than a second parallel posting
+// path: if it was actually billed (Status 'confirmed'), the original Receipts row is voided
+// (same not-yet-sent-to-QuickBooks guard as reassign above) and the queue row drops back to
+// Pending with Manual_Refund set. An 'attached_only' row never billed anything in the first
+// place (see receiptAttachOnly) — nothing to void, it just goes back to Pending flagged.
+async function receiptReconMarkRefundConfirmed(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (!['confirmed', 'attached_only'].includes(row.Status)) return json({ error: `only a confirmed or attached-only receipt can be marked as a refund this way (this one is ${row.Status || 'pending'})` }, 409);
+
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
+  let voidedId = null;
+  if (row.Status === 'confirmed') {
+    const original = await findReceiptForQueueRow(env, row);
+    if (!original) return json({ error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.' }, 404);
+    if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
+      return json({ error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here.` }, 409);
+    }
+    await updateRow(env, 'Receipts', original.ID, {
+      Active: 'FALSE',
+      Description: (original.Description || '') + ` [marked refund ${new Date().toISOString().slice(0, 10)} — pulled back into Receipt Reconciler for reversal]`,
+    });
+    voidedId = original.ID;
+  }
+
+  await updateRow(env, 'Receipt_Recon_Queue', id, {
+    Status: 'pending', Manual_Refund: 'TRUE',
+    Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
+    Notes: `Marked as a refund ${new Date().toISOString().slice(0, 10)} — was ${row.Status}.`,
+  });
+  return json({ ok: true, id, voided_receipt_id: voidedId });
+}
+
+// GET /receipt-recon/search?q=<amount|store|description text>&date=<yyyy-mm-dd> — Brett, Sep 23
+// 2026: "let me manually check whether I already processed this receipt" (he keeps hitting cases
+// where no duplicate flag comes back but he's fairly sure he already handled one). Searches the
+// canonical Receipts ledger, not just this session's own queue — that's the real record of what
+// actually got billed/expensed/refunded/attached, including anything entered outside the
+// Reconciler (vendor-submitted, manually keyed, older pre-Reconciler receipts). Read-only.
+async function receiptReconSearch(env, url) {
+  const qRaw = (url.searchParams.get('q') || '').trim();
+  const dateParam = (url.searchParams.get('date') || '').trim();
+  if (!qRaw && !dateParam) return json({ error: 'q or date required' }, 400);
+  let rows = []; try { rows = await fetchTab(env, 'Receipts'); } catch (e) { return json({ error: String(e && e.message || e) }, 500); }
+  const qNorm = _rcNorm(qRaw);
+  // A bare number is very likely an amount search ("$101.28" / "101.28") — match it against
+  // Amount with cent-level tolerance, in addition to the normal text match, so Brett doesn't have
+  // to strip the $ or guess how it's formatted.
+  const qAmount = parseFloat(qRaw.replace(/[^0-9.\-]/g, ''));
+  const hasAmount = qRaw.replace(/[^0-9.]/g, '').length > 0 && !isNaN(qAmount);
+
+  let properties = [], workorders = [];
+  try { properties = await fetchTab(env, 'Properties'); } catch (e) {}
+  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) {}
+  const propById = new Map(properties.map(p => [String(p.ID), p]));
+  const woById = new Map(workorders.map(w => [String(w.ID), w]));
+
+  const results = rows.filter(r => {
+    if (dateParam && String(r.Date || '').slice(0, 10) !== dateParam) return false;
+    if (!qRaw) return true;
+    if (hasAmount && Math.abs(Number(r.Amount) - qAmount) < 0.01) return true;
+    const blob = _rcNorm([r.Store, r.Description, r.WO_ID, r.Property_ID].filter(Boolean).join(' '));
+    return !!(qNorm && blob.indexOf(qNorm) >= 0);
+  }).map(r => {
+    const prop = r.Property_ID ? propById.get(String(r.Property_ID)) : null;
+    const wo = r.WO_ID ? woById.get(String(r.WO_ID)) : null;
+    return {
+      id: r.ID, amount: r.Amount, store: r.Store, description: r.Description, date: r.Date,
+      category: r.Category, active: String(r.Active || '').toUpperCase() !== 'FALSE',
+      wo_id: r.WO_ID || '', wo_description: wo ? (wo.Description || '') : '',
+      property_id: r.Property_ID || '', property_address: prop ? (prop.Address || '') : '',
+      qb_email_sent: String(r.QB_Email_Sent || '').toUpperCase() === 'TRUE',
+      qb_email_sent_date: r.QB_Email_Sent_Date || '', created_date: r.Created_Date || '',
+      added_by: r.Added_By || '', source_file_url: r.Source_File_URL || '',
+    };
+  }).sort((a, b) => new Date(b.date || b.created_date || 0) - new Date(a.date || a.created_date || 0));
+
+  return json({ ok: true, count: results.length, results: results.slice(0, 200) });
+}
+
 const DUPLICATE_RETENTION_DAYS = 180;
 
 // PURE — is this queue row due for the 180-day retention purge right now? Factored out of
