@@ -2202,7 +2202,25 @@ var _invoiceFileId = '';
 var _billTypeUserPicked = false; // flips true the moment the vendor taps a By-the-Hour/Flat tab themselves
 var _overageAcknowledged = false; // Sep 23 2026 — set once the vendor confirms past the overage warning below; reset on every modal open
 
+// Vendor Onboarding Phase 1 (Sep 23 2026) — Submit Bill is the one gated action (brief section
+// 3c: never gate work-order visibility/progress, only billing, since a bill for a vendor with no
+// billing/tax info on file is already meaningless). Checks completeness first; the real modal
+// (_openBillModalReal, unchanged below) only opens once the gate passes, either immediately or
+// right after the vendor submits the Complete-Your-Info form (same tap).
 function openBillModal(woId, vendorName) {
+  var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
+  if (!vendorId) { _openBillModalReal(woId, vendorName); return; } // no session — fail open rather than block
+  api('/vendor-onboarding-status?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
+    if (res && res.complete) { _openBillModalReal(woId, vendorName); }
+    else { openCompleteInfoModal(woId, vendorName, (res && res.missing) || []); }
+  }).catch(function() {
+    // A network hiccup checking the gate must never block billing outright — fail open, same
+    // "never gate work" spirit the rest of this portal already follows.
+    _openBillModalReal(woId, vendorName);
+  });
+}
+
+function _openBillModalReal(woId, vendorName) {
   _billWOId = woId;
   _billType = 'hourly';
   _billTypeUserPicked = false;
