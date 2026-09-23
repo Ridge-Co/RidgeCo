@@ -2200,12 +2200,14 @@ var _uploadedPhotos = {};
 var _invoiceFileURL = '';
 var _invoiceFileId = '';
 var _billTypeUserPicked = false; // flips true the moment the vendor taps a By-the-Hour/Flat tab themselves
+var _overageAcknowledged = false; // Sep 23 2026 — set once the vendor confirms past the overage warning below; reset on every modal open
 
 function openBillModal(woId, vendorName) {
   _billWOId = woId;
   _billType = 'hourly';
   _billTypeUserPicked = false;
   _billSubmitting = false; // reset on every open
+  _overageAcknowledged = false;
   _receiptCount = 0;
   _uploadedPhotos = {};
   _invoiceFileURL = '';
