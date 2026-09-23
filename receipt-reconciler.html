@@ -968,7 +968,7 @@ function rowCard(r){
   const fileLink = r.Source_File_URL ? '<a href="'+esc(r.Source_File_URL)+'" target="_blank">View receipt →</a>' : '<span class="info">no file link</span>';
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
-    if (!excluded && !isCompany) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    if (!excluded && !isCompany && !isRefund) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
     if (isCompany) html += '<button class="btn small" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>';
     if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🖐 Confirm duplicate</button>';
     // Part 2: an alternative to Confirm/Confirm-duplicate — attach this receipt's own image to
