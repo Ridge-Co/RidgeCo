@@ -316,6 +316,60 @@ const env = { SHEET_ID: 'S', __STAGING__: true };
   t('an audit row exists on each new WO naming the original', db.WO_Audit.rows.some(r => r[1] === newA && /from WO-100/.test(r[8])) && db.WO_Audit.rows.some(r => r[1] === newB && /from WO-100/.test(r[8])));
 }
 
+// ── 2b. Priority/Trade fallback — a new-WO spec that omits them inherits from the (possibly
+//        overridden) original instead of silently defaulting to 'normal'/'' (Sep 23 2026 field
+//        audit — same class of bug as Combine's Priority/Description issues, just for Split's
+//        direction). The shipped UI always sends both explicitly (pre-filled selects), so this
+//        exercises the server-side safety net a direct/future API caller would otherwise hit.
+{
+  const db = makeDb([
+    { ID: 'WO-150', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Description: 'urgent leak', Status: 'New' },
+  ]);
+  const { woSplit } = build(db);
+  const res = await woSplit(env, {
+    original_wo_id: 'WO-150',
+    new_work_orders: [{ Description: 'no trade or priority given' }], // Trade/Priority omitted entirely
+  });
+  const body = await res.json();
+  t('split with an omitted Trade/Priority on the new spec still succeeds', body.success === true);
+  const newId = body.new_wo_ids[0];
+  t('the new WO inherits Priority from the original (urgent), NOT a silent normal default', wf(db, newId, 'Priority') === 'urgent');
+  t('the new WO inherits Trade from the original (Plumbing), NOT a silent blank', wf(db, newId, 'Trade') === 'Plumbing');
+}
+{
+  // Same, but the original's OWN Priority is simultaneously being downgraded via
+  // original_overrides — the new WO should inherit the POST-override value, not the pre-
+  // override snapshot, since that's the value the original itself ends up holding.
+  const db = makeDb([
+    { ID: 'WO-151', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Description: 'urgent leak', Status: 'New' },
+  ]);
+  const { woSplit } = build(db);
+  const res = await woSplit(env, {
+    original_wo_id: 'WO-151',
+    original_overrides: { Priority: 'low' },
+    new_work_orders: [{ Description: 'no priority given, original was just downgraded' }],
+  });
+  const body = await res.json();
+  const newId = body.new_wo_ids[0];
+  t('the new WO inherits the POST-override original Priority (low), not the pre-override one (urgent)', wf(db, newId, 'Priority') === 'low');
+}
+{
+  // An explicit Priority/Trade on the spec always wins over inheritance — the fallback only
+  // fires when the field is entirely omitted.
+  const db = makeDb([
+    { ID: 'WO-152', Property_ID: '76', Unit_ID: 'U1', Trade: 'Plumbing', Priority: 'urgent', Description: 'x', Status: 'New' },
+  ]);
+  const { woSplit } = build(db);
+  const res = await woSplit(env, {
+    original_wo_id: 'WO-152',
+    new_work_orders: [{ Trade: 'HVAC', Priority: 'low', Description: 'explicit low priority HVAC job' }],
+  });
+  const body = await res.json();
+  const newId = body.new_wo_ids[0];
+  t('an explicitly-provided Priority overrides the inherited fallback', wf(db, newId, 'Priority') === 'low');
+  t('an explicitly-provided Trade overrides the inherited fallback', wf(db, newId, 'Trade') === 'HVAC');
+}
+
 // ── 3. Two new WOs with IDENTICAL trade+description don't collide into the same WO id ────────
 {
   const db = makeDb([
