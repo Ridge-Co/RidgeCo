@@ -12233,8 +12233,23 @@ function bcRenderConflicts() {
   var wrap = document.getElementById('bc-conflicts-wrap');
   var listEl = document.getElementById('bc-conflicts-list');
   var confirmBtn = document.getElementById('bc-confirm-btn');
-  if (!survivorId) { wrap.style.display='none'; confirmBtn.disabled = true; return; }
+  var mergeNote = document.getElementById('bc-merge-note');
+  if (!survivorId) { wrap.style.display='none'; mergeNote.style.display='none'; confirmBtn.disabled = true; return; }
   var wos = _bulkCombineIds.map(function(id){ return safeArray(state.workorders).find(function(w){return w.ID===id;}); }).filter(Boolean);
+
+  // Informational only — these are never a conflict, always auto-combined server-side. Shown
+  // so Brett knows it's happening, not so he can pick anything.
+  var mergeFieldsPresent = BC_MERGE_FIELDS.filter(function(f){
+    return wos.some(function(w){ return String(w[f]||'').trim(); });
+  });
+  if (mergeFieldsPresent.length) {
+    mergeNote.style.display = '';
+    mergeNote.textContent = 'Automatically combined onto the survivor (nothing discarded): ' +
+      mergeFieldsPresent.map(function(f){ return BC_MERGE_FIELD_LABELS[f]||f; }).join(', ') + '.';
+  } else {
+    mergeNote.style.display = 'none';
+  }
+
   var conflicts = BC_FIELDS.filter(function(f){
     var vals = wos.map(function(w){ return String(w[f]==null?'':w[f]); });
     return vals.some(function(v){ return v !== vals[0]; });
