@@ -95,11 +95,12 @@ Build:
 ## Suggested build order
 
 1. Rebase PR #27 onto `main` first (blocking everything else — it owns the auth-gate/router lines everything below will also touch).
-2. Part 5 (WO picker: links + dates + mismatch warning) — read-only, no new write path, and it directly informs every other part's "which WO is this" decision, so do it right after the rebase.
-3. Part 1 (image-attached indicator) — smallest, and both Part 1 and Part 2 read from the same `Receipts` attachment field, so do them together.
-4. Part 2 (attach-only action).
-5. Part 4 (bulk actions) — self-contained, doesn't depend on refund work.
-6. Part 3 (refund detection + matching) — the most open-ended piece (OCR + fuzzy matching), do it last so the simpler wins ship first.
+2. **Part 0 (intake-time duplicate cross-check) — do this immediately after the rebase, ahead of everything else.** It's the only part of this brief responding to an active, ongoing problem (real duplicates landing in Pending right now) rather than a workflow improvement.
+3. Part 5 (WO picker: links + dates + mismatch warning) — read-only, no new write path, and it directly informs every other part's "which WO is this" decision.
+4. Part 1 (image-attached indicator) — smallest, and both Part 1 and Part 2 read from the same `Receipts` attachment field, so do them together.
+5. Part 2 (attach-only action).
+6. Part 4 (bulk actions) — self-contained, doesn't depend on refund work.
+7. Part 3 (refund detection + matching) — the most open-ended piece (OCR + fuzzy matching), do it last so the simpler wins ship first.
 
 ## Notes for whoever builds this
 
