@@ -4737,7 +4737,7 @@ async function createWorkOrder(env, body) {
     const tenant = currentTenantForDispatch(tenants, unit, woLike);
     const tenantNotifyCreated = body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE';
     if (isTenantNotifiable(tenant, woLike) && tenantNotifyCreated) {
-      const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'your unit';
+      const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
       const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
       const sendAfter = new Date(Date.now() + 8*3600000).toISOString();
       await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
