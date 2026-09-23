@@ -3885,11 +3885,13 @@ function openEditVendorModal(id) {
   evTrade.value = v.Trade || 'General';
   document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
   document.getElementById('ev-type').value=v.Vendor_Type||'labor'; document.getElementById('ev-payaddr').value=v.Payment_Address||'';
+  document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
+  document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
   openModal('modal-edit-vendor');
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
-  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value};
+  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim()};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
     toast('Vendor updated','success');closeModal('modal-edit-vendor');loadAll();
