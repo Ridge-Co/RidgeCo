@@ -4997,7 +4997,22 @@ async function createWorkOrder(env, body) {
   const _woSig = {
     Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Tenant_ID: body.tenant_id || '',
     Trade: body.trade || '', Description: body.description || '', Type: body.type || 'manual',
-  }, 30);
+  };
+  const _gotClaim = claimWOSignature(_woSig);
+  if (!_gotClaim) {
+    // Another request in this isolate already claimed this exact signature and may still be
+    // mid-flight (not necessarily finished writing yet), so a single check right now could
+    // still miss it. Poll briefly for it to land instead of racing ahead to append a twin.
+    for (let i = 0; i < 6; i++) {
+      await new Promise(r => setTimeout(r, 350));
+      const found = await findRecentDuplicate(env, 'Work_Orders', _woSig, 60);
+      if (found) return json({ success: true, duplicate: true, id: found.ID });
+    }
+    // Gave up waiting (the "owner" of the claim errored out, or this really is a stale claim
+    // slot getting reused) — fall through to the normal single-source-of-truth check below
+    // rather than blocking a legitimate write forever.
+  }
+  const dupe = await findRecentDuplicate(env, 'Work_Orders', _woSig, 60);
   if (dupe) return json({ success: true, duplicate: true, id: dupe.ID });
 
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
