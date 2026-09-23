@@ -234,7 +234,21 @@ export default {
         // though the path itself is shared with the real, WORKER_SECRET-authenticated route.
         // Fully inert unless env.HUB_TEST_TOKEN is set, so deploying this has zero effect until
         // the secret exists — and it never exists on production's env at all.
-        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices'];
+        //
+        // /config and /hub-bootstrap added Sep 22 2026 (Brett, WO Combine/Split UI click-through
+        // build): this token now also works as a staging-only admin UI login credential for
+        // headless Playwright testing. /config is what index.html's doLogin() calls to verify
+        // the entered value before accepting it — without it this token could never log into the
+        // Hub UI at all, only call the API directly. /hub-bootstrap is the one batched call the
+        // UI makes right after login to populate every list (replacing 8 separate per-tab reads);
+        // without it the UI would render but sit empty. Every other GET the UI issues (audit
+        // trail, vendor bills, materials, receipts, etc.) is unguarded but non-blocking client
+        // code — it fails silently into a "Loading…" state rather than breaking the page — so
+        // this stays the minimal read surface needed for a real click-through rather than
+        // mirroring the whole app's GET surface. Brett's explicit call (raised when a UI test
+        // hit this exact gap): staging-only + already-TEST-record-scoped writes is protection
+        // enough, so this is intentionally broader than a pure API smoke-test token needs to be.
+        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap'];
         const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split'];
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
