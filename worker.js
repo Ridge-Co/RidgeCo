@@ -2074,7 +2074,7 @@ async function receiptReconScan(env, body) {
       const po = ex.po_reference || ex.handwritten_note || '';
       const items = Array.isArray(ex.items) ? ex.items : [];
       const itemsSummary = Array.isArray(ex.items_summary) ? ex.items_summary : [];
-      const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '' }, properties, workorders, receipts, custCards);
+      const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '', refund: ex.refund === true }, properties, workorders, receipts, custCards);
       const tooOld = receiptBeforeCutoff(ex.date, cutoff);
       if (tooOld) skippedOld++;
       // Part 0 (Sep 22 2026 incident) — cross-check BEFORE this lands as a fresh Pending row.
@@ -2084,7 +2084,10 @@ async function receiptReconScan(env, body) {
       const entrySource = receiptReconEntrySource(f.description);
       const rescanMatches = receiptReconFindRescanMatches({ total: ex.total, store: ex.vendor, date: ex.date, gmailMessageId: gmailId }, receipts, existing);
       if (rescanMatches.length) flaggedRescan++;
-      const notes = tooOld ? receiptCutoffNote(ex.date, cutoff) : (rescanMatches.length ? rescanMatches.map(m => '⚠️ ' + m.reason).join(' ') : '');
+      // Part 3 (Sep 22 2026 brief) — surface the refund detection in Notes too, not just the
+      // Suggestion JSON the card's badge reads, so it's visible even before the UI renders.
+      const refundNote = (!tooOld && ex.refund) ? ('🔄 Refund/return detected — ' + (ex.refund_reason || 'review the suggested match or post as a negative expense.')) : '';
+      const notes = tooOld ? receiptCutoffNote(ex.date, cutoff) : [rescanMatches.length ? rescanMatches.map(m => '⚠️ ' + m.reason).join(' ') : '', refundNote].filter(Boolean).join(' ');
       await addRow(env, 'Receipt_Recon_Queue', {
         Source_File_ID: f.id, Source_File_URL: f.webViewLink || '', File_Name: f.name || '',
         Received_Date: new Date().toISOString(), Vendor: ex.vendor || '', Receipt_Date: ex.date || '',
