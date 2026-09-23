@@ -12256,7 +12256,132 @@ function submitBulkCombine() {
   }).catch(function(e){ toast('Error: '+e.message,'error'); }).finally(function(){ btn.disabled=false; btn.textContent=origText; });
 }
 
-// ── Bulk Cancel — double protection (checkbox + typed confirmation) ────────
+// -- Bulk Void (Sep 23 2026) -- voids every selected WO that has no money attached, reusing
+// the real single-WO /wo/void per WO server-side (see woBulkVoid in worker.js) -- this file
+// never re-derives the void logic itself, only the preview shown before Confirm. The preview
+// (which WOs will void vs. skip, and why) is a client-side mirror of the server's own check --
+// UX only; /wo/bulk-void re-validates authoritatively and is the real boundary, same
+// preview-vs-authority split as Combine's field-conflict picker above.
+var _bulkVoidIds = [];
+var _bulkVoidVoidableIds = [];
+
+function updateBulkVoidBtn() {
+  var btn = document.getElementById('bv-open-btn');
+  if (!btn) return;
+  btn.disabled = getBulkCheckedWOIds().length === 0;
+}
+
+function bvComputeMoneyReason(wo, linkedBill) {
+  if (!wo) return 'Work order not found';
+  if (String(wo.Voided || '').toUpperCase() === 'TRUE') return 'Already voided';
+  var charge = String(wo.Customer_Charge || '').trim();
+  if (charge) return 'Customer charge on file ($' + charge + ')';
+  var qbo = String(wo.QBO_Invoice_Number || '').trim();
+  if (qbo) return 'Already invoiced in QuickBooks (' + qbo + ')';
+  if (linkedBill) return 'Has a linked vendor bill (' + linkedBill.ID + (linkedBill.Status === 'reviewed' ? ', reviewed' : '') + ')';
+  return null;
+}
+
+function openBulkVoidModal() {
+  var ids = getBulkCheckedWOIds();
+  if (!ids.length) { toast('Select at least one WO', 'error'); return; }
+  _bulkVoidIds = ids;
+  _bulkVoidVoidableIds = [];
+  document.getElementById('bv-reason').value = '';
+  document.getElementById('bv-combined-wrap').style.display = 'none';
+  document.getElementById('bv-other-wrap').style.display = 'none';
+  document.getElementById('bv-other-detail').value = '';
+  document.getElementById('bv-combined-wo').value = '';
+  document.getElementById('bv-error').style.display = 'none';
+  document.getElementById('bv-preview').innerHTML = '<div style="color:var(--muted);font-size:12px">Checking for money attached...</div>';
+  document.getElementById('bv-confirm-btn').disabled = true;
+  openModal('modal-bulk-void');
+  bvRenderPreview();
+}
+
+function onBulkVoidReasonChange() {
+  var reason = document.getElementById('bv-reason').value;
+  document.getElementById('bv-combined-wrap').style.display = reason === 'Combined' ? '' : 'none';
+  document.getElementById('bv-other-wrap').style.display = reason === 'Other' ? '' : 'none';
+  bvUpdateConfirmGate();
+}
+
+function bvUpdateConfirmGate() {
+  var reason = document.getElementById('bv-reason').value;
+  var btn = document.getElementById('bv-confirm-btn');
+  if (!btn) return;
+  if (!reason) { btn.disabled = true; return; }
+  if (reason === 'Combined' && !(document.getElementById('bv-combined-wo').value || '').trim()) { btn.disabled = true; return; }
+  if (reason === 'Other' && !(document.getElementById('bv-other-detail').value || '').trim()) { btn.disabled = true; return; }
+  btn.disabled = _bulkVoidVoidableIds.length === 0;
+}
+
+// Fetches each selected WO's vendor bills (small N -- Brett's use case is clearing a handful
+// of junk/test WOs at a time, not hundreds) to mirror the server's linked-vendor-bill check,
+// alongside the already-loaded Customer_Charge/QBO_Invoice_Number fields from state.workorders.
+function bvRenderPreview() {
+  var ids = _bulkVoidIds;
+  Promise.all(ids.map(function(id) {
+    return api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(id)).catch(function() { return []; });
+  })).then(function(billLists) {
+    var voidable = [], skips = [];
+    ids.forEach(function(id, i) {
+      var wo = safeArray(state.workorders).find(function(w) { return w.ID === id; });
+      var bills = safeArray(billLists[i]).filter(function(b) { return b.Active !== 'FALSE'; });
+      var reason = bvComputeMoneyReason(wo, bills[0]);
+      if (reason) skips.push({ id: id, reason: reason }); else voidable.push(id);
+    });
+    _bulkVoidVoidableIds = voidable;
+    var html = '<div style="font-size:12px;margin-bottom:6px"><b style="color:#2a7">' + voidable.length + '</b> will be voided' +
+      (skips.length ? ', <b style="color:#c80">' + skips.length + '</b> skipped (money attached)' : '') + '.</div>';
+    if (skips.length) {
+      html += '<div style="max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:6px 8px">' +
+        skips.map(function(s) { return '<div style="font-size:11px;color:var(--muted);padding:2px 0">' + esc(s.id) + ' -- ' + esc(s.reason) + '</div>'; }).join('') +
+        '</div>';
+    }
+    document.getElementById('bv-preview').innerHTML = html;
+    bvUpdateConfirmGate();
+  }).catch(function(e) {
+    // Fail open on the preview only -- Customer_Charge/QBO_Invoice_Number were still checked
+    // client-side, and /wo/bulk-void re-checks vendor bills authoritatively server-side
+    // regardless of whether this preview call succeeded.
+    document.getElementById('bv-preview').innerHTML = '<div style="color:#e55;font-size:12px">Could not preview vendor bills (' + esc(e.message) + ') -- the server will still check them on submit.</div>';
+    _bulkVoidVoidableIds = ids.slice();
+    bvUpdateConfirmGate();
+  });
+}
+
+function submitBulkVoid() {
+  var reason = document.getElementById('bv-reason').value;
+  if (!reason) { toast('Select a reason', 'error'); return; }
+  var detail = '', combinedInto = '';
+  if (reason === 'Combined') {
+    combinedInto = (document.getElementById('bv-combined-wo').value || '').trim();
+    if (!combinedInto) { toast('Enter the work order ID to combine into', 'error'); return; }
+  } else if (reason === 'Other') {
+    detail = (document.getElementById('bv-other-detail').value || '').trim();
+    if (!detail) { toast('Enter a reason', 'error'); return; }
+  }
+  if (!_bulkVoidVoidableIds.length) { toast('Nothing to void -- every selected work order has money attached', 'error'); return; }
+  var btn = document.getElementById('bv-confirm-btn');
+  var origText = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Voiding...';
+  document.getElementById('bv-error').style.display = 'none';
+  api('POST', '/wo/bulk-void', { ids: _bulkVoidIds, reason: reason, detail: detail, combined_into_wo_id: combinedInto, updated_by: 'Admin', updated_by_role: 'admin' }).then(function(res) {
+    if (res.success) {
+      var skippedN = (res.skipped || []).length;
+      toast('Voided ' + res.voided_count + ' work order' + (res.voided_count === 1 ? '' : 's') + (skippedN ? ' -- ' + skippedN + ' skipped (money attached)' : ''), 'success');
+      closeModal('modal-bulk-void');
+      toggleBulkMode();
+      loadAll();
+    } else {
+      document.getElementById('bv-error').textContent = res.error || 'Bulk void failed';
+      document.getElementById('bv-error').style.display = '';
+    }
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); }).finally(function() { btn.disabled = false; btn.textContent = origText; });
+}
+
+// -- Bulk Cancel -- double protection (checkbox + typed confirmation) ----
 var _bulkCancelIds = [];
 
 function openBulkCancelConfirm(ids) {
