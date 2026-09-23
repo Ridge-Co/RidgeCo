@@ -2150,8 +2150,8 @@ async function appendReceiptToInvoiceReview(env, { wo_id, receipt_id, amount }) 
     // positive one below, with an added floor so a reversal can never push the invoice negative.
     if (!amt) return { linked: false, reason: 'no_amount' };
     const ids = String(ir.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
-    if (amt > 0 && ids.includes(String(receipt_id))) return { linked: true, ir_id: ir.ID, already: true };
-    if (amt > 0) ids.push(String(receipt_id));
+    if (ids.includes(String(receipt_id))) return { linked: true, ir_id: ir.ID, already: true };
+    ids.push(String(receipt_id));
     const newOwnMaterials = +((Number(ir.Own_Materials) || 0) + amt).toFixed(2);
     const newCustomerTotal = +((Number(ir.Customer_Total) || 0) + amt).toFixed(2);
     if (newOwnMaterials < 0 || newCustomerTotal < 0) {
