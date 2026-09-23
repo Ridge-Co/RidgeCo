@@ -6439,7 +6439,8 @@ async function sendPropertyNotice(env, body) {
   const cfg = await fetchConfig(env);
   const assistantName = cfg.ASSISTANT_NAME || 'Riley';
   const ownerLabel = (owner && (owner.Company || owner.First_Name)) || 'your property owner';
-  const tokens = { Address: property.Address || '', Owner: ownerLabel, AssistantName: assistantName };
+  const unitToken = unit && unit.Unit_Label ? formatUnitLabel(unit.Unit_Label) : '';
+  const tokens = { Address: property.Address || '', Owner: ownerLabel, AssistantName: assistantName, Unit: unitToken };
 
   const smsTpl = await getMessageTemplate(env, 'property_notice', 'sms');
   const emailTpl = await getMessageTemplate(env, 'property_notice', 'email');
