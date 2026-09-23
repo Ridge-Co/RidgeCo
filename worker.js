@@ -5198,7 +5198,7 @@ async function assignVendor(env, body) {
   const unit     = units.find(u => u.ID === wo.Unit_ID);
   const tenant   = currentTenantForDispatch(tenants, unit, wo);
   const room     = (wo.Room||'').trim();
-  const address  = property ? `${property.Address}${unit ? ' Unit '+unit.Unit_Label : ''}${room ? ' ('+room+')' : ''}` : 'the property';
+  const address  = property ? `${property.Address}${unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''}${room ? ' ('+room+')' : ''}` : 'the property';
   // Access info (lockbox codes, master key status, etc.) is deliberately NOT built or sent
   // here — this initial dispatch text withholds it on purpose (see the Access-gate comment
   // below); it only unlocks in the vendor's own portal once they accept. Removed a dead
