@@ -1989,7 +1989,7 @@ async function receiptReconScan(env, body) {
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
-  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0;
+  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0;
   const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
@@ -2001,13 +2001,22 @@ async function receiptReconScan(env, body) {
       const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '' }, properties, workorders, receipts, custCards);
       const tooOld = receiptBeforeCutoff(ex.date, cutoff);
       if (tooOld) skippedOld++;
+      // Part 0 (Sep 22 2026 incident) — cross-check BEFORE this lands as a fresh Pending row.
+      // Never auto-skips on a match (a false positive could hide a real second purchase) — only
+      // flags the row so Brett sees it the instant he looks at the card, not by memory.
+      const gmailId = receiptReconGmailIdFromDescription(f.description);
+      const entrySource = receiptReconEntrySource(f.description);
+      const rescanMatches = receiptReconFindRescanMatches({ total: ex.total, store: ex.vendor, date: ex.date, gmailMessageId: gmailId }, receipts, existing);
+      if (rescanMatches.length) flaggedRescan++;
+      const notes = tooOld ? receiptCutoffNote(ex.date, cutoff) : (rescanMatches.length ? rescanMatches.map(m => '⚠️ ' + m.reason).join(' ') : '');
       await addRow(env, 'Receipt_Recon_Queue', {
         Source_File_ID: f.id, Source_File_URL: f.webViewLink || '', File_Name: f.name || '',
         Received_Date: new Date().toISOString(), Vendor: ex.vendor || '', Receipt_Date: ex.date || '',
         Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
         PO_Reference: po, Items: JSON.stringify(items), Items_Summary: JSON.stringify(itemsSummary), Card_Last4: ex.card_last4 || '', Invoice_Number: ex.invoice_number || '',
         Suggestion: JSON.stringify(suggestion).slice(0, 4000), Status: tooOld ? 'skipped' : 'pending',
-        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: tooOld ? receiptCutoffNote(ex.date, cutoff) : '', Active: 'TRUE',
+        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: notes, Active: 'TRUE',
+        Gmail_Message_ID: gmailId, Entry_Source: entrySource, Rescan_Match_JSON: JSON.stringify(rescanMatches).slice(0, 4000),
       });
       n++;
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
@@ -2020,7 +2029,7 @@ async function receiptReconScan(env, body) {
   }
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
-  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
+  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
