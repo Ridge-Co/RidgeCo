@@ -11763,16 +11763,41 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
 // data starts flowing from here). routeAI throws on a hard failure (missing key, fetch error)
 // exactly like the old direct call did — only the final JSON.parse of the model's own text is
 // caught, unchanged from before.
+// PURE — Part 3 of the Sep 22 2026 dup/refund/bulk brief. The live incident: the Aug 24 Home
+// Depot return (`2026-08-24_HomeDepot_85eb0166.pdf`, TOTAL −$111.18, "REFUND-CUSTOMER COPY",
+// "ORIG REC:" lines) OCR'd as +$111.18 — the model read the printed digits but missed that they
+// represented money coming BACK, not a charge. Rather than trust the model's sign alone, this is
+// a second, code-level guard run on every extracted receipt: given the already-extracted fields
+// (including the new refund_signal_text field the prompt below now asks for), decide definitively
+// whether this is a refund/return and FORCE the total negative — never let a refund amount reach
+// addReceipt/billing as a positive charge, no matter what the model returned. Pure and testable
+// with no live model call: feed it a plain object shaped like receiptExtract's own output.
+function receiptApplyRefundDetection(ex) {
+  ex = ex || {};
+  const total = (typeof ex.total === 'number' && isFinite(ex.total)) ? ex.total
+    : (ex.total !== null && ex.total !== undefined && ex.total !== '' && isFinite(Number(ex.total)) ? Number(ex.total) : null);
+  const blob = [ex.refund_signal_text, ex.handwritten_note, ex.po_reference, ex.invoice_number].filter(Boolean).join(' ');
+  const hasRefundLanguage = /\b(REFUND|RETURN|ORIG\s*REC|CREDIT\s*MEMO)\b/i.test(blob);
+  const isNegative = total !== null && total < 0;
+  const refund = hasRefundLanguage || isNegative;
+  return {
+    ...ex,
+    total: (refund && total !== null) ? -Math.abs(total) : total,
+    refund,
+    refund_reason: refund ? (String(ex.refund_signal_text || '').trim() || (hasRefundLanguage ? 'Refund/return language detected on receipt.' : 'Negative total (return/refund).')) : '',
+  };
+}
+
 async function receiptExtract(env, bytes, mime) {
   const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
   const media = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
-  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased, VERBATIM as printed — e.g. "GLIDDEN PREMIUM INT PAINT"; empty array if unreadable), items_summary (array of short GENERALIZED category words for what was bought, one per distinct item/group — e.g. "paint", "primer", "batteries", "tape" instead of the verbatim brand/SKU text in items; collapse near-duplicates, e.g. two paint SKUs both become one "paint" entry; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased, VERBATIM as printed — e.g. "GLIDDEN PREMIUM INT PAINT"; empty array if unreadable), items_summary (array of short GENERALIZED category words for what was bought, one per distinct item/group — e.g. "paint", "primer", "batteries", "tape" instead of the verbatim brand/SKU text in items; collapse near-duplicates, e.g. two paint SKUs both become one "paint" entry; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), refund_signal_text (verbatim any text on the receipt indicating this is a RETURN/REFUND rather than a purchase — e.g. "REFUND-CUSTOMER COPY", "RETURN", "ORIG REC:", "CREDIT MEMO" — else ""; if present, also make `+"`total`"+` the NEGATIVE amount refunded to the customer even if the printed digits show it as positive), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
   const r = await routeAI(env, { type: 'receipt_parse', moneyFacing: true, media, prompt, maxTokens: 700, source: 'receiptExtract' });
   const txt = (r.result || '').trim();
-  try { return JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim()); }
-  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0 }; }
+  try { return receiptApplyRefundDetection(JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim())); }
+  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0, refund: false, refund_reason: '' }; }
 }
 
 // Read a VENDOR INVOICE (photo or PDF) with Claude vision → strict JSON suggestion. This is the
