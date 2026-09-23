@@ -13850,8 +13850,18 @@ function missingTabResponse(tab) {
 // caller proceeds to append.
 async function findRecentDuplicate(env, tab, signature, windowSeconds) {
   try {
-    const rows = await fetchTab(env, tab);
+    // Root-caused Sep 23 2026 (WO-1213/WO-1214, Lance Serafica, 30s apart, rule 162's guard
+    // never fired): cutoff used to be computed AFTER `await fetchTab`. That await is a real
+    // network round trip to Sheets (retried with backoff under a 429), so every millisecond it
+    // takes silently SHRINKS the window from what the caller asked for — a 30s window becomes
+    // effectively "30s minus however long this fetch took." On the tenant `/workorder` path
+    // there are several awaited Sheets reads ahead of this one too (session→tenant resolve,
+    // the tenant-WO-toggle access check), so by the time this cutoff was computed, real elapsed
+    // time since the first submission could already exceed the nominal window even though the
+    // two requests looked ~30s apart end-to-end. Compute cutoff from the moment the check
+    // STARTS, before any awaits, so the promised window is the actual window.
     const cutoff = Date.now() - (windowSeconds || 120) * 1000;
+    const rows = await fetchTab(env, tab);
     const keys = Object.keys(signature);
     for (let i = rows.length - 1; i >= 0; i--) {   // newest first — duplicates are recent
       const r = rows[i];
