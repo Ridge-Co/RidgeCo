@@ -851,7 +851,11 @@ function rowCard(r){
   // gets its own lightweight confirm path below instead of being excluded outright. 'refund'
   // and 'customer_paid' still have nothing to confirm here — those stay Skip-only.
   const isCompany = sug.category === 'company';
-  const excluded = ['refund','customer_paid'].includes(sug.category);
+  // Part 3 (Sep 22 2026 brief): 'refund' now gets its own real actions below (find a matching
+  // original purchase to reverse, or post as a negative expense) — it is NEVER skip-only
+  // anymore. 'customer_paid' is the only category left with nothing to confirm here.
+  const isRefund = sug.category === 'refund';
+  const excluded = ['customer_paid'].includes(sug.category);
   const isPendingLike = (r.Status||'pending') === 'pending';
   const isDuplicateFlagged = (sug.flags||[]).includes('duplicate_on_wo');
   const propId = (sug.property && sug.property.id) || '';
