@@ -9201,7 +9201,7 @@ async function createVendorRequest(env, body) {
   if (!vendor.Phone) return json({ error: 'Vendor has no phone number on file' }, 400);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const unit = units.find(u => u.ID === wo.Unit_ID);
-  const address = property ? property.Address + (unit ? ' Unit '+unit.Unit_Label : '') : 'the property';
+  const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'the property';
   const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || 'there');
   const msg = reqType === 'photos'
     ? `Hi ${vname}, could you upload before/after photos for ${woId} at ${address} when you get a chance? You can add them from your vendor portal. ${vendorPortalLink(woId)}`
