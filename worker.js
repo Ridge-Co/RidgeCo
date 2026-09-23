@@ -2649,8 +2649,12 @@ async function receiptReconReassign(env, body) {
 
   if (wo_id) {
     const workorders = await fetchTab(env, 'Work_Orders');
-    if (!workorders.some(w => String(w.ID) === String(wo_id))) {
+    const wo = workorders.find(w => String(w.ID) === String(wo_id));
+    if (!wo) {
       return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
+    }
+    if (String(wo.Property_ID) !== String(property_id)) {
+      return json({ error: `Work order ${wo_id} belongs to a different property than the one you're reassigning to (Property ${wo.Property_ID}, not ${property_id}) — check the property/WO pairing.` }, 400);
     }
   }
 
