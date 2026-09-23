@@ -678,6 +678,9 @@ export default {
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
         if (path === '/receipt-recon/check-duplicates')  return await receiptReconCheckDuplicates(env, body);
         if (path === '/receipt-recon/check-duplicates-bulk') return await receiptReconCheckDuplicatesBulk(env, body);
+        if (path === '/admin/receipt-duplicate-audit/build-index') return await receiptDuplicateAuditBuildIndex(env, body);
+        if (path === '/admin/receipt-duplicate-audit/scan')        return await receiptDuplicateAuditScan(env, body);
+        if (path === '/admin/receipt-duplicate-audit/mark')        return await receiptDuplicateAuditMark(env, body);
         if (path === '/receipt-recon/skip')       return await receiptReconSkip(env, body);
         if (path === '/receipt-recon/unskip')     return await receiptReconUnskip(env, body);
         if (path === '/receipt-recon/skip-before-cutoff') return await receiptReconSkipBeforeCutoff(env, body);
