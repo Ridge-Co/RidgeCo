@@ -1509,6 +1509,21 @@ function isTenantCurrent(t) {
   return true;
 }
 
+// Unit_Label formatting (Sep 23 2026): real Unit_Label data is a genuine mix — most read like
+// full labels already ("Apt 3R", "Apt B") but a real subset (931 Saint Paul St, 1305 N Calvert
+// St) are bare identifiers ("3R", "1F", "2nd") with no "Apt"/"Unit"/word prefix at all. Blindly
+// prepending "Unit " onto every label double-prefixed the already-full ones ("...St Unit Apt
+// 3R"); blindly stripping it would have read badly on the bare ones ("...St 3R" reads fine
+// actually, but a bare ordinal like "2nd" reads oddly with no word at all — "Unit 2nd" is the
+// clearer text). This keeps a bare label prefixed with "Unit " and leaves an already-worded
+// label (Apt/Unit/Suite/#) exactly as-is. Use this everywhere a unit label is appended onto an
+// address instead of raw string concatenation.
+function formatUnitLabel(label) {
+  const l = String(label || '').trim();
+  if (!l) return '';
+  return (/^(apt|unit|suite|ste)\b/i.test(l) || l[0] === '#') ? l : `Unit ${l}`;
+}
+
 // The tenant to hand a VENDOR. Deliberately stricter than "whoever the work order names":
 // a vendor going to an address today needs the person living there today. A moved-out
 // tenant's name and phone must not travel out to a third party — they no longer live
