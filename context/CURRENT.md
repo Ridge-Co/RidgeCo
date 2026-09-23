@@ -1,3 +1,34 @@
+# ⭐⭐⭐ Sep 23, 2026, ~12:40 ET — Fixed: HUB_TEST_TOKEN staging test coverage for receipt-recon (PR #44's "how do we test this" follow-up)
+
+Brett asked "fix the sheets credentials... cloudflare secret, gh broker secret?" after I said PR
+#44 needs his own live pass. **No credential was actually missing** — `hub_test_get('/health')`
+proved `HUB_TEST_TOKEN` and the Cloudflare Service Binding to staging were already fully
+configured and working. The real gap was a **code allow-list**, in two places, that had simply
+never been extended for the receipt-recon endpoint family:
+
+1. `Ridge-Co/RidgeCo` `worker.js` (committed to `feature/receipt-recon-reassign-refund-search`,
+   same branch as PR #44): `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS` now include
+   `/receipt-recon/queue`, `/receipt-recon/search`, `/admin/seed-test-receipt`,
+   `/receipt-recon/confirm`, `/receipt-recon/reassign`, `/receipt-recon/mark-refund`,
+   `/receipt-recon/mark-refund-confirmed`; `hubTestWriteAllowed()` got matching TEST-record-scoped
+   guard cases for each write path. Also added `seedTestReceipt()` + `POST
+   /admin/seed-test-receipt` — a real `Receipt_Recon_Queue` row only ever arrives via scanning a
+   Drive file, so there was no way to get a testable pending row onto staging; this creates one
+   directly, scoped to `TEST-PROPERTY-001`. `node --check` verified against the actual committed
+   branch content (not just the local copy).
+2. `brett332/gh-broker` `src/index.ts` (committed straight to `main`, test-infra-only, no
+   money/auth risk): its own `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS` — a second, client-side,
+   non-enforcing filter in front of the Hub's own real enforcement — were even further out of
+   date (missing `/receipt/attach-only` and the duplicate-audit paths too, from an earlier build).
+   Extended to match worker.js's list.
+
+**Needs Brett — this is NOT live yet:** (a) gh-broker is a Cloudflare Worker with no CI/auto-deploy
+wired to this repo (no `.github/workflows`) — the `main` commit above needs `wrangler deploy` run
+by Brett before `hub_test_post` will actually accept these paths (confirmed still rejecting as of
+this write-up). (b) staging only ever deploys from a `staging` branch, never `main` or a feature
+branch — so even after PR #44 is reviewed, the worker.js side of this needs staging synced before
+it's testable end-to-end either.
+
 # ⭐⭐⭐ Sep 23, 2026, ~11:20 ET — Receipt Reconciler: PR #44 open (reassign BMore expense to WO, manual refund marking, ledger search)
 
 Brett's voice memo (Sep 23, 11:05am ET) raised three Receipt Reconciler gaps, all addressed in
