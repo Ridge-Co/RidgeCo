@@ -12380,7 +12380,7 @@ async function woShareLink(env, body){
   const token = await makeSessionToken({ scope:'wo-share-link', wo:woId, rev }, env.WORKER_SECRET, WO_SHARE_LINK_TTL);
   const base = (body.page_base || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/,'');
   const link = `${base}/wo.html?wo=${encodeURIComponent(woId)}&t=${encodeURIComponent(token)}`;
-  const addr = (prop.Address||'the property') + (unit.Unit_Label?(' Unit '+unit.Unit_Label):'');
+  const addr = (prop.Address||'the property') + (unit.Unit_Label?(' '+formatUnitLabel(unit.Unit_Label)):'');
   const lang = (vendor.Language==='es') ? 'es' : 'en';
   const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || '').trim();
   const msgEn = `Hi${vname?' '+vname:''}, here's the work order for ${addr}. Everything you need — job details, access, photos, and billing — is here:\n${link}\nTo open it, enter the last 4 digits of your phone (one time per day).`;
