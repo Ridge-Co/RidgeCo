@@ -61,6 +61,11 @@ const fetchTabsSrc    = grab(wsrc, 'async function fetchTabs(');
 const updateRowSrc    = grab(wsrc, 'async function updateRow(');
 const updateWOFieldsSrc = grab(wsrc, 'async function updateWOFields(');
 const findRecentDupSrc  = grab(wsrc, 'async function findRecentDuplicate(');
+// Root cause fix for WO-1213/WO-1214 (rule 162 follow-up, Sep 23 2026) added a same-isolate
+// synchronous claim that createWorkOrder now calls before its own dupe check — grab it
+// alongside createWorkOrder itself, same convention as ensure-columns.test.mjs and dupe-guard
+// already follow for their own paired dependencies.
+const claimCacheSrc   = grabRange(wsrc, 'const __woClaimCache = new Map();', 'async function createWorkOrder(');
 const createWOSrc     = grab(wsrc, 'async function createWorkOrder(');
 const rolesSrc        = grabConst(wsrc, 'const TURNOVER_ROLES');
 const tradeMapSrc     = grabConst(wsrc, 'const TURNOVER_TRADE_BY_ROLE');
