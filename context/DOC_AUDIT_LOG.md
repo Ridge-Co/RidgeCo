@@ -80,3 +80,30 @@ Checked commits: 60 (excluding merges/doc-audit itself)
 - `b5631fd` (2026-09-21 01:20) Fix transcription slip: restore trailing newline at end of file — best single-entry match: 43%
 - `7fe1c59` (2026-09-21 01:20) Fix transcription slip: bold-marker placement in the 828 S Charles St Verify line — best single-entry match: 43%
 - `ba3b4e4` (2026-09-21 00:22) Merge main (PR #17) into PR #14 branch: restore WO_Audit message-audit columns, logWOAuditMany extended shape, and logMessageAudit wrapper — best single-entry match: 42%
+
+## Run: 2026-09-23 17:39 UTC
+Since: 2026-09-22 (source: this script's own last recorded run)
+Checked commits: 278 (excluding merges/doc-audit itself)
+**22 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `bc8746b` (2026-09-23 16:03) Flag unresolved staging-deploy-lag question found while live-testing the new PAT-033 autonomy — best single-entry match: 44%
+- `61f4294` (2026-09-23 13:57) openUnitDetail: avoid double-prefixing Unit_Label, mirroring worker.js formatUnitLabel — best single-entry match: 43%
+- `bdfcdb0` (2026-09-23 13:56) Add formatUnitLabel helper (avoid double-prefixing Unit_Label) — best single-entry match: 40%
+- `f1e8a72` (2026-09-23 01:46) Part 3: pure-logic + wiring tests for refund detection, matching, and the Rung-3 reversal write — reconstructs the real Aug 24 2026 Home Depot return as a fixture and proves detection fires on it — best single-entry match: 42%
+- `9e5523e` (2026-09-23 01:42) Part 3: add receiptReconRefundCandidates (read-only match search) and receiptReconRefundReverse (Rung-3 money write — Brett's-tap-only, admin-gated, reuses addReceipt + appendReceiptToInvoiceReview, same convention as scopeProposalAdjustBill) — best single-entry match: 47%
+- `241b17d` (2026-09-23 01:41) Part 3 follow-up: keep the same receipt-id dedupe/tracking for a negative (refund-reversal) delta as for a positive one — no sign-conditional branch needed — best single-entry match: 40%
+- `a1127db` (2026-09-23 01:40) Part 3: add receiptRefundFindMatches — pure, unit-testable scorer for candidate original-purchase matches against a refund (store/date-window/amount/item-overlap) — best single-entry match: 43%
+- `ff67972` (2026-09-23 01:40) Part 3: refund detection in receiptExtract — code-level guard (receiptApplyRefundDetection) forces refund totals negative regardless of OCR sign, fixes the Aug 24 Home Depot return misread — best single-entry match: 47%
+- `277f1f2` (2026-09-23 01:32) Bulk actions: JS dispatch (bulkAction/bulkExpense/updateBulkBar) — Part 4 — best single-entry match: 43%
+- `256c709` (2026-09-23 01:19) receipt-recon: bump BUILD_VERSION for Parts 1+2 (image-attached indicator + attach-only) — best single-entry match: 43%
+- `81edbc6` (2026-09-23 01:12) Part 5: add woDatesLabel/woDateWindowWarning pure helpers + embed in woSelectHTML — best single-entry match: 43%
+- `b6feb56` (2026-09-23 00:56) receipt-reconciler UI: render entry-source + rescan banner in rowCard — best single-entry match: 33%
+- `54caac0` (2026-09-23 00:44) Add receipt-duplicate-audit/flags to HUB_PROD_RO_READ_PATHS — best single-entry match: 33%
+- `4009c9e` (2026-09-23 00:44) Add receipt-duplicate-audit paths to HUB_TEST allow-lists — best single-entry match: 25%
+- `6385a8d` (2026-09-23 00:06) Add urgent Part 0: intake-time cross-check against already-processed receipts — best single-entry match: 43%
+- `7df2406` (2026-09-22 20:46) Update acceptance criteria and rollout for the two-path allow-list — best single-entry match: 40%
+- `f1a34c7` (2026-09-22 20:46) Update Design section 1 with widened allow-list and same-PR addition convention — best single-entry match: 43%
+- `8426a48` (2026-09-22 20:45) Update build brief: widened starting allow-list + durable same-PR addition convention (Brett feedback) — best single-entry match: 40%
+- `e30b840` (2026-09-22 20:45) Widen HUB_PROD_WRITE_TOKEN allow-list + establish same-PR addition convention — best single-entry match: 43%
+- `acbc1e7` (2026-09-22 20:20) wo-combine: add offline tests for resolveCombineFields() and woCombine() — best single-entry match: 40%
+- `5fa56b0` (2026-09-22 20:05) wo-combine: add woCombine() + resolveCombineFields() backend logic — best single-entry match: 40%
+- `64f9f4b` (2026-09-22 19:48) Reconciler: rowCard uses evidenceHtml wrapper — best single-entry match: 40%
