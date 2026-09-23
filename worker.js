@@ -5507,7 +5507,9 @@ async function woCombine(env, body) {
 
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {}
 
-  return json({ success: true, survivor_wo_id: survivorId, combined_wo_ids: combinedIds, resolved_fields: resolved });
+  const mergedFieldsApplied = {};
+  for (const f of WO_COMBINE_MERGE_FIELDS) if (Object.prototype.hasOwnProperty.call(fieldsToApply, f)) mergedFieldsApplied[f] = fieldsToApply[f];
+  return json({ success: true, survivor_wo_id: survivorId, combined_wo_ids: combinedIds, resolved_fields: resolved, merged_fields: mergedFieldsApplied });
 }
 
 // Split (inverse of Combine, Sep 22 2026 build — WO detail "Split" action). Takes ONE existing
