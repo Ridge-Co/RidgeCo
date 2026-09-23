@@ -9247,6 +9247,7 @@ function renderIRCard(b, i) {
       noteLine +
       vendorInvLine +
       renderReceiptsJsonBreakdown(b) +
+      (b.ID ? '<div style="margin-top:4px"><a href="javascript:void(0)" onclick="openWODetail(\''+esc(woId)+'\')" style="color:var(--info);font-size:11px">✎ Something wrong with these receipts? Edit them on the work order →</a></div>' : '') +
       '<div style="margin-top:8px">' +
         '<button onclick="irLoadWOReceipts('+i+',\''+esc(woId)+'\')" style="background:var(--surface);border:1px solid var(--border);color:var(--muted);border-radius:4px;font-family:var(--font);font-size:10.5px;padding:4px 8px;cursor:pointer">🧾 Check for separate receipts logged on this WO</button>' +
         '<div id="ir-wo-receipts-'+i+'" style="margin-top:4px"></div>' +
