@@ -1663,10 +1663,17 @@ async function listReceipts(env, url) {
 // paid out of pocket and needs it added to what they're owed) — never silently inferred from
 // role, since Brett himself sometimes logs an entry on a vendor's behalf.
 async function addReceipt(env, body) {
-  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source } = body;
-  if (!amount) return json({ error: 'amount required' }, 400);
+  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative } = body;
+  if (!amount && amount !== 0) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
-  if (isNaN(amt) || amt <= 0) return json({ error: 'amount must be a positive number' }, 400);
+  if (isNaN(amt) || amt === 0) return json({ error: 'amount must be non-zero' }, 400);
+  // Part 3 (Sep 22 2026 brief): a refund posts as a genuine NEGATIVE amount — money coming back,
+  // not a charge (never a positive number silently standing in for it). Every other caller of
+  // addReceipt (vendor portal, manual entry, ordinary WO receipts) still gets the original
+  // positive-only guard; allow_negative is only ever passed by the refund expense path
+  // (receiptReconConfirm's no_wo refund case) and the refund-reversal write
+  // (receiptReconRefundReverse) — both Rung-3/Brett's-tap gated, never automatic.
+  if (amt < 0 && !allow_negative) return json({ error: 'amount must be a positive number' }, 400);
   const paymentSource = (payment_source === 'vendor_reimburse') ? 'vendor_reimburse' : 'company_card';
 
   // Same receipt, same job/property, same store, seconds apart = a double-tap, not two
