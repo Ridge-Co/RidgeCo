@@ -14317,6 +14317,43 @@ async function setConfigKey(env, body) {
   return json({ success: true });
 }
 
+// POST /admin/set-alert-flags (Sep 24 2026, Queue #14/#10 opt-in build) — the narrow,
+// purpose-built alternative to /config/set for these two flags. Writes ONLY the two named
+// keys below (never an arbitrary key from the body), and coerces every value to the literal
+// 'TRUE'/'FALSE' strings the rest of the Worker already reads via
+// String(cfg.failure_alert_enabled||'').toUpperCase()!=='TRUE' (see callWithFailureAlert /
+// deadManSwitchCheck) — so this can never be pointed at any other Config row.
+const ALERT_FLAG_KEYS = ['failure_alert_enabled', 'dead_man_switch_enabled'];
+async function setAlertFlags(env, body) {
+  const updates = {};
+  for (const k of ALERT_FLAG_KEYS) {
+    if (body && Object.prototype.hasOwnProperty.call(body, k)) {
+      updates[k] = (body[k] === true || String(body[k]).toUpperCase() === 'TRUE') ? 'TRUE' : 'FALSE';
+    }
+  }
+  if (!Object.keys(updates).length) return json({ error: 'Provide at least one of: ' + ALERT_FLAG_KEYS.join(', ') }, 400);
+  const data = await sheetsRequest(env, 'GET', '/values/Config');
+  const rows = data.values || [];
+  const batchData = [];
+  const appends = [];
+  for (const key of Object.keys(updates)) {
+    const value = updates[key];
+    const rowIdx = rows.findIndex(r => (r[0] || '').trim() === key);
+    if (rowIdx >= 0) {
+      batchData.push({ range: `Config!B${rowIdx + 1}`, values: [[value]] });
+    } else {
+      appends.push([key, value]);
+    }
+  }
+  if (batchData.length) {
+    await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batchData });
+  }
+  for (const row of appends) {
+    await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: [row] });
+  }
+  return json({ success: true, updated: updates });
+}
+
 function nextSafeId(rows) {
   if(rows.length<=1) return 1;
   const ids=rows.slice(1).map(r=>parseInt(r[0]||'0')).filter(n=>Number.isFinite(n)&&n>0);
