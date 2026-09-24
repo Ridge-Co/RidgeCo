@@ -1830,7 +1830,7 @@ function showPage(name, btn) {
   document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('page-'+name).classList.add('active');
   if (btn) btn.classList.add('active');
-  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); }
+  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); loadAlertFlags(); }
   if (name === 'invoice-review') { loadSendTrack(); loadInvoiceReview(); }
   if (name === 'qb-send') { loadQBQueue(); }
   if (name === 'qb-map')  { loadQBMapping(false); }
