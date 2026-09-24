@@ -655,6 +655,13 @@ export default {
         if (path === '/create-upload-session')    return await createUploadSession(env, body);
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
+        if (path === '/vendor-bill/add-standalone') return await addVendorBillStandalone(env, body);
+        if (path === '/vendor/request-property-access') return await vendorRequestPropertyAccess(env, body);
+        if (path === '/vendor-access-requests/approve') return await vendorAccessRequestApprove(env, body);
+        if (path === '/workorder/self-serve')     return await workorderSelfServe(env, body);
+        if (path === '/vendor/set-can-bill-no-wo') return await vendorSetCanBillNoWO(env, body);
+        if (path === '/vendor/set-can-create-own-wo') return await vendorSetCanCreateOwnWO(env, body);
+        if (path === '/vendor/set-billing-property-access') return await vendorSetBillingPropertyAccess(env, body);
         if (path === '/vendor/update-contact')    return await vendorUpdateContact(env, body);
         if (path === '/vendor-bill/extract')      return await vendorBillExtract(env, body);
         if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
