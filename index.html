@@ -210,7 +210,7 @@ window.addEventListener('pageshow', function(e){
       <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
       <button class="nav-btn" onclick="showPage('vendor-performance',this)">📊 VENDOR PERFORMANCE</button>
       <button class="nav-btn" onclick="showPage('vendor-onboarding',this)">📋 VENDOR ONBOARDING</button>
-      <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
+      <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG <span id="devlog-nav-badge" style="display:none;background:var(--danger);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span></button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
       <button class="nav-btn" onclick="showPage('messaging',this)">📢 MESSAGING</button>
     </nav>
@@ -223,6 +223,10 @@ window.addEventListener('pageshow', function(e){
       <div class="stat-card"><div class="num" id="stat-urgent">—</div><div class="label">URGENT</div></div>
       <div class="stat-card"><div class="num" id="stat-invoiced">—</div><div class="label">AWAITING PAYMENT</div></div>
       <div class="stat-card"><div class="num" id="stat-props">—</div><div class="label">PROPERTIES</div></div>
+    </div>
+    <div id="dashboard-var-tile" style="display:none;background:#fdf2e2;border:1px solid var(--warn);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;cursor:pointer" onclick="goToVendorAccessRequests()">
+      <span style="color:var(--warn);font-weight:bold;font-size:13px">⚠ <span id="dashboard-var-count">0</span> vendor access request(s) pending</span>
+      <span style="color:var(--muted);font-size:11px;margin-left:6px">— review in Dev Log</span>
     </div>
     <div class="section-title">ACTIVE WORK ORDERS</div>
     <div class="wo-list" id="dashboard-wo-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
