@@ -1201,6 +1201,14 @@ async function vendorByPin(env, url) {
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
       vendor_trades: vendor.Trades||vendor.Trade||'', vendor_rate: vendor.Hourly_Rate||'', language: vendor.Language||'en',
       vendor_email: vendor.Email||'', vendor_company: vendor.Company||'',
+      // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §3a/§4a):
+      // carried on the session so vendor.html can show/hide the "Submit a Bill" / "Log a
+      // One-Off Job" home-screen buttons without a separate round trip. Every write these
+      // enable is still re-checked server-side against the live Vendors row — this is
+      // display-only, never itself a grant of access.
+      can_bill_no_wo: String(vendor.Can_Bill_No_WO || '').toUpperCase() === 'TRUE',
+      can_create_own_wo: String(vendor.Can_Create_Own_WO || '').toUpperCase() === 'TRUE',
+      billing_property_access: vendor.Billing_Property_Access || '',
       token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET),
     });
   });
