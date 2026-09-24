@@ -2430,6 +2430,17 @@ function openWODetail(woId) {
     '</div>';
 
   document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
+  // Vendor Task Requests (CAP-036 #12) -- its own section/insert, deliberately separate
+  // from the addBtn(...) action-buttons block above so it never collides with that code.
+  var vtrSection = wo.Vendor_ID ? (
+    '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">VENDOR TASK REQUESTS</div>' +
+    '<button class="btn secondary" onclick="openVendorTaskRequestModal(\'' + woId + '\',\'' + wo.Vendor_ID + '\')">🚩 Flag Vendor Issue (Photos / Description / Other)</button>' +
+    '<div id="vtr-wo-list-' + woId + '" style="margin-top:8px"></div>' +
+    '</div>'
+  ) : '';
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', vtrSection);
+  if (wo.Vendor_ID) loadVendorTaskRequestsForWO(woId);
 
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
