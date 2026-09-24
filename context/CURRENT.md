@@ -1,3 +1,49 @@
+# Sep 24, 2026, ~18:00 ET — BUILT (branch pushed, PR pending): CAP-036 #14 "Invoiced — Pending Info" sub-status
+
+Capture-inbox item #14, Brett-confirmed: a vendor invoices a completed job, but Brett needs
+something more before he'll pay it (missing photos, missing receipts, too-thin a description) —
+there was previously no way to flag "yes invoiced, but don't pay yet" separately from just
+leaving a bill sitting unapproved. Confirmed explicitly this covers Scope Proposal / milestone
+billing too, not just vendor-submitted invoices.
+
+**Modeled as a flag on top of the existing Status column, not a new Status value** — read
+`Vendor_Bills.Status` (`submitted`→`reviewed`) and `Payment_Milestones.Status`
+(`pending`→`billed`) first: both are narrow 2-value enums with existing `?status=` filter logic a
+third value would break, so a bill/milestone can be `Status:'submitted'` AND
+`Pending_Info:'TRUE'` at once. New columns (`Pending_Info`, `Pending_Info_Note`,
+`Pending_Info_Set_By`, `Pending_Info_Set_Date`) added additively via `ensureColumns` on both
+tabs. Full detail: `context/FEATURE_LOG.md` ([FL-20260924-1800-pi]).
+
+**The gate is a soft block, not a hard one** — Brett is the only approver ("I can be blocked by
+me"), so every preview shows the flag as a warning and every real money-write (`qbSendInvoice`,
+`qbSendCombinedInvoice`, `scopeProposalBillMilestones`) returns 409 unless the caller sends
+`override_pending_info:true`; there is always a deliberate way through, never a dead end.
+`approveInvoiceReview` itself (Review Bills' internal step) is untouched — it doesn't move
+money, so it wasn't the right chokepoint.
+
+**Surfaces:** Review Bills (`index.html`) sorts flagged bills to the top with a banner +
+Flag/Clear buttons and a "Send anyway" override on the QB-send modal; the vendor portal
+(`vendor.html`) gained a brand-new Invoiced tab (none existed before — built minimal, not a full
+tab redesign, per instruction) with a per-bill banner and pending-info-first sorting;
+Scope Proposal / milestone billing (`signed-proposals.html`) got the identical
+flag/clear-chip + soft-block-with-override treatment on `scopeProposalBillMilestones`.
+
+**Verified:** new `test/pending-info.test.mjs` (36 assertions) plus the 6 pre-existing
+money-adjacent suites this change touches or sits near (`combined-invoice`,
+`invoice-review-bulk`, `scope-book`, `scope-ready-to-bill`, `invoice-no-bill`,
+`scope-bill-gap`) — 146 assertions total, run locally against the patched branch, zero
+regressions. **`hub_test_get`/`hub_test_post` staging smoke-testing of the two new endpoints was
+not exercised this pass** — flagged plainly rather than claimed; a follow-up session with
+staging access should confirm `/vendor-bill/set-pending-info` and
+`/scope-proposal/milestone/set-pending-info` end-to-end against TEST- fixtures before this ships.
+
+**Ship status:** branch `feat/cap-036-invoiced-pending-info` pushed to `Ridge-Co/RidgeCo`, PR
+opened for Brett's review (money-adjacent status model he relies on for Review Bills, per
+PAT-033 — not auto-merged). No payment/QuickBooks-send logic itself changed, only the status
+model and its two soft-block gate points.
+
+---
+
 # Sep 24, 2026, ~17:00 ET — SHIPPED: Allow-list simplification (PR #55) + property/unit linking & duplicate-check (PR #57)
 
 ## 🟢 Live: Allow-list simplification, all 3 changes
