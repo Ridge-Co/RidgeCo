@@ -5834,8 +5834,9 @@ async function woSplit(env, body) {
     const unit = units.find(u => u.ID === originalFresh.Unit_ID);
     const property = properties.find(p => p.ID === originalFresh.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = currentTenantForDispatch(tenants, unit, originalFresh);
-    if (isTenantNotifiable(tenant, originalFresh) && originalFresh.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (originalFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, originalFresh)) {
+      if (!isTenantNotifiable(tenant, originalFresh)) continue;
       const idList = createdWoIds.join(', ');
       const msg = `Hi ${tenant.First_Name}, work order ${originalId} was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
       await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
