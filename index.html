@@ -2601,6 +2601,63 @@ function updateWOStatus(woId,status) {
 // Manual vendor request — "Request photos"/"Request invoice" buttons on the WO detail view
 // (Sep 14 2026). Confirms first since this sends immediately (no preview step, unlike PIN/
 // Welcome) — the message itself is short and standardized enough not to need per-send editing.
+// Vendor Task Requests (CAP-036 #12, Sep 24 2026) -- "Flag Vendor Issue". A DIFFERENT feature
+// from requestFromVendor()/Vendor_Requests below (the automatic chase-a-quiet-vendor clock).
+// This is Brett EXPLICITLY flagging something for a vendor to address (canned Photos/
+// Description or a free-typed Other), scoped to their estimate or invoice, opened from either
+// the WO detail view or a Review Bills card. Reused by both call sites.
+var _vtrCtx = null;
+var VTR_TYPE_LABELS = { photos: 'Photos', description: 'Description Update', other: 'Other' };
+function openVendorTaskRequestModal(woId, vendorId) {
+  if (!vendorId) { toast('This work order has no vendor assigned yet.', 'error'); return; }
+  _vtrCtx = { wo_id: woId, vendor_id: vendorId };
+  var vendor = safeArray(state.vendors).find(function(v){ return String(v.ID) === String(vendorId); });
+  document.getElementById('vtr-context').textContent = woId + (vendor ? ' -- ' + (vendor.Name || vendor.First_Name || 'vendor') : '');
+  document.getElementById('vtr-type').value = 'photos';
+  document.getElementById('vtr-scope').value = 'estimate';
+  document.getElementById('vtr-other-msg').value = '';
+  document.getElementById('vtr-other-wrap').style.display = 'none';
+  document.getElementById('vtr-error').style.display = 'none';
+  openModal('modal-vendor-task-request');
+}
+function vtrOnTypeChange() {
+  document.getElementById('vtr-other-wrap').style.display = document.getElementById('vtr-type').value === 'other' ? '' : 'none';
+}
+function submitVendorTaskRequest() {
+  if (!_vtrCtx) return;
+  var type = document.getElementById('vtr-type').value;
+  var scope = document.getElementById('vtr-scope').value;
+  var msg = document.getElementById('vtr-other-msg').value.trim();
+  var errEl = document.getElementById('vtr-error');
+  errEl.style.display = 'none';
+  if (type === 'other' && !msg) { errEl.textContent = 'Please type a message for "Other".'; errEl.style.display = ''; return; }
+  var btn = document.getElementById('vtr-submit-btn');
+  btn.disabled = true; btn.textContent = 'Sending...';
+  api('POST', '/vendor-task-request/create', { wo_id: _vtrCtx.wo_id, vendor_id: _vtrCtx.vendor_id, request_type: type, scope: scope, message: msg, created_by: 'brett' })
+    .then(function(res) {
+      btn.disabled = false; btn.textContent = 'Send Request';
+      if (res.error) { errEl.textContent = res.error; errEl.style.display = ''; return; }
+      closeModal('modal-vendor-task-request');
+      toast(res.sent ? 'Sent to vendor' : (res.no_phone ? 'Saved -- vendor has no phone on file, but it shows in their portal' : 'Saved'), 'success');
+      if (typeof loadVendorTaskRequestsForWO === 'function' && _vtrCtx) loadVendorTaskRequestsForWO(_vtrCtx.wo_id);
+    })
+    .catch(function(e) { btn.disabled = false; btn.textContent = 'Send Request'; errEl.textContent = e.message || 'Error'; errEl.style.display = ''; });
+}
+// Small read-only list of this WO's own task requests, shown right under the Flag button on
+// the WO detail view -- so Brett can see what's already open/pending without leaving the modal.
+function loadVendorTaskRequestsForWO(woId) {
+  var el = document.getElementById('vtr-wo-list-' + woId);
+  if (!el) return;
+  api('GET', '/vendor-task-requests?wo_id=' + encodeURIComponent(woId)).then(function(rows) {
+    if (!el || !rows || !rows.length) { if (el) el.innerHTML = ''; return; }
+    el.innerHTML = rows.map(function(r) {
+      var statusLabel = r.Status === 'open' ? 'Open' : r.Status === 'vendor_marked_done' ? 'Vendor says done -- needs your review' : 'Resolved';
+      return '<div style="font-size:11px;color:var(--muted);padding:4px 0;border-top:1px solid var(--border)">' +
+        esc(VTR_TYPE_LABELS[r.Request_Type] || r.Request_Type) + ' (' + esc(r.Scope || '') + ') -- ' + statusLabel + '</div>';
+    }).join('');
+  }).catch(function() { /* non-fatal -- this is a convenience view */ });
+}
+
 function requestFromVendor(woId, vendorId, requestType) {
   var label = requestType === 'photos' ? 'photos' : 'invoice';
   if (!confirm('Send a request for '+label+' to the vendor on '+woId+'? A follow-up reminder will repeat automatically until it\'s satisfied.')) return;
