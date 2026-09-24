@@ -1734,6 +1734,7 @@ function _loadAllFinish(loaded) {
   renderDashboard(); renderWOPage(); renderPropertiesPage();
   renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
   loadWishlist();
+  loadVendorAccessRequests(); // keeps the Dashboard tile + Dev Log nav badge populated from app load, not only when Dev Log is opened
   setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
   processNotificationsBackground();
   toast('Loaded '+loaded+'/8 data sets','success');
