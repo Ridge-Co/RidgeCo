@@ -739,6 +739,9 @@ window.addEventListener('pageshow', function(e){
     </div>
     <div id="wishlist-filters" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
     <div id="wishlist-list" style="margin-bottom:24px"><div class="loading">No items yet</div></div>
+    <div class="section-title">VENDOR ACCESS REQUESTS <span id="var-nav-count-inline" style="display:none;color:var(--warn);font-size:11px;font-weight:normal">— pending</span></div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Vendors requesting billing access to a property not already on their Billing_Property_Access list (Vendor Standalone Billing, §3d). "Approve once" clears just this request; "Approve ongoing" also adds the property to their standing list.</div>
+    <div id="vendor-access-requests-list" style="margin-bottom:24px"><div class="loading">Loading…</div></div>
     <div class="section-title">TROUBLESHOOTING CACHE</div>
     <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review.</p>
     <button class="btn secondary small" onclick="loadCache()" style="margin-bottom:12px">↻ Refresh Cache List</button>
