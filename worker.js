@@ -4297,6 +4297,10 @@ async function scopeProposalSignedList(env, url) {
         customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0, status: m.Status || 'pending',
         qb_invoice_id: m.QB_Invoice_ID || '', qb_invoice_number: m.QB_Invoice_Number || '',
         qb_bill_id: m.QB_Bill_ID || '', qb_bill_number: m.QB_Bill_Number || '', billed_date: m.Billed_Date || '',
+        // CAP-036 #14 — "Invoiced — Pending Info" flag, layered on top of Status (see
+        // setMilestonePendingInfo / scopeProposalBillMilestones).
+        pending_info: String(m.Pending_Info || '').toUpperCase() === 'TRUE',
+        pending_info_note: m.Pending_Info_Note || '',
       }));
     return {
       id: r.ID, scope_id: r.Scope_ID, wo_id: sc.WO_ID || '', property: p.Address || ('Property ' + sc.Property_ID),
