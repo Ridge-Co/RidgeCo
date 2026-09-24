@@ -11803,6 +11803,7 @@ async function selftestCallEndpoint(env, name) {
     case 'returns': return await getSheet(env, 'Returns');
     case 'master_keys': return await getSheet(env, 'Master_Keys');
     case 'vendor_requests': return await getSheet(env, VENDOR_REQ_TAB);
+    case 'vendor_task_requests': return await listVendorTaskRequests(env, u('/vendor-task-requests'), null, null);
     case 'notification_queue': return await getSheet(env, NOTIF_QUEUE_TAB);
     case 'message_queue': return await listMessageQueue(env, u('/message-queue'));
     case 'message_templates': return await listMessageTemplates(env);
