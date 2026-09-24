@@ -1,3 +1,31 @@
+# Sep 24, 2026, ~17:00 ET — SHIPPED: Allow-list simplification (PR #55) + property/unit linking & duplicate-check (PR #57)
+
+## 🟢 Live: Allow-list simplification, all 3 changes
+Full detail: `context/ALLOWLIST_SIMPLIFICATION_BUILD_BRIEF_v1.0.md` (now marked shipped),
+`FEATURE_LOG.md` ([FL-20260924-1815-as]). gh-broker's redundant client-side path-allowlist arrays
+removed (direct to gh-broker `main`); `HUB_TEST_TOKEN` broadened to any path/method on staging
+(`hubTestWriteAllowed` confirmed default-deny); `HUB_PROD_RO_TOKEN` inverted from a ~12-path
+allow-list to an 8-path deny-list after reading every GET handler by hand. PR #55 merged by Brett
+("go with pr 54 and pr 55"), verified live on staging and production.
+
+## 🟢 Live: Property/Unit linking discoverability + duplicate-creation guard
+Full detail: `context/PROPERTY_UNIT_LINK_AND_DUPE_CHECK_BUILD_BRIEF_v1.0.md`,
+`FEATURE_LOG.md` ([FL-20260924-1900-pu]). QB Mapping now reachable from the Dev Log page and a
+per-owner 🔗 button on the Owners table; Add Property modal shows the owner's unlinked properties
+as a link-vs-create stopgap; new `findSimilarProperties`/`findSimilarUnits` duplicate check
+returns 409+`duplicate_of` on `/property/add`/`/unit/add`, frontend offers "Link to existing" /
+"Create anyway" (`force:true`). PR #57 merged by Brett ("MERGE PR 57").
+
+## 🟡 Note: Claude Projects / repo context reconciliation in progress
+The claude.ai "Continuous Improvement" Project had been keeping a parallel, partially-drifting
+copy of some of this repo's context (e.g. its own allow-list brief). This repo's `context/` +
+`brett332/data/business-context/` remains the authoritative system (predates Claude Projects, per
+Brett). Reconciliation across all ~30 Project docs is in progress — see `SESSION_STATE.md`'s Sep 24
+checkpoint for the concrete gaps found so far (stale `cabin-str.md`, stale
+`cleaning-vendor-push-RESUME.md`, a few project-only design docs never promoted to a build brief).
+
+---
+
 # Sep 24, 2026, ~16:00 ET — BUILT (branch pushed, PR pending): CAP-036 #17 Vendor active/inactive self-service UI; CAP-036 #18 (deactivate Emmanuel Tires + Brian Furr) BLOCKED — needs an interactive/PAT session
 
 **CAP-036 #17 — checked whether an Active/Inactive toggle already existed before building.**
