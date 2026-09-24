@@ -10048,21 +10048,25 @@ async function tenantManualUpdate(env, body) {
   const [workorders, units, tenants, properties, owners] = await fetchTabs(env, ['Work_Orders','Units','Tenants','Properties','Owners']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const unit = units.find(u => u.ID === wo.Unit_ID);
-  // Reuse the same canonical lookup assignVendor/updateStatus/scheduleWO already use — this
-  // used to be a simpler inline lookup here that missed whole-property (no-Unit) tenants;
-  // see the fix + comment on currentTenantForDispatch itself.
-  const tenant = currentTenantForDispatch(tenants, unit, wo);
-  if (!tenant || !tenant.Phone) return json({ error: 'No tenant with a phone number on this work order' }, 400);
-  // currentTenantForDispatch already confirmed this tenant is current (active, not moved out);
-  // isBackgroundWO catches the other case it doesn't cover — a WO opened before this tenant's
-  // own move-in (background work tied to whoever lived here before them).
-  if (isBackgroundWO(tenant, wo)) return json({ error: 'This WO predates the tenant\'s move-in — not notifiable' }, 400);
+  // CAP-036 #21: tenantsForDispatch returns EVERY active tenant linked to this unit (was
+  // currentTenantForDispatch, which only ever named one via Units.Tenant_ID's single pointer).
+  const woTenants = tenantsForDispatch(tenants, unit, wo).filter(t => t.Phone && !isBackgroundWO(t, wo));
+  if (!woTenants.length) return json({ error: 'No tenant with a phone number on this work order' }, 400);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-  const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
-  const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), r.sent ? 'Sent' : (r.send_ok ? 'Send failed' : 'Queued — gate: ' + r.gate_snapshot)); } catch(_){}
-  return json({ success: true, sent: r.sent, send_ok: r.send_ok, queued_id: r.queued_id, gate_snapshot: r.gate_snapshot });
+  // Same text goes to every tenant in the unit (each gets their own First_Name greeting) —
+  // one admin-typed update, everyone actually living there sees it, same as any other WO SMS.
+  let anySent = false, anySendOk = false, lastGate = '', firstQueuedId = '';
+  for (const tenant of woTenants) {
+    const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+    if (r.sent) anySent = true;
+    if (r.send_ok) anySendOk = true;
+    if (r.gate_snapshot) lastGate = r.gate_snapshot;
+    if (r.queued_id && !firstQueuedId) firstQueuedId = r.queued_id;
+  }
+  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), anySent ? 'Sent' : (anySendOk ? 'Send failed' : 'Queued — gate: ' + lastGate)); } catch(_){}
+  return json({ success: true, sent: anySent, send_ok: anySendOk, queued_id: firstQueuedId, gate_snapshot: lastGate, tenant_count: woTenants.length });
 }
 
 // -- Custom one-off message to a single tenant/owner/vendor (Sep 21 2026) --------------------
