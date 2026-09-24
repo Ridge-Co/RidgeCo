@@ -16074,6 +16074,38 @@ async function qbSetVendorInHouse(env, body) {
   return json({ success: true, id, in_house: on });
 }
 
+// POST /vendor/set-can-bill-no-wo { id, value } — Vendors page inline checkbox, exact same
+// pattern as qbSetVendorInHouse above (Vendor Standalone Billing build brief §2).
+async function vendorSetCanBillNoWO(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const on = body.value === true || String(body.value).toUpperCase() === 'TRUE';
+  await ensureColumns(env, 'Vendors', ['Can_Bill_No_WO']);
+  await updateRow(env, 'Vendors', id, { Can_Bill_No_WO: on ? 'TRUE' : 'FALSE' });
+  return json({ success: true, id, value: on });
+}
+
+// POST /vendor/set-can-create-own-wo { id, value } — same pattern, the "One-Off Job" flag.
+async function vendorSetCanCreateOwnWO(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const on = body.value === true || String(body.value).toUpperCase() === 'TRUE';
+  await ensureColumns(env, 'Vendors', ['Can_Create_Own_WO']);
+  await updateRow(env, 'Vendors', id, { Can_Create_Own_WO: on ? 'TRUE' : 'FALSE' });
+  return json({ success: true, id, value: on });
+}
+
+// POST /vendor/set-billing-property-access { id, property_ids:[...] } — the Edit Vendor
+// modal's property multi-select (mirrors the existing Trades checkbox-grid pattern).
+async function vendorSetBillingPropertyAccess(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const ids = Array.isArray(body.property_ids) ? body.property_ids.map(String) : [];
+  await ensureColumns(env, 'Vendors', ['Billing_Property_Access']);
+  await updateRow(env, 'Vendors', id, { Billing_Property_Access: ids.join(',') });
+  return json({ success: true, id, property_ids: ids });
+}
+
 // POST /qb/create-subcustomer { kind: 'property'|'unit', id }
 // Creates the sub-customer under its parent and stores the id. Only ever on request —
 // the same rule as customers: nothing appears in QuickBooks without Brett asking for it.
