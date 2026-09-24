@@ -1048,7 +1048,14 @@ function loadVendorBillSummary(woId, idx) {
         // by the photo gallery (rule 142).
         var fid = driveIdFromDriveUrl(r.url);
         var viewHref = fid ? internalFileUrl(woId, fid) : '';
-        return '<div>🧾 ' + esc(r.desc||'Receipt') + ': $' + parseFloat(r.amount||0).toFixed(2) + (viewHref ? ' <a href="'+esc(viewHref)+'" target="_blank" style="color:var(--info);font-size:10px">View</a>' : '') + '</div>';
+        // CAP-036 #11 (Sep 24 2026): same 💳 CARD / 💵 REIMBURSE coding badge Review Bills
+        // shows per receipt (renderReceiptsJsonBreakdown in index.html) — a vendor should see
+        // how a receipt will be coded before it's ever sent anywhere, not just Brett.
+        var onAccount = r.pay === 'account';
+        var payBadge = onAccount
+          ? '<span style="background:#e6f4ea;color:#1a7a3c;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">💳 CARD</span>'
+          : '<span style="background:#fff3cd;color:#8a6100;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">💵 REIMBURSE</span>';
+        return '<div>🧾 ' + esc(r.desc||'Receipt') + ': $' + parseFloat(r.amount||0).toFixed(2) + payBadge + (viewHref ? ' <a href="'+esc(viewHref)+'" target="_blank" style="color:var(--info);font-size:10px">View</a>' : '') + '</div>';
       }).join('');
       var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--muted)';
       return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:6px">' +
