@@ -3371,9 +3371,13 @@ function renderVendorsPage() {
   renderVendorsPendingSection();
   var el = document.getElementById('vendors-list');
   var onlyUnwelcomed = !!((document.getElementById('vendor-filter-unwelcomed')||{}).checked);
-  var vendors = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE' && String(v.Status||'').toLowerCase()!=='pending_review';});
-  if (onlyUnwelcomed) vendors = vendors.filter(function(v){ return v.Welcome_Sent !== 'TRUE'; });
-  if (!vendors.length) { el.innerHTML='<div class="loading">'+(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet')+'</div>'; return; }
+  var showInactive = !!((document.getElementById('vendor-filter-inactive')||{}).checked);
+  var vendors = safeArray(state.vendors).filter(function(v){
+    if (String(v.Status||'').toLowerCase()==='pending_review') return false;
+    return showInactive ? v.Active==='FALSE' : v.Active!=='FALSE';
+  });
+  if (!showInactive && onlyUnwelcomed) vendors = vendors.filter(function(v){ return v.Welcome_Sent !== 'TRUE'; });
+  if (!vendors.length) { el.innerHTML='<div class="loading">'+(showInactive?'No inactive vendors.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet'))+'</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
     '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th></th></tr></thead><tbody>' +
@@ -3381,12 +3385,13 @@ function renderVendorsPage() {
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
       var nm = v.Name || '';
+      var isInactive = v.Active==='FALSE';
       var welcomeBadge = v.Welcome_Sent === 'TRUE'
         ? '<span style="color:var(--accent2);font-size:11px" title="'+esc(v.Welcome_Sent_Date||'')+'">👋 sent'+(v.Welcome_Sent_Date?' '+esc(v.Welcome_Sent_Date.slice(0,10)):'')+'</span>'
         : '<span style="color:var(--muted);font-size:11px">— not yet</span>';
-      return '<tr>' +
+      return '<tr'+(isInactive?' style="opacity:.6"':'')+'>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+v.ID+'" data-type="vendor" data-name="'+nm+'" data-phone="'+(v.Phone||'')+'" onchange="updatePinActionBar(\'vendors-action-bar\')"></td>' +
-        '<td>'+nm+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
+        '<td>'+nm+(isInactive?' <span style="color:var(--danger);font-size:10px;font-weight:bold;border:1px solid var(--danger);border-radius:4px;padding:1px 4px">INACTIVE</span>':'')+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
         '<td>'+(v.Trades ? v.Trades.split(',').map(function(t){return '<span style="display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:10px;margin:1px">'+t.trim()+'</span>';}).join(' ') : (v.Trade||'—'))+'</td>' +
         '<td style="color:var(--muted)">'+(v.Hourly_Rate?'$'+esc(String(v.Hourly_Rate))+'/hr':'—')+'</td>' +
         '<td><a href="tel:'+v.Phone+'" style="color:var(--accent);text-decoration:none">'+(v.Phone||'—')+'</a></td>' +
@@ -3395,8 +3400,11 @@ function renderVendorsPage() {
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
-        '<td style="display:flex;gap:4px">' +
+        '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
+        (isInactive
+          ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',true)" title="Reactivate this vendor">Reactivate</button>'
+          : '<button class="btn small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',false)" title="Deactivate this vendor — hides them from assign/reassign pickers, keeps their history">Deactivate</button>') +
         '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
         '<button class="btn small secondary" style="font-size:10px" onclick="regenerateAndShowPIN(\'vendor\',\''+v.ID+'\',\''+nm+'\')" title="Regenerate PIN">🔄</button>' +
         (v.Phone?'<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')" title="Send Welcome">👋</button>':'') +
