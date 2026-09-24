@@ -185,6 +185,12 @@ secret gate at ≈38 (`if (!PUBLIC_PATHS.includes(path))`), then method +
 | POST /qb/send-invoice | qbSendInvoice | Push invoice+bill to QuickBooks (preview-first) | Work_Orders · W, Invoice_Review · W; Properties/Owners/Vendors/Vendor_Bills · R; QB API | secret | ≈2137 |
 | POST /ops-queue/scout-submit | opsQueueScoutSubmit | Insert Scout & Reuse-Radar findings as `Status:'proposed'` backlog rows (max 20/call); best-effort logs a summary to Ops_Review_Log | Ops_Build_Queue · W; Ops_Review_Log · W (best-effort) | secret, narrow (`SCOUT_QUEUE_TOKEN` via `X-Auth-Token` — not `WORKER_SECRET`) | new, PR #14 (unmerged) |
 | POST /admin/gemini-context-update | adminGeminiContextUpdate | Writes `{content}` into Config as the Gemini-Notebook snapshot that GET /gemini-context serves; called by the daily scheduled refresh | Config (`Gemini_Context_Snapshot` key) · W | secret, narrow (`HUB_PROD_WRITE_TOKEN`, part of `HUB_PROD_WRITE_PATHS`) | new, Sep 22 2026, PR #33 + gh-broker #7 |
+| POST /receipt-recon/import-statement | receiptReconImportStatement | Statement importer Phase 1 (bulk vendor statement — CSV rows parsed client-side, or a PDF/scan via file_id → new `statementExtract`); matches lines via new `statementLineMatch` against Receipts/Receipt_Recon_Queue, lands unmatched/possible lines in Receipt_Recon_Queue tagged `Entry_Source:'statement'` | Receipt_Recon_Queue · R/W, Receipts · R | secret | new, Sep 24 2026, STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0 |
+
+Note: the wider `/receipt-recon/*` endpoint family (scan/confirm/skip/bulk-action/etc.) predates
+this map's July 21 generation and was never fully backfilled — see doc-drift flag 4's sibling gap.
+Only the new Sep 24 route above and `/receipt-recon/scan` are indexed here; the rest are real, live
+endpoints (see worker.js's router around ≈726-749) not yet reflected in this table.
 
 Unmatched method/path → `json({error:'Not found'}, 404)` at ≈175.
 `PUBLIC_PATHS` (worker.js ≈37): `/sms-inbound`, `/qb/test`, `/qb/accounts`,
