@@ -2926,10 +2926,32 @@ function openTenantSafetyScreen() {
   var trade  = document.getElementById('wo-trade').value;
   if (!propId) { toast('Select a property','error'); return; }
   if (!trade)  { toast('Select a trade','error'); return; }
+  // CAP-036 #5 (Sep 24 2026): a whole-property WO (no Unit picked) on a property that actually
+  // HAS units is the "common area / whole building" case Brett doesn't want defaulted to
+  // texting tenants. A single-family property with zero Units rows isn't multi-unit at all —
+  // "whole property" there just means the one tenant, so that case keeps the old default.
+  var unitId = document.getElementById('wo-unit').value;
+  var propUnits = safeArray(state.units).filter(function(u){ return String(u.Property_ID) === String(propId) && u.Active !== 'FALSE'; });
+  var isWholeMultiUnit = !unitId && propUnits.length > 0;
   // Reset safety screen to defaults
   document.getElementById('safety-visible').checked = true;
-  document.getElementById('safety-notify-created').checked = true;
-  document.getElementById('safety-notify-updates').checked = true;
+  document.getElementById('safety-notify-created').checked = !isWholeMultiUnit;
+  document.getElementById('safety-notify-updates').checked = !isWholeMultiUnit;
+  var createdLabel = document.getElementById('safety-notify-created-label');
+  var createdSub   = document.getElementById('safety-notify-created-sub');
+  var updatesLabel = document.getElementById('safety-notify-updates-label');
+  var updatesSub   = document.getElementById('safety-notify-updates-sub');
+  if (isWholeMultiUnit) {
+    if (createdLabel) createdLabel.textContent = 'Notify all tenants in this property when created';
+    if (createdSub)   createdSub.textContent   = 'Whole-property job, no single unit — sends SMS to tenants with no unit on file. Off by default for common-area/building-wide work.';
+    if (updatesLabel) updatesLabel.textContent = 'Notify all tenants in this property on status updates';
+    if (updatesSub)   updatesSub.textContent   = 'Sends SMS to tenants with no unit on file when status changes to Complete etc.';
+  } else {
+    if (createdLabel) createdLabel.textContent = 'Notify tenant when created';
+    if (createdSub)   createdSub.textContent   = 'Sends SMS to tenant on creation';
+    if (updatesLabel) updatesLabel.textContent = 'Notify tenant on status updates';
+    if (updatesSub)   updatesSub.textContent   = 'Sends SMS when status changes to Complete etc.';
+  }
   if (typeof resetNewWOSafetyModal === 'function') resetNewWOSafetyModal();
   openModal('modal-tenant-safety');
 }
