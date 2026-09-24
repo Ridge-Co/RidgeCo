@@ -9347,16 +9347,25 @@ function renderIRCard(b, i) {
       (b.Invoice_File_URL ? ' — <a href="' + esc(b.Invoice_File_URL) + '" target="_blank" style="color:var(--info)">view file ↗</a>' : '') +
       '</div>' : '';
 
+  // Standalone bill (Vendor Standalone Billing build brief §5) — no Work_Orders row at all, so
+  // the lookup below never finds one. Resolve the address straight from Vendor_Bills.Property_ID
+  // instead of silently blanking the card (what used to happen here).
+  var isStandalone = String(b.Standalone||'').toUpperCase()==='TRUE';
+
   // Work order info from state. String-compare the property id — Sheets hands numeric-looking
   // ids back as strings inconsistently, and a strict === silently dropped the address.
-  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
-  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : null;
+  var wo = isStandalone ? null : safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  var standaloneProp = isStandalone ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(b.Property_ID); }) : null;
+  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : standaloneProp;
   var unitRow = wo ? safeArray(state.units).find(function(u) { return String(u.ID) === String(wo.Unit_ID); }) : null;
   var unitLabel = unitRow ? (unitRow.Unit_Label || '') : (wo ? (wo.Unit_Label || '') : '');
-  var addr = prop ? prop.Address : (wo ? (wo.Property_Address || wo.Property_ID || '—') : '—');
+  var addr = prop ? prop.Address : (wo ? (wo.Property_Address || wo.Property_ID || '—') : (isStandalone ? (b.Property_ID || '—') : '—'));
   if (addr && unitLabel) addr = addr + ' — Unit ' + unitLabel;
   var ownerRow = wo
-    ? '<div style="color:var(--muted);font-size:11px">Owner WO Ref: ' + esc(wo.Owner_WO_Ref || '—') + '</div>' : '';
+    ? '<div style="color:var(--muted);font-size:11px">Owner WO Ref: ' + esc(wo.Owner_WO_Ref || '—') + '</div>'
+    : (isStandalone
+      ? '<div style="margin-top:4px"><span style="background:#e8f0fb;border:1px solid var(--info);color:var(--info);border-radius:4px;padding:2px 7px;font-size:10px;font-weight:bold;letter-spacing:.04em">STANDALONE BILL — NO WO</span> <span style="color:var(--muted);font-size:11px;margin-left:6px">Bill-to: ' + esc(b.Bill_To==='ridgeco' ? "Ridge Co's own cost" : 'Property owner') + '</span></div>'
+      : '');
 
   // ── ALREADY HANDLED? ─────────────────────────────────────────
   // A bill only leaves this queue when its Vendor_Bills.Status flips to 'reviewed', which
