@@ -5544,8 +5544,9 @@ async function woCombine(env, body) {
     const unit = units.find(u => u.ID === survivorFresh.Unit_ID);
     const property = properties.find(p => p.ID === survivorFresh.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = currentTenantForDispatch(tenants, unit, survivorFresh);
-    if (isTenantNotifiable(tenant, survivorFresh) && survivorFresh.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (survivorFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, survivorFresh)) {
+      if (!isTenantNotifiable(tenant, survivorFresh)) continue;
       const idList = combinedIds.join(', ');
       const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
       await smsGatedSend(env, { wo_id: survivorId, message_type: 'tenant_wo_combined', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
