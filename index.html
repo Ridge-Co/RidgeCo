@@ -2067,6 +2067,7 @@ function openWODetail(woId) {
   var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:-24px -24px 14px;padding:12px 24px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<button class="btn small" onclick="openEditWOModal(\''+woId+'\')">✏️ Edit</button>' +
     '<button class="btn small secondary" onclick="sendTenantManualUpdate(\''+woId+'\')">📱 Send update</button>' +
+    '<button class="btn small secondary" onclick="sendPhotoRequestSMS(\''+woId+'\')" title="Canned text asking the tenant for photos of the issue">📸 Request photos</button>' +
     '<button class="btn small secondary" onclick="openWOMessageModal(\''+woId+'\')" title="Send a one-off message to the tenant, owner, or vendor on this job">✉️ Message</button>' +
     '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:var(--radius)">' +
     '<option value="">Status: '+(wo.Status||'—')+' ▾</option>' +
