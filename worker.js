@@ -19172,6 +19172,45 @@ async function deliveryAdd(env, body) {
   try { const aj = await add.json(); return json({ success: true, id: aj.id, wo_id: createdWO }); } catch (_) { return add; }
 }
 
+// POST /delivery/relay { id, message, preview_only? } — CAP-036 #6 (Sep 24 2026). Actually
+// sends the tenant relay via Twilio SMS + email instead of deliveries.html's old sms: URI
+// (which only ever opened the ADMIN's own phone app — nothing was sent through Ridge Co's
+// number, and there was no email at all). message is client-typed (deliveries.html still
+// builds the default text and lets Brett edit it before sending, same preview pattern as
+// sendTenantManualUpdate) — this endpoint just does the actual send + email.
+async function deliveryRelay(env, body) {
+  const id = String((body && body.id) || '').trim();
+  if (!id) return json({ error: 'id required' }, 400);
+  const message = String((body && body.message) || '').trim();
+  if (!message) return json({ error: 'message required' }, 400);
+  await ensureDeliveryTab(env);
+  const [dels, tenants] = await fetchTabs(env, ['Deliveries', 'Tenants']);
+  const d = dels.find(x => String(x.ID) === id);
+  if (!d) return json({ error: `No delivery ${id}` }, 404);
+  const tenant = d.Tenant_ID ? tenants.find(t => String(t.ID) === String(d.Tenant_ID)) : null;
+  // Same priority as deliveries.html's relayTarget(): tenant if that's who's meeting it and
+  // has a phone, else the manual backup contact, else fall back to the tenant's phone anyway.
+  let targetPhone = '', targetName = '';
+  if (d.Onsite_Contact === 'tenant' && tenant && tenant.Phone) { targetPhone = tenant.Phone; targetName = tenant.First_Name || 'tenant'; }
+  else if (d.Onsite_Contact_Phone) { targetPhone = d.Onsite_Contact_Phone; targetName = d.Backup_Contact || 'on-site contact'; }
+  else if (tenant && tenant.Phone) { targetPhone = tenant.Phone; targetName = tenant.First_Name || 'tenant'; }
+  const tenantEmail = tenant ? (tenant.Email || '') : '';
+  if (body.preview_only) return json({ preview: message, phone: targetPhone, name: targetName, email: tenantEmail });
+  if (!targetPhone) return json({ error: 'No phone number on file for the contact' }, 400);
+  const smsResult = await sendSMS(env, targetPhone, message);
+  const smsSent = !(smsResult && smsResult.error);
+  let emailSent = false;
+  if (tenantEmail) {
+    try {
+      const subject = 'Delivery update' + (d.Store ? (' — ' + d.Store) : '');
+      await gmailSendEmail(env, { to: tenantEmail, subject, html: '<p>' + message.replace(/\n/g, '<br>') + '</p>' });
+      emailSent = true;
+    } catch (e) { emailSent = false; }
+  }
+  try { await logSMS(env, (d.Linked_WO_IDs || '').split(',')[0] || '', 'delivery_relay', id, targetPhone, message); } catch (_) {}
+  return json({ success: true, sms_sent: smsSent, email_sent: emailSent, phone: targetPhone, email: tenantEmail });
+}
+
 // Monday-anchored week key (YYYY-MM-DD of that week's Monday). Date-only + UTC
 // noon so a Baltimore evening never rolls into the next day's bucket.
 function trashWeekKey(dateStr) {
