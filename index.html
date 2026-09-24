@@ -958,6 +958,40 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- VENDOR TASK REQUEST MODAL (CAP-036 #12, Sep 24 2026) — "Flag Vendor Issue". Opened from
+     either the WO detail view or the Review Bills card. Photos/Description are canned-message
+     buttons; Other requires a free-typed message. Always scoped to estimate or invoice. -->
+<div class="modal-overlay" id="modal-vendor-task-request">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">🚩 FLAG VENDOR ISSUE</div><button class="modal-close" onclick="closeModal('modal-vendor-task-request')">✕</button></div>
+    <div id="vtr-context" style="color:var(--muted);font-size:12px;margin-bottom:12px"></div>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>What do you need from the vendor?</label>
+        <select id="vtr-type" onchange="vtrOnTypeChange()">
+          <option value="photos">📷 Request Photos</option>
+          <option value="description">✎ Request Description Update / Clarification</option>
+          <option value="other">💬 Other (type your own)</option>
+        </select>
+      </div>
+      <div class="form-group full">
+        <label>Is this about their estimate or their invoice?</label>
+        <select id="vtr-scope">
+          <option value="estimate">Estimate</option>
+          <option value="invoice">Invoice</option>
+        </select>
+      </div>
+      <div class="form-group full" id="vtr-other-wrap" style="display:none">
+        <label>Message to the vendor</label>
+        <textarea id="vtr-other-msg" placeholder="What do you need from them?"></textarea>
+      </div>
+    </div>
+    <div style="color:var(--muted);font-size:11px;margin-top:2px">This sends the vendor a text and shows in a dedicated section of their portal. When they mark it done, it lands in your own "Needs Your Review" queue — it's never auto-resolved.</div>
+    <div id="vtr-error" style="color:#e55;font-size:12px;margin-top:8px;display:none"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-vendor-task-request')">Cancel</button><button class="btn" id="vtr-submit-btn" onclick="submitVendorTaskRequest()">Send Request</button></div>
+  </div>
+</div>
+
 <!-- ADD PROPERTY MODAL -->
 <div class="modal-overlay" id="modal-add-property">
   <div class="modal">
