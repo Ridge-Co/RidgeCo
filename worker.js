@@ -18994,6 +18994,17 @@ async function qbSendInvoice(env, body) {
     // ---- CONFIRM (writes to QuickBooks) ----
     if (!owner) return json({ ok: false, error: 'No owner on this property — cannot create a QB customer.', warnings });
     if (custTotal <= 0) return json({ ok: false, error: 'Customer_Total is 0 — nothing to invoice.', warnings });
+    // CAP-036 #14: soft block on the actual write — Brett's own framing ("I can be blocked by
+    // me"), so this refuses by default but never permanently: override_pending_info:true sends
+    // anyway. previewOnly already showed the warning above; this is the one place money
+    // actually moves, so it's the one place that's actually gated.
+    if (billPendingInfo && !body.override_pending_info) {
+      return json({
+        ok: false,
+        error: `This vendor bill is flagged "Invoiced — Pending Info"${billRow.Pending_Info_Note ? ': ' + billRow.Pending_Info_Note : ''}. Resolve it, or resend with override_pending_info to send anyway.`,
+        pending_info: true, pending_info_note: billRow.Pending_Info_Note || '', warnings,
+      }, 409);
+    }
 
     const token = await qbAccessToken(env);
     const errors = [];
