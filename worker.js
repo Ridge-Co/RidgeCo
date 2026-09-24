@@ -661,6 +661,7 @@ export default {
         if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
         if (path === '/vendor-bill/edit-receipts') return await editVendorBillReceipts(env, body);
+        if (path === '/vendor-bill/set-pending-info') return await setVendorBillPendingInfo(env, body);
         if (path === '/vendor-bill/move-to-new-wo') return await moveVendorBillToNewWO(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
         // Code (Aug 24, 2026): Master_Keys previously had only Name/Owner/Notes — no actual
