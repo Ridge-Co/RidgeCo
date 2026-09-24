@@ -247,6 +247,142 @@ async function scanNow(){
   } catch(e){ status.textContent = '❌ '+e.message; }
 }
 
+// ── Statement importer (Phase 1, Sep 24 2026) ───────────────────────────────────────────────────
+// CSV is parsed entirely client-side — the worker has no server-side CSV parser (confirmed live,
+// grepped worker.js) and this codebase's own convention (hubBulkImport) is "parse in the browser,
+// POST structured rows". Small, correct line parser: handles quoted fields containing commas and
+// escaped "" quotes, which a naive .split(',') would mangle.
+function stmtParseCsvLine(line){
+  const out = []; let cur = ''; let inQ = false;
+  for (let i = 0; i < line.length; i++){
+    const c = line[i];
+    if (inQ){
+      if (c === '"'){
+        if (line[i+1] === '"'){ cur += '"'; i++; } else { inQ = false; }
+      } else cur += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ','){ out.push(cur); cur = ''; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+function stmtParseCsv(text){
+  const lines = String(text||'').split(/\r\n|\r|\n/).filter(l => l.trim() !== '');
+  return lines.map(stmtParseCsvLine);
+}
+function stmtDetectColumns(headerRow){
+  const norm = headerRow.map(h => String(h||'').toLowerCase());
+  const find = (needles) => { for (let i=0;i<norm.length;i++){ for (const n of needles){ if (norm[i].indexOf(n) >= 0) return i; } } return -1; };
+  return {
+    date: find(['date']),
+    amount: find(['amount','total']),
+    description: find(['description','memo','desc']),
+    ref: find(['reference','ref','po','invoice']),
+  };
+}
+function stmtRowsFromCsv(rows){
+  if (!rows.length) return { cols: null, out: [] };
+  const cols = stmtDetectColumns(rows[0]);
+  const out = [];
+  for (let i = 1; i < rows.length; i++){
+    const r = rows[i];
+    const amtRaw = cols.amount >= 0 ? (r[cols.amount]||'') : '';
+    const amt = Number(String(amtRaw).replace(/[^0-9.\-]/g,''));
+    out.push({
+      date: cols.date >= 0 ? (r[cols.date]||'').slice(0,10) : '',
+      amount: isFinite(amt) ? Math.abs(amt) : null,
+      description: cols.description >= 0 ? (r[cols.description]||'') : '',
+      ref: cols.ref >= 0 ? (r[cols.ref]||'') : '',
+    });
+  }
+  return { cols, out };
+}
+if (typeof window !== 'undefined') window.stmtRowsFromCsv = stmtRowsFromCsv;
+
+let stmtCsvRows = null;
+function stmtCsvSelected(input){
+  const preview = document.getElementById('stmt-csv-preview');
+  const file = input.files && input.files[0];
+  if (!file){ stmtCsvRows = null; preview.textContent = ''; return; }
+  preview.textContent = 'Reading…';
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = stmtParseCsv(reader.result);
+      const { cols, out } = stmtRowsFromCsv(parsed);
+      const valid = out.filter(r => r.amount !== null && r.date);
+      stmtCsvRows = out;
+      const missing = [];
+      if (!cols || cols.date < 0) missing.push('date');
+      if (!cols || cols.amount < 0) missing.push('amount');
+      preview.innerHTML = esc(out.length + ' row(s) found, ' + valid.length + ' with a readable date+amount.')
+        + (missing.length ? ' <span class="warn">Could not auto-detect: ' + esc(missing.join(', ')) + ' — check the CSV header row.</span>' : '')
+        + '<br><button class="btn small" onclick="stmtSubmitCsv()">Import ' + out.length + ' row(s)</button>';
+    } catch(e){ preview.innerHTML = '<span class="err">❌ ' + esc(e.message) + '</span>'; }
+  };
+  reader.onerror = () => { preview.innerHTML = '<span class="err">❌ Could not read file.</span>'; };
+  reader.readAsText(file);
+}
+
+function stmtVendor(){ return document.getElementById('stmt-vendor').value.trim(); }
+
+async function stmtSubmitCsv(){
+  const statusEl = document.getElementById('stmt-status');
+  const vendor = stmtVendor();
+  if (!vendor){ statusEl.innerHTML = '<span class="err">Enter a vendor name first.</span>'; return; }
+  if (!stmtCsvRows || !stmtCsvRows.length){ statusEl.innerHTML = '<span class="err">No CSV rows to import.</span>'; return; }
+  await stmtRunImport({ vendor, rows: stmtCsvRows.slice(0, 500) }, stmtCsvRows.length > 500);
+}
+
+async function stmtPdfSelected(input){
+  const statusEl = document.getElementById('stmt-status');
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const vendor = stmtVendor();
+  if (!vendor){ statusEl.innerHTML = '<span class="err">Enter a vendor name first.</span>'; input.value=''; return; }
+  statusEl.innerHTML = '<span class="info">Uploading ' + esc(file.name) + '…</span>';
+  try {
+    const sess = await post('/create-upload-session', {
+      file_type: 'invoice', file_name: file.name, mime_type: file.type || 'application/octet-stream',
+      property: 'Statement Imports', origin: window.location.origin,
+    });
+    if (!sess.success || !sess.upload_url) throw new Error(sess.error || 'Could not start upload.');
+    const putRes = await fetch(sess.upload_url, { method:'PUT', headers:{'Content-Type': file.type||'application/octet-stream'}, body: file });
+    const fileData = await putRes.json().catch(() => null);
+    if (!fileData || !fileData.id) throw new Error('Upload did not complete.');
+    statusEl.innerHTML = '<span class="info">Uploaded — reading statement (this can take a bit for a long one)…</span>';
+    await stmtRunImport({ vendor, file_id: fileData.id, mime_type: file.type || 'application/octet-stream', source_file_name: file.name });
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ ' + esc(e.message) + '</span>'; }
+  input.value = '';
+}
+
+async function stmtRunImport(body, truncatedNote){
+  const statusEl = document.getElementById('stmt-status');
+  const resultEl = document.getElementById('stmt-result');
+  statusEl.innerHTML = '<span class="info">Importing…</span>';
+  try {
+    const res = await post('/receipt-recon/import-statement', body);
+    if (res.error) throw new Error(res.error);
+    const lines = [
+      res.total_lines + ' line(s) read' + (res.vendor_detected ? ' (statement says "' + esc(res.vendor_detected) + '")' : ''),
+      res.matched_confirmed + ' already accounted for (no action needed)',
+      res.inserted + ' landed in Pending' + (res.flagged_possible ? ' (' + res.flagged_possible + ' flagged ⚠️ possible match — check before billing)' : ''),
+      res.skipped_invalid ? res.skipped_invalid + ' skipped (no readable date/amount)' : '',
+    ].filter(Boolean);
+    let html = '<div class="ok">✅ ' + lines.join(' · ') + '</div>';
+    if (truncatedNote) html += '<div class="warn">Only the first 500 rows were sent — split the rest into another CSV import.</div>';
+    if (res.remaining > 0) html += '<div class="warn">' + res.remaining + ' more line(s) waiting — <button class="btn small" onclick="stmtRunImport(' + JSON.stringify(body).replace(/"/g,'&quot;') + ')">Import again</button></div>';
+    if (res.errors && res.errors.length) html += '<div class="err">' + res.errors.length + ' error(s): ' + esc(res.errors.slice(0,3).join('; ')) + '</div>';
+    resultEl.innerHTML = html;
+    statusEl.innerHTML = '';
+    toast('<b>' + esc(body.vendor) + ' statement</b> — ' + esc(lines.join(' · ')));
+    if (curStatus === 'pending') await loadQueue();
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ ' + esc(e.message) + '</span>'; }
+}
+
 function rebuildWoDatalist(){
   const dl = document.getElementById('wo-datalist');
   dl.innerHTML = allWOs.map(w => '<option value="'+esc(w.ID)+'">'+esc(w.ID+' — '+(w.Description||'').slice(0,60))+'</option>').join('');
