@@ -1301,7 +1301,7 @@ function loadVendorBillSummary(woId, idx) {
     if (!Array.isArray(bills) || !bills.length) {
       wrap.innerHTML = '';
       if (badge) badge.innerHTML = '';
-      if (btn) btn.textContent = '💰 Bill';
+      if (btn) btn.textContent = '💰 Submit Invoice';
       window._vendorBillCache = window._vendorBillCache || {};
       delete window._vendorBillCache[woId];
       return;
