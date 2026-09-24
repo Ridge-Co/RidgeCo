@@ -9717,6 +9717,31 @@ function irSkip(i) {
   if (card) { card.style.display = 'none'; }
 }
 
+// CAP-036 #14 — "Invoiced — Pending Info": flag/clear on a bill from Review Bills. Setting
+// it requires a note (what's missing); clearing does not. Reloads the whole queue after
+// either so the sort (flagged first) and the banner both stay accurate.
+function irFlagPendingInfo(i) {
+  var b = _irBills[i];
+  if (!b) return;
+  var note = prompt('What\'s needed before this can be paid? (e.g. "need photos", "need receipts", "description too vague")');
+  if (note === null) return;
+  note = note.trim();
+  if (!note) { toast('A note is required to flag pending info', 'error'); return; }
+  api('POST', '/vendor-bill/set-pending-info', { id: b.ID, pending_info: true, note: note, set_by: 'Brett' }).then(function(res) {
+    if (res && res.success) { toast('Flagged — needs info before paying', 'success'); loadInvoiceReview(); }
+    else toast('Could not flag: ' + (res && res.error || '?'), 'error');
+  }).catch(function(e) { toast('Error: ' + (e.message || '?'), 'error'); });
+}
+function irClearPendingInfo(i) {
+  var b = _irBills[i];
+  if (!b) return;
+  if (!confirm('Clear the Pending Info flag on this bill?')) return;
+  api('POST', '/vendor-bill/set-pending-info', { id: b.ID, pending_info: false, set_by: 'Brett' }).then(function(res) {
+    if (res && res.success) { toast('Cleared', 'success'); loadInvoiceReview(); }
+    else toast('Could not clear: ' + (res && res.error || '?'), 'error');
+  }).catch(function(e) { toast('Error: ' + (e.message || '?'), 'error'); });
+}
+
 // Fades + disables the Review Bills card for scope key k = 'ir<i>' once that bill is
 // approved (server-side Status is 'reviewed', so it's already gone from the underlying
 // queue — this just makes the screen agree immediately instead of waiting for a manual
