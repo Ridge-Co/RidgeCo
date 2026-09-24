@@ -120,18 +120,36 @@ property" if Brett wants no restriction here; **flagged as an open question belo
 description field, and nothing else — no vendor-assignment picker, since the vendor is always
 auto-assigned to themselves.
 
+**Mandatory "who authorized this" attestation (Brett's Sep 24 follow-up, applies to every
+`Can_Create_Own_WO` vendor, not just Alan).** The form cannot submit without a required
+`Approval_Source` choice, plus a note:
+- **Owner requested it** — the property owner asked for this directly.
+- **Brett requested it** — Brett called/texted and asked for it, before entering the WO himself.
+- **Other** — free-text required (Brett's own examples: the vendor noticed it needed doing and is
+  attaching photos for Brett to review after the fact; or an in-person conversation with no text
+  trail — the vendor just says so, e.g. "discussed in person 9/24, no text record").
+This is the *only* substitute for Brett originating the WO himself — a self-serve WO is never
+created with no stated reason. `Approval_Source` (`'owner'|'brett'|'other'`) and `Approval_Note`
+(text; required when `'other'`, optional but encouraged otherwise — e.g. "owner Jennifer called
+me directly 9/24") are stamped straight onto the new `Work_Orders` row and rendered prominently
+(not buried) on the WO card/detail wherever `Created_By_Vendor` shows, so Brett sees the
+justification in the same glance as the flag itself.
+
 ### 4b. Backend: `POST /workorder/self-serve` (new, thin wrapper around the existing
 `createWorkOrder`)
 - Calls the existing `createWorkOrder` internals with `Vendor_ID` forced to the calling vendor's
   own id (server-side, never trust a client-supplied vendor id — closes the same class of gap the
   Sep 16 tenant-submission hardening fixed for tenants).
-- New `Created_By_Vendor: 'TRUE'` column stamped on the WO so it's visibly flagged wherever WOs
-  render (a small badge in `renderWOPage`/`openWODetail`) — this is the mechanism for "goes to me
-  for approval": rather than a hard status gate that blocks the vendor from working, it's a
-  **visible flag Brett reviews**, consistent with how every vendor bill already requires his
-  explicit approval in Review Bills before money moves. **Open question below** on whether Brett
-  wants a harder gate instead (WO literally can't be acted on — status/scheduled/billed — until
-  he taps an "Approve" button).
+- Requires `Approval_Source` (+ `Approval_Note` when `Approval_Source==='other'`) in the request
+  body — 400 without it. Both are hardened server-side same as everything else here (never trust
+  a client to have honestly filled a required field client-side only).
+- New `Created_By_Vendor: 'TRUE'`, `Approval_Source`, `Approval_Note` columns stamped on the WO so
+  it's visibly flagged wherever WOs render (a small badge + the approval line in
+  `renderWOPage`/`openWODetail`) — this is the mechanism for "goes to me for approval": rather
+  than a hard status gate that blocks the vendor from working, it's a **visible flag + mandatory
+  justification Brett reviews**, consistent with how every vendor bill already requires his
+  explicit approval in Review Bills before money moves. (Resolves open question #1 below — no
+  hard gate; the attestation requirement is the safeguard.)
 - From there the WO is a completely normal WO: Alan assigns himself (already true), adds his own
   description, eventually submits his invoice through the **existing, unmodified**
   `/vendor-bill/add` (WO-anchored) path — same Review Bills queue, same QB pipeline, zero new
@@ -185,10 +203,10 @@ WO involvement (used by the Scope Proposal signing flow). Plan:
 
 ## 7. Open questions before this gets built
 
-1. **Hard gate vs. visible flag on self-serve WOs.** §4b proposes a badge Brett notices in the
-   normal WO list rather than a blocking status. If Brett wants vendor-created WOs to be
-   literally un-actionable (no status change, no bill) until he taps an explicit Approve, that's a
-   different (slightly larger) build — say so and this gets revised before the build starts.
+1. ~~**Hard gate vs. visible flag on self-serve WOs.**~~ **Resolved Sep 24** — no hard gate. Every
+   self-serve WO must carry a mandatory `Approval_Source` (owner / Brett / other-with-required-note)
+   attestation, shown prominently alongside the `Created_By_Vendor` flag (§4a/4b). This is the
+   safeguard in place of a blocking status.
 2. **Self-serve WO property scope.** Should a self-serve-WO vendor (Alan George) be limited to a
    property allow-list the same way `Billing_Property_Access` limits Sierra's billing, or can he
    create a WO at any active property? Landscaping-at-any-property vs. billing-at-one-property may
