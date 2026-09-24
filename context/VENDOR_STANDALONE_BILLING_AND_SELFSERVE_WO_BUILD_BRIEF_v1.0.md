@@ -18,14 +18,14 @@ from inside a WO's own detail view (`_billWOId` always set from `openBillModal(w
 needs a way to submit a bill with **no WO at all**, on her own schedule, and have it land in the
 same Review Bills queue Brett already works from.
 
-**B. Self-serve Work Order creation.** Separately, some vendors (Alan George doing landscaping) can
-be trusted to create their *own* Work Order when Brett calls them and says "go do X" before Brett
-has had time to enter it himself — vendor writes the description, is auto-assigned as themselves
-(never another vendor), submits it, and it flows into the **normal** WO → assign → bill →
-Review Bills pipeline unchanged. This is a different capability from (A): it still produces a real
-WO, it just lets the vendor originate it instead of Brett. Eddie Smith should **not** get this
-today (he communicates with Brett and Brett enters the WO), but might later if volume outpaces
-Brett's own data entry.
+**B. Self-serve Work Order creation ("One-Off Job").** Separately, some vendors (Alan George doing
+landscaping) can be trusted to create their *own* Work Order when Brett calls them and says "go do
+X" before Brett has had time to enter it himself — vendor writes the description, is auto-assigned
+as themselves (never another vendor), submits it, and it flows into the **normal** WO → assign →
+bill → Review Bills pipeline unchanged. This is a different capability from (A): it still produces
+a real WO, it just lets the vendor originate it instead of Brett. Eddie Smith should **not** get
+this today (he communicates with Brett and Brett enters the WO), but might later if volume
+outpaces Brett's own data entry.
 
 These are independent, per-vendor, opt-in permissions — not a single "trusted vendor" flag. Sierra
 gets (A) but likely not (B) (no evidence she creates her own jobs); Alan George gets (B) but not
@@ -43,8 +43,8 @@ onboarding columns:
 | Column | Type | Meaning |
 |---|---|---|
 | `Can_Bill_No_WO` | `'TRUE'/'FALSE'` | Sierra-style: can submit a standalone bill with no WO |
-| `Can_Create_Own_WO` | `'TRUE'/'FALSE'` | Alan-George-style: can create their own WO, auto-assigned to self |
-| `Billing_Property_Access` | comma-separated `Property_ID` list | Properties this vendor can bill against *without* asking (e.g. Sierra → `1864 Kerns School Rd`'s ID) |
+| `Can_Create_Own_WO` | `'TRUE'/'FALSE'` | Alan-George-style: can log their own "One-Off Job", auto-assigned to self |
+| `Billing_Property_Access` | comma-separated `Property_ID` list | Properties this vendor can bill against *without* asking (e.g. Sierra → `1864 Kerns School Rd`'s ID). **Only used by `Can_Bill_No_WO` — `Can_Create_Own_WO` is deliberately NOT property-restricted (§4a).** |
 
 Both booleans render as inline checkboxes in the Vendors table (copy `toggleVendorInHouse` →
 `toggleVendorCanBillNoWO(id,on)` / `toggleVendorCanCreateOwnWO(id,on)`, each its own narrow
@@ -54,17 +54,26 @@ picker in the Edit Vendor modal (reuses the existing Trades checkbox-grid patter
 free-text field.
 
 **Bulk action:** the Vendors page's existing bulk-checkbox selection gets two new bulk buttons —
-"Enable No-WO Billing for selected" / "Enable Self-Serve WO for selected" — so Brett can flip
+"Enable No-WO Billing for selected" / "Enable One-Off Job for selected" — so Brett can flip
 several vendors at once, per his ask.
 
 ## 3. Standalone billing flow (Sierra's case)
 
 ### 3a. Vendor portal entry point
-A **persistent "Submit Bill" button**, always visible in `vendor.html`'s main nav (not just inside
-a WO), shown only when `session.vendor.Can_Bill_No_WO === 'TRUE'` (vendor session/lookup needs to
-carry this flag — today `openBillModal` only receives `woId`/`vendorName`, so the vendor session
-payload gains `can_bill_no_wo`/`can_create_own_wo`/`billing_property_access` fields at login,
-same place `vendor-by-pin` already returns the vendor row).
+A **persistent "Submit a Bill" button on `vendor.html`'s main/home screen** (not tucked inside a
+menu, not inside a WO), shown only when `session.vendor.Can_Bill_No_WO === 'TRUE'` (vendor
+session/lookup needs to carry this flag — today `openBillModal` only receives `woId`/`vendorName`,
+so the vendor session payload gains `can_bill_no_wo`/`can_create_own_wo`/`billing_property_access`
+fields at login, same place `vendor-by-pin` already returns the vendor row).
+
+Because access here is already scoped by property (Brett controls the property list), the framing
+copy shown the first time — and available any time via a small "what is this?" link — stays light,
+just enough to make the distinction clear, not a warning:
+
+> **Submit a Bill** — Use this to bill for something you did that *isn't* tied to a specific Work
+> Order, like tenant treats or a small extra at one of your properties. If a Work Order already
+> exists for the job, submit your invoice from that Work Order instead — this is only for work
+> that never had one.
 
 ### 3b. The no-WO bill modal
 New `openStandaloneBillModal()`, separate from `_openBillModalReal` (which stays WO-anchored,
@@ -110,15 +119,31 @@ too, since Brett said she should act like any other vendor for actual work order
   line-item storage format needed.
 - Same duplicate-guard idea as today's dedup check, keyed on vendor+property+total+day.
 
-## 4. Self-serve WO flow (Alan George's case)
+## 4. Self-serve WO flow — "One-Off Job" (Alan George's case)
 
 ### 4a. Vendor portal entry point
-A second nav item, **"Create a Job"** (or similar), shown only when
-`session.vendor.Can_Create_Own_WO === 'TRUE'`. Opens a cut-down New-WO form: property picker
-(scoped the same way — his own `Billing_Property_Access`-style list, or simply "any active
-property" if Brett wants no restriction here; **flagged as an open question below**), a
-description field, and nothing else — no vendor-assignment picker, since the vendor is always
-auto-assigned to themselves.
+A button on `vendor.html`'s **main/home screen** — **"Log a One-Off Job"** — sitting outside the
+Work Orders list/nav entirely (own tile/button on the home screen), shown only when
+`session.vendor.Can_Create_Own_WO === 'TRUE'`. **Deliberately not property-restricted** (Brett:
+"it's going to be a one-off system") — the property picker offers any active property, no
+`Billing_Property_Access`-style allow-list here; that mechanism stays specific to §3's billing
+flow, which Brett does want scoped.
+
+Unlike Sierra's lighter framing, this one needs to actively discourage overuse — Brett's own
+words: it should never become "a substitute for regular work orders," and if a vendor is getting
+verbal jobs often enough to need this repeatedly, that's a signal to talk to Brett about setting
+up a recurring template or a different process, not to keep using this as the default. Copy shown
+every time the button/form opens (not just once):
+
+> **Log a One-Off Job** — Use this only when you're doing a job today that hasn't been entered as
+> a Work Order yet — like a quick call where Brett said "go do X." **This is not a substitute for
+> regular Work Orders**, and it shouldn't become your normal way of getting jobs. If you're getting
+> jobs verbally on a regular basis, talk to Brett — he can set up a recurring job or a different
+> process so this stays the exception, not the rule.
+
+Form itself, after that notice: property picker (any active property), description field, and the
+mandatory attestation below. No vendor-assignment picker — the vendor is always auto-assigned to
+themselves.
 
 **Mandatory "who authorized this" attestation (Brett's Sep 24 follow-up, applies to every
 `Can_Create_Own_WO` vendor, not just Alan).** The form cannot submit without a required
@@ -128,7 +153,7 @@ auto-assigned to themselves.
 - **Other** — free-text required (Brett's own examples: the vendor noticed it needed doing and is
   attaching photos for Brett to review after the fact; or an in-person conversation with no text
   trail — the vendor just says so, e.g. "discussed in person 9/24, no text record").
-This is the *only* substitute for Brett originating the WO himself — a self-serve WO is never
+This is the *only* substitute for Brett originating the WO himself — a One-Off Job is never
 created with no stated reason. `Approval_Source` (`'owner'|'brett'|'other'`) and `Approval_Note`
 (text; required when `'other'`, optional but encouraged otherwise — e.g. "owner Jennifer called
 me directly 9/24") are stamped straight onto the new `Work_Orders` row and rendered prominently
@@ -139,7 +164,8 @@ justification in the same glance as the flag itself.
 `createWorkOrder`)
 - Calls the existing `createWorkOrder` internals with `Vendor_ID` forced to the calling vendor's
   own id (server-side, never trust a client-supplied vendor id — closes the same class of gap the
-  Sep 16 tenant-submission hardening fixed for tenants).
+  Sep 16 tenant-submission hardening fixed for tenants). `Property_ID` accepted from any active
+  property — no allow-list check (per §4a, this flow is intentionally unrestricted by property).
 - Requires `Approval_Source` (+ `Approval_Note` when `Approval_Source==='other'`) in the request
   body — 400 without it. Both are hardened server-side same as everything else here (never trust
   a client to have honestly filled a required field client-side only).
@@ -148,8 +174,7 @@ justification in the same glance as the flag itself.
   `renderWOPage`/`openWODetail`) — this is the mechanism for "goes to me for approval": rather
   than a hard status gate that blocks the vendor from working, it's a **visible flag + mandatory
   justification Brett reviews**, consistent with how every vendor bill already requires his
-  explicit approval in Review Bills before money moves. (Resolves open question #1 below — no
-  hard gate; the attestation requirement is the safeguard.)
+  explicit approval in Review Bills before money moves.
 - From there the WO is a completely normal WO: Alan assigns himself (already true), adds his own
   description, eventually submits his invoice through the **existing, unmodified**
   `/vendor-bill/add` (WO-anchored) path — same Review Bills queue, same QB pipeline, zero new
@@ -203,21 +228,27 @@ WO involvement (used by the Scope Proposal signing flow). Plan:
 
 ## 7. Open questions before this gets built
 
-1. ~~**Hard gate vs. visible flag on self-serve WOs.**~~ **Resolved Sep 24** — no hard gate. Every
-   self-serve WO must carry a mandatory `Approval_Source` (owner / Brett / other-with-required-note)
-   attestation, shown prominently alongside the `Created_By_Vendor` flag (§4a/4b). This is the
-   safeguard in place of a blocking status.
-2. **Self-serve WO property scope.** Should a self-serve-WO vendor (Alan George) be limited to a
-   property allow-list the same way `Billing_Property_Access` limits Sierra's billing, or can he
-   create a WO at any active property? Landscaping-at-any-property vs. billing-at-one-property may
-   reasonably differ.
-3. **Access-request approval surface.** Proposed as a small new admin view + SMS link (§3b),
+All items previously open here are resolved as of Sep 24 2026:
+
+1. ~~Hard gate vs. visible flag on self-serve WOs.~~ **Resolved** — no hard gate. Every One-Off
+   Job must carry a mandatory `Approval_Source` (owner / Brett / other-with-required-note)
+   attestation, shown prominently alongside the `Created_By_Vendor` flag (§4a/4b).
+2. ~~Self-serve WO property scope.~~ **Resolved** — not property-restricted; any active property
+   (§4a/4b). `Billing_Property_Access` applies only to Sierra's billing flow (§3), which Brett does
+   want scoped by property.
+3. ~~Naming.~~ **Resolved** — the self-serve-WO feature is named **"One-Off Job"** ("Log a One-Off
+   Job" as the button), living outside the Work Orders list on the vendor portal's main/home
+   screen, with mandatory framing copy every time it opens (§4a). Sierra's flow is **"Submit a
+   Bill,"** also on the main/home screen, with lighter one-time framing copy (§3a). `Can_Bill_No_WO`
+   / `Can_Create_Own_WO` remain the internal column names — cosmetic, not worth renaming.
+
+**Remaining, genuinely still open:**
+
+4. **Access-request approval surface.** Proposed as a small new admin view + SMS link (§3b),
    consistent with existing approval-via-SMS-link patterns. If Brett would rather this just be a
    new row on an existing page (e.g. folded into Dev Log or a Vendors sub-tab) rather than a new
-   standalone view, say so.
-4. **Naming.** Working names used above: "Can_Bill_No_WO", "Can_Create_Own_WO", "Submit Bill",
-   "Create a Job", "Standalone bill". Cosmetic only — easy to change before or during the build.
+   standalone view, say so — otherwise this is the default the build will use.
 
-Once these are settled (or Brett says "your call" on any of them), this is ready to hand to a
-build session as a normal branch+PR per `AUTONOMY_GUARDRAILS_v1.0` (money/QuickBooks-adjacent →
-staged PR for Brett's own review, not auto-merged).
+Once #4 is settled (or Brett says "your call"), this is ready to hand to a build session as a
+normal branch+PR per `AUTONOMY_GUARDRAILS_v1.0` (money/QuickBooks-adjacent → staged PR for Brett's
+own review, not auto-merged).
