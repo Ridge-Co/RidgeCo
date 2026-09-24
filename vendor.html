@@ -405,6 +405,280 @@ function doLogout() {
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
 }
 
+// ══════════════════════════════════════════════════════════════
+// Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief)
+// ══════════════════════════════════════════════════════════════
+var _allProperties = null; // lazy-fetched once, shared by all three new pickers below
+function _loadAllPropertiesOnce() {
+  if (_allProperties) return Promise.resolve(_allProperties);
+  return api('/properties').then(function(rows) {
+    _allProperties = Array.isArray(rows) ? rows.filter(function(p){ return p && p.Active !== 'FALSE'; }) : [];
+    return _allProperties;
+  }).catch(function() { _allProperties = []; return _allProperties; });
+}
+function _billingPropertyIds() {
+  return String((session && session.billing_property_access) || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+}
+
+// ── Submit a Bill (standalone, no WO) — §3a/§3b ─────────────────────────────
+var _sbItemCount = 0;
+var _sbPay = {};
+var _sbUploadedPhotos = {};
+var _sbBillTo = 'owner';
+var _sbSubmitting = false;
+
+function openStandaloneBillModal() {
+  _sbItemCount = 0; _sbPay = {}; _sbUploadedPhotos = {}; _sbSubmitting = false;
+  document.getElementById('sb-items-list').innerHTML = '';
+  document.getElementById('sb-notes').value = '';
+  document.getElementById('sb-msg').innerHTML = '';
+  setStandaloneBillTo('owner');
+  addStandaloneItemRow();
+  var sel = document.getElementById('sb-property');
+  sel.innerHTML = '<option value="">Loading…</option>';
+  _loadAllPropertiesOnce().then(function(all) {
+    var ids = _billingPropertyIds();
+    var mine = all.filter(function(p) { return ids.indexOf(String(p.ID)) !== -1; });
+    sel.innerHTML = mine.length
+      ? mine.map(function(p) { return '<option value="' + p.ID + '">' + esc(p.Address || ('Property ' + p.ID)) + '</option>'; }).join('')
+      : '<option value="">No properties on your billing list yet — request access below</option>';
+  });
+  calcStandaloneBillTotal();
+  document.getElementById('modal-standalone-bill').style.display = 'flex';
+}
+function closeStandaloneBillModal() {
+  document.getElementById('modal-standalone-bill').style.display = 'none';
+  _sbSubmitting = false;
+  var btn = document.getElementById('sb-submit-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'SUBMIT BILL'; }
+}
+function setStandaloneBillTo(mode) {
+  _sbBillTo = mode;
+  var ownerBtn = document.getElementById('sb-billto-owner'), ridgecoBtn = document.getElementById('sb-billto-ridgeco');
+  var onOwner = mode === 'owner';
+  ownerBtn.style.border = '2px solid ' + (onOwner ? 'var(--accent)' : 'var(--border)');
+  ownerBtn.style.background = onOwner ? 'var(--accent)' : 'var(--surface2)';
+  ownerBtn.style.color = onOwner ? '#fff' : 'var(--muted)';
+  ridgecoBtn.style.border = '2px solid ' + (!onOwner ? 'var(--accent)' : 'var(--border)');
+  ridgecoBtn.style.background = !onOwner ? 'var(--accent)' : 'var(--surface2)';
+  ridgecoBtn.style.color = !onOwner ? '#fff' : 'var(--muted)';
+}
+function addStandaloneItemRow() {
+  _sbItemCount++;
+  var n = _sbItemCount;
+  _sbPay[n] = 'reimburse'; // default "I paid, reimburse me" — Sierra's usual case
+  var div = document.createElement('div');
+  div.id = 'sb-item-row-' + n;
+  div.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px';
+  div.innerHTML = '<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">' +
+    '<span style="color:var(--muted);font-size:16px">$</span>' +
+    '<input type="number" id="sb-amt-' + n + '" placeholder="0.00" min="0" step="0.01" oninput="calcStandaloneBillTotal()" style="width:100px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:7px;border-radius:6px">' +
+    '<input type="text" id="sb-desc-' + n + '" placeholder="What was this for? (e.g. tenant treats)" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:7px;border-radius:6px">' +
+    '<button onclick="removeStandaloneItemRow(' + n + ')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px">×</button>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+    '<button type="button" id="sb-photo-lbl-' + n + '" onclick="document.getElementById(\'sb-photo-input-' + n + '\').click()" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 10px;min-height:36px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--muted);display:flex;align-items:center;gap:6px">📷 Upload Receipt</button>' +
+    '<input type="file" id="sb-photo-input-' + n + '" accept="image/*,application/pdf" onchange="uploadStandalonePhoto(' + n + ',this)" style="display:none">' +
+    '<span id="sb-photo-status-' + n + '" style="font-size:11px;color:var(--muted)"></span>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text);font-weight:bold;margin-bottom:5px">💳 Who paid for this? — REQUIRED</div>' +
+    '<div style="display:flex;gap:6px">' +
+      '<button type="button" id="sb-pay-reimburse-' + n + '" onclick="setStandalonePay(' + n + ',\'reimburse\')" style="flex:1;padding:9px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid #8a6100;background:#fff3cd;color:#8a6100">💵 I paid, reimburse me ✓</button>' +
+      '<button type="button" id="sb-pay-account-' + n + '" onclick="setStandalonePay(' + n + ',\'account\')" style="flex:1;padding:9px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid var(--border);background:var(--surface);color:var(--muted)">💳 Charged to Brett\'s/company card</button>' +
+    '</div>';
+  document.getElementById('sb-items-list').appendChild(div);
+}
+function removeStandaloneItemRow(n) {
+  var row = document.getElementById('sb-item-row-' + n);
+  if (row) row.remove();
+  delete _sbUploadedPhotos[n];
+  calcStandaloneBillTotal();
+}
+function setStandalonePay(n, mode) {
+  _sbPay[n] = mode;
+  var rb = document.getElementById('sb-pay-reimburse-' + n), ab = document.getElementById('sb-pay-account-' + n);
+  if (!rb || !ab) return;
+  var onAccount = mode === 'account';
+  ab.style.border = '2px solid ' + (onAccount ? '#1a7a3c' : 'var(--border)');
+  ab.style.background = onAccount ? '#e6f4ea' : 'var(--surface)';
+  ab.style.color = onAccount ? '#1a7a3c' : 'var(--muted)';
+  ab.innerHTML = '💳 Charged to Brett\'s/company card' + (onAccount ? ' ✓' : '');
+  rb.style.border = '2px solid ' + (!onAccount ? '#8a6100' : 'var(--border)');
+  rb.style.background = !onAccount ? '#fff3cd' : 'var(--surface)';
+  rb.style.color = !onAccount ? '#8a6100' : 'var(--muted)';
+  rb.innerHTML = '💵 I paid, reimburse me' + (!onAccount ? ' ✓' : '');
+}
+function uploadStandalonePhoto(n, input) {
+  var file = input.files[0]; if (!file) return;
+  var statusEl = document.getElementById('sb-photo-status-' + n);
+  var lblEl = document.getElementById('sb-photo-lbl-' + n);
+  statusEl.textContent = 'Uploading…'; statusEl.style.color = 'var(--muted)';
+  var fd = new FormData();
+  fd.append('file', file); fd.append('file_type', 'receipt');
+  fetch(WORKER + '/upload-photo', { method: 'POST', headers: { 'X-Auth-Token': SECRET }, body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (res.url) {
+        _sbUploadedPhotos[n] = res.url;
+        statusEl.textContent = '✓ Uploaded'; statusEl.style.color = 'var(--accent2)';
+        lblEl.style.borderColor = 'var(--accent2)'; lblEl.style.color = 'var(--accent2)';
+      } else { statusEl.textContent = '⚠ Upload failed'; statusEl.style.color = 'var(--danger)'; }
+    }).catch(function() { statusEl.textContent = '⚠ Error'; statusEl.style.color = 'var(--danger)'; });
+}
+function calcStandaloneBillTotal() {
+  var total = 0;
+  for (var i = 1; i <= _sbItemCount; i++) {
+    var el = document.getElementById('sb-amt-' + i);
+    if (el) total += parseFloat(el.value) || 0;
+  }
+  var out = document.getElementById('sb-grand-total');
+  if (out) out.textContent = '$' + total.toFixed(2);
+  return total;
+}
+function submitStandaloneBill() {
+  if (_sbSubmitting) return;
+  var msgEl = document.getElementById('sb-msg');
+  var propertyId = document.getElementById('sb-property').value;
+  if (!propertyId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
+  var items = [];
+  for (var i = 1; i <= _sbItemCount; i++) {
+    var amtEl = document.getElementById('sb-amt-' + i);
+    if (!amtEl) continue;
+    var amt = parseFloat(amtEl.value) || 0;
+    var desc = (document.getElementById('sb-desc-' + i) || {}).value || '';
+    if (amt > 0) items.push({ amount: amt, description: desc, url: _sbUploadedPhotos[i] || '', pay: (_sbPay[i] === 'account' ? 'account' : 'reimburse') });
+  }
+  if (!items.length) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Enter at least one line item.</div>'; return; }
+  msgEl.innerHTML = '';
+  _sbSubmitting = true;
+  var btn = document.getElementById('sb-submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  api('POST', '/vendor-bill/add-standalone', {
+    vendor_id: session.vendor_id, property_id: propertyId, bill_to: _sbBillTo,
+    line_items: items, notes: document.getElementById('sb-notes').value,
+  }).then(function(res) {
+    if (res && (res.id || res.success)) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#eaf6ee;border-radius:6px">✓ Bill submitted!</div>';
+      btn.textContent = '✓ SUBMITTED';
+      setTimeout(function() { closeStandaloneBillModal(); }, 1600);
+    } else {
+      _sbSubmitting = false; btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error submitting') + '</div>';
+    }
+  }).catch(function(e) {
+    _sbSubmitting = false; btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>';
+  });
+}
+
+// ── Request access to another property (§3b/§3d) ────────────────────────────
+function openRequestPropertyAccessModal() {
+  var sel = document.getElementById('rpa-property');
+  sel.innerHTML = '<option value="">Loading…</option>';
+  document.getElementById('rpa-note').value = '';
+  document.getElementById('rpa-msg').innerHTML = '';
+  _loadAllPropertiesOnce().then(function(all) {
+    var ids = _billingPropertyIds();
+    var notMine = all.filter(function(p) { return ids.indexOf(String(p.ID)) === -1; });
+    sel.innerHTML = notMine.map(function(p) { return '<option value="' + p.ID + '">' + esc(p.Address || ('Property ' + p.ID)) + '</option>'; }).join('') ||
+      '<option value="">No other properties found</option>';
+  });
+  document.getElementById('modal-request-property-access').style.display = 'flex';
+}
+function closeRequestPropertyAccessModal() {
+  document.getElementById('modal-request-property-access').style.display = 'none';
+}
+function submitRequestPropertyAccess() {
+  var propertyId = document.getElementById('rpa-property').value;
+  var msgEl = document.getElementById('rpa-msg');
+  if (!propertyId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
+  var btn = document.getElementById('rpa-submit-btn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  api('POST', '/vendor/request-property-access', {
+    vendor_id: session.vendor_id, property_id: propertyId, note: document.getElementById('rpa-note').value,
+  }).then(function(res) {
+    btn.disabled = false; btn.textContent = 'Send Request';
+    if (res && (res.success || res.id)) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:12px">✓ Request sent — Brett has been notified.</div>';
+      setTimeout(function() { closeRequestPropertyAccessModal(); }, 1600);
+    } else {
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error sending request') + '</div>';
+    }
+  }).catch(function() { btn.disabled = false; btn.textContent = 'Send Request'; msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>'; });
+}
+
+// ── Log a One-Off Job (self-serve WO) — §4a/§4b ─────────────────────────────
+var _ooApprovalSource = '';
+var _ooSubmitting = false;
+function openOneOffJobModal() {
+  _ooApprovalSource = ''; _ooSubmitting = false;
+  document.getElementById('oo-description').value = '';
+  document.getElementById('oo-approval-note').value = '';
+  document.getElementById('oo-note-required-lbl').style.display = 'none';
+  document.getElementById('oo-msg').innerHTML = '';
+  ['owner', 'brett', 'other'].forEach(function(s) {
+    var b = document.getElementById('oo-src-' + s);
+    if (b) { b.style.border = '2px solid var(--border)'; b.style.background = 'var(--surface2)'; }
+  });
+  var sel = document.getElementById('oo-property');
+  sel.innerHTML = '<option value="">Loading…</option>';
+  // Deliberately NOT restricted to Billing_Property_Access (§4a) — any active property.
+  _loadAllPropertiesOnce().then(function(all) {
+    sel.innerHTML = all.map(function(p) { return '<option value="' + p.ID + '">' + esc(p.Address || ('Property ' + p.ID)) + '</option>'; }).join('') ||
+      '<option value="">No properties found</option>';
+  });
+  document.getElementById('modal-one-off-job').style.display = 'flex';
+}
+function closeOneOffJobModal() {
+  document.getElementById('modal-one-off-job').style.display = 'none';
+  _ooSubmitting = false;
+  var btn = document.getElementById('oo-submit-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'LOG JOB'; }
+}
+function setOneOffApprovalSource(source) {
+  _ooApprovalSource = source;
+  ['owner', 'brett', 'other'].forEach(function(s) {
+    var b = document.getElementById('oo-src-' + s);
+    if (!b) return;
+    var on = s === source;
+    b.style.border = '2px solid ' + (on ? 'var(--accent)' : 'var(--border)');
+    b.style.background = on ? 'var(--accent)' : 'var(--surface2)';
+    b.style.color = on ? '#fff' : 'var(--text)';
+  });
+  document.getElementById('oo-note-required-lbl').style.display = source === 'other' ? '' : 'none';
+}
+function submitOneOffJob() {
+  if (_ooSubmitting) return;
+  var msgEl = document.getElementById('oo-msg');
+  var propertyId = document.getElementById('oo-property').value;
+  var description = document.getElementById('oo-description').value.trim();
+  var note = document.getElementById('oo-approval-note').value.trim();
+  if (!propertyId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
+  if (!description) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Describe what needs doing.</div>'; return; }
+  if (!_ooApprovalSource) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select who authorized this.</div>'; return; }
+  if (_ooApprovalSource === 'other' && !note) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">A note is required for "Other".</div>'; return; }
+  msgEl.innerHTML = '';
+  _ooSubmitting = true;
+  var btn = document.getElementById('oo-submit-btn');
+  btn.disabled = true; btn.textContent = 'Logging…';
+  api('POST', '/workorder/self-serve', {
+    vendor_id: session.vendor_id, property_id: propertyId, description: description,
+    approval_source: _ooApprovalSource, approval_note: note,
+  }).then(function(res) {
+    if (res && (res.id || res.success)) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#eaf6ee;border-radius:6px">✓ Job logged' + (res.id ? ' — ' + esc(res.id) : '') + '!</div>';
+      btn.textContent = '✓ LOGGED';
+      setTimeout(function() { closeOneOffJobModal(); loadWorkOrders(); }, 1600);
+    } else {
+      _ooSubmitting = false; btn.disabled = false; btn.textContent = 'LOG JOB';
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error logging job') + '</div>';
+    }
+  }).catch(function() {
+    _ooSubmitting = false; btn.disabled = false; btn.textContent = 'LOG JOB';
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>';
+  });
+}
+
 // Restore a persisted session so a reload / auto-refresh keeps the vendor logged in.
 // Sep 22 2026 fix: this used to run immediately as an IIFE, inline in this early <script>
 // block -- but onLoginSuccess() calls applyTranslations(), which isn't defined until a LATER
