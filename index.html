@@ -11320,6 +11320,16 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
      to a work order (WO detail's "✉️ Message" button pre-fills the recipient from the job and
      logs the exchange to that WO's audit trail). Reuses the same smsGatedSend/queue/opt-out
      pipeline as every other outbound text in the Hub — nothing new to gate or audit separately. -->
+<!-- PICK MESSAGE RECIPIENT MODAL — button-select replacement for the old "type 1/2/3" prompt
+     (CAP-036 #2, Sep 24 2026). Only shown when a WO has more than one of tenant/owner/vendor
+     on file; _pickSendMessageRecipient() fills #pick-recipient-list with one button per option. -->
+<div class="modal-overlay" id="modal-pick-recipient">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header"><div class="modal-title">MESSAGE WHO?</div><button class="modal-close" onclick="closeModal('modal-pick-recipient')">✕</button></div>
+    <div id="pick-recipient-list" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-send-message">
   <div class="modal" style="max-width:480px">
     <div class="modal-title">✉️ SEND MESSAGE</div>
