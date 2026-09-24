@@ -7862,7 +7862,10 @@ function invBillThisJob(k) {
       // second bill on the same job can't pick them up again in the same sitting.
       invRefreshMaterialsForWO(_invWO[k] || k);
       if (inWOModal) closeModal('modal-wo-detail');
-      previewQBSend(res.id);            // preview creates nothing; you confirm in the modal
+      previewQBSend(res.id, true);      // preview creates nothing; you confirm in the modal.
+                                         // true: THIS call just approved the bill, so Cancel
+                                         // below must undo that approval too, or it's not a
+                                         // real Cancel — see cancelQBSend() (CAP-036 #15).
     } else {
       // Approved, but no usable row id came back — fall back to resolving it by work order.
       if (msg) msg.innerHTML = '<span style="color:var(--accent2)">✓ Approved at $' + charge.toFixed(2) + '.</span>';
