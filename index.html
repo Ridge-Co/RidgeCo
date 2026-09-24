@@ -9442,7 +9442,23 @@ function renderIRCard(b, i) {
       '</div>';
   }
 
+  // CAP-036 #14 — "Invoiced — Pending Info": Brett needs something more (photos, receipts, a
+  // better description) before this bill can be paid. Deliberately a flag on top of Status
+  // (Status stays 'submitted'/'reviewed'), so this banner can appear alongside anything else
+  // on the card. Loudest banner on the card by design — this is exactly what's supposed to
+  // hold the bill back from Send to QuickBooks (soft block, overridable — see qbSendInvoice).
+  var pendingInfo = String(b.Pending_Info || '').toUpperCase() === 'TRUE';
+  var pendingInfoHtml = pendingInfo
+    ? '<div style="background:#f9e4e4;border:1px solid var(--danger);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#7a1418;line-height:1.55">' +
+        '<div style="font-weight:bold;margin-bottom:2px">⏳ INVOICED — PENDING INFO' + (b.Pending_Info_Set_By ? ' (flagged by ' + esc(b.Pending_Info_Set_By) + ')' : '') + '</div>' +
+        '<div>' + esc(b.Pending_Info_Note || 'Needs something before this can be paid.') + '</div>' +
+        '<button onclick="irClearPendingInfo(' + i + ')" style="margin-top:8px;background:#fff;border:1px solid var(--danger);color:var(--danger);border-radius:6px;font-family:var(--font);font-size:11px;font-weight:bold;padding:6px 10px;cursor:pointer">✓ Info received — clear flag</button>' +
+      '</div>'
+    : '';
+
   return '<div id="ir-card-'+i+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">' +
+
+    pendingInfoHtml +
 
     // Header
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:10px">' +
