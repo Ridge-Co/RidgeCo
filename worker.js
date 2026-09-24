@@ -18833,6 +18833,10 @@ async function qbSendInvoice(env, body) {
     if (!owner) warnings.push('No owner found for this property — set the property owner before sending.');
     const billToNote = qbBillToNote(billTo, prop, unit);
     if (billToNote) warnings.push(billToNote);
+    // CAP-036 #14: "Invoiced — Pending Info" — surfaced as a warning in every preview; the
+    // real write is gated below (near CONFIRM) unless explicitly overridden.
+    const billPendingInfo = String(billRow.Pending_Info || '').toUpperCase() === 'TRUE';
+    if (billPendingInfo) warnings.push(`⏳ This vendor bill is flagged "Invoiced — Pending Info"${billRow.Pending_Info_Note ? ': ' + billRow.Pending_Info_Note : ''} — resolve it before sending, or override deliberately.`);
 
     // B-227 Phase 3: if other approved-but-not-yet-invoiced bills share this WO, combine
     // them into ONE customer invoice (still one QB Bill per vendor) instead of the old
