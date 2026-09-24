@@ -654,6 +654,15 @@ window.addEventListener('pageshow', function(e){
   </div>
 
   <div class="page" id="page-devlog">
+    <!-- VENDOR TASK REQUESTS -- NEEDS YOUR REVIEW (CAP-036 #12, Sep 24 2026). A vendor marking
+         a Flag-Vendor-Issue request "done" from their portal does NOT resolve it -- it lands
+         here until Brett does his own manual check and clicks Reviewed. -->
+    <div id="vtr-review-wrap" style="margin-bottom:22px">
+      <div class="section-title" style="margin-bottom:6px">🚩 VENDOR TASK REQUESTS — NEEDS YOUR REVIEW</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">A vendor marked these done from their portal. Nothing here is auto-resolved -- give each one a quick look, then mark it reviewed.</div>
+      <div id="vtr-review-list"><div style="font-size:12px;color:var(--muted)">Loading...</div></div>
+    </div>
+
     <!-- TOOLS — grouped so this page stays navigable as tools grow (FEATURE_LOG rule 57, extended
          Aug 10: one TOOLS area, sub-grouped by purpose). Launcher buttons window.open a standalone
          page which inherits the Hub admin token (mh_auth, same origin) so it opens already logged in;
