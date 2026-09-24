@@ -4209,6 +4209,52 @@ function scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal) {
 // the deposit booking (scopeProposalBook) and the final-balance booking (scopeProposalBookFinal,
 // Sep 2 2026) so the two halves of a job can never resolve to a different customer/vendor/trade
 // due to duplicated logic drifting apart.
+// ── Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief) ───────────
+// PURE helpers — no I/O, unit-tested by test/vendor-standalone-billing-selfserve.test.mjs.
+
+// §4a/4b: a One-Off Job (self-serve WO) can never be created with no stated reason. 'other'
+// requires a real note; 'owner'/'brett' accept one but don't require it.
+function validateApprovalSource(source, note) {
+  const s = String(source || '').trim().toLowerCase();
+  if (!['owner', 'brett', 'other'].includes(s)) {
+    return { ok: false, error: 'Approval_Source must be owner, brett, or other' };
+  }
+  if (s === 'other' && !String(note || '').trim()) {
+    return { ok: false, error: 'Approval_Note is required when Approval_Source is "other"' };
+  }
+  return { ok: true, source: s, note: String(note || '').trim() };
+}
+
+// §3c: never trust the client — a standalone bill may only target a property the vendor's
+// own Billing_Property_Access allow-list already carries (or that an approved access-request
+// has since appended to it — see vendorAccessRequestApprove).
+function vendorHasBillingPropertyAccess(vendor, propertyId) {
+  const list = String((vendor && vendor.Billing_Property_Access) || '').split(',').map(s => s.trim()).filter(Boolean);
+  return list.includes(String(propertyId || '').trim());
+}
+
+// §3c: same Total/Receipts_Total/Receipts_Reimburse_Total shape addVendorBill's normal
+// hourly/flat + receipts flow already produces (and Review Bills' irCalc() already reads) —
+// Total is what's actually owed TO THE VENDOR (excludes items paid on Ridge Co's own card),
+// Receipts_Total is the full billable amount (both pay modes) that reaches the customer
+// invoice via buildInvoiceLines. Keeping this identical to the existing formula means no
+// downstream code (irCalc, buildInvoiceLines) needs to know a bill is standalone at all.
+function computeStandaloneBillTotals(lineItems) {
+  const items = Array.isArray(lineItems) ? lineItems : [];
+  let receiptsTotal = 0, reimburseTotal = 0;
+  for (const it of items) {
+    const amt = +(Number(it && it.amount) || 0);
+    if (amt <= 0) continue;
+    receiptsTotal += amt;
+    if (!it || it.pay !== 'account') reimburseTotal += amt;
+  }
+  return {
+    receipts_total: +receiptsTotal.toFixed(2),
+    receipts_reimburse_total: +reimburseTotal.toFixed(2),
+    total: +reimburseTotal.toFixed(2),
+  };
+}
+
 async function scopeSigResolveParties(env, s, row) {
   let selections = {}; try { selections = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
   const items = scopeParseItems(s);
