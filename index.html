@@ -4520,6 +4520,45 @@ var WL_STATUSES=[
   {key:'Not applicable',label:'✗ N-A',       border:'var(--muted)',   badge:'var(--muted)'}
 ];
 function wlStatusOf(item){ var s=(item.Status||'').trim(); return s||'Active'; }
+// Vendor Task Requests -- admin "needs your review" queue (CAP-036 #12)
+function loadVendorTaskReviewQueue() {
+  var el = document.getElementById('vtr-review-list');
+  if (!el) return;
+  api('GET', '/vendor-task-requests/pending-review').then(function(rows) {
+    renderVendorTaskReviewQueue(rows || []);
+  }).catch(function(e) { el.innerHTML = '<div style="color:#e55;font-size:12px">Failed to load: ' + esc(e.message || '') + '</div>'; });
+}
+function renderVendorTaskReviewQueue(rows) {
+  var el = document.getElementById('vtr-review-list');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = '<div style="font-size:12px;color:var(--muted)">Nothing waiting on your review.</div>'; return; }
+  el.innerHTML = rows.map(function(r) {
+    var wo = safeArray(state.workorders).find(function(w){ return w.ID === r.WO_ID; });
+    var vendor = safeArray(state.vendors).find(function(v){ return String(v.ID) === String(r.Vendor_ID); });
+    var addr = wo ? (safeArray(state.properties).find(function(p){return String(p.ID)===String(wo.Property_ID);})||{}).Address : '';
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">' +
+        '<div><a href="javascript:void(0)" onclick="openWODetail(\''+esc(r.WO_ID)+'\')" style="color:var(--info);font-weight:bold;font-size:13px">' + esc(r.WO_ID) + '</a>' +
+        (addr ? ' <span style="color:var(--muted);font-size:11px">-- ' + esc(addr) + '</span>' : '') + '</div>' +
+        '<div style="color:var(--muted);font-size:11px">' + esc((vendor && (vendor.Name || vendor.First_Name)) || r.Vendor_ID) + '</div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text);margin-bottom:4px"><b>' + esc(r.Request_Type||'') + '</b> (' + esc(r.Scope||'') + ')</div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;white-space:pre-wrap">' + esc(r.Message||'') + '</div>' +
+      '<div style="font-size:10.5px;color:var(--muted);margin-bottom:8px">Vendor marked done: ' + esc((r.Vendor_Marked_Done_Date||'').split('T')[0]||'—') + '</div>' +
+      '<button class="btn btn-sm" onclick="markVendorTaskReviewed(\''+esc(r.ID)+'\')" id="vtr-review-btn-'+esc(r.ID)+'">Mark Reviewed</button>' +
+    '</div>';
+  }).join('');
+}
+function markVendorTaskReviewed(id) {
+  var btn = document.getElementById('vtr-review-btn-' + id);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  api('POST', '/vendor-task-request/mark-reviewed', { id: id }).then(function(res) {
+    if (res.error) { toast(res.error, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Mark Reviewed'; } return; }
+    toast('Marked reviewed', 'success');
+    loadVendorTaskReviewQueue();
+  }).catch(function(e) { toast('Error: ' + (e.message || 'unknown'), 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Mark Reviewed'; } });
+}
+
 function loadWishlist(){
   api('GET','/wishlist').then(function(items){
     wishlistItems=Array.isArray(items)?items.filter(function(i){return i.Active!=='FALSE';}):[]; renderWishlist();
