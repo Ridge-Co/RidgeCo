@@ -18857,6 +18857,7 @@ async function qbSendInvoice(env, body) {
       return await qbSendCombinedInvoice(env, {
         groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName,
         warnings, previewOnly, batch: body.batch, timeEntries: woTimeEntries,
+        overridePendingInfo: !!body.override_pending_info,
       });
     }
 
