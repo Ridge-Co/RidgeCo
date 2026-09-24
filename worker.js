@@ -18891,6 +18891,20 @@ async function qbSendInvoice(env, body) {
       try { vendorId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token); }
       catch (e) { errors.push('Vendor: ' + e.message); }
       if (vendorId) {
+        // Loan-ledger deduction (CAP-036 #13) — sized here (read-only) so the bill posts at
+        // the already-reduced amount; the ledger itself is only WRITTEN below once billId
+        // comes back real (see computeVendorLoanAdjustment's comment for why: a failed bill
+        // POST that gets retried must not deduct twice). General on purpose — any vendor with
+        // a nonzero balance gets this, not just Alex.
+        let loanAdj = { deduction: 0, laborAmount: 0, balance: 0 };
+        try {
+          loanAdj = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost, billRow });
+          if (loanAdj.deduction > 0) {
+            vendorCost = +(vendorCost - loanAdj.deduction).toFixed(2);
+            billPayload.Line[0].Amount = +vendorCost.toFixed(2);
+            billPayload.Line[0].Description = (billPayload.Line[0].Description + ` (Loan repayment: $${loanAdj.deduction.toFixed(2)})`).slice(0, 4000);
+          }
+        } catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
         billPayload.VendorRef = { value: vendorId };
         // Terms, so the bill reads "Due on receipt" rather than showing a blank term
         // alongside a same-day due date.
@@ -18911,8 +18925,29 @@ async function qbSendInvoice(env, body) {
           r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
           billId = (r && r.Bill && r.Bill.Id) || '';
         }
-        if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
-        else billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+        if (!billId) {
+          errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+          // Bill never posted — undo the in-memory reduction so a later retry (once the real
+          // problem is fixed) sizes the bill against the UN-deducted amount and this same
+          // loan adjustment gets computed (and recorded) fresh next time, not skipped.
+          if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
+        } else {
+          billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (loanAdj.deduction > 0) {
+            try {
+              const newBalance = await recordVendorLoanDeduction(env, {
+                vendorId: vendor.ID, vendorName: vendDisplay, deduction: loanAdj.deduction,
+                laborAmount: loanAdj.laborAmount, billId: ir.Bill_ID, woId: ir.WO_ID,
+              });
+              warnings.push(`Loan repayment: $${loanAdj.deduction.toFixed(2)} deducted from ${vendDisplay}'s payment (balance now $${newBalance.toFixed(2)}).`);
+            } catch (e) {
+              // The bill already posted at the reduced amount — the money-correct side is
+              // done. Only the ledger ROW failed to write; say so plainly rather than losing
+              // track of a deduction that already happened.
+              warnings.push(`⚠ Bill posted with a $${loanAdj.deduction.toFixed(2)} loan deduction already applied, but the ledger entry failed to save (${e.message || 'error'}) — add it manually on the vendor's loan ledger.`);
+            }
+          }
+        }
       }
     }
 
