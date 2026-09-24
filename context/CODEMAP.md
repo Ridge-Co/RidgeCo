@@ -101,6 +101,7 @@ secret gate at ≈38 (`if (!PUBLIC_PATHS.includes(path))`), then method +
 | GET /qb/setup-trades | qbSetupTrades | Provision QB income accts/items per trade | — (QB API) | **PUBLIC** | ≈1910 |
 | GET /qb/ready | qbReadyQueue | Invoices ready to push to QB | Invoice_Review, Work_Orders · R | secret | ≈2112 |
 | GET /gemini-context | geminiContext | Serves the Gemini-Notebook context snapshot as plain text; self-verifies `?token=` against `GEMINI_CONTEXT_TOKEN` (404 if missing/wrong, not 401) | Config (`Gemini_Context_Snapshot` key) · R | **PUBLIC** (self-verified) | new, Sep 22 2026, PR #33 |
+| GET /brettos-tasks-summary | brettosTasksSummary | Read-only glance summary (counts by Status/Venture + top-N open) of the BrettOS Tasks Sheet — a SEPARATE Google Sheet (`env.BRETTOS_TASKS_SHEET_ID`, not `env.SHEET_ID`), read with the same runtime SA JWT (`getAccessToken`) as `env.KEY_REGISTRY_SHEET_ID`'s importKeyRegistry. Sheet stays canonical for tasks per TASK_LINKING_BUILD_BRIEF_v1.0; never written here. | (foreign Sheet's `Tasks` tab) · R | secret | new, Sep 24 2026 |
 
 ### POST routes
 | METHOD PATH | Handler | Purpose | Sheet tab(s) · R/W | Auth | ≈Line |
