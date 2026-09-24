@@ -1,3 +1,53 @@
+# Sep 24, 2026, ~16:00 ET — BUILT (branch pushed, PR pending): CAP-036 #17 Vendor active/inactive self-service UI; CAP-036 #18 (deactivate Emmanuel Tires + Brian Furr) BLOCKED — needs an interactive/PAT session
+
+**CAP-036 #17 — checked whether an Active/Inactive toggle already existed before building.**
+Read `renderVendorsPage`/`openEditVendorModal`/`submitEditVendor` in `index.html`: the Vendors
+page already filtered `v.Active!=='FALSE'`, and literally every vendor picker in the app
+(assign, reassign, new-WO, master-key holder, bill split, etc. — ~10 spots) already excluded
+`Active==='FALSE'` vendors. But the Edit Vendor modal had **no Active field at all** (unlike
+Edit Tenant, which already has `et-active`), and the Vendors page had no way to see or reactivate
+an inactive vendor once one existed — deactivating today only happens via `updateRow`/direct
+Sheet edit or the vendor-reject flow's hardcoded `Active:'FALSE'`. So: additive build, not a
+duplicate.
+
+**Built** (branch `feat/cap-036-vendor-active-toggle`, `index.html` only — no worker.js change,
+reuses the existing generic `POST /vendor/update` + `Active` TRUE/FALSE column convention,
+PAT-006): a "Show inactive vendors" checkbox on the Vendors page; a Deactivate/Reactivate button
+per vendor row (`toggleVendorActive`, confirms before writing, updates local state + re-renders
+so the vendor visibly moves between the active/inactive views without a full reload); an
+INACTIVE badge + dimmed row for inactive vendors; and a Status (Active/Inactive) `<select>` on
+the Edit Vendor modal (`ev-active`), read in `openEditVendorModal` and written in
+`submitEditVendor`.
+
+**Verification gap, named plainly rather than routed around:** `/vendor/update` is not on
+`HUB_TEST_WRITE_PATHS` (`hub_test_post` → 401) or `HUB_PROD_WRITE_PATHS` (`hub_prod_post` →
+401) — confirmed by trying both read-only-safe probes (staging against test vendor Riley
+Testvendor ID 16; prod attempt was reverted-in-effect since it 401'd and wrote nothing). Per
+`test-verified-builds` Step 0, this is a genuine tooling gap, not a reason to ask Brett for
+`WORKER_SECRET`: full write+read-back verification of this exact change needs either (a)
+`/vendor/update` added to `HUB_TEST_WRITE_PATHS` in gh-broker for staging testing, or (b) Brett's
+own interactive/PAT session. Static review + the fact that this reuses an endpoint already
+exercised by the existing vendor-reject and Edit-Tenant-Active code paths is the verification
+available from here.
+
+**CAP-036 #18 — Deactivate Emmanuel Tires (Vendor ID 13) and Brian Furr (Vendor ID 7),
+Brett-approved.** Confirmed via `hub_prod_get('/vendors')` (read-only): Emmanuel Tires — ID 13,
+Company "Emmanuel Tires", Trade "Mechanic", Rate_Notes "MECHANIC / auto work only (per Brett).
+Fleet vehicle repairs.", currently `Active:"TRUE"`. Brian Furr — ID 7, no company, Trade
+"General", currently `Active:"TRUE"`. **Could not execute the write**: tried
+`hub_prod_post('/vendor/update', {id:'7', fields:{Active:'FALSE'}})` — 401, confirming
+`/vendor/update` is genuinely not on the narrow, additive-only `HUB_PROD_WRITE_PATHS` allow-list
+(correctly so — it's a mutating update, not additive/idempotent-backfill shaped, so it doesn't
+fit that token's design). **Nothing was written to either vendor** — both remain `Active:"TRUE"`
+in production as of this entry. This needs Brett (or a PAT-equipped session) to either merge
+CAP-036 #17's PR and use the new UI, or flip the two rows directly.
+
+**Ship status:** branch `feat/cap-036-vendor-active-toggle` pushed to `Ridge-Co/RidgeCo`, PR not
+yet opened in this pass (opening next). `context/FEATURE_LOG.md` bumped to v2.08,
+`[FL-20260924-1600-va]`.
+
+---
+
 # Sep 24, 2026, ~11:40 ET — FIXED (PR open, not merged): CAP-036 #15 Review Bills Cancel disappearing bill, and CAP-036 #9 Property Notice picker stuck on first property
 
 **CAP-036 #15 — Review Bills "Cancel" made a bill disappear (real incident: Eddie Smith).**
