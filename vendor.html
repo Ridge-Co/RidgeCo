@@ -322,6 +322,14 @@ function onLoginSuccess(data, persist) {
   show('screenLogin', false);
   show('screenDash', true);
   applyTranslations();
+  // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §3a/§4a) —
+  // home-screen buttons, shown only when the vendor's own session carries the flag. Both
+  // default to hidden (see the buttons' own inline style) so a session predating this build
+  // (or restored from localStorage before a re-login) never shows either by accident.
+  var billBtn = document.getElementById('btnSubmitStandaloneBill');
+  if (billBtn) billBtn.style.display = (data.can_bill_no_wo === true || String(data.can_bill_no_wo).toUpperCase() === 'TRUE') ? '' : 'none';
+  var oneOffBtn = document.getElementById('btnLogOneOffJob');
+  if (oneOffBtn) oneOffBtn.style.display = (data.can_create_own_wo === true || String(data.can_create_own_wo).toUpperCase() === 'TRUE') ? '' : 'none';
   loadWorkOrders();
   if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
 }
