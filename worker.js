@@ -18857,6 +18857,10 @@ async function qbSendInvoice(env, body) {
     const [wos, props, owners, vendors, bills, units, allTimeEntries] = await fetchTabs(env, [
       'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units','Time_Entries',
     ]);
+    const billRowEarly = bills.find(b => String(b.ID) === String(ir.Bill_ID)) || {};
+    if (String(billRowEarly.Standalone || '').toUpperCase() === 'TRUE') {
+      return await qbSendStandaloneInvoice(env, body, { ir, billRow: billRowEarly, previewOnly });
+    }
     const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
     const wo      = findWO(wos, ir.WO_ID) || {};
     const prop    = props.find(p => p.ID === wo.Property_ID) || {};
