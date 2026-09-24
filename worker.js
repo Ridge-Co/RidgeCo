@@ -685,6 +685,13 @@ export default {
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
         if (path === '/wishlist/status')          return await setWishlistStatus(env, body);
         if (path === '/config/set')               return await setConfigKey(env, body);
+        // Narrow, single-purpose alternative to /config/set (Sep 24 2026, Queue #14/#10 opt-in
+        // build): /config/set requires the full WORKER_SECRET, which no session or UI ever
+        // solicits (see CLAUDE.md's security note), so there was previously NO way for Brett to
+        // flip failure_alert_enabled / dead_man_switch_enabled himself. This endpoint writes
+        // ONLY those two named Config keys — never a generic key/value passthrough — so it can
+        // never become a backdoor generic config setter, whatever the caller sends.
+        if (path === '/admin/set-alert-flags')    return await setAlertFlags(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
         if (path === '/judge')                    return await judgeRun(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
