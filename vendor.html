@@ -490,8 +490,40 @@ function fetchDueWOs() {
     return wos.filter(function(w) { return isCompleteNotInvoiced(w) && !billedWOIds[w.ID]; });
   });
 }
+// "INVOICED" tab (CAP-036 #14, Sep 24 2026): every job this vendor has billed for, at least
+// once — the counterpart to the "NEEDS INVOICE" tab above. Brett's own ask: bills flagged
+// "Invoiced — Pending Info" sort to the TOP so the vendor sees what's blocking their payment
+// first; this tab had no sort/group logic at all before, so this is a minimal one, not a
+// redesign — sortKey 0 (pending info) < 1 (submitted, awaiting review) < 2 (reviewed, closest
+// to paid), newest-billed first within each group.
+function invoicedSortKey(wo, billsByWO) {
+  var bills = billsByWO[wo.ID] || [];
+  if (!bills.length) return 3;
+  var anyPending = bills.some(function(b) { return String(b.Pending_Info || '').toUpperCase() === 'TRUE'; });
+  if (anyPending) return 0;
+  var anyUnreviewed = bills.some(function(b) { return b.Status !== 'reviewed'; });
+  return anyUnreviewed ? 1 : 2;
+}
+function fetchInvoicedWOs() {
+  return Promise.all([
+    api('/vendor-workorders?vendor_id=' + session.vendor_id + '&include_closed=true'),
+    api('/vendor-bills?vendor_id=' + session.vendor_id)
+  ]).then(function(results) {
+    var wos = results[0] || [], bills = results[1] || [];
+    var billsByWO = {};
+    bills.forEach(function(b) { if (b.WO_ID) { (billsByWO[b.WO_ID] = billsByWO[b.WO_ID] || []).push(b); } });
+    var invoiced = wos.filter(function(w) { return !!(billsByWO[w.ID] && billsByWO[w.ID].length); });
+    invoiced.sort(function(a, b) {
+      var ka = invoicedSortKey(a, billsByWO), kb = invoicedSortKey(b, billsByWO);
+      if (ka !== kb) return ka - kb;
+      return new Date(b.Created_Date || 0) - new Date(a.Created_Date || 0);
+    });
+    return invoiced;
+  });
+}
 function loadWOsForCurrentTab() {
   if (currentTab === 'due') return fetchDueWOs();
+  if (currentTab === 'invoiced') return fetchInvoicedWOs();
   var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
   return api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed);
 }
@@ -501,6 +533,7 @@ function switchTab(tab) {
   document.getElementById('tabOpen').className = 'tab' + (tab === 'open' ? ' active' : '');
   document.getElementById('tabAll').className = 'tab' + (tab === 'all' ? ' active' : '');
   document.getElementById('tabDue').className = 'tab' + (tab === 'due' ? ' active' : '');
+  document.getElementById('tabInvoiced').className = 'tab' + (tab === 'invoiced' ? ' active' : '');
   loadWorkOrders();
 }
 
