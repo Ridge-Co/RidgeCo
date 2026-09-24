@@ -14723,6 +14723,32 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/vendor-bill/set-pending-info') {
+    // Sets/clears a flag on an existing Vendor_Bills row by id. Resolve bill -> WO_ID ->
+    // Work_Orders -> Property_ID, same chain as /vendor-bill/edit-receipts above.
+    const bills = await fetchTab(env, 'Vendor_Bills');
+    const bill = bills.find(b => String(b.ID) === String(body && body.id));
+    if (!bill) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(bill.WO_ID));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/scope-proposal/milestone/set-pending-info') {
+    // Resolve milestone -> Signature_ID -> Scope_Signatures -> Scope_ID -> Scopes ->
+    // Property_ID, the same chain GET /scope-proposal/signed itself joins through, so this
+    // token can only ever touch a milestone sitting on a TEST- fixture property.
+    const milestones = await fetchTab(env, 'Payment_Milestones');
+    const m = milestones.find(x => String(x.ID) === String(body && body.milestone_id));
+    if (!m) return false;
+    const sigs = await fetchTab(env, 'Scope_Signatures');
+    const sig = sigs.find(s => String(s.ID) === String(m.Signature_ID));
+    if (!sig) return false;
+    const scopes = await fetchTab(env, 'Scopes');
+    const sc = scopes.find(x => String(x.ID) === String(sig.Scope_ID));
+    if (!sc) return false;
+    return await isTestRecord(env, 'Properties', sc.Property_ID);
+  }
   if (path === '/wo/bulk-void') {
     // Same shape as /wo/combine above: every id in the batch must itself resolve (via its
     // Property) to a TEST- record, or this token can never touch it -- a mixed batch with even
