@@ -5206,6 +5206,58 @@ async function createWorkOrder(env, body) {
   return json({ success: true, id: woId });
 }
 
+// POST /workorder/self-serve { vendor_id, property_id, trade?, description, approval_source,
+//   approval_note? }
+// "Log a One-Off Job" (Sep 24 2026 build brief §4b) — a thin wrapper around createWorkOrder
+// for a vendor with Vendors.Can_Create_Own_WO='TRUE'. Deliberately NOT property-restricted
+// (§4a: "it's going to be a one-off system") — any active property is fair game, unlike the
+// billing flow's Billing_Property_Access allow-list. The one hard requirement is the
+// Approval_Source attestation: this is the ONLY substitute for Brett originating the WO
+// himself, so it is validated server-side and never trusted from the client alone.
+async function workorderSelfServe(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  const description = String(body.description || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+  if (!description) return json({ error: 'description required' }, 400);
+
+  const approval = validateApprovalSource(body.approval_source, body.approval_note);
+  if (!approval.ok) return json({ error: approval.error }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  if (String(vendor.Can_Create_Own_WO || '').toUpperCase() !== 'TRUE') {
+    return json({ error: 'This vendor is not enabled for self-serve work orders' }, 403);
+  }
+  const prop = properties.find(p => String(p.ID) === propertyId && p.Active !== 'FALSE');
+  if (!prop) return json({ error: 'Property not found or inactive' }, 404);
+
+  await ensureColumns(env, 'Work_Orders', ['Created_By_Vendor', 'Approval_Source', 'Approval_Note']);
+
+  // createWorkOrder itself always sets Vendor_ID to blank on create (assignment is a separate
+  // step everywhere in this app) — the vendor is assigned to themselves via the normal
+  // assignVendor() chokepoint right after, exactly like any other WO, so this never bypasses
+  // that pipeline's own SMS/notification/audit side effects.
+  const createRes = await createWorkOrder(env, {
+    property_id: propertyId, trade: vendor.Trade || '', description,
+    priority: 'normal', type: 'vendor_self_serve', created_by: 'vendor:' + vendorId,
+    created_by_vendor: 'TRUE', approval_source: approval.source, approval_note: approval.note,
+  });
+  let created = null;
+  try { created = await createRes.clone().json(); } catch (e) { return createRes; }
+  if (!created || created.error) return createRes;
+  if (created.duplicate) return json(created);
+
+  // Server-side, never a client-supplied vendor id (same class of hardening as the Sep 16
+  // 2026 tenant-submission fix) — the vendor is ALWAYS assigned to themselves, never anyone else.
+  try { await assignVendor(env, { wo_id: created.id, vendor_id: vendorId, notify: false }); }
+  catch (e) { /* WO exists even if the self-assign step fails; Brett can assign it manually */ }
+
+  return json({ success: true, id: created.id });
+}
+
 async function appendWONotes(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, body.wo_id);
