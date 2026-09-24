@@ -4406,6 +4406,33 @@ function removeTradeAccessDefault(trade) {
   });
 }
 
+function loadAlertFlags() {
+  var fEl = document.getElementById('alert-flag-failure');
+  var dEl = document.getElementById('alert-flag-deadman');
+  if (!fEl || !dEl) return;
+  api('GET', '/config').then(function(cfg) {
+    fEl.checked = String(cfg.failure_alert_enabled || '').toUpperCase() === 'TRUE';
+    dEl.checked = String(cfg.dead_man_switch_enabled || '').toUpperCase() === 'TRUE';
+  }).catch(function() {
+    var s = document.getElementById('alert-flags-status');
+    if (s) s.textContent = 'Could not load config';
+  });
+}
+
+function saveAlertFlags() {
+  var fEl = document.getElementById('alert-flag-failure');
+  var dEl = document.getElementById('alert-flag-deadman');
+  var s = document.getElementById('alert-flags-status');
+  if (!fEl || !dEl) return;
+  api('POST', '/admin/set-alert-flags', {
+    failure_alert_enabled: fEl.checked,
+    dead_man_switch_enabled: dEl.checked
+  }).then(function(res) {
+    if (res && res.success) { toast('Alert settings saved', 'success'); if (s) s.textContent = 'Saved.'; }
+    else { toast('Error saving alert settings: ' + ((res&&res.error)||''), 'error'); if (s) s.textContent = 'Error.'; }
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); if (s) s.textContent = 'Error.'; });
+}
+
 function renderErrorLog(){
   var logs=JSON.parse(localStorage.getItem('mh_errors')||'[]');
   var el=document.getElementById('error-log-list'); if(!el) return;
