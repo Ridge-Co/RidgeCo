@@ -1127,8 +1127,38 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
       <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
+      <div class="form-group full" style="border-top:1px solid var(--border);padding-top:10px">
+        <label>Loan / Advance Balance</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span id="ev-loan-balance" style="font-weight:bold;font-size:14px">—</span>
+          <button type="button" class="btn small secondary" onclick="openVendorLoanModal(document.getElementById('ev-id').value, document.getElementById('ev-name').value)">Manage Loan Ledger</button>
+        </div>
+      </div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
+  </div>
+</div>
+
+<!-- VENDOR LOAN LEDGER MODAL (CAP-036 #13) — reusable for any vendor: Gina's manual Venmo
+     loan/repayment ledger, and a read-only view of Alex's (or anyone's) automatic invoice
+     deductions. Both entry types live in the same Vendor_Loan_Ledger tab, distinguished by
+     Entry_Type, shown together here so the running balance is always the whole story. -->
+<div class="modal-overlay" id="modal-vendor-loan">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">LOAN / ADVANCE LEDGER — <span id="vl-vendor-name"></span></div><button class="modal-close" onclick="closeModal('modal-vendor-loan')">✕</button></div>
+    <input type="hidden" id="vl-vendor-id">
+    <div style="font-size:22px;font-weight:bold;margin-bottom:10px">Balance: <span id="vl-balance">$0.00</span></div>
+    <div class="form-grid" style="margin-bottom:12px">
+      <div class="form-group"><label>Amount</label><input type="number" id="vl-amount" min="0.01" step="0.01" placeholder="0.00"></div>
+      <div class="form-group"><label>Direction</label><select id="vl-direction"><option value="loan">Loan / advance given (balance goes up)</option><option value="repayment">Repayment received (balance goes down)</option></select></div>
+      <div class="form-group"><label>Date</label><input type="date" id="vl-date"></div>
+      <div class="form-group full"><label>Notes</label><input type="text" id="vl-notes" placeholder="e.g. Venmo advance"></div>
+    </div>
+    <button class="btn" onclick="submitVendorLoanEntry()">Add Entry</button>
+    <div style="margin-top:14px;max-height:260px;overflow-y:auto">
+      <table class="data-table"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Balance After</th><th>Notes</th></tr></thead>
+      <tbody id="vl-entries"><tr><td colspan="5" class="loading">Loading…</td></tr></tbody></table>
+    </div>
   </div>
 </div>
 
