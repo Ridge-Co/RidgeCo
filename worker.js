@@ -255,20 +255,22 @@ export default {
         // (creates a synthetic PENDING Receipt_Recon_Queue row scoped to TEST-PROPERTY-001, since
         // a real one only ever arrives via scanning a Drive file — there was no way to get a
         // testable row onto staging otherwise).
-        // /vendor-onboarding-status + /vendor/complete-onboarding added Sep 23 2026 (Vendor
-        // Onboarding Phase 1) so a staging smoke test can exercise the new endpoints on a real
-        // TEST- vendor. /vendor-onboarding-status is a read keyed by vendor_id, no PII exposure
-        // beyond what /vendors already returns wholesale. /vendor/complete-onboarding is gated
-        // below in hubTestWriteAllowed to a TEST- vendor only, same as every other write here.
-        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search','/vendor-onboarding-status'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts','/vendor/complete-onboarding'];
+        // Allow-List Simplification (Sep 24 2026): this block used to also require the path to
+        // appear in HUB_TEST_READ_PATHS (GET) or HUB_TEST_WRITE_PATHS (POST) before granting
+        // access. Those arrays are removed. GET is now unrestricted by path — this token can
+        // never reach production regardless of path (isStaging() below is the real gate, and
+        // Brett never sets this secret on production's env at all), so a broader staging read
+        // surface costs nothing. POST is now gated solely by hubTestWriteAllowed()'s record-level
+        // TEST- check further down (after body parsing) — verified Sep 24 2026 to default-deny
+        // (returns false for any path/case it doesn't explicitly recognize), so removing the path
+        // array here doesn't weaken anything; it just stops ALSO requiring the path to be listed
+        // in a second, separately-maintained array that kept drifting out of sync (5+ documented
+        // incidents in context/CURRENT.md where a write this token should have reached got
+        // rejected here first, even though hubTestWriteAllowed would have handled it correctly).
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
-          && (
-            (request.method === 'GET'  && HUB_TEST_READ_PATHS.includes(path)) ||
-            (request.method === 'POST' && HUB_TEST_WRITE_PATHS.includes(path))
-          );
+          && (request.method === 'GET' || request.method === 'POST');
         if (_hubTestOk) _viaHubTestToken = true;
         // Narrow READ-ONLY token for self-test/verification of PRODUCTION read-only admin endpoints
           // (credential-access gap closed Sep 22 2026, B-012 Vendor Performance follow-up — see
