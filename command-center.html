@@ -439,6 +439,7 @@ function render(d){
 
   html+=staleCard(d.stale);
   html+=optCard(d.opt);
+  html+=tasksCard(d.tasks);
 
   // vendor bills to review
   if(bills.length){
