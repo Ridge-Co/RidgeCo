@@ -5168,9 +5168,10 @@ async function createWorkOrder(env, body) {
     // existing Tenant_Notify_Created toggle already covers. Delayed 1h so a fast assignment can
     // supersede/bump it (see the tenant_job_received check in processPendingNotifications)
     // instead of the tenant getting "we got it" immediately followed by "you're assigned".
-    const tenant = currentTenantForDispatch(tenants, unit, woLike);
+    // CAP-036 #21: every active tenant in the unit, not just one.
     const tenantNotifyCreated = body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE';
-    if (isTenantNotifiable(tenant, woLike) && tenantNotifyCreated) {
+    if (tenantNotifyCreated) for (const tenant of tenantsForDispatch(tenants, unit, woLike)) {
+      if (!isTenantNotifiable(tenant, woLike)) continue;
       const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
       const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
       const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
