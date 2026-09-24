@@ -11126,13 +11126,18 @@ function renderQBPreview(p) {
     warns + already;
 }
 
-function confirmQBSend() {
+// CAP-036 #14: overridePendingInfo (true only when re-called from the "Send anyway" button
+// below) resends with override_pending_info:true so a bill flagged "Invoiced — Pending Info"
+// can still go out deliberately — soft block, never a permanent one.
+function confirmQBSend(overridePendingInfo) {
   if (!_qbCurrent) return;
   var id = _qbCurrent;
   var btn = document.getElementById('qb-send-confirm-btn');
   btn.disabled = true; btn.textContent = 'CREATING…';
   document.getElementById('qb-send-msg').innerHTML = '';
-  api('POST', '/qb/send-invoice', { id: id }).then(function(res){
+  var payload = { id: id };
+  if (overridePendingInfo) payload.override_pending_info = true;
+  api('POST', '/qb/send-invoice', payload).then(function(res){
     if (res.ok || res.already_sent) {
       // Combined sends (B-227 Phase 3) return bill_ids (array, one per vendor) instead of a
       // single bill_id — normalize to one flag/count so the rest of this stays unchanged.
