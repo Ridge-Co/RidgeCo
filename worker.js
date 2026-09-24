@@ -18612,7 +18612,7 @@ async function qbSendInvoice(env, body) {
     }
 
     const custTotal  = Number(ir.Customer_Total) || 0;
-    const vendorCost = Number(ir.Vendor_Cost) || 0;
+    let vendorCost = Number(ir.Vendor_Cost) || 0;
     if (custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
     if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
 
