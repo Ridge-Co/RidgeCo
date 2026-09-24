@@ -9511,6 +9511,7 @@ function renderIRCard(b, i) {
 
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">' +
       '<button onclick="irSkip('+i+')" title="Hides this card until the next refresh \u2014 the bill stays in the queue" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:9px 14px;cursor:pointer">Hide for now</button>' +
+      (pendingInfo ? '' : '<button onclick="irFlagPendingInfo('+i+')" title="Flag this bill as invoiced but needing something before it can be paid" style="background:var(--surface2);border:1px solid var(--warn);color:var(--warn);border-radius:6px;font-family:var(--font);font-size:12px;padding:9px 14px;cursor:pointer">Flag: needs info</button>') +
     '</div>' +
 
     '<div id="ir-msg-'+i+'" style="margin-top:8px"></div>' +
