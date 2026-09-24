@@ -1129,6 +1129,7 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
       <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
+      <div class="form-group full"><label>No-WO billing — properties this vendor may bill against directly <span style="font-weight:normal;color:var(--muted)">(only used when "No-WO Bill" is checked)</span></label><div id="ev-billprop-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;margin-top:4px;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
   </div>
