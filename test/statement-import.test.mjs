@@ -155,5 +155,53 @@ const { statementLineMatch } = pure;
   ok(d2.cols.date === 0 && d2.cols.amount === 1 && d2.cols.description === 2 && d2.cols.ref === 3, 'alternate header names (TxnDate/Total/Memo/PO#) still auto-detect correctly');
 }
 
+// ── Offset-based batching (Sep 24 2026 review fix) ─────────────────────────────────────────────
+// Regression test for the real bug: re-submitting without an offset re-took rows.slice(0,100)
+// every time, and since a just-inserted row is Status:'pending' (statementLineMatch correctly
+// treats 'pending' as NOT a prior disposition), the first 100 lines got duplicate-inserted on every
+// follow-up call instead of being skipped. Exercises the REAL async receiptReconImportStatement
+// end to end (mocked I/O) across 3 calls (offset 0, 100, 200) on a 250-row batch and asserts every
+// row is processed exactly once with no overlap.
+{
+  function extractAsyncFn(name) {
+    const start = src.indexOf(`async function ${name}(`);
+    if (start === -1) throw new Error(name + ' not found');
+    let i = src.indexOf('{', start), d = 0;
+    for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
+    return src.slice(start, i);
+  }
+
+  const inserted = [];
+  const deps = {
+    ensureTab: async () => {}, ensureColumns: async () => {},
+    fetchTabs: async () => [[], []], // no existing Receipts/Receipt_Recon_Queue rows to match against
+    addRow: async (env, tab, row) => { inserted.push(row); },
+    getAccessToken: async () => 'tok',
+    driveDownload: async () => ({ bytes: new ArrayBuffer(1), mime: 'application/pdf' }),
+    statementExtract: async () => ({ vendor_detected: '', lines: [] }),
+    statementLineMatch, // the REAL pure function extracted above — never a second implementation
+    RECEIPT_RECON_QUEUE_HEADERS: [],
+    json: (o) => o,
+  };
+  const names = Object.keys(deps);
+  const fn = new Function(...names, `return (${extractAsyncFn('receiptReconImportStatement')});`)(...names.map(n => deps[n]));
+
+  // 250 rows, each with a distinct amount so none can ever match one another or anything else.
+  const rows = Array.from({ length: 250 }, (_, i) => ({
+    date: '2026-09-01', amount: (1 + i * 0.01).toFixed(2), description: 'line ' + i, ref: '',
+  }));
+
+  const r1 = await fn({}, { vendor: 'Batch Test Co', rows, offset: 0 });
+  const r2 = await fn({}, { vendor: 'Batch Test Co', rows, offset: r1.next_offset });
+  const r3 = await fn({}, { vendor: 'Batch Test Co', rows, offset: r2.next_offset });
+
+  ok(r1.next_offset === 100 && r2.next_offset === 200 && r3.next_offset === 250, 'next_offset advances 0->100->200->250 across the 3 calls (got ' + r1.next_offset + ',' + r2.next_offset + ',' + r3.next_offset + ')');
+  ok(r1.remaining === 150 && r2.remaining === 50 && r3.remaining === 0, 'remaining counts down correctly (150, 50, 0) so the caller knows exactly when to stop');
+  ok(inserted.length === 250, 'exactly 250 rows inserted total across all 3 calls (got ' + inserted.length + ') — the old bug would have produced 350 (100+100+150 worth of first-100 overlap)');
+  const totals = new Set(inserted.map(r => r.Total));
+  ok(totals.size === 250, 'all 250 inserted rows have distinct Total values — no row was processed twice (got ' + totals.size + ' distinct)');
+  ok(r1.inserted === 100 && r2.inserted === 100 && r3.inserted === 50, 'each call inserts only its own slice (100, 100, 50), never re-inserting an earlier slice');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
