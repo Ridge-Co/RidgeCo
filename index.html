@@ -10627,6 +10627,7 @@ function renderQBMapping() {
     subSection('PROPERTIES → SUB-CUSTOMERS', 'Each building sits under its owner, so an invoice lands on the address that earned it rather than on one shared ledger.', unlinkedP, props.length, 'property', props) +
     subSection('UNITS → SUB-CUSTOMERS', 'Optional. Link a unit only where you want that apartment tracked separately; otherwise its work bills to the building.', unlinkedU, units.length, 'unit', units) +
     section('VENDORS → QUICKBOOKS VENDORS', unlinkedV, vendors.length, 'vendor', vendors, _qbMap.qb_vendors);
+  filterQBMapping();
 }
 
 // Which slice of the loaded map a kind lives in. This used to be a two-way ternary that
