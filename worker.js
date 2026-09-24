@@ -755,6 +755,7 @@ export default {
         if (path === '/trash/unmark-skipped')     return await trashUnmarkSkipped(env, body);
         if (path === '/delivery/add')             return await deliveryAdd(env, body);
         if (path === '/delivery/update')          return await updateRow(env, 'Deliveries', body.id, body.fields);
+        if (path === '/delivery/relay')           return await deliveryRelay(env, body);
         if (path === '/proposal/sign')            return await proposalSign(env, body);
         if (path === '/proposal/book')            return await proposalBook(env, body);
         if (path === '/proposal/unbook')          return await proposalUnbook(env, body);
