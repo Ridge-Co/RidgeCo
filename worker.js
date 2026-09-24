@@ -4486,6 +4486,20 @@ async function scopeProposalBillMilestones(env, body) {
   const notPending = picked.filter(m => (m.Status || 'pending') !== 'pending');
   if (notPending.length) return json({ error: 'Milestone(s) already billed: ' + notPending.map(m => m.Label).join(', ') }, 400);
 
+  // CAP-036 #14: soft block, not a hard one — a flagged milestone can still be billed with
+  // explicit override_pending_info:true (Brett's own words: "I can be blocked by me"), but never
+  // silently. previewOnly is allowed through either way so the checkbox/preview can show the
+  // flag; only the real write (below) is gated.
+  const flaggedPending = picked.filter(m => String(m.Pending_Info || '').toUpperCase() === 'TRUE');
+  if (flaggedPending.length && !body.preview_only && !body.override_pending_info) {
+    return json({
+      error: `${flaggedPending.length} selected milestone(s) are flagged "Invoiced — Pending Info": ` +
+        flaggedPending.map(m => `${m.Label}${m.Pending_Info_Note ? ' (' + m.Pending_Info_Note + ')' : ''}`).join(', ') +
+        '. Resolve them, or resend with override_pending_info to bill anyway.',
+      pending_info: true,
+    }, 409);
+  }
+
   const { tradeName, trade, prop, unit, owner, vendor, billTo, custDisplay, vendDisplay, vendorInHouse, addr } = await scopeSigResolveParties(env, s, row);
 
   const custTotal = +picked.reduce((sum, m) => sum + (+m.Customer_Amount || 0), 0).toFixed(2);
