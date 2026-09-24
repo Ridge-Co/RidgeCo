@@ -210,6 +210,11 @@ input[type=file]{display:none;}
   <button class="btn btn-sm btn-muted" onclick="openFeedback()" style="font-size:10px;padding:4px 8px">💬 FEEDBACK</button>
   </div>
 
+  <div id="homeExtraButtons" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <button id="btnSubmitStandaloneBill" onclick="openStandaloneBillModal()" style="display:none;flex:1;min-width:150px;background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12.5px;font-weight:bold;padding:11px 10px;cursor:pointer">🧾 <span data-i18n="SUBMIT A BILL">SUBMIT A BILL</span></button>
+    <button id="btnLogOneOffJob" onclick="openOneOffJobModal()" style="display:none;flex:1;min-width:150px;background:var(--warn);color:#3a2a00;border:none;border-radius:6px;font-family:var(--font);font-size:12.5px;font-weight:bold;padding:11px 10px;cursor:pointer">🔧 <span data-i18n="LOG A ONE-OFF JOB">LOG A ONE-OFF JOB</span></button>
+  </div>
+
   <div class="tabs">
     <div class="tab active" id="tabOpen" data-i18n="OPEN JOBS" onclick="switchTab('open')">OPEN JOBS</div>
     <div class="tab" id="tabAll" data-i18n="ALL JOBS" onclick="switchTab('all')">ALL JOBS</div>
