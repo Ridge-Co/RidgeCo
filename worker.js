@@ -15662,7 +15662,26 @@ function qbResolveBillTo(owner, prop, unit) {
 // owner level the first time, and every time after that, until someone links the property.
 // This is the sentence that says so, and it is the only place that says it.
 function qbBillToNote(billTo, prop, unit) {
-  if (!billTo || billTo.level !== 'owner') return '';
+  if (!billTo) return '';
+  // Property-level fallback: the property itself IS linked (that's the only way billTo.level
+  // resolves to 'property'), but the specific unit on this job isn't — so every invoice for
+  // that unit nests under the building's shared ledger instead of its own line, until someone
+  // links the unit. Same silent-forever failure mode as the owner-level case below, one level
+  // down. Only fires when there's a real unit to point at — a flat/no-unit property billing
+  // correctly at property level never shows this.
+  if (billTo.level === 'property') {
+    const unitId = unit && unit.ID;
+    if (!unitId) return '';
+    if (String((unit && unit.QBO_Customer_ID) || '').trim()) return ''; // unit IS linked
+    const addr = qbPropertyDisplayName(prop);
+    const label = qbUnitLabel(unit);
+    if (!label) return '';
+    const where = addr ? (addr + ' ' + label) : label;
+    return `This lands on ${addr || 'the building'}'s shared ledger, not ${where} — ` +
+      `${label} has no QuickBooks sub-customer yet. ` +
+      `Create it on QB Mapping and this and future invoices for ${label} will bill separately. Sending it now is fine.`;
+  }
+  if (billTo.level !== 'owner') return '';
   const addr = qbPropertyDisplayName(prop);
   if (!addr) return '';                       // no address on file — nothing to nest under
   const label = qbUnitLabel(unit);
