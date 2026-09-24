@@ -9068,6 +9068,13 @@ function loadInvoiceReview() {
     return api('GET', '/vendor-bills?status=submitted');
   }).then(function(bills) {
     _irBills = Array.isArray(bills) ? bills : [];
+    // CAP-036 #14: bills flagged "Invoiced — Pending Info" sort to the TOP of the queue, so
+    // whatever's blocking payment is the first thing Brett sees, not buried in the list.
+    _irBills.sort(function(a, b) {
+      var ap = String(a.Pending_Info || '').toUpperCase() === 'TRUE' ? 0 : 1;
+      var bp = String(b.Pending_Info || '').toUpperCase() === 'TRUE' ? 0 : 1;
+      return ap - bp;
+    });
     var fhost = document.getElementById('ir-filters');
     if (!_irBills.length) {
       if (fhost) fhost.innerHTML = '';
