@@ -6832,6 +6832,174 @@ async function addVendorBill(env, body) {
   return res;
 }
 
+// POST /vendor-bill/add-standalone { vendor_id, property_id, bill_to:'owner'|'ridgeco',
+//   line_items:[{description,amount,pay:'reimburse'|'account',url}], notes?, invoice_description? }
+// Vendor Standalone Billing (Sep 24 2026 build brief §3c) — lets a vendor with
+// Vendors.Can_Bill_No_WO='TRUE' submit a bill with NO Work_Orders row at all (Sierra Taylor's
+// tenant-treats/small-extras case). Writes a Vendor_Bills row with WO_ID left BLANK — already
+// tolerated everywhere downstream (addVendorBill's WO-auto-complete step is a no-op on a blank
+// WO_ID; addReceipt has supported a bare property_id with no wo_id since the one-tap-expense
+// build) — plus three new columns (Property_ID, Bill_To, Standalone) that qbSendInvoice's new
+// standalone branch (qbSendStandaloneInvoice) and Review Bills' renderIRCard use to resolve
+// Owner/QuickBooks straight from Property_ID, the same shape scopeSigResolveParties() already
+// uses for signed Scope Proposals. Every other field (Bill_Type/Hours/Truck_Stock/Receipts_JSON/
+// Receipts_Total/Receipts_Reimburse_Total/Total) matches the existing hourly/flat bill shape
+// EXACTLY, on purpose — Review Bills' irCalc()/renderIRCard money math and the QuickBooks send
+// path never need to know a bill is standalone; only the owner-resolution step does.
+async function addVendorBillStandalone(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  const billTo = String(body.bill_to || '').trim().toLowerCase();
+  const items = Array.isArray(body.line_items) ? body.line_items : [];
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+  if (!['owner', 'ridgeco'].includes(billTo)) return json({ error: "bill_to must be 'owner' or 'ridgeco'" }, 400);
+  const validItems = items.filter(it => it && (+it.amount || 0) > 0);
+  if (!validItems.length) return json({ error: 'At least one line item with an amount is required' }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  // Never trust the client — re-check the permission and the property allow-list server-side,
+  // same principle as the Sep 16 2026 tenant-submission hardening.
+  if (String(vendor.Can_Bill_No_WO || '').toUpperCase() !== 'TRUE') {
+    return json({ error: 'This vendor is not enabled for standalone billing' }, 403);
+  }
+  const prop = properties.find(p => String(p.ID) === propertyId);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+  if (!vendorHasBillingPropertyAccess(vendor, propertyId)) {
+    return json({ error: 'You do not have billing access to this property yet. Use "Request access to another property" first.' }, 403);
+  }
+
+  const receipts = validItems.map(it => ({
+    amount: +(+it.amount || 0).toFixed(2),
+    desc: String(it.description || it.desc || '').trim(),
+    url: String(it.url || '').trim(),
+    pay: it.pay === 'account' ? 'account' : 'reimburse',
+  }));
+  const totals = computeStandaloneBillTotals(receipts);
+  if (totals.receipts_total <= 0) return json({ error: 'Total must be greater than $0' }, 400);
+
+  await ensureColumns(env, 'Vendor_Bills', ['Property_ID', 'Bill_To', 'Standalone']);
+
+  // Same duplicate-guard shape addVendorBill already uses (vendor+property+total+day), scoped
+  // to Standalone rows only so it never collides with an ordinary WO-anchored bill.
+  const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
+    Vendor_ID: vendorId, Property_ID: propertyId, Total: totals.total.toFixed(2), Standalone: 'TRUE',
+  }, 86400);
+  if (dupe) return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
+
+  const vendorName = vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + vendorId);
+  const now = new Date();
+  const res = await addRow(env, 'Vendor_Bills', {
+    WO_ID: '', Vendor_ID: vendorId, Vendor_Name: vendorName,
+    Bill_Type: 'flat', Hours: '0', Rate: '0', Labor_Total: '0', Flat_Rate: '0',
+    Truck_Stock: '0', Truck_Desc: '',
+    Receipts_JSON: JSON.stringify(receipts),
+    Receipts_Total: totals.receipts_total.toFixed(2),
+    Receipts_Reimburse_Total: totals.receipts_reimburse_total.toFixed(2),
+    Total: totals.total.toFixed(2),
+    Notes: String(body.notes || ''),
+    Invoice_Description: String(body.invoice_description || '').trim() || (vendorName + ' — standalone bill'),
+    Property_ID: propertyId, Bill_To: billTo, Standalone: 'TRUE',
+    Status: 'submitted', Submitted_At: now.toISOString(), Created_Date: now.toISOString().split('T')[0],
+  });
+  return res;
+}
+
+// POST /vendor/request-property-access { vendor_id, property_id, note? }
+// Vendor Standalone Billing (§3b/§3d) — a vendor whose Billing_Property_Access allow-list
+// doesn't yet cover a property they need to bill against can ask for it here instead of being
+// stuck. Writes a Vendor_Access_Requests row (Brett approves/denies from Dev Log or the
+// Dashboard badge — see vendorAccessRequestApprove) and fires the same admin-alert SMS every
+// other "Brett, look at this" flow in this file uses (config.admin_phone + sendSMS).
+async function vendorRequestPropertyAccess(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  const prop = properties.find(p => String(p.ID) === propertyId);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+
+  await ensureColumns(env, 'Vendor_Access_Requests', [
+    'ID', 'Vendor_ID', 'Vendor_Name', 'Requested_Property_ID', 'Note', 'Status',
+    'Created_Date', 'Decided_Date', 'Active',
+  ]);
+  const vendorName = vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + vendorId);
+  const res = await addRow(env, 'Vendor_Access_Requests', {
+    Vendor_ID: vendorId, Vendor_Name: vendorName, Requested_Property_ID: propertyId,
+    Note: String(body.note || ''), Status: 'pending', Created_Date: new Date().toISOString(),
+  });
+  try {
+    const config = await getConfig(env);
+    if (config.admin_phone) {
+      await sendSMS(env, config.admin_phone,
+        `🔑 ${vendorName} requested billing access to ${prop.Address || ('property ' + propertyId)}. Review in Hub → Dev Log → Vendor Access Requests.`);
+    }
+  } catch (e) { /* non-fatal — the request row is already saved */ }
+  return res;
+}
+
+// GET /vendor-access-requests?status=pending  (or &count_only=1 for the dashboard/nav badges)
+// Vendor Standalone Billing (§3d) — one query backs BOTH the Dev Log section and the
+// Dashboard pending-count tile, deliberately, so the two badges can never drift apart.
+async function listVendorAccessRequests(env, url) {
+  const status = (url.searchParams.get('status') || '').trim().toLowerCase();
+  const countOnly = url.searchParams.get('count_only') === '1';
+  let rows = [];
+  try { rows = await fetchTab(env, 'Vendor_Access_Requests'); } catch (e) { rows = []; }
+  let results = rows.filter(r => r.Active !== 'FALSE');
+  if (status) results = results.filter(r => String(r.Status || 'pending').toLowerCase() === status);
+  if (countOnly) return json({ count: results.length });
+  return json(results);
+}
+
+// POST /vendor-access-requests/approve { id, scope:'once'|'ongoing', decision:'approve'|'deny' }
+// Vendor Standalone Billing (§3d). 'once' resolves the pending item without touching the
+// vendor's standing Billing_Property_Access list; 'ongoing' also appends the requested
+// property to it, so future bills against it clear the server-side allow-list check without
+// another request. A deny just closes the row out — no Vendors write at all.
+async function vendorAccessRequestApprove(env, body) {
+  const id = String(body.id || '').trim();
+  const decision = String(body.decision || '').trim().toLowerCase();
+  const scope = String(body.scope || 'once').trim().toLowerCase();
+  if (!id) return json({ error: 'id required' }, 400);
+  if (!['approve', 'deny'].includes(decision)) return json({ error: "decision must be 'approve' or 'deny'" }, 400);
+
+  const rows = await fetchTab(env, 'Vendor_Access_Requests');
+  const reqRow = rows.find(r => String(r.ID) === id);
+  if (!reqRow) return json({ error: 'Request not found' }, 404);
+
+  const today = new Date().toISOString();
+  if (decision === 'deny') {
+    await updateRow(env, 'Vendor_Access_Requests', id, { Status: 'denied', Decided_Date: today });
+    return json({ success: true, id, status: 'denied' });
+  }
+
+  const newStatus = scope === 'ongoing' ? 'approved_ongoing' : 'approved_once';
+  await updateRow(env, 'Vendor_Access_Requests', id, { Status: newStatus, Decided_Date: today });
+
+  if (scope === 'ongoing' && reqRow.Vendor_ID && reqRow.Requested_Property_ID) {
+    try {
+      const vendors = await fetchTab(env, 'Vendors');
+      const vendor = vendors.find(v => String(v.ID) === String(reqRow.Vendor_ID));
+      if (vendor) {
+        const list = String(vendor.Billing_Property_Access || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (!list.includes(String(reqRow.Requested_Property_ID))) {
+          list.push(String(reqRow.Requested_Property_ID));
+          await ensureColumns(env, 'Vendors', ['Billing_Property_Access']);
+          await updateRow(env, 'Vendors', reqRow.Vendor_ID, { Billing_Property_Access: list.join(',') });
+        }
+      }
+    } catch (e) { /* the request itself is already resolved; the vendor list append is best-effort */ }
+  }
+  return json({ success: true, id, status: newStatus });
+}
+
 // POST /vendor-bill/edit-receipts { bill_id, receipts:[{amount,desc,pay,url}], edited_by? }
 // Sep 23 2026, Brett's ask: a vendor's mistaken/duplicate receipt entry on a submitted bill
 // (e.g. a blank-description receipt whose amount just re-states her own flat-rate/labor
