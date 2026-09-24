@@ -413,7 +413,7 @@ function openEdit(id){
   document.getElementById('df-hint').classList.add('hide');
   document.getElementById('df-woline').textContent='';
   fillProps();
-  document.getElementById('df-store').value=d.store||'';
+  syncStoreSelectFromValue(d.store||'');
   document.getElementById('df-order').value=d.order_number||'';
   document.getElementById('df-item').value=d.item_type||'';
   document.getElementById('df-model').value=d.make_model||'';
