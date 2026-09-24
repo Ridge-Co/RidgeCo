@@ -6002,8 +6002,9 @@ async function updateStatus(env, body) {
   // This is the automation the acceptance gate exists to enable: the status moving to
   // Accepted is the trigger, so a vendor who just starts the job no longer silently skips it.
   if (body.status === 'Accepted') {
-    const tenant = currentTenantForDispatch(tenants, unit, wo);
-    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
+      if (!isTenantNotifiable(tenant, wo)) continue;
       const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${wo.Trade} request at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
