@@ -3982,7 +3982,67 @@ function openEditVendorModal(id) {
   document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
   document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
   document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
+  document.getElementById('ev-loan-balance').textContent = '…';
+  api('GET','/vendor-loan?vendor_id='+encodeURIComponent(v.ID)).then(function(res){
+    var bal = (res && typeof res.balance === 'number') ? res.balance : 0;
+    document.getElementById('ev-loan-balance').textContent = '$' + bal.toFixed(2) + (bal > 0 ? ' owed to Ridge Co' : '');
+  }).catch(function(){ document.getElementById('ev-loan-balance').textContent = '—'; });
   openModal('modal-edit-vendor');
+}
+
+// ── Vendor Loan/Advance Ledger (CAP-036 #13) — reusable for any vendor. Gina's manual
+// Venmo ledger and Alex's (or anyone else's) automatic invoice deductions share this one
+// modal/tab, distinguished by Entry_Type. ──────────────────────────────────────────────
+function openVendorLoanModal(vendorId, vendorName) {
+  document.getElementById('vl-vendor-id').value = vendorId;
+  document.getElementById('vl-vendor-name').textContent = vendorName || '';
+  document.getElementById('vl-amount').value = '';
+  document.getElementById('vl-notes').value = '';
+  document.getElementById('vl-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('vl-balance').textContent = '…';
+  document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" class="loading">Loading…</td></tr>';
+  openModal('modal-vendor-loan');
+  loadVendorLoanLedger(vendorId);
+}
+function loadVendorLoanLedger(vendorId) {
+  api('GET', '/vendor-loan?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
+    if (!res || res.error) { document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc((res && res.error) || 'Could not load ledger') + '</td></tr>'; return; }
+    var bal = Number(res.balance) || 0;
+    document.getElementById('vl-balance').textContent = '$' + bal.toFixed(2) + (bal > 0 ? ' owed to Ridge Co' : (bal < 0 ? ' (overpaid)' : ' — paid off'));
+    var entries = safeArray(res.entries).slice().reverse();
+    document.getElementById('vl-entries').innerHTML = entries.length
+      ? entries.map(function(e){
+          var amt = Number(e.Amount) || 0;
+          var typeLabel = e.Entry_Type === 'auto-deduction' ? 'Auto (invoice)' : (e.Entry_Type === 'seed' ? 'Starting balance' : 'Manual');
+          return '<tr><td>'+esc(e.Date||'')+'</td><td>'+esc(typeLabel)+'</td>' +
+            '<td style="color:'+(amt>=0?'var(--warn)':'var(--accent2)')+'">'+(amt>=0?'+':'')+'$'+amt.toFixed(2)+'</td>' +
+            '<td>$'+(Number(e.Balance_After)||0).toFixed(2)+'</td><td>'+esc(e.Notes||'')+'</td></tr>';
+        }).join('')
+      : '<tr><td colspan="5" class="loading">No entries yet.</td></tr>';
+  }).catch(function(e) {
+    document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc(e.message) + '</td></tr>';
+  });
+}
+function submitVendorLoanEntry() {
+  var vendorId = document.getElementById('vl-vendor-id').value;
+  var vendorName = document.getElementById('vl-vendor-name').textContent;
+  var amount = parseFloat(document.getElementById('vl-amount').value);
+  if (!(amount > 0)) { toast('Enter an amount greater than 0', 'error'); return; }
+  var body = {
+    vendor_id: vendorId, vendor_name: vendorName,
+    amount: amount, direction: document.getElementById('vl-direction').value,
+    date: document.getElementById('vl-date').value || undefined,
+    notes: document.getElementById('vl-notes').value.trim(),
+  };
+  api('POST', '/vendor-loan/add', body).then(function(res) {
+    if (!res || res.error) { toast('Error: ' + ((res && res.error) || 'unknown error'), 'error'); return; }
+    toast('Ledger entry added', 'success');
+    document.getElementById('vl-amount').value = '';
+    document.getElementById('vl-notes').value = '';
+    loadVendorLoanLedger(vendorId);
+    var evId = document.getElementById('ev-id');
+    if (evId && evId.value === vendorId) document.getElementById('ev-loan-balance').textContent = '$' + Number(res.balance).toFixed(2) + (res.balance > 0 ? ' owed to Ridge Co' : '');
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); });
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
