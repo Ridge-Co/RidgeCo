@@ -320,6 +320,7 @@ function onLoginSuccess(data, persist) {
   show('screenDash', true);
   applyTranslations();
   loadWorkOrders();
+  loadVendorTaskAlerts();
   if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
 }
 
