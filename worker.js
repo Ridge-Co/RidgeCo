@@ -282,6 +282,12 @@ export default {
           // production. Fully inert unless env.HUB_PROD_RO_TOKEN is set, so deploying this has
           // zero effect until the secret exists on production maintenance-hub (and the matching
           // value is set on the gh-broker Worker's own HUB_PROD_RO_TOKEN).
+          // Allow-List Simplification (Sep 24 2026): inverted from an allow-list to a deny-list.
+          // Every GET route handler in the router above was read by hand (not guessed from its
+          // name or comment) to confirm it does nothing but read and format data. The paths below
+          // are the only ones confirmed to genuinely mutate or send something on a GET, and stay
+          // excluded; every other GET route on this Worker, including any shipped later, is
+          // reachable with this token with zero allow-list edit needed.
           const HUB_PROD_RO_EXCLUDE_PATHS = [
             '/notifications/pending', // processPendingNotifications: sends live SMS (sendSMS/smsGatedSend) and marks Notification_Queue rows Sent on every call that finds due rows
             '/gmail/test',            // gmailTest: sends a real test email via gmailSendEmail
