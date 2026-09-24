@@ -1590,13 +1590,11 @@ function formatUnitLabel(label) {
 // tenant. Found live (Sep 2026): this fallback was missing here, so tenant SMS silently never
 // fired for any whole-property WO — Tenant_SMS_Sent stayed FALSE even on a successful assign.
 function currentTenantForDispatch(tenants, unit, wo) {
-  const all = tenantsForDispatch(tenants, unit, wo);
-  if (all.length) return all[0];
-  // Fallback to the legacy single-pointer lookup only when the Tenants-table scan above found
-  // nothing at all (e.g. Units.Tenant_ID or WO.Tenant_ID names a tenant whose own Unit_ID/
-  // Property_ID has since drifted) — keeps every existing non-fanout caller's behavior intact.
   const id = (unit && unit.Tenant_ID) || (wo && wo.Tenant_ID) || '';
   let t = id ? (tenants || []).find(x => String(x.ID) === String(id)) : null;
+  if (!t && wo && wo.Property_ID && !wo.Unit_ID) {
+    t = (tenants || []).find(x => x.Property_ID === wo.Property_ID && !x.Unit_ID && x.Active !== 'FALSE');
+  }
   return isTenantCurrent(t) ? t : null;
 }
 
