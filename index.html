@@ -9782,7 +9782,7 @@ function qbBillToLine(p) {
     if (b.note) {
       return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">↳ ' + esc(b.note) +
         (b.property_id && b.owner_linked
-          ? ' <button class="btn small" onclick="qbMakeSubFromPreview(\'' + esc(String(b.property_id)) + '\',this)" ' +
+          ? ' <button class="btn small" onclick="qbMakeSubFromPreview(\'property\',\'' + esc(String(b.property_id)) + '\',this)" ' +
             'style="background:var(--warn);color:#fff;padding:1px 7px;font-size:10px;margin-left:4px">Create it now</button>'
           : '') + '</div>';
     }
@@ -9790,6 +9790,17 @@ function qbBillToLine(p) {
     return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">' +
       '↳ Billing at the owner level — ' + missing + ' isn\'t linked to a QuickBooks sub-customer. ' +
       'Link or create it on the QB Mapping screen to bill the address instead.</div>';
+  }
+  // Property-level fallback with a real, unlinked unit on the job (Sep 24 2026): same
+  // silent-forever failure one level down as the owner case above. The Worker (qbBillToNote)
+  // only sends a note here when there's an actual unit to point at, so a flat/no-unit
+  // property billing correctly at property level never shows this banner.
+  if (b.level === 'property' && b.note) {
+    return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">↳ ' + esc(b.note) +
+      (b.unit_id
+        ? ' <button class="btn small" onclick="qbMakeSubFromPreview(\'unit\',\'' + esc(String(b.unit_id)) + '\',this)" ' +
+          'style="background:var(--warn);color:#fff;padding:1px 7px;font-size:10px;margin-left:4px">Create it now</button>'
+        : '') + '</div>';
   }
   return '<div style="color:var(--accent2);font-size:11px;margin:2px 0 6px">' +
     '↳ Billing to ' + (b.level === 'unit' ? 'unit' : 'property') + ': <b>' + esc(b.display || '') + '</b>' +
