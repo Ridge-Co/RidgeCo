@@ -13015,6 +13015,40 @@ async function receiptExtract(env, bytes, mime) {
   catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0, refund: false, refund_reason: '' }; }
 }
 
+// Read a BULK VENDOR STATEMENT (photo/scan/PDF — Home Depot, Lowe's, a credit card, a future Ace
+// Hardware account) with Claude vision → strict JSON of every transaction line, not just one.
+// Sibling to receiptExtract above, copying its exact conventions on purpose (Statement importer
+// Phase 1, Sep 24 2026 — STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0): same bytesToB64 +
+// isPdf media-block branching, same routeAI(env, {type, moneyFacing:true, media, prompt, maxTokens,
+// source}) call shape, same ```json fence-stripping before JSON.parse, same fail-open
+// default-object return on a parse error — never throws, so a bad/unreadable statement upload
+// fails open with an empty lines array rather than 500ing the import endpoint.
+async function statementExtract(env, bytes, mime) {
+  try {
+    const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+    const media = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+    const prompt = `You are a bulk statement data extractor for a property-maintenance business. This document is a VENDOR STATEMENT or CREDIT CARD STATEMENT listing MANY separate transaction lines (not a single receipt) — e.g. a Home Depot Pro account statement, a Lowe's commercial statement, or a credit card statement. Read EVERY distinct transaction/purchase line on the document, not just some of them — statements often run to dozens of lines across multiple pages/sections. Return ONLY strict minified JSON with keys: vendor_detected (the statement issuer's name as printed, e.g. "The Home Depot Pro", string, else ""), lines (array of objects, one per distinct transaction line, each with: date ("YYYY-MM-DD" if determinable, else ""), amount (the line's charge amount as a plain positive number — use the absolute value even if shown as a credit/negative on the statement; null if unreadable), description (short verbatim text describing the purchase/line, e.g. store location, department, or item description, else ""), ref (the transaction's own PO number, invoice number, order number, or reference code AS PRINTED on that line, exactly as shown, else "")). Skip statement-level summary lines (previous balance, payments received, finance charges, total due) — only include actual purchase/transaction lines. JSON only, no prose.`;
+    const r = await routeAI(env, { type: 'statement_parse', moneyFacing: true, media, prompt, maxTokens: 4000, source: 'statementExtract' });
+    const txt = (r.result || '').trim();
+    const parsed = JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim());
+    const lines = Array.isArray(parsed.lines) ? parsed.lines.slice(0, 500).map(x => ({
+      date: String((x && x.date) || ''),
+      amount: (x && typeof x.amount === 'number' && isFinite(x.amount)) ? Math.abs(x.amount)
+        : ((x && x.amount !== null && x.amount !== undefined && x.amount !== '' && isFinite(Number(x.amount))) ? Math.abs(Number(x.amount)) : null),
+      description: String((x && x.description) || ''),
+      ref: String((x && x.ref) || ''),
+    })) : [];
+    return { vendor_detected: String((parsed && parsed.vendor_detected) || ''), lines };
+  } catch (e) {
+    // routeAI threw (missing key, network) or the model's text didn't parse as JSON — fail open
+    // with an empty lines array rather than throwing into the import endpoint (same discipline as
+    // invoiceExtract's fail-open wrapper above).
+    return { vendor_detected: '', lines: [], _error: true, _error_message: String((e && e.message) || e) };
+  }
+}
+
 // Read a VENDOR INVOICE (photo or PDF) with Claude vision → strict JSON suggestion. This is the
 // read half of the "vendor picks a file → it's read automatically → confirm & Submit" flow
 // (Brett's ask, Aug 31 2026): no separate "read" button, the file is OCR'd the instant it's
