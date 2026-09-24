@@ -359,28 +359,51 @@ async function stmtPdfSelected(input){
   input.value = '';
 }
 
+// Auto-loops on the server's own `next_offset`/`remaining` rather than relying on Brett to
+// manually tap "import again" (Sep 24 2026 review fix): the endpoint caps writes at 100/call, and
+// re-sending the SAME first 100 rows without an offset re-inserted them as duplicates — a row it
+// just wrote is Status:'pending', and statementLineMatch correctly treats 'pending' as not yet
+// dispositioned, so it never deduped against its own just-inserted rows. Sending `offset:
+// next_offset` on every follow-up call makes each call process a genuinely different slice, so
+// nothing is ever reprocessed and nothing is silently skipped — this removes the duplicate-insert
+// risk entirely rather than just documenting around it.
 async function stmtRunImport(body, truncatedNote){
   const statusEl = document.getElementById('stmt-status');
   const resultEl = document.getElementById('stmt-result');
-  statusEl.innerHTML = '<span class="info">Importing…</span>';
+  const totals = { total_lines: 0, matched_confirmed: 0, flagged_possible: 0, inserted: 0, skipped_invalid: 0, errors: [] };
+  let vendorDetected = '';
+  let offset = 0, call = 0;
   try {
-    const res = await post('/receipt-recon/import-statement', body);
-    if (res.error) throw new Error(res.error);
+    while (true) {
+      call++;
+      statusEl.innerHTML = '<span class="info">Importing' + (call > 1 ? ' — processed ' + offset + (totals.total_lines ? ' of ' + totals.total_lines : '') + '…' : '…') + '</span>';
+      const res = await post('/receipt-recon/import-statement', Object.assign({}, body, { offset }));
+      if (res.error) throw new Error(res.error);
+      totals.total_lines = res.total_lines; // authoritative each call (rows/file are re-sent unchanged)
+      totals.matched_confirmed += res.matched_confirmed || 0;
+      totals.flagged_possible += res.flagged_possible || 0;
+      totals.inserted += res.inserted || 0;
+      totals.skipped_invalid += res.skipped_invalid || 0;
+      if (res.errors && res.errors.length) totals.errors = totals.errors.concat(res.errors);
+      if (res.vendor_detected) vendorDetected = res.vendor_detected;
+      offset = (typeof res.next_offset === 'number') ? res.next_offset : offset + 100;
+      if (!res.remaining || res.remaining <= 0) break;
+      statusEl.innerHTML = '<span class="info">Processed ' + offset + ' of ' + totals.total_lines + '… continuing</span>';
+    }
     const lines = [
-      res.total_lines + ' line(s) read' + (res.vendor_detected ? ' (statement says "' + esc(res.vendor_detected) + '")' : ''),
-      res.matched_confirmed + ' already accounted for (no action needed)',
-      res.inserted + ' landed in Pending' + (res.flagged_possible ? ' (' + res.flagged_possible + ' flagged ⚠️ possible match — check before billing)' : ''),
-      res.skipped_invalid ? res.skipped_invalid + ' skipped (no readable date/amount)' : '',
+      totals.total_lines + ' line(s) read' + (vendorDetected ? ' (statement says "' + esc(vendorDetected) + '")' : ''),
+      totals.matched_confirmed + ' already accounted for (no action needed)',
+      totals.inserted + ' landed in Pending' + (totals.flagged_possible ? ' (' + totals.flagged_possible + ' flagged ⚠️ possible match — check before billing)' : ''),
+      totals.skipped_invalid ? totals.skipped_invalid + ' skipped (no readable date/amount)' : '',
     ].filter(Boolean);
-    let html = '<div class="ok">✅ ' + lines.join(' · ') + '</div>';
+    let html = '<div class="ok">✅ ' + lines.join(' · ') + (call > 1 ? ' (' + call + ' batches)' : '') + '</div>';
     if (truncatedNote) html += '<div class="warn">Only the first 500 rows were sent — split the rest into another CSV import.</div>';
-    if (res.remaining > 0) html += '<div class="warn">' + res.remaining + ' more line(s) waiting — <button class="btn small" onclick="stmtRunImport(' + JSON.stringify(body).replace(/"/g,'&quot;') + ')">Import again</button></div>';
-    if (res.errors && res.errors.length) html += '<div class="err">' + res.errors.length + ' error(s): ' + esc(res.errors.slice(0,3).join('; ')) + '</div>';
+    if (totals.errors.length) html += '<div class="err">' + totals.errors.length + ' error(s): ' + esc(totals.errors.slice(0,3).join('; ')) + '</div>';
     resultEl.innerHTML = html;
     statusEl.innerHTML = '';
     toast('<b>' + esc(body.vendor) + ' statement</b> — ' + esc(lines.join(' · ')));
     if (curStatus === 'pending') await loadQueue();
-  } catch(e){ statusEl.innerHTML = '<span class="err">❌ ' + esc(e.message) + '</span>'; }
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ ' + esc(e.message) + ' (processed ' + offset + ' of ' + (totals.total_lines || '?') + ' before this failed)</span>'; }
 }
 
 function rebuildWoDatalist(){
