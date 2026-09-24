@@ -1590,12 +1590,47 @@ function formatUnitLabel(label) {
 // tenant. Found live (Sep 2026): this fallback was missing here, so tenant SMS silently never
 // fired for any whole-property WO — Tenant_SMS_Sent stayed FALSE even on a successful assign.
 function currentTenantForDispatch(tenants, unit, wo) {
+  const all = tenantsForDispatch(tenants, unit, wo);
+  if (all.length) return all[0];
+  // Fallback to the legacy single-pointer lookup only when the Tenants-table scan above found
+  // nothing at all (e.g. Units.Tenant_ID or WO.Tenant_ID names a tenant whose own Unit_ID/
+  // Property_ID has since drifted) — keeps every existing non-fanout caller's behavior intact.
   const id = (unit && unit.Tenant_ID) || (wo && wo.Tenant_ID) || '';
   let t = id ? (tenants || []).find(x => String(x.ID) === String(id)) : null;
-  if (!t && wo && wo.Property_ID && !wo.Unit_ID) {
-    t = (tenants || []).find(x => x.Property_ID === wo.Property_ID && !x.Unit_ID && x.Active !== 'FALSE');
-  }
   return isTenantCurrent(t) ? t : null;
+}
+
+// CAP-036 #21 fix (Sep 24 2026) — real case: 115 W 29th St Apt 2 (Julie Feldman + Alanna
+// McLaughlin) and Apt 3 (Lance Serafica + Emily Marquez) each have TWO active tenants sharing
+// one unit, and only one of them was ever getting work-order SMS (reassignment/completion/
+// scheduled/etc). Root cause was NOT a bad tenant/unit link — both tenants' own Tenants rows
+// correctly carry the same Unit_ID/Property_ID. The bug was that every tenant-notification call
+// site resolved "the" tenant via currentTenantForDispatch, which follows Units.Tenant_ID — a
+// single FK column that can only ever name one occupant — instead of asking the Tenants table
+// for every active tenant actually linked to that unit. Confirmed systemic: at least 8 other
+// live multi-tenant units show the same one-tenant-only pointer (153 W Lanvale Apt 1, 1214 N
+// Calvert Apt 2 & Apt 3, 3014 N Calvert Apt B, 928 N Calvert Apt 2F, 151 W Lanvale Apt 2, plus
+// the Apt 3/20 E Eager test row) — none of those needed a data fix either.
+//
+// tenantsForDispatch returns EVERY currently-active tenant tied to this WO's unit (or, for a
+// whole-property WO with no Unit_ID, every active no-Unit tenant at that property — same
+// fallback currentTenantForDispatch already used). This is deliberately still scoped to ONE
+// unit/property's own tenants, never a building-wide broadcast — that's a separate, already-
+// decided default-off case. Callers that need to actually SEND something still run each
+// returned tenant through isTenantNotifiable (phone present, not background-WO) individually,
+// exactly as they did for the single tenant before this fix.
+function tenantsForDispatch(tenants, unit, wo) {
+  const list = tenants || [];
+  let matches = [];
+  if (wo && wo.Unit_ID) {
+    matches = list.filter(t => t.Unit_ID === wo.Unit_ID && t.Active !== 'FALSE');
+  } else if (wo && wo.Property_ID && !wo.Unit_ID) {
+    matches = list.filter(t => t.Property_ID === wo.Property_ID && !t.Unit_ID && t.Active !== 'FALSE');
+  } else if (wo && wo.Tenant_ID) {
+    const t = list.find(x => String(x.ID) === String(wo.Tenant_ID));
+    if (t) matches = [t];
+  }
+  return matches.filter(isTenantCurrent);
 }
 
 // A WO opened before the tenant's Move_In_Date is "background" to them — work tied to
