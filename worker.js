@@ -565,9 +565,9 @@ export default {
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
-        if (path === '/property/add')             return await addRow(env, 'Properties', body);
+        if (path === '/property/add')             return await propertyAddWithDupeCheck(env, body);
         if (path === '/property/update')          return await propertyUpdate(env, body);
-        if (path === '/unit/add')                 return await addRow(env, 'Units', body);
+        if (path === '/unit/add')                 return await unitAddWithDupeCheck(env, body);
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
         if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
@@ -14079,6 +14079,68 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds) {
     }
     return null;
   } catch (e) { return null; }
+}
+
+// Duplicate-guard for /property/add and /unit/add (Sep 24 2026, Brett's ask): both handlers
+// used to call addRow directly with zero check against what's already there, so a new
+// property/unit could be created even when a matching one already existed -- the fix should
+// have been linking the existing record (to an owner, or to QuickBooks), not creating a second
+// one. addRow itself stays untouched (Owners/Vendors/Tenants/etc all still call it directly);
+// only the property/unit dispatch now wraps it with a same-normalization-as-adminDuplicateProperties
+// check first. Same soft-block pattern as depositApprove/qbSetIrBill: 409 + the matching row(s),
+// resubmit with force:true to create anyway -- never a native confirm() (see the Aug 24 2026 note
+// on qbSetMap for why this repo dropped that pattern).
+async function findSimilarProperties(env, address, city) {
+  const addr = qbNormAddress(address || '');
+  if (!addr) return [];
+  const key = addr + '|' + qbNormAddress(city || '');
+  const properties = await fetchTab(env, 'Properties');
+  return properties
+    .filter(p => p.Active !== 'FALSE' && (qbNormAddress(p.Address || '') + '|' + qbNormAddress(p.City || '')) === key)
+    .map(p => ({ id: p.ID, address: p.Address, city: p.City || '', owner_id: p.Owner_ID || null }));
+}
+
+// Units don't have their own address to normalize -- qbNormAddress's street-suffix mapping
+// (st -> street, etc.) doesn't apply to a label like "Apt 1" or "2nd Floor", so this is its own
+// small normalizer: lowercase, strip the same punctuation qbNormAddress strips, collapse
+// whitespace. Scoped to the SAME Property_ID only -- "Unit 1" on two different buildings is not
+// a duplicate of itself.
+function qbNormUnitLabel(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+async function findSimilarUnits(env, propertyId, label) {
+  const norm = qbNormUnitLabel(label);
+  if (!propertyId || !norm) return [];
+  const units = await fetchTab(env, 'Units');
+  return units
+    .filter(u => String(u.Property_ID) === String(propertyId) && u.Active !== 'FALSE' && qbNormUnitLabel(u.Unit_Label) === norm)
+    .map(u => ({ id: u.ID, unit_label: u.Unit_Label }));
+}
+
+async function propertyAddWithDupeCheck(env, body) {
+  if (!body.force) {
+    const matches = await findSimilarProperties(env, body.Address, body.City);
+    if (matches.length) {
+      return json({
+        error: `A property matching "${body.Address}"${body.City ? ', ' + body.City : ''} already exists (ID ${matches.map(m => m.id).join(', ')}). Link it to the right owner instead (POST /property/update with Owner_ID), or pass force:true to create a new one anyway.`,
+        duplicate_of: matches,
+      }, 409);
+    }
+  }
+  return await addRow(env, 'Properties', body);
+}
+
+async function unitAddWithDupeCheck(env, body) {
+  if (!body.force) {
+    const matches = await findSimilarUnits(env, body.Property_ID, body.Unit_Label);
+    if (matches.length) {
+      return json({
+        error: `A unit labeled "${body.Unit_Label}" already exists on this property (ID ${matches.map(m => m.id).join(', ')}). Pass force:true to create a new one anyway.`,
+        duplicate_of: matches,
+      }, 409);
+    }
+  }
+  return await addRow(env, 'Units', body);
 }
 
 async function addRow(env, tab, body) {

@@ -641,10 +641,13 @@ window.addEventListener('pageshow', function(e){
       Anything left unlinked gets <b>created</b> in QuickBooks the first time you invoice it —
       which is how you end up with the same customer twice under slightly different names.
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
       <button class="btn small" onclick="loadQBMapping(true)">↻ Reload from QuickBooks</button>
       <button class="btn small" onclick="qbApplyAllSuggestions()">✓ Accept all confident matches</button>
       <button class="btn small" onclick="auditUnits()">🔍 Check every unit</button>
+      <input id="qbmap-filter" type="text" placeholder="Filter by owner, property or unit…" oninput="filterQBMapping()"
+        style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px;min-width:220px">
+      <span id="qbmap-filter-count" style="color:var(--muted);font-size:11px"></span>
     </div>
     <div id="qb-map-body"><div style="color:var(--muted);font-size:12px">Loading…</div></div>
   </div>
@@ -681,6 +684,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="findRepairableInvoices()">🔧 Fix invoices already in QuickBooks</button>
       <button class="btn small" onclick="window.open('signed-proposals.html','_blank')">🖊 Signed proposals → QB</button>
       <button class="btn small" onclick="window.open('trash.html','_blank')">🗑 Trash Service billing</button>
+      <button class="btn small" onclick="goToQBMapping()">🔗 QB Mapping — link properties/units to QuickBooks</button>
     </div>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🧹 DATA HYGIENE</div>
@@ -956,6 +960,12 @@ window.addEventListener('pageshow', function(e){
 <div class="modal-overlay" id="modal-add-property">
   <div class="modal">
     <div class="modal-header"><div class="modal-title">ADD PROPERTY</div><button class="modal-close" onclick="closeModal('modal-add-property')">✕</button></div>
+    <div id="ap-unlinked-section" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:12px">
+      <div style="font-size:11.5px;color:var(--text);font-weight:600;margin-bottom:4px">Already in the system with no owner assigned</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px">If one of these is the property you meant, link it instead of creating a new one below.</div>
+      <div id="ap-unlinked-list"></div>
+    </div>
+    <div id="ap-dupe-warning" style="display:none;background:#fff3e0;border:1px solid var(--warn);border-radius:6px;padding:10px;margin-bottom:12px;font-size:11.5px;color:var(--text)"></div>
     <div class="form-grid">
       <div class="form-group full"><label>Address</label><input type="text" id="p-address" placeholder="123 Main St"></div>
       <div class="form-group"><label>City</label><input type="text" id="p-city" placeholder="Baltimore"></div>
@@ -1034,6 +1044,7 @@ window.addEventListener('pageshow', function(e){
         <input type="text" id="ep-new-unit-label" placeholder="e.g. Apt 1, 1st Floor" style="flex:1;margin-bottom:0">
         <button type="button" class="btn small" onclick="addUnitToEditedProperty()">+ Add Unit</button>
       </div>
+      <div id="ep-unit-dupe-warning" style="display:none;background:#fff3e0;border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:6px;font-size:11px;color:var(--text)"></div>
     </div>
     <div class="form-group full" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
       <label>Tenant Work Order Submission <span id="ep-two-effective" style="font-weight:normal"></span></label>
@@ -3660,12 +3671,55 @@ function markInvoicePaid(woId){
 function openAddPropertyModal() {
   document.getElementById('p-owner').innerHTML = '<option value="">No owner assigned</option>' +
     state.owners.map(function(o){return '<option value="'+o.ID+'">'+o.First_Name+' '+o.Last_Name+'</option>';}).join('');
+  document.getElementById('ap-dupe-warning').style.display = 'none';
+  renderApUnlinkedList();
   openModal('modal-add-property');
 }
-function submitAddProperty() {
+
+// The "already there, just not owned yet" list shown at the top of Add Property (Sep 24 2026).
+// Pulled entirely from already-loaded state.properties -- no extra network call.
+function renderApUnlinkedList() {
+  var section = document.getElementById('ap-unlinked-section');
+  var list = document.getElementById('ap-unlinked-list');
+  var unlinked = safeArray(state.properties).filter(function(p){ return p.Active !== 'FALSE' && !p.Owner_ID; });
+  if (!unlinked.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  list.innerHTML = unlinked.map(function(p){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-top:1px solid var(--border);font-size:11.5px">' +
+      '<span>' + esc(p.Address || '(no address)') + (p.City ? ', ' + esc(p.City) : '') + '</span>' +
+      '<button class="btn small" onclick="linkUnlinkedProperty(\'' + esc(String(p.ID)) + '\')">Link to this owner</button>' +
+    '</div>';
+  }).join('');
+}
+function linkUnlinkedProperty(propertyId) {
+  var ownerId = document.getElementById('p-owner').value;
+  if (!ownerId) { toast('Pick an owner above first, then link','error'); return; }
+  api('POST','/property/update',{id:propertyId,fields:{Owner_ID:ownerId}}).then(function(res){
+    if (res.error){logError('Link property',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Linked','success');closeModal('modal-add-property');loadAll();
+  }).catch(function(e){logError('Link property',e.message);toast('Error: '+e.message,'error');});
+}
+
+function submitAddProperty(force) {
   var body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Unit_Count:document.getElementById('p-units').value,Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
+  if (force) body.force = true;
   if (!body.Address) { toast('Address required','error'); return; }
+  var warnBox = document.getElementById('ap-dupe-warning');
+  warnBox.style.display = 'none';
   api('POST','/property/add',body).then(function(res){
+    if (res.duplicate_of && safeArray(res.duplicate_of).length) {
+      var ownerId = document.getElementById('p-owner').value;
+      warnBox.innerHTML = '⚠ ' + esc(res.error || 'A matching property already exists.') + '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
+        safeArray(res.duplicate_of).map(function(m){
+          return (ownerId
+            ? '<button class="btn small" onclick="linkUnlinkedProperty(\'' + esc(String(m.id)) + '\')">Link ID ' + esc(String(m.id)) + ' to this owner</button>'
+            : '<span style="color:var(--muted)">ID ' + esc(String(m.id)) + (m.owner_id ? ' (already has an owner)' : ' (no owner — pick one above to link)') + '</span>');
+        }).join(' ') +
+        ' <button class="btn small secondary" onclick="submitAddProperty(true)">Create a new one anyway</button>' +
+      '</div>';
+      warnBox.style.display = '';
+      return;
+    }
     if (res.error){logError('Add property',res.error);toast('Error: '+res.error,'error');return;}
     toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');loadAll();
   }).catch(function(e){logError('Add property',e.message);toast('Error: '+e.message,'error');});
@@ -4017,12 +4071,22 @@ function renderEpUnitsSection(propId){
         '<button type="button" class="btn small danger" onclick="deactivateEpUnit(\''+u.ID+'\')">Remove</button></div>';
     }).join('');
 }
-function addUnitToEditedProperty(){
+function addUnitToEditedProperty(force){
   var propId = document.getElementById('ep-id').value;
   var labelEl = document.getElementById('ep-new-unit-label');
   var label = labelEl.value.trim();
+  var warnBox = document.getElementById('ep-unit-dupe-warning');
+  if (warnBox) warnBox.style.display = 'none';
   if (!label) { toast('Enter a unit label first (e.g. Apt 1, 1st Floor)','error'); return; }
-  api('POST','/unit/add',{ Property_ID: propId, Unit_Label: label, Active: 'TRUE' }).then(function(res){
+  var body = { Property_ID: propId, Unit_Label: label, Active: 'TRUE' };
+  if (force) body.force = true;
+  api('POST','/unit/add',body).then(function(res){
+    if (res.duplicate_of && safeArray(res.duplicate_of).length && warnBox) {
+      warnBox.innerHTML = '⚠ ' + esc(res.error || 'A matching unit already exists on this property.') +
+        ' <button class="btn small secondary" onclick="addUnitToEditedProperty(true)">Create anyway</button>';
+      warnBox.style.display = '';
+      return;
+    }
     if (res.error) { logError('Add unit', res.error); toast('Error: '+res.error,'error'); return; }
     state.units = safeArray(state.units).concat([{ ID: res.id, Property_ID: propId, Unit_Label: label, Tenant_ID: '', Active: 'TRUE' }]);
     labelEl.value = ''; toast('Unit added','success'); renderEpUnitsSection(propId);
@@ -5035,6 +5099,7 @@ function renderOwnersPage() {
       '<td style="display:flex;gap:4px">' +
       '<button class="btn small secondary" onclick="openEditOwnerModal(\''+o.ID+'\')">Edit</button>' +
       '<button class="btn small secondary" onclick="openLinkPropertyModal(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Assign an existing property to this owner">+ Property</button>' +
+      '<button class="btn small secondary" onclick="goToQBMapping(\''+esc((nm || o.Company || '').replace(/\'/g,''))+'\')" title="View/link this owner\'s properties and units to QuickBooks">🔗</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
       '<button class="btn small secondary" onclick="openSendMessageModal(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Send a one-off message">✉️</button>' +
@@ -10338,7 +10403,8 @@ function qbSubRow(kind, row, qbList) {
     ? (row.owner_name ? esc(row.owner_name) : '<span style="color:var(--danger)">no owner</span>')
     : (row.property_name ? esc(row.property_name) : '<span style="color:var(--danger)">no property</span>');
 
-  return '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
+  var filterText = ((row.display || '') + ' ' + (row.owner_name || '') + ' ' + (row.property_name || '')).toLowerCase();
+  return '<div data-qbfilter="' + esc(filterText) + '" style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
     '<div>' +
       '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(unnamed)') + '</div>' +
       '<div style="color:var(--muted);font-size:10px;margin:1px 0">under ' + context + '</div>' +
@@ -10536,7 +10602,7 @@ function qbMapRow(kind, row, qbList) {
         }).join(', ') + ' — is that where these belong?</div>'
     : '';
 
-  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
+  return '<div data-qbfilter="' + esc((row.display || '').toLowerCase()) + '" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
     '<div>' +
       '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(no name)') + '</div>' +
       '<div style="margin-top:2px">' + (row.in_house && kind === 'vendor' ? '<span style="color:var(--accent2);font-size:10.5px">in-house — no QuickBooks bill</span>' : state) + '</div>' +
@@ -10547,6 +10613,39 @@ function qbMapRow(kind, row, qbList) {
       'style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px">' +
       opts + '</select>' +
   '</div>';
+}
+
+// Client-side substring filter over the rows renderQBMapping() just drew — every row from
+// qbMapRow/qbSubRow carries a data-qbfilter attribute (lowercased display name, plus owner/
+// property context for properties and units) to match against. No backend call, so it stays
+// instant even on a big portfolio; re-applied at the end of every render (loadQBMapping /
+// auditUnits / accept-all) so a filter typed before a refresh survives it.
+function filterQBMapping() {
+  var input = document.getElementById('qbmap-filter');
+  var q = (input && input.value || '').trim().toLowerCase();
+  var rows = document.querySelectorAll('#qb-map-body [data-qbfilter]');
+  var shown = 0;
+  rows.forEach(function(r) {
+    var match = !q || r.getAttribute('data-qbfilter').indexOf(q) !== -1;
+    r.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  var countEl = document.getElementById('qbmap-filter-count');
+  if (countEl) countEl.textContent = q ? (shown + ' of ' + rows.length + ' match') : '';
+}
+
+// Click-through entry point for other pages (Dev Log, the Owners table "🔗" button) that want
+// to land on QB Mapping already narrowed to one owner/property, instead of the whole portfolio
+// (Sep 24 2026, Brett's ask — the mapping tool had no way in from anywhere but its own nav
+// button, and no way to jump straight to one owner's rows once there).
+function goToQBMapping(filterText) {
+  showPage('qb-map', document.querySelector('.nav-btn[onclick*="qb-map"]'));
+  var input = document.getElementById('qbmap-filter');
+  if (input) input.value = filterText || '';
+  // loadQBMapping(false) re-renders async (cached data if already loaded, a fresh fetch
+  // otherwise) — apply the filter once that render lands rather than racing it.
+  setTimeout(filterQBMapping, 0);
+  setTimeout(filterQBMapping, 400);
 }
 
 function renderQBMapping() {
@@ -10590,6 +10689,7 @@ function renderQBMapping() {
     subSection('PROPERTIES → SUB-CUSTOMERS', 'Each building sits under its owner, so an invoice lands on the address that earned it rather than on one shared ledger.', unlinkedP, props.length, 'property', props) +
     subSection('UNITS → SUB-CUSTOMERS', 'Optional. Link a unit only where you want that apartment tracked separately; otherwise its work bills to the building.', unlinkedU, units.length, 'unit', units) +
     section('VENDORS → QUICKBOOKS VENDORS', unlinkedV, vendors.length, 'vendor', vendors, _qbMap.qb_vendors);
+  filterQBMapping();
 }
 
 // Which slice of the loaded map a kind lives in. This used to be a two-way ternary that
