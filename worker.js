@@ -282,8 +282,17 @@ export default {
           // production. Fully inert unless env.HUB_PROD_RO_TOKEN is set, so deploying this has
           // zero effect until the secret exists on production maintenance-hub (and the matching
           // value is set on the gh-broker Worker's own HUB_PROD_RO_TOKEN).
-          const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance','/admin/receipt-duplicate-audit/flags'];
-          const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && HUB_PROD_RO_READ_PATHS.includes(path);
+          const HUB_PROD_RO_EXCLUDE_PATHS = [
+            '/notifications/pending', // processPendingNotifications: sends live SMS (sendSMS/smsGatedSend) and marks Notification_Queue rows Sent on every call that finds due rows
+            '/gmail/test',            // gmailTest: sends a real test email via gmailSendEmail
+            '/gmail/callback',        // gmailOAuthCallback: writes GMAIL_REFRESH_TOKEN to Config on a successful OAuth exchange
+            '/qb/setup-trades',       // qbSetupTrades: creates QuickBooks Account/Item records
+            '/daily-digest',          // digestResponse: writes an Ops_Telemetry row every call; sends SMS/email when called with ?deliver=1
+            '/tenant-by-pin',         // tenantByPin -> pinLookup: writes PIN_Lockout on every call (recordPinFailure/clearPinLockout)
+            '/owner-by-pin',          // ownerByPin -> pinLookup: same PIN_Lockout write path as /tenant-by-pin
+            '/vendor-by-pin',         // vendorByPin -> pinLookup: same PIN_Lockout write path as /tenant-by-pin
+          ];
+          const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && !HUB_PROD_RO_EXCLUDE_PATHS.includes(path);
           // Narrow WRITE-CAPABLE token for safe, allow-listed production writes (Sep 22 2026,
           // follow-on to HUB_PROD_RO_TOKEN above — see context/PROD_WRITE_TOKEN_BUILD_BRIEF_v1.0.md).
           // Lets a session run a specific, pre-reviewed production write (one-time backfills and
