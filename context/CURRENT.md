@@ -1,3 +1,49 @@
+# Sep 24, 2026, ~17:45 ET — BUILT (branch pushed, PR #66 open, not merged): CAP-036 #12 Vendor Task Requests -- "Flag Vendor Issue" + needs-your-review queue
+
+Confirmed spec: `context/CAPTURE_INBOX.md` CAP-036 item #12. A NEW system, separate from the
+existing `Vendor_Requests`/`processVendorNudges` automatic chase-a-quiet-vendor clock -- this is
+Brett explicitly flagging a vendor issue: three canned request types (Request Photos, Request
+Description Update/Clarification, Other free-typed), always scoped to the vendor's estimate or
+invoice on the WO. Triggered from either the WO detail view or the Review Bills card. Surfaces
+in a dedicated "Needs Your Attention" section at the top of the vendor portal. Vendor "Mark
+Done" does NOT auto-resolve it -- per Brett's explicit instruction, it lands in a "Needs Your
+Review" queue on the Hub's Dev Log page until Brett does his own manual check.
+
+**Built:** new additive `Vendor_Task_Requests` Sheet tab (via the existing `ensureTab`/
+`ensureColumns` pattern); `POST /vendor-task-request/create` (admin, SMS via the existing
+`smsGatedSend` chokepoint), `GET /vendor-task-requests` (admin + vendor session, vendor_id
+forced from the verified session token for a vendor caller), `POST /vendor-task-request/
+mark-done` (vendor-side, sets `vendor_marked_done` -- never the terminal status), `GET
+/vendor-task-requests/pending-review` + `POST /vendor-task-request/mark-reviewed` (admin only,
+the only path to `reviewed_resolved`). `ROLE_SCOPES.vendor` gets exactly the two vendor-facing
+paths. UI: a "Flag Vendor Issue" trigger + this WO's own requests on the WO detail modal
+(index.html), a matching button on each Review Bills card, a "Needs Your Review" section on Dev
+Log, and a "Needs Your Attention" banner at the top of the vendor portal (vendor.html) loaded on
+login.
+
+**Deliberately avoided touching:** per this file's own note that CAP-036 sub-builds are landing
+concurrently across several open PRs, this build did not touch `index.html`'s WO-detail
+action-buttons block (`addBtn(...)` calls inside `openWODetail`) or `vendor.html`'s
+`loadVendorBillSummary` -- both are PR #63's (`feat/cap-036-batch2-photo-delivery-receipts`)
+territory. The new UI is added as its own separate `insertAdjacentHTML` call / function block
+alongside them instead.
+
+**Verified:** new `test/vendor-task-requests.test.mjs`, 27/27 passing (structural, same
+convention as `test/vendor-nudges.test.mjs` -- reads the real `worker.js` source, no live Sheets/
+Twilio calls). Re-ran `test/selftest.test.mjs` (107/107) and `test/vendor-nudges.test.mjs`
+(17/17) against the changed `worker.js` -- no regressions. `node --check` clean on `worker.js`
+and both HTML files' inline `<script>` blocks. **Not verified live** -- `maintenance-hub-staging`
+is several PRs behind several other just-built CAP-036 sub-builds (#56/#58/#59/#61/#63), so this
+pass relied on static/structural verification only, named plainly rather than routed around, same
+as other recent CAP-036 builds have flagged.
+
+**Ship status:** branch `feat/cap-036-vendor-task-requests` pushed to `Ridge-Co/RidgeCo`, PR #66
+(`https://github.com/Ridge-Co/RidgeCo/pull/66`) open, **not merged** -- vendor-facing SMS + a new
+data model, staged for Brett's own review per PAT-033/`AUTONOMY_GUARDRAILS_v1.0`, not
+auto-merged. `context/FEATURE_LOG.md` bumped to v2.10, `[FL-20260924-1745-vtr]`.
+
+---
+
 # Sep 24, 2026, ~17:00 ET — SHIPPED: Allow-list simplification (PR #55) + property/unit linking & duplicate-check (PR #57)
 
 ## 🟢 Live: Allow-list simplification, all 3 changes
