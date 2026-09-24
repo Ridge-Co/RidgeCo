@@ -564,6 +564,9 @@ export default {
         if (path === '/message/send-custom')      return await sendCustomMessage(env, body);
         if (path === '/cron/sweep')                return await cronSweep(env);
         if (path === '/vendor-request/create')     return await createVendorRequest(env, body);
+        if (path === '/vendor-task-request/create')       return await createVendorTaskRequest(env, body);
+        if (path === '/vendor-task-request/mark-done')    return await markVendorTaskDone(env, body, callerRole, callerSessionId);
+        if (path === '/vendor-task-request/mark-reviewed') return await markVendorTaskReviewed(env, body);
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
