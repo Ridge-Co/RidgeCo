@@ -4491,6 +4491,60 @@ function deleteWishlistItem(id){
   if(!confirm('Remove this item completely? (To keep it as history, use ✓ Done or ✗ N-A instead.)'))return;
   api('POST','/wishlist/delete',{id:id}).then(function(){wishlistItems=wishlistItems.filter(function(i){return String(i.ID)!==String(id);});renderWishlist();}).catch(function(e){toast('Error: '+e.message,'error');});
 }
+
+// ── Vendor Access Requests (Vendor Standalone Billing build brief §3d) ──────────────────────
+// Lazy-fetch-on-open, same pattern as Wishlist/Cache above. One GET backs BOTH the Dev Log
+// section here and the Dashboard's pending-count tile (renderDashboard), on purpose — Brett's
+// ask was that these two badges can never drift apart.
+var vendorAccessRequests = [];
+function loadVendorAccessRequests(){
+  api('GET','/vendor-access-requests?status=pending').then(function(rows){
+    vendorAccessRequests = Array.isArray(rows) ? rows : [];
+    renderVendorAccessRequests();
+    updateVendorAccessRequestBadges();
+  }).catch(function(e){ console.log('Vendor access requests load error', e); });
+}
+function renderVendorAccessRequests(){
+  var el = document.getElementById('vendor-access-requests-list'); if (!el) return;
+  if (!vendorAccessRequests.length) { el.innerHTML = '<div class="loading">No pending requests.</div>'; return; }
+  el.innerHTML = vendorAccessRequests.map(function(r){
+    var prop = safeArray(state.properties).find(function(p){ return String(p.ID)===String(r.Requested_Property_ID); });
+    var addr = prop ? prop.Address : ('Property ' + r.Requested_Property_ID);
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:var(--radius);padding:12px;margin-bottom:8px">' +
+      '<div style="font-size:13px;font-weight:bold">' + esc(r.Vendor_Name||'') + '</div>' +
+      '<div style="font-size:12px;color:var(--text);margin:2px 0">Requesting access to: ' + esc(addr) + '</div>' +
+      (r.Note ? '<div style="font-size:11.5px;color:var(--muted);font-style:italic;margin-bottom:6px">"' + esc(r.Note) + '"</div>' : '') +
+      '<div style="font-size:10.5px;color:var(--muted);margin-bottom:8px">' + esc((r.Created_Date||'').split('T')[0]) + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        '<button class="btn small" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'once\',\'approve\')">✓ Approve once</button>' +
+        '<button class="btn small" style="background:var(--accent2)" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'ongoing\',\'approve\')">✓ Approve ongoing</button>' +
+        '<button class="btn small danger" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'once\',\'deny\')">✗ Deny</button>' +
+      '</div></div>';
+  }).join('');
+}
+function decideVendorAccessRequest(id, scope, decision){
+  api('POST','/vendor-access-requests/approve',{id:id,scope:scope,decision:decision}).then(function(res){
+    if (res && res.error) { toast('Error: '+res.error,'error'); return; }
+    toast(decision==='deny' ? 'Denied' : ('Approved ('+scope+')'), 'success');
+    loadVendorAccessRequests();
+    loadAll(); // Billing_Property_Access may have changed — keep state.vendors fresh
+  }).catch(function(e){ toast('Error: '+e.message,'error'); });
+}
+function updateVendorAccessRequestBadges(){
+  var n = vendorAccessRequests.length;
+  var navBadge = document.getElementById('devlog-nav-badge');
+  if (navBadge) { navBadge.style.display = n>0 ? 'inline-block' : 'none'; navBadge.textContent = String(n); }
+  var inline = document.getElementById('var-nav-count-inline');
+  if (inline) inline.style.display = n>0 ? '' : 'none';
+  var tile = document.getElementById('dashboard-var-tile');
+  var tileCount = document.getElementById('dashboard-var-count');
+  if (tile) tile.style.display = n>0 ? 'block' : 'none';
+  if (tileCount) tileCount.textContent = String(n);
+}
+function goToVendorAccessRequests(){
+  var btn = document.querySelector('.nav-btn[onclick*="devlog"]');
+  showPage('devlog', btn);
+}
 function clearWishlistDone(){
   var gone=wishlistItems.filter(function(i){var s=wlStatusOf(i);return s==='Done'||s==='Not applicable';});
   if(!gone.length){toast('Nothing Done or N-A to clear','info');return;}
