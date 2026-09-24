@@ -6690,6 +6690,166 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   }
 }
 
+// ── Vendor Loan/Advance Ledger (CAP-036 #13, Sep 24 2026, Brett-confirmed) ──────────────────
+// A GENERAL, reusable running-balance ledger on the Vendor record — any vendor, not
+// hardcoded to Gina or Alex. One tab covers both use cases, distinguished by Entry_Type:
+//   'manual'         — Gina (Venmo, bypasses the invoice-payment system on purpose): Brett
+//                       adds an entry with an amount + direction + date; balance moves either
+//                       way (a loan/advance increases it, a repayment decreases it).
+//   'auto-deduction' — Alex (and any other vendor with a nonzero balance): automatically
+//                       deducted from the LABOR portion of each invoice at bill-payment time
+//                       (see applyVendorLoanDeduction, called from qbSendInvoice).
+//   'seed'           — a one-time starting-balance entry (e.g. Alex's $210 placeholder).
+// Amount is stored SIGNED (+ increases balance / a loan given, − decreases it / a repayment)
+// so the running balance is always just a sum — Balance_After is a snapshot for fast display,
+// recomputed from the full history so a stray edit can never leave it silently wrong.
+// Self-provisions on first write, same pattern as ensureTrashTabs/ensureDeliveryTab/ensureInspTabs.
+const LOAN_LEDGER_TAB = 'Vendor_Loan_Ledger';
+const LOAN_LEDGER_HEADERS = ['ID','Vendor_ID','Vendor_Name','Entry_Type','Direction','Amount','Balance_After','Labor_Amount','Bill_ID','WO_ID','Date','Notes','Entered_By','Created_Date','Active'];
+
+async function ensureLoanLedgerTab(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  if (!titles.includes(LOAN_LEDGER_TAB)) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: LOAN_LEDGER_TAB } } }] });
+  }
+  await ensureColumns(env, LOAN_LEDGER_TAB, LOAN_LEDGER_HEADERS);
+}
+
+// Sum of every active entry's signed Amount for one vendor = the current balance.
+// Balance > 0 means the vendor owes Ridge Co (a loan/advance outstanding); 0 or less
+// means paid off (a negative balance would mean Brett owes THEM, which the deduction
+// logic below can never create — it stops exactly at 0, see computeLoanDeduction).
+async function getVendorLoanBalance(env, vendorId) {
+  let rows = [];
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { return 0; } // tab doesn't exist yet → no loans
+  return rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
+    .reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
+}
+
+// Appends one ledger entry and returns the new running balance. `direction` is 'loan' (balance
+// goes up) or 'repayment' (balance goes down) — the caller passes a positive `amount` either
+// way; the sign is applied here so a mistaken negative amount can never flip the meaning.
+async function addVendorLoanEntry(env, opts) {
+  await ensureLoanLedgerTab(env);
+  const direction = opts.direction === 'loan' ? 'loan' : 'repayment';
+  const signedAmount = direction === 'loan' ? Math.abs(Number(opts.amount) || 0) : -Math.abs(Number(opts.amount) || 0);
+  const priorBalance = await getVendorLoanBalance(env, opts.vendorId);
+  const balanceAfter = +(priorBalance + signedAmount).toFixed(2);
+  const row = {
+    Vendor_ID: String(opts.vendorId),
+    Vendor_Name: opts.vendorName || '',
+    Entry_Type: opts.entryType || 'manual',   // manual | auto-deduction | seed
+    Direction: direction,
+    Amount: signedAmount.toFixed(2),
+    Balance_After: balanceAfter.toFixed(2),
+    Labor_Amount: (opts.laborAmount != null && opts.laborAmount !== '') ? Number(opts.laborAmount).toFixed(2) : '',
+    Bill_ID: opts.billId || '',
+    WO_ID: opts.woId || '',
+    Date: opts.date || new Date().toISOString().split('T')[0],
+    Notes: opts.notes || '',
+    Entered_By: opts.enteredBy || 'Brett',
+  };
+  await addRow(env, LOAN_LEDGER_TAB, row);
+  return balanceAfter;
+}
+
+// GET /vendor-loan?vendor_id=X — running balance + full entry history for one vendor
+// (admin UI: Vendor edit view + the manual-entry ledger modal).
+async function vendorLoanGet(env, url) {
+  const vendorId = (url.searchParams.get('vendor_id') || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  let rows = [];
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { rows = []; } // no tab yet = no history
+  const entries = rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
+    .sort((a, b) => (parseInt(a.ID) || 0) - (parseInt(b.ID) || 0));
+  const balance = entries.reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
+  return json({ vendor_id: vendorId, balance: +balance.toFixed(2), entries });
+}
+
+// POST /vendor-loan/add { vendor_id, vendor_name?, amount, direction: 'loan'|'repayment',
+// date?, notes?, entered_by? } — Gina's manual ledger (and anyone else's manual correction).
+// Always Entry_Type 'manual'; the automatic path (applyVendorLoanDeduction) writes its own
+// 'auto-deduction' rows directly and never goes through this endpoint.
+async function vendorLoanAdd(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const amount = Number(body.amount);
+  const direction = body.direction === 'loan' ? 'loan' : (body.direction === 'repayment' ? 'repayment' : null);
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!(amount > 0)) return json({ error: 'amount must be a positive number' }, 400);
+  if (!direction) return json({ error: "direction must be 'loan' or 'repayment'" }, 400);
+  const balance = await addVendorLoanEntry(env, {
+    vendorId, vendorName: body.vendor_name || '', entryType: 'manual', direction,
+    amount, date: body.date || '', notes: body.notes || '', enteredBy: body.entered_by || 'Brett',
+  });
+  return json({ success: true, balance });
+}
+
+// PURE — the Alex/vendor-loan automatic-deduction formula (CAP-036 #13, Sep 24 2026,
+// Brett-confirmed spec; edge cases pinned in test/vendor-loan-deduction.test.mjs).
+//   laborAmount    — the LABOR-ONLY portion of the invoice being paid. Never materials or
+//                    reimbursement — those pass through to the vendor untouched regardless
+//                    of loan balance (Brett's stated rationale: materials spend isn't within
+//                    the vendor's control, so it must not speed up repayment).
+//   currentBalance — the vendor's loan balance BEFORE this invoice's deduction.
+// Returns the dollar amount to deduct. $0 whenever there's no balance to repay or labor is
+// under $100. Otherwise: 2.5% of labor at exactly $100, scaling linearly up to 5% at $500+
+// labor, capped at $25/invoice, then rounded to the nearest $2.50 — DOWN when labor is under
+// $350, UP at $351+ (exactly $350 rounds down, same side as "under"). The one exception: a
+// deduction that would clear the balance is never rounded and never exceeds what's actually
+// owed — it pays the exact remaining balance instead, whether that shortfall shows up before
+// or only after rounding.
+function computeLoanDeduction(laborAmount, currentBalance) {
+  const labor = Number(laborAmount) || 0;
+  const balance = Number(currentBalance) || 0;
+  if (balance <= 0 || labor < 100) return 0;
+
+  const pct = labor >= 500 ? 0.05 : 0.025 + (labor - 100) * (0.05 - 0.025) / (500 - 100);
+  let deduction = Math.min(labor * pct, 25);
+
+  // Payoff check #1: the raw (capped, unrounded) deduction already clears the balance.
+  if (deduction >= balance) return +balance.toFixed(2);
+
+  const roundUp = labor >= 351;
+  deduction = roundUp ? Math.ceil(deduction / 2.5) * 2.5 : Math.floor(deduction / 2.5) * 2.5;
+
+  // Payoff check #2: rounding (specifically rounding UP) can push it past the balance too.
+  if (deduction >= balance) return +balance.toFixed(2);
+
+  return +deduction.toFixed(2);
+}
+
+// STEP 1 (read-only) — figures out whether a loan deduction applies to this bill and how
+// much, WITHOUT writing anything. Split from the ledger write (recordVendorLoanDeduction,
+// below) on purpose: qbSendInvoice's bill POST can fail (a bad vendor ref, an Intuit hiccup)
+// and get retried on the next send attempt, and this row's QB_Bill_ID only gets set on
+// success — so writing the ledger entry here, before we know the bill actually posted, would
+// double-deduct on every retry of a failed send. Compute the adjustment early (to size the
+// bill payload correctly); record it only after billId comes back real.
+async function computeVendorLoanAdjustment(env, { vendorId, vendorCost, billRow }) {
+  const balance = await getVendorLoanBalance(env, vendorId);
+  if (!(balance > 0)) return { deduction: 0, laborAmount: 0, balance: 0 };
+
+  const isFlat = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'flat';
+  const laborAmount = isFlat ? (parseFloat(billRow && billRow.Flat_Rate) || 0) : (parseFloat(billRow && billRow.Labor_Total) || 0);
+  const deduction = computeLoanDeduction(laborAmount, balance);
+  // Never deduct more than the vendor is actually being paid on this bill — the loan ledger
+  // is repaid out of what they're owed, not created as a negative payable.
+  const safeDeduction = Math.min(deduction, Math.max(0, vendorCost));
+  return { deduction: safeDeduction > 0 ? safeDeduction : 0, laborAmount, balance };
+}
+
+// STEP 2 (writes) — call ONLY after the QuickBooks Bill has actually been created (a real
+// billId came back). General on purpose — ANY vendor with a nonzero balance gets this, not
+// just Alex.
+async function recordVendorLoanDeduction(env, { vendorId, vendorName, deduction, laborAmount, billId, woId }) {
+  return await addVendorLoanEntry(env, {
+    vendorId, vendorName, entryType: 'auto-deduction', direction: 'repayment',
+    amount: deduction, laborAmount, billId, woId,
+    notes: `Auto-deducted from invoice payment (labor $${Number(laborAmount).toFixed(2)})`,
+  });
+}
+
 async function addVendorBill(env, body) {
   // Vendor_Bills stores Created_Date as a date only, so the finest duplicate window
   // available here is the same day: same job, same vendor, same total, same day, still
