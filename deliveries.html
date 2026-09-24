@@ -380,6 +380,7 @@ function fillTenants(){
 }
 function resetForm(){
   ['df-store','df-order','df-model','df-dims','df-address','df-date','df-window','df-backup','df-backupphone','df-notes','df-woids'].forEach(function(id){ document.getElementById(id).value=''; });
+  syncStoreSelectFromValue('');
   document.getElementById('df-item').value='';
   document.getElementById('df-onsite').value='tenant';
   fillProps();
