@@ -2191,17 +2191,31 @@ function submitMyInfo() {
 // in the same tap (brief section 3c) rather than making the vendor tap Bill twice.
 var _ciWOId = null, _ciVendorName = null, _ciTaxDocUrl = '';
 
-function openCompleteInfoModal(woId, vendorName, missing) {
+function openCompleteInfoModal(woId, vendorName, missing, values) {
   _ciWOId = woId; _ciVendorName = vendorName; _ciTaxDocUrl = '';
+  values = values || {};
   var phone = (session && session.vendor_phone) || '';
   document.getElementById('ci-phone').value = phone;
   // Phone is only locked when it's already on file — a vendor genuinely missing it (rare, but
   // it's in the required list) must still be able to type it in here.
   document.getElementById('ci-phone').readOnly = !!phone;
   document.getElementById('ci-phone').style.opacity = phone ? '0.7' : '1';
-  document.getElementById('ci-billing-email').value = (session && session.vendor_email) || '';
-  document.getElementById('ci-billing-address').value = '';
-  document.getElementById('ci-tax-id').value = '';
+  // Billing Email/Address/Tax ID: prefill + lock exactly like Phone above whenever the vendor
+  // already has a real value on file (from /vendor-onboarding-status's `values`), instead of
+  // leaving these fields showing only grey placeholder text on top of real stored data (the bug
+  // Brett caught via screenshot — Phone was the only field ever actually read back and locked).
+  var billingEmail = values.Billing_Email || '';
+  document.getElementById('ci-billing-email').value = billingEmail;
+  document.getElementById('ci-billing-email').readOnly = !!billingEmail;
+  document.getElementById('ci-billing-email').style.opacity = billingEmail ? '0.7' : '1';
+  var billingAddress = values.Billing_Address || '';
+  document.getElementById('ci-billing-address').value = billingAddress;
+  document.getElementById('ci-billing-address').readOnly = !!billingAddress;
+  document.getElementById('ci-billing-address').style.opacity = billingAddress ? '0.7' : '1';
+  var taxId = values.Tax_ID || '';
+  document.getElementById('ci-tax-id').value = taxId;
+  document.getElementById('ci-tax-id').readOnly = !!taxId;
+  document.getElementById('ci-tax-id').style.opacity = taxId ? '0.7' : '1';
   document.getElementById('ci-tax-doc').value = '';
   document.getElementById('ci-tax-doc-status').textContent = '';
   document.getElementById('ciMsg').innerHTML = '';
