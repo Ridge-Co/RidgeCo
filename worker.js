@@ -11710,7 +11710,7 @@ function selftestAssertEndpoint(name, status, data) {
   const ARRAY_CHECKS = new Set(['properties','units','tenants','owners','vendors','workorders',
     'invoices','templates','smslog','wishlist','keys','returns','master_keys','vendor_requests',
     'notification_queue','message_queue','message_templates','vendor_bills','qb_ready',
-    'receipt_queue','scopes']);
+    'receipt_queue','scopes','vendor_task_requests']);
   if (ARRAY_CHECKS.has(name)) {
     if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
     return arrayOk();
