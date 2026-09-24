@@ -5881,7 +5881,9 @@ async function assignVendor(env, body) {
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner    = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const unit     = units.find(u => u.ID === wo.Unit_ID);
-  const tenant   = currentTenantForDispatch(tenants, unit, wo);
+  // CAP-036 #21: notify every active tenant linked to this unit, not just one — see
+  // tenantsForDispatch's comment for the real Lance/Emily (115 W 29th St) case this fixes.
+  const woTenants = tenantsForDispatch(tenants, unit, wo);
   const room     = (wo.Room||'').trim();
   const address  = property ? `${property.Address}${unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''}${room ? ' ('+room+')' : ''}` : 'the property';
   // Access info (lockbox codes, master key status, etc.) is deliberately NOT built or sent
