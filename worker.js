@@ -4523,7 +4523,8 @@ async function scopeProposalBillMilestones(env, body) {
 
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
-    milestones: picked.map(m => ({ id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0 })),
+    milestones: picked.map(m => ({ id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0,
+      pending_info: String(m.Pending_Info || '').toUpperCase() === 'TRUE', pending_info_note: m.Pending_Info_Note || '' })),
     invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
     bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName } : null,
     warnings,
