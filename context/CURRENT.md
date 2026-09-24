@@ -44,6 +44,39 @@ auto-merged. `context/FEATURE_LOG.md` bumped to v2.10, `[FL-20260924-1745-vtr]`.
 
 ---
 
+# Sep 24, 2026, ~17:56 ET — BUILT, staged for Brett: /admin/set-alert-flags (Queue #14/#10 opt-in toggle) — PR #67 open to `main`, NOT auto-merged (SMS-adjacent)
+
+## 🟡 Staged for Brett's review/merge: Failure Alerts / Dead Man's Switch admin toggle
+Full detail: `FEATURE_LOG.md` ([FL-20260924-1756-af]). Brett previously had NO way to flip
+`failure_alert_enabled`/`dead_man_switch_enabled` (Queue #14/#10, shipped dormant Sep 22) himself —
+`/config/set` needs the full `WORKER_SECRET` (no session/UI ever solicits it) and the only
+config-writing UI (Vendor Access Defaults) writes exactly one key. New `POST
+/admin/set-alert-flags` writes ONLY these 2 named Config keys — never a generic key/value
+passthrough, so it structurally cannot become a backdoor generic config setter. Added to
+`HUB_PROD_WRITE_PATHS` (additive) and to `hubTestWriteAllowed()` for staging testing. New Dev Log
+"🔔 ALERTING" section (two checkboxes + Save) mirrors the Vendor Access Defaults UI pattern.
+Branch `feature/alert-flags-admin-toggle`, PR #65 merged to `staging`; PR #67 open to `main` for
+Brett's own review/merge per `AUTONOMY_GUARDRAILS_v1.0` (both alerts eventually page `admin_phone`
+via SMS, so this is SMS-adjacent, not autonomous). **Verification status:** `node --check` clean
+on both `worker.js` and the extracted inline JS from `index.html`; full manual trace of the
+auth-gate cascade + the new `hubTestWriteAllowed` case; the git `staging` branch confirmed
+byte-for-byte to carry the change. **Could NOT complete live HTTP verification via
+`hub_test_post`** — `maintenance-hub-staging`'s live Cloudflare deploy was confirmed stale
+(`BUILD_VERSION` stuck on `2026-09-23.12`) for ~20+ minutes after the PR #65 merge, even after a
+direct nudge commit to the `staging` git branch (which did trigger a new deploy per
+`workers_list()`'s `modified_on`, but the resulting live bundle — fetched via
+`workers_get_worker_code` — still didn't contain `/admin/set-alert-flags`, and didn't even match
+either git branch's content, e.g. it carried unrelated Vendor Standalone Billing code not on
+`staging`). This is a deploy-pipeline drift affecting the whole `maintenance-hub-staging`
+environment today, not specific to this build — see the Vendor Task Requests entry in
+`FEATURE_LOG.md` (PR #66, "maintenance-hub-staging is several PRs behind") hitting the identical
+issue in a separate session around the same time, and the original documented root cause at
+[FL-20260920-1710-sb]. **Next step for Brett or a fresh session:** once the staging deploy catches
+up (no tool in this session can trigger/inspect a Cloudflare Build beyond nudge-commits +
+`workers_get_worker_code` polling), confirm via `hub_test_post('/admin/set-alert-flags',
+{failure_alert_enabled:true})` + `hub_test_get('/config')` read-back, then decide on merging PR
+#67 to `main`.
+
 # Sep 24, 2026, ~17:00 ET — SHIPPED: Allow-list simplification (PR #55) + property/unit linking & duplicate-check (PR #57)
 
 ## 🟢 Live: Allow-list simplification, all 3 changes
