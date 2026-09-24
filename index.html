@@ -4659,13 +4659,24 @@ function openWOMessageModal(woId) {
   if (options.length === 1) { var o = options[0]; openSendMessageModal(o.type, o.id, o.name, o.phone, woId); return; }
   _pickSendMessageRecipient(options, woId);
 }
+// CAP-036 #2 (Sep 24 2026) — was a prompt()+parseInt "type 1/2/3" picker; Brett asked for
+// real button-select wherever the Hub makes someone type a number to choose from a list of
+// messaging recipients. Renders one button per option in a small modal instead.
+var _pickRecipientOptions = null, _pickRecipientWOId = null;
 function _pickSendMessageRecipient(options, woId) {
-  var pick = prompt('Message who on this job?\n' + options.map(function(o, i){ return (i+1) + ') ' + o.name + ' (' + o.type + ')'; }).join('\n'));
-  if (pick === null) return;
-  var idx = parseInt(pick, 10) - 1;
-  if (isNaN(idx) || !options[idx]) { alert('Enter a number from the list.'); return; }
-  var o = options[idx];
-  openSendMessageModal(o.type, o.id, o.name, o.phone, woId);
+  _pickRecipientOptions = options; _pickRecipientWOId = woId;
+  var host = document.getElementById('pick-recipient-list');
+  host.innerHTML = options.map(function(o, i) {
+    return '<button class="btn secondary" style="text-align:left;width:100%" onclick="_chooseSendMessageRecipient(' + i + ')">' +
+      esc(o.name) + ' <span style="color:var(--muted);font-weight:normal">(' + esc(o.type) + ')</span></button>';
+  }).join('');
+  openModal('modal-pick-recipient');
+}
+function _chooseSendMessageRecipient(idx) {
+  var o = _pickRecipientOptions && _pickRecipientOptions[idx];
+  if (!o) return;
+  closeModal('modal-pick-recipient');
+  openSendMessageModal(o.type, o.id, o.name, o.phone, _pickRecipientWOId);
 }
 function confirmSendMessage() {
   if (!_sendMessageCtx) return;
