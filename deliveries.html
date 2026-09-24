@@ -334,6 +334,24 @@ function fillProps(){
     return '<option value="'+esc(p.ID)+'">'+esc(p.Address||('property '+p.ID))+'</option>';
   }).join('');
 }
+// CAP-036 #7 (Sep 24 2026) — combo-box: a known store fills #df-store (hidden) from the
+// dropdown; "Other…" reveals the text input for anything not listed. #df-store's value is
+// what formBody()/saveD() actually send — this is a manual-entry convenience layered on top,
+// nothing else changes about what gets written to the Store column.
+var KNOWN_STORES = ['Home Depot', "Lowe's", 'Ace Hardware', 'Walmart'];
+function onStoreSelectChange(){
+  var sel = document.getElementById('df-store-select').value;
+  var inp = document.getElementById('df-store');
+  if (sel === 'Other') { inp.style.display = ''; inp.value = ''; inp.focus(); }
+  else { inp.style.display = 'none'; inp.value = sel; }
+}
+function syncStoreSelectFromValue(v){
+  var sel = document.getElementById('df-store-select');
+  var inp = document.getElementById('df-store');
+  if (!v) { sel.value = ''; inp.style.display = 'none'; inp.value = ''; }
+  else if (KNOWN_STORES.indexOf(v) >= 0) { sel.value = v; inp.style.display = 'none'; inp.value = v; }
+  else { sel.value = 'Other'; inp.style.display = ''; inp.value = v; }
+}
 function onPropertyChange(){
   var pid=document.getElementById('df-property').value;
   var us=document.getElementById('df-unit');
