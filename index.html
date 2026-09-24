@@ -10933,6 +10933,7 @@ function confirmQBSend() {
       }
       document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + esc(txt) + '</div>' + warnHtml;
       qbMarkDone(id);
+      _qbSendJustApproved = null; // it's actually in QuickBooks now — nothing left to undo
       // Hold the modal open longer when there's something to read.
       setTimeout(function(){ closeModal('modal-qb-send'); }, warnHtml ? 6000 : 1600);
     } else {
@@ -10943,6 +10944,38 @@ function confirmQBSend() {
   }).catch(function(e){
     btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
     document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + esc(e.message||'?') + '</div>';
+  });
+}
+
+// Real incident (CAP-036 #15, Sep 24 2026, Eddie Smith's bill): "Approve & send to QuickBooks"
+// is one button that does two things — approve the bill (real, server-side, moves it out of
+// Review Bills), THEN open this preview for the actual QuickBooks send. The old Cancel button
+// just closed the modal, which is a true no-op for the "create in QuickBooks" half but does
+// NOTHING about the approve half that already happened — so the bill vanished from Review
+// Bills with no visible way back (it was still sitting on the Send to QuickBooks screen,
+// approved-but-unsent, recoverable only via "Withdraw approval" there, which Brett had no
+// reason to know to look for). If this modal was opened by that same fresh approval,
+// Cancel now undoes the approval too, so Cancel is a true no-op for the WHOLE action —
+// the bill reappears in Review Bills exactly as it was. If the bill was already approved
+// from an earlier sitting (opened via the Send to QB queue, or the "already approved" fast
+// path), that earlier approval predates this click and Cancel leaves it alone, same as always.
+function cancelQBSend() {
+  var id = _qbCurrent;
+  var justApproved = _qbSendJustApproved && _qbSendJustApproved === id;
+  closeModal('modal-qb-send');
+  _qbSendJustApproved = null;
+  if (!justApproved) return; // nothing this click did needs undoing — already a true no-op
+  api('POST', '/invoice-review/unapprove', { id: id }).then(function(res) {
+    if (!res || res.error) {
+      toast('Cancelled, but could not automatically undo the approval — the bill is sitting on the "Send to QuickBooks" page (approved, not yet sent), not lost. Use "Withdraw approval" there to bring it back to Review Bills. (' + ((res && res.error) || 'unknown error') + ')', 'error');
+      return;
+    }
+    toast('Cancelled — the bill is back in Review Bills, untouched.', 'success');
+    // Refresh whichever view the bill needs to reappear on.
+    if (document.getElementById('ir-list')) loadInvoiceReview();
+    if (document.getElementById('qb-list')) loadQBQueue();
+  }).catch(function(e) {
+    toast('Cancelled, but could not automatically undo the approval — the bill is sitting on the "Send to QuickBooks" page (approved, not yet sent), not lost. Use "Withdraw approval" there to bring it back to Review Bills. (' + (e.message || '?') + ')', 'error');
   });
 }
 
