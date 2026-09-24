@@ -43,6 +43,7 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
 - CAP-033 — Reviewed a "4 Claude upgrades" video (Aug 22) against what Brett already runs (see full entry below)
 - CAP-034 — Scope→estimate→signature→invoice workflow is split across 2 pages, needs consolidating (Ridge Co Hub — UX debt, NEW)
 - CAP-035 — `.btn-muted` isn't an actual defined CSS class in `vendor.html` (cosmetic, RESOLVED Sep 19 2026, FEATURE_LOG rule 195)
+- CAP-036 — Sep 24 sticky-note/voice-memo brain-dump: SMS button-select everywhere, notification-matrix deep dive, vendor task-tracking queue, Alex/Gina loan ledger, "Invoiced–Pending Info" substatus, Review Bills cancel bug, status-model rework, vendor self-deactivate, 115 W 29th multi-tenant SMS gap (RidgeCo Hub — mostly NEW, active)
 <!-- QUICK-INDEX:END -->
 
 
