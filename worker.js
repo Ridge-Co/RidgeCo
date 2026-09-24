@@ -727,6 +727,7 @@ export default {
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
         if (path === '/receipt-recon/scan')       return await receiptReconScan(env, body);
+        if (path === '/receipt-recon/import-statement') return await receiptReconImportStatement(env, body);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
         if (path === '/receipt/attach-only')      return await receiptAttachOnly(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
