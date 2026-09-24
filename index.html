@@ -3412,6 +3412,8 @@ function renderVendorsPage() {
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Bill_No_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanBillNoWO(\''+v.ID+'\',this.checked)" title="Can submit a standalone bill with no Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Create_Own_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanCreateOwnWO(\''+v.ID+'\',this.checked)" title="Can log their own One-Off Job Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
         (isInactive
