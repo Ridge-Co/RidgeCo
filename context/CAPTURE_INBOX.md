@@ -558,9 +558,9 @@ _Compact map of every capture item. Read THIS map on load (two-tier loading); op
   21. Multi-tenant unit SMS gap — **confirmed property: 115 West 29th Street, 2nd AND 3rd floor units both affected** (both had the same one-tenant-only behavior; Lance not getting messages that Emily got, on the same unit). Root-cause candidates: tenant-to-unit linking, or the SMS fan-out logic only grabbing one tenant per unit by design. Needs investigation — likely affects other multi-tenant units too, just not yet observed.
   22. Recurring work orders — **confirmed: never built**, only spec'd (see `wo-templates-recurring-scheduler` design notes/private memory). WO Templates (view/edit/create-from-template) is the only piece that shipped.
 - ❓ Open questions still needed before building:
-  - Alex loan: starting/current balance, the deduction percentage, and the cap (max deduction amount or total loan cap)?
-  - "Invoiced — Pending Info" sub-status — does it apply to Scope Proposal milestone billing too, or vendor-submitted invoices only?
-  - Notification-matrix deep dive (#4) and the status-model rework (#16) are both big enough to warrant their own dedicated build-brief/design session rather than folding into this batch — confirm Brett wants those scoped separately, and in what priority order relative to the rest of this list?
+  - Alex loan: **starting amount still unconfirmed.** Brett said it was a Home Depot purchase of a Ryobi combo tool kit, a couple months before Sep 24 2026, roughly a couple hundred dollars. Searched Gmail receipts (brett@bmoremanagement.com) for Home Depot e-receipts June–September 2026 — no Ryobi combo kit purchase found among the receipts checked. Still need the exact dollar amount from Brett directly (his own statement/receipt), plus the deduction percentage and the cap (max per-deduction, or a total cap on the loan itself).
+  - "Invoiced — Pending Info" — **answered: applies to Scope Proposal / milestone billing too, not just vendor-submitted invoices.**
+  - Notification-matrix deep dive (#4) — **answered: normal priority, lower than most of the rest of this list.** Status-model rework (#16) priority not yet given.
 - Links: none yet — new work, first captured here. Feeds into `context/BACKLOG.md` once each item is scoped into a real ticket.
 
 <!-- QUEUE-SYNC-INSERT (synced captures land above this line) -->
