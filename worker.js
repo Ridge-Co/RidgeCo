@@ -419,6 +419,7 @@ export default {
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
+        if (path === '/vendor-loan')            return await vendorLoanGet(env, url);
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
         if (path === '/estimates')              return await listEstimates(env, url);
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
