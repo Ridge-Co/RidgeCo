@@ -10553,6 +10553,39 @@ function qbMapRow(kind, row, qbList) {
   '</div>';
 }
 
+// Client-side substring filter over the rows renderQBMapping() just drew — every row from
+// qbMapRow/qbSubRow carries a data-qbfilter attribute (lowercased display name, plus owner/
+// property context for properties and units) to match against. No backend call, so it stays
+// instant even on a big portfolio; re-applied at the end of every render (loadQBMapping /
+// auditUnits / accept-all) so a filter typed before a refresh survives it.
+function filterQBMapping() {
+  var input = document.getElementById('qbmap-filter');
+  var q = (input && input.value || '').trim().toLowerCase();
+  var rows = document.querySelectorAll('#qb-map-body [data-qbfilter]');
+  var shown = 0;
+  rows.forEach(function(r) {
+    var match = !q || r.getAttribute('data-qbfilter').indexOf(q) !== -1;
+    r.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  var countEl = document.getElementById('qbmap-filter-count');
+  if (countEl) countEl.textContent = q ? (shown + ' of ' + rows.length + ' match') : '';
+}
+
+// Click-through entry point for other pages (Dev Log, the Owners table "🔗" button) that want
+// to land on QB Mapping already narrowed to one owner/property, instead of the whole portfolio
+// (Sep 24 2026, Brett's ask — the mapping tool had no way in from anywhere but its own nav
+// button, and no way to jump straight to one owner's rows once there).
+function goToQBMapping(filterText) {
+  showPage('qb-map', document.querySelector('.nav-btn[onclick*="qb-map"]'));
+  var input = document.getElementById('qbmap-filter');
+  if (input) input.value = filterText || '';
+  // loadQBMapping(false) re-renders async (cached data if already loaded, a fresh fetch
+  // otherwise) — apply the filter once that render lands rather than racing it.
+  setTimeout(filterQBMapping, 0);
+  setTimeout(filterQBMapping, 400);
+}
+
 function renderQBMapping() {
   var box = document.getElementById('qb-map-body');
   if (!box || !_qbMap) return;
