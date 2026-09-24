@@ -10800,8 +10800,14 @@ function qbMakeSubFromPreview(propertyId, btn) {
   });
 }
 
-function previewQBSend(id) {
+// justApproved=true means THIS call is the one that just auto-approved the bill (the single
+// "Approve & send to QuickBooks" button in invBillThisJob) — not a bill that arrived here
+// already approved from an earlier sitting. cancelQBSend() uses this to decide whether
+// Cancel needs to undo that approval too, or whether it's a true no-op already.
+var _qbSendJustApproved = null;
+function previewQBSend(id, justApproved) {
   _qbCurrent = id;
+  _qbSendJustApproved = justApproved ? id : null;
   document.getElementById('qb-send-title-sub').textContent = 'IR ' + id;
   document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--muted)">Loading preview…</div>';
   document.getElementById('qb-send-msg').innerHTML = '';
