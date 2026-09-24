@@ -720,6 +720,24 @@ window.addEventListener('pageshow', function(e){
       </select>
       <button class="btn small" onclick="saveTradeAccessDefault()">Save</button>
     </div>
+
+    <div class="section-title" style="margin-bottom:8px">🔔 ALERTING</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Both alerts page the admin phone via the existing SMS pattern — no new channel. Both ship OFF by default; flip them on here whenever you're ready to start getting paged.</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="alert-flag-failure">
+        <span>Failure Alerts — page me when a wo_create/wo_status job fails (debounced to once/hour per job type)</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="alert-flag-deadman">
+        <span>Dead Man's Switch — page me if the Worker goes 24h+ with zero completed jobs (debounced to once/24h)</span>
+      </label>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <button class="btn small" onclick="saveAlertFlags()">Save</button>
+      <span id="alert-flags-status" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <button class="btn danger small" onclick="clearErrorLog()">Clear Errors</button>
       <button class="btn secondary small" onclick="clearWishlistDone()">🧹 Clear Done / N-A</button>
