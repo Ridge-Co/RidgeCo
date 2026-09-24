@@ -4842,6 +4842,15 @@ function openPropertyNoticeModal(propId) {
 }
 
 var _pnDebounce = null;
+// Bumped on every property-select change so a slow, in-flight preview response for a property
+// the user has since switched AWAY from can never overwrite what's on screen for the property
+// they're looking at now. Real bug (CAP-036 #9): the modal opened showing 20 East Eager Street,
+// and switching to a different property in the picker left that address/recipient info on
+// screen — a race, not a missing handler: the FIRST property's own preview request (there are
+// two chained requests just to open the modal — see the template-autofill branch below) could
+// still be in flight and land AFTER a fast property switch, painting stale data back over the
+// newly-selected property.
+var _pnReqId = 0;
 function propertyNoticeRecalc() {
   var info = smsSegmentInfo(document.getElementById('pn-message').value);
   document.getElementById('pn-segment-info').textContent = info.length
@@ -4851,23 +4860,41 @@ function propertyNoticeRecalc() {
   _pnDebounce = setTimeout(propertyNoticePreviewNow, 350);
 }
 
+// Called specifically by the property <select> itself (not by every keystroke/checkbox change
+// that also routes through propertyNoticeRecalc), so the stale info visibly clears the instant
+// the user switches property, rather than sitting there — right or wrong — until the debounced
+// fetch resolves.
+function propertyNoticePropertyChanged() {
+  document.getElementById('pn-recipients').textContent = '';
+  document.getElementById('pn-send-btn').disabled = true;
+  propertyNoticeRecalc();
+}
+
 function propertyNoticePreviewNow() {
   var propId = document.getElementById('pn-property').value;
   if (!propId) return;
+  var reqId = ++_pnReqId;
   var channels = [];
   if (document.getElementById('pn-ch-sms').checked) channels.push('sms');
   if (document.getElementById('pn-ch-email').checked) channels.push('email');
   var customMsg = document.getElementById('pn-message').value.trim();
   api('POST', '/property/notice', { property_id: propId, channels: channels, message: customMsg || undefined, preview_only: true }).then(function(res) {
+    // Stale response guard: if the user has since fired another request (typed, toggled a
+    // channel, or — the reported bug — picked a different property), this one no longer
+    // reflects what's selected. Never let it paint over newer, correct info.
+    if (reqId !== _pnReqId || document.getElementById('pn-property').value !== propId) return;
     var btn = document.getElementById('pn-send-btn');
     if (!res || res.error) { document.getElementById('pn-recipients').textContent = res ? res.error : 'Preview failed'; btn.disabled = true; return; }
     if (!customMsg && res.sms_message) { document.getElementById('pn-message').value = res.sms_message; propertyNoticeRecalc(); return; }
     var parts = [];
     if (channels.indexOf('sms') > -1) parts.push(res.sms_recipient_count + ' by text' + (res.sms_skipped_opted_out ? ' (' + res.sms_skipped_opted_out + ' opted out, skipped)' : ''));
     if (channels.indexOf('email') > -1) parts.push(res.email_recipient_count + ' by email');
-    document.getElementById('pn-recipients').textContent = res.total_active_tenants + ' active tenant(s) at ' + res.property_address + ' — ' + (parts.join(', ') || 'no channel selected');
+    document.getElementById('pn-recipients').textContent = res.total_active_tenants + ' active tenant(s) at ' + res.property_address + ' (owner: ' + (res.owner || '—') + ') — ' + (parts.join(', ') || 'no channel selected');
     btn.disabled = !(channels.length && ((res.sms_recipient_count||0) + (res.email_recipient_count||0) > 0));
-  }).catch(function(){ document.getElementById('pn-recipients').textContent = 'Preview failed — connection error'; document.getElementById('pn-send-btn').disabled = true; });
+  }).catch(function(){
+    if (reqId !== _pnReqId) return;
+    document.getElementById('pn-recipients').textContent = 'Preview failed — connection error'; document.getElementById('pn-send-btn').disabled = true;
+  });
 }
 
 function sendPropertyNoticeNow() {
