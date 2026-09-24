@@ -18716,6 +18716,21 @@ async function qbSendInvoice(env, body) {
         warnings.push('No job-photo folder on this work order, so the invoice will carry no photo link. Upload a photo to the job to create one.');
       }
 
+      // Loan-ledger preview — READ-ONLY (no ledger write here; that only happens on confirm,
+      // below). Shown so Brett sees the deduction before it happens, not after.
+      let previewLoanDeduction = 0, previewLoanBalance = 0;
+      if (!previewInHouse && vendorCost > 0 && vendor.ID) {
+        try {
+          previewLoanBalance = await getVendorLoanBalance(env, vendor.ID);
+          if (previewLoanBalance > 0) {
+            const isFlatPrev = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'flat';
+            const laborPrev = isFlatPrev ? (parseFloat(billRow && billRow.Flat_Rate) || 0) : (parseFloat(billRow && billRow.Labor_Total) || 0);
+            previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), vendorCost);
+            if (previewLoanDeduction > 0) warnings.push(`Loan repayment: $${previewLoanDeduction.toFixed(2)} will be deducted from ${vendDisplay}'s payment (current balance $${previewLoanBalance.toFixed(2)}).`);
+          }
+        } catch (e) { /* best-effort — confirm still applies/records the real deduction */ }
+      }
+
       return json({ preview: {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
