@@ -19323,6 +19323,16 @@ async function qbSendCombinedInvoice(env, ctx) {
     // ---- CONFIRM (writes to QuickBooks) ----
     if (!owner) return json({ ok: false, error: 'No owner on this property — cannot create a QB customer.', warnings });
     if (combinedTotal <= 0) return json({ ok: false, error: 'Combined Customer_Total is 0 — nothing to invoice.', warnings });
+    // CAP-036 #14: same soft block as the single-bill path — any flagged row in the group
+    // stops the real write unless explicitly overridden.
+    const pendingInfoRows = groupRows.filter(r => String(r.Pending_Info || '').toUpperCase() === 'TRUE');
+    if (pendingInfoRows.length && !ctx.overridePendingInfo) {
+      return json({
+        ok: false,
+        error: `${pendingInfoRows.length} bill(s) in this group are flagged "Invoiced — Pending Info" (${pendingInfoRows.map(r => r.Bill_ID || r.ID).join(', ')}). Resolve them, or resend with override_pending_info to send anyway.`,
+        pending_info: true, warnings,
+      }, 409);
+    }
 
     const token = await qbAccessToken(env);
     const errors = [];
