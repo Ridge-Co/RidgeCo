@@ -9583,6 +9583,139 @@ async function processVendorNudges(env) {
   }
   return { checked: due.length, results };
 }
+// ── Vendor Task Requests (CAP-036 #12, Sep 24 2026) ─────────────────────────────────────────
+// A DIFFERENT system from Vendor_Requests/processVendorNudges above: that one is an automatic
+// clock that CHASES a quiet vendor (status/photos/invoice nudges, auto-satisfied, escalates to
+// Brett after 5 tries). This one is Brett EXPLICITLY flagging a specific vendor issue that
+// needs the vendor's attention — three canned request types (Request Photos, Request
+// Description Update/Clarification, Other free-typed), always scoped to either the vendor's
+// estimate or their invoice on a WO (both already tied to the WO — no separate attachment
+// model needed). Triggered from the WO detail view or the bill-review section. Surfaces in a
+// dedicated section of the vendor portal. The vendor can mark it done, but that does NOT
+// auto-resolve it — per Brett, he doesn't trust a vendor's own "I did it" click without his own
+// manual glance, so it lands in a "needs your review" queue (Status: vendor_marked_done) and
+// only Brett's own /vendor-task-request/mark-reviewed call retires it.
+const VENDOR_TASK_TAB = 'Vendor_Task_Requests';
+const VENDOR_TASK_COLS = ['ID','WO_ID','Vendor_ID','Request_Type','Scope','Message','Status','Created_Date','Created_By','Vendor_Marked_Done_Date','Reviewed_Date','Active'];
+const VENDOR_TASK_TYPES = ['photos','description','other'];
+const VENDOR_TASK_SCOPES = ['estimate','invoice'];
+let _vendorTaskReady = false;
+async function ensureVendorTaskTab(env) {
+  if (!_vendorTaskReady) { await ensureTab(env, VENDOR_TASK_TAB, VENDOR_TASK_COLS); _vendorTaskReady = true; }
+  await ensureColumns(env, VENDOR_TASK_TAB, VENDOR_TASK_COLS);
+}
+
+// POST /vendor-task-request/create { wo_id, vendor_id, request_type: 'photos'|'description'|'other',
+// scope: 'estimate'|'invoice', message?, created_by? } — the WO-detail / bill-review trigger.
+// 'other' requires a free-typed message; the two canned types build their own message (an
+// optional caller-supplied `message` is appended as extra context, never replaces the ask).
+// Sends the vendor an SMS through the same smsGatedSend chokepoint every other vendor text
+// uses (quiet hours / opt-out / test-mode all apply identically) so this doesn't need its own
+// notification path — but the row (and the portal surface) is the requirement Brett actually
+// asked for; the SMS is a best-effort convenience on top of it.
+async function createVendorTaskRequest(env, body) {
+  const woId = body.wo_id, vendorId = body.vendor_id, reqType = body.request_type, scope = body.scope;
+  if (!woId || !vendorId) return json({ error: 'wo_id and vendor_id are required' }, 400);
+  if (!VENDOR_TASK_TYPES.includes(reqType)) return json({ error: "request_type must be one of: " + VENDOR_TASK_TYPES.join(', ') }, 400);
+  if (!VENDOR_TASK_SCOPES.includes(scope)) return json({ error: "scope must be 'estimate' or 'invoice'" }, 400);
+  const customMsg = (body.message || '').trim();
+  if (reqType === 'other' && !customMsg) return json({ error: "message is required when request_type is 'other'" }, 400);
+  await ensureVendorTaskTab(env);
+  const [workorders, vendors, properties, units] = await Promise.all([
+    fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors'), fetchTab(env, 'Properties'), fetchTab(env, 'Units'),
+  ]);
+  const wo = findWO(workorders, woId); if (!wo) return json({ error: 'WO not found' }, 404);
+  const vendor = vendors.find(v => v.ID === vendorId); if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  const property = properties.find(p => p.ID === wo.Property_ID);
+  const unit = units.find(u => u.ID === wo.Unit_ID);
+  const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'the property';
+  const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || 'there');
+  const scopeLabel = scope === 'estimate' ? 'estimate' : 'invoice';
+  let msg;
+  if (reqType === 'photos') {
+    msg = `Hi ${vname}, could you upload updated photos to go with your ${scopeLabel} for ${woId} at ${address}? You can add them from your vendor portal.`;
+  } else if (reqType === 'description') {
+    msg = `Hi ${vname}, could you update or clarify the description on your ${scopeLabel} for ${woId} at ${address}? Please take a look in your vendor portal.`;
+  } else {
+    msg = customMsg;
+  }
+  if (customMsg && reqType !== 'other') msg += ' ' + customMsg;
+  msg += ' ' + vendorPortalLink(woId);
+  let sent = false, heldForQuietHours = false, testMode = false, gateSnapshot = '';
+  if (vendor.Phone) {
+    const r = await smsGatedSend(env, { wo_id: woId, message_type: `vendor_task_${reqType}`, recipient_type: 'vendor', vendor, message_body: msg });
+    sent = !!r.sent; heldForQuietHours = !!r.held_for_quiet_hours; testMode = !!r.test_mode; gateSnapshot = r.gate_snapshot || '';
+  }
+  const now = new Date().toISOString();
+  const res = await addRow(env, VENDOR_TASK_TAB, {
+    WO_ID: woId, Vendor_ID: vendorId, Request_Type: reqType, Scope: scope, Message: msg,
+    Status: 'open', Created_Date: now, Created_By: body.created_by || 'brett',
+    Vendor_Marked_Done_Date: '', Reviewed_Date: '',
+  });
+  return json({ success: true, id: res.id, sent, held_for_quiet_hours: heldForQuietHours, test_mode: testMode, gate_snapshot: gateSnapshot, no_phone: !vendor.Phone });
+}
+
+// GET /vendor-task-requests?vendor_id=&wo_id=&status= — reads for BOTH the vendor portal
+// (its own open items) and the admin Hub (WO-scoped or all-open view). A vendor-role session
+// can only ever see its OWN rows: vendor_id is forced from the verified session, never a
+// caller-supplied query param, so one vendor cannot page through another's flagged issues by
+// changing the query string. Admin (full secret, callerRole null) can pass any filter.
+async function listVendorTaskRequests(env, url, callerRole, callerSessionId) {
+  await ensureVendorTaskTab(env);
+  const rows = await fetchTab(env, VENDOR_TASK_TAB);
+  let vendorId = url.searchParams.get('vendor_id') || '';
+  const woId = url.searchParams.get('wo_id') || '';
+  const status = url.searchParams.get('status') || '';
+  if (callerRole === 'vendor') vendorId = callerSessionId;
+  const out = rows.filter(r => {
+    if (r.Active === 'FALSE') return false;
+    if (vendorId && r.Vendor_ID !== vendorId) return false;
+    if (woId && r.WO_ID !== woId) return false;
+    if (status && r.Status !== status) return false;
+    return true;
+  });
+  return json(out);
+}
+
+// POST /vendor-task-request/mark-done { id, vendor_id? } — the vendor-portal "Mark Done"
+// button. Does NOT resolve the request — per Brett, a vendor's own "done" click is never
+// auto-trusted. It only flips Status to 'vendor_marked_done', which is exactly what makes it
+// show up in Brett's own /vendor-task-requests/pending-review queue for a manual check.
+async function markVendorTaskDone(env, body, callerRole, callerSessionId) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  await ensureVendorTaskTab(env);
+  const rows = await fetchTab(env, VENDOR_TASK_TAB);
+  const row = rows.find(r => r.ID === String(id));
+  if (!row || row.Active === 'FALSE') return json({ error: 'Request not found' }, 404);
+  const vendorId = callerRole === 'vendor' ? callerSessionId : (body.vendor_id || row.Vendor_ID);
+  if (row.Vendor_ID !== vendorId) return json({ error: 'This request does not belong to this vendor' }, 403);
+  if (row.Status !== 'open') return json({ error: `Request is already ${row.Status}` }, 400);
+  await updateRow(env, VENDOR_TASK_TAB, row.ID, { Status: 'vendor_marked_done', Vendor_Marked_Done_Date: new Date().toISOString() });
+  return json({ success: true, id: row.ID, status: 'vendor_marked_done' });
+}
+
+// GET /vendor-task-requests/pending-review — Brett's "needs your review" queue: every
+// vendor-marked-done request he hasn't personally cleared yet. Admin-gated only (not in
+// ROLE_SCOPES.vendor) — a vendor has no reason to see this list.
+async function listVendorTaskPendingReview(env) {
+  await ensureVendorTaskTab(env);
+  const rows = await fetchTab(env, VENDOR_TASK_TAB);
+  return json(rows.filter(r => r.Active !== 'FALSE' && r.Status === 'vendor_marked_done'));
+}
+
+// POST /vendor-task-request/mark-reviewed { id } — Brett's own manual check, the only thing
+// that actually retires a request. Admin-gated only.
+async function markVendorTaskReviewed(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  await ensureVendorTaskTab(env);
+  const rows = await fetchTab(env, VENDOR_TASK_TAB);
+  const row = rows.find(r => r.ID === String(id));
+  if (!row || row.Active === 'FALSE') return json({ error: 'Request not found' }, 404);
+  if (row.Status !== 'vendor_marked_done') return json({ error: `Request is ${row.Status}, not awaiting review` }, 400);
+  await updateRow(env, VENDOR_TASK_TAB, row.ID, { Status: 'reviewed_resolved', Reviewed_Date: new Date().toISOString() });
+  return json({ success: true, id: row.ID, status: 'reviewed_resolved' });
+}
+
 const OWNER_NOTIFY_DEFAULTS={urgent:'always',normal:'key',low:'completion'};
 // Sep 14 2026 — trimmed to the 4 owner message types that actually exist now (Received/
 // Scheduled/Complete/On_Hold). 'Assigned' and 'Invoiced' are retired per Brett's own call
