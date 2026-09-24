@@ -75,6 +75,7 @@ const vendorBillLockSrc       = grab(wsrc, 'function vendorBillReassignLock(');
 const findLockedVendorBillSrc = grab(wsrc, 'async function findLockedVendorBillForWOs(');
 const isTenantCurrentSrc    = grab(wsrc, 'function isTenantCurrent(');
 const currentTenantSrc      = grab(wsrc, 'function currentTenantForDispatch(');
+const tenantsForDispatchSrc = grab(wsrc, 'function tenantsForDispatch(');
 const isBackgroundWOSrc     = grab(wsrc, 'function isBackgroundWO(');
 const isTenantNotifiableSrc = grab(wsrc, 'function isTenantNotifiable(');
 const smsGateDecisionSrc    = grab(wsrc, 'function smsGateDecision(');
