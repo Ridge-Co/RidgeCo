@@ -1,3 +1,82 @@
+# Sep 24, 2026, ~11:40 ET — FIXED (PR open, not merged): CAP-036 #15 Review Bills Cancel disappearing bill, and CAP-036 #9 Property Notice picker stuck on first property
+
+**CAP-036 #15 — Review Bills "Cancel" made a bill disappear (real incident: Eddie Smith).**
+Root cause: `invBillThisJob(k)` (Review Bills' single "Approve & send to QuickBooks" button) calls
+`POST /invoice-review/approve` — which immediately flips `Vendor_Bills.Status` to `'reviewed'`,
+excluding it from Review Bills' `?status=submitted` list — and then opens the QB-send confirm
+modal via `previewQBSend(res.id)`. The modal's Cancel button only ever called `closeModal(...)`.
+So the approval that just happened was never undone by Cancel — the bill was already gone from
+Review Bills the moment the modal opened, and Cancel did nothing to bring it back. Not a bug in
+`irHideCard` (the client-side fade) or in the approve endpoint itself — both worked exactly as
+written; the gap was that nothing ever called the pre-existing `unapproveInvoiceReview`
+endpoint on Cancel.
+
+Fix: `previewQBSend(id, justApproved)` now records whether THIS call is the one that just
+auto-approved the bill. The modal's Cancel button now calls a new `cancelQBSend()`: if the modal
+was opened by a fresh approval, it calls `POST /invoice-review/unapprove` (pre-existing endpoint,
+unchanged) to restore `Vendor_Bills.Status='submitted'` and put the bill back in Review Bills,
+and tells the user so via toast. If the modal was opened for a bill approved in an earlier
+sitting (the Send-to-QB queue's own "Preview & Send" path), Cancel is left as a true no-op,
+exactly as before — that approval predates this click and must not be touched.
+
+Verified: `test/manual-verify-review-bills-cancel-noop-ui.mjs` (new, real Playwright pass against
+the actual shipped `index.html`, no mocking of app code — only the Worker's own fetch endpoints
+are intercepted). Case 1 (fresh approval, Cancel) — confirms `/invoice-review/unapprove` is
+called with the right id, the real `/qb/send-invoice` (non-preview) is never called, and the
+toast says the bill is back in Review Bills. Case 2 (pre-existing approval, Cancel) — confirms
+`/invoice-review/unapprove` is NOT called. 8/8 assertions pass against the fix. Re-ran the same
+test unmodified against the pre-fix `index.html` to confirm it actually discriminates the bug:
+2 of 8 assertions fail (no unapprove call ever fires), confirming this is a real regression test,
+not just a structural check. `hub_test_post` could not exercise `/invoice-review/approve` /
+`/invoice-review/unapprove` / `/qb/send-invoice` directly — none of the three are in gh-broker's
+`HUB_TEST_WRITE_PATHS` — so verification relied on the Playwright pass driving the real shipped
+JS end to end instead.
+
+**Production finding (read-only only, nothing written) — Eddie Smith's bill:** Using
+`hub_prod_get` (`/vendors`, `/vendor-bills`) and `hub_prod_qb_query` (`/qb/vendor-reconcile`),
+confirmed Eddie Smith's WO-1118 bill (Vendor_Bills row ID 56, $608.65) is genuinely stuck: its
+status was moved to `'reviewed'` by the approval, and `/qb/vendor-reconcile` shows no matching
+QuickBooks bill/invoice was ever created for it — i.e. Cancel was pressed, the approval was never
+undone, and the actual send to QuickBooks never happened either. It is not lost data — it's
+sitting in the `Invoice_Review` tab in an approved-but-unsent state, recoverable either by
+opening it on the Send to QuickBooks page and completing the send, or by using the (now-fixed)
+flow to withdraw the approval and put it back in Review Bills. Swept all 11 vendors with
+`'reviewed'` bills as of this check: the other 91 reviewed bills across 10 vendors all have a
+matching QuickBooks entry — Eddie Smith's WO-1118 is the only one stuck this way. Brett Lambert's
+~30 in-house jobs use a separate path not fully checkable with the read-only tools available and
+are flagged as an unchecked gap, not a confirmed problem. No write was made to any of this —
+Brett's go-ahead needed before recovering the Eddie Smith bill.
+
+**CAP-036 #9 — Property Notice modal stuck on the first property (e.g. opened on "20 East Eager
+Street", switching properties never updated the display).** Root cause: a stale-response race,
+not a missing `onchange` handler. `propertyNoticeRecalc()` already fired a debounced
+`POST /property/notice` preview request on every change, but the response handler had no way to
+tell whether its request was still the current one — a slow response for the property the user
+had already left could land after a fast response for the new selection and silently overwrite
+it. Also, the backend already returned `owner` but the frontend never displayed it.
+
+Fix: added a monotonic request-id guard (`_pnReqId`) so a response is only applied if it's still
+for the currently-selected property and is still the latest request in flight; added
+`propertyNoticePropertyChanged()` (wired to the picker's `onchange`) to clear the stale display
+immediately on switch rather than leaving old data visible while the new request is in flight;
+and now render `owner` in the recipients line.
+
+Verified: `test/manual-verify-property-notice-refresh-ui.mjs` (new, real Playwright pass).
+Simulates opening the modal on Property 1 ("20 East Eager Street", 700ms-delayed mock response),
+switching to Property 2 ("115 West 29th Street", 20ms mock response) while P1's request is
+already in flight, and asserts the display shows P2 immediately after switching AND still shows
+P2 after P1's late response finally arrives. 8/8 assertions pass against the fix. Re-ran
+unmodified against the pre-fix `index.html`: 2 of 8 assertions fail, with "20 East Eager Street"
+leaking back onto the screen after the switch — confirming the test catches the real bug.
+
+**Ship status:** both fixes are on branch `fix/cap-036-review-bills-cancel-property-notice`,
+PR #56 (`https://github.com/Ridge-Co/RidgeCo/pull/56`), open, **not merged** — Review Bills is
+money-adjacent (QuickBooks-send flow) per PAT-033/AUTONOMY_GUARDRAILS, so this stops at a staged
+PR for Brett's own review and merge, not an auto-merge to `main`. `context/FEATURE_LOG.md` bumped
+to v2.07 with matching `[FL-20260924-1136-rb]` and `[FL-20260924-1130-pn]` entries.
+
+---
+
 # Sep 23, 2026, ~19:25 ET — INVESTIGATED: staging 401 on the two brand-new Vendor Onboarding Phase 1 endpoints, right after PR #52 merged to `main` — root cause was Cloudflare deploy propagation lag, not a code bug
 
 **Symptom:** ~15 minutes after PR #52 ("Vendor Onboarding Phase 1") merged to `main` and both
