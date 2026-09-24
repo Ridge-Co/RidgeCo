@@ -255,15 +255,22 @@ export default {
         // (creates a synthetic PENDING Receipt_Recon_Queue row scoped to TEST-PROPERTY-001, since
         // a real one only ever arrives via scanning a Drive file — there was no way to get a
         // testable row onto staging otherwise).
-        const HUB_TEST_READ_PATHS = ['/health','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/config','/hub-bootstrap','/admin/receipt-duplicate-audit/flags','/receipt-recon/queue','/receipt-recon/search'];
-        const HUB_TEST_WRITE_PATHS = ['/admin/seed-test-fixtures','/property/add','/owner/add','/vendor/add','/tenant/add','/unit/add','/workorder','/assign','/status','/schedule','/wo/combine','/wo/split','/wo/bulk-void','/admin/receipt-duplicate-audit/build-index','/admin/receipt-duplicate-audit/scan','/admin/receipt-duplicate-audit/mark','/receipt/attach-only','/admin/seed-test-receipt','/receipt-recon/confirm','/receipt-recon/reassign','/receipt-recon/mark-refund','/receipt-recon/mark-refund-confirmed','/vendor-bill/add','/vendor-bill/edit-receipts'];
+        // Allow-List Simplification (Sep 24 2026): this block used to also require the path to
+        // appear in HUB_TEST_READ_PATHS (GET) or HUB_TEST_WRITE_PATHS (POST) before granting
+        // access. Those arrays are removed. GET is now unrestricted by path — this token can
+        // never reach production regardless of path (isStaging() below is the real gate, and
+        // Brett never sets this secret on production's env at all), so a broader staging read
+        // surface costs nothing. POST is now gated solely by hubTestWriteAllowed()'s record-level
+        // TEST- check further down (after body parsing) — verified Sep 24 2026 to default-deny
+        // (returns false for any path/case it doesn't explicitly recognize), so removing the path
+        // array here doesn't weaken anything; it just stops ALSO requiring the path to be listed
+        // in a second, separately-maintained array that kept drifting out of sync (5+ documented
+        // incidents in context/CURRENT.md where a write this token should have reached got
+        // rejected here first, even though hubTestWriteAllowed would have handled it correctly).
         const _hubTestOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
-          && (
-            (request.method === 'GET'  && HUB_TEST_READ_PATHS.includes(path)) ||
-            (request.method === 'POST' && HUB_TEST_WRITE_PATHS.includes(path))
-          );
+          && (request.method === 'GET' || request.method === 'POST');
         if (_hubTestOk) _viaHubTestToken = true;
         // Narrow READ-ONLY token for self-test/verification of PRODUCTION read-only admin endpoints
           // (credential-access gap closed Sep 22 2026, B-012 Vendor Performance follow-up — see
@@ -275,8 +282,23 @@ export default {
           // production. Fully inert unless env.HUB_PROD_RO_TOKEN is set, so deploying this has
           // zero effect until the secret exists on production maintenance-hub (and the matching
           // value is set on the gh-broker Worker's own HUB_PROD_RO_TOKEN).
-          const HUB_PROD_RO_READ_PATHS = ['/health','/version','/vendors','/owners','/tenants','/properties','/units','/workorders','/vendor-bills','/invoices','/vendor-performance','/admin/receipt-duplicate-audit/flags'];
-          const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && HUB_PROD_RO_READ_PATHS.includes(path);
+          // Allow-List Simplification (Sep 24 2026): inverted from an allow-list to a deny-list.
+          // Every GET route handler in the router above was read by hand (not guessed from its
+          // name or comment) to confirm it does nothing but read and format data. The paths below
+          // are the only ones confirmed to genuinely mutate or send something on a GET, and stay
+          // excluded; every other GET route on this Worker, including any shipped later, is
+          // reachable with this token with zero allow-list edit needed.
+          const HUB_PROD_RO_EXCLUDE_PATHS = [
+            '/notifications/pending', // processPendingNotifications: sends live SMS (sendSMS/smsGatedSend) and marks Notification_Queue rows Sent on every call that finds due rows
+            '/gmail/test',            // gmailTest: sends a real test email via gmailSendEmail
+            '/gmail/callback',        // gmailOAuthCallback: writes GMAIL_REFRESH_TOKEN to Config on a successful OAuth exchange
+            '/qb/setup-trades',       // qbSetupTrades: creates QuickBooks Account/Item records
+            '/daily-digest',          // digestResponse: writes an Ops_Telemetry row every call; sends SMS/email when called with ?deliver=1
+            '/tenant-by-pin',         // tenantByPin -> pinLookup: writes PIN_Lockout on every call (recordPinFailure/clearPinLockout)
+            '/owner-by-pin',          // ownerByPin -> pinLookup: same PIN_Lockout write path as /tenant-by-pin
+            '/vendor-by-pin',         // vendorByPin -> pinLookup: same PIN_Lockout write path as /tenant-by-pin
+          ];
+          const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && !HUB_PROD_RO_EXCLUDE_PATHS.includes(path);
           // Narrow WRITE-CAPABLE token for safe, allow-listed production writes (Sep 22 2026,
           // follow-on to HUB_PROD_RO_TOKEN above — see context/PROD_WRITE_TOKEN_BUILD_BRIEF_v1.0.md).
           // Lets a session run a specific, pre-reviewed production write (one-time backfills and
@@ -296,9 +318,24 @@ export default {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk) {
+          // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
+          // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
+          // touching QuickBooks (see its own comment: "touch no money, SMS, QuickBooks, or
+          // auth/vendor-assignment fields"), so QuickBooks reconciliation reads need their own
+          // token rather than an exception carved into that one. Structurally POST-only (both
+          // qbFindBills and qbVendorReconcile take a JSON body), but every path on this list was
+          // read by hand before being added here and is a pure QuickBooks/Sheets READ — no write,
+          // no QB mutation, no Sheets write. qbFindBills issues a QuickBooks `select ... from Bill`
+          // query only; qbVendorReconcile reads Sheets tabs (Vendors/Vendor_Bills/Work_Orders/
+          // Properties/Units/Invoice_Review) plus the same kind of QB read. Same Rung-3
+          // PR-not-autonomous-merge discipline as every other narrow token in this cascade — this
+          // is fully inert until Brett sets HUB_PROD_QB_RO_TOKEN on both production maintenance-hub
+          // and the gh-broker Worker (Brett only — no session can set a Cloudflare secret).
+          const HUB_PROD_QB_RO_PATHS = ['/qb/find-bills', '/qb/vendor-reconcile'];
+          const _qbRoOk = !!env.HUB_PROD_QB_RO_TOKEN && _tok === env.HUB_PROD_QB_RO_TOKEN && request.method === 'POST' && HUB_PROD_QB_RO_PATHS.includes(path);
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -410,6 +447,9 @@ export default {
         if (path === '/ar/report/opt-in')       return await arReportOptInRead(env, url);
         if (path === '/ar-report/view')         return await arReportView(env, url);
         if (path === '/vendor-performance')     return await vendorPerformance(env, url);
+        if (path === '/brettos-tasks-summary') return await brettosTasksSummary(env, url);
+        if (path === '/vendor-onboarding-status') return await vendorOnboardingStatus(env, url);
+        if (path === '/vendor-onboarding-gaps') return await vendorOnboardingGaps(env);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
@@ -526,9 +566,9 @@ export default {
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
-        if (path === '/property/add')             return await addRow(env, 'Properties', body);
+        if (path === '/property/add')             return await propertyAddWithDupeCheck(env, body);
         if (path === '/property/update')          return await propertyUpdate(env, body);
-        if (path === '/unit/add')                 return await addRow(env, 'Units', body);
+        if (path === '/unit/add')                 return await unitAddWithDupeCheck(env, body);
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
         if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
@@ -543,8 +583,11 @@ export default {
         // are new Vendors columns — addRow/updateRow map fields by existing header only, so a
         // write to a not-yet-created column stores nothing silently (same trap Vendor_Invoice_No
         // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
-        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await addRow(env, 'Vendors', body); }
-        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address']); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        // VENDOR_ONBOARDING_COLS (Sep 23 2026, Phase 1) folded into the same ensureColumns call
+        // every vendor add/update already makes — additive, no-op once the headers exist.
+        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; return await addRow(env, 'Vendors', body); }
+        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address'].concat(VENDOR_ONBOARDING_COLS)); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        if (path === '/vendor/complete-onboarding') return await vendorCompleteOnboarding(env, body);
         // Contact-card upload (Sept 2 2026) — business-card/contact-photo OCR shared by the
         // Add Tenant / Add Owner / Add Vendor contact-card buttons in index.html. Admin-gated
         // (not in PUBLIC_PATHS) since it's called from already-authenticated Hub forms. The
@@ -642,6 +685,13 @@ export default {
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
         if (path === '/wishlist/status')          return await setWishlistStatus(env, body);
         if (path === '/config/set')               return await setConfigKey(env, body);
+        // Narrow, single-purpose alternative to /config/set (Sep 24 2026, Queue #14/#10 opt-in
+        // build): /config/set requires the full WORKER_SECRET, which no session or UI ever
+        // solicits (see CLAUDE.md's security note), so there was previously NO way for Brett to
+        // flip failure_alert_enabled / dead_man_switch_enabled himself. This endpoint writes
+        // ONLY those two named Config keys — never a generic key/value passthrough — so it can
+        // never become a backdoor generic config setter, whatever the caller sends.
+        if (path === '/admin/set-alert-flags')    return await setAlertFlags(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
         if (path === '/judge')                    return await judgeRun(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
@@ -685,6 +735,7 @@ export default {
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
         if (path === '/receipt-recon/scan')       return await receiptReconScan(env, body);
+        if (path === '/receipt-recon/import-statement') return await receiptReconImportStatement(env, body);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
         if (path === '/receipt/attach-only')      return await receiptAttachOnly(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
@@ -2056,6 +2107,100 @@ function receiptReconFindRescanMatches(candidate, existingReceipts, existingQueu
   return matches;
 }
 
+// ── Statement importer (Sep 24 2026) — STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0 Phase 1
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// PURE — checks ONE normalized statement line (from a bulk vendor statement — Home Depot, Lowe's,
+// a credit card, etc.) against already-captured Receipts and Receipt_Recon_Queue rows. Deliberately
+// reuses the SAME comparison primitives as receiptReconFindRescanMatches above (_rcNorm,
+// .toFixed(2) string equality for money, same Active/Status filters) rather than inventing a
+// second dedup/matching algorithm — the brief's explicit, load-bearing instruction. Never image
+// matching (a statement line never looks like a receipt photo).
+// Returns { confidence: 'confirmed'|'possible'|null, ...matchDetails }:
+//   1. 'confirmed' — exact amount (to the cent) AND exact date AND normalized vendor match,
+//      against a live Receipts row (Active !== 'FALSE') or a non-pending Receipt_Recon_Queue row.
+//   2. 'confirmed' — line.ref (PO/invoice number) exact-matches PO_Reference or Invoice_Number on
+//      an existing Receipt_Recon_Queue row, at the same amount, even if the date differs by a day
+//      or two (a reference match is a stronger signal than date proximity). Receipts itself has no
+//      PO/invoice-number column (confirmed live, addReceipt above) — checked against Description
+//      there as a best-effort fallback only.
+//   3. 'possible' — same amount (exact) AND date within ±3 calendar days (same day-window math as
+//      qbDuplicateBillsNear) AND normalized vendor roughly matches (substring either direction) —
+//      weaker signal, still surfaced, never silently suppressed.
+//   4. null — no match.
+function statementLineMatch(line, existingReceipts, existingQueueRows) {
+  const amt = (Number(line && line.amount) || 0).toFixed(2);
+  const st = _rcNorm(line && (line.vendor || line.store));
+  const date = String((line && line.date) || '').trim();
+  const ref = String((line && line.ref) || '').trim();
+  const roughMatch = (a, b) => !!a && !!b && (a.indexOf(b) >= 0 || b.indexOf(a) >= 0);
+
+  // 1) Exact match — amount + date + normalized vendor.
+  if (date && st && Number(amt) > 0) {
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Date || '') !== date) continue;
+      if (_rcNorm(r.Store) !== st) continue;
+      return { confidence: 'confirmed', type: 'exact_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+    }
+    for (const r of (existingQueueRows || [])) {
+      const status = r.Status || 'pending';
+      if (status === 'pending') continue;
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Receipt_Date || '') !== date) continue;
+      if (_rcNorm(r.Vendor) !== st) continue;
+      return { confidence: 'confirmed', type: 'exact_queue', queue_id: r.ID, status };
+    }
+  }
+
+  // 2) Reference match — same amount, exact PO/invoice number, date can differ.
+  if (ref && Number(amt) > 0) {
+    for (const r of (existingQueueRows || [])) {
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (ref === String(r.PO_Reference || '').trim() || ref === String(r.Invoice_Number || '').trim()) {
+        return { confidence: 'confirmed', type: 'ref_queue', queue_id: r.ID, status: r.Status || 'pending' };
+      }
+    }
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (ref === String(r.Description || '').trim()) {
+        return { confidence: 'confirmed', type: 'ref_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+      }
+    }
+  }
+
+  // 3) Possible — same amount, date within ±3 days, vendor roughly matches.
+  if (date && Number(amt) > 0) {
+    const d = new Date(date + 'T00:00:00Z');
+    if (!isNaN(d)) {
+      const from = d.getTime() - 3 * 86400000, to = d.getTime() + 3 * 86400000;
+      for (const r of (existingReceipts || [])) {
+        if (r.Active === 'FALSE') continue;
+        if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+        const rd = new Date(String(r.Date || '') + 'T00:00:00Z'); if (isNaN(rd)) continue;
+        if (rd.getTime() < from || rd.getTime() > to) continue;
+        if (st && !roughMatch(_rcNorm(r.Store), st)) continue;
+        return { confidence: 'possible', type: 'window_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+      }
+      for (const r of (existingQueueRows || [])) {
+        const status = r.Status || 'pending';
+        if (status === 'pending') continue;
+        if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+        if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+        const rd = new Date(String(r.Receipt_Date || '') + 'T00:00:00Z'); if (isNaN(rd)) continue;
+        if (rd.getTime() < from || rd.getTime() > to) continue;
+        if (st && !roughMatch(_rcNorm(r.Vendor), st)) continue;
+        return { confidence: 'possible', type: 'window_queue', queue_id: r.ID, status };
+      }
+    }
+  }
+
+  return { confidence: null };
+}
+
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
@@ -2138,6 +2283,110 @@ async function receiptReconScan(env, body) {
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
   return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
+}
+
+// POST /receipt-recon/import-statement { vendor, rows:[{date,amount,description,ref}], source_file_id?,
+// source_file_name?, source_file_url? } OR { vendor, file_id, mime_type, source_file_name? } —
+// Statement importer Phase 1 (Sep 24 2026, STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0).
+// Lands EVERY unmatched/possibly-matched line from a bulk vendor statement into the SAME
+// Receipt_Recon_Queue Brett already works daily — not a new screen — tagged Entry_Source:'statement'
+// so he can tell a statement line apart from a normally scanned receipt. Confirmed matches are
+// never inserted (no action needed); this never writes a Receipt directly, same non-billing
+// discipline as receiptReconScan above. CSV rows are parsed CLIENT-SIDE (index.html) per this
+// codebase's hubBulkImport convention — confirmed live, no server-side CSV parser exists — so the
+// `rows` shape here is already-parsed objects, never raw CSV text.
+async function receiptReconImportStatement(env, body) {
+  body = body || {};
+  const vendor = String(body.vendor || '').trim();
+  if (!vendor) return json({ error: 'vendor required' }, 400);
+  const hasRows = Array.isArray(body.rows) && body.rows.length;
+  const hasFile = !!(body.file_id && body.mime_type);
+  if (!hasRows && !hasFile) return json({ error: 'rows (array) or file_id+mime_type required' }, 400);
+  if (hasRows && body.rows.length > 500) return json({ error: 'Too many rows in one call — split into batches of 500 or fewer.' }, 400);
+
+  let workingRows = [];
+  let detectedVendor = '';
+  let sourceFileId = body.source_file_id || '';
+  const sourceFileName = body.source_file_name || '';
+  const sourceFileUrl = body.source_file_url || '';
+
+  if (hasFile) {
+    sourceFileId = body.file_id;
+    let dl;
+    try {
+      const tok = await getAccessToken(env);
+      dl = await driveDownload(tok, body.file_id);
+    } catch (e) {
+      return json({ error: 'Could not download the file: ' + (e && e.message || e) }, 500);
+    }
+    const ex = await statementExtract(env, dl.bytes, dl.mime);
+    detectedVendor = ex.vendor_detected || '';
+    // statementExtract's own lines already use `amount`; documented here in case an older/altered
+    // extractor response ever returns `total` instead — mapped defensively, never silently dropped.
+    workingRows = (ex.lines || []).map(l => ({
+      date: l.date || '', amount: (l.amount !== undefined && l.amount !== null) ? l.amount : l.total,
+      description: l.description || '', ref: l.ref || '',
+    }));
+  } else {
+    workingRows = body.rows;
+  }
+
+  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  const [receipts, queueRows] = await fetchTabs(env, ['Receipts', 'Receipt_Recon_Queue']);
+
+  // Cloudflare-subrequest-safety cap, same pattern as receiptReconScan's `cap`/`remaining` above —
+  // a big statement (hundreds of lines) must never blow the per-invocation subrequest limit
+  // partway through. FIXED (Sep 24 2026 review): rows past the cap used to always be re-taken from
+  // the START of workingRows on the next call — since a just-inserted row is Status:'pending' and
+  // statementLineMatch correctly treats 'pending' as NOT yet dispositioned (never counts as a prior
+  // match), that meant the first 100 lines got duplicate-inserted every subsequent call instead of
+  // dedupe-skipping. Fix: the CALLER now tracks and sends `offset` (default 0) so each call
+  // processes a genuinely different slice — `next_offset` tells it exactly where to resume, so
+  // nothing is ever reprocessed and nothing is silently skipped.
+  const IMPORT_STATEMENT_MAX_WRITES = 100;
+  const offset = Math.max(0, parseInt(body.offset, 10) || 0);
+  const toProcess = workingRows.slice(offset, offset + IMPORT_STATEMENT_MAX_WRITES);
+  const nextOffset = offset + toProcess.length;
+  const remaining = Math.max(0, workingRows.length - nextOffset);
+
+  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0;
+  const errors = [];
+  const today = new Date().toISOString().split('T')[0];
+
+  for (const line of toProcess) {
+    const amt = Number(line && line.amount);
+    const date = String((line && line.date) || '').trim();
+    if (!isFinite(amt) || amt <= 0 || !date) { skipped_invalid++; continue; }
+    const lineVendor = (line && line.vendor) || vendor;
+    const normLine = { amount: amt, date, ref: (line && line.ref) || '', vendor: lineVendor };
+    let match;
+    try { match = statementLineMatch(normLine, receipts, queueRows); }
+    catch (e) { errors.push('match failed: ' + (e && e.message || e)); match = { confidence: null }; }
+
+    if (match.confidence === 'confirmed') { matched_confirmed++; continue; }
+    if (match.confidence === 'possible') flagged_possible++;
+
+    const noteBase = `From ${vendor} statement upload (${sourceFileName || 'uploaded ' + today}).`;
+    const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '');
+    try {
+      await addRow(env, 'Receipt_Recon_Queue', {
+        Source_File_ID: sourceFileId || '', Source_File_URL: sourceFileUrl || '', File_Name: sourceFileName || '',
+        Received_Date: new Date().toISOString(), Vendor: lineVendor, Receipt_Date: date,
+        Total: String(amt), PO_Reference: (line && line.ref) || '', Items: '[]',
+        Items_Summary: JSON.stringify([(line && line.description) || '']).slice(0, 4000),
+        Card_Last4: '', Invoice_Number: '', Suggestion: '', Status: 'pending',
+        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: notes, Active: 'TRUE',
+        Gmail_Message_ID: '', Entry_Source: 'statement', Rescan_Match_JSON: '[]',
+      });
+      inserted++;
+    } catch (e) { errors.push('insert failed: ' + (e && e.message || e)); }
+  }
+
+  return json({
+    success: true, vendor, vendor_detected: detectedVendor || undefined, total_lines: workingRows.length,
+    matched_confirmed, flagged_possible, inserted, skipped_invalid, remaining, next_offset: nextOffset, errors,
+  });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
@@ -5088,7 +5337,7 @@ async function createWorkOrder(env, body) {
     // Tenant Received: separate from tenant_job_assigned — tells the tenant only that the
     // request landed and is pending assignment/scheduling. Not scoped to Type='tenant' (unlike
     // Owner Received above) — applies to any new WO with a notifiable tenant, same scope the
-    // existing Tenant_Notify_Created toggle already covers. Delayed 8h so a fast assignment can
+    // existing Tenant_Notify_Created toggle already covers. Delayed 1h so a fast assignment can
     // supersede/bump it (see the tenant_job_received check in processPendingNotifications)
     // instead of the tenant getting "we got it" immediately followed by "you're assigned".
     const tenant = currentTenantForDispatch(tenants, unit, woLike);
@@ -5096,7 +5345,7 @@ async function createWorkOrder(env, body) {
     if (isTenantNotifiable(tenant, woLike) && tenantNotifyCreated) {
       const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
       const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
-      const sendAfter = new Date(Date.now() + 8*3600000).toISOString();
+      const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
       await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
     }
   } catch (e) { /* non-fatal */ }
@@ -8852,7 +9101,7 @@ async function createUploadSession(env, body) {
 }
 
 // File types whose media stays PRIVATE — vendor cost docs never go anyone-with-link (FEATURE_LOG rule 13).
-const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice'];
+const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice','tax_id_doc'];
 
 async function logAttachment(env, body) {
   try {
@@ -11739,6 +11988,161 @@ async function arAging(env, url) {
   return json({ ok: true, as_of: new Date(now).toISOString().slice(0, 10), total_open: +totalOpen.toFixed(2), open_count: list.length, buckets, by_customer: customers, invoices: list.slice(0, 100) });
 }
 
+// ── VENDOR ONBOARDING — Phase 1 (Sep 23 2026, VENDOR_ONBOARDING_BANKING_BUILD_BRIEF_v1.0) ──
+// Phase 1 ONLY: the non-banking required fields, Submit-Bill gating, and an admin gap report.
+// Banking capture/encryption (Phase 2) and the automatic nudge sweep (Phase 3) are NOT built
+// here — both stay GATED per the brief until Brett's own live walkthrough.
+//
+// New Vendors columns (additive — ensureColumns backfills on write, existing rows untouched).
+// The banking-status columns are schema-only in this phase: written with safe defaults so
+// Phase 2 has somewhere to land, but no encryption/capture/QuickBooks-manual-entry logic
+// exists yet, per the brief's Build Sequence.
+const VENDOR_ONBOARDING_COLS = [
+  'Billing_Email', 'Billing_Address', 'Tax_ID', 'Tax_ID_Document_URL',
+  'Insurance_Cert_URL', 'Insurance_Expiry',
+  'Bank_Info_Status', 'Bank_Info_Submitted_Date', 'Bank_Info_Verified_Date', 'Bank_Info_Drive_Pointer',
+  'Onboarding_Nudge_Sent_Date',
+];
+
+// The required-now fields per Brett (section 3c/5 of the brief): phone, billing email, billing
+// address, tax ID (the typed value only — NOT the uploaded document, NOT banking, which is
+// Phase 2 and never blocks bill submission). PURE — no I/O — so it's directly unit-testable.
+const VENDOR_ONBOARDING_REQUIRED_FIELDS = ['Phone', 'Billing_Email', 'Billing_Address', 'Tax_ID'];
+
+function vendorOnboardingComplete(vendor) {
+  vendor = vendor || {};
+  const missing = VENDOR_ONBOARDING_REQUIRED_FIELDS.filter(f => !String(vendor[f] || '').trim());
+  return { complete: missing.length === 0, missing };
+}
+
+// PURE — the subset of QuickBooks Vendor fields the required-now onboarding inputs map to.
+// Confirmed against current QuickBooks Online Vendor API docs (Sep 23 2026, PAT-028 — verified
+// live rather than assumed from training data): PrimaryEmailAddr.Address, BillAddr.Line1, and
+// TaxIdentifier (a plain string) are all real, writable Vendor fields on the standard Accounting
+// API — unlike bank routing/account number, which QuickBooks does not expose for third-party
+// writes at all (see brief section 2). Deliberately does NOT fall back to the legacy `Email`
+// field — that already has its own fallback in qbFindOrCreateVendor's create payload below, and
+// mixing it in here would make an existing vendor's unrelated `Email` trigger a sparse
+// onboarding-field push with nothing new to actually write.
+function vendorQBOnboardingFields(vendor) {
+  vendor = vendor || {};
+  const out = {};
+  const email = String(vendor.Billing_Email || '').trim();
+  if (email) out.PrimaryEmailAddr = { Address: email };
+  const addr = String(vendor.Billing_Address || '').trim();
+  if (addr) out.BillAddr = { Line1: addr };
+  const taxId = String(vendor.Tax_ID || '').trim();
+  if (taxId) out.TaxIdentifier = taxId;
+  return out;
+}
+
+// Best-effort sparse push of the onboarding fields onto an ALREADY-LINKED QuickBooks vendor
+// (the qbFindOrCreateVendor "found" path — a brand-new vendor gets these baked into its create
+// payload instead, see below). Never throws — a QuickBooks outage or fault must not fail vendor
+// onboarding itself — but always logs the failure to Ops_Telemetry rather than swallowing it
+// silently (the rule-174/175 lesson in this repo: a silently-swallowed catch around a
+// Sheets/Drive/QB write is exactly how past regressions went unnoticed for weeks).
+async function qbSyncVendorOnboardingFields(env, vendor, qbId, token) {
+  const patch = vendorQBOnboardingFields(vendor);
+  if (!Object.keys(patch).length) return { skipped: true };
+  try {
+    const got = await qbApi(env, `vendor/${encodeURIComponent(qbId)}?minorversion=73`, 'GET', null, token);
+    const v = got && got.Vendor;
+    if (!v) throw new Error('vendor not found in QuickBooks for onboarding sparse update');
+    const body = Object.assign({ Id: String(qbId), SyncToken: v.SyncToken, sparse: true }, patch);
+    const r = await qbApi(env, 'vendor?minorversion=73', 'POST', body, token);
+    if (!r || !r.Vendor) throw new Error(qbFault(r) || 'QuickBooks vendor onboarding sparse update failed');
+    return { ok: true };
+  } catch (e) {
+    try {
+      await logTelemetry(env, {
+        Source: 'worker', Job_Type: 'vendor_onboarding_qb_push_failed',
+        Skill_Or_Endpoint: 'qbSyncVendorOnboardingFields', Success: 'FALSE',
+        Notes: `vendorId=${(vendor && vendor.ID) || ''} qbId=${qbId} err=${String((e && e.message) || e)}`,
+      });
+    } catch (_) { /* logging itself failing must not mask the original error path */ }
+    return { ok: false, error: e.message };
+  }
+}
+
+// GET /vendor-onboarding-status?vendor_id= — secret-gated (omitted from PUBLIC_PATHS, same
+// convention as every other admin/vendor-portal read). Single-vendor completeness check for the
+// vendor-portal Submit-Bill gate.
+async function vendorOnboardingStatus(env, url) {
+  const vendorId = url.searchParams.get('vendor_id') || '';
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => String(v.ID) === String(vendorId));
+  if (!vendor) return json({ error: 'Vendor not found', vendor_id: vendorId }, 404);
+  const status = vendorOnboardingComplete(vendor);
+  return json({ vendor_id: vendorId, complete: status.complete, missing: status.missing });
+}
+
+// GET /vendor-onboarding-gaps — admin-only bulk report (index.html's new gap-report page). Every
+// active vendor missing any required-now field, in ONE call — avoids an N+1 loop over
+// /vendor-onboarding-status for every vendor, same reasoning as vendor-performance/arAging above.
+async function vendorOnboardingGaps(env) {
+  const vendors = await fetchTab(env, 'Vendors');
+  const active = vendors.filter(v => String(v.Active || '').toUpperCase() !== 'FALSE');
+  const rows = active.map(v => {
+    const status = vendorOnboardingComplete(v);
+    return {
+      vendor_id: String(v.ID), name: v.Name || v.Company || '', phone: v.Phone || '',
+      complete: status.complete, missing: status.missing,
+      bank_info_status: v.Bank_Info_Status || 'not_started',
+    };
+  }).filter(r => !r.complete);
+  return json({ ok: true, as_of: new Date().toISOString().slice(0, 10), total_active_vendors: active.length, gap_count: rows.length, vendors: rows });
+}
+
+// POST /vendor/complete-onboarding — secret-gated. The vendor-portal "Complete your info" form
+// (gates Submit Bill) AND the admin Add/Edit Vendor modal in index.html both write through here.
+// Body: {vendor_id, phone?, billing_email?, billing_address?, tax_id?, tax_id_document_url?}.
+// Only vendor_id is required — the form re-submits whichever fields the vendor/admin filled in;
+// blank/omitted fields are left untouched on the row (same "only write what's given" behavior
+// as the existing updateRow chokepoint this wraps).
+async function vendorCompleteOnboarding(env, body) {
+  const vendorId = body && body.vendor_id;
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  await ensureColumns(env, 'Vendors', VENDOR_ONBOARDING_COLS);
+
+  const fields = {};
+  if (body.phone) fields.Phone = body.phone;
+  if (body.billing_email) fields.Billing_Email = body.billing_email;
+  if (body.billing_address) fields.Billing_Address = body.billing_address;
+  if (body.tax_id) fields.Tax_ID = body.tax_id;
+  if (body.tax_id_document_url) fields.Tax_ID_Document_URL = body.tax_id_document_url;
+  if (!Object.keys(fields).length) return json({ error: 'No fields to update' }, 400);
+
+  const updateRes = await updateRow(env, 'Vendors', vendorId, fields);
+  let landed = updateRes && updateRes.status === 200;
+  if (landed) { try { const j = await updateRes.clone().json(); landed = !!(j && j.success); } catch (_) { landed = false; } }
+  if (!landed) return updateRes; // pass the real error straight through — never claim success on a write that didn't land
+
+  // Best-effort QuickBooks push (brief section 3b). Never fails this request — a vendor's
+  // onboarding info is saved on the Vendors row regardless of QuickBooks' availability — but
+  // every failure is logged (see qbSyncVendorOnboardingFields), never silently swallowed.
+  let qbPush = { skipped: true };
+  try {
+    const vendors = await fetchTab(env, 'Vendors');
+    const vendor = vendors.find(v => String(v.ID) === String(vendorId));
+    if (vendor) {
+      const dn = qbVendorDisplayName ? qbVendorDisplayName(vendor) : (vendor.Name || vendor.Company || '');
+      if (dn) {
+        const token = await qbAccessToken(env);
+        const qbId = await qbFindOrCreateVendor(env, vendor, dn, token);
+        qbPush = qbId ? { ok: true, qb_vendor_id: qbId } : { ok: false };
+      }
+    }
+  } catch (e) {
+    qbPush = { ok: false, error: e.message };
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_onboarding_qb_push_failed', Skill_Or_Endpoint: '/vendor/complete-onboarding', Success: 'FALSE', Notes: `vendorId=${vendorId} err=${String((e && e.message) || e)}` }); } catch (_) {}
+  }
+
+  const status = vendorOnboardingComplete(Object.assign({}, (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(vendorId)) || {}));
+  return json({ success: true, id: String(vendorId), complete: status.complete, missing: status.missing, qb_push: qbPush });
+}
+
 // GET /vendor-performance (B-012) — READ-ONLY vendor scorecard. Ranks Brett's vendors by
 // reliability, speed, volume, and cost — aggregated live from data the Hub already stores
 // (Work_Orders + Vendor_Bills + Time_Entries). No new tab, no new column, no writes. Admin-gated
@@ -11798,6 +12202,82 @@ async function vendorPerformance(env, url) {
       open_jobs: rows.reduce((s, r) => s + r.jobs_open, 0),
     },
     vendors: rows,
+  });
+}
+
+// GET /brettos-tasks-summary — READ-ONLY glance summary of the BrettOS Tasks Sheet (Brett's
+// real, canonical task tracker — a SEPARATE Google Sheet from this repo's own env.SHEET_ID /
+// "RidgeCo Main"; sheet id lives in env.BRETTOS_TASKS_SHEET_ID, never hardcoded here since this
+// repo is public — same reasoning CREDENTIALS_MAP.md gives for keeping identifiers out of it).
+// Per context/TASK_LINKING_BUILD_BRIEF_v1.0.md (Sep 24 2026, decision #1): the BrettOS Sheet
+// stays canonical for tasks — never mirrored or written here — this endpoint only surfaces
+// counts + a handful of top-open items so Brett can see what's open without leaving the Hub
+// (Command Center card + Dev Log link). Never writes. Admin-gated by omission from PUBLIC_PATHS,
+// same convention as vendorPerformance/opsTelemetryRead above.
+//
+// Auth reuse note: uses the SAME getAccessToken(env)/GOOGLE_SA_EMAIL/GOOGLE_SA_KEY runtime
+// service-account JWT this file already uses for env.SHEET_ID, but points it at a DIFFERENT
+// spreadsheet id — the same "auth is the SA, target sheet is a separate id" pattern
+// importKeyRegistry already uses for env.KEY_REGISTRY_SHEET_ID. Fully inert (clean 500, not a
+// crash) until env.BRETTOS_TASKS_SHEET_ID is set. OPEN QUESTION (not resolved by this build,
+// flagged in the PR): whether the BrettOS Tasks Sheet has actually been shared as
+// Viewer/Editor with the runtime SA (maintenance-hub-sheets@maintenance-hub-498819...) —
+// CREDENTIALS_MAP.md's "Known Sheets" table lists only RidgeCo Main as confirmed-shared, and
+// the existing nightly Entities sync runs the OTHER direction (BrettOS pulls FROM this Worker's
+// GET /public/entities-feed, not this Worker reading the BrettOS Sheet) — so that sync's
+// credentials don't establish this endpoint's access either way. If the SA hasn't been shared,
+// this 500s with a clear Google "caller does not have permission" message rather than failing
+// silently — see PAT-027.
+async function brettosTasksSummary(env, url) {
+  const sheetId = env.BRETTOS_TASKS_SHEET_ID;
+  if (!sheetId) return json({ error: 'BRETTOS_TASKS_SHEET_ID not set' }, 500);
+  const limit = Math.max(1, Math.min(25, parseInt(url.searchParams.get('limit') || '8') || 8));
+  let token;
+  try { token = await getAccessToken(env); }
+  catch (e) { return json({ error: `BrettOS Tasks auth error: ${e.message}` }, 500); }
+  const resp = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Tasks`, { headers: { 'Authorization': `Bearer ${token}` } });
+  const data = await resp.json();
+  if (data.error) return json({ error: `BrettOS Tasks read error: ${data.error.message}` }, 400);
+  const rows = data.values || [];
+  const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+  if (rows.length < 2) return json({ ok: true, as_of: new Date().toISOString(), total: 0, open_total: 0, by_status: {}, by_venture: {}, top_open: [], sheet_url: sheetUrl });
+  const headers = rows[0];
+  const tasks = rows.slice(1).map(r => { const o = {}; headers.forEach((hh, i) => { o[hh] = (r[i] !== undefined) ? r[i] : ''; }); return o; });
+
+  // Status set is confirmed-live-but-not-exhaustive per the build brief ("check what statuses
+  // actually appear") — rather than hardcode an assumed set of "open" labels, treat anything
+  // that looks like a closed/done label as closed and everything else (including a status this
+  // code has never seen) as open, so a future status value never silently vanishes from counts.
+  const DONE_STATUSES = new Set(['done', 'complete', 'completed', 'closed', 'cancelled', 'canceled']);
+  const isOpen = t => !DONE_STATUSES.has(String(t.Status || '').toLowerCase().trim());
+
+  const by_status = {}, by_venture = {};
+  for (const t of tasks) {
+    const st = t.Status || '(blank)', ve = t.Venture || '(blank)';
+    by_status[st] = (by_status[st] || 0) + 1;
+    by_venture[ve] = (by_venture[ve] || 0) + 1;
+  }
+
+  const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, medium: 2, low: 3 };
+  const rank = t => { const p = PRIORITY_RANK[String(t.Priority || '').toLowerCase().trim()]; return p === undefined ? 4 : p; };
+  const open = tasks.filter(isOpen);
+  const top_open = open.slice()
+    .sort((a, b) => {
+      const rd = rank(a) - rank(b);
+      if (rd !== 0) return rd;
+      return String(b.Created_Date || '').localeCompare(String(a.Created_Date || '')); // newer first, tiebreak
+    })
+    .slice(0, limit)
+    .map(t => ({
+      task_id: t.Task_ID || '', title: t.Title || '', status: t.Status || '', venture: t.Venture || '',
+      priority: t.Priority || '', due_date: t.Due_Date || '', created_date: t.Created_Date || '',
+      next_action: t.Next_Action || '',
+    }));
+
+  return json({
+    ok: true, as_of: new Date().toISOString(),
+    total: tasks.length, open_total: open.length,
+    by_status, by_venture, top_open, sheet_url: sheetUrl,
   });
 }
 
@@ -12722,6 +13202,40 @@ async function receiptExtract(env, bytes, mime) {
   const txt = (r.result || '').trim();
   try { return receiptApplyRefundDetection(JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim())); }
   catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0, refund: false, refund_reason: '' }; }
+}
+
+// Read a BULK VENDOR STATEMENT (photo/scan/PDF — Home Depot, Lowe's, a credit card, a future Ace
+// Hardware account) with Claude vision → strict JSON of every transaction line, not just one.
+// Sibling to receiptExtract above, copying its exact conventions on purpose (Statement importer
+// Phase 1, Sep 24 2026 — STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0): same bytesToB64 +
+// isPdf media-block branching, same routeAI(env, {type, moneyFacing:true, media, prompt, maxTokens,
+// source}) call shape, same ```json fence-stripping before JSON.parse, same fail-open
+// default-object return on a parse error — never throws, so a bad/unreadable statement upload
+// fails open with an empty lines array rather than 500ing the import endpoint.
+async function statementExtract(env, bytes, mime) {
+  try {
+    const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+    const media = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+    const prompt = `You are a bulk statement data extractor for a property-maintenance business. This document is a VENDOR STATEMENT or CREDIT CARD STATEMENT listing MANY separate transaction lines (not a single receipt) — e.g. a Home Depot Pro account statement, a Lowe's commercial statement, or a credit card statement. Read EVERY distinct transaction/purchase line on the document, not just some of them — statements often run to dozens of lines across multiple pages/sections. Return ONLY strict minified JSON with keys: vendor_detected (the statement issuer's name as printed, e.g. "The Home Depot Pro", string, else ""), lines (array of objects, one per distinct transaction line, each with: date ("YYYY-MM-DD" if determinable, else ""), amount (the line's charge amount as a plain positive number — use the absolute value even if shown as a credit/negative on the statement; null if unreadable), description (short verbatim text describing the purchase/line, e.g. store location, department, or item description, else ""), ref (the transaction's own PO number, invoice number, order number, or reference code AS PRINTED on that line, exactly as shown, else "")). Skip statement-level summary lines (previous balance, payments received, finance charges, total due) — only include actual purchase/transaction lines. JSON only, no prose.`;
+    const r = await routeAI(env, { type: 'statement_parse', moneyFacing: true, media, prompt, maxTokens: 4000, source: 'statementExtract' });
+    const txt = (r.result || '').trim();
+    const parsed = JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim());
+    const lines = Array.isArray(parsed.lines) ? parsed.lines.slice(0, 500).map(x => ({
+      date: String((x && x.date) || ''),
+      amount: (x && typeof x.amount === 'number' && isFinite(x.amount)) ? Math.abs(x.amount)
+        : ((x && x.amount !== null && x.amount !== undefined && x.amount !== '' && isFinite(Number(x.amount))) ? Math.abs(Number(x.amount)) : null),
+      description: String((x && x.description) || ''),
+      ref: String((x && x.ref) || ''),
+    })) : [];
+    return { vendor_detected: String((parsed && parsed.vendor_detected) || ''), lines };
+  } catch (e) {
+    // routeAI threw (missing key, network) or the model's text didn't parse as JSON — fail open
+    // with an empty lines array rather than throwing into the import endpoint (same discipline as
+    // invoiceExtract's fail-open wrapper above).
+    return { vendor_detected: '', lines: [], _error: true, _error_message: String((e && e.message) || e) };
+  }
 }
 
 // Read a VENDOR INVOICE (photo or PDF) with Claude vision → strict JSON suggestion. This is the
@@ -13803,6 +14317,43 @@ async function setConfigKey(env, body) {
   return json({ success: true });
 }
 
+// POST /admin/set-alert-flags (Sep 24 2026, Queue #14/#10 opt-in build) — the narrow,
+// purpose-built alternative to /config/set for these two flags. Writes ONLY the two named
+// keys below (never an arbitrary key from the body), and coerces every value to the literal
+// 'TRUE'/'FALSE' strings the rest of the Worker already reads via
+// String(cfg.failure_alert_enabled||'').toUpperCase()!=='TRUE' (see callWithFailureAlert /
+// deadManSwitchCheck) — so this can never be pointed at any other Config row.
+const ALERT_FLAG_KEYS = ['failure_alert_enabled', 'dead_man_switch_enabled'];
+async function setAlertFlags(env, body) {
+  const updates = {};
+  for (const k of ALERT_FLAG_KEYS) {
+    if (body && Object.prototype.hasOwnProperty.call(body, k)) {
+      updates[k] = (body[k] === true || String(body[k]).toUpperCase() === 'TRUE') ? 'TRUE' : 'FALSE';
+    }
+  }
+  if (!Object.keys(updates).length) return json({ error: 'Provide at least one of: ' + ALERT_FLAG_KEYS.join(', ') }, 400);
+  const data = await sheetsRequest(env, 'GET', '/values/Config');
+  const rows = data.values || [];
+  const batchData = [];
+  const appends = [];
+  for (const key of Object.keys(updates)) {
+    const value = updates[key];
+    const rowIdx = rows.findIndex(r => (r[0] || '').trim() === key);
+    if (rowIdx >= 0) {
+      batchData.push({ range: `Config!B${rowIdx + 1}`, values: [[value]] });
+    } else {
+      appends.push([key, value]);
+    }
+  }
+  if (batchData.length) {
+    await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batchData });
+  }
+  for (const row of appends) {
+    await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: [row] });
+  }
+  return json({ success: true, updated: updates });
+}
+
 function nextSafeId(rows) {
   if(rows.length<=1) return 1;
   const ids=rows.slice(1).map(r=>parseInt(r[0]||'0')).filter(n=>Number.isFinite(n)&&n>0);
@@ -13882,6 +14433,68 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds) {
     }
     return null;
   } catch (e) { return null; }
+}
+
+// Duplicate-guard for /property/add and /unit/add (Sep 24 2026, Brett's ask): both handlers
+// used to call addRow directly with zero check against what's already there, so a new
+// property/unit could be created even when a matching one already existed -- the fix should
+// have been linking the existing record (to an owner, or to QuickBooks), not creating a second
+// one. addRow itself stays untouched (Owners/Vendors/Tenants/etc all still call it directly);
+// only the property/unit dispatch now wraps it with a same-normalization-as-adminDuplicateProperties
+// check first. Same soft-block pattern as depositApprove/qbSetIrBill: 409 + the matching row(s),
+// resubmit with force:true to create anyway -- never a native confirm() (see the Aug 24 2026 note
+// on qbSetMap for why this repo dropped that pattern).
+async function findSimilarProperties(env, address, city) {
+  const addr = qbNormAddress(address || '');
+  if (!addr) return [];
+  const key = addr + '|' + qbNormAddress(city || '');
+  const properties = await fetchTab(env, 'Properties');
+  return properties
+    .filter(p => p.Active !== 'FALSE' && (qbNormAddress(p.Address || '') + '|' + qbNormAddress(p.City || '')) === key)
+    .map(p => ({ id: p.ID, address: p.Address, city: p.City || '', owner_id: p.Owner_ID || null }));
+}
+
+// Units don't have their own address to normalize -- qbNormAddress's street-suffix mapping
+// (st -> street, etc.) doesn't apply to a label like "Apt 1" or "2nd Floor", so this is its own
+// small normalizer: lowercase, strip the same punctuation qbNormAddress strips, collapse
+// whitespace. Scoped to the SAME Property_ID only -- "Unit 1" on two different buildings is not
+// a duplicate of itself.
+function qbNormUnitLabel(s) {
+  return String(s == null ? '' : s).toLowerCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+async function findSimilarUnits(env, propertyId, label) {
+  const norm = qbNormUnitLabel(label);
+  if (!propertyId || !norm) return [];
+  const units = await fetchTab(env, 'Units');
+  return units
+    .filter(u => String(u.Property_ID) === String(propertyId) && u.Active !== 'FALSE' && qbNormUnitLabel(u.Unit_Label) === norm)
+    .map(u => ({ id: u.ID, unit_label: u.Unit_Label }));
+}
+
+async function propertyAddWithDupeCheck(env, body) {
+  if (!body.force) {
+    const matches = await findSimilarProperties(env, body.Address, body.City);
+    if (matches.length) {
+      return json({
+        error: `A property matching "${body.Address}"${body.City ? ', ' + body.City : ''} already exists (ID ${matches.map(m => m.id).join(', ')}). Link it to the right owner instead (POST /property/update with Owner_ID), or pass force:true to create a new one anyway.`,
+        duplicate_of: matches,
+      }, 409);
+    }
+  }
+  return await addRow(env, 'Properties', body);
+}
+
+async function unitAddWithDupeCheck(env, body) {
+  if (!body.force) {
+    const matches = await findSimilarUnits(env, body.Property_ID, body.Unit_Label);
+    if (matches.length) {
+      return json({
+        error: `A unit labeled "${body.Unit_Label}" already exists on this property (ID ${matches.map(m => m.id).join(', ')}). Pass force:true to create a new one anyway.`,
+        duplicate_of: matches,
+      }, 409);
+    }
+  }
+  return await addRow(env, 'Units', body);
 }
 
 async function addRow(env, tab, body) {
@@ -13984,6 +14597,9 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/assign') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  if (path === '/vendor/complete-onboarding') {
+    return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
   if (path === '/receipt/attach-only') {
     // Same reasoning as /status below: the write only ever lands on Receipts (never Vendor_Bills
     // or Invoice_Review — see receiptAttachOnly's own comment), tied to an existing Work_Orders
@@ -14069,6 +14685,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return true;
   }
   if (path === '/admin/seed-test-receipt') return true; // self-scoped to TEST-PROPERTY-001 internally, staging-only (see seedTestReceipt)
+  if (path === '/admin/set-alert-flags') return true; // Config is global (no per-record row to check), but setAlertFlags itself hard-codes the only two keys it will ever write (failure_alert_enabled, dead_man_switch_enabled) and coerces every value to 'TRUE'/'FALSE' — structurally cannot become a generic config write regardless of caller, same SAFE-class reasoning as the duplicate-audit paths above.
   if (path === '/receipt-recon/confirm') {
     // Confirm can create a fresh Receipts row without a WO (a company/BMore expense) or bill an
     // existing WO — gate on whichever applies, same isTestRecord pattern as /workorder above.
@@ -15479,7 +16096,26 @@ function qbResolveBillTo(owner, prop, unit) {
 // owner level the first time, and every time after that, until someone links the property.
 // This is the sentence that says so, and it is the only place that says it.
 function qbBillToNote(billTo, prop, unit) {
-  if (!billTo || billTo.level !== 'owner') return '';
+  if (!billTo) return '';
+  // Property-level fallback: the property itself IS linked (that's the only way billTo.level
+  // resolves to 'property'), but the specific unit on this job isn't — so every invoice for
+  // that unit nests under the building's shared ledger instead of its own line, until someone
+  // links the unit. Same silent-forever failure mode as the owner-level case below, one level
+  // down. Only fires when there's a real unit to point at — a flat/no-unit property billing
+  // correctly at property level never shows this.
+  if (billTo.level === 'property') {
+    const unitId = unit && unit.ID;
+    if (!unitId) return '';
+    if (String((unit && unit.QBO_Customer_ID) || '').trim()) return ''; // unit IS linked
+    const addr = qbPropertyDisplayName(prop);
+    const label = qbUnitLabel(unit);
+    if (!label) return '';
+    const where = addr ? (addr + ' ' + label) : label;
+    return `This lands on ${addr || 'the building'}'s shared ledger, not ${where} — ` +
+      `${label} has no QuickBooks sub-customer yet. ` +
+      `Create it on QB Mapping and this and future invoices for ${label} will bill separately. Sending it now is fine.`;
+  }
+  if (billTo.level !== 'owner') return '';
   const addr = qbPropertyDisplayName(prop);
   if (!addr) return '';                       // no address on file — nothing to nest under
   const label = qbUnitLabel(unit);
@@ -16595,14 +17231,21 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
       }
       try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) {}
     }
+    // Push billing email/address/tax ID (Phase 1 onboarding, brief section 3b) onto a vendor
+    // that already has a linked QuickBooks Vendor — a brand-new vendor gets these baked into
+    // the create payload below instead. Best-effort; never fails this lookup.
+    await qbSyncVendorOnboardingFields(env, vendor, found, token);
     return found;
   }
 
   const payload = { DisplayName: dn };
   const phone = vendor.Phone || '';
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };
-  const email = vendor.Email || '';
+  const email = vendor.Billing_Email || vendor.Email || '';
   if (email) payload.PrimaryEmailAddr = { Address: email };
+  const onboarding = vendorQBOnboardingFields(vendor);
+  if (onboarding.BillAddr) payload.BillAddr = onboarding.BillAddr;
+  if (onboarding.TaxIdentifier) payload.TaxIdentifier = onboarding.TaxIdentifier;
   const r = await qbApi(env, 'vendor?minorversion=73', 'POST', payload, token);
   const id = r?.Vendor?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB vendor');

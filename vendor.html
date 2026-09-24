@@ -1871,6 +1871,117 @@ function submitMyInfo() {
 }
 </script>
 
+<!-- COMPLETE YOUR INFO MODAL (Vendor Onboarding Phase 1, Sep 23 2026) — shown instead of the
+     bill modal when GET /vendor-onboarding-status says required fields are missing. Submitting
+     it unblocks the bill modal immediately in the same tap (brief section 3c). Banking is
+     explicitly OUT of Phase 1 — this form never asks for it. -->
+<div class="modal-overlay" id="modalCompleteInfo" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:440px;padding:20px;max-height:90vh;overflow-y:auto">
+    <div style="color:var(--accent);font-size:.9rem;letter-spacing:.1em;margin-bottom:8px" data-i18n="COMPLETE YOUR INFO TO BILL">COMPLETE YOUR INFO TO BILL</div>
+    <p style="color:var(--muted);font-size:11px;margin-bottom:12px" data-i18n="Ridge Co needs this on file before it can pay a bill. Fill it in once — it only takes a minute.">Ridge Co needs this on file before it can pay a bill. Fill it in once — it only takes a minute.</p>
+    <label data-i18n="Phone">Phone</label>
+    <input type="tel" id="ci-phone" placeholder="(410) 555-0100" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:8px;text-transform:none;letter-spacing:normal;text-align:left">
+    <label data-i18n="Billing Email">Billing Email</label>
+    <input type="email" id="ci-billing-email" placeholder="billing@yourcompany.com" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:8px;text-transform:none;letter-spacing:normal;text-align:left">
+    <label data-i18n="Billing Address">Billing Address</label>
+    <input type="text" id="ci-billing-address" placeholder="123 Main St, City, ST 21201" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:8px;text-transform:none;letter-spacing:normal;text-align:left">
+    <label data-i18n="Tax ID (EIN or SSN)">Tax ID (EIN or SSN)</label>
+    <input type="text" id="ci-tax-id" placeholder="12-3456789" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:8px;text-transform:none;letter-spacing:normal;text-align:left">
+    <label data-i18n="Tax ID document (optional — photo or PDF of your W-9/SS-4)">Tax ID document (optional — photo or PDF of your W-9/SS-4)</label>
+    <input type="file" id="ci-tax-doc" accept="image/*,application/pdf" style="width:100%;color:var(--text);font-family:var(--font);font-size:12px;margin-bottom:4px" onchange="ciTaxDocSelected(this)">
+    <div id="ci-tax-doc-status" style="font-size:11px;color:var(--muted);margin-bottom:8px"></div>
+    <div id="ciMsg"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-sm btn-muted" onclick="closeCompleteInfo()" data-i18n="Cancel">Cancel</button>
+      <button class="btn btn-sm" id="ciBtn" onclick="submitCompleteInfo()" data-i18n="SAVE & CONTINUE TO BILL">SAVE &amp; CONTINUE TO BILL</button>
+    </div>
+  </div>
+</div>
+<script>
+// Vendor Onboarding Phase 1 — Submit-Bill gate. openBillModal() (below, wrapping the original
+// bill-modal opener as _openBillModalReal) checks GET /vendor-onboarding-status first; if
+// incomplete, this modal shows instead, and submitting it opens the real bill modal immediately
+// in the same tap (brief section 3c) rather than making the vendor tap Bill twice.
+var _ciWOId = null, _ciVendorName = null, _ciTaxDocUrl = '';
+
+function openCompleteInfoModal(woId, vendorName, missing) {
+  _ciWOId = woId; _ciVendorName = vendorName; _ciTaxDocUrl = '';
+  var phone = (session && session.vendor_phone) || '';
+  document.getElementById('ci-phone').value = phone;
+  // Phone is only locked when it's already on file — a vendor genuinely missing it (rare, but
+  // it's in the required list) must still be able to type it in here.
+  document.getElementById('ci-phone').readOnly = !!phone;
+  document.getElementById('ci-phone').style.opacity = phone ? '0.7' : '1';
+  document.getElementById('ci-billing-email').value = (session && session.vendor_email) || '';
+  document.getElementById('ci-billing-address').value = '';
+  document.getElementById('ci-tax-id').value = '';
+  document.getElementById('ci-tax-doc').value = '';
+  document.getElementById('ci-tax-doc-status').textContent = '';
+  document.getElementById('ciMsg').innerHTML = '';
+  document.getElementById('modalCompleteInfo').style.display = 'flex';
+  applyTranslations();
+}
+function closeCompleteInfo() {
+  document.getElementById('modalCompleteInfo').style.display = 'none';
+  _ciWOId = null;
+}
+
+function ciTaxDocSelected(input) {
+  if (!input.files || !input.files[0]) return;
+  var file = input.files[0];
+  var statusEl = document.getElementById('ci-tax-doc-status');
+  statusEl.textContent = t('Uploading…');
+  var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
+  api('POST', '/create-upload-session', {
+    wo_id: 'VENDOR-' + vendorId, property: 'Vendor Onboarding',
+    file_name: file.name, file_type: 'tax_id_doc',
+    mime_type: file.type || 'application/octet-stream', origin: window.location.origin,
+  }).then(function(res) {
+    if (!res || !res.success || !res.upload_url) { statusEl.textContent = t('Upload failed — you can still save without it.'); return; }
+    return fetch(res.upload_url, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file })
+      .then(function(r) { return r.json(); })
+      .then(function(fileData) {
+        if (!fileData || !fileData.id) { statusEl.textContent = t('Upload failed — you can still save without it.'); return; }
+        _ciTaxDocUrl = fileData.webViewLink || '';
+        statusEl.textContent = '✓ ' + file.name;
+        statusEl.style.color = 'var(--accent2)';
+      });
+  }).catch(function() { statusEl.textContent = t('Upload failed — you can still save without it.'); });
+}
+
+function submitCompleteInfo() {
+  if (!session || !session.vendor_id) return;
+  var phone = document.getElementById('ci-phone').value.trim();
+  var billingEmail = document.getElementById('ci-billing-email').value.trim();
+  var billingAddress = document.getElementById('ci-billing-address').value.trim();
+  var taxId = document.getElementById('ci-tax-id').value.trim();
+  var msgEl = document.getElementById('ciMsg');
+  if (!phone || !billingEmail || !billingAddress || !taxId) {
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + t('Phone, billing email, billing address, and tax ID are all required.') + '</div>';
+    return;
+  }
+  var release = claimSubmit('complete-onboarding', document.getElementById('ciBtn'), t('Saving…'));
+  if (!release) return;
+  msgEl.innerHTML = '';
+  api('POST', '/vendor/complete-onboarding', {
+    vendor_id: session.vendor_id, phone: phone, billing_email: billingEmail,
+    billing_address: billingAddress, tax_id: taxId, tax_id_document_url: _ciTaxDocUrl || undefined,
+  }).then(function(res) {
+    release();
+    if (res.error) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + esc(res.error) + '</div>'; return; }
+    session.vendor_phone = phone;
+    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch (e) {}
+    var woId = _ciWOId, vendorName = _ciVendorName;
+    closeCompleteInfo();
+    // Same tap: go straight into the real bill modal now that the gate is cleared.
+    _openBillModalReal(woId, vendorName);
+  }).catch(function() {
+    release();
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + t('Error saving — try again') + '</div>';
+  });
+}
+</script>
+
 <!-- SCHEDULING MODAL -->
 <div class="modal-overlay" id="modalSched" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
   <div class="modal" style="max-width:440px">
@@ -2202,7 +2313,25 @@ var _invoiceFileId = '';
 var _billTypeUserPicked = false; // flips true the moment the vendor taps a By-the-Hour/Flat tab themselves
 var _overageAcknowledged = false; // Sep 23 2026 — set once the vendor confirms past the overage warning below; reset on every modal open
 
+// Vendor Onboarding Phase 1 (Sep 23 2026) — Submit Bill is the one gated action (brief section
+// 3c: never gate work-order visibility/progress, only billing, since a bill for a vendor with no
+// billing/tax info on file is already meaningless). Checks completeness first; the real modal
+// (_openBillModalReal, unchanged below) only opens once the gate passes, either immediately or
+// right after the vendor submits the Complete-Your-Info form (same tap).
 function openBillModal(woId, vendorName) {
+  var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
+  if (!vendorId) { _openBillModalReal(woId, vendorName); return; } // no session — fail open rather than block
+  api('/vendor-onboarding-status?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
+    if (res && res.complete) { _openBillModalReal(woId, vendorName); }
+    else { openCompleteInfoModal(woId, vendorName, (res && res.missing) || []); }
+  }).catch(function() {
+    // A network hiccup checking the gate must never block billing outright — fail open, same
+    // "never gate work" spirit the rest of this portal already follows.
+    _openBillModalReal(woId, vendorName);
+  });
+}
+
+function _openBillModalReal(woId, vendorName) {
   _billWOId = woId;
   _billType = 'hourly';
   _billTypeUserPicked = false;
@@ -2928,6 +3057,20 @@ var ES = {
   'TOTAL':'TOTAL',
   'Cancel':'Cancelar',
   'Enter at least one billable item.':'Ingrese al menos un artículo facturable.',
+  // Vendor Onboarding Phase 1 (Sep 23 2026) — Complete Your Info modal
+  'COMPLETE YOUR INFO TO BILL':'COMPLETE SU INFORMACIÓN PARA FACTURAR',
+  'Ridge Co needs this on file before it can pay a bill. Fill it in once — it only takes a minute.':'Ridge Co necesita esta información antes de poder pagarle una factura. Complétela una vez — solo toma un minuto.',
+  'Phone':'Teléfono',
+  'Billing Email':'Correo de Facturación',
+  'Billing Address':'Dirección de Facturación',
+  'Tax ID (EIN or SSN)':'Número de Identificación Fiscal (EIN o SSN)',
+  'Tax ID document (optional — photo or PDF of your W-9/SS-4)':'Documento de identificación fiscal (opcional — foto o PDF de su W-9/SS-4)',
+  'SAVE & CONTINUE TO BILL':'GUARDAR Y CONTINUAR A LA FACTURA',
+  'Uploading…':'Subiendo…',
+  'Upload failed — you can still save without it.':'Error al subir — puede guardar sin el documento.',
+  'Phone, billing email, billing address, and tax ID are all required.':'Se requieren teléfono, correo de facturación, dirección de facturación y número de identificación fiscal.',
+  'Saving…':'Guardando…',
+  'Error saving — try again':'Error al guardar — intente de nuevo',
 };
 
 function t(key) {

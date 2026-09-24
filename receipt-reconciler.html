@@ -139,6 +139,33 @@
   </div>
 </div>
 
+<!-- Statement importer Phase 1 (Sep 24 2026, STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0).
+     Drops a bulk vendor statement (Home Depot, Lowe's, a credit card, a future Ace Hardware
+     account) in here; every line is checked against Receipts/Receipt_Recon_Queue and anything not
+     already accounted for lands in the SAME Pending queue below, tagged as a statement line — not
+     a second screen. CSV is parsed client-side (this codebase's hubBulkImport convention — there is
+     no server-side CSV parser); a PDF/image goes through the existing create-upload-session flow. -->
+<div class="section" id="stmt-import-section">
+  <div class="section-title">Import Statement</div>
+  <p class="sub" style="margin-bottom:10px">
+    Drop a bulk vendor statement (CSV export or a PDF/scan) — every line gets checked against
+    Receipts and this queue. Anything not already accounted for lands below in Pending, tagged
+    <b>from statement</b>, so it goes through the same Confirm/Skip flow as a normal scan.
+  </p>
+  <div class="row"><label>Vendor</label><input id="stmt-vendor" placeholder="e.g. Home Depot" style="flex:1;max-width:280px"></div>
+  <div class="row">
+    <label>CSV file</label>
+    <input type="file" id="stmt-csv-file" accept=".csv,text/csv" onchange="stmtCsvSelected(this)">
+  </div>
+  <div id="stmt-csv-preview" style="font-size:11px;color:var(--muted);margin:2px 0 8px 108px"></div>
+  <div class="row">
+    <label>PDF / scan</label>
+    <input type="file" id="stmt-pdf-file" accept=".pdf,image/*" onchange="stmtPdfSelected(this)">
+  </div>
+  <div id="stmt-status" class="rc-status" style="margin-left:0"></div>
+  <div id="stmt-result" style="font-size:12px;margin-top:6px"></div>
+</div>
+
 <div class="section">
   <div class="tabs" id="tabs"></div>
   <!-- Part 4 (Sep 22 2026 bulk-actions brief). Scoped to THIS page's own #list container only,
@@ -218,6 +245,165 @@ async function scanNow(){
     await loadQueue();
     status.textContent = msg + ' · ' + status.textContent.replace(/^✅\s*/, '');
   } catch(e){ status.textContent = '❌ '+e.message; }
+}
+
+// ── Statement importer (Phase 1, Sep 24 2026) ───────────────────────────────────────────────────
+// CSV is parsed entirely client-side — the worker has no server-side CSV parser (confirmed live,
+// grepped worker.js) and this codebase's own convention (hubBulkImport) is "parse in the browser,
+// POST structured rows". Small, correct line parser: handles quoted fields containing commas and
+// escaped "" quotes, which a naive .split(',') would mangle.
+function stmtParseCsvLine(line){
+  const out = []; let cur = ''; let inQ = false;
+  for (let i = 0; i < line.length; i++){
+    const c = line[i];
+    if (inQ){
+      if (c === '"'){
+        if (line[i+1] === '"'){ cur += '"'; i++; } else { inQ = false; }
+      } else cur += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ','){ out.push(cur); cur = ''; }
+      else cur += c;
+    }
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+function stmtParseCsv(text){
+  const lines = String(text||'').split(/\r\n|\r|\n/).filter(l => l.trim() !== '');
+  return lines.map(stmtParseCsvLine);
+}
+function stmtDetectColumns(headerRow){
+  const norm = headerRow.map(h => String(h||'').toLowerCase());
+  const find = (needles) => { for (let i=0;i<norm.length;i++){ for (const n of needles){ if (norm[i].indexOf(n) >= 0) return i; } } return -1; };
+  return {
+    date: find(['date']),
+    amount: find(['amount','total']),
+    description: find(['description','memo','desc']),
+    ref: find(['reference','ref','po','invoice']),
+  };
+}
+function stmtRowsFromCsv(rows){
+  if (!rows.length) return { cols: null, out: [] };
+  const cols = stmtDetectColumns(rows[0]);
+  const out = [];
+  for (let i = 1; i < rows.length; i++){
+    const r = rows[i];
+    const amtRaw = cols.amount >= 0 ? (r[cols.amount]||'') : '';
+    const amt = Number(String(amtRaw).replace(/[^0-9.\-]/g,''));
+    out.push({
+      date: cols.date >= 0 ? (r[cols.date]||'').slice(0,10) : '',
+      amount: isFinite(amt) ? Math.abs(amt) : null,
+      description: cols.description >= 0 ? (r[cols.description]||'') : '',
+      ref: cols.ref >= 0 ? (r[cols.ref]||'') : '',
+    });
+  }
+  return { cols, out };
+}
+if (typeof window !== 'undefined') window.stmtRowsFromCsv = stmtRowsFromCsv;
+
+let stmtCsvRows = null;
+function stmtCsvSelected(input){
+  const preview = document.getElementById('stmt-csv-preview');
+  const file = input.files && input.files[0];
+  if (!file){ stmtCsvRows = null; preview.textContent = ''; return; }
+  preview.textContent = 'Reading…';
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = stmtParseCsv(reader.result);
+      const { cols, out } = stmtRowsFromCsv(parsed);
+      const valid = out.filter(r => r.amount !== null && r.date);
+      stmtCsvRows = out;
+      const missing = [];
+      if (!cols || cols.date < 0) missing.push('date');
+      if (!cols || cols.amount < 0) missing.push('amount');
+      preview.innerHTML = esc(out.length + ' row(s) found, ' + valid.length + ' with a readable date+amount.')
+        + (missing.length ? ' <span class="warn">Could not auto-detect: ' + esc(missing.join(', ')) + ' — check the CSV header row.</span>' : '')
+        + '<br><button class="btn small" onclick="stmtSubmitCsv()">Import ' + out.length + ' row(s)</button>';
+    } catch(e){ preview.innerHTML = '<span class="err">❌ ' + esc(e.message) + '</span>'; }
+  };
+  reader.onerror = () => { preview.innerHTML = '<span class="err">❌ Could not read file.</span>'; };
+  reader.readAsText(file);
+}
+
+function stmtVendor(){ return document.getElementById('stmt-vendor').value.trim(); }
+
+async function stmtSubmitCsv(){
+  const statusEl = document.getElementById('stmt-status');
+  const vendor = stmtVendor();
+  if (!vendor){ statusEl.innerHTML = '<span class="err">Enter a vendor name first.</span>'; return; }
+  if (!stmtCsvRows || !stmtCsvRows.length){ statusEl.innerHTML = '<span class="err">No CSV rows to import.</span>'; return; }
+  await stmtRunImport({ vendor, rows: stmtCsvRows.slice(0, 500) }, stmtCsvRows.length > 500);
+}
+
+async function stmtPdfSelected(input){
+  const statusEl = document.getElementById('stmt-status');
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const vendor = stmtVendor();
+  if (!vendor){ statusEl.innerHTML = '<span class="err">Enter a vendor name first.</span>'; input.value=''; return; }
+  statusEl.innerHTML = '<span class="info">Uploading ' + esc(file.name) + '…</span>';
+  try {
+    const sess = await post('/create-upload-session', {
+      file_type: 'invoice', file_name: file.name, mime_type: file.type || 'application/octet-stream',
+      property: 'Statement Imports', origin: window.location.origin,
+    });
+    if (!sess.success || !sess.upload_url) throw new Error(sess.error || 'Could not start upload.');
+    const putRes = await fetch(sess.upload_url, { method:'PUT', headers:{'Content-Type': file.type||'application/octet-stream'}, body: file });
+    const fileData = await putRes.json().catch(() => null);
+    if (!fileData || !fileData.id) throw new Error('Upload did not complete.');
+    statusEl.innerHTML = '<span class="info">Uploaded — reading statement (this can take a bit for a long one)…</span>';
+    await stmtRunImport({ vendor, file_id: fileData.id, mime_type: file.type || 'application/octet-stream', source_file_name: file.name });
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ ' + esc(e.message) + '</span>'; }
+  input.value = '';
+}
+
+// Auto-loops on the server's own `next_offset`/`remaining` rather than relying on Brett to
+// manually tap "import again" (Sep 24 2026 review fix): the endpoint caps writes at 100/call, and
+// re-sending the SAME first 100 rows without an offset re-inserted them as duplicates — a row it
+// just wrote is Status:'pending', and statementLineMatch correctly treats 'pending' as not yet
+// dispositioned, so it never deduped against its own just-inserted rows. Sending `offset:
+// next_offset` on every follow-up call makes each call process a genuinely different slice, so
+// nothing is ever reprocessed and nothing is silently skipped — this removes the duplicate-insert
+// risk entirely rather than just documenting around it.
+async function stmtRunImport(body, truncatedNote){
+  const statusEl = document.getElementById('stmt-status');
+  const resultEl = document.getElementById('stmt-result');
+  const totals = { total_lines: 0, matched_confirmed: 0, flagged_possible: 0, inserted: 0, skipped_invalid: 0, errors: [] };
+  let vendorDetected = '';
+  let offset = 0, call = 0;
+  try {
+    while (true) {
+      call++;
+      statusEl.innerHTML = '<span class="info">Importing' + (call > 1 ? ' — processed ' + offset + (totals.total_lines ? ' of ' + totals.total_lines : '') + '…' : '…') + '</span>';
+      const res = await post('/receipt-recon/import-statement', Object.assign({}, body, { offset }));
+      if (res.error) throw new Error(res.error);
+      totals.total_lines = res.total_lines; // authoritative each call (rows/file are re-sent unchanged)
+      totals.matched_confirmed += res.matched_confirmed || 0;
+      totals.flagged_possible += res.flagged_possible || 0;
+      totals.inserted += res.inserted || 0;
+      totals.skipped_invalid += res.skipped_invalid || 0;
+      if (res.errors && res.errors.length) totals.errors = totals.errors.concat(res.errors);
+      if (res.vendor_detected) vendorDetected = res.vendor_detected;
+      offset = (typeof res.next_offset === 'number') ? res.next_offset : offset + 100;
+      if (!res.remaining || res.remaining <= 0) break;
+      statusEl.innerHTML = '<span class="info">Processed ' + offset + ' of ' + totals.total_lines + '… continuing</span>';
+    }
+    const lines = [
+      totals.total_lines + ' line(s) read' + (vendorDetected ? ' (statement says "' + esc(vendorDetected) + '")' : ''),
+      totals.matched_confirmed + ' already accounted for (no action needed)',
+      totals.inserted + ' landed in Pending' + (totals.flagged_possible ? ' (' + totals.flagged_possible + ' flagged ⚠️ possible match — check before billing)' : ''),
+      totals.skipped_invalid ? totals.skipped_invalid + ' skipped (no readable date/amount)' : '',
+    ].filter(Boolean);
+    let html = '<div class="ok">✅ ' + lines.join(' · ') + (call > 1 ? ' (' + call + ' batches)' : '') + '</div>';
+    if (truncatedNote) html += '<div class="warn">Only the first 500 rows were sent — split the rest into another CSV import.</div>';
+    if (totals.errors.length) html += '<div class="err">' + totals.errors.length + ' error(s): ' + esc(totals.errors.slice(0,3).join('; ')) + '</div>';
+    resultEl.innerHTML = html;
+    statusEl.innerHTML = '';
+    toast('<b>' + esc(body.vendor) + ' statement</b> — ' + esc(lines.join(' · ')));
+    if (curStatus === 'pending') await loadQueue();
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ ' + esc(e.message) + ' (processed ' + offset + ' of ' + (totals.total_lines || '?') + ' before this failed)</span>'; }
 }
 
 function rebuildWoDatalist(){

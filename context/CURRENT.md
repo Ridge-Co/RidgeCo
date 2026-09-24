@@ -1,3 +1,439 @@
+# Sep 24, 2026, ~17:00 ET — SHIPPED: Allow-list simplification (PR #55) + property/unit linking & duplicate-check (PR #57)
+
+## 🟢 Live: Allow-list simplification, all 3 changes
+Full detail: `context/ALLOWLIST_SIMPLIFICATION_BUILD_BRIEF_v1.0.md` (now marked shipped),
+`FEATURE_LOG.md` ([FL-20260924-1815-as]). gh-broker's redundant client-side path-allowlist arrays
+removed (direct to gh-broker `main`); `HUB_TEST_TOKEN` broadened to any path/method on staging
+(`hubTestWriteAllowed` confirmed default-deny); `HUB_PROD_RO_TOKEN` inverted from a ~12-path
+allow-list to an 8-path deny-list after reading every GET handler by hand. PR #55 merged by Brett
+("go with pr 54 and pr 55"), verified live on staging and production.
+
+## 🟢 Live: Property/Unit linking discoverability + duplicate-creation guard
+Full detail: `context/PROPERTY_UNIT_LINK_AND_DUPE_CHECK_BUILD_BRIEF_v1.0.md`,
+`FEATURE_LOG.md` ([FL-20260924-1900-pu]). QB Mapping now reachable from the Dev Log page and a
+per-owner 🔗 button on the Owners table; Add Property modal shows the owner's unlinked properties
+as a link-vs-create stopgap; new `findSimilarProperties`/`findSimilarUnits` duplicate check
+returns 409+`duplicate_of` on `/property/add`/`/unit/add`, frontend offers "Link to existing" /
+"Create anyway" (`force:true`). PR #57 merged by Brett ("MERGE PR 57").
+
+## 🟡 Note: Claude Projects / repo context reconciliation in progress
+The claude.ai "Continuous Improvement" Project had been keeping a parallel, partially-drifting
+copy of some of this repo's context (e.g. its own allow-list brief). This repo's `context/` +
+`brett332/data/business-context/` remains the authoritative system (predates Claude Projects, per
+Brett). Reconciliation across all ~30 Project docs is in progress — see `SESSION_STATE.md`'s Sep 24
+checkpoint for the concrete gaps found so far (stale `cabin-str.md`, stale
+`cleaning-vendor-push-RESUME.md`, a few project-only design docs never promoted to a build brief).
+
+---
+
+# Sep 24, 2026, ~16:00 ET — BUILT (branch pushed, PR pending): CAP-036 #17 Vendor active/inactive self-service UI; CAP-036 #18 (deactivate Emmanuel Tires + Brian Furr) BLOCKED — needs an interactive/PAT session
+
+**CAP-036 #17 — checked whether an Active/Inactive toggle already existed before building.**
+Read `renderVendorsPage`/`openEditVendorModal`/`submitEditVendor` in `index.html`: the Vendors
+page already filtered `v.Active!=='FALSE'`, and literally every vendor picker in the app
+(assign, reassign, new-WO, master-key holder, bill split, etc. — ~10 spots) already excluded
+`Active==='FALSE'` vendors. But the Edit Vendor modal had **no Active field at all** (unlike
+Edit Tenant, which already has `et-active`), and the Vendors page had no way to see or reactivate
+an inactive vendor once one existed — deactivating today only happens via `updateRow`/direct
+Sheet edit or the vendor-reject flow's hardcoded `Active:'FALSE'`. So: additive build, not a
+duplicate.
+
+**Built** (branch `feat/cap-036-vendor-active-toggle`, `index.html` only — no worker.js change,
+reuses the existing generic `POST /vendor/update` + `Active` TRUE/FALSE column convention,
+PAT-006): a "Show inactive vendors" checkbox on the Vendors page; a Deactivate/Reactivate button
+per vendor row (`toggleVendorActive`, confirms before writing, updates local state + re-renders
+so the vendor visibly moves between the active/inactive views without a full reload); an
+INACTIVE badge + dimmed row for inactive vendors; and a Status (Active/Inactive) `<select>` on
+the Edit Vendor modal (`ev-active`), read in `openEditVendorModal` and written in
+`submitEditVendor`.
+
+**Verification gap, named plainly rather than routed around:** `/vendor/update` is not on
+`HUB_TEST_WRITE_PATHS` (`hub_test_post` → 401) or `HUB_PROD_WRITE_PATHS` (`hub_prod_post` →
+401) — confirmed by trying both read-only-safe probes (staging against test vendor Riley
+Testvendor ID 16; prod attempt was reverted-in-effect since it 401'd and wrote nothing). Per
+`test-verified-builds` Step 0, this is a genuine tooling gap, not a reason to ask Brett for
+`WORKER_SECRET`: full write+read-back verification of this exact change needs either (a)
+`/vendor/update` added to `HUB_TEST_WRITE_PATHS` in gh-broker for staging testing, or (b) Brett's
+own interactive/PAT session. Static review + the fact that this reuses an endpoint already
+exercised by the existing vendor-reject and Edit-Tenant-Active code paths is the verification
+available from here.
+
+**CAP-036 #18 — Deactivate Emmanuel Tires (Vendor ID 13) and Brian Furr (Vendor ID 7),
+Brett-approved.** Confirmed via `hub_prod_get('/vendors')` (read-only): Emmanuel Tires — ID 13,
+Company "Emmanuel Tires", Trade "Mechanic", Rate_Notes "MECHANIC / auto work only (per Brett).
+Fleet vehicle repairs.", currently `Active:"TRUE"`. Brian Furr — ID 7, no company, Trade
+"General", currently `Active:"TRUE"`. **Could not execute the write**: tried
+`hub_prod_post('/vendor/update', {id:'7', fields:{Active:'FALSE'}})` — 401, confirming
+`/vendor/update` is genuinely not on the narrow, additive-only `HUB_PROD_WRITE_PATHS` allow-list
+(correctly so — it's a mutating update, not additive/idempotent-backfill shaped, so it doesn't
+fit that token's design). **Nothing was written to either vendor** — both remain `Active:"TRUE"`
+in production as of this entry. This needs Brett (or a PAT-equipped session) to either merge
+CAP-036 #17's PR and use the new UI, or flip the two rows directly.
+
+**Ship status:** branch `feat/cap-036-vendor-active-toggle` pushed to `Ridge-Co/RidgeCo`, PR not
+yet opened in this pass (opening next). `context/FEATURE_LOG.md` bumped to v2.08,
+`[FL-20260924-1600-va]`.
+
+---
+
+# Sep 24, 2026, ~13:05 ET — DESIGNED (not yet built): Vendor Standalone Billing + Self-Serve "One-Off Job" — build brief finalized; **a separate session is now building this, do not duplicate**
+
+Full spec: `context/VENDOR_STANDALONE_BILLING_AND_SELFSERVE_WO_BUILD_BRIEF_v1.0.md` (§7 confirms
+zero open questions as of this write — fully resolved through several rounds of Brett's own
+clarifying answers). Two new independent, per-vendor opt-in permissions on `Vendors`:
+
+- **`Can_Bill_No_WO`** (Sierra Taylor's case) — vendor gets a persistent **"Submit a Bill"** button
+  on `vendor.html`'s home screen, scoped to a per-vendor `Billing_Property_Access` property
+  allow-list, with a "request access to another property" path that SMS's Brett a link to approve
+  once/ongoing. New `POST /vendor-bill/add-standalone` writes a `Vendor_Bills` row with `WO_ID`
+  blank + new `Property_ID`/`Bill_To`(`owner`/`ridgeco`)/`Standalone` columns; `approveInvoiceReview`
+  and `qbSendInvoice` get a `Standalone` branch (modeled on the existing `scopeSigResolveParties()`)
+  to resolve Owner straight from `Property_ID` with no WO in the chain, since today that whole
+  Property→Owner→QB-Customer resolution runs exclusively off `wo.Property_ID`.
+- **`Can_Create_Own_WO`** (Alan George's case) — a **"Log a One-Off Job"** button, also on the
+  vendor home screen, deliberately NOT property-restricted. New `POST /workorder/self-serve` forces
+  `Vendor_ID` to the caller (never another vendor) and now **requires** a mandatory
+  `Approval_Source` attestation (`'owner'|'brett'|'other'`, free-text `Approval_Note` required when
+  `'other'`) before it will create the WO — the safeguard in place of a hard approval gate, so
+  Brett always sees *why* a vendor-created WO exists, not just that one exists. Mandatory framing
+  copy on the form every time it opens, explicitly warning this is not a substitute for regular
+  Work Orders and that recurring verbal-job patterns should go to Brett for a proper
+  template/process instead.
+- Both flags get inline-checkbox toggles on the Vendors table (mirrors the existing `In_House`
+  pattern) plus a bulk-select action to flip several vendors at once.
+- Property-access-request approvals (the "request access to another property" path above) surface
+  in **two** places reading the same pending count, per Brett's explicit ask that the SMS alone
+  won't be reliable enough: a new **Dev Log** section with a pending-count badge on the Dev Log nav
+  tab, and a **Dashboard** stat tile that only shows when something's pending.
+
+Money/QuickBooks-adjacent → ships as a staged branch+PR per `AUTONOMY_GUARDRAILS_v1.0`, not
+auto-merged. **Before starting any build work on this**, check this repo's open PR list first —
+per Brett (Sep 24), a separate session was already asked to build it; re-confirm it isn't already
+in flight or merged before duplicating effort.
+
+---
+
+# Sep 24, 2026, ~11:40 ET — FIXED (PR open, not merged): CAP-036 #15 Review Bills Cancel disappearing bill, and CAP-036 #9 Property Notice picker stuck on first property
+
+**CAP-036 #15 — Review Bills "Cancel" made a bill disappear (real incident: Eddie Smith).**
+Root cause: `invBillThisJob(k)` (Review Bills' single "Approve & send to QuickBooks" button) calls
+`POST /invoice-review/approve` — which immediately flips `Vendor_Bills.Status` to `'reviewed'`,
+excluding it from Review Bills' `?status=submitted` list — and then opens the QB-send confirm
+modal via `previewQBSend(res.id)`. The modal's Cancel button only ever called `closeModal(...)`.
+So the approval that just happened was never undone by Cancel — the bill was already gone from
+Review Bills the moment the modal opened, and Cancel did nothing to bring it back. Not a bug in
+`irHideCard` (the client-side fade) or in the approve endpoint itself — both worked exactly as
+written; the gap was that nothing ever called the pre-existing `unapproveInvoiceReview`
+endpoint on Cancel.
+
+Fix: `previewQBSend(id, justApproved)` now records whether THIS call is the one that just
+auto-approved the bill. The modal's Cancel button now calls a new `cancelQBSend()`: if the modal
+was opened by a fresh approval, it calls `POST /invoice-review/unapprove` (pre-existing endpoint,
+unchanged) to restore `Vendor_Bills.Status='submitted'` and put the bill back in Review Bills,
+and tells the user so via toast. If the modal was opened for a bill approved in an earlier
+sitting (the Send-to-QB queue's own "Preview & Send" path), Cancel is left as a true no-op,
+exactly as before — that approval predates this click and must not be touched.
+
+Verified: `test/manual-verify-review-bills-cancel-noop-ui.mjs` (new, real Playwright pass against
+the actual shipped `index.html`, no mocking of app code — only the Worker's own fetch endpoints
+are intercepted). Case 1 (fresh approval, Cancel) — confirms `/invoice-review/unapprove` is
+called with the right id, the real `/qb/send-invoice` (non-preview) is never called, and the
+toast says the bill is back in Review Bills. Case 2 (pre-existing approval, Cancel) — confirms
+`/invoice-review/unapprove` is NOT called. 8/8 assertions pass against the fix. Re-ran the same
+test unmodified against the pre-fix `index.html` to confirm it actually discriminates the bug:
+2 of 8 assertions fail (no unapprove call ever fires), confirming this is a real regression test,
+not just a structural check. `hub_test_post` could not exercise `/invoice-review/approve` /
+`/invoice-review/unapprove` / `/qb/send-invoice` directly — none of the three are in gh-broker's
+`HUB_TEST_WRITE_PATHS` — so verification relied on the Playwright pass driving the real shipped
+JS end to end instead.
+
+**Production finding (read-only only, nothing written) — Eddie Smith's bill:** Using
+`hub_prod_get` (`/vendors`, `/vendor-bills`) and `hub_prod_qb_query` (`/qb/vendor-reconcile`),
+confirmed Eddie Smith's WO-1118 bill (Vendor_Bills row ID 56, $608.65) is genuinely stuck: its
+status was moved to `'reviewed'` by the approval, and `/qb/vendor-reconcile` shows no matching
+QuickBooks bill/invoice was ever created for it — i.e. Cancel was pressed, the approval was never
+undone, and the actual send to QuickBooks never happened either. It is not lost data — it's
+sitting in the `Invoice_Review` tab in an approved-but-unsent state, recoverable either by
+opening it on the Send to QuickBooks page and completing the send, or by using the (now-fixed)
+flow to withdraw the approval and put it back in Review Bills. Swept all 11 vendors with
+`'reviewed'` bills as of this check: the other 91 reviewed bills across 10 vendors all have a
+matching QuickBooks entry — Eddie Smith's WO-1118 is the only one stuck this way. Brett Lambert's
+~30 in-house jobs use a separate path not fully checkable with the read-only tools available and
+are flagged as an unchecked gap, not a confirmed problem. No write was made to any of this —
+Brett's go-ahead needed before recovering the Eddie Smith bill.
+
+**CAP-036 #9 — Property Notice modal stuck on the first property (e.g. opened on "20 East Eager
+Street", switching properties never updated the display).** Root cause: a stale-response race,
+not a missing `onchange` handler. `propertyNoticeRecalc()` already fired a debounced
+`POST /property/notice` preview request on every change, but the response handler had no way to
+tell whether its request was still the current one — a slow response for the property the user
+had already left could land after a fast response for the new selection and silently overwrite
+it. Also, the backend already returned `owner` but the frontend never displayed it.
+
+Fix: added a monotonic request-id guard (`_pnReqId`) so a response is only applied if it's still
+for the currently-selected property and is still the latest request in flight; added
+`propertyNoticePropertyChanged()` (wired to the picker's `onchange`) to clear the stale display
+immediately on switch rather than leaving old data visible while the new request is in flight;
+and now render `owner` in the recipients line.
+
+Verified: `test/manual-verify-property-notice-refresh-ui.mjs` (new, real Playwright pass).
+Simulates opening the modal on Property 1 ("20 East Eager Street", 700ms-delayed mock response),
+switching to Property 2 ("115 West 29th Street", 20ms mock response) while P1's request is
+already in flight, and asserts the display shows P2 immediately after switching AND still shows
+P2 after P1's late response finally arrives. 8/8 assertions pass against the fix. Re-ran
+unmodified against the pre-fix `index.html`: 2 of 8 assertions fail, with "20 East Eager Street"
+leaking back onto the screen after the switch — confirming the test catches the real bug.
+
+**Ship status:** both fixes are on branch `fix/cap-036-review-bills-cancel-property-notice`,
+PR #56 (`https://github.com/Ridge-Co/RidgeCo/pull/56`), open, **not merged** — Review Bills is
+money-adjacent (QuickBooks-send flow) per PAT-033/AUTONOMY_GUARDRAILS, so this stops at a staged
+PR for Brett's own review and merge, not an auto-merge to `main`. `context/FEATURE_LOG.md` bumped
+to v2.07 with matching `[FL-20260924-1136-rb]` and `[FL-20260924-1130-pn]` entries.
+
+---
+
+# Sep 23, 2026, ~19:25 ET — INVESTIGATED: staging 401 on the two brand-new Vendor Onboarding Phase 1 endpoints, right after PR #52 merged to `main` — root cause was Cloudflare deploy propagation lag, not a code bug
+
+**Symptom:** ~15 minutes after PR #52 ("Vendor Onboarding Phase 1") merged to `main` and both
+`maintenance-hub` and `maintenance-hub-staging` showed the new code via `workers_get_worker_code`
+(new functions, correct `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS` entries, byte-verified clean
+ASCII, no stray characters), `hub_test_get('/vendor-onboarding-status?vendor_id=7')` and
+`hub_test_post('/vendor/complete-onboarding', {...})` both 401'd with `{"error":"Unauthorized"}`,
+100% reproducible across repeated retries, while every pre-existing `HUB_TEST_*` path
+(`/vendors`, `/workorders`, `/receipt-recon/queue`, etc.) kept working fine on the same deploy
+with the same `HUB_TEST_TOKEN`.
+
+**Investigation:** Read worker.js's auth gate line-by-line (operator precedence on `_hubTestOk`,
+byte-level hex/ASCII check on both new path literals in the array, `isStaging()`, the whole
+`if (!PUBLIC_PATHS.includes(path))` block) and `gh-broker`'s own `src/index.ts` (its separate
+client-side `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS` allow-list, `hubTestGet`/`hubTestPost`,
+the `HUB_STAGING` Service Binding). Everything was byte-for-byte correct in both repos, and
+matched between GitHub source and the Cloudflare-deployed bundle. Direct `curl` straight to
+`https://maintenance-hub-staging.brett-2f8.workers.dev/version` also showed the live worker
+already serving the post-merge `BUILD_VERSION` string, which briefly looked like it ruled out a
+stale deploy.
+
+**Confirmed root cause:** it *was* a stale/incompletely-propagated deploy after all — just not one
+`workers_get_worker_code`, `/version`, or a 15-minute wait exposed. Pushed a temporary, harmless
+diagnostic endpoint (`/debug/vendor-onboarding-diag`, public, no secrets, just booleans/echo) via
+`commit_patch` to `main`. It confirmed live that `HUB_TEST_READ_PATHS.includes('/vendor-onboarding-status')`
+and the write-path equivalent were both already `true` in the exact code Cloudflare's API said was
+live — yet the *actual edge-serving* worker was still 401'ing real requests to those two paths at
+that same moment. The very next commit (removing that diagnostic endpoint) reproduced the same
+pattern in reverse: `workers_get_worker_code` reflected the removal within seconds, but the live
+edge kept serving the pre-removal (diagnostic-endpoint-enabled) version for **over 10 minutes**
+before catching up. This is a real, empirically-reproduced case of Cloudflare Workers Builds'
+git-triggered auto-deploy updating the account-level "current script" record quickly while actual
+global edge propagation lags — sometimes by under a minute, sometimes by 10+ minutes — well beyond
+the ~15 minutes Brett's original retries had already covered. There was no bug in worker.js's auth
+gate, no bug in gh-broker's client-side allow-list, no gradual-deployment version-percentage split,
+no WAF/Access rule, and no caching layer involved — all of those were checked and ruled out.
+
+**Fix:** none needed to application code — PR #52's merged code was correct from the moment it
+landed. Pushed and then cleanly reverted a temporary public diagnostic endpoint
+(`/debug/vendor-onboarding-diag`, two commits, `60e11252` add → `1ee700fd` remove, net diff = zero
+vs. the PR #52 merge commit) directly to `main` on `Ridge-Co/RidgeCo` purely to observe live
+runtime state without needing the real `HUB_TEST_TOKEN`; it exposed no secrets, only booleans/echo
+data, and was removed as soon as it had done its job.
+
+**Verified end-to-end on staging** (after propagation caught up, ~30–60 min post PR #52 merge):
+- `GET /vendor-onboarding-status?vendor_id=7` → `{"vendor_id":"7","complete":false,"missing":["Billing_Email","Billing_Address","Tax_ID"]}` (correct — TEST-VENDOR-001 genuinely had those fields blank).
+- `POST /vendor/complete-onboarding` with phone/billing_email/billing_address/tax_id for vendor 7 → `{"success":true,"id":"7","complete":true,"missing":[],"qb_push":{"ok":false,"error":"QB env vars missing..."}}` (QB push correctly no-ops on staging, which has no QuickBooks sandbox creds — expected).
+- `GET /vendors` read back afterward → vendor ID 7's row now genuinely shows `"Billing_Email":"test@example.com"`, `"Billing_Address":"123 Test St, Baltimore, MD 21201"`, `"Tax_ID":"12-3456789"`.
+- `GET /vendor-onboarding-status?vendor_id=7` again → `{"vendor_id":"7","complete":true,"missing":[]}`.
+
+**Takeaway for future same-day-deploy debugging on this repo:** if a just-merged endpoint 401s
+immediately after `workers_get_worker_code` already shows the correct code, don't trust that read
+as proof the live edge has caught up — it can lag by significantly more than 15 minutes with zero
+in-between successes. The reliable next step is a harmless temporary public diagnostic route (or
+just waiting longer / retrying over a longer window) rather than re-auditing already-correct auth
+logic a second or third time.
+
+# Sep 23, 2026, ~19:15 ET — BUILT (not merged): Vendor Onboarding Phase 1 — required-field gate on Submit Bill, admin gap report, QuickBooks field push (PR open on `Ridge-Co/RidgeCo`, branch `feature/vendor-onboarding-phase1`)
+
+**Scope:** Phase 1 only, per `context/VENDOR_ONBOARDING_BANKING_BUILD_BRIEF_v1.0.md` section 5.
+Phase 2 (encrypted banking capture / QuickBooks-manual-entry pipeline) and Phase 3 (automatic
+SMS/email nudge sweep) are explicitly NOT built — both stay GATED pending Brett's own review.
+This is a PII/QuickBooks-adjacent change, so per `AUTONOMY_GUARDRAILS_v1.0` it ships as a PR for
+Brett's own reviewed merge, not auto-merged.
+
+**What's in the PR:**
+- New additive Vendors columns (ensureColumns pattern, existing rows untouched): `Billing_Email`,
+  `Billing_Address`, `Tax_ID`, `Tax_ID_Document_URL`, `Insurance_Cert_URL`, `Insurance_Expiry`,
+  `Bank_Info_Status` (default `not_started`), `Bank_Info_Submitted_Date`,
+  `Bank_Info_Verified_Date`, `Bank_Info_Drive_Pointer`, `Onboarding_Nudge_Sent_Date`. The banking
+  columns are schema-only — no encryption/capture logic (Phase 2, not built).
+- `vendorOnboardingComplete(vendor)` — pure helper, required-now fields are Phone/Billing_Email/
+  Billing_Address/Tax_ID (typed value only, not the doc upload, not banking).
+- `vendorQBOnboardingFields(vendor)` — pure helper mapping Billing_Email/Billing_Address/Tax_ID
+  onto QuickBooks Vendor's `PrimaryEmailAddr`/`BillAddr`/`TaxIdentifier` fields (verified against
+  current QBO Vendor API docs, not assumed from training data — PAT-028). `qbFindOrCreateVendor`
+  now pushes these on both the create-vendor path and, via a new best-effort sparse update
+  (`qbSyncVendorOnboardingFields`), onto an already-linked QuickBooks vendor. Failures are logged
+  to `Ops_Telemetry`, never silently swallowed (rule-174/175 lesson).
+- `GET /vendor-onboarding-status?vendor_id=` (secret-gated) — single-vendor completeness check,
+  used by the vendor portal's Submit-Bill gate.
+- `GET /vendor-onboarding-gaps` (secret-gated) — bulk report of every active vendor missing a
+  required field, in one call (no N+1 over the per-vendor endpoint).
+- `POST /vendor/complete-onboarding` (secret-gated) — writes phone/billing email/billing
+  address/tax ID (+ optional tax ID doc URL) onto the Vendors row, then best-effort pushes to
+  QuickBooks.
+- `vendor.html`: `openBillModal` now checks `/vendor-onboarding-status` before opening the real
+  bill modal (renamed to `_openBillModalReal`); if incomplete, a new "Complete Your Info" modal
+  shows instead (phone prefilled/readonly if already known, billing email, billing address, tax
+  ID, optional tax ID document upload reusing the existing `/create-upload-session` Drive-upload
+  path). Submitting it opens the real bill modal immediately in the same tap. Full EN/ES i18n.
+  Never gates anything except Submit Bill — work-order visibility/progress/scheduling/photos all
+  stay unaffected, per the brief. Fails open (opens the bill modal anyway) on a network error
+  checking the gate, so a Worker hiccup never blocks billing outright.
+- `index.html`: new "📋 VENDOR ONBOARDING" nav tab / admin gap-report page (same fetch-on-open
+  pattern as Vendor Performance), and the same 4 fields added to both the Add Vendor and Edit
+  Vendor modals so Brett can fill a vendor in himself.
+- `test/vendor-onboarding.test.mjs` — 14 assertions covering `vendorOnboardingComplete` and
+  `vendorQBOnboardingFields`, source-sliced from `worker.js` the same way
+  `test/qb-address.test.mjs`/`test/trade-map.test.mjs` already do. All 14 pass.
+
+**What was actually verified (not just "should work"):**
+- `node --check` on `worker.js`, `vendor.html` (all 11 inline `<script>` blocks), and `index.html`
+  (all 5 inline `<script>` blocks) — clean on both the locally-edited copies and the versions
+  actually committed to the branch (re-fetched and diffed byte-for-byte identical after every
+  commit_patch call).
+- `node test/vendor-onboarding.test.mjs` — 14/14 pass.
+- Per `test-verified-builds` Step 0a, closed the recurring gh-broker-allow-list gap in the SAME
+  build: `brett332/gh-broker`'s own client-side `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS`
+  (`src/index.ts`) were missing `/vendor-onboarding-status` and `/vendor/complete-onboarding` —
+  added and pushed directly to `gh-broker`'s `main` (auto-deploys).
+- Confirmed live, via `hub_test_get`/`hub_test_post` against `maintenance-hub-staging`: both new
+  paths now clear gh-broker's allow-list (the earlier "path not allow-listed" error is gone) and
+  correctly reach the staging Hub's own auth gate, which 401s them — expected, since this PR is
+  unmerged and `maintenance-hub-staging` is still running the pre-Phase-1 code. This confirms the
+  whole plumbing end-to-end short of the deploy itself.
+- **What still needs Brett's own live pass, after he merges to `main` (staging) and it
+  auto-deploys:** re-run the same `hub_test_get`/`hub_test_post` calls against a seeded
+  `TEST-VENDOR-001` and confirm (a) the Vendors row actually gains the new columns and values
+  (read-back, not just `success:true`), (b) a real QuickBooks sandbox/production vendor record
+  actually receives `PrimaryEmailAddr`/`BillAddr`/`TaxIdentifier` on save — this build sandbox
+  has no real QuickBooks credentials to confirm that leg live, same standing limitation as most
+  builds in this repo — and (c) a click-through of the vendor-portal Complete-Your-Info modal and
+  the new admin Vendor Onboarding page on the actual deployed pages.
+
+**PR:** `Ridge-Co/RidgeCo`, branch `feature/vendor-onboarding-phase1` — left open per
+`AUTONOMY_GUARDRAILS_v1.0` for Brett's own reviewed merge (PII + QuickBooks-adjacent).
+
+---
+
+# ⭐⭐⭐ Sep 23, 2026, ~14:10 ET — SHIPPED: Receipt Reconciler reassign/refund/search now live in production; new standing policy (staging is self-serve, Cloudflare self-checked) proven end-to-end on this exact build
+
+**Feature status:** the receipt-recon reassign/mark-refund/mark-refund-confirmed/search work
+(PR #44, `feature/receipt-recon-reassign-refund-search`) is fully merged `staging` → `main` and
+confirmed live on production `maintenance-hub` (`build_version:
+"2026-09-23.12-receipt-recon-reassign-refund-search"`, confirmed via `hub_prod_get('/health')`).
+No further action needed on this feature.
+
+**What got tested before it shipped** (all via `hub_test_get`/`hub_test_post` against
+`maintenance-hub-staging`, zero pasted credentials): seed-test-receipt → queue read → confirm
+(happy path + the `wo_id required` edge case) → reassign (happy path + the "only a confirmed row
+can be reassigned" business rule) → mark-refund (flag + read-back) → mark-refund-confirmed
+(voids the confirmed receipt, second call correctly 409s) → search (by vendor and by date) → a
+record-scope auth-boundary probe (a write against a non-TEST property correctly 403'd).
+
+**Bug found and fixed before shipping, by the adversarial `ridgeco-validate` pass, not by the
+builder's own review:** `receiptReconReassign` checked that a target work order *exists* but
+never that it belongs to the *target property* — so a real (non-test) call could have created a
+Receipts row with a mismatched Property_ID/WO_ID pairing. Fixed directly on `staging` (commit
+`78796f1`) to match the same ownership check `hubTestWriteAllowed`'s test-token guard already
+enforced, then re-confirmed deployed before merge. This is the exact class of gap
+`ridgeco-validate` exists to catch — the fix was invisible from inside the build itself.
+
+**Also fixed along the way, in `brett332/gh-broker`:** `hub_test_get`/`hub_prod_get`'s allow-list
+check matched the full path string including any query string, so `/receipt-recon/search?q=...`
+could never actually pass even though `/receipt-recon/search` itself was correctly allow-listed —
+any endpoint needing a query param was silently untestable. Fixed to match on the pathname only.
+
+**Policy proven live, same day (see `CLAUDE.md` PAT-033 and the `brett-flow`/`test-verified-builds`
+skill updates from earlier today):**
+- Push to `staging`, the fix→retest loop, and the adversarial validate pass all ran autonomously,
+  no check-ins.
+- `maintenance-hub-staging`'s deploy was confirmed stale, then confirmed current, entirely via
+  `mcp__Cloudflare_Developer_Platform__workers_get_worker_code` — no Cloudflare dashboard ask.
+- The Cloudflare connector itself dropped mid-session (needed Brett to reconnect it) — that
+  genuinely couldn't be self-resolved and was the one thing surfaced to Brett, exactly per the
+  "only two reasons to interrupt him" rule.
+- Brett gave the explicit staging→main go-ahead once notified everything was green; by the time
+  that merge was requested, a separate session (using the handoff text given for the Cloudflare
+  re-check) had already completed the merge to `main` and production had already picked it up —
+  confirming both the staging-autonomy and the main-merge-still-gates-on-Brett halves of the new
+  policy worked exactly as designed, back to back, on a real build.
+
+# ⭐⭐⭐ Sep 23, 2026, ~12:40 ET — Fixed: HUB_TEST_TOKEN staging test coverage for receipt-recon (PR #44's "how do we test this" follow-up)
+
+Brett asked "fix the sheets credentials... cloudflare secret, gh broker secret?" after I said PR
+#44 needs his own live pass. **No credential was actually missing** — `hub_test_get('/health')`
+proved `HUB_TEST_TOKEN` and the Cloudflare Service Binding to staging were already fully
+configured and working. The real gap was a **code allow-list**, in two places, that had simply
+never been extended for the receipt-recon endpoint family:
+
+1. `Ridge-Co/RidgeCo` `worker.js` (committed to `feature/receipt-recon-reassign-refund-search`,
+   same branch as PR #44): `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS` now include
+   `/receipt-recon/queue`, `/receipt-recon/search`, `/admin/seed-test-receipt`,
+   `/receipt-recon/confirm`, `/receipt-recon/reassign`, `/receipt-recon/mark-refund`,
+   `/receipt-recon/mark-refund-confirmed`; `hubTestWriteAllowed()` got matching TEST-record-scoped
+   guard cases for each write path. Also added `seedTestReceipt()` + `POST
+   /admin/seed-test-receipt` — a real `Receipt_Recon_Queue` row only ever arrives via scanning a
+   Drive file, so there was no way to get a testable pending row onto staging; this creates one
+   directly, scoped to `TEST-PROPERTY-001`. `node --check` verified against the actual committed
+   branch content (not just the local copy).
+2. `brett332/gh-broker` `src/index.ts` (committed straight to `main`, test-infra-only, no
+   money/auth risk): its own `HUB_TEST_READ_PATHS`/`HUB_TEST_WRITE_PATHS` — a second, client-side,
+   non-enforcing filter in front of the Hub's own real enforcement — were even further out of
+   date (missing `/receipt/attach-only` and the duplicate-audit paths too, from an earlier build).
+   Extended to match worker.js's list.
+
+**Correction, same day:** gh-broker DOES auto-deploy from `main` (Brett: he never runs
+`wrangler deploy` himself, only disconnects/reconnects the Claude connector when its code
+changes — some Cloudflare-side integration handles the actual deploy). Confirmed live within
+minutes of the `main` commit above: `hub_test_post('/admin/seed-test-receipt', {})` went from
+"path not allow-listed" (gh-broker's old list) to a 401 from the Hub itself (gh-broker now
+forwards it — the Hub rejects only because staging hasn't synced the feature branch yet). **Only
+remaining blocker:** staging deploys exclusively from a `staging` branch, never `main` or a
+feature branch — so PR #44's worker.js side (the new allow-list entries + `seedTestReceipt`) isn't
+live-testable until Brett reviews/merges it and staging gets synced.
+
+# ⭐⭐⭐ Sep 23, 2026, ~11:20 ET — Receipt Reconciler: PR #44 open (reassign BMore expense to WO, manual refund marking, ledger search)
+
+Brett's voice memo (Sep 23, 11:05am ET) raised three Receipt Reconciler gaps, all addressed in
+one build, staged as [PR #44](https://github.com/Ridge-Co/RidgeCo/pull/44)
+(`feature/receipt-recon-reassign-refund-search`), **not merged — Brett's call per PAT-033** (this
+touches money-movement: voids/reposts Receipts rows):
+
+1. **Reassign a confirmed BMore/Ridge Co expense to a property + work order.** New 🔁 Reassign
+   button on a confirmed `company`-category card opens the same property/unit/WO picker Pending
+   rows use. Brett's own scoping answer: only works while the original Receipts row **hasn't been
+   emailed to QuickBooks yet** — already-sent ones refuse with a message telling him to fix it in
+   QuickBooks directly. `POST /receipt-recon/reassign` voids the original (soft-delete,
+   `Active:'FALSE'`) and reposts through the same `addReceipt()` every path uses. The BMore/Ridge
+   Co one-tap-expense flow itself is untouched.
+2. **Manual "mark as refund".** 🔄 toggle on any Pending card (the OCR-based refund detection
+   sometimes misses one); ↩ on a confirmed/attached_only card undoes a wrongly-billed receipt by
+   voiding it (same QB-sent guard as #1) and dropping it back to Pending flagged as a refund — 100%
+   reuses the existing Sep 22 refund UI (find-match / negative-expense), no new posting path.
+3. **🔎 Search tab** — searches the canonical `Receipts` ledger (not just the queue) by
+   amount/store/description, so "did I already process this $101.28 receipt" is a direct lookup.
+   Also a lightweight client-side filter box on every status tab.
+
+Two new additive `Receipt_Recon_Queue` columns: `Confirmed_Receipt_ID` (lets reassign/mark-refund
+find the exact Receipts row a confirmation wrote, instead of guessing) and `Manual_Refund`.
+`node --check` clean on worker.js + the reconciler's inline script.
+`test/receipt-recon-reassign-refund-search.test.mjs` — 25 static/route-wiring assertions (no live
+Sheets credentials in this build sandbox, same standing limitation as most builds here).
+
+**Needs Brett:** merge PR #44 when ready, then a live pass — reassign a real BMore-flagged test
+receipt to a WO (confirm the old Receipts row goes inactive, new one bills correctly); confirm
+reassign refuses cleanly on an already-QB-sent receipt; mark a pending receipt as a refund and
+confirm the find-match UI appears; search for a receipt by a known dollar amount.
+
+---
+
 # ⭐⭐ LATE-NIGHT UPDATE — Sep 22, 2026, 23:50 ET (supersedes the "end of day" FULL PICTURE directly below — that one was already stale by the time it was written; six more PRs landed after it)
 
 **Live build:** `/version`/`/health` confirmed via `HUB_PROD_RO_TOKEN` at 23:47 ET: `build_version: "2026-09-22.10-receipt-recon-refunds"`. This is the real current state — the `.4` figure quoted in the FULL PICTURE section below is long superseded.

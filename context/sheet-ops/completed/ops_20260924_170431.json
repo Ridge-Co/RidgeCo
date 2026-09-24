@@ -1,0 +1,6 @@
+{
+  "sheet_id": "1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA",
+  "ops": [
+    {"type": "add_column_header", "tab": "Tasks", "header": "Linked_Entities"}
+  ]
+}

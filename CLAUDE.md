@@ -25,6 +25,27 @@ action — no cheerleading. When corrected, change approach; never restate a ref
    solicited, and rotate it afterward. On a normal day this path should never be needed.
 3. Do not write code or make changes until context is loaded and confirmed.
 
+## MANDATORY: "update context" means BOTH stores, every time (Sep 24, 2026)
+
+When Brett says "update context" (or anything equivalent — end of session, wrapping up, log this),
+that means updating **both** of the following, not just one:
+1. **This repo's `context/` files** (and `brett332/data/business-context/` for cross-venture
+   topics) — `FEATURE_LOG.md` (numbered/tagged rule entry), `CURRENT.md` (status section), the
+   relevant `*_BUILD_BRIEF_v1.0.md` if one exists or is warranted, `SESSION_STATE.md` checkpoint.
+   Use `commit_patch` (old_str/new_str) for the large files (`FEATURE_LOG.md`, `CURRENT.md`) —
+   never try to round-trip their full content through `commit_file`.
+2. **The claude.ai Project "Continuous Improvement"** (`Projects` tool, `project_write`) — the
+   matching doc there, if one exists for this topic.
+
+This repo's `context/`/`business-context/` system is the long-standing, authoritative one (predates
+Claude Projects, per Brett). The Claude Project is a second surface Brett also reads/works from —
+he wants the two kept in exact sync, not one deprecated in favor of the other. Don't update one and
+skip the other because it seems redundant; that's exactly the drift Brett flagged and had corrected
+on Sep 24, 2026 (a Claude Project doc had gone stale relative to this repo's real state). If a topic
+only has a home in one of the two stores, create the missing counterpart rather than leaving it
+one-sided — see `context/SESSION_STATE.md`'s Sep 24 checkpoint for a concrete backlog of docs still
+needing this treatment.
+
 ## Workflow: PLAN first, then implement
 - Scope and design BEFORE editing. Get to the root of what Brett actually wants — surface the
   real goal, constraints, and the smallest change that achieves it — then confirm the plan.
@@ -49,8 +70,62 @@ never a direct push to `main`. Verify on the staging Worker (`?api=staging` on t
 curl the staging URL directly for the backend) BEFORE merging to `main`, which is what actually
 triggers the production deploy. Not optional, not feature-specific — this is what closed the gap
 after the Sept 1, 2026 incident (a push straight to `main`, tested against production only after
-the fact). Full detail: `context/Brett_Context_Document_v1.13.md` PAT-033; the "Staging sandbox"
-credentials note now lives in `brett332/data/CREDENTIALS_MAP.md` (moved off this public repo Sep 16).
+the fact). The "Staging sandbox" credentials note lives in `brett332/data/CREDENTIALS_MAP.md`
+(moved off this public repo Sep 16).
+
+**Sep 23, 2026 update — staging is now self-serve, Brett's gate moved to the main-merge only.**
+`maintenance-hub-staging`'s Cloudflare Build deploys from the `staging` git branch (not `main`,
+not the feature branch itself), and `HUB_TEST_TOKEN`/`hub_test_get`/`hub_test_post` (via GH
+Broker) give credential-free read+write access to it. Brett's own words: *"push everything to
+staging now that we have this safe staging mechanism... find problems during testing on the
+staging branch and fix them and come back to me with either problems that need to be resolved
+that you cannot resolve yourself, or you can tell me that things are tested and ready and we can
+push to main."* So, going forward:
+- **Push the feature branch into `staging` yourself, no confirmation needed** — open a PR with
+  `base: staging`, `head: <feature branch>` and merge it immediately (`create_pull_request` +
+  `merge_pull_request` via GH Broker). This is the step that used to wait on Brett manually
+  syncing `staging`; it no longer does.
+- **Test on staging and iterate autonomously.** Run `test-verified-builds` against
+  `maintenance-hub-staging` (`hub_test_get`/`hub_test_post`, plus Playwright against
+  `?api=staging` for UI). If something fails, fix it on the feature branch, re-merge into
+  `staging`, and retest — loop until green, same as any other self-test loop. Don't stop to ask
+  permission for any of this.
+- **Only pause and surface to Brett when:** (a) something is broken that can't be resolved without
+  his input (a real decision, a missing credential, an ambiguous requirement), or (b) the build is
+  fully tested and green on staging and ready for his go/no-go on merging into `main` — the step
+  that actually reaches production. That merge-to-`main` decision is still always his call, per
+  PAT-033's original intent; everything before it (branch → staging → test → fix → retest) is not.
+
+**Confirmed Sep 23, 2026 — do NOT assume staging auto-deploys on push, and check this yourself,
+never by asking Brett to look at the Cloudflare dashboard.** A direct push to `staging` (via GH
+Broker) does NOT reliably show up live within minutes — a push sat undeployed for 2+ minutes in
+this session's own test. `main` and `gh-broker` both auto-deploy on push (confirmed separately);
+`maintenance-hub-staging` does not reliably, at least not quickly.
+
+**How to check it yourself (the `mcp__Cloudflare_Developer_Platform__*` tools, available in every
+session — Brett has never had to open the dashboard for this and shouldn't be asked to):**
+1. `workers_get_worker_code(scriptName: "maintenance-hub-staging")` — pulls the ACTUAL deployed
+   source directly from Cloudflare's API (the ground truth, not `hub_test_get('/health')`'s
+   `build_version`, which is just as reliable but slower to grep through). Grep it for
+   `BUILD_VERSION =` and compare against the `staging` branch's own current value. This is the
+   right first move whenever a staging test isn't showing an expected change — before assuming
+   the code push failed, before asking Brett anything.
+2. `workers_list()` / `workers_get_worker(scriptName: ...)` for basic metadata (a recent
+   `modified_on` timestamp does NOT mean the code content actually changed — confirmed the two can
+   disagree; always verify with `workers_get_worker_code`, don't infer from the timestamp alone).
+3. If step 1 shows the deployed code is genuinely stale relative to the `staging` branch, that is
+   now a confirmed, narrow finding — not a hunch — and only THEN is it worth telling Brett, and
+   only naming the specific unresolved piece: no tool in this session can see Cloudflare's own
+   Build logs or trigger a manual redeploy, so if a re-push doesn't resolve it, that specific
+   capability gap (build visibility / manual trigger) is what to ask him about — never "can you
+   check Cloudflare for me" as a first move when steps 1-2 haven't been tried.
+
+Brett's own words on this (Sep 23, 2026): *"You've come to me several times today to check the
+Cloudflare dashboard, but you can check it yourself... I don't want you coming to me with these
+issues unless you have already checked, and know why the issue is happening, and cannot resolve
+it without my direct intervention."* Treat that as the standing bar for anything infrastructure-
+shaped, not staging-specific — diagnose with the tools already in the session before naming an
+issue to Brett, and when it does need him, name the exact narrow gap, not the whole symptom.
 
 ## Regression rules — DON'T break working features (full log in /context/FEATURE_LOG.md)
 - **A silent `catch(e){}`/`catch(_){}` around a Sheets/Drive write is a real blind spot, not a

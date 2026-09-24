@@ -209,6 +209,7 @@ window.addEventListener('pageshow', function(e){
       <button class="nav-btn" onclick="showPage('qb-map',this)">🔗 QB MAPPING</button>
       <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
       <button class="nav-btn" onclick="showPage('vendor-performance',this)">📊 VENDOR PERFORMANCE</button>
+      <button class="nav-btn" onclick="showPage('vendor-onboarding',this)">📋 VENDOR ONBOARDING</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
       <button class="nav-btn" onclick="showPage('messaging',this)">📢 MESSAGING</button>
@@ -387,6 +388,7 @@ window.addEventListener('pageshow', function(e){
     </div>
     <div id="vendors-pending-section"></div>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-unwelcomed" onchange="renderVendorsPage()"> Only show vendors who haven't received a welcome message</label>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-inactive" onchange="renderVendorsPage()"> Show inactive (deactivated) vendors instead of active ones</label>
     <div id="vendors-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
       <button class="btn small" onclick="bulkSendPinFromTab('vendors-list')">📱 Send PIN to Selected</button>
@@ -618,6 +620,21 @@ window.addEventListener('pageshow', function(e){
     <div id="vendor-perf-body"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
 
+  <div class="page" id="page-vendor-onboarding">
+    <div class="section-title" style="margin-bottom:4px">📋 VENDOR ONBOARDING — MISSING INFO</div>
+    <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:780px">
+      Every active vendor missing phone, billing email, billing address, or tax ID — the fields
+      required before a bill can actually be paid (Vendor Onboarding Phase 1). Banking is tracked
+      separately and is not part of this list yet. Fix a vendor here, or the vendor can fill it in
+      themselves the next time they tap Bill in the portal.
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <button class="btn small" onclick="loadVendorOnboardingGaps()">↻ Refresh</button>
+    </div>
+    <div id="vendor-onboarding-summary" style="color:var(--muted);font-size:11.5px;margin-bottom:10px"></div>
+    <div id="vendor-onboarding-body"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+  </div>
+
   <div class="page" id="page-qb-map">
     <div class="section-title" style="margin-bottom:4px">QUICKBOOKS MAPPING</div>
     <div style="color:var(--muted);font-size:11.5px;line-height:1.5;margin-bottom:12px;max-width:760px">
@@ -625,10 +642,13 @@ window.addEventListener('pageshow', function(e){
       Anything left unlinked gets <b>created</b> in QuickBooks the first time you invoice it —
       which is how you end up with the same customer twice under slightly different names.
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
       <button class="btn small" onclick="loadQBMapping(true)">↻ Reload from QuickBooks</button>
       <button class="btn small" onclick="qbApplyAllSuggestions()">✓ Accept all confident matches</button>
       <button class="btn small" onclick="auditUnits()">🔍 Check every unit</button>
+      <input id="qbmap-filter" type="text" placeholder="Filter by owner, property or unit…" oninput="filterQBMapping()"
+        style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px;min-width:220px">
+      <span id="qbmap-filter-count" style="color:var(--muted);font-size:11px"></span>
     </div>
     <div id="qb-map-body"><div style="color:var(--muted);font-size:12px">Loading…</div></div>
   </div>
@@ -648,6 +668,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="window.open('inspect.html','_blank')">🔍 Inspection Scheduler — customers, properties, availability</button>
       <button class="btn small" onclick="window.open('action-center.html','_blank')">✅ Action Center — who to pay / to process</button>
       <button class="btn small" onclick="window.open('command-center.html','_blank')">📊 Command Center</button>
+      <button class="btn small" onclick="window.open('https://docs.google.com/spreadsheets/d/1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA/edit','_blank')">📋 BrettOS Tasks — open the Sheet (canonical, read-only here)</button>
       <button class="btn small" onclick="window.open('proposals.html','_blank')">💡 Proposals / greenlit queue</button>
       <button class="btn small" onclick="window.open('deliveries.html','_blank')">🚚 Deliveries</button>
       <button class="btn small" onclick="window.open('tenant-wo-access.html','_blank')">🔓 Tenant Work Order Access</button>
@@ -665,6 +686,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="findRepairableInvoices()">🔧 Fix invoices already in QuickBooks</button>
       <button class="btn small" onclick="window.open('signed-proposals.html','_blank')">🖊 Signed proposals → QB</button>
       <button class="btn small" onclick="window.open('trash.html','_blank')">🗑 Trash Service billing</button>
+      <button class="btn small" onclick="goToQBMapping()">🔗 QB Mapping — link properties/units to QuickBooks</button>
     </div>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🧹 DATA HYGIENE</div>
@@ -698,6 +720,24 @@ window.addEventListener('pageshow', function(e){
       </select>
       <button class="btn small" onclick="saveTradeAccessDefault()">Save</button>
     </div>
+
+    <div class="section-title" style="margin-bottom:8px">🔔 ALERTING</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Both alerts page the admin phone via the existing SMS pattern — no new channel. Both ship OFF by default; flip them on here whenever you're ready to start getting paged.</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="alert-flag-failure">
+        <span>Failure Alerts — page me when a wo_create/wo_status job fails (debounced to once/hour per job type)</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="alert-flag-deadman">
+        <span>Dead Man's Switch — page me if the Worker goes 24h+ with zero completed jobs (debounced to once/24h)</span>
+      </label>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
+      <button class="btn small" onclick="saveAlertFlags()">Save</button>
+      <span id="alert-flags-status" style="font-size:11px;color:var(--muted)"></span>
+    </div>
+
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
       <button class="btn danger small" onclick="clearErrorLog()">Clear Errors</button>
       <button class="btn secondary small" onclick="clearWishlistDone()">🧹 Clear Done / N-A</button>
@@ -940,6 +980,12 @@ window.addEventListener('pageshow', function(e){
 <div class="modal-overlay" id="modal-add-property">
   <div class="modal">
     <div class="modal-header"><div class="modal-title">ADD PROPERTY</div><button class="modal-close" onclick="closeModal('modal-add-property')">✕</button></div>
+    <div id="ap-unlinked-section" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:12px">
+      <div style="font-size:11.5px;color:var(--text);font-weight:600;margin-bottom:4px">Already in the system with no owner assigned</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px">If one of these is the property you meant, link it instead of creating a new one below.</div>
+      <div id="ap-unlinked-list"></div>
+    </div>
+    <div id="ap-dupe-warning" style="display:none;background:#fff3e0;border:1px solid var(--warn);border-radius:6px;padding:10px;margin-bottom:12px;font-size:11.5px;color:var(--text)"></div>
     <div class="form-grid">
       <div class="form-group full"><label>Address</label><input type="text" id="p-address" placeholder="123 Main St"></div>
       <div class="form-group"><label>City</label><input type="text" id="p-city" placeholder="Baltimore"></div>
@@ -973,6 +1019,11 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
       <div class="form-group"><label>Vendor Type</label><select id="v-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
       <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="v-payaddr" placeholder="123 Main St, City, ST 00000"></div>
+      <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">ONBOARDING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— required before this vendor's first bill can be paid. Banking is handled separately, not here.</span></div></div>
+      <div class="form-group"><label>Billing Email</label><input type="email" id="v-billing-email" placeholder="billing@vendorcompany.com"></div>
+      <div class="form-group"><label>Billing Address</label><input type="text" id="v-billing-address" placeholder="123 Main St, City, ST 00000"></div>
+      <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="v-tax-id" placeholder="12-3456789"></div>
+      <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="v-tax-doc-url" placeholder="https://drive.google.com/..."></div>
       <div class="form-group full"><label>Trades — check all that apply</label><div id="v-trades-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px;margin-top:4px"></div></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="v-rates" placeholder="Hourly rate, trip charge, etc..."></textarea></div>
     </div>
@@ -1013,6 +1064,7 @@ window.addEventListener('pageshow', function(e){
         <input type="text" id="ep-new-unit-label" placeholder="e.g. Apt 1, 1st Floor" style="flex:1;margin-bottom:0">
         <button type="button" class="btn small" onclick="addUnitToEditedProperty()">+ Add Unit</button>
       </div>
+      <div id="ep-unit-dupe-warning" style="display:none;background:#fff3e0;border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:6px;font-size:11px;color:var(--text)"></div>
     </div>
     <div class="form-group full" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
       <label>Tenant Work Order Submission <span id="ep-two-effective" style="font-weight:normal"></span></label>
@@ -1086,7 +1138,13 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Trade</label><select id="ev-trade"></select></div>
       <div class="form-group"><label>Markets</label><input type="text" id="ev-markets"></div>
       <div class="form-group"><label>Vendor Type</label><select id="ev-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
+      <div class="form-group"><label>Status</label><select id="ev-active"><option value="TRUE">Active</option><option value="FALSE">Inactive / Deactivated</option></select></div>
       <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="ev-payaddr"></div>
+      <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">ONBOARDING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— required before this vendor's first bill can be paid. Banking is handled separately, not here.</span></div></div>
+      <div class="form-group"><label>Billing Email</label><input type="email" id="ev-billing-email"></div>
+      <div class="form-group"><label>Billing Address</label><input type="text" id="ev-billing-address"></div>
+      <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
+      <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
@@ -1772,7 +1830,7 @@ function showPage(name, btn) {
   document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('page-'+name).classList.add('active');
   if (btn) btn.classList.add('active');
-  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); }
+  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); loadAlertFlags(); }
   if (name === 'invoice-review') { loadSendTrack(); loadInvoiceReview(); }
   if (name === 'qb-send') { loadQBQueue(); }
   if (name === 'qb-map')  { loadQBMapping(false); }
@@ -1782,6 +1840,7 @@ function showPage(name, btn) {
   // "Check and save to the sheet" buttons remain for a manual re-run any time after that.
   if (name === 'payables') { loadPayables(false); }
   if (name === 'vendor-performance') { loadVendorPerformance(); }
+  if (name === 'vendor-onboarding') { loadVendorOnboardingGaps(); }
   if (name === 'messaging') { loadMessagingPage(); }
 }
 
@@ -3343,9 +3402,13 @@ function renderVendorsPage() {
   renderVendorsPendingSection();
   var el = document.getElementById('vendors-list');
   var onlyUnwelcomed = !!((document.getElementById('vendor-filter-unwelcomed')||{}).checked);
-  var vendors = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE' && String(v.Status||'').toLowerCase()!=='pending_review';});
-  if (onlyUnwelcomed) vendors = vendors.filter(function(v){ return v.Welcome_Sent !== 'TRUE'; });
-  if (!vendors.length) { el.innerHTML='<div class="loading">'+(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet')+'</div>'; return; }
+  var showInactive = !!((document.getElementById('vendor-filter-inactive')||{}).checked);
+  var vendors = safeArray(state.vendors).filter(function(v){
+    if (String(v.Status||'').toLowerCase()==='pending_review') return false;
+    return showInactive ? v.Active==='FALSE' : v.Active!=='FALSE';
+  });
+  if (!showInactive && onlyUnwelcomed) vendors = vendors.filter(function(v){ return v.Welcome_Sent !== 'TRUE'; });
+  if (!vendors.length) { el.innerHTML='<div class="loading">'+(showInactive?'No inactive vendors.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet'))+'</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
     '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th></th></tr></thead><tbody>' +
@@ -3353,12 +3416,13 @@ function renderVendorsPage() {
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
       var nm = v.Name || '';
+      var isInactive = v.Active==='FALSE';
       var welcomeBadge = v.Welcome_Sent === 'TRUE'
         ? '<span style="color:var(--accent2);font-size:11px" title="'+esc(v.Welcome_Sent_Date||'')+'">👋 sent'+(v.Welcome_Sent_Date?' '+esc(v.Welcome_Sent_Date.slice(0,10)):'')+'</span>'
         : '<span style="color:var(--muted);font-size:11px">— not yet</span>';
-      return '<tr>' +
+      return '<tr'+(isInactive?' style="opacity:.6"':'')+'>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+v.ID+'" data-type="vendor" data-name="'+nm+'" data-phone="'+(v.Phone||'')+'" onchange="updatePinActionBar(\'vendors-action-bar\')"></td>' +
-        '<td>'+nm+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
+        '<td>'+nm+(isInactive?' <span style="color:var(--danger);font-size:10px;font-weight:bold;border:1px solid var(--danger);border-radius:4px;padding:1px 4px">INACTIVE</span>':'')+(v.Company?'<br><span style="color:var(--muted);font-size:11px">'+v.Company+'</span>':'')+'</td>' +
         '<td>'+(v.Trades ? v.Trades.split(',').map(function(t){return '<span style="display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:10px;margin:1px">'+t.trim()+'</span>';}).join(' ') : (v.Trade||'—'))+'</td>' +
         '<td style="color:var(--muted)">'+(v.Hourly_Rate?'$'+esc(String(v.Hourly_Rate))+'/hr':'—')+'</td>' +
         '<td><a href="tel:'+v.Phone+'" style="color:var(--accent);text-decoration:none">'+(v.Phone||'—')+'</a></td>' +
@@ -3367,8 +3431,11 @@ function renderVendorsPage() {
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
-        '<td style="display:flex;gap:4px">' +
+        '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
+        (isInactive
+          ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',true)" title="Reactivate this vendor">Reactivate</button>'
+          : '<button class="btn small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',false)" title="Deactivate this vendor — hides them from assign/reassign pickers, keeps their history">Deactivate</button>') +
         '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
         '<button class="btn small secondary" style="font-size:10px" onclick="regenerateAndShowPIN(\'vendor\',\''+v.ID+'\',\''+nm+'\')" title="Regenerate PIN">🔄</button>' +
         (v.Phone?'<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'vendor\',\''+v.ID+'\',\''+nm+'\',\''+v.Phone+'\')" title="Send Welcome">👋</button>':'') +
@@ -3449,6 +3516,54 @@ function renderVendorPerformanceTable() {
         '<td>$' + Number(v.total_billed || 0).toLocaleString() + '</td>' +
         '<td>' + (v.labor_hours || '—') + '</td>' +
         '<td style="color:var(--muted);font-size:11px">' + esc(v.last_activity || '—') + '</td>' +
+        '</tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+// ── Vendor Onboarding gap report (Phase 1, Sep 23 2026) — fetch-on-open like Vendor Performance.
+// One bulk call (/vendor-onboarding-gaps) instead of N per-vendor /vendor-onboarding-status
+// calls — same reasoning as vendor-performance/arAging on the Worker side.
+var _vendorOnboardingRows = null;
+
+function loadVendorOnboardingGaps() {
+  var el = document.getElementById('vendor-onboarding-body');
+  if (el) el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading...</div>';
+  var summary = document.getElementById('vendor-onboarding-summary');
+  if (summary) summary.textContent = '';
+  api('GET', '/vendor-onboarding-gaps').then(function(res) {
+    if (!res || res.ok === false) {
+      if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Could not load vendor onboarding gaps') + '</div>';
+      return;
+    }
+    _vendorOnboardingRows = safeArray(res.vendors);
+    if (summary) {
+      summary.textContent = 'As of ' + res.as_of + ' · ' + res.gap_count + ' of ' + res.total_active_vendors + ' active vendors missing something';
+    }
+    renderVendorOnboardingTable();
+  }).catch(function(e) {
+    if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
+  });
+}
+
+function renderVendorOnboardingTable() {
+  var el = document.getElementById('vendor-onboarding-body');
+  if (!el) return;
+  var rows = safeArray(_vendorOnboardingRows);
+  if (!rows.length) { el.innerHTML = '<div class="loading">No gaps — every active vendor has phone, billing email, billing address, and tax ID on file.</div>'; return; }
+  var missingLabel = { Phone: 'Phone', Billing_Email: 'Billing Email', Billing_Address: 'Billing Address', Tax_ID: 'Tax ID' };
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+    '<th>Vendor</th><th>Phone</th><th>Missing</th><th>Bank Info</th><th></th>' +
+    '</tr></thead><tbody>' +
+    rows.map(function(v) {
+      var missingHtml = safeArray(v.missing).map(function(f) {
+        return '<span class="badge" style="background:#fdecea;border:1px solid var(--danger);color:var(--danger);margin-right:4px">' + esc(missingLabel[f] || f) + '</span>';
+      }).join('');
+      return '<tr>' +
+        '<td>' + esc(v.name) + '</td>' +
+        '<td>' + esc(v.phone || '—') + '</td>' +
+        '<td>' + missingHtml + '</td>' +
+        '<td style="color:var(--muted);font-size:11px">' + esc(v.bank_info_status || 'not_started') + '</td>' +
+        '<td><button class="btn small" onclick="openEditVendorModal(\'' + v.vendor_id + '\')">Fix</button></td>' +
         '</tr>';
     }).join('') + '</tbody></table></div>';
 }
@@ -3585,12 +3700,55 @@ function markInvoicePaid(woId){
 function openAddPropertyModal() {
   document.getElementById('p-owner').innerHTML = '<option value="">No owner assigned</option>' +
     state.owners.map(function(o){return '<option value="'+o.ID+'">'+o.First_Name+' '+o.Last_Name+'</option>';}).join('');
+  document.getElementById('ap-dupe-warning').style.display = 'none';
+  renderApUnlinkedList();
   openModal('modal-add-property');
 }
-function submitAddProperty() {
+
+// The "already there, just not owned yet" list shown at the top of Add Property (Sep 24 2026).
+// Pulled entirely from already-loaded state.properties -- no extra network call.
+function renderApUnlinkedList() {
+  var section = document.getElementById('ap-unlinked-section');
+  var list = document.getElementById('ap-unlinked-list');
+  var unlinked = safeArray(state.properties).filter(function(p){ return p.Active !== 'FALSE' && !p.Owner_ID; });
+  if (!unlinked.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  list.innerHTML = unlinked.map(function(p){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-top:1px solid var(--border);font-size:11.5px">' +
+      '<span>' + esc(p.Address || '(no address)') + (p.City ? ', ' + esc(p.City) : '') + '</span>' +
+      '<button class="btn small" onclick="linkUnlinkedProperty(\'' + esc(String(p.ID)) + '\')">Link to this owner</button>' +
+    '</div>';
+  }).join('');
+}
+function linkUnlinkedProperty(propertyId) {
+  var ownerId = document.getElementById('p-owner').value;
+  if (!ownerId) { toast('Pick an owner above first, then link','error'); return; }
+  api('POST','/property/update',{id:propertyId,fields:{Owner_ID:ownerId}}).then(function(res){
+    if (res.error){logError('Link property',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Linked','success');closeModal('modal-add-property');loadAll();
+  }).catch(function(e){logError('Link property',e.message);toast('Error: '+e.message,'error');});
+}
+
+function submitAddProperty(force) {
   var body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Unit_Count:document.getElementById('p-units').value,Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
+  if (force) body.force = true;
   if (!body.Address) { toast('Address required','error'); return; }
+  var warnBox = document.getElementById('ap-dupe-warning');
+  warnBox.style.display = 'none';
   api('POST','/property/add',body).then(function(res){
+    if (res.duplicate_of && safeArray(res.duplicate_of).length) {
+      var ownerId = document.getElementById('p-owner').value;
+      warnBox.innerHTML = '⚠ ' + esc(res.error || 'A matching property already exists.') + '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
+        safeArray(res.duplicate_of).map(function(m){
+          return (ownerId
+            ? '<button class="btn small" onclick="linkUnlinkedProperty(\'' + esc(String(m.id)) + '\')">Link ID ' + esc(String(m.id)) + ' to this owner</button>'
+            : '<span style="color:var(--muted)">ID ' + esc(String(m.id)) + (m.owner_id ? ' (already has an owner)' : ' (no owner — pick one above to link)') + '</span>');
+        }).join(' ') +
+        ' <button class="btn small secondary" onclick="submitAddProperty(true)">Create a new one anyway</button>' +
+      '</div>';
+      warnBox.style.display = '';
+      return;
+    }
     if (res.error){logError('Add property',res.error);toast('Error: '+res.error,'error');return;}
     toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');loadAll();
   }).catch(function(e){logError('Add property',e.message);toast('Error: '+e.message,'error');});
@@ -3674,7 +3832,7 @@ var onTenantCardUpload = bindContactCardFields({first:'mi-first', last:'mi-last'
 function openAddVendorModal(){openModal('modal-add-vendor');}
 function submitAddVendor(){
   var trades = Array.from(document.querySelectorAll('.v-trade-check:checked')).map(function(c){return c.value;}).join(',');
-  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Vendor_Type:document.getElementById('v-type').value||'labor',Payment_Address:document.getElementById('v-payaddr').value.trim(),Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE'};
+  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Vendor_Type:document.getElementById('v-type').value||'labor',Payment_Address:document.getElementById('v-payaddr').value.trim(),Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE',Billing_Email:document.getElementById('v-billing-email').value.trim(),Billing_Address:document.getElementById('v-billing-address').value.trim(),Tax_ID:document.getElementById('v-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('v-tax-doc-url').value.trim()};
   if(!body.Name){toast('Name required','error');return;}
   if(!body.Phone){toast('Phone required','error');return;}
   api('POST','/vendor/add',body).then(function(res){
@@ -3810,11 +3968,14 @@ function openEditVendorModal(id) {
   evTrade.value = v.Trade || 'General';
   document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
   document.getElementById('ev-type').value=v.Vendor_Type||'labor'; document.getElementById('ev-payaddr').value=v.Payment_Address||'';
+  document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
+  document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
+  document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
   openModal('modal-edit-vendor');
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
-  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value};
+  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim(),Active:document.getElementById('ev-active').value==='FALSE'?'FALSE':'TRUE'};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
     toast('Vendor updated','success');closeModal('modal-edit-vendor');loadAll();
@@ -3940,12 +4101,22 @@ function renderEpUnitsSection(propId){
         '<button type="button" class="btn small danger" onclick="deactivateEpUnit(\''+u.ID+'\')">Remove</button></div>';
     }).join('');
 }
-function addUnitToEditedProperty(){
+function addUnitToEditedProperty(force){
   var propId = document.getElementById('ep-id').value;
   var labelEl = document.getElementById('ep-new-unit-label');
   var label = labelEl.value.trim();
+  var warnBox = document.getElementById('ep-unit-dupe-warning');
+  if (warnBox) warnBox.style.display = 'none';
   if (!label) { toast('Enter a unit label first (e.g. Apt 1, 1st Floor)','error'); return; }
-  api('POST','/unit/add',{ Property_ID: propId, Unit_Label: label, Active: 'TRUE' }).then(function(res){
+  var body = { Property_ID: propId, Unit_Label: label, Active: 'TRUE' };
+  if (force) body.force = true;
+  api('POST','/unit/add',body).then(function(res){
+    if (res.duplicate_of && safeArray(res.duplicate_of).length && warnBox) {
+      warnBox.innerHTML = '⚠ ' + esc(res.error || 'A matching unit already exists on this property.') +
+        ' <button class="btn small secondary" onclick="addUnitToEditedProperty(true)">Create anyway</button>';
+      warnBox.style.display = '';
+      return;
+    }
     if (res.error) { logError('Add unit', res.error); toast('Error: '+res.error,'error'); return; }
     state.units = safeArray(state.units).concat([{ ID: res.id, Property_ID: propId, Unit_Label: label, Tenant_ID: '', Active: 'TRUE' }]);
     labelEl.value = ''; toast('Unit added','success'); renderEpUnitsSection(propId);
@@ -4233,6 +4404,33 @@ function removeTradeAccessDefault(trade) {
     if (res && res.success) { toast('Removed default for ' + trade, 'success'); loadTradeAccessDefaults(); }
     else toast('Error: ' + ((res&&res.error)||''), 'error');
   });
+}
+
+function loadAlertFlags() {
+  var fEl = document.getElementById('alert-flag-failure');
+  var dEl = document.getElementById('alert-flag-deadman');
+  if (!fEl || !dEl) return;
+  api('GET', '/config').then(function(cfg) {
+    fEl.checked = String(cfg.failure_alert_enabled || '').toUpperCase() === 'TRUE';
+    dEl.checked = String(cfg.dead_man_switch_enabled || '').toUpperCase() === 'TRUE';
+  }).catch(function() {
+    var s = document.getElementById('alert-flags-status');
+    if (s) s.textContent = 'Could not load config';
+  });
+}
+
+function saveAlertFlags() {
+  var fEl = document.getElementById('alert-flag-failure');
+  var dEl = document.getElementById('alert-flag-deadman');
+  var s = document.getElementById('alert-flags-status');
+  if (!fEl || !dEl) return;
+  api('POST', '/admin/set-alert-flags', {
+    failure_alert_enabled: fEl.checked,
+    dead_man_switch_enabled: dEl.checked
+  }).then(function(res) {
+    if (res && res.success) { toast('Alert settings saved', 'success'); if (s) s.textContent = 'Saved.'; }
+    else { toast('Error saving alert settings: ' + ((res&&res.error)||''), 'error'); if (s) s.textContent = 'Error.'; }
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); if (s) s.textContent = 'Error.'; });
 }
 
 function renderErrorLog(){
@@ -4765,6 +4963,15 @@ function openPropertyNoticeModal(propId) {
 }
 
 var _pnDebounce = null;
+// Bumped on every property-select change so a slow, in-flight preview response for a property
+// the user has since switched AWAY from can never overwrite what's on screen for the property
+// they're looking at now. Real bug (CAP-036 #9): the modal opened showing 20 East Eager Street,
+// and switching to a different property in the picker left that address/recipient info on
+// screen — a race, not a missing handler: the FIRST property's own preview request (there are
+// two chained requests just to open the modal — see the template-autofill branch below) could
+// still be in flight and land AFTER a fast property switch, painting stale data back over the
+// newly-selected property.
+var _pnReqId = 0;
 function propertyNoticeRecalc() {
   var info = smsSegmentInfo(document.getElementById('pn-message').value);
   document.getElementById('pn-segment-info').textContent = info.length
@@ -4774,23 +4981,41 @@ function propertyNoticeRecalc() {
   _pnDebounce = setTimeout(propertyNoticePreviewNow, 350);
 }
 
+// Called specifically by the property <select> itself (not by every keystroke/checkbox change
+// that also routes through propertyNoticeRecalc), so the stale info visibly clears the instant
+// the user switches property, rather than sitting there — right or wrong — until the debounced
+// fetch resolves.
+function propertyNoticePropertyChanged() {
+  document.getElementById('pn-recipients').textContent = '';
+  document.getElementById('pn-send-btn').disabled = true;
+  propertyNoticeRecalc();
+}
+
 function propertyNoticePreviewNow() {
   var propId = document.getElementById('pn-property').value;
   if (!propId) return;
+  var reqId = ++_pnReqId;
   var channels = [];
   if (document.getElementById('pn-ch-sms').checked) channels.push('sms');
   if (document.getElementById('pn-ch-email').checked) channels.push('email');
   var customMsg = document.getElementById('pn-message').value.trim();
   api('POST', '/property/notice', { property_id: propId, channels: channels, message: customMsg || undefined, preview_only: true }).then(function(res) {
+    // Stale response guard: if the user has since fired another request (typed, toggled a
+    // channel, or — the reported bug — picked a different property), this one no longer
+    // reflects what's selected. Never let it paint over newer, correct info.
+    if (reqId !== _pnReqId || document.getElementById('pn-property').value !== propId) return;
     var btn = document.getElementById('pn-send-btn');
     if (!res || res.error) { document.getElementById('pn-recipients').textContent = res ? res.error : 'Preview failed'; btn.disabled = true; return; }
     if (!customMsg && res.sms_message) { document.getElementById('pn-message').value = res.sms_message; propertyNoticeRecalc(); return; }
     var parts = [];
     if (channels.indexOf('sms') > -1) parts.push(res.sms_recipient_count + ' by text' + (res.sms_skipped_opted_out ? ' (' + res.sms_skipped_opted_out + ' opted out, skipped)' : ''));
     if (channels.indexOf('email') > -1) parts.push(res.email_recipient_count + ' by email');
-    document.getElementById('pn-recipients').textContent = res.total_active_tenants + ' active tenant(s) at ' + res.property_address + ' — ' + (parts.join(', ') || 'no channel selected');
+    document.getElementById('pn-recipients').textContent = res.total_active_tenants + ' active tenant(s) at ' + res.property_address + ' (owner: ' + (res.owner || '—') + ') — ' + (parts.join(', ') || 'no channel selected');
     btn.disabled = !(channels.length && ((res.sms_recipient_count||0) + (res.email_recipient_count||0) > 0));
-  }).catch(function(){ document.getElementById('pn-recipients').textContent = 'Preview failed — connection error'; document.getElementById('pn-send-btn').disabled = true; });
+  }).catch(function(){
+    if (reqId !== _pnReqId) return;
+    document.getElementById('pn-recipients').textContent = 'Preview failed — connection error'; document.getElementById('pn-send-btn').disabled = true;
+  });
 }
 
 function sendPropertyNoticeNow() {
@@ -4931,6 +5156,7 @@ function renderOwnersPage() {
       '<td style="display:flex;gap:4px">' +
       '<button class="btn small secondary" onclick="openEditOwnerModal(\''+o.ID+'\')">Edit</button>' +
       '<button class="btn small secondary" onclick="openLinkPropertyModal(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Assign an existing property to this owner">+ Property</button>' +
+      '<button class="btn small secondary" onclick="goToQBMapping(\''+esc((nm || o.Company || '').replace(/\'/g,''))+'\')" title="View/link this owner\'s properties and units to QuickBooks">🔗</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
       '<button class="btn small secondary" onclick="openSendMessageModal(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Send a one-off message">✉️</button>' +
@@ -7785,7 +8011,10 @@ function invBillThisJob(k) {
       // second bill on the same job can't pick them up again in the same sitting.
       invRefreshMaterialsForWO(_invWO[k] || k);
       if (inWOModal) closeModal('modal-wo-detail');
-      previewQBSend(res.id);            // preview creates nothing; you confirm in the modal
+      previewQBSend(res.id, true);      // preview creates nothing; you confirm in the modal.
+                                         // true: THIS call just approved the bill, so Cancel
+                                         // below must undo that approval too, or it's not a
+                                         // real Cancel — see cancelQBSend() (CAP-036 #15).
     } else {
       // Approved, but no usable row id came back — fall back to resolving it by work order.
       if (msg) msg.innerHTML = '<span style="color:var(--accent2)">✓ Approved at $' + charge.toFixed(2) + '.</span>';
@@ -9705,7 +9934,7 @@ function qbBillToLine(p) {
     if (b.note) {
       return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">↳ ' + esc(b.note) +
         (b.property_id && b.owner_linked
-          ? ' <button class="btn small" onclick="qbMakeSubFromPreview(\'' + esc(String(b.property_id)) + '\',this)" ' +
+          ? ' <button class="btn small" onclick="qbMakeSubFromPreview(\'property\',\'' + esc(String(b.property_id)) + '\',this)" ' +
             'style="background:var(--warn);color:#fff;padding:1px 7px;font-size:10px;margin-left:4px">Create it now</button>'
           : '') + '</div>';
     }
@@ -9713,6 +9942,17 @@ function qbBillToLine(p) {
     return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">' +
       '↳ Billing at the owner level — ' + missing + ' isn\'t linked to a QuickBooks sub-customer. ' +
       'Link or create it on the QB Mapping screen to bill the address instead.</div>';
+  }
+  // Property-level fallback with a real, unlinked unit on the job (Sep 24 2026): same
+  // silent-forever failure one level down as the owner case above. The Worker (qbBillToNote)
+  // only sends a note here when there's an actual unit to point at, so a flat/no-unit
+  // property billing correctly at property level never shows this banner.
+  if (b.level === 'property' && b.note) {
+    return '<div style="color:var(--warn);font-size:11px;margin:2px 0 6px">↳ ' + esc(b.note) +
+      (b.unit_id
+        ? ' <button class="btn small" onclick="qbMakeSubFromPreview(\'unit\',\'' + esc(String(b.unit_id)) + '\',this)" ' +
+          'style="background:var(--warn);color:#fff;padding:1px 7px;font-size:10px;margin-left:4px">Create it now</button>'
+        : '') + '</div>';
   }
   return '<div style="color:var(--accent2);font-size:11px;margin:2px 0 6px">' +
     '↳ Billing to ' + (b.level === 'unit' ? 'unit' : 'property') + ': <b>' + esc(b.display || '') + '</b>' +
@@ -10220,7 +10460,8 @@ function qbSubRow(kind, row, qbList) {
     ? (row.owner_name ? esc(row.owner_name) : '<span style="color:var(--danger)">no owner</span>')
     : (row.property_name ? esc(row.property_name) : '<span style="color:var(--danger)">no property</span>');
 
-  return '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
+  var filterText = ((row.display || '') + ' ' + (row.owner_name || '') + ' ' + (row.property_name || '')).toLowerCase();
+  return '<div data-qbfilter="' + esc(filterText) + '" style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
     '<div>' +
       '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(unnamed)') + '</div>' +
       '<div style="color:var(--muted);font-size:10px;margin:1px 0">under ' + context + '</div>' +
@@ -10332,6 +10573,26 @@ function toggleVendorInHouse(id, on) {
   }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
 }
 
+// CAP-036 #17 — self-service vendor deactivate/reactivate. Uses the same generic
+// /vendor/update + Active:'TRUE'/'FALSE' convention already used by the vendor-reject
+// flow (PAT-006 — deletion = Active FALSE, never a hard delete). Every vendor picker
+// across the Hub (assign, reassign, new-WO, master-key holder, bill split, etc.) already
+// filters on v.Active!=='FALSE', so deactivating here removes the vendor from all of them
+// without any other change; reactivating brings them right back.
+function toggleVendorActive(id, name, reactivate) {
+  var msg = reactivate
+    ? 'Reactivate ' + (name || 'this vendor') + '? They will reappear in assign/reassign vendor pickers.'
+    : 'Deactivate ' + (name || 'this vendor') + '? They will stop appearing in assign/reassign vendor pickers. Their history (past work orders, bills) is kept — this does not delete anything.';
+  if (!confirm(msg)) return;
+  api('POST', '/vendor/update', { id: id, fields: { Active: reactivate ? 'TRUE' : 'FALSE' } }).then(function(res) {
+    if (res && res.error) { toast('Error: ' + res.error, 'error'); return; }
+    toast(reactivate ? 'Vendor reactivated' : 'Vendor deactivated', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.Active = reactivate ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast('Error: ' + (e && e.message || e), 'error'); });
+}
+
 function qbToggleInHouse(kind, id, on) {
   api('POST', '/qb/vendor-in-house', { id: id, in_house: on }).then(function(r) {
     if (r && r.error) { toast(r.error, 'error'); loadQBMapping(false); return; }
@@ -10418,7 +10679,7 @@ function qbMapRow(kind, row, qbList) {
         }).join(', ') + ' — is that where these belong?</div>'
     : '';
 
-  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
+  return '<div data-qbfilter="' + esc((row.display || '').toLowerCase()) + '" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
     '<div>' +
       '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(no name)') + '</div>' +
       '<div style="margin-top:2px">' + (row.in_house && kind === 'vendor' ? '<span style="color:var(--accent2);font-size:10.5px">in-house — no QuickBooks bill</span>' : state) + '</div>' +
@@ -10429,6 +10690,39 @@ function qbMapRow(kind, row, qbList) {
       'style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11.5px">' +
       opts + '</select>' +
   '</div>';
+}
+
+// Client-side substring filter over the rows renderQBMapping() just drew — every row from
+// qbMapRow/qbSubRow carries a data-qbfilter attribute (lowercased display name, plus owner/
+// property context for properties and units) to match against. No backend call, so it stays
+// instant even on a big portfolio; re-applied at the end of every render (loadQBMapping /
+// auditUnits / accept-all) so a filter typed before a refresh survives it.
+function filterQBMapping() {
+  var input = document.getElementById('qbmap-filter');
+  var q = (input && input.value || '').trim().toLowerCase();
+  var rows = document.querySelectorAll('#qb-map-body [data-qbfilter]');
+  var shown = 0;
+  rows.forEach(function(r) {
+    var match = !q || r.getAttribute('data-qbfilter').indexOf(q) !== -1;
+    r.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  var countEl = document.getElementById('qbmap-filter-count');
+  if (countEl) countEl.textContent = q ? (shown + ' of ' + rows.length + ' match') : '';
+}
+
+// Click-through entry point for other pages (Dev Log, the Owners table "🔗" button) that want
+// to land on QB Mapping already narrowed to one owner/property, instead of the whole portfolio
+// (Sep 24 2026, Brett's ask — the mapping tool had no way in from anywhere but its own nav
+// button, and no way to jump straight to one owner's rows once there).
+function goToQBMapping(filterText) {
+  showPage('qb-map', document.querySelector('.nav-btn[onclick*="qb-map"]'));
+  var input = document.getElementById('qbmap-filter');
+  if (input) input.value = filterText || '';
+  // loadQBMapping(false) re-renders async (cached data if already loaded, a fresh fetch
+  // otherwise) — apply the filter once that render lands rather than racing it.
+  setTimeout(filterQBMapping, 0);
+  setTimeout(filterQBMapping, 400);
 }
 
 function renderQBMapping() {
@@ -10472,6 +10766,7 @@ function renderQBMapping() {
     subSection('PROPERTIES → SUB-CUSTOMERS', 'Each building sits under its owner, so an invoice lands on the address that earned it rather than on one shared ledger.', unlinkedP, props.length, 'property', props) +
     subSection('UNITS → SUB-CUSTOMERS', 'Optional. Link a unit only where you want that apartment tracked separately; otherwise its work bills to the building.', unlinkedU, units.length, 'unit', units) +
     section('VENDORS → QUICKBOOKS VENDORS', unlinkedV, vendors.length, 'vendor', vendors, _qbMap.qb_vendors);
+  filterQBMapping();
 }
 
 // Which slice of the loaded map a kind lives in. This used to be a two-way ternary that
@@ -10703,13 +10998,16 @@ function renderQBCard(r, i) {
   '</div>';
 }
 
-// Create the property's QuickBooks sub-customer without leaving the preview. Only offered
-// when the owner is already linked — a sub-customer needs a parent, and the Worker refuses
-// otherwise. On success the preview is re-read so the bill-to line shows the new nesting
-// before anything is sent; nothing is created in QuickBooks until this button is pressed.
-function qbMakeSubFromPreview(propertyId, btn) {
+// Create a QuickBooks sub-customer (property under its owner, or unit under its property)
+// without leaving the preview. Only offered when the immediate parent is already linked — a
+// sub-customer needs a parent, and the Worker refuses otherwise. On success the preview is
+// re-read so the bill-to line shows the new nesting before anything is sent; nothing is
+// created in QuickBooks until this button is pressed. `kind` is 'property' or 'unit' (Sep 24
+// 2026 — generalized from a property-only helper so the same button/flow covers a unit
+// that's the actual gap, not just its property).
+function qbMakeSubFromPreview(kind, id, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
-  api('POST', '/qb/create-subcustomer', { kind: 'property', id: propertyId }).then(function(r) {
+  api('POST', '/qb/create-subcustomer', { kind: kind, id: id }).then(function(r) {
     if (r && r.error) {
       toast(r.error, 'error');
       if (btn) { btn.disabled = false; btn.textContent = 'Create it now'; }
@@ -10723,8 +11021,14 @@ function qbMakeSubFromPreview(propertyId, btn) {
   });
 }
 
-function previewQBSend(id) {
+// justApproved=true means THIS call is the one that just auto-approved the bill (the single
+// "Approve & send to QuickBooks" button in invBillThisJob) — not a bill that arrived here
+// already approved from an earlier sitting. cancelQBSend() uses this to decide whether
+// Cancel needs to undo that approval too, or whether it's a true no-op already.
+var _qbSendJustApproved = null;
+function previewQBSend(id, justApproved) {
   _qbCurrent = id;
+  _qbSendJustApproved = justApproved ? id : null;
   document.getElementById('qb-send-title-sub').textContent = 'IR ' + id;
   document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--muted)">Loading preview…</div>';
   document.getElementById('qb-send-msg').innerHTML = '';
@@ -10847,6 +11151,7 @@ function confirmQBSend() {
       }
       document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + esc(txt) + '</div>' + warnHtml;
       qbMarkDone(id);
+      _qbSendJustApproved = null; // it's actually in QuickBooks now — nothing left to undo
       // Hold the modal open longer when there's something to read.
       setTimeout(function(){ closeModal('modal-qb-send'); }, warnHtml ? 6000 : 1600);
     } else {
@@ -10857,6 +11162,38 @@ function confirmQBSend() {
   }).catch(function(e){
     btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
     document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + esc(e.message||'?') + '</div>';
+  });
+}
+
+// Real incident (CAP-036 #15, Sep 24 2026, Eddie Smith's bill): "Approve & send to QuickBooks"
+// is one button that does two things — approve the bill (real, server-side, moves it out of
+// Review Bills), THEN open this preview for the actual QuickBooks send. The old Cancel button
+// just closed the modal, which is a true no-op for the "create in QuickBooks" half but does
+// NOTHING about the approve half that already happened — so the bill vanished from Review
+// Bills with no visible way back (it was still sitting on the Send to QuickBooks screen,
+// approved-but-unsent, recoverable only via "Withdraw approval" there, which Brett had no
+// reason to know to look for). If this modal was opened by that same fresh approval,
+// Cancel now undoes the approval too, so Cancel is a true no-op for the WHOLE action —
+// the bill reappears in Review Bills exactly as it was. If the bill was already approved
+// from an earlier sitting (opened via the Send to QB queue, or the "already approved" fast
+// path), that earlier approval predates this click and Cancel leaves it alone, same as always.
+function cancelQBSend() {
+  var id = _qbCurrent;
+  var justApproved = _qbSendJustApproved && _qbSendJustApproved === id;
+  closeModal('modal-qb-send');
+  _qbSendJustApproved = null;
+  if (!justApproved) return; // nothing this click did needs undoing — already a true no-op
+  api('POST', '/invoice-review/unapprove', { id: id }).then(function(res) {
+    if (!res || res.error) {
+      toast('Cancelled, but could not automatically undo the approval — the bill is sitting on the "Send to QuickBooks" page (approved, not yet sent), not lost. Use "Withdraw approval" there to bring it back to Review Bills. (' + ((res && res.error) || 'unknown error') + ')', 'error');
+      return;
+    }
+    toast('Cancelled — the bill is back in Review Bills, untouched.', 'success');
+    // Refresh whichever view the bill needs to reappear on.
+    if (document.getElementById('ir-list')) loadInvoiceReview();
+    if (document.getElementById('qb-list')) loadQBQueue();
+  }).catch(function(e) {
+    toast('Cancelled, but could not automatically undo the approval — the bill is sitting on the "Send to QuickBooks" page (approved, not yet sent), not lost. Use "Withdraw approval" there to bring it back to Review Bills. (' + (e.message || '?') + ')', 'error');
   });
 }
 
@@ -11019,7 +11356,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   <div class="modal" style="max-width:520px">
     <div class="modal-title">📢 SEND PROPERTY NOTICE</div>
     <label style="font-size:11px;color:var(--muted)">Property</label>
-    <select id="pn-property" onchange="propertyNoticeRecalc()" style="width:100%;margin:4px 0 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;color:var(--text)"></select>
+    <select id="pn-property" onchange="propertyNoticePropertyChanged()" style="width:100%;margin:4px 0 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px;color:var(--text)"></select>
     <label style="font-size:11px;color:var(--muted)">Send by</label>
     <div style="margin:4px 0 10px">
       <label style="font-size:12px;margin-right:14px"><input type="checkbox" id="pn-ch-sms" checked onchange="propertyNoticeRecalc()"> Text (SMS)</label>
@@ -11046,7 +11383,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
     <div id="qb-send-preview" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:10px"></div>
     <div id="qb-send-msg"></div>
     <div class="modal-actions">
-      <button class="btn secondary" onclick="closeModal('modal-qb-send')">Cancel</button>
+      <button class="btn secondary" onclick="cancelQBSend()">Cancel</button>
       <button class="btn" id="qb-send-confirm-btn" onclick="confirmQBSend()">CREATE IN QUICKBOOKS</button>
     </div>
   </div>
