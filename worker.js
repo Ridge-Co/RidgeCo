@@ -656,6 +656,7 @@ export default {
         if (path === '/create-upload-session')    return await createUploadSession(env, body);
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
+        if (path === '/vendor-loan/add')          return await vendorLoanAdd(env, body);
         if (path === '/vendor/update-contact')    return await vendorUpdateContact(env, body);
         if (path === '/vendor-bill/extract')      return await vendorBillExtract(env, body);
         if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
