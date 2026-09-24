@@ -478,10 +478,12 @@ function previewMilestoneBill(sigId){
     var b=document.getElementById('m-confirm');b.classList.remove('hide');b.textContent='Confirm — bill in QuickBooks';b.disabled=false;
   }).catch(function(e){document.getElementById('m-body').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
 }
-function confirmMilestoneBill(btn){
+function confirmMilestoneBill(btn,overridePendingInfo){
   if(!curMs)return;
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Creating…';
-  api('POST','/scope-proposal/bill-milestones',{signature_id:curMs.sigId,milestone_ids:curMs.ids}).then(function(r){
+  var payload={signature_id:curMs.sigId,milestone_ids:curMs.ids};
+  if(overridePendingInfo)payload.override_pending_info=true;
+  api('POST','/scope-proposal/bill-milestones',payload).then(function(r){
     if(r&&r.ok){
       var msg='Billed'+(r.invoice_number?(' invoice #'+r.invoice_number):' invoice')+(r.bill_number?(' + bill #'+r.bill_number):(r.bill_id?' + bill':''));
       document.getElementById('m-body').innerHTML='<p style="font-weight:700;color:var(--green)">✓ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');
