@@ -4071,12 +4071,22 @@ function renderEpUnitsSection(propId){
         '<button type="button" class="btn small danger" onclick="deactivateEpUnit(\''+u.ID+'\')">Remove</button></div>';
     }).join('');
 }
-function addUnitToEditedProperty(){
+function addUnitToEditedProperty(force){
   var propId = document.getElementById('ep-id').value;
   var labelEl = document.getElementById('ep-new-unit-label');
   var label = labelEl.value.trim();
+  var warnBox = document.getElementById('ep-unit-dupe-warning');
+  if (warnBox) warnBox.style.display = 'none';
   if (!label) { toast('Enter a unit label first (e.g. Apt 1, 1st Floor)','error'); return; }
-  api('POST','/unit/add',{ Property_ID: propId, Unit_Label: label, Active: 'TRUE' }).then(function(res){
+  var body = { Property_ID: propId, Unit_Label: label, Active: 'TRUE' };
+  if (force) body.force = true;
+  api('POST','/unit/add',body).then(function(res){
+    if (res.duplicate_of && safeArray(res.duplicate_of).length && warnBox) {
+      warnBox.innerHTML = '⚠ ' + esc(res.error || 'A matching unit already exists on this property.') +
+        ' <button class="btn small secondary" onclick="addUnitToEditedProperty(true)">Create anyway</button>';
+      warnBox.style.display = '';
+      return;
+    }
     if (res.error) { logError('Add unit', res.error); toast('Error: '+res.error,'error'); return; }
     state.units = safeArray(state.units).concat([{ ID: res.id, Property_ID: propId, Unit_Label: label, Tenant_ID: '', Active: 'TRUE' }]);
     labelEl.value = ''; toast('Unit added','success'); renderEpUnitsSection(propId);
