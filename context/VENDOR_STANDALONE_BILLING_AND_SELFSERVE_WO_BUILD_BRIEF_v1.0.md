@@ -85,11 +85,10 @@ too, since Brett said she should act like any other vendor for actual work order
   form (pick property from the full active-properties list + optional note) → `POST
   /vendor/request-property-access`. That fires an SMS to Brett's admin phone (reusing `sendSMS`,
   same chokepoint everything else uses) with the vendor name, requested property, and a link
-  straight to a new small admin approval view (`GET /vendor-access-requests` /
-  `POST /vendor-access-requests/approve {id, scope: 'once'|'ongoing', decision}`). "Once" bills the
-  one pending item and doesn't touch `Billing_Property_Access`; "ongoing" also appends the
-  property to her standing list. This mirrors the existing estimate-approval and vendor-nudge
-  SMS+link pattern already used elsewhere — no new SMS chokepoint needed.
+  straight into the admin approval surface (§3d) — see §3d for exactly where that lives and how
+  Brett is guaranteed to notice it, not just the SMS. "Once" bills the one pending item and
+  doesn't touch `Billing_Property_Access`; "ongoing" also appends the property to her standing
+  list.
 - **Line items** (repeatable, reusing the existing receipt-row UI/JS almost verbatim): each row =
   description + amount + **Payment source** control — defaults to **"I paid, reimburse me"**
   (maps to today's `pay:'reimburse'`) but can be switched to **"Charged to Brett's/company
@@ -118,6 +117,34 @@ too, since Brett said she should act like any other vendor for actual work order
   company-card pay mode and photo attachment work exactly like today's receipt rows — no new
   line-item storage format needed.
 - Same duplicate-guard idea as today's dedup check, keyed on vendor+property+total+day.
+
+### 3d. Admin approval surface for property-access requests — **lives in Dev Log AND the
+Dashboard, both carrying a visible pending count** (Brett's Sep 24 follow-up)
+
+Brett's own reasoning: the SMS notification alone probably won't be reliably enough — he wants a
+flag he can't miss even if he doesn't manually check Dev Log. So this isn't just "add a page" —
+it needs two surfaces, both counting the same pending queue:
+
+- **New `Vendor_Access_Requests` tab** (`ensureColumns`-provisioned): `ID, Vendor_ID, Vendor_Name,
+  Requested_Property_ID, Note, Status ('pending'/'approved_once'/'approved_ongoing'/'denied'),
+  Created_Date, Decided_Date`.
+- **Dev Log** (existing `renderErrorLog`/Dev Log page, index.html ≈2472) gets a new **"Vendor
+  Access Requests"** section, same lazy-fetch-on-open pattern as its other sections (Wishlist,
+  Cache), listing every `pending` row with Approve-once / Approve-ongoing / Deny buttons
+  (`POST /vendor-access-requests/approve {id, scope, decision}`, per §3b). The Dev Log nav tab
+  itself gets a small badge showing the pending count, the same visual pattern a notification
+  badge would use elsewhere in the Hub — so the tab looks different at a glance even before it's
+  opened.
+- **Dashboard** (`renderDashboard`, index.html ≈1025 — the screen Brett lands on, referred to here
+  as the "Command Center") gets a new small stat tile/card, e.g. **"⚠ 2 vendor access requests
+  pending"**, shown only when the pending count is >0 (so it doesn't add clutter on a normal day),
+  clicking straight through to the Dev Log section above. `GET /vendor-access-requests?status=pending`
+  (or a `count`-only variant) backs both badges from the same query — one source of truth, no risk
+  of the two counts drifting apart.
+- The SMS Brett receives (§3b) is the fast path when he's already on his phone; the Dev Log +
+  Dashboard badges are the backstop for the (likely common) case where he doesn't act on the SMS
+  right away — both surfaces stay populated until he actually approves/denies, not just until the
+  SMS is sent.
 
 ## 4. Self-serve WO flow — "One-Off Job" (Alan George's case)
 
@@ -225,6 +252,9 @@ WO involvement (used by the Scope Proposal signing flow). Plan:
 - `scopeSigResolveParties()` is the exact template for resolving Owner directly from `Property_ID`
   with no WO — this is the one piece of real new logic (a resolver branch in `qbSendInvoice`),
   everything else is additive columns + a new vendor-portal entry point + a thin wrapper endpoint.
+- The Dev Log page's existing lazy-fetch-on-open sections (Wishlist, Cache) are the template for
+  the new Vendor Access Requests section (§3d); the Dashboard's existing stat-tile row
+  (`renderDashboard`) is the template for the new pending-count tile.
 
 ## 7. Open questions before this gets built
 
@@ -241,14 +271,12 @@ All items previously open here are resolved as of Sep 24 2026:
    screen, with mandatory framing copy every time it opens (§4a). Sierra's flow is **"Submit a
    Bill,"** also on the main/home screen, with lighter one-time framing copy (§3a). `Can_Bill_No_WO`
    / `Can_Create_Own_WO` remain the internal column names — cosmetic, not worth renaming.
+4. ~~Access-request approval surface.~~ **Resolved** — lives in **Dev Log** (a new section, badge
+   on the nav tab) **and** the **Dashboard** ("Command Center," a pending-count stat tile), both
+   reading the same `Vendor_Access_Requests` pending count so they can't drift out of sync — see
+   §3d. The SMS notification stays as the fast path, with these two as the backstop Brett won't
+   miss even if he doesn't act on the SMS right away.
 
-**Remaining, genuinely still open:**
-
-4. **Access-request approval surface.** Proposed as a small new admin view + SMS link (§3b),
-   consistent with existing approval-via-SMS-link patterns. If Brett would rather this just be a
-   new row on an existing page (e.g. folded into Dev Log or a Vendors sub-tab) rather than a new
-   standalone view, say so — otherwise this is the default the build will use.
-
-Once #4 is settled (or Brett says "your call"), this is ready to hand to a build session as a
-normal branch+PR per `AUTONOMY_GUARDRAILS_v1.0` (money/QuickBooks-adjacent → staged PR for Brett's
-own review, not auto-merged).
+No open questions remain — this is ready to hand to a build session as a normal branch+PR per
+`AUTONOMY_GUARDRAILS_v1.0` (money/QuickBooks-adjacent → staged PR for Brett's own review, not
+auto-merged).
