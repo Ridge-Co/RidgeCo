@@ -5982,8 +5982,10 @@ async function updateStatus(env, body) {
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
   if (body.status === 'Complete') {
-    const tenant = currentTenantForDispatch(tenants, unit, wo);
-    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just the one Units.Tenant_ID happens
+    // to name — see tenantsForDispatch's comment for the real Lance/Emily case this fixes.
+    if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
+      if (!isTenantNotifiable(tenant, wo)) continue;
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
       // same-address jobs distinguishable in the text (see tenant_job_assigned's comment).
       // Sep 16 2026 (Brett): dropped the "reply or call us" line — inbound SMS from a tenant
