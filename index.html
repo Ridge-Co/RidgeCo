@@ -11163,6 +11163,14 @@ function confirmQBSend(overridePendingInfo) {
       _qbSendJustApproved = null; // it's actually in QuickBooks now — nothing left to undo
       // Hold the modal open longer when there's something to read.
       setTimeout(function(){ closeModal('modal-qb-send'); }, warnHtml ? 6000 : 1600);
+    } else if (res.pending_info && !overridePendingInfo) {
+      // CAP-036 #14: soft block, not a dead end — the server refused because the underlying
+      // bill is flagged, but Brett is the only approver here, so a deliberate way through
+      // has to exist. Resend with the override rather than leaving him stuck.
+      btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
+      document.getElementById('qb-send-msg').innerHTML =
+        '<div style="color:var(--warn);font-size:12px;margin-top:6px;line-height:1.5">⏳ ' + esc(res.error || 'This bill is flagged "Invoiced — Pending Info."') + '</div>' +
+        '<div style="margin-top:8px"><button onclick="confirmQBSend(true)" style="background:var(--danger);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 12px;cursor:pointer">Send anyway</button></div>';
     } else {
       btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
       var errs = (res.errors&&res.errors.length) ? res.errors.join('; ') : (res.error||'Error');
