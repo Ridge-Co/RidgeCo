@@ -4436,6 +4436,39 @@ async function scopeSigResolveParties(env, s, row) {
 // already-created invoice. Every milestone in the request must belong to the same signature and
 // still be 'pending' — mixing signatures or re-billing an already-billed milestone is rejected
 // outright rather than silently partial-processed.
+// POST /scope-proposal/milestone/set-pending-info { signature_id, milestone_id, pending_info, note?, set_by? }
+// CAP-036 #14's confirmed scope also covers Scope Proposal / milestone billing, not just plain
+// vendor invoices (Brett, answering the open question directly: "applies to Scope Proposal /
+// milestone billing too"). Payment_Milestones only ever has Status 'pending' → 'billed'
+// (scopeProposalBillMilestones is the only thing that flips it) — same flag-on-top pattern as
+// Vendor_Bills: a 'pending' milestone can ALSO be flagged Pending_Info, blocking it from being
+// billed (soft block, overridable — see scopeProposalBillMilestones below) until Brett clears it.
+async function setMilestonePendingInfo(env, body) {
+  const msId = String(body.milestone_id || '').trim();
+  const sigId = String(body.signature_id || '').trim();
+  if (!msId || !sigId) return json({ error: 'signature_id and milestone_id required' }, 400);
+  const pending = body.pending_info === true || String(body.pending_info).toUpperCase() === 'TRUE';
+  const note = String(body.note || '').trim();
+  if (pending && !note) return json({ error: 'A note is required when flagging Pending Info — say what\'s missing.' }, 400);
+
+  try {
+    await paymentMilestonesTab(env);
+    await ensureColumns(env, 'Payment_Milestones', ['Pending_Info', 'Pending_Info_Note', 'Pending_Info_Set_By', 'Pending_Info_Set_Date']);
+  } catch (e) { return json({ error: 'Could not prepare Payment_Milestones columns: ' + String(e && e.message || e) }, 500); }
+
+  const milestones = await fetchTab(env, 'Payment_Milestones');
+  const m = milestones.find(x => x.ID === msId && x.Signature_ID === sigId && String(x.Active || '').toUpperCase() !== 'FALSE');
+  if (!m) return json({ error: `Milestone ${msId} not found on signature ${sigId}` }, 404);
+
+  await updateRow(env, 'Payment_Milestones', msId, {
+    Pending_Info: pending ? 'TRUE' : 'FALSE',
+    Pending_Info_Note: pending ? note : '',
+    Pending_Info_Set_By: pending ? (body.set_by || 'Brett') : '',
+    Pending_Info_Set_Date: pending ? new Date().toISOString() : '',
+  });
+  return json({ success: true, id: msId, signature_id: sigId, pending_info: pending, note: pending ? note : '' });
+}
+
 async function scopeProposalBillMilestones(env, body) {
   const sigId = body && body.signature_id;
   const milestoneIds = Array.isArray(body && body.milestone_ids) ? body.milestone_ids.map(String) : [];
