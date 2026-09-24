@@ -76,6 +76,43 @@ yet opened in this pass (opening next). `context/FEATURE_LOG.md` bumped to v2.08
 
 ---
 
+# Sep 24, 2026, ~13:05 ET — DESIGNED (not yet built): Vendor Standalone Billing + Self-Serve "One-Off Job" — build brief finalized; **a separate session is now building this, do not duplicate**
+
+Full spec: `context/VENDOR_STANDALONE_BILLING_AND_SELFSERVE_WO_BUILD_BRIEF_v1.0.md` (§7 confirms
+zero open questions as of this write — fully resolved through several rounds of Brett's own
+clarifying answers). Two new independent, per-vendor opt-in permissions on `Vendors`:
+
+- **`Can_Bill_No_WO`** (Sierra Taylor's case) — vendor gets a persistent **"Submit a Bill"** button
+  on `vendor.html`'s home screen, scoped to a per-vendor `Billing_Property_Access` property
+  allow-list, with a "request access to another property" path that SMS's Brett a link to approve
+  once/ongoing. New `POST /vendor-bill/add-standalone` writes a `Vendor_Bills` row with `WO_ID`
+  blank + new `Property_ID`/`Bill_To`(`owner`/`ridgeco`)/`Standalone` columns; `approveInvoiceReview`
+  and `qbSendInvoice` get a `Standalone` branch (modeled on the existing `scopeSigResolveParties()`)
+  to resolve Owner straight from `Property_ID` with no WO in the chain, since today that whole
+  Property→Owner→QB-Customer resolution runs exclusively off `wo.Property_ID`.
+- **`Can_Create_Own_WO`** (Alan George's case) — a **"Log a One-Off Job"** button, also on the
+  vendor home screen, deliberately NOT property-restricted. New `POST /workorder/self-serve` forces
+  `Vendor_ID` to the caller (never another vendor) and now **requires** a mandatory
+  `Approval_Source` attestation (`'owner'|'brett'|'other'`, free-text `Approval_Note` required when
+  `'other'`) before it will create the WO — the safeguard in place of a hard approval gate, so
+  Brett always sees *why* a vendor-created WO exists, not just that one exists. Mandatory framing
+  copy on the form every time it opens, explicitly warning this is not a substitute for regular
+  Work Orders and that recurring verbal-job patterns should go to Brett for a proper
+  template/process instead.
+- Both flags get inline-checkbox toggles on the Vendors table (mirrors the existing `In_House`
+  pattern) plus a bulk-select action to flip several vendors at once.
+- Property-access-request approvals (the "request access to another property" path above) surface
+  in **two** places reading the same pending count, per Brett's explicit ask that the SMS alone
+  won't be reliable enough: a new **Dev Log** section with a pending-count badge on the Dev Log nav
+  tab, and a **Dashboard** stat tile that only shows when something's pending.
+
+Money/QuickBooks-adjacent → ships as a staged branch+PR per `AUTONOMY_GUARDRAILS_v1.0`, not
+auto-merged. **Before starting any build work on this**, check this repo's open PR list first —
+per Brett (Sep 24), a separate session was already asked to build it; re-confirm it isn't already
+in flight or merged before duplicating effort.
+
+---
+
 # Sep 24, 2026, ~11:40 ET — FIXED (PR open, not merged): CAP-036 #15 Review Bills Cancel disappearing bill, and CAP-036 #9 Property Notice picker stuck on first property
 
 **CAP-036 #15 — Review Bills "Cancel" made a bill disappear (real incident: Eddie Smith).**
