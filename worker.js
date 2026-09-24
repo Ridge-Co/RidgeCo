@@ -11999,6 +11999,82 @@ async function vendorPerformance(env, url) {
   });
 }
 
+// GET /brettos-tasks-summary — READ-ONLY glance summary of the BrettOS Tasks Sheet (Brett's
+// real, canonical task tracker — a SEPARATE Google Sheet from this repo's own env.SHEET_ID /
+// "RidgeCo Main"; sheet id lives in env.BRETTOS_TASKS_SHEET_ID, never hardcoded here since this
+// repo is public — same reasoning CREDENTIALS_MAP.md gives for keeping identifiers out of it).
+// Per context/TASK_LINKING_BUILD_BRIEF_v1.0.md (Sep 24 2026, decision #1): the BrettOS Sheet
+// stays canonical for tasks — never mirrored or written here — this endpoint only surfaces
+// counts + a handful of top-open items so Brett can see what's open without leaving the Hub
+// (Command Center card + Dev Log link). Never writes. Admin-gated by omission from PUBLIC_PATHS,
+// same convention as vendorPerformance/opsTelemetryRead above.
+//
+// Auth reuse note: uses the SAME getAccessToken(env)/GOOGLE_SA_EMAIL/GOOGLE_SA_KEY runtime
+// service-account JWT this file already uses for env.SHEET_ID, but points it at a DIFFERENT
+// spreadsheet id — the same "auth is the SA, target sheet is a separate id" pattern
+// importKeyRegistry already uses for env.KEY_REGISTRY_SHEET_ID. Fully inert (clean 500, not a
+// crash) until env.BRETTOS_TASKS_SHEET_ID is set. OPEN QUESTION (not resolved by this build,
+// flagged in the PR): whether the BrettOS Tasks Sheet has actually been shared as
+// Viewer/Editor with the runtime SA (maintenance-hub-sheets@maintenance-hub-498819...) —
+// CREDENTIALS_MAP.md's "Known Sheets" table lists only RidgeCo Main as confirmed-shared, and
+// the existing nightly Entities sync runs the OTHER direction (BrettOS pulls FROM this Worker's
+// GET /public/entities-feed, not this Worker reading the BrettOS Sheet) — so that sync's
+// credentials don't establish this endpoint's access either way. If the SA hasn't been shared,
+// this 500s with a clear Google "caller does not have permission" message rather than failing
+// silently — see PAT-027.
+async function brettosTasksSummary(env, url) {
+  const sheetId = env.BRETTOS_TASKS_SHEET_ID;
+  if (!sheetId) return json({ error: 'BRETTOS_TASKS_SHEET_ID not set' }, 500);
+  const limit = Math.max(1, Math.min(25, parseInt(url.searchParams.get('limit') || '8') || 8));
+  let token;
+  try { token = await getAccessToken(env); }
+  catch (e) { return json({ error: `BrettOS Tasks auth error: ${e.message}` }, 500); }
+  const resp = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Tasks`, { headers: { 'Authorization': `Bearer ${token}` } });
+  const data = await resp.json();
+  if (data.error) return json({ error: `BrettOS Tasks read error: ${data.error.message}` }, 400);
+  const rows = data.values || [];
+  const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+  if (rows.length < 2) return json({ ok: true, as_of: new Date().toISOString(), total: 0, open_total: 0, by_status: {}, by_venture: {}, top_open: [], sheet_url: sheetUrl });
+  const headers = rows[0];
+  const tasks = rows.slice(1).map(r => { const o = {}; headers.forEach((hh, i) => { o[hh] = (r[i] !== undefined) ? r[i] : ''; }); return o; });
+
+  // Status set is confirmed-live-but-not-exhaustive per the build brief ("check what statuses
+  // actually appear") — rather than hardcode an assumed set of "open" labels, treat anything
+  // that looks like a closed/done label as closed and everything else (including a status this
+  // code has never seen) as open, so a future status value never silently vanishes from counts.
+  const DONE_STATUSES = new Set(['done', 'complete', 'completed', 'closed', 'cancelled', 'canceled']);
+  const isOpen = t => !DONE_STATUSES.has(String(t.Status || '').toLowerCase().trim());
+
+  const by_status = {}, by_venture = {};
+  for (const t of tasks) {
+    const st = t.Status || '(blank)', ve = t.Venture || '(blank)';
+    by_status[st] = (by_status[st] || 0) + 1;
+    by_venture[ve] = (by_venture[ve] || 0) + 1;
+  }
+
+  const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, medium: 2, low: 3 };
+  const rank = t => { const p = PRIORITY_RANK[String(t.Priority || '').toLowerCase().trim()]; return p === undefined ? 4 : p; };
+  const open = tasks.filter(isOpen);
+  const top_open = open.slice()
+    .sort((a, b) => {
+      const rd = rank(a) - rank(b);
+      if (rd !== 0) return rd;
+      return String(b.Created_Date || '').localeCompare(String(a.Created_Date || '')); // newer first, tiebreak
+    })
+    .slice(0, limit)
+    .map(t => ({
+      task_id: t.Task_ID || '', title: t.Title || '', status: t.Status || '', venture: t.Venture || '',
+      priority: t.Priority || '', due_date: t.Due_Date || '', created_date: t.Created_Date || '',
+      next_action: t.Next_Action || '',
+    }));
+
+  return json({
+    ok: true, as_of: new Date().toISOString(),
+    total: tasks.length, open_total: open.length,
+    by_status, by_venture, top_open, sheet_url: sheetUrl,
+  });
+}
+
 // GET /ar/invoices — READ-ONLY invoice status board, straight from QuickBooks. Solves the thing
 // QuickBooks' own UI can't filter: invoices Brett CREATED but never SENT (they sit). QuickBooks
 // exposes EmailStatus (NotSet / NeedToSend / EmailSent) — anything other than EmailSent = not yet
