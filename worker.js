@@ -9097,8 +9097,9 @@ async function scheduleWO(env, body) {
   const unit=units.find(u=>u.ID===wo.Unit_ID), property=properties.find(p=>p.ID===wo.Property_ID);
   const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
-    const tenant=currentTenantForDispatch(tenants, unit, wo);
+    // CAP-036 #21: every active tenant in the unit, not just the one Units.Tenant_ID names.
     const address=property?property.Address+(unit&&unit.Unit_Label?' '+formatUnitLabel(unit.Unit_Label):''):'your address';
+    for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       // woJobLabel keeps two same-trade/same-address jobs distinguishable in the text.
@@ -9113,12 +9114,13 @@ async function scheduleWO(env, body) {
       // true when it actually goes out, not what was true when it was scheduled.
       if(schedDate===today||isWithinHour){
         const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_scheduled', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-        tenantSMSSent = r.sent;
+        if (r.sent) tenantSMSSent = true;
       } else {
         let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}
         await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter,{ message_type: 'tenant_job_scheduled', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
         notifyQueued=true;
       }
+    }
     }
   }
   // Owner Scheduled (Sep 15 2026 — real gap found live-testing rule 168): the owner-scheduled
