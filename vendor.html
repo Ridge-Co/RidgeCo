@@ -395,6 +395,48 @@ function doLogout() {
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
 }
 
+// Vendor Task Requests (CAP-036 #12, Sep 24 2026) -- "Needs Your Attention". A dedicated,
+// prominent section at the top of the portal (above the job list) for anything Brett has
+// explicitly flagged -- Request Photos, Request Description Update, or Other -- scoped to the
+// vendor's estimate or invoice on a WO. Marking one done does NOT resolve it here -- it moves
+// into Brett's own review queue; the vendor sees it disappear from this list once marked.
+var VTR_TYPE_LABELS_VENDOR = { photos: 'Upload photos', description: 'Update / clarify your description', other: 'Request' };
+function loadVendorTaskAlerts() {
+  if (!session) return;
+  api('/vendor-task-requests?status=open').then(function(rows) {
+    renderVendorTaskAlerts(rows || []);
+  }).catch(function(e) { console.error('[loadVendorTaskAlerts]', e); });
+}
+function renderVendorTaskAlerts(rows) {
+  var el = document.getElementById('vtrBanner');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = ''; return; }
+  var items = rows.map(function(r) {
+    var typeLabel = VTR_TYPE_LABELS_VENDOR[r.Request_Type] || 'Request';
+    var scopeLabel = r.Scope === 'invoice' ? 'invoice' : 'estimate';
+    return '<div style="background:var(--surface);border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:8px">' +
+      '<div style="font-size:12px;font-weight:bold;color:var(--warn);margin-bottom:2px">' + esc(r.WO_ID || '') + ' -- ' + esc(typeLabel) + ' (' + esc(scopeLabel) + ')</div>' +
+      '<div style="font-size:12px;color:var(--text);margin-bottom:8px;white-space:pre-wrap">' + esc(r.Message || '') + '</div>' +
+      '<button class="btn btn-sm" onclick="markVendorTaskRequestDone(\'' + esc(r.ID) + '\')" id="vtr-done-' + esc(r.ID) + '">Mark Done</button>' +
+      '</div>';
+  }).join('');
+  el.innerHTML = '<div style="background:#fdf2e2;border:2px solid var(--warn);border-radius:8px;padding:12px;margin-bottom:14px">' +
+    '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--warn);font-weight:bold;margin-bottom:8px">NEEDS YOUR ATTENTION (' + rows.length + ')</div>' +
+    items + '</div>';
+}
+function markVendorTaskRequestDone(id) {
+  var btn = document.getElementById('vtr-done-' + id);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  api('POST', '/vendor-task-request/mark-done', { id: id }).then(function(res) {
+    if (res.error) { toast(res.error, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Mark Done'; } return; }
+    toast('Marked done -- Brett will take a look', 'success');
+    loadVendorTaskAlerts();
+  }).catch(function(e) {
+    toast('Error: ' + (e.message || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Mark Done'; }
+  });
+}
+
 // Restore a persisted session so a reload / auto-refresh keeps the vendor logged in.
 // Sep 22 2026 fix: this used to run immediately as an IIFE, inline in this early <script>
 // block -- but onLoginSuccess() calls applyTranslations(), which isn't defined until a LATER
