@@ -19231,6 +19231,8 @@ async function qbSendCombinedInvoice(env, ctx) {
       const vendorCost = Number(r.Vendor_Cost) || 0;
       if (custTotal <= 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: Customer_Total is 0 — nothing to invoice for this line.`);
       if (vendorCost <= 0) warnings.push(`Bill ${r.Bill_ID || r.ID} (${vendor.Name || r.Vendor_Name || 'vendor'}): Vendor_Cost is 0 — its vendor bill will be skipped.`);
+      // CAP-036 #14: same Pending_Info warning as the single-bill path, per row in the group.
+      if (String(r.Pending_Info || '').toUpperCase() === 'TRUE') warnings.push(`⏳ Bill ${r.Bill_ID || r.ID} (${vendor.Name || r.Vendor_Name || 'vendor'}) is flagged "Invoiced — Pending Info"${r.Pending_Info_Note ? ': ' + r.Pending_Info_Note : ''}.`);
 
       let ownReceipts = [];
       const ownIds = String(r.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
