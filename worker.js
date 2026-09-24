@@ -420,6 +420,7 @@ export default {
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
+        if (path === '/vendor-access-requests') return await listVendorAccessRequests(env, url);
         if (path === '/estimates')              return await listEstimates(env, url);
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
         if (path === '/stale-wos')              return await staleWos(env, url);
