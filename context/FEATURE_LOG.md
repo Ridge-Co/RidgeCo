@@ -1,6 +1,68 @@
 # BrettOS Feature Log — What Works, Don't Break It
 **Version:** v2.09 | **Last Updated:** September 24, 2026 ([FL-20260924-1800-pi] — CAP-036 #14: "Invoiced — Pending Info" sub-status. A vendor bill or milestone can now be flagged, on top of its existing Status, as "invoiced but don't pay yet — I need something more" (photos, receipts, a better description). Modeled as an additive FLAG (`Pending_Info`/`Pending_Info_Note`/`Pending_Info_Set_By`/`Pending_Info_Set_Date`, via `ensureColumns`), not a new Status value, on both `Vendor_Bills` and `Payment_Milestones` — both are narrow 2-value enums (`submitted`→`reviewed`, `pending`→`billed`) where a third value would break existing `?status=` filters, so a bill/milestone can be e.g. `Status:'submitted'` AND `Pending_Info:'TRUE'` at once. Surfaces: Review Bills (`index.html`) sorts flagged bills to the top, shows a banner + Flag/Clear buttons, and soft-blocks the real "Approve & send to QuickBooks" write with a 409 unless `override_pending_info:true` is sent (preview is never blocked — Brett's own words, "I can be blocked by me," so a deliberate way through always exists); vendor portal (`vendor.html`) gained a new Invoiced tab (none existed before) with a per-bill banner and a minimal `invoicedSortKey` (pending-info first, unreviewed next, reviewed/paid last); Scope Proposal / milestone billing (`signed-proposals.html`) got the identical flag/clear + soft-block treatment on `scopeProposalBillMilestones`, confirmed in-scope by Brett explicitly ("applies to Scope Proposal / milestone billing too, not just vendor-submitted invoices"). New endpoints `POST /vendor-bill/set-pending-info` and `POST /scope-proposal/milestone/set-pending-info`, both requiring a note when setting the flag; both added to `hubTestWriteAllowed`'s staging TEST- guard. `test/pending-info.test.mjs` (36 assertions) plus the 6 existing money-adjacent suites (`combined-invoice`, `invoice-review-bulk`, `scope-book`, `scope-ready-to-bill`, `invoice-no-bill`, `scope-bill-gap` — 146 assertions total) verified locally against the patched branch with zero regressions; staging (`hub_test_get`/`hub_test_post`) not exercised this pass — say so plainly rather than claim it. Branch `feat/cap-036-invoiced-pending-info`, PR pending — money-adjacent status model Brett relies on for Review Bills, staged for his own review per PAT-033, not auto-merged. Previous: [FL-20260924-1600-va] — CAP-036 #17: Vendor active/inactive self-service. Confirmed no Active/Inactive field+toggle existed on the Edit Vendor modal (the Vendors page already filtered `Active!=='FALSE'` and every vendor picker app-wide already excluded inactive vendors, but there was no UI to flip the flag or to find/reactivate an inactive vendor — so this was additive, not a rebuild). Added: a "Show inactive vendors" checkbox on the Vendors page; Deactivate/Reactivate buttons per row (`toggleVendorActive`, reuses the existing generic `POST /vendor/update` + `Active` TRUE/FALSE convention, same one the vendor-reject flow already used — no worker.js change); and a Status (Active/Inactive) field on the Edit Vendor modal wired into `submitEditVendor`. Branch `feat/cap-036-vendor-active-toggle`, PR pending — UI change touching a write path, staged for Brett's own review per PAT-033, not auto-merged. Note: `/vendor/update` is not on either `HUB_TEST_WRITE_PATHS` or `HUB_PROD_WRITE_PATHS`, so this session could not itself flip Emmanuel Tires (Vendor ID 13) / Brian Furr (Vendor ID 7) to inactive in production (CAP-036 #18, Brett-approved) — that write needs an interactive/PAT session or the merged UI itself; flagged to Brett rather than requesting `WORKER_SECRET`. Previous: [FL-20260924-1136-rb] — Review Bills "Approve & send to QuickBooks" Cancel is now a true no-op — auto-withdraws an approval that was JUST made by that same click, so the bill reappears in Review Bills instead of vanishing; real incident: Eddie Smith's WO-1118 bill found still stuck approved-but-unsent in production (CAP-036 #15), PR #56 open, not yet merged. Previous: [FL-20260924-1130-pn] — Property Notice modal: fixed a stale-response race where a slow request for the first-loaded property could overwrite a faster response for whatever property the user switched to (CAP-036 #9), same PR #56. Previous: [FL-20260922-2250-gc] — /gemini-context: token-gated endpoint serving a Brett-context snapshot as a stable URL source for Brett's Gemini Notebook, replacing a Google Drive file whose ID broke on every refresh. Previous: [FL-20260922-1900-rm] — Receipt Mail → Hub: emailed receipts into the Reconciler folder via Gmail filters + Apps Script; receiptReconScan batch cap. Previous: [FL-20260922-0910-vp] — B-012 Vendor Performance dashboard: read-only GET /vendor-performance admin-only vendor scorecard + Hub UI, PR #19 open, not yet merged; prior: [FL-20260920-1710-sb] — HUB_TEST_TOKEN staging test-infra: found and fixed the real root cause of a day-long "/workorder always 403s" mystery — not a guard-logic bug, but maintenance-hub-staging's Cloudflare Build never actually deploying anything merged to main; prior: [FL-20260920-1700-sb] — Invoice Submitted vendor-bill status + per-audience notify controls, PR #9 open; prior: [FL-20260919-1315-sb] — Ops_Build_Queue → Start Build: fires a real Claude Code cloud session via Anthropic's Routines API from proposals.html, item-level status callback (held/done))
 
+**[FL-20260924-1800-pi] [invoice-review] [feature] "Invoiced — Pending Info" sub-status (CAP-036 #14), branch pushed, PR pending.**
+
+Brett: a vendor has invoiced a job and it's done, but he needs something more before he'll pay it
+(missing photos, missing receipts, a description that's too thin) — there was no way to flag
+"yes invoiced, but don't pay yet" separately from just leaving the bill unapproved. Confirmed
+explicitly this also applies to Scope Proposal / milestone billing, not just vendor-submitted
+invoices.
+
+Modeled as a FLAG layered on top of the existing Status column, not a new Status value —
+`Vendor_Bills.Status` (`submitted`→`reviewed`) and `Payment_Milestones.Status` (`pending`→`billed`)
+are both narrow 2-value enums with existing `?status=`/`!== 'pending'` filter logic that a third
+value would break; a flag lets a bill be `Status:'submitted'` AND `Pending_Info:'TRUE'`
+simultaneously. New columns (`Pending_Info`, `Pending_Info_Note`, `Pending_Info_Set_By`,
+`Pending_Info_Set_Date`) added via `ensureColumns` on both `Vendor_Bills` and `Payment_Milestones`.
+
+New endpoints: `POST /vendor-bill/set-pending-info` (`setVendorBillPendingInfo`) and
+`POST /scope-proposal/milestone/set-pending-info` (`setMilestonePendingInfo`) — both require a
+non-empty `note` when setting the flag (400 otherwise), both no-op-clean when clearing, both
+log to `logWOAudit` (bill side) best-effort, and both added to `hubTestWriteAllowed`'s staging
+TEST- fixture guard.
+
+The actual gate is a **soft block, not a hard one** — Brett is the sole approver ("I can be
+blocked by me"), so every money-writing path shows the flag as a `warnings[]` entry on
+`preview_only`, then returns 409 with `pending_info:true` on the real write UNLESS the caller
+sends `override_pending_info:true`: `qbSendInvoice` (single-bill QB send), `qbSendCombinedInvoice`
+(B-227 Phase 3 grouped send — threaded through via `overridePendingInfo` in `ctx`), and
+`scopeProposalBillMilestones`. `approveInvoiceReview` (Review Bills' internal "approve" step) is
+untouched — it doesn't move money, so gating it wasn't the right chokepoint.
+
+Surfacing:
+- **Review Bills** (`index.html`, `renderIRCard`/`loadInvoiceReview`): flagged bills sort to the
+  top; a banner at the top of the card shows the note + a "✓ Info received — clear flag" button
+  (`irClearPendingInfo`); a "Flag: needs info" button (`irFlagPendingInfo`) appears when not
+  flagged; the QB-send modal's `confirmQBSend` shows the 409 warning with a "Send anyway" button
+  that retries with `override_pending_info:true` rather than a dead end.
+- **Vendor portal** (`vendor.html`): no Invoiced tab existed at all before this — added a minimal
+  one (`tabInvoiced`/`fetchInvoicedWOs`), per the instruction not to over-build a full tab redesign
+  if none existed. `invoicedSortKey` sorts pending-info-flagged WOs first, then not-yet-reviewed,
+  then reviewed/paid last. Each bill card shows a "⏳ NEEDS SOMETHING BEFORE THIS CAN BE PAID"
+  banner with the note when flagged.
+- **Scope Proposal / milestone billing** (`signed-proposals.html`): each milestone row shows a
+  "⏳ pending info" chip + Flag/Clear link (`toggleMilestonePendingInfo`, prompts for a note when
+  setting); `confirmMilestoneBill` shows the same 409-with-override "Bill anyway" pattern as
+  Review Bills' QB-send modal, so it's covered by the identical UX rather than a second, divergent
+  implementation.
+
+**Verified:** `test/pending-info.test.mjs` (36 static-regex assertions against the live source —
+flag/clear handlers, `ensureColumns` backfill, both soft-block gates, both staging-guard blocks,
+and every UI surfacing point) plus the 6 pre-existing money-adjacent suites this change's edits
+sit near or inside (`combined-invoice.test.mjs`, `invoice-review-bulk.test.mjs`,
+`scope-book.test.mjs`, `scope-ready-to-bill.test.mjs`, `invoice-no-bill.test.mjs`,
+`scope-bill-gap.test.mjs`) — 146 assertions total across all 7 suites, run locally against the
+patched branch content, zero failures, zero regressions. `hub_test_get`/`hub_test_post` staging
+smoke-testing of the two new endpoints was **not** exercised this pass — noted plainly rather than
+claimed; a follow-up session with staging access should confirm the two new routes end-to-end
+against TEST- fixtures before this ships to Brett.
+
+Branch `feat/cap-036-invoiced-pending-info`. No payment/QuickBooks-send logic itself changed —
+only the status model and its two soft-block gate points — but this is money-adjacent (Brett's
+own approval chokepoint for what gets paid), so it ships as a PR for his review per PAT-033
+rather than auto-merged.
+
 **[FL-20260924-1900-pu] [property-unit] [feature] Property/Unit linking discoverability + duplicate-creation guard (PR #57, merged).**
 
 Brett: "can't find the property and unit link... Give that to me in the devlog, but also put it on the owner's properties pages as a click through... stopgap that asks if we want to link rather than create... duplicate check." Added: 🔗 QB Mapping link on Dev Log page + a per-owner 🔗 button on the Owners table (with a new QB Mapping filter box so the jump can pre-filter to one owner); Add Property modal now lists the owner's unlinked (owner-less) properties with a "Link to this owner" button instead of risking a duplicate create; new `findSimilarProperties`/`findSimilarUnits` helpers (reusing the existing `qbNormAddress` normalizer) run before `/property/add` and `/unit/add` — a match returns 409 + `duplicate_of`, frontend shows a "Link to existing" / "Create anyway" (`force:true`) banner, same soft-block pattern as `depositApprove`/`qbSetIrBill` (not a native `confirm()`, per this repo's documented past failure with that pattern). Verified: `node --check` clean on worker.js and both large inline `<script>` blocks in index.html; full diff review against pre-branch content. Branch `feature/property-unit-link-and-dupe-check`, merged (`11b7e39751e259b0c059201dd3d9cec9ab963475`). Still Brett's to-do: fix the QB Mapping click-through for the original 12 units at 931 St Paul St / 1305 N Calvert St; live smoke-test of the new Add Property flow.
