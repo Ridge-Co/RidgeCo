@@ -3444,6 +3444,7 @@ function renderVendorsPage() {
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
+        '<button class="btn small secondary" onclick="openVendorLoanModal(\''+v.ID+'\',\''+esc(nm)+'\')" title="Loan/advance ledger">$ Loan</button>' +
         (isInactive
           ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',true)" title="Reactivate this vendor">Reactivate</button>'
           : '<button class="btn small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',false)" title="Deactivate this vendor — hides them from assign/reassign pickers, keeps their history">Deactivate</button>') +
