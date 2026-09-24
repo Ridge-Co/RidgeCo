@@ -2588,6 +2588,118 @@ function submitVendorSched(modalId) {
   </div>
 </div>
 
+<!-- STANDALONE BILL MODAL (Vendor Standalone Billing build brief §3b) — "Submit a Bill",
+     completely separate from the WO-anchored modal above. Only shown to a vendor whose
+     session carries can_bill_no_wo === true. -->
+<div class="modal-overlay" id="modal-standalone-bill" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:20px;margin:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">🧾 SUBMIT A BILL</div>
+      <button onclick="closeStandaloneBillModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div style="background:var(--surface2);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:11.5px;color:var(--muted);line-height:1.5">
+      Use this to bill for something you did that <b>isn't</b> tied to a specific Work Order, like tenant treats or a small extra at one of your properties. If a Work Order already exists for the job, submit your invoice from that Work Order instead — this is only for work that never had one.
+    </div>
+
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px" data-i18n="PROPERTY">PROPERTY</label>
+      <select id="sb-property" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:9px;border-radius:6px"></select>
+      <div style="margin-top:6px"><a href="javascript:void(0)" onclick="openRequestPropertyAccessModal()" style="color:var(--info);font-size:11.5px;text-decoration:underline" data-i18n="Request access to another property">Request access to another property</a></div>
+    </div>
+
+    <div style="margin-bottom:8px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px" data-i18n="LINE ITEMS">LINE ITEMS</label>
+      <div id="sb-items-list" style="display:flex;flex-direction:column;gap:10px;margin-bottom:8px"></div>
+      <button type="button" onclick="addStandaloneItemRow()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--font);font-size:12px;color:var(--text);cursor:pointer" data-i18n="+ Add line item">+ Add line item</button>
+    </div>
+
+    <div style="margin:14px 0">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:6px" data-i18n="BILL TO">BILL TO</label>
+      <div style="display:flex;gap:6px">
+        <button type="button" id="sb-billto-owner" onclick="setStandaloneBillTo('owner')" style="flex:1;padding:10px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid var(--accent);background:var(--accent);color:#fff">🏠 Property owner</button>
+        <button type="button" id="sb-billto-ridgeco" onclick="setStandaloneBillTo('ridgeco')" style="flex:1;padding:10px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--muted)">🏢 Ridge Co's own cost</button>
+      </div>
+    </div>
+
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">NOTES (optional)</label>
+      <textarea id="sb-notes" style="width:100%;min-height:50px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px"></textarea>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);padding-top:10px;margin-bottom:14px">
+      <span style="font-size:12px;color:var(--muted)">TOTAL</span>
+      <span id="sb-grand-total" style="font-size:1.3rem;font-weight:bold;color:var(--accent2)">$0.00</span>
+    </div>
+
+    <div id="sb-msg" style="margin-bottom:10px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeStandaloneBillModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
+      <button id="sb-submit-btn" onclick="submitStandaloneBill()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT BILL</button>
+    </div>
+  </div>
+</div>
+
+<!-- Request property access — small sub-form opened from the modal above -->
+<div class="modal-overlay" id="modal-request-property-access" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:310;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:400px;padding:20px;margin:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="color:var(--accent);font-size:.9rem;font-weight:bold">REQUEST PROPERTY ACCESS</div>
+      <button onclick="closeRequestPropertyAccessModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">PROPERTY</label>
+    <select id="rpa-property" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:9px;border-radius:6px;margin-bottom:10px"></select>
+    <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">NOTE (optional)</label>
+    <textarea id="rpa-note" style="width:100%;min-height:50px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:12px"></textarea>
+    <div id="rpa-msg" style="margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeRequestPropertyAccessModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
+      <button id="rpa-submit-btn" onclick="submitRequestPropertyAccess()" style="background:var(--info);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer" data-i18n="Send Request">Send Request</button>
+    </div>
+  </div>
+</div>
+
+<!-- ONE-OFF JOB MODAL (Vendor Standalone Billing build brief §4a) — self-serve WO creation.
+     Only shown to a vendor whose session carries can_create_own_wo === true. -->
+<div class="modal-overlay" id="modal-one-off-job" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:20px;margin:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">🔧 LOG A ONE-OFF JOB</div>
+      <button onclick="closeOneOffJobModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:11.5px;color:#6b5200;line-height:1.55">
+      Use this only when you're doing a job today that hasn't been entered as a Work Order yet — like a quick call where Brett said "go do X." <b>This is not a substitute for regular Work Orders</b>, and it shouldn't become your normal way of getting jobs. If you're getting jobs verbally on a regular basis, talk to Brett — he can set up a recurring job or a different process so this stays the exception, not the rule.
+    </div>
+
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">PROPERTY</label>
+      <select id="oo-property" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:9px;border-radius:6px"></select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px" data-i18n="WHAT NEEDS DOING">WHAT NEEDS DOING</label>
+      <textarea id="oo-description" style="width:100%;min-height:70px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px"></textarea>
+    </div>
+
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:6px" data-i18n="WHO AUTHORIZED THIS? — REQUIRED">WHO AUTHORIZED THIS? — REQUIRED</label>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <button type="button" id="oo-src-owner" onclick="setOneOffApprovalSource('owner')" style="text-align:left;padding:10px;border-radius:6px;font-family:var(--font);font-size:12.5px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--text)">🏠 Owner requested it — the property owner asked for this directly</button>
+        <button type="button" id="oo-src-brett" onclick="setOneOffApprovalSource('brett')" style="text-align:left;padding:10px;border-radius:6px;font-family:var(--font);font-size:12.5px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--text)">📞 Brett requested it — he called/texted before you entered this</button>
+        <button type="button" id="oo-src-other" onclick="setOneOffApprovalSource('other')" style="text-align:left;padding:10px;border-radius:6px;font-family:var(--font);font-size:12.5px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--text)">✏️ Other — explain below (required)</button>
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">NOTE <span id="oo-note-required-lbl" style="display:none;color:var(--danger)">(required for "Other")</span></label>
+      <textarea id="oo-approval-note" placeholder="e.g. owner Jennifer called me directly 9/24" style="width:100%;min-height:50px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px"></textarea>
+    </div>
+
+    <div id="oo-msg" style="margin-bottom:10px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeOneOffJobModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
+      <button id="oo-submit-btn" onclick="submitOneOffJob()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer" data-i18n="LOG JOB">LOG JOB</button>
+    </div>
+  </div>
+</div>
+
 <script>
 var _billWOId = null;
 var _billType = 'hourly';
