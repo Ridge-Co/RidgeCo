@@ -641,10 +641,13 @@ window.addEventListener('pageshow', function(e){
       Anything left unlinked gets <b>created</b> in QuickBooks the first time you invoice it —
       which is how you end up with the same customer twice under slightly different names.
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
       <button class="btn small" onclick="loadQBMapping(true)">↻ Reload from QuickBooks</button>
       <button class="btn small" onclick="qbApplyAllSuggestions()">✓ Accept all confident matches</button>
       <button class="btn small" onclick="auditUnits()">🔍 Check every unit</button>
+      <input id="qbmap-filter" type="text" placeholder="Filter by owner, property or unit…" oninput="filterQBMapping()"
+        style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px;min-width:220px">
+      <span id="qbmap-filter-count" style="color:var(--muted);font-size:11px"></span>
     </div>
     <div id="qb-map-body"><div style="color:var(--muted);font-size:12px">Loading…</div></div>
   </div>
