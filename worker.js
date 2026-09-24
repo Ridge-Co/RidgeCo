@@ -2329,12 +2329,18 @@ async function receiptReconImportStatement(env, body) {
 
   // Cloudflare-subrequest-safety cap, same pattern as receiptReconScan's `cap`/`remaining` above —
   // a big statement (hundreds of lines) must never blow the per-invocation subrequest limit
-  // partway through. Rows past the cap simply wait for the next tap of Import (Brett re-submits
-  // the same rows; already-inserted lines are unaffected since nothing here dedupes on a source
-  // line index).
+  // partway through. FIXED (Sep 24 2026 review): rows past the cap used to always be re-taken from
+  // the START of workingRows on the next call — since a just-inserted row is Status:'pending' and
+  // statementLineMatch correctly treats 'pending' as NOT yet dispositioned (never counts as a prior
+  // match), that meant the first 100 lines got duplicate-inserted every subsequent call instead of
+  // dedupe-skipping. Fix: the CALLER now tracks and sends `offset` (default 0) so each call
+  // processes a genuinely different slice — `next_offset` tells it exactly where to resume, so
+  // nothing is ever reprocessed and nothing is silently skipped.
   const IMPORT_STATEMENT_MAX_WRITES = 100;
-  const toProcess = workingRows.slice(0, IMPORT_STATEMENT_MAX_WRITES);
-  const remaining = Math.max(0, workingRows.length - toProcess.length);
+  const offset = Math.max(0, parseInt(body.offset, 10) || 0);
+  const toProcess = workingRows.slice(offset, offset + IMPORT_STATEMENT_MAX_WRITES);
+  const nextOffset = offset + toProcess.length;
+  const remaining = Math.max(0, workingRows.length - nextOffset);
 
   let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0;
   const errors = [];
