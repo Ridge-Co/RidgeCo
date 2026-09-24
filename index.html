@@ -4215,6 +4215,25 @@ function sendTenantManualUpdate(woId) {
   }).catch(function(e) { alert('Could not send: ' + (e && e.message ? e.message : 'unknown error')); });
 }
 
+// CAP-036 #1 (Sep 24 2026) — canned "request photos" template, same send path as
+// sendTenantManualUpdate above (POST /wo/tenant-update-manual — same gating, audit log, and
+// Hi-{First_Name}/Ref-{wo_id} framing). Pre-fills the prompt with the canned ask instead of
+// starting blank; Brett can still edit it before it goes out.
+function sendPhotoRequestSMS(woId) {
+  var defaultMsg = 'could you send us a few photos of the issue when you get a chance? It helps us line up the right parts/vendor faster.';
+  var msg = prompt('Photo request to send the tenant on ' + woId + ':\n\n' +
+    '(Sent as: "Hi [tenant\'s first name], " + what you type here + " Ref: ' + woId + '." — edit if you want, or just send as-is.)', defaultMsg);
+  if (msg === null) return;
+  msg = msg.trim();
+  if (!msg) { alert('Nothing sent — message was empty.'); return; }
+  api('POST', '/wo/tenant-update-manual', { wo_id: woId, message: msg, updated_by: 'Admin', updated_by_role: 'admin' }).then(function(r) {
+    if (r && r.error) { alert('Could not send: ' + r.error); return; }
+    if (r && r.sent) { alert('Sent.'); return; }
+    if (r && r.send_ok === false) { alert('Queued, not sent — SMS is currently gated off (' + (r.gate_snapshot || 'Global OFF') + '). It\'ll show in the Message Queue review screen once Global/Property/Tenant SMS are turned on.'); return; }
+    alert('Queued but the send itself failed — check the Message Queue review screen.');
+  }).catch(function(e) { alert('Could not send: ' + (e && e.message ? e.message : 'unknown error')); });
+}
+
 function tenantToggle(field, currentVal, label, woId) {
   var isOn = currentVal !== "FALSE";
   var color = isOn ? "var(--accent2)" : "var(--danger)";
