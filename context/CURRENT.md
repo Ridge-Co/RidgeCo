@@ -1,3 +1,67 @@
+# Sep 24, 2026, ~17:00 ET — FIXED (branch pushed, PR pending): CAP-036 #21 Multi-tenant unit SMS fan-out — confirmed CODE bug, not data; both Lance/Emily and Julie/Alanna were always correctly linked
+
+**Task: investigate why Lance Serafica wasn't getting work-order SMS that Emily Marquez got, on
+the same unit (115 W 29th St Apt 3) — Brett suspected this might be systemic.**
+
+**Root cause, confirmed via read-only `hub_prod_get` calls (no production writes made):** this
+is a CODE bug, not a data problem. Apt 3 (Unit_ID 3): Lance Serafica (Tenant ID 103) and Emily
+Marquez (Tenant ID 118) are BOTH correctly linked in the Tenants sheet —
+`Unit_ID:"3"`/`Property_ID:"3"`, both `Active:"TRUE"`. Apt 2 (Unit_ID 2) shows the identical
+pattern: Julie Feldman (ID 80) and Alanna McLaughlin (ID 119) both correctly linked. No tenant
+or unit record needed correcting.
+
+The actual bug: `Units.Tenant_ID` is a single FK column that can only ever name ONE occupant
+(Units row 3's `Tenant_ID` pointed only at Emily/118; Units row 2's pointed only at
+Alanna/119). Every tenant-notification call site in worker.js — `assignVendor`,
+`updateStatus` (Complete + Accepted), `createWorkOrder`, `combineWorkOrders`, `splitWorkOrder`,
+`scheduleWO`, and `tenantManualUpdate` — resolved "the" tenant to notify via
+`currentTenantForDispatch(tenants, unit, wo)`, which follows that single pointer. So Lance and
+Julie were structurally never going to be notified, no matter how correctly their own Tenants
+rows were linked.
+
+**Fix (branch `fix/cap-036-multi-tenant-unit-sms-fanout`):** added a new function,
+`tenantsForDispatch(tenants, unit, wo)`, which instead queries the Tenants table directly by
+`Unit_ID` (ignoring `Units.Tenant_ID` entirely whenever `wo.Unit_ID` is set) and returns every
+currently-active tenant linked to that unit — falling back to the existing whole-property
+(no-Unit) behavior, unchanged, for property-wide WOs. Rewired all 7 call sites above to loop
+over `tenantsForDispatch(...)` instead of using the single result of
+`currentTenantForDispatch(...)`; each tenant in the loop is still individually gated through
+`isTenantNotifiable`/`smsGatedSend` exactly as before, so nothing about quiet-hours, phone
+presence, or background-WO suppression changed — only how many tenants get evaluated.
+`currentTenantForDispatch` itself was deliberately left byte-for-byte unchanged (not rebuilt on
+top of the new helper), so every existing single-tenant-only caller and test keeps behaving
+identically; whole-property broadcast still defaults to not messaging anyone, per the existing,
+already-decided behavior — this fix is scoped strictly to a WO's own unit/property tenants,
+never a building-wide fan-out.
+
+**Systemic scope, exploratory (no data fix made or needed):** cross-referencing the live
+`/tenants` data for duplicate `(Property_ID, Unit_ID)` pairs among active tenants found at
+least 8 more units with the identical one-tenant-only pointer shape: Property 6 Unit 11 (Sean
++ Will), Property 13 Unit 37 (Kelsey + a test tenant), Property 4 Unit 6 (Kenneth Wee + Ryan),
+Property 8 Unit 21 (VeAmber + Owen), Property 11 Unit 29 (Cole + Nadia), Property 5 Unit 9
+(Matt + Maddie), Property 4 Unit 5 (Valeria Pomales + Garima) — plus the two 115 W 29th units
+above. All of these were pure code-bug instances (Tenants rows correctly linked in every case
+checked); this one fix in worker.js resolves all of them, no per-unit data correction needed.
+
+**Verified locally** (staging `hub_test_*` only deploys from `main`, so an unmerged feature
+branch can't be exercised there — same limitation already logged for PR #56; relying on local
+Node test-harness execution instead): new `test/tenant-dispatch-multi-tenant-unit.test.mjs`
+(6/6) proves the Lance+Emily / Julie+Alanna fan-out and back-compat directly against the real
+production tenant/unit IDs; `test/tenant-privacy.test.mjs` (16/16) and
+`test/tenant-dispatch-whole-property.test.mjs` (6/6) confirm zero behavior change in
+`currentTenantForDispatch`; `test/wo-split.test.mjs` (64/64) and `test/wo-combine.test.mjs`
+(97/97) updated to add `tenantsForDispatch` to their sandboxed function extraction (their
+`new Function()` sandboxes now reference it) and re-verified passing; `test/turnover.test.mjs`
+(30/30) and `test/wo-duplicate-race.test.mjs` (12/12) re-run and confirmed unaffected (the
+tenant-notify block they exercise is try/catch-wrapped). Reviewed every other test file in the
+repo for any additional extraction of the 7 modified functions — none found.
+
+**Ship status: PR pending, not merged.** SMS-to-tenant behavior is GATED per
+AUTONOMY_GUARDRAILS ("Sending SMS/email to a real customer/owner/tenant"); staged for Brett's
+own review/merge per PAT-033.
+
+---
+
 # Sep 24, 2026, ~16:00 ET — BUILT (branch pushed, PR pending): CAP-036 #17 Vendor active/inactive self-service UI; CAP-036 #18 (deactivate Emmanuel Tires + Brian Furr) BLOCKED — needs an interactive/PAT session
 
 **CAP-036 #17 — checked whether an Active/Inactive toggle already existed before building.**
