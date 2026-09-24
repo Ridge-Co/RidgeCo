@@ -14641,6 +14641,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return true;
   }
   if (path === '/admin/seed-test-receipt') return true; // self-scoped to TEST-PROPERTY-001 internally, staging-only (see seedTestReceipt)
+  if (path === '/admin/set-alert-flags') return true; // Config is global (no per-record row to check), but setAlertFlags itself hard-codes the only two keys it will ever write (failure_alert_enabled, dead_man_switch_enabled) and coerces every value to 'TRUE'/'FALSE' — structurally cannot become a generic config write regardless of caller, same SAFE-class reasoning as the duplicate-audit paths above.
   if (path === '/receipt-recon/confirm') {
     // Confirm can create a fresh Receipts row without a WO (a company/BMore expense) or bill an
     // existing WO — gate on whichever applies, same isTestRecord pattern as /workorder above.
