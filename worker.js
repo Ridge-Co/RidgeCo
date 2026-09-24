@@ -2276,6 +2276,104 @@ async function receiptReconScan(env, body) {
   return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
 }
 
+// POST /receipt-recon/import-statement { vendor, rows:[{date,amount,description,ref}], source_file_id?,
+// source_file_name?, source_file_url? } OR { vendor, file_id, mime_type, source_file_name? } —
+// Statement importer Phase 1 (Sep 24 2026, STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0).
+// Lands EVERY unmatched/possibly-matched line from a bulk vendor statement into the SAME
+// Receipt_Recon_Queue Brett already works daily — not a new screen — tagged Entry_Source:'statement'
+// so he can tell a statement line apart from a normally scanned receipt. Confirmed matches are
+// never inserted (no action needed); this never writes a Receipt directly, same non-billing
+// discipline as receiptReconScan above. CSV rows are parsed CLIENT-SIDE (index.html) per this
+// codebase's hubBulkImport convention — confirmed live, no server-side CSV parser exists — so the
+// `rows` shape here is already-parsed objects, never raw CSV text.
+async function receiptReconImportStatement(env, body) {
+  body = body || {};
+  const vendor = String(body.vendor || '').trim();
+  if (!vendor) return json({ error: 'vendor required' }, 400);
+  const hasRows = Array.isArray(body.rows) && body.rows.length;
+  const hasFile = !!(body.file_id && body.mime_type);
+  if (!hasRows && !hasFile) return json({ error: 'rows (array) or file_id+mime_type required' }, 400);
+  if (hasRows && body.rows.length > 500) return json({ error: 'Too many rows in one call — split into batches of 500 or fewer.' }, 400);
+
+  let workingRows = [];
+  let detectedVendor = '';
+  let sourceFileId = body.source_file_id || '';
+  const sourceFileName = body.source_file_name || '';
+  const sourceFileUrl = body.source_file_url || '';
+
+  if (hasFile) {
+    sourceFileId = body.file_id;
+    let dl;
+    try {
+      const tok = await getAccessToken(env);
+      dl = await driveDownload(tok, body.file_id);
+    } catch (e) {
+      return json({ error: 'Could not download the file: ' + (e && e.message || e) }, 500);
+    }
+    const ex = await statementExtract(env, dl.bytes, dl.mime);
+    detectedVendor = ex.vendor_detected || '';
+    // statementExtract's own lines already use `amount`; documented here in case an older/altered
+    // extractor response ever returns `total` instead — mapped defensively, never silently dropped.
+    workingRows = (ex.lines || []).map(l => ({
+      date: l.date || '', amount: (l.amount !== undefined && l.amount !== null) ? l.amount : l.total,
+      description: l.description || '', ref: l.ref || '',
+    }));
+  } else {
+    workingRows = body.rows;
+  }
+
+  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  const [receipts, queueRows] = await fetchTabs(env, ['Receipts', 'Receipt_Recon_Queue']);
+
+  // Cloudflare-subrequest-safety cap, same pattern as receiptReconScan's `cap`/`remaining` above —
+  // a big statement (hundreds of lines) must never blow the per-invocation subrequest limit
+  // partway through. Rows past the cap simply wait for the next tap of Import (Brett re-submits
+  // the same rows; already-inserted lines are unaffected since nothing here dedupes on a source
+  // line index).
+  const IMPORT_STATEMENT_MAX_WRITES = 100;
+  const toProcess = workingRows.slice(0, IMPORT_STATEMENT_MAX_WRITES);
+  const remaining = Math.max(0, workingRows.length - toProcess.length);
+
+  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0;
+  const errors = [];
+  const today = new Date().toISOString().split('T')[0];
+
+  for (const line of toProcess) {
+    const amt = Number(line && line.amount);
+    const date = String((line && line.date) || '').trim();
+    if (!isFinite(amt) || amt <= 0 || !date) { skipped_invalid++; continue; }
+    const lineVendor = (line && line.vendor) || vendor;
+    const normLine = { amount: amt, date, ref: (line && line.ref) || '', vendor: lineVendor };
+    let match;
+    try { match = statementLineMatch(normLine, receipts, queueRows); }
+    catch (e) { errors.push('match failed: ' + (e && e.message || e)); match = { confidence: null }; }
+
+    if (match.confidence === 'confirmed') { matched_confirmed++; continue; }
+    if (match.confidence === 'possible') flagged_possible++;
+
+    const noteBase = `From ${vendor} statement upload (${sourceFileName || 'uploaded ' + today}).`;
+    const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '');
+    try {
+      await addRow(env, 'Receipt_Recon_Queue', {
+        Source_File_ID: sourceFileId || '', Source_File_URL: sourceFileUrl || '', File_Name: sourceFileName || '',
+        Received_Date: new Date().toISOString(), Vendor: lineVendor, Receipt_Date: date,
+        Total: String(amt), PO_Reference: (line && line.ref) || '', Items: '[]',
+        Items_Summary: JSON.stringify([(line && line.description) || '']).slice(0, 4000),
+        Card_Last4: '', Invoice_Number: '', Suggestion: '', Status: 'pending',
+        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: notes, Active: 'TRUE',
+        Gmail_Message_ID: '', Entry_Source: 'statement', Rescan_Match_JSON: '[]',
+      });
+      inserted++;
+    } catch (e) { errors.push('insert failed: ' + (e && e.message || e)); }
+  }
+
+  return json({
+    success: true, vendor, vendor_detected: detectedVendor || undefined, total_lines: workingRows.length,
+    matched_confirmed, flagged_possible, inserted, skipped_invalid, remaining, errors,
+  });
+}
+
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
 async function listReceiptReconQueue(env, url) {
   let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json([]); }
