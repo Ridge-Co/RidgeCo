@@ -10341,7 +10341,8 @@ function qbSubRow(kind, row, qbList) {
     ? (row.owner_name ? esc(row.owner_name) : '<span style="color:var(--danger)">no owner</span>')
     : (row.property_name ? esc(row.property_name) : '<span style="color:var(--danger)">no property</span>');
 
-  return '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
+  var filterText = ((row.display || '') + ' ' + (row.owner_name || '') + ' ' + (row.property_name || '')).toLowerCase();
+  return '<div data-qbfilter="' + esc(filterText) + '" style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--border)">' +
     '<div>' +
       '<div style="font-size:12.5px;color:var(--text)">' + esc(row.display || '(unnamed)') + '</div>' +
       '<div style="color:var(--muted);font-size:10px;margin:1px 0">under ' + context + '</div>' +
