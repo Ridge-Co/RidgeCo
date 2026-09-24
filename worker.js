@@ -565,9 +565,9 @@ export default {
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
-        if (path === '/property/add')             return await addRow(env, 'Properties', body);
+        if (path === '/property/add')             return await propertyAddWithDupeCheck(env, body);
         if (path === '/property/update')          return await propertyUpdate(env, body);
-        if (path === '/unit/add')                 return await addRow(env, 'Units', body);
+        if (path === '/unit/add')                 return await unitAddWithDupeCheck(env, body);
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
         if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
