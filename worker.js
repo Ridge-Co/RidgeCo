@@ -5916,16 +5916,19 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
-  if (notify && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
+  if (notify) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface),
     // and a short job label (woJobLabel) so two same-trade/same-address jobs never read
     // identically in a text — "your General job" alone was indistinguishable from any other
-    // General job at the same address.
-    const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
-    const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-    tenantSMSSent = r.sent;
+    // General job at the same address. CAP-036 #21: loops every tenant in the unit (was one).
+    for (const tenant of woTenants) {
+      if (!tenant?.Phone || !isTenantNotifiable(tenant, wo)) continue;
+      const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
+      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
+      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+      if (r.sent) tenantSMSSent = true;
+    }
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
