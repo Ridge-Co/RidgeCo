@@ -18708,6 +18708,138 @@ async function qbReadyQueue(env, url) {
 // Preview returns the resolved customer/vendor/trade + exact lines with ZERO writes.
 // Confirm creates the QB Invoice + Bill (find-or-create customer/vendor), writes the
 // ids + status back to the Invoice_Review row, and flips the WO to Invoiced.
+// Vendor Standalone Billing (Sep 24 2026 build brief §5) — a standalone Vendor_Bills row
+// (WO_ID blank, Standalone='TRUE') has no Work_Orders row to resolve Owner/QuickBooks through,
+// so it can't go down qbSendInvoice's normal wo→prop→owner chain (nor its WO-grouping/combine
+// path — qbGroupOpenRows groups by WO_ID, and every standalone bill shares a blank one, which
+// would otherwise lump UNRELATED standalone bills from different vendors/properties into a
+// single QuickBooks invoice). Isolated into its own function, deliberately NOT threaded into
+// the main WO-invoice code path below, so this new, less-tested branch can never change the
+// behavior of the ordinary WO-anchored send that every existing job already depends on.
+// Resolves Owner straight from Vendor_Bills.Property_ID, mirroring scopeSigResolveParties().
+async function qbSendStandaloneInvoice(env, body, ctx) {
+  const { ir, billRow, previewOnly } = ctx;
+  const [props, owners, vendors] = await fetchTabs(env, ['Properties', 'Owners', 'Vendors']);
+  const prop   = props.find(p => String(p.ID) === String(billRow.Property_ID)) || {};
+  const owner  = prop.Owner_ID ? (owners.find(o => String(o.ID) === String(prop.Owner_ID)) || null) : null;
+  const vendor = vendors.find(v => String(v.ID) === String(ir.Vendor_ID)) || {};
+  const billTo = qbResolveBillTo(owner, prop, null);
+  const billToRidgeco = String(billRow.Bill_To || '').toLowerCase() === 'ridgeco';
+
+  const resolved = resolveTrade(vendor.Trade);
+  const tradeName = resolved.name;
+  const trade = QB_TRADE_MAP[tradeName];
+
+  const warnings = ['Standalone bill — no work order.'];
+  if (!resolved.matched) warnings.push('Vendor trade "' + (vendor.Trade || 'blank') + '" is not in the QuickBooks map — booking to General.');
+  if (!billToRidgeco && !owner) warnings.push('No owner found for this property — set the property owner before sending, or bill it to Ridge Co instead.');
+
+  const custTotal  = Number(ir.Customer_Total) || 0;
+  const vendorCost = Number(ir.Vendor_Cost) || 0;
+  if (!billToRidgeco && custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
+  if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
+
+  // One invoice/bill line per submitted line item, straight off the bill's own descriptions —
+  // there is no WO description to fall back to for a standalone bill (§5).
+  let receipts = [];
+  try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+  const itemRef = { value: trade.item };
+  const invLines = (Array.isArray(receipts) ? receipts : []).map(rc => {
+    const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
+    return amt > 0 ? {
+      DetailType: 'SalesItemLineDetail', Amount: amt,
+      Description: (String((rc && rc.desc) || 'Item')).slice(0, 4000),
+      SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: amt },
+    } : null;
+  }).filter(Boolean);
+  if (!invLines.length && custTotal > 0) {
+    invLines.push({ DetailType: 'SalesItemLineDetail', Amount: custTotal,
+      Description: (billRow.Invoice_Description || (ir.Vendor_Name + ' — standalone bill')).slice(0, 4000),
+      SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: custTotal } });
+  }
+
+  const vendDisplay = vendor.Name || ir.Vendor_Name || ('Vendor ' + (ir.Vendor_ID || ''));
+  const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
+  const txnDate = ir.Approved_Date || new Date().toISOString().split('T')[0];
+  const note = `RidgeCo IR ${ir.ID} · Standalone · Bill ${ir.Bill_ID}`;
+
+  const invoicePayload = { Line: invLines, TxnDate: txnDate, PrivateNote: note };
+  const billPayload = {
+    Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +vendorCost.toFixed(2),
+      Description: (vendDisplay + ' — ' + tradeName + ' — standalone').slice(0, 4000),
+      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+    TxnDate: txnDate, PrivateNote: note,
+  };
+  const termDays = vendorTermDays(vendor);
+  const dueDate = new Date(txnDate + 'T12:00:00');
+  dueDate.setDate(dueDate.getDate() + termDays);
+  billPayload.DueDate = termDays > 0 ? dueDate.toISOString().split('T')[0] : txnDate;
+
+  const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
+  const haveBill = !!(ir.QB_Bill_ID && ir.QB_Bill_ID.trim());
+
+  if (previewOnly) {
+    return json({ preview: {
+      ir_id: ir.ID, wo_id: '', standalone: true, trade: tradeName,
+      bill_to: { level: billToRidgeco ? 'ridgeco' : billTo.level, display: billToRidgeco ? 'Ridge Co (own cost)' : billTo.display,
+                 property: qbPropertyDisplayName(prop), property_id: prop.ID || '' },
+      customer: billToRidgeco ? null : { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', owner_id: (owner && owner.ID) || '' },
+      vendor: { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '', vendor_id: vendor.ID || '' },
+      invoice: billToRidgeco ? null : { total: +custTotal.toFixed(2), lines: invLines.map(l => ({ desc: l.Description, amount: l.Amount })) },
+      bill: { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0 },
+      already: { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
+      warnings,
+    }});
+  }
+
+  if (!billToRidgeco && !haveInv && (!owner || custTotal <= 0)) {
+    return json({ ok: false, error: billToRidgeco ? '' : (!owner ? 'No owner on this property — cannot create a QB customer.' : 'Customer_Total is 0 — nothing to invoice.'), warnings });
+  }
+
+  const token = await qbAccessToken(env);
+  const errors = [];
+  let invoiceId = ir.QB_Invoice_ID || '', billId = ir.QB_Bill_ID || '';
+
+  if (!billToRidgeco && !haveInv) {
+    let customerId = billTo.level !== 'owner' && billTo.qb_id ? billTo.qb_id : '';
+    if (!customerId) { try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); } catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); } }
+    invoicePayload.CustomerRef = { value: customerId };
+    const billEmail = (owner && (owner.Billing_Email || owner.Email) || '').trim();
+    if (billEmail && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail)) invoicePayload.BillEmail = { Address: billEmail };
+    let r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+    invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    if (!invoiceId) errors.push('Invoice: ' + (qbFault(r) || 'unknown error'));
+  }
+
+  const vendorInHouse = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+  if (vendorInHouse && vendorCost > 0) warnings.push(`No vendor bill created — ${vendDisplay} is marked in-house, so there's no payable.`);
+  if (!haveBill && vendorCost > 0 && !vendorInHouse) {
+    let vendorId = '';
+    try { vendorId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token); } catch (e) { errors.push('Vendor: ' + e.message); }
+    if (vendorId) {
+      billPayload.VendorRef = { value: vendorId };
+      const dueTermId = await qbTermForDays(env, token, termDays);
+      if (dueTermId) billPayload.SalesTermRef = { value: dueTermId };
+      const r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+      billId = (r && r.Bill && r.Bill.Id) || '';
+      if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+    }
+  }
+
+  if (invoiceId || billId) { try { await qbAttachReceipts(env, token, invoiceId, billId, billRow, warnings); } catch (e) { warnings.push('Attachments error: ' + (e.message || '')); } }
+
+  const billNotOwed = vendorCost <= 0 || vendorInHouse;
+  const status = ((invoiceId || billToRidgeco) && (billId || billNotOwed)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
+  try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); } catch (e) {}
+  await updateRow(env, 'Invoice_Review', ir.ID, {
+    QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
+    QB_Bill_To: billToRidgeco ? 'ridgeco' : (billTo.level + (billTo.display ? ': ' + billTo.display : '')),
+    QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
+  });
+  if (errors.length) return json({ ok: false, error: errors.join('; '), warnings, invoice_id: invoiceId, bill_id: billId });
+  return json({ ok: true, invoice_id: invoiceId, bill_id: billId, status, warnings });
+}
+
 async function qbSendInvoice(env, body) {
   try {
     const previewOnly = !!body.preview_only;
