@@ -7257,6 +7257,49 @@ async function moveVendorBillToNewWO(env, body) {
 // Only ever before it reaches QuickBooks. Once an invoice or bill exists there, the Hub
 // row is the record of what was actually sent, and quietly retiring it would leave the two
 // systems disagreeing with nothing to reconcile against.
+// POST /vendor-bill/set-pending-info { id, pending_info: true/false, note?, set_by? }
+// CAP-036 #14 (Sep 24 2026, Brett): the "Invoiced — Pending Info" sub-status — a vendor has
+// invoiced a job and it's complete, but Brett needs something more (photos, receipts, a better
+// description) before he can pay it, and there was no way to flag that. Deliberately modeled as
+// a FLAG layered on top of the existing Status enum, not a new Status value: Vendor_Bills.Status
+// only ever means 'submitted' or 'reviewed' (see addVendorBill / approveInvoiceReview /
+// unapproveInvoiceReview) — a bill can be either AND ALSO flagged Pending_Info at the same time,
+// exactly as Brett described it. Setting the flag requires a note (what's missing); clearing it
+// does not. This function only ever sets/clears the flag — see qbSendInvoice for the actual
+// soft-block-with-override at the money-movement point, renderIRCard (index.html Review Bills)
+// and loadVendorBillSummary (vendor.html) for where it surfaces.
+async function setVendorBillPendingInfo(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'id required' }, 400);
+  const pending = body.pending_info === true || String(body.pending_info).toUpperCase() === 'TRUE';
+  const note = String(body.note || '').trim();
+  if (pending && !note) return json({ error: 'A note is required when flagging Pending Info — say what\'s missing (photos, receipts, description, etc.).' }, 400);
+
+  try {
+    await ensureColumns(env, 'Vendor_Bills', ['Pending_Info', 'Pending_Info_Note', 'Pending_Info_Set_By', 'Pending_Info_Set_Date']);
+  } catch (e) { return json({ error: 'Could not prepare Vendor_Bills columns: ' + String(e && e.message || e) }, 500); }
+
+  const bills = await fetchTab(env, 'Vendor_Bills');
+  const bill = bills.find(b => String(b.ID) === id);
+  if (!bill) return json({ error: `No vendor bill ${id}` }, 404);
+
+  const wasPending = String(bill.Pending_Info || '').toUpperCase() === 'TRUE';
+  const fields = {
+    Pending_Info: pending ? 'TRUE' : 'FALSE',
+    Pending_Info_Note: pending ? note : '',
+    Pending_Info_Set_By: pending ? (body.set_by || 'Brett') : '',
+    Pending_Info_Set_Date: pending ? new Date().toISOString() : '',
+  };
+  await updateRow(env, 'Vendor_Bills', id, fields);
+  try {
+    await logWOAudit(env, bill.WO_ID || '', body.set_by || 'Brett', 'admin', 'Vendor_Bill_Pending_Info',
+      wasPending ? ('Pending Info: ' + (bill.Pending_Info_Note || '')) : 'not flagged',
+      pending ? ('Pending Info: ' + note) : 'cleared',
+      pending ? ('Flagged bill ' + id + ' pending info: ' + note) : ('Cleared pending-info flag on bill ' + id + '.'));
+  } catch (e) { /* audit is best-effort — the flag itself already landed */ }
+  return json({ success: true, id, pending_info: pending, note: pending ? note : '' });
+}
+
 async function unapproveInvoiceReview(env, body) {
   const id = String(body.id || '').trim();
   if (!id) return json({ error: 'id required' }, 400);
