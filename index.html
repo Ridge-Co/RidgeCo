@@ -10791,13 +10791,16 @@ function renderQBCard(r, i) {
   '</div>';
 }
 
-// Create the property's QuickBooks sub-customer without leaving the preview. Only offered
-// when the owner is already linked — a sub-customer needs a parent, and the Worker refuses
-// otherwise. On success the preview is re-read so the bill-to line shows the new nesting
-// before anything is sent; nothing is created in QuickBooks until this button is pressed.
-function qbMakeSubFromPreview(propertyId, btn) {
+// Create a QuickBooks sub-customer (property under its owner, or unit under its property)
+// without leaving the preview. Only offered when the immediate parent is already linked — a
+// sub-customer needs a parent, and the Worker refuses otherwise. On success the preview is
+// re-read so the bill-to line shows the new nesting before anything is sent; nothing is
+// created in QuickBooks until this button is pressed. `kind` is 'property' or 'unit' (Sep 24
+// 2026 — generalized from a property-only helper so the same button/flow covers a unit
+// that's the actual gap, not just its property).
+function qbMakeSubFromPreview(kind, id, btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
-  api('POST', '/qb/create-subcustomer', { kind: 'property', id: propertyId }).then(function(r) {
+  api('POST', '/qb/create-subcustomer', { kind: kind, id: id }).then(function(r) {
     if (r && r.error) {
       toast(r.error, 'error');
       if (btn) { btn.disabled = false; btn.textContent = 'Create it now'; }
