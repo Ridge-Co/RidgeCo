@@ -10529,6 +10529,47 @@ function toggleVendorInHouse(id, on) {
   }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
 }
 
+// Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2) — same
+// inline-checkbox pattern as toggleVendorInHouse above, one dedicated endpoint per flag.
+function toggleVendorCanBillNoWO(id, on) {
+  api('POST', '/vendor/set-can-bill-no-wo', { id: id, value: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
+    toast(on ? 'Can now submit a bill with no Work Order' : 'No-WO billing turned off', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.Can_Bill_No_WO = on ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
+}
+function toggleVendorCanCreateOwnWO(id, on) {
+  api('POST', '/vendor/set-can-create-own-wo', { id: id, value: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
+    toast(on ? 'Can now log their own One-Off Job' : 'One-Off Job turned off', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.Can_Create_Own_WO = on ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
+}
+// Bulk versions — the Vendors page's existing bulk-checkbox selection (pin-check), applied to
+// either new permission across every selected vendor.
+function bulkSetVendorPermission(field, endpoint) {
+  var checked = Array.from(document.getElementById('vendors-list').querySelectorAll('.pin-check:checked'));
+  if (!checked.length) return;
+  var ids = checked.map(function(cb) { return cb.dataset.id; });
+  if (!confirm('Enable this for ' + ids.length + ' selected vendor(s)?')) return;
+  Promise.all(ids.map(function(id) { return api('POST', endpoint, { id: id, value: true }).catch(function(){ return null; }); }))
+    .then(function() {
+      ids.forEach(function(id) {
+        var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+        if (v) v[field] = 'TRUE';
+      });
+      toast('Updated ' + ids.length + ' vendor(s)', 'success');
+      clearPinChecks('vendors-list');
+      renderVendorsPage();
+    });
+}
+function bulkEnableCanBillNoWO() { bulkSetVendorPermission('Can_Bill_No_WO', '/vendor/set-can-bill-no-wo'); }
+function bulkEnableCanCreateOwnWO() { bulkSetVendorPermission('Can_Create_Own_WO', '/vendor/set-can-create-own-wo'); }
+
 // CAP-036 #17 — self-service vendor deactivate/reactivate. Uses the same generic
 // /vendor/update + Active:'TRUE'/'FALSE' convention already used by the vendor-reject
 // flow (PAT-006 — deletion = Active FALSE, never a hard delete). Every vendor picker
