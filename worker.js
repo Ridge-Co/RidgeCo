@@ -447,6 +447,7 @@ export default {
         if (path === '/ar/report/opt-in')       return await arReportOptInRead(env, url);
         if (path === '/ar-report/view')         return await arReportView(env, url);
         if (path === '/vendor-performance')     return await vendorPerformance(env, url);
+        if (path === '/brettos-tasks-summary') return await brettosTasksSummary(env, url);
         if (path === '/vendor-onboarding-status') return await vendorOnboardingStatus(env, url);
         if (path === '/vendor-onboarding-gaps') return await vendorOnboardingGaps(env);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
