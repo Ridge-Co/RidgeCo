@@ -116,5 +116,44 @@ const { statementLineMatch } = pure;
   ok(statementLineMatch({ amount: 10.00, date: '2026-09-10', vendor: 'Amazon', ref: '' }, [], queue).confidence === null, 'Active=FALSE queue row is ignored');
 }
 
+// ── CSV column auto-detection heuristic (index.html/receipt-reconciler.html client JS) ─────────
+// stmtParseCsv/stmtRowsFromCsv are pure (no DOM dependency) despite living in the HTML file's
+// inline <script>, so they ARE testable here — extracted the same way as the worker.js functions
+// above, just from receipt-reconciler.html instead.
+{
+  const htmlSrc = readFileSync(join(here, '..', 'receipt-reconciler.html'), 'utf8');
+  function extractFromHtml(name) {
+    const start = htmlSrc.indexOf(`function ${name}(`);
+    if (start === -1) throw new Error(name + ' not found in receipt-reconciler.html');
+    let i = htmlSrc.indexOf('{', start), d = 0;
+    for (; i < htmlSrc.length; i++) { if (htmlSrc[i] === '{') d++; else if (htmlSrc[i] === '}') { d--; if (d === 0) { i++; break; } } }
+    return htmlSrc.slice(start, i);
+  }
+  const csvPure = new Function(`
+    ${extractFromHtml('stmtParseCsvLine')}
+    ${extractFromHtml('stmtParseCsv')}
+    ${extractFromHtml('stmtDetectColumns')}
+    ${extractFromHtml('stmtRowsFromCsv')}
+    return { stmtParseCsv, stmtRowsFromCsv };
+  `)();
+  const { stmtParseCsv, stmtRowsFromCsv } = csvPure;
+
+  const csv = 'Date,Amount,Description,Reference\n2026-09-01,"1,234.56","Paint, brushes",PO-100\n2026-09-02,45.00,Lumber,';
+  const rows = stmtParseCsv(csv);
+  ok(rows.length === 3, 'CSV parser: header + 2 data rows');
+  ok(rows[1][1] === '1,234.56', 'CSV parser: quoted comma-containing amount field preserved verbatim');
+  const { cols, out } = stmtRowsFromCsv(rows);
+  ok(cols.date === 0 && cols.amount === 1 && cols.description === 2 && cols.ref === 3, 'header auto-detect finds Date/Amount/Description/Reference by case-insensitive contains');
+  ok(out[0].amount === 1234.56, 'amount with embedded comma+quotes parses to a real number (1234.56)');
+  ok(out[0].description === 'Paint, brushes', 'description with an embedded comma is preserved, not split');
+  ok(out[1].amount === 45, 'second row parses cleanly with a blank reference column');
+
+  // Header variants the spec calls out: "Total" instead of "Amount", "Memo"/"Desc" instead of
+  // "Description", "PO"/"Invoice" instead of "Reference" — all case-insensitive contains matches.
+  const rows2 = stmtParseCsv('TxnDate,Total,Memo,PO#\n2026-08-01,10.00,Widgets,PO-5');
+  const d2 = stmtRowsFromCsv(rows2);
+  ok(d2.cols.date === 0 && d2.cols.amount === 1 && d2.cols.description === 2 && d2.cols.ref === 3, 'alternate header names (TxnDate/Total/Memo/PO#) still auto-detect correctly');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
