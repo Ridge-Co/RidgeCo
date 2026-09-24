@@ -2736,7 +2736,7 @@ function openBillModal(woId, vendorName) {
   if (!vendorId) { _openBillModalReal(woId, vendorName); return; } // no session — fail open rather than block
   api('/vendor-onboarding-status?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
     if (res && res.complete) { _openBillModalReal(woId, vendorName); }
-    else { openCompleteInfoModal(woId, vendorName, (res && res.missing) || []); }
+    else { openCompleteInfoModal(woId, vendorName, (res && res.missing) || [], (res && res.values) || {}); }
   }).catch(function() {
     // A network hiccup checking the gate must never block billing outright — fail open, same
     // "never gate work" spirit the rest of this portal already follows.
