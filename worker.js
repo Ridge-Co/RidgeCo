@@ -727,6 +727,7 @@ export default {
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
         if (path === '/receipt-recon/scan')       return await receiptReconScan(env, body);
+        if (path === '/receipt-recon/import-statement') return await receiptReconImportStatement(env, body);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
         if (path === '/receipt/attach-only')      return await receiptAttachOnly(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
@@ -2098,6 +2099,100 @@ function receiptReconFindRescanMatches(candidate, existingReceipts, existingQueu
   return matches;
 }
 
+// ── Statement importer (Sep 24 2026) — STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0 Phase 1
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// PURE — checks ONE normalized statement line (from a bulk vendor statement — Home Depot, Lowe's,
+// a credit card, etc.) against already-captured Receipts and Receipt_Recon_Queue rows. Deliberately
+// reuses the SAME comparison primitives as receiptReconFindRescanMatches above (_rcNorm,
+// .toFixed(2) string equality for money, same Active/Status filters) rather than inventing a
+// second dedup/matching algorithm — the brief's explicit, load-bearing instruction. Never image
+// matching (a statement line never looks like a receipt photo).
+// Returns { confidence: 'confirmed'|'possible'|null, ...matchDetails }:
+//   1. 'confirmed' — exact amount (to the cent) AND exact date AND normalized vendor match,
+//      against a live Receipts row (Active !== 'FALSE') or a non-pending Receipt_Recon_Queue row.
+//   2. 'confirmed' — line.ref (PO/invoice number) exact-matches PO_Reference or Invoice_Number on
+//      an existing Receipt_Recon_Queue row, at the same amount, even if the date differs by a day
+//      or two (a reference match is a stronger signal than date proximity). Receipts itself has no
+//      PO/invoice-number column (confirmed live, addReceipt above) — checked against Description
+//      there as a best-effort fallback only.
+//   3. 'possible' — same amount (exact) AND date within ±3 calendar days (same day-window math as
+//      qbDuplicateBillsNear) AND normalized vendor roughly matches (substring either direction) —
+//      weaker signal, still surfaced, never silently suppressed.
+//   4. null — no match.
+function statementLineMatch(line, existingReceipts, existingQueueRows) {
+  const amt = (Number(line && line.amount) || 0).toFixed(2);
+  const st = _rcNorm(line && (line.vendor || line.store));
+  const date = String((line && line.date) || '').trim();
+  const ref = String((line && line.ref) || '').trim();
+  const roughMatch = (a, b) => !!a && !!b && (a.indexOf(b) >= 0 || b.indexOf(a) >= 0);
+
+  // 1) Exact match — amount + date + normalized vendor.
+  if (date && st && Number(amt) > 0) {
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Date || '') !== date) continue;
+      if (_rcNorm(r.Store) !== st) continue;
+      return { confidence: 'confirmed', type: 'exact_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+    }
+    for (const r of (existingQueueRows || [])) {
+      const status = r.Status || 'pending';
+      if (status === 'pending') continue;
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Receipt_Date || '') !== date) continue;
+      if (_rcNorm(r.Vendor) !== st) continue;
+      return { confidence: 'confirmed', type: 'exact_queue', queue_id: r.ID, status };
+    }
+  }
+
+  // 2) Reference match — same amount, exact PO/invoice number, date can differ.
+  if (ref && Number(amt) > 0) {
+    for (const r of (existingQueueRows || [])) {
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (ref === String(r.PO_Reference || '').trim() || ref === String(r.Invoice_Number || '').trim()) {
+        return { confidence: 'confirmed', type: 'ref_queue', queue_id: r.ID, status: r.Status || 'pending' };
+      }
+    }
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (ref === String(r.Description || '').trim()) {
+        return { confidence: 'confirmed', type: 'ref_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+      }
+    }
+  }
+
+  // 3) Possible — same amount, date within ±3 days, vendor roughly matches.
+  if (date && Number(amt) > 0) {
+    const d = new Date(date + 'T00:00:00Z');
+    if (!isNaN(d)) {
+      const from = d.getTime() - 3 * 86400000, to = d.getTime() + 3 * 86400000;
+      for (const r of (existingReceipts || [])) {
+        if (r.Active === 'FALSE') continue;
+        if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+        const rd = new Date(String(r.Date || '') + 'T00:00:00Z'); if (isNaN(rd)) continue;
+        if (rd.getTime() < from || rd.getTime() > to) continue;
+        if (st && !roughMatch(_rcNorm(r.Store), st)) continue;
+        return { confidence: 'possible', type: 'window_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+      }
+      for (const r of (existingQueueRows || [])) {
+        const status = r.Status || 'pending';
+        if (status === 'pending') continue;
+        if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+        if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+        const rd = new Date(String(r.Receipt_Date || '') + 'T00:00:00Z'); if (isNaN(rd)) continue;
+        if (rd.getTime() < from || rd.getTime() > to) continue;
+        if (st && !roughMatch(_rcNorm(r.Vendor), st)) continue;
+        return { confidence: 'possible', type: 'window_queue', queue_id: r.ID, status };
+      }
+    }
+  }
+
+  return { confidence: null };
+}
+
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
@@ -2180,6 +2275,110 @@ async function receiptReconScan(env, body) {
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
   return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
+}
+
+// POST /receipt-recon/import-statement { vendor, rows:[{date,amount,description,ref}], source_file_id?,
+// source_file_name?, source_file_url? } OR { vendor, file_id, mime_type, source_file_name? } —
+// Statement importer Phase 1 (Sep 24 2026, STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0).
+// Lands EVERY unmatched/possibly-matched line from a bulk vendor statement into the SAME
+// Receipt_Recon_Queue Brett already works daily — not a new screen — tagged Entry_Source:'statement'
+// so he can tell a statement line apart from a normally scanned receipt. Confirmed matches are
+// never inserted (no action needed); this never writes a Receipt directly, same non-billing
+// discipline as receiptReconScan above. CSV rows are parsed CLIENT-SIDE (index.html) per this
+// codebase's hubBulkImport convention — confirmed live, no server-side CSV parser exists — so the
+// `rows` shape here is already-parsed objects, never raw CSV text.
+async function receiptReconImportStatement(env, body) {
+  body = body || {};
+  const vendor = String(body.vendor || '').trim();
+  if (!vendor) return json({ error: 'vendor required' }, 400);
+  const hasRows = Array.isArray(body.rows) && body.rows.length;
+  const hasFile = !!(body.file_id && body.mime_type);
+  if (!hasRows && !hasFile) return json({ error: 'rows (array) or file_id+mime_type required' }, 400);
+  if (hasRows && body.rows.length > 500) return json({ error: 'Too many rows in one call — split into batches of 500 or fewer.' }, 400);
+
+  let workingRows = [];
+  let detectedVendor = '';
+  let sourceFileId = body.source_file_id || '';
+  const sourceFileName = body.source_file_name || '';
+  const sourceFileUrl = body.source_file_url || '';
+
+  if (hasFile) {
+    sourceFileId = body.file_id;
+    let dl;
+    try {
+      const tok = await getAccessToken(env);
+      dl = await driveDownload(tok, body.file_id);
+    } catch (e) {
+      return json({ error: 'Could not download the file: ' + (e && e.message || e) }, 500);
+    }
+    const ex = await statementExtract(env, dl.bytes, dl.mime);
+    detectedVendor = ex.vendor_detected || '';
+    // statementExtract's own lines already use `amount`; documented here in case an older/altered
+    // extractor response ever returns `total` instead — mapped defensively, never silently dropped.
+    workingRows = (ex.lines || []).map(l => ({
+      date: l.date || '', amount: (l.amount !== undefined && l.amount !== null) ? l.amount : l.total,
+      description: l.description || '', ref: l.ref || '',
+    }));
+  } else {
+    workingRows = body.rows;
+  }
+
+  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  const [receipts, queueRows] = await fetchTabs(env, ['Receipts', 'Receipt_Recon_Queue']);
+
+  // Cloudflare-subrequest-safety cap, same pattern as receiptReconScan's `cap`/`remaining` above —
+  // a big statement (hundreds of lines) must never blow the per-invocation subrequest limit
+  // partway through. FIXED (Sep 24 2026 review): rows past the cap used to always be re-taken from
+  // the START of workingRows on the next call — since a just-inserted row is Status:'pending' and
+  // statementLineMatch correctly treats 'pending' as NOT yet dispositioned (never counts as a prior
+  // match), that meant the first 100 lines got duplicate-inserted every subsequent call instead of
+  // dedupe-skipping. Fix: the CALLER now tracks and sends `offset` (default 0) so each call
+  // processes a genuinely different slice — `next_offset` tells it exactly where to resume, so
+  // nothing is ever reprocessed and nothing is silently skipped.
+  const IMPORT_STATEMENT_MAX_WRITES = 100;
+  const offset = Math.max(0, parseInt(body.offset, 10) || 0);
+  const toProcess = workingRows.slice(offset, offset + IMPORT_STATEMENT_MAX_WRITES);
+  const nextOffset = offset + toProcess.length;
+  const remaining = Math.max(0, workingRows.length - nextOffset);
+
+  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0;
+  const errors = [];
+  const today = new Date().toISOString().split('T')[0];
+
+  for (const line of toProcess) {
+    const amt = Number(line && line.amount);
+    const date = String((line && line.date) || '').trim();
+    if (!isFinite(amt) || amt <= 0 || !date) { skipped_invalid++; continue; }
+    const lineVendor = (line && line.vendor) || vendor;
+    const normLine = { amount: amt, date, ref: (line && line.ref) || '', vendor: lineVendor };
+    let match;
+    try { match = statementLineMatch(normLine, receipts, queueRows); }
+    catch (e) { errors.push('match failed: ' + (e && e.message || e)); match = { confidence: null }; }
+
+    if (match.confidence === 'confirmed') { matched_confirmed++; continue; }
+    if (match.confidence === 'possible') flagged_possible++;
+
+    const noteBase = `From ${vendor} statement upload (${sourceFileName || 'uploaded ' + today}).`;
+    const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '');
+    try {
+      await addRow(env, 'Receipt_Recon_Queue', {
+        Source_File_ID: sourceFileId || '', Source_File_URL: sourceFileUrl || '', File_Name: sourceFileName || '',
+        Received_Date: new Date().toISOString(), Vendor: lineVendor, Receipt_Date: date,
+        Total: String(amt), PO_Reference: (line && line.ref) || '', Items: '[]',
+        Items_Summary: JSON.stringify([(line && line.description) || '']).slice(0, 4000),
+        Card_Last4: '', Invoice_Number: '', Suggestion: '', Status: 'pending',
+        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: notes, Active: 'TRUE',
+        Gmail_Message_ID: '', Entry_Source: 'statement', Rescan_Match_JSON: '[]',
+      });
+      inserted++;
+    } catch (e) { errors.push('insert failed: ' + (e && e.message || e)); }
+  }
+
+  return json({
+    success: true, vendor, vendor_detected: detectedVendor || undefined, total_lines: workingRows.length,
+    matched_confirmed, flagged_possible, inserted, skipped_invalid, remaining, next_offset: nextOffset, errors,
+  });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
@@ -12919,6 +13118,40 @@ async function receiptExtract(env, bytes, mime) {
   const txt = (r.result || '').trim();
   try { return receiptApplyRefundDetection(JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim())); }
   catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0, refund: false, refund_reason: '' }; }
+}
+
+// Read a BULK VENDOR STATEMENT (photo/scan/PDF — Home Depot, Lowe's, a credit card, a future Ace
+// Hardware account) with Claude vision → strict JSON of every transaction line, not just one.
+// Sibling to receiptExtract above, copying its exact conventions on purpose (Statement importer
+// Phase 1, Sep 24 2026 — STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0): same bytesToB64 +
+// isPdf media-block branching, same routeAI(env, {type, moneyFacing:true, media, prompt, maxTokens,
+// source}) call shape, same ```json fence-stripping before JSON.parse, same fail-open
+// default-object return on a parse error — never throws, so a bad/unreadable statement upload
+// fails open with an empty lines array rather than 500ing the import endpoint.
+async function statementExtract(env, bytes, mime) {
+  try {
+    const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+    const media = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+    const prompt = `You are a bulk statement data extractor for a property-maintenance business. This document is a VENDOR STATEMENT or CREDIT CARD STATEMENT listing MANY separate transaction lines (not a single receipt) — e.g. a Home Depot Pro account statement, a Lowe's commercial statement, or a credit card statement. Read EVERY distinct transaction/purchase line on the document, not just some of them — statements often run to dozens of lines across multiple pages/sections. Return ONLY strict minified JSON with keys: vendor_detected (the statement issuer's name as printed, e.g. "The Home Depot Pro", string, else ""), lines (array of objects, one per distinct transaction line, each with: date ("YYYY-MM-DD" if determinable, else ""), amount (the line's charge amount as a plain positive number — use the absolute value even if shown as a credit/negative on the statement; null if unreadable), description (short verbatim text describing the purchase/line, e.g. store location, department, or item description, else ""), ref (the transaction's own PO number, invoice number, order number, or reference code AS PRINTED on that line, exactly as shown, else "")). Skip statement-level summary lines (previous balance, payments received, finance charges, total due) — only include actual purchase/transaction lines. JSON only, no prose.`;
+    const r = await routeAI(env, { type: 'statement_parse', moneyFacing: true, media, prompt, maxTokens: 4000, source: 'statementExtract' });
+    const txt = (r.result || '').trim();
+    const parsed = JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim());
+    const lines = Array.isArray(parsed.lines) ? parsed.lines.slice(0, 500).map(x => ({
+      date: String((x && x.date) || ''),
+      amount: (x && typeof x.amount === 'number' && isFinite(x.amount)) ? Math.abs(x.amount)
+        : ((x && x.amount !== null && x.amount !== undefined && x.amount !== '' && isFinite(Number(x.amount))) ? Math.abs(Number(x.amount)) : null),
+      description: String((x && x.description) || ''),
+      ref: String((x && x.ref) || ''),
+    })) : [];
+    return { vendor_detected: String((parsed && parsed.vendor_detected) || ''), lines };
+  } catch (e) {
+    // routeAI threw (missing key, network) or the model's text didn't parse as JSON — fail open
+    // with an empty lines array rather than throwing into the import endpoint (same discipline as
+    // invoiceExtract's fail-open wrapper above).
+    return { vendor_detected: '', lines: [], _error: true, _error_message: String((e && e.message) || e) };
+  }
 }
 
 // Read a VENDOR INVOICE (photo or PDF) with Claude vision → strict JSON suggestion. This is the
