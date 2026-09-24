@@ -3670,12 +3670,55 @@ function markInvoicePaid(woId){
 function openAddPropertyModal() {
   document.getElementById('p-owner').innerHTML = '<option value="">No owner assigned</option>' +
     state.owners.map(function(o){return '<option value="'+o.ID+'">'+o.First_Name+' '+o.Last_Name+'</option>';}).join('');
+  document.getElementById('ap-dupe-warning').style.display = 'none';
+  renderApUnlinkedList();
   openModal('modal-add-property');
 }
-function submitAddProperty() {
+
+// The "already there, just not owned yet" list shown at the top of Add Property (Sep 24 2026).
+// Pulled entirely from already-loaded state.properties -- no extra network call.
+function renderApUnlinkedList() {
+  var section = document.getElementById('ap-unlinked-section');
+  var list = document.getElementById('ap-unlinked-list');
+  var unlinked = safeArray(state.properties).filter(function(p){ return p.Active !== 'FALSE' && !p.Owner_ID; });
+  if (!unlinked.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  list.innerHTML = unlinked.map(function(p){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-top:1px solid var(--border);font-size:11.5px">' +
+      '<span>' + esc(p.Address || '(no address)') + (p.City ? ', ' + esc(p.City) : '') + '</span>' +
+      '<button class="btn small" onclick="linkUnlinkedProperty(\'' + esc(String(p.ID)) + '\')">Link to this owner</button>' +
+    '</div>';
+  }).join('');
+}
+function linkUnlinkedProperty(propertyId) {
+  var ownerId = document.getElementById('p-owner').value;
+  if (!ownerId) { toast('Pick an owner above first, then link','error'); return; }
+  api('POST','/property/update',{id:propertyId,fields:{Owner_ID:ownerId}}).then(function(res){
+    if (res.error){logError('Link property',res.error);toast('Error: '+res.error,'error');return;}
+    toast('Linked','success');closeModal('modal-add-property');loadAll();
+  }).catch(function(e){logError('Link property',e.message);toast('Error: '+e.message,'error');});
+}
+
+function submitAddProperty(force) {
   var body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Unit_Count:document.getElementById('p-units').value,Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
+  if (force) body.force = true;
   if (!body.Address) { toast('Address required','error'); return; }
+  var warnBox = document.getElementById('ap-dupe-warning');
+  warnBox.style.display = 'none';
   api('POST','/property/add',body).then(function(res){
+    if (res.duplicate_of && safeArray(res.duplicate_of).length) {
+      var ownerId = document.getElementById('p-owner').value;
+      warnBox.innerHTML = '⚠ ' + esc(res.error || 'A matching property already exists.') + '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
+        safeArray(res.duplicate_of).map(function(m){
+          return (ownerId
+            ? '<button class="btn small" onclick="linkUnlinkedProperty(\'' + esc(String(m.id)) + '\')">Link ID ' + esc(String(m.id)) + ' to this owner</button>'
+            : '<span style="color:var(--muted)">ID ' + esc(String(m.id)) + (m.owner_id ? ' (already has an owner)' : ' (no owner — pick one above to link)') + '</span>');
+        }).join(' ') +
+        ' <button class="btn small secondary" onclick="submitAddProperty(true)">Create a new one anyway</button>' +
+      '</div>';
+      warnBox.style.display = '';
+      return;
+    }
     if (res.error){logError('Add property',res.error);toast('Error: '+res.error,'error');return;}
     toast('Property added (ID: '+res.id+')','success');closeModal('modal-add-property');loadAll();
   }).catch(function(e){logError('Add property',e.message);toast('Error: '+e.message,'error');});
