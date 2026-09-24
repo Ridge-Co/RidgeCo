@@ -139,6 +139,33 @@
   </div>
 </div>
 
+<!-- Statement importer Phase 1 (Sep 24 2026, STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0).
+     Drops a bulk vendor statement (Home Depot, Lowe's, a credit card, a future Ace Hardware
+     account) in here; every line is checked against Receipts/Receipt_Recon_Queue and anything not
+     already accounted for lands in the SAME Pending queue below, tagged as a statement line — not
+     a second screen. CSV is parsed client-side (this codebase's hubBulkImport convention — there is
+     no server-side CSV parser); a PDF/image goes through the existing create-upload-session flow. -->
+<div class="section" id="stmt-import-section">
+  <div class="section-title">Import Statement</div>
+  <p class="sub" style="margin-bottom:10px">
+    Drop a bulk vendor statement (CSV export or a PDF/scan) — every line gets checked against
+    Receipts and this queue. Anything not already accounted for lands below in Pending, tagged
+    <b>from statement</b>, so it goes through the same Confirm/Skip flow as a normal scan.
+  </p>
+  <div class="row"><label>Vendor</label><input id="stmt-vendor" placeholder="e.g. Home Depot" style="flex:1;max-width:280px"></div>
+  <div class="row">
+    <label>CSV file</label>
+    <input type="file" id="stmt-csv-file" accept=".csv,text/csv" onchange="stmtCsvSelected(this)">
+  </div>
+  <div id="stmt-csv-preview" style="font-size:11px;color:var(--muted);margin:2px 0 8px 108px"></div>
+  <div class="row">
+    <label>PDF / scan</label>
+    <input type="file" id="stmt-pdf-file" accept=".pdf,image/*" onchange="stmtPdfSelected(this)">
+  </div>
+  <div id="stmt-status" class="rc-status" style="margin-left:0"></div>
+  <div id="stmt-result" style="font-size:12px;margin-top:6px"></div>
+</div>
+
 <div class="section">
   <div class="tabs" id="tabs"></div>
   <!-- Part 4 (Sep 22 2026 bulk-actions brief). Scoped to THIS page's own #list container only,
