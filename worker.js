@@ -2098,6 +2098,100 @@ function receiptReconFindRescanMatches(candidate, existingReceipts, existingQueu
   return matches;
 }
 
+// ── Statement importer (Sep 24 2026) — STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0 Phase 1
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// PURE — checks ONE normalized statement line (from a bulk vendor statement — Home Depot, Lowe's,
+// a credit card, etc.) against already-captured Receipts and Receipt_Recon_Queue rows. Deliberately
+// reuses the SAME comparison primitives as receiptReconFindRescanMatches above (_rcNorm,
+// .toFixed(2) string equality for money, same Active/Status filters) rather than inventing a
+// second dedup/matching algorithm — the brief's explicit, load-bearing instruction. Never image
+// matching (a statement line never looks like a receipt photo).
+// Returns { confidence: 'confirmed'|'possible'|null, ...matchDetails }:
+//   1. 'confirmed' — exact amount (to the cent) AND exact date AND normalized vendor match,
+//      against a live Receipts row (Active !== 'FALSE') or a non-pending Receipt_Recon_Queue row.
+//   2. 'confirmed' — line.ref (PO/invoice number) exact-matches PO_Reference or Invoice_Number on
+//      an existing Receipt_Recon_Queue row, at the same amount, even if the date differs by a day
+//      or two (a reference match is a stronger signal than date proximity). Receipts itself has no
+//      PO/invoice-number column (confirmed live, addReceipt above) — checked against Description
+//      there as a best-effort fallback only.
+//   3. 'possible' — same amount (exact) AND date within ±3 calendar days (same day-window math as
+//      qbDuplicateBillsNear) AND normalized vendor roughly matches (substring either direction) —
+//      weaker signal, still surfaced, never silently suppressed.
+//   4. null — no match.
+function statementLineMatch(line, existingReceipts, existingQueueRows) {
+  const amt = (Number(line && line.amount) || 0).toFixed(2);
+  const st = _rcNorm(line && (line.vendor || line.store));
+  const date = String((line && line.date) || '').trim();
+  const ref = String((line && line.ref) || '').trim();
+  const roughMatch = (a, b) => !!a && !!b && (a.indexOf(b) >= 0 || b.indexOf(a) >= 0);
+
+  // 1) Exact match — amount + date + normalized vendor.
+  if (date && st && Number(amt) > 0) {
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Date || '') !== date) continue;
+      if (_rcNorm(r.Store) !== st) continue;
+      return { confidence: 'confirmed', type: 'exact_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+    }
+    for (const r of (existingQueueRows || [])) {
+      const status = r.Status || 'pending';
+      if (status === 'pending') continue;
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Receipt_Date || '') !== date) continue;
+      if (_rcNorm(r.Vendor) !== st) continue;
+      return { confidence: 'confirmed', type: 'exact_queue', queue_id: r.ID, status };
+    }
+  }
+
+  // 2) Reference match — same amount, exact PO/invoice number, date can differ.
+  if (ref && Number(amt) > 0) {
+    for (const r of (existingQueueRows || [])) {
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (ref === String(r.PO_Reference || '').trim() || ref === String(r.Invoice_Number || '').trim()) {
+        return { confidence: 'confirmed', type: 'ref_queue', queue_id: r.ID, status: r.Status || 'pending' };
+      }
+    }
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (ref === String(r.Description || '').trim()) {
+        return { confidence: 'confirmed', type: 'ref_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+      }
+    }
+  }
+
+  // 3) Possible — same amount, date within ±3 days, vendor roughly matches.
+  if (date && Number(amt) > 0) {
+    const d = new Date(date + 'T00:00:00Z');
+    if (!isNaN(d)) {
+      const from = d.getTime() - 3 * 86400000, to = d.getTime() + 3 * 86400000;
+      for (const r of (existingReceipts || [])) {
+        if (r.Active === 'FALSE') continue;
+        if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+        const rd = new Date(String(r.Date || '') + 'T00:00:00Z'); if (isNaN(rd)) continue;
+        if (rd.getTime() < from || rd.getTime() > to) continue;
+        if (st && !roughMatch(_rcNorm(r.Store), st)) continue;
+        return { confidence: 'possible', type: 'window_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+      }
+      for (const r of (existingQueueRows || [])) {
+        const status = r.Status || 'pending';
+        if (status === 'pending') continue;
+        if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+        if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+        const rd = new Date(String(r.Receipt_Date || '') + 'T00:00:00Z'); if (isNaN(rd)) continue;
+        if (rd.getTime() < from || rd.getTime() > to) continue;
+        if (st && !roughMatch(_rcNorm(r.Vendor), st)) continue;
+        return { confidence: 'possible', type: 'window_queue', queue_id: r.ID, status };
+      }
+    }
+  }
+
+  return { confidence: null };
+}
+
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
