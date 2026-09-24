@@ -1161,11 +1161,11 @@ window.addEventListener('pageshow', function(e){
       </label>
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
         <input type="checkbox" id="safety-notify-created" checked style="width:auto;padding:0;font-size:16px">
-        <div><div style="font-size:13px">Notify tenant when created</div><div style="color:var(--muted);font-size:11px">Sends SMS to tenant on creation</div></div>
+        <div><div id="safety-notify-created-label" style="font-size:13px">Notify tenant when created</div><div id="safety-notify-created-sub" style="color:var(--muted);font-size:11px">Sends SMS to tenant on creation</div></div>
       </label>
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
         <input type="checkbox" id="safety-notify-updates" checked style="width:auto;padding:0;font-size:16px">
-        <div><div style="font-size:13px">Notify tenant on status updates</div><div style="color:var(--muted);font-size:11px">Sends SMS when status changes to Complete etc.</div></div>
+        <div><div id="safety-notify-updates-label" style="font-size:13px">Notify tenant on status updates</div><div id="safety-notify-updates-sub" style="color:var(--muted);font-size:11px">Sends SMS when status changes to Complete etc.</div></div>
       </label>
     </div>
     <div class="modal-actions" id="newwo-safety-actions">
