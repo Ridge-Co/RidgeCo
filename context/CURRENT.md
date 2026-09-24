@@ -1,3 +1,49 @@
+# Sep 24, 2026, ~18:18 ET — INFRA FINDING: Cloudflare Workers Builds delayed/stuck (their incident, not our config) -- affects every PR merged to `main`/`staging` today
+
+**What happened:** merged PR #62 (`GET /brettos-tasks-summary`, per `context/TASK_LINKING_BUILD_BRIEF_v1.0.md`)
+and, following this repo's usual assumption ("main auto-deploys via Cloudflare Workers Builds, no
+action needed"), reported it as effectively live. It wasn't. Checked the Cloudflare dashboard
+directly with Brett: the `main`-triggered build for that merge commit (`45cff52`) sat in
+"Initializing" for 26+ minutes without ever reaching Cloning/Installing/Deploying, and the
+Deployments -> Build history view showed **~888 queued builds on `maintenance-hub`** (and ~1,802
+on `maintenance-hub-staging`) -- effectively every build triggered today, most never actually run.
+
+**Root cause confirmed, not guessed:** cloudflarestatus.com lists an active incident, **"Delays
+Starting Cloudflare Workers Builds"** (Minor Impact, Workers Builds affected service), started
+**Sep 24 2026, 1:33 PM EDT** -- matching almost exactly when this repo's queue jammed. This is
+Cloudflare's own infrastructure, currently in "Monitoring" status on their end. **Not a repo
+config problem**: both `maintenance-hub` (branch `main`) and `maintenance-hub-staging` (branch
+`staging`, "Builds for non-production branches" on) are correctly connected via Workers Builds
+Git integration -- confirmed directly in Settings -> Builds on both Workers. No setup change
+needed there.
+
+**Practical implication for every session today:** any PR merged to `main` or pushed to `staging`
+during this window (at minimum #58, #60, #62, #64 -- possibly more) may NOT actually be live in
+production/staging yet, even though several sessions' own summaries said "should deploy shortly."
+Don't trust "merged" == "live" until this clears. Check `/version` or the specific new route
+before telling Brett something is confirmed live.
+
+**Separately unresolved, lower priority:** the Deployments/Version History view on `maintenance-hub`
+also shows several "Manually deployed" entries via `Wrangler`, attributed to Brett, spaced roughly
+hourly through today (**before** this incident started) -- e.g. commits ending `95c4fe1b`,
+`b2ee9841`, `ceb66dd5` etc. Brett confirmed he is not running anything manually and doesn't know
+the source. Checked all Claude sessions from today (7 chats via `recent_chats`) -- none of them
+used `wrangler`; all made the same now-known-wrong "main auto-deploys" assumption this one did.
+Source of those Wrangler deploys is still unidentified. Not urgent right now, but worth a look if
+it recurs, since it means *something* has direct deploy access outside both the Git-integration
+path and any Claude session accounted for here.
+
+**No action needed to fix this** -- Brett is waiting for Cloudflare's incident to clear. Cloudflare
+Workers Builds auto-skips superseded queued builds for the same trigger once it resumes, so the
+newest queued `main` build (which is a superset of everything merged today, including PR #62)
+should deploy on its own without anyone needing to manually retry the specific `45cff52` build
+(which was cancelled mid-session, safely -- it was hung, not making progress). If builds still
+haven't resumed a good while after Cloudflare marks the incident resolved, the manual nudge is:
+Workers & Pages -> `maintenance-hub` -> Deployments -> find the newest `main` build -> "..." menu
+-> Retry (if offered), or ask a session to push a trivial no-op commit to `main` to re-trigger.
+
+---
+
 # Sep 24, 2026, ~17:45 ET — BUILT (branch pushed, PR #66 open, not merged): CAP-036 #12 Vendor Task Requests -- "Flag Vendor Issue" + needs-your-review queue
 
 Confirmed spec: `context/CAPTURE_INBOX.md` CAP-036 item #12. A NEW system, separate from the
