@@ -47,9 +47,9 @@ This is the mechanism that makes #3 possible. Design questions B-230 left open a
 - Brett reviews the draft, taps send (or says "send it") — nothing auto-fires.
 - The Sheet task gets marked done, with a note pointing at what closed it.
 
-## Build order (not yet started — sequencing only)
+## Build order
 1. Add `Venture` + FK columns (mirroring Notes) + `Tags` to the BrettOS Sheet's Tasks tab, if not already shaped close to this (confirm actual current columns before adding — do not assume, per PAT-024).
-2. `GET /brettos-tasks-summary` Worker endpoint (read-only, reuses existing Sheets access) + Command Center card + Dev Log link.
+2. **Staged Sep 24 2026, PR pending Brett's review** (`feature/brettos-tasks-summary`): `GET /brettos-tasks-summary` Worker endpoint (read-only, reuses the runtime service-account Sheets access via a NEW `env.BRETTOS_TASKS_SHEET_ID` var — same pattern as `env.KEY_REGISTRY_SHEET_ID`, deliberately NOT `env.SHEET_ID`) + a Command Center card + a Dev Log nav link to the raw Sheet. **Not yet live-verified**: the build session had no credential to call the deployed endpoint, and — more importantly — it's unconfirmed whether the BrettOS Tasks Sheet has actually been shared as Viewer/Editor with the runtime SA (`maintenance-hub-sheets@maintenance-hub-498819...`); `CREDENTIALS_MAP.md`'s "Known Sheets" table lists only RidgeCo Main as confirmed-shared. If it hasn't been shared, the endpoint 500s with a clear Google permission error rather than failing silently — Brett needs to either confirm sharing already happened or share it (Editor, safest — matches the "when unsure, share with both" rule) before this can go live. See the PR description for the full verification status.
 3. Wire the Notes Hub UI (already fully spec'd, just never built) so Property/Unit/WO detail views show linked notes/tasks together — this is what makes "everything tied to this vendor" actually visible.
 4. Extend the Scout/Reuse-Radar pass with the new "shipped-feature ↔ open task" lens; wire its findings into Command Center's Needs-You queue.
 5. Only then: revisit whether the inline "notice it live in-session" behavior needs anything beyond Claude just doing it (it likely doesn't — it's a behavior change, not a build).
