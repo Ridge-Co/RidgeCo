@@ -123,7 +123,17 @@
     <div id="df-woline" class="muted" style="margin-bottom:8px"></div>
 
     <div class="grid2">
-      <div><label class="fld">Store</label><input id="df-store" placeholder="Home Depot"></div>
+      <div><label class="fld">Store</label>
+        <select id="df-store-select" onchange="onStoreSelectChange()">
+          <option value="">— choose store —</option>
+          <option value="Home Depot">Home Depot</option>
+          <option value="Lowe's">Lowe's</option>
+          <option value="Ace Hardware">Ace Hardware</option>
+          <option value="Walmart">Walmart</option>
+          <option value="Other">Other…</option>
+        </select>
+        <input id="df-store" placeholder="Store name" style="margin-top:6px;display:none">
+      </div>
       <div><label class="fld">Order / confirmation #</label><input id="df-order" placeholder="e.g. H1234-56789"></div>
     </div>
     <div class="grid2">
@@ -260,8 +270,20 @@ function relay(id){
   var d=DELS.find(function(x){return x.id===id;}); if(!d) return;
   var tgt=relayTarget(d);
   if(!tgt||!tgt.phone){ toast('No phone on file for the contact'); return; }
-  var url='sms:'+tgt.phone.replace(/[^0-9+]/g,'')+'?&body='+encodeURIComponent(relayText(d));
-  window.location.href=url;
+  // CAP-036 #6 (Sep 24 2026): used to build an sms: URI that just opened the ADMIN's own
+  // phone's messaging app — nothing was ever actually sent, and there was no email either.
+  // Now actually sends via Twilio SMS (+ email, if the tenant has one on file) through the
+  // real /delivery/relay endpoint. Prompt still lets the text be edited before it goes out.
+  var msg = prompt('Send to '+tgt.name+' ('+tgt.phone+') by text'+(d.tenant_id?' (and email, if on file)':'')+':', relayText(d));
+  if (msg === null) return;
+  msg = msg.trim();
+  if (!msg) { toast('Nothing sent — message was empty.'); return; }
+  api('POST','/delivery/relay', { id: id, message: msg }).then(function(r){
+    if (r && r.error) { toast('Could not send: '+r.error); return; }
+    var parts = [r.sms_sent ? 'SMS sent' : 'SMS not sent'];
+    if (r.email) parts.push(r.email_sent ? 'email sent' : 'email not sent');
+    toast(parts.join(' · '));
+  }).catch(function(e){ toast('Error: '+(e&&e.message||'unknown error')); });
 }
 function bucket(d){
   var done=['Delivered','Cancelled'];
@@ -312,6 +334,24 @@ function fillProps(){
     return '<option value="'+esc(p.ID)+'">'+esc(p.Address||('property '+p.ID))+'</option>';
   }).join('');
 }
+// CAP-036 #7 (Sep 24 2026) — combo-box: a known store fills #df-store (hidden) from the
+// dropdown; "Other…" reveals the text input for anything not listed. #df-store's value is
+// what formBody()/saveD() actually send — this is a manual-entry convenience layered on top,
+// nothing else changes about what gets written to the Store column.
+var KNOWN_STORES = ['Home Depot', "Lowe's", 'Ace Hardware', 'Walmart'];
+function onStoreSelectChange(){
+  var sel = document.getElementById('df-store-select').value;
+  var inp = document.getElementById('df-store');
+  if (sel === 'Other') { inp.style.display = ''; inp.value = ''; inp.focus(); }
+  else { inp.style.display = 'none'; inp.value = sel; }
+}
+function syncStoreSelectFromValue(v){
+  var sel = document.getElementById('df-store-select');
+  var inp = document.getElementById('df-store');
+  if (!v) { sel.value = ''; inp.style.display = 'none'; inp.value = ''; }
+  else if (KNOWN_STORES.indexOf(v) >= 0) { sel.value = v; inp.style.display = 'none'; inp.value = v; }
+  else { sel.value = 'Other'; inp.style.display = ''; inp.value = v; }
+}
 function onPropertyChange(){
   var pid=document.getElementById('df-property').value;
   var us=document.getElementById('df-unit');
@@ -340,6 +380,7 @@ function fillTenants(){
 }
 function resetForm(){
   ['df-store','df-order','df-model','df-dims','df-address','df-date','df-window','df-backup','df-backupphone','df-notes','df-woids'].forEach(function(id){ document.getElementById(id).value=''; });
+  syncStoreSelectFromValue('');
   document.getElementById('df-item').value='';
   document.getElementById('df-onsite').value='tenant';
   fillProps();
@@ -372,7 +413,7 @@ function openEdit(id){
   document.getElementById('df-hint').classList.add('hide');
   document.getElementById('df-woline').textContent='';
   fillProps();
-  document.getElementById('df-store').value=d.store||'';
+  syncStoreSelectFromValue(d.store||'');
   document.getElementById('df-order').value=d.order_number||'';
   document.getElementById('df-item').value=d.item_type||'';
   document.getElementById('df-model').value=d.make_model||'';

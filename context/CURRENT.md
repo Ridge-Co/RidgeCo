@@ -1,3 +1,214 @@
+# Sep 26, 2026, ~12:50 ET — BUILT + STAGING-VERIFIED (PR to `main` open, NOT merged): Owner self-serve onboarding link, owner billing address, commercial property type, Add Property "fields persist" fix
+
+Full brief: `context/OWNER_SELF_ONBOARDING_BUILD_BRIEF_v1.0.md`; FEATURE_LOG `[FL-20260926-1245-oo]`. Brett sends a single-use link (Hub → Owners → 📨 Owner Onboarding Link); the owner enters name / business-or-name (required choice) / contact phone / billing email / billing address / PIN (3 letters + 5 digits — the platform's existing owner PIN format) / properties (address, city, type, unit count; commercial + retail/mixed use/industrial/office) / units (occupied → tenant name+phone, vacant → lockbox+code or no-lockbox+note, or "provide later" — at least one resolved unit overall) / optional unchecked SMS-permission box, and it lands in Owners, Properties, Units, Tenants, Keys with SMS off on new properties/tenants. Admin gets an SMS summary; the invite list shows a Needs-review flag with reasons. Add Property now resets every field on open (it never did before). Owners have billing-address fields in Add/Edit Owner.
+
+**Update (later Sep 26):** also on this branch/PR — Owners page **Set PIN for Selected** + **Select owners with no PIN** (backfill PINs for owners who don't set their own; `/owner/pin-suggest`, `/owner/set-pins`), staging build `2026-09-26.2-owner-set-pin`, live-tested on TEST owner 25. Also the QuickBooks owner-customer email fix (existing QB customers 459/460 still need "Fix QB emails" run by Brett).
+**Status:** branch `feat/owner-self-onboarding`; `maintenance-hub-staging` was exercised end to end with real Sheet read-back. Also: `staging` was brought current with `main` (PRs #71/#72). **Needs Brett:** merge the PR to `main` (auto-deploys the Worker; GitHub Pages serves `owner-onboard.html`), then send himself a test link and click through once on his phone. **Left as-is / decisions:** SMS consent is optional + unchecked (compliance-safe); not exercised live: unowned-property → link path, QuickBooks customer creation, admin SMS (all staging-stubbed or test-token-restricted).
+
+---
+
+# Sep 24, 2026, ~18:18 ET — INFRA FINDING: Cloudflare Workers Builds delayed/stuck (their incident, not our config) -- affects every PR merged to `main`/`staging` today
+
+**What happened:** merged PR #62 (`GET /brettos-tasks-summary`, per `context/TASK_LINKING_BUILD_BRIEF_v1.0.md`)
+and, following this repo's usual assumption ("main auto-deploys via Cloudflare Workers Builds, no
+action needed"), reported it as effectively live. It wasn't. Checked the Cloudflare dashboard
+directly with Brett: the `main`-triggered build for that merge commit (`45cff52`) sat in
+"Initializing" for 26+ minutes without ever reaching Cloning/Installing/Deploying, and the
+Deployments -> Build history view showed **~888 queued builds on `maintenance-hub`** (and ~1,802
+on `maintenance-hub-staging`) -- effectively every build triggered today, most never actually run.
+
+**Root cause confirmed, not guessed:** cloudflarestatus.com lists an active incident, **"Delays
+Starting Cloudflare Workers Builds"** (Minor Impact, Workers Builds affected service), started
+**Sep 24 2026, 1:33 PM EDT** -- matching almost exactly when this repo's queue jammed. This is
+Cloudflare's own infrastructure, currently in "Monitoring" status on their end. **Not a repo
+config problem**: both `maintenance-hub` (branch `main`) and `maintenance-hub-staging` (branch
+`staging`, "Builds for non-production branches" on) are correctly connected via Workers Builds
+Git integration -- confirmed directly in Settings -> Builds on both Workers. No setup change
+needed there.
+
+**Practical implication for every session today:** any PR merged to `main` or pushed to `staging`
+during this window (at minimum #58, #60, #62, #64 -- possibly more) may NOT actually be live in
+production/staging yet, even though several sessions' own summaries said "should deploy shortly."
+Don't trust "merged" == "live" until this clears. Check `/version` or the specific new route
+before telling Brett something is confirmed live.
+
+**Separately unresolved, lower priority:** the Deployments/Version History view on `maintenance-hub`
+also shows several "Manually deployed" entries via `Wrangler`, attributed to Brett, spaced roughly
+hourly through today (**before** this incident started) -- e.g. commits ending `95c4fe1b`,
+`b2ee9841`, `ceb66dd5` etc. Brett confirmed he is not running anything manually and doesn't know
+the source. Checked all Claude sessions from today (7 chats via `recent_chats`) -- none of them
+used `wrangler`; all made the same now-known-wrong "main auto-deploys" assumption this one did.
+Source of those Wrangler deploys is still unidentified. Not urgent right now, but worth a look if
+it recurs, since it means *something* has direct deploy access outside both the Git-integration
+path and any Claude session accounted for here.
+
+**No action needed to fix this** -- Brett is waiting for Cloudflare's incident to clear. Cloudflare
+Workers Builds auto-skips superseded queued builds for the same trigger once it resumes, so the
+newest queued `main` build (which is a superset of everything merged today, including PR #62)
+should deploy on its own without anyone needing to manually retry the specific `45cff52` build
+(which was cancelled mid-session, safely -- it was hung, not making progress). If builds still
+haven't resumed a good while after Cloudflare marks the incident resolved, the manual nudge is:
+Workers & Pages -> `maintenance-hub` -> Deployments -> find the newest `main` build -> "..." menu
+-> Retry (if offered), or ask a session to push a trivial no-op commit to `main` to re-trigger.
+
+---
+
+# Sep 24, 2026, ~17:45 ET — BUILT (branch pushed, PR #66 open, not merged): CAP-036 #12 Vendor Task Requests -- "Flag Vendor Issue" + needs-your-review queue
+
+Confirmed spec: `context/CAPTURE_INBOX.md` CAP-036 item #12. A NEW system, separate from the
+existing `Vendor_Requests`/`processVendorNudges` automatic chase-a-quiet-vendor clock -- this is
+Brett explicitly flagging a vendor issue: three canned request types (Request Photos, Request
+Description Update/Clarification, Other free-typed), always scoped to the vendor's estimate or
+invoice on the WO. Triggered from either the WO detail view or the Review Bills card. Surfaces
+in a dedicated "Needs Your Attention" section at the top of the vendor portal. Vendor "Mark
+Done" does NOT auto-resolve it -- per Brett's explicit instruction, it lands in a "Needs Your
+Review" queue on the Hub's Dev Log page until Brett does his own manual check.
+
+**Built:** new additive `Vendor_Task_Requests` Sheet tab (via the existing `ensureTab`/
+`ensureColumns` pattern); `POST /vendor-task-request/create` (admin, SMS via the existing
+`smsGatedSend` chokepoint), `GET /vendor-task-requests` (admin + vendor session, vendor_id
+forced from the verified session token for a vendor caller), `POST /vendor-task-request/
+mark-done` (vendor-side, sets `vendor_marked_done` -- never the terminal status), `GET
+/vendor-task-requests/pending-review` + `POST /vendor-task-request/mark-reviewed` (admin only,
+the only path to `reviewed_resolved`). `ROLE_SCOPES.vendor` gets exactly the two vendor-facing
+paths. UI: a "Flag Vendor Issue" trigger + this WO's own requests on the WO detail modal
+(index.html), a matching button on each Review Bills card, a "Needs Your Review" section on Dev
+Log, and a "Needs Your Attention" banner at the top of the vendor portal (vendor.html) loaded on
+login.
+
+**Deliberately avoided touching:** per this file's own note that CAP-036 sub-builds are landing
+concurrently across several open PRs, this build did not touch `index.html`'s WO-detail
+action-buttons block (`addBtn(...)` calls inside `openWODetail`) or `vendor.html`'s
+`loadVendorBillSummary` -- both are PR #63's (`feat/cap-036-batch2-photo-delivery-receipts`)
+territory. The new UI is added as its own separate `insertAdjacentHTML` call / function block
+alongside them instead.
+
+**Verified:** new `test/vendor-task-requests.test.mjs`, 27/27 passing (structural, same
+convention as `test/vendor-nudges.test.mjs` -- reads the real `worker.js` source, no live Sheets/
+Twilio calls). Re-ran `test/selftest.test.mjs` (107/107) and `test/vendor-nudges.test.mjs`
+(17/17) against the changed `worker.js` -- no regressions. `node --check` clean on `worker.js`
+and both HTML files' inline `<script>` blocks. **Not verified live** -- `maintenance-hub-staging`
+is several PRs behind several other just-built CAP-036 sub-builds (#56/#58/#59/#61/#63), so this
+pass relied on static/structural verification only, named plainly rather than routed around, same
+as other recent CAP-036 builds have flagged.
+
+**Ship status:** branch `feat/cap-036-vendor-task-requests` pushed to `Ridge-Co/RidgeCo`, PR #66
+(`https://github.com/Ridge-Co/RidgeCo/pull/66`) open, **not merged** -- vendor-facing SMS + a new
+data model, staged for Brett's own review per PAT-033/`AUTONOMY_GUARDRAILS_v1.0`, not
+auto-merged. `context/FEATURE_LOG.md` bumped to v2.10, `[FL-20260924-1745-vtr]`.
+
+---
+
+# Sep 24, 2026, ~17:56 ET — BUILT, staged for Brett: /admin/set-alert-flags (Queue #14/#10 opt-in toggle) — PR #67 open to `main`, NOT auto-merged (SMS-adjacent)
+
+## 🟡 Staged for Brett's review/merge: Failure Alerts / Dead Man's Switch admin toggle
+Full detail: `FEATURE_LOG.md` ([FL-20260924-1756-af]). Brett previously had NO way to flip
+`failure_alert_enabled`/`dead_man_switch_enabled` (Queue #14/#10, shipped dormant Sep 22) himself —
+`/config/set` needs the full `WORKER_SECRET` (no session/UI ever solicits it) and the only
+config-writing UI (Vendor Access Defaults) writes exactly one key. New `POST
+/admin/set-alert-flags` writes ONLY these 2 named Config keys — never a generic key/value
+passthrough, so it structurally cannot become a backdoor generic config setter. Added to
+`HUB_PROD_WRITE_PATHS` (additive) and to `hubTestWriteAllowed()` for staging testing. New Dev Log
+"🔔 ALERTING" section (two checkboxes + Save) mirrors the Vendor Access Defaults UI pattern.
+Branch `feature/alert-flags-admin-toggle`, PR #65 merged to `staging`; PR #67 open to `main` for
+Brett's own review/merge per `AUTONOMY_GUARDRAILS_v1.0` (both alerts eventually page `admin_phone`
+via SMS, so this is SMS-adjacent, not autonomous). **Verification status:** `node --check` clean
+on both `worker.js` and the extracted inline JS from `index.html`; full manual trace of the
+auth-gate cascade + the new `hubTestWriteAllowed` case; the git `staging` branch confirmed
+byte-for-byte to carry the change. **Could NOT complete live HTTP verification via
+`hub_test_post`** — `maintenance-hub-staging`'s live Cloudflare deploy was confirmed stale
+(`BUILD_VERSION` stuck on `2026-09-23.12`) for ~20+ minutes after the PR #65 merge, even after a
+direct nudge commit to the `staging` git branch (which did trigger a new deploy per
+`workers_list()`'s `modified_on`, but the resulting live bundle — fetched via
+`workers_get_worker_code` — still didn't contain `/admin/set-alert-flags`, and didn't even match
+either git branch's content, e.g. it carried unrelated Vendor Standalone Billing code not on
+`staging`). This is a deploy-pipeline drift affecting the whole `maintenance-hub-staging`
+environment today, not specific to this build — see the Vendor Task Requests entry in
+`FEATURE_LOG.md` (PR #66, "maintenance-hub-staging is several PRs behind") hitting the identical
+issue in a separate session around the same time, and the original documented root cause at
+[FL-20260920-1710-sb]. **Next step for Brett or a fresh session:** once the staging deploy catches
+up (no tool in this session can trigger/inspect a Cloudflare Build beyond nudge-commits +
+`workers_get_worker_code` polling), confirm via `hub_test_post('/admin/set-alert-flags',
+{failure_alert_enabled:true})` + `hub_test_get('/config')` read-back, then decide on merging PR
+#67 to `main`.
+
+---
+
+# Sep 24, 2026, ~17:20 ET — BUILT (branch pushed, PR pending): CAP-036 batch 2 — photo-request SMS, delivery Twilio relay, store dropdown, button-select recipient picker, whole-property notify default, itemized vendor-portal receipts
+
+Full detail: `context/FEATURE_LOG.md` ([FL-20260924-1720-p2]). This batch covers CAP-036's
+items #1, #2, #5, #6, #7, #8, #11 (its own numbering — items #3/#4 are the separate
+notification-matrix deep dive, not touched; #12–#18 are separate builds already shipped or in
+flight in PRs #56/#58/#59/#61, not touched).
+
+**#1 — Photo-request SMS template + button on the WO.** New `📸 Request photos` button on the
+WO detail sticky bar (`sendPhotoRequestSMS`), alongside the existing `📱 Send update` button.
+Reuses the exact same `/wo/tenant-update-manual` chokepoint (same gating/audit/framing) with a
+canned default message pre-filled into the prompt instead of starting blank — Brett can still
+edit before it sends.
+
+**#2 — Number-entry → button-select for choosing an SMS recipient.** Searched worker.js/
+index.html/vendor.html for the "type 1/2/3" pattern and found exactly one real instance:
+`_pickSendMessageRecipient` (WO detail's ✉️ Message button, when a WO has more than one of
+tenant/owner/vendor on file). Replaced the `prompt()`+`parseInt` with a real button list in a
+new `#modal-pick-recipient` modal. (Everything else numbered — e.g. lockbox Possession_Status —
+is an unrelated single-field picker, not recipient selection, so left alone.)
+
+**#6 — Delivery relay through Twilio SMS + email.** `deliveries.html`'s "✉ Relay to tenant"
+button used to build an `sms:` URI that only ever opened the ADMIN's own phone's native
+messaging app — nothing was sent through Ridge Co's number, and there was no email at all
+(Phase 0 design comment: "no Twilio, no customer send," written before Twilio was wired up).
+New `POST /delivery/relay` actually sends: SMS via the existing `sendSMS` chokepoint (same
+admin-triggered direct-send pattern as `sendPinMessage`/`welcomeSend`'s non-gated sends) and
+email via the existing `gmailSendEmail` chokepoint when the tenant has one on file — no new
+send infrastructure. The client still lets Brett edit the text in a prompt before it goes out.
+
+**#7 — Delivery store field dropdown.** `deliveries.html`'s Store field is now a Home
+Depot/Lowe's/Ace Hardware/Walmart/Other dropdown, with the existing free-text input kept as the
+actual value (`#df-store`) that gets saved — an "Other…" selection reveals it for typing. No
+backend change; the Store column still accepts any string.
+
+**#8 — Delivery property picker → address prefill.** Checked `onPropertyChange()` in
+`deliveries.html` before building anything: it ALREADY fills `#df-address` from the selected
+property's address when the field is blank, and still lets Brett override it. Verified working,
+no change needed — CAP-036's note that this "doesn't populate" appears to predate this code, or
+was never actually broken.
+
+**#5 — Whole-property multi-unit WO tenant-SMS checkbox.** The tenant-safety screen shown on
+every WO creation (`openTenantSafetyScreen`) always defaulted both "Notify tenant..." checkboxes
+to checked regardless of whether a Unit was picked, with generic singular-tenant labels. Now: for
+a whole-property WO (no Unit selected) on a property that actually HAS units (`propUnits.length
+> 0` — a real multi-unit building, not a single-family property with zero Units rows), both
+checkboxes default UNCHECKED and relabel to "Notify all tenants in this property...". Single-unit
+and single-family WOs are unaffected — verified the underlying dispatch (`tenantsForDispatch`/
+`createWorkOrder`) already only ever reaches no-Unit tenants for a whole-property WO, never every
+unit's tenant, so this changes the default+label, not who could actually be reached.
+
+**#11 — Itemized receipts on Review Bills + vendor portal.** Found Review Bills' side ALREADY
+LIVE (`renderReceiptsJsonBreakdown` in index.html shows every `Receipts_JSON` line with a
+💳 CARD / 💵 REIMBURSE badge). The real gap was the vendor portal's own bill summary
+(`loadVendorBillSummary` in vendor.html), which listed each receipt's amount/description/photo
+link but never the pay-mode coding — added the same badge there so a vendor sees exactly how a
+receipt will be coded before it goes anywhere.
+
+**Verification:** `node --check` clean on worker.js and every inline `<script>` block in
+index.html/vendor.html. Two new structural test files — `test/delivery-relay.test.mjs` (10/10)
+and `test/cap-036-batch2-ui.test.mjs` (19/19) — same source-grab convention as
+`welcome-send.test.mjs`/`tenant-wo-settings-ui.test.mjs` (heavy Sheets/Twilio/Gmail I/O isn't
+worth mocking here). Ran a sample of pre-existing tests (`tenant-dispatch-whole-property`,
+`message-queue`, `tenant-note-notify`, `vendor-portal-link`) against the modified files —
+unaffected, no regressions. **`maintenance-hub-staging` was on `/version` 2026-09-23.12 at build
+time — predates even PR #55/#57, so stale relative to this branch — verified statically/locally
+instead of via a live staging smoke-test**, same allowance CAP-036's other builds have used.
+
+**Ship status:** all 7 items land in one PR (`feat/cap-036-batch2-photo-delivery-receipts`) since
+none of it needs to ship independently — per Brett's own scoping note. #1/#2/#8 touch real
+tenant communications (a canned SMS send, a message-recipient picker, and default notify
+behavior) so this is staged as a branch+PR for Brett's review per `AUTONOMY_GUARDRAILS_v1.0`,
+not auto-merged; #5(store)/#6(relay send)/#7(prefill, no-op)/#11 are UI-only or read-only but
+included in the same PR.
+
+---
 # Sep 24, 2026, ~17:00 ET — SHIPPED: Allow-list simplification (PR #55) + property/unit linking & duplicate-check (PR #57)
 
 ## 🟢 Live: Allow-list simplification, all 3 changes
@@ -23,6 +234,134 @@ copy of some of this repo's context (e.g. its own allow-list brief). This repo's
 Brett). Reconciliation across all ~30 Project docs is in progress — see `SESSION_STATE.md`'s Sep 24
 checkpoint for the concrete gaps found so far (stale `cabin-str.md`, stale
 `cleaning-vendor-push-RESUME.md`, a few project-only design docs never promoted to a build brief).
+
+---
+
+# Sep 24, 2026, ~17:00 ET — FIXED (branch pushed, PR pending): CAP-036 #21 Multi-tenant unit SMS fan-out — confirmed CODE bug, not data; both Lance/Emily and Julie/Alanna were always correctly linked
+
+**Task: investigate why Lance Serafica wasn't getting work-order SMS that Emily Marquez got, on
+the same unit (115 W 29th St Apt 3) — Brett suspected this might be systemic.**
+
+**Root cause, confirmed via read-only `hub_prod_get` calls (no production writes made):** this
+is a CODE bug, not a data problem. Apt 3 (Unit_ID 3): Lance Serafica (Tenant ID 103) and Emily
+Marquez (Tenant ID 118) are BOTH correctly linked in the Tenants sheet —
+`Unit_ID:"3"`/`Property_ID:"3"`, both `Active:"TRUE"`. Apt 2 (Unit_ID 2) shows the identical
+pattern: Julie Feldman (ID 80) and Alanna McLaughlin (ID 119) both correctly linked. No tenant
+or unit record needed correcting.
+
+The actual bug: `Units.Tenant_ID` is a single FK column that can only ever name ONE occupant
+(Units row 3's `Tenant_ID` pointed only at Emily/118; Units row 2's pointed only at
+Alanna/119). Every tenant-notification call site in worker.js — `assignVendor`,
+`updateStatus` (Complete + Accepted), `createWorkOrder`, `combineWorkOrders`, `splitWorkOrder`,
+`scheduleWO`, and `tenantManualUpdate` — resolved "the" tenant to notify via
+`currentTenantForDispatch(tenants, unit, wo)`, which follows that single pointer. So Lance and
+Julie were structurally never going to be notified, no matter how correctly their own Tenants
+rows were linked.
+
+**Fix (branch `fix/cap-036-multi-tenant-unit-sms-fanout`):** added a new function,
+`tenantsForDispatch(tenants, unit, wo)`, which instead queries the Tenants table directly by
+`Unit_ID` (ignoring `Units.Tenant_ID` entirely whenever `wo.Unit_ID` is set) and returns every
+currently-active tenant linked to that unit — falling back to the existing whole-property
+(no-Unit) behavior, unchanged, for property-wide WOs. Rewired all 7 call sites above to loop
+over `tenantsForDispatch(...)` instead of using the single result of
+`currentTenantForDispatch(...)`; each tenant in the loop is still individually gated through
+`isTenantNotifiable`/`smsGatedSend` exactly as before, so nothing about quiet-hours, phone
+presence, or background-WO suppression changed — only how many tenants get evaluated.
+`currentTenantForDispatch` itself was deliberately left byte-for-byte unchanged (not rebuilt on
+top of the new helper), so every existing single-tenant-only caller and test keeps behaving
+identically; whole-property broadcast still defaults to not messaging anyone, per the existing,
+already-decided behavior — this fix is scoped strictly to a WO's own unit/property tenants,
+never a building-wide fan-out.
+
+**Systemic scope, exploratory (no data fix made or needed):** cross-referencing the live
+`/tenants` data for duplicate `(Property_ID, Unit_ID)` pairs among active tenants found at
+least 8 more units with the identical one-tenant-only pointer shape: Property 6 Unit 11 (Sean
++ Will), Property 13 Unit 37 (Kelsey + a test tenant), Property 4 Unit 6 (Kenneth Wee + Ryan),
+Property 8 Unit 21 (VeAmber + Owen), Property 11 Unit 29 (Cole + Nadia), Property 5 Unit 9
+(Matt + Maddie), Property 4 Unit 5 (Valeria Pomales + Garima) — plus the two 115 W 29th units
+above. All of these were pure code-bug instances (Tenants rows correctly linked in every case
+checked); this one fix in worker.js resolves all of them, no per-unit data correction needed.
+
+**Verified locally** (staging `hub_test_*` only deploys from `main`, so an unmerged feature
+branch can't be exercised there — same limitation already logged for PR #56; relying on local
+Node test-harness execution instead): new `test/tenant-dispatch-multi-tenant-unit.test.mjs`
+(6/6) proves the Lance+Emily / Julie+Alanna fan-out and back-compat directly against the real
+production tenant/unit IDs; `test/tenant-privacy.test.mjs` (16/16) and
+`test/tenant-dispatch-whole-property.test.mjs` (6/6) confirm zero behavior change in
+`currentTenantForDispatch`; `test/wo-split.test.mjs` (64/64) and `test/wo-combine.test.mjs`
+(97/97) updated to add `tenantsForDispatch` to their sandboxed function extraction (their
+`new Function()` sandboxes now reference it) and re-verified passing; `test/turnover.test.mjs`
+(30/30) and `test/wo-duplicate-race.test.mjs` (12/12) re-run and confirmed unaffected (the
+tenant-notify block they exercise is try/catch-wrapped). Reviewed every other test file in the
+repo for any additional extraction of the 7 modified functions — none found.
+
+**Ship status: PR pending, not merged.** SMS-to-tenant behavior is GATED per
+AUTONOMY_GUARDRAILS ("Sending SMS/email to a real customer/owner/tenant"); staged for Brett's
+own review/merge per PAT-033.
+
+---
+
+# Sep 24, 2026, ~19:30 ET — BUILT (branch pushed, PR pending): CAP-036 #13 Vendor Loan/Advance Ledger (Gina manual + Alex automatic-deduction)
+
+Read `context/CAPTURE_INBOX.md`'s CAP-036 #13 entry (fully Brett-confirmed spec) and the actual
+vendor-bill/invoice-payment code (`addVendorBill`, `approveInvoiceReview`, `buildInvoiceLines`,
+`qbSendInvoice`) before touching anything — this is money-adjacent (vendor payments).
+
+**Built:** a reusable Vendor_Loan_Ledger tab (self-provisioning, same addSheet+ensureColumns
+pattern as Trash/Deliveries/Inspections) with ONE running balance per vendor, covering both
+halves of the spec with an `Entry_Type` field:
+
+- **Gina (manual):** admin-only "Manage Loan Ledger" modal — pick a vendor (button on the
+  Vendors page row, or from Edit Vendor), enter amount + direction (loan given / repayment
+  received) + date + notes, running balance shown live. `POST /vendor-loan/add`.
+- **Alex (automatic):** `computeLoanDeduction(laborAmount, currentBalance)` — a pure function,
+  fully unit-tested (`test/vendor-loan-deduction.test.mjs`, 15/15) — implements the exact
+  Brett-confirmed formula: no deduction under $100 labor; 2.5% at $100 scaling linearly to 5%
+  at $500+ labor; $25/invoice cap; round to the nearest $2.50 (down under $350 labor, up at
+  $351+); and a never-rounded, never-over-owed payoff exception when a deduction would clear
+  the balance (checked both before AND after rounding, since rounding up can itself push past
+  the remaining balance). Deduction bases ONLY on the LABOR portion (`Labor_Total`/`Flat_Rate`
+  on the Vendor_Bills row) — materials/reimbursement always passes through untouched, per
+  Brett's stated rationale (materials spend isn't within the vendor's control).
+
+**Where it hooks in:** `qbSendInvoice`'s single-bill send path (the ~95% ordinary case), right
+before the vendor Bill actually POSTs to QuickBooks. The deduction is sized read-only first (so
+the Bill payload carries the already-reduced amount + an appended "(Loan repayment: $X)" on its
+line description), and the ledger entry is only WRITTEN after a real QB Bill id comes back —
+so a failed send that gets retried can never double-deduct. The Send-to-QB **preview** also
+shows the pending deduction (read-only) before Brett ever confirms, and the confirm result's
+`warnings` array states the deduction and new balance plainly — never a silent subtraction.
+Running balance is visible on the vendor's own Edit modal and via the ledger modal.
+
+**Verification:** `node --check` clean on both `worker.js` and the extracted inline `<script>`
+blocks in `index.html`. `test/vendor-loan-deduction.test.mjs` — 15/15, covering the sub-$100
+floor, the $100/$150/$300 mid-scale rounding-down cases, the $350/$351 round-down/round-up
+boundary, the $500+ flat-5%-and-$25-cap case, and both payoff-exception shapes (raw deduction
+already over balance; rounding pushes a still-under-balance raw amount over). Re-ran the
+existing `combined-invoice.test.mjs` (16/16) and `invoice-hours.test.mjs` (7/7) against the
+modified `worker.js` unchanged — the multi-vendor combined-invoice path and the hours×rate
+labor-line logic this build sits next to are both untouched. Diffed the pushed branch content
+against the locally-verified files byte-for-byte to confirm the exact reviewed code shipped.
+
+**Verification gap, named plainly rather than routed around:** could not exercise
+`GET /vendor-loan` (or the send-invoice hook) against `maintenance-hub-staging` — confirmed via
+`GET /version` that staging is still serving the pre-branch `main` build
+(`2026-09-23.12-receipt-recon-reassign-refund-search`), so this branch's new route genuinely
+isn't deployed there yet; a completely unrelated fake path 401s the same way `hub_test_get`
+returned for `/vendor-loan`, which is consistent with staging's own auth gate not recognizing
+an undeployed path rather than anything wrong with the route itself. Same shape of gap as
+CAP-036 #17's `/vendor/update` finding — needs this PR merged (and staging redeployed) before
+a live GET/POST smoke test is possible.
+
+**Still needs Brett:** (1) review/merge the PR (money-adjacent, per PAT-033/AUTONOMY_GUARDRAILS
+— not auto-merged); (2) after it's live, add ONE manual ledger entry seeding Alex's starting
+balance — **$210**, the explicit placeholder he approved (a Home Depot Ryobi combo-kit purchase
+he can't find the exact receipt for) — via the new "Manage Loan Ledger" UI on Alex's vendor
+record; nothing else needs seeding, the ledger tracks correctly from there forward regardless
+of that starting number's exactness.
+
+`context/FEATURE_LOG.md` bumped to v2.09, `[FL-20260924-1930-vl]`. Branch
+`feat/cap-036-vendor-loan-ledger` pushed to `Ridge-Co/RidgeCo`, PR opened next.
 
 ---
 
