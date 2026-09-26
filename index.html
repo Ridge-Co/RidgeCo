@@ -4234,7 +4234,7 @@ function openEditPropertyModal(id){
 }
 function submitEditProperty(){
   var id=document.getElementById('ep-id').value;
-  var fields={Address:document.getElementById('ep-address').value,City:document.getElementById('ep-city').value,Market:document.getElementById('ep-market').value,Type:document.getElementById('ep-type').value,Lockbox_Code:document.getElementById('ep-lockbox').value,Lock_Code:document.getElementById('ep-lockcode').value,Water_Shutoff:document.getElementById('ep-shutoff').value,HVAC_Filter_Size:document.getElementById('ep-hvac').value,Breaker_Location:document.getElementById('ep-breaker').value,Access_Notes:document.getElementById('ep-access').value,Owner_ID:document.getElementById('ep-owner').value};
+  var fields={Address:document.getElementById('ep-address').value,City:document.getElementById('ep-city').value,Market:document.getElementById('ep-market').value,Type:document.getElementById('ep-type').value,Commercial_Subtype:(document.getElementById('ep-type').value==='commercial'?document.getElementById('ep-subtype').value:''),Lockbox_Code:document.getElementById('ep-lockbox').value,Lock_Code:document.getElementById('ep-lockcode').value,Water_Shutoff:document.getElementById('ep-shutoff').value,HVAC_Filter_Size:document.getElementById('ep-hvac').value,Breaker_Location:document.getElementById('ep-breaker').value,Access_Notes:document.getElementById('ep-access').value,Owner_ID:document.getElementById('ep-owner').value};
   if (EP_MULTI_TYPES.indexOf(fields.Type) !== -1) {
     var overrideVisible = document.getElementById('ep-unit-count-override-row').style.display !== 'none';
     var overrideVal = document.getElementById('ep-unit-count-override').value;
