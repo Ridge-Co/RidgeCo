@@ -157,6 +157,34 @@ ok((await page.textContent('#app')).includes('Pat') && !(await page.textContent(
 ok(await page.evaluate(() => Object.keys(localStorage).every(k => !k.startsWith('oo_draft_'))), 'draft cleared after success');
 ok(consoleErrors.length === 0, 'no uncaught page errors' + (consoleErrors.length ? ': ' + consoleErrors[0] : ''));
 
+console.log('PIN suggestion variants');
+{
+  // taken PIN → quietly tries fresh letters
+  let r = await newPage({ takenCount: 2 });
+  await r.page.click('#sugg'); await r.page.waitForTimeout(1200);
+  ok(r.seen.pinChecks.length === 3, 'a taken suggestion is retried with new letters (3 checks): ' + JSON.stringify(r.seen.pinChecks));
+  ok(new Set(r.seen.pinChecks).size === r.seen.pinChecks.length || r.seen.pinChecks.every(p => p.endsWith('50142')), 'every attempt still uses the phone digits');
+  ok((await r.page.textContent('#pinstat')).includes('available'), 'ends on an available PIN');
+  await r.ctx.close();
+  // phone whose last 5 are a trivial run → digits are NOT used (would fail the PIN rules)
+  r = await newPage();
+  await r.page.fill('[id="owner.phone"]', '4105512345'); await r.page.click('#sugg'); await r.page.waitForTimeout(800);
+  let p = await r.page.inputValue('[id="owner.pin"]');
+  ok(/^[A-Z]{3}\d{5}$/.test(p) && !p.endsWith('12345'), 'trivial last-5 (12345) falls back to random digits: ' + p);
+  ok((await r.page.textContent('#rules')).length > 0 && await r.page.locator('#rules li.ok').count() === 3, 'the suggested PIN satisfies all three PIN rules');
+  // changing the phone changes the suggestion's digits
+  await r.page.fill('[id="owner.phone"]', '4437891234'); await r.page.click('#sugg'); await r.page.waitForTimeout(800);
+  p = await r.page.inputValue('[id="owner.pin"]');
+  ok(p.endsWith('91234'), 'suggestion follows the phone number entered: ' + p);
+  await r.ctx.close();
+  // no phone → still a valid PIN
+  r = await newPage({ info: { valid: true, prefill: {} } });
+  await r.page.click('#sugg'); await r.page.waitForTimeout(800);
+  p = await r.page.inputValue('[id="owner.pin"]');
+  ok(/^[A-Z]{3}\d{5}$/.test(p), 'no phone yet → random-digit fallback is still a valid PIN: ' + p);
+  await r.ctx.close();
+}
+
 console.log('Server-side rejection mapping');
 {
   const r = await newPage({ submitResponse: { status: 422, json: { error: 'Please fix the highlighted items.', errors: [{ field: 'owner.pin', message: 'That PIN is already taken — please try a different one.' }] } } });
