@@ -1404,6 +1404,103 @@ async function reverseRefund(id, receiptId, btn){
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// ── Sep 23 2026 build: reassign a confirmed BMore/Ridge Co expense + manual refund marking ─────
+// Reuses the same property/unit/WO picker helpers (propertyOptions/unitOptions/woSelectHTML)
+// already built for the Pending flow above, just rendered into a per-card toggle panel instead
+// of always-on. onclick toggles it open/closed by checking whether the panel already has content.
+function toggleReassign(id){
+  const box = document.getElementById('rc'+id+'-reassign');
+  if (!box) return;
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  const idAttr = 'rc'+id;
+  const r = rowsById[id] || {};
+  const sug = rowSuggestions[id] || {};
+  const propId = (sug.property && sug.property.id) || '';
+  box.innerHTML = '<div class="rc-fields" style="margin-top:8px">'
+    + '<div><label>Property</label><select id="'+idAttr+'-ra-prop" onchange="refreshReassignUnit(\''+id+'\')">'+propertyOptions(propId)+'</select></div>'
+    + '<div><label>Unit (optional — narrows the work-order list)</label><select id="'+idAttr+'-ra-unit" onchange="refreshReassignWo(\''+id+'\')">'+unitOptions(propId,'')+'</select></div>'
+    + '<div><label>Work order (leave blank to just move the property, no job)</label><select id="'+idAttr+'-ra-wo"></select></div>'
+    + '<div class="full"><label>...or type a WO number directly</label><input id="'+idAttr+'-ra-wo-manual" list="wo-datalist" placeholder="e.g. 1234"></div>'
+    + '<div><label>Amount</label><input id="'+idAttr+'-ra-amt" value="'+esc(money(r.Confirmed_Amount||r.Total))+'"></div>'
+    + '<div><label>Store</label><input id="'+idAttr+'-ra-store" value="'+esc(r.Vendor||'')+'"></div>'
+    + '<div><label>Date</label><input id="'+idAttr+'-ra-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
+    + '<div class="full"><label>Description</label><textarea id="'+idAttr+'-ra-desc">'+esc(r.Confirmed_Description||'')+'</textarea></div>'
+    + '</div>'
+    + '<div class="row"><button class="btn small warnbtn" onclick="submitReassign(\''+id+'\', this)">Post reassignment</button>'
+    + '<span style="font-size:11px;color:var(--muted)">Voids the original BMore/Ridge Co expense (only works if it hasn\'t been emailed to QuickBooks yet) and posts a fresh receipt to whatever you pick here.</span></div>';
+  refreshReassignWo(id);
+}
+function refreshReassignUnit(id){
+  const idAttr = 'rc'+id;
+  const propSel = document.getElementById(idAttr+'-ra-prop');
+  const unitSel = document.getElementById(idAttr+'-ra-unit');
+  if (!propSel || !unitSel) return;
+  unitSel.innerHTML = unitOptions(propSel.value, '');
+  refreshReassignWo(id);
+}
+function refreshReassignWo(id){
+  const idAttr = 'rc'+id;
+  const propSel = document.getElementById(idAttr+'-ra-prop');
+  const unitSel = document.getElementById(idAttr+'-ra-unit');
+  const woSel = document.getElementById(idAttr+'-ra-wo');
+  if (!propSel || !woSel) return;
+  woSel.innerHTML = woSelectHTML(propSel.value, '', false, null, unitSel ? unitSel.value : '', '');
+}
+async function submitReassign(id, btn){
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const propSel = document.getElementById(idAttr+'-ra-prop');
+  const property_id = propSel ? propSel.value.trim() : '';
+  if (!property_id) { statusEl.innerHTML = '<span class="err">Pick a property first.</span>'; return; }
+  const woSel = document.getElementById(idAttr+'-ra-wo');
+  const woManual = document.getElementById(idAttr+'-ra-wo-manual');
+  const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
+  if (wo_id && !allWOs.some(w => String(w.ID) === wo_id)) { statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>'; return; }
+  const amount = document.getElementById(idAttr+'-ra-amt').value.trim();
+  const store = document.getElementById(idAttr+'-ra-store').value.trim();
+  const date = document.getElementById(idAttr+'-ra-date').value.trim();
+  const description = document.getElementById(idAttr+'-ra-desc').value.trim();
+  if (!confirm('Void the original BMore/Ridge Co expense and repost it '+(wo_id?('to WO '+wo_id):'to that property, no work order')+'? This only works if it hasn\'t been emailed to QuickBooks yet.')) return;
+  if (btn) btn.disabled = true;
+  statusEl.innerHTML = '<span class="info">Reassigning…</span>';
+  try {
+    const res = await post('/receipt-recon/reassign', { id, wo_id, property_id, amount, store, date, description });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Reassigned to '+esc(wo_id||('Property '+property_id))+'.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Pending-row manual refund toggle. The card re-renders with different fields once the category
+// flips (see rowCard's isRefund branch), so this does a full reload rather than a DOM patch —
+// same trade-off loadAudit/markAudit already make for their own re-render.
+async function markRefundPending(id, refund, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('rc'+id+'-status');
+  if (statusEl) statusEl.innerHTML = '<span class="info">'+(refund?'Marking as a refund…':'Undoing refund mark…')+'</span>';
+  try {
+    const res = await post('/receipt-recon/mark-refund', { id, refund });
+    if (res.error) throw new Error(res.error);
+    await loadQueue();
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Undo a confirmed/attached-only receipt into the refund flow. On success the row is back in
+// Pending flagged as a refund — finishCard removes it from THIS (confirmed/attached_only) tab;
+// switching to the Pending tab shows it with the normal find-match/negative-expense refund UI.
+async function markRefundConfirmed(id, btn){
+  const statusEl = document.getElementById('rc'+id+'-status');
+  if (!confirm('Pull this receipt back into Pending as a refund? If it was already billed, the original expense/receipt gets voided first (only works if it hasn\'t been emailed to QuickBooks yet) — then it shows up in Pending flagged as a refund, same flow as any other refund.')) return;
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.innerHTML = '<span class="info">Converting to a refund…</span>';
+  try {
+    const res = await post('/receipt-recon/mark-refund-confirmed', { id });
+    if (res.error) throw new Error(res.error);
+    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Moved back to Pending, flagged as a refund.</span>';
+    finishCard(id);
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 // 1864 Kerns School Rd (Milam Ridge, Property 85 — Brett's own STR, no owner to bill). Found by
 // address rather than a hardcoded ID so a renumbered Properties tab can't silently point this
 // button at someone else's building.
