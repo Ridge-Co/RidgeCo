@@ -187,6 +187,9 @@
       <button class="btn small secondary" onclick="clearBulkSelection()">Clear</button>
     </div>
   </div>
+  <div class="row" id="rc-filter-bar" style="display:none">
+    <input id="rc-filter-input" placeholder="Filter this list by amount, store, or notes…" style="flex:1" oninput="onQueueFilterInput(this.value)">
+  </div>
   <div id="list"><div class="empty">Loading…</div></div>
 </div>
 
