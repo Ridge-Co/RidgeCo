@@ -116,9 +116,9 @@ For each remaining inbound record, in order:
 1. **Register as direct-bill vendor** — pick/create the Vendor; set platform key, default property, QB expense account, billable customer, pre-approved flag. **Registering also confirms this first item**, and the card previews the exact QB entry that will be posted. Future emails from that key are automatic.
 2. **Attach to work order** — pick a WO (suggestions from vendor's open WOs). Enters the normal Vendor_Bills / Review Bills flow.
 3. **Record as expense** — creates the QuickBooks expense (or bill+payment if unpaid) with account, class/customer/property, payment account, and the email/PDF attached. For spend with no payable vendor. Supports "remember this merchant" so next time is one tap (or auto, if Brett opts the merchant in).
-4. **Dismiss (non-financial mail only)** — for marketing/notification mail that isn't an invoice or receipt. Never used for something that represents money spent. Dismiss can be "this email" or "this sender". (Brett: "this means I've spent money, I need to capture it.")
+4. **Skip (duplicate or not a real charge)** — same idea as Skip / mark-duplicate on the existing Receipt Reconciler. It is for a genuine invoice/receipt-shaped email that turns out to be a duplicate of something already recorded, or a charge that isn't yours. It is **not** a way to ignore non-financial mail, because non-financial mail never reaches a card (Step 0). Requires picking a reason (duplicate / not mine / other) and is kept in the Log for audit. *This is my addition to keep a card from ever being stuck; Brett did not ask for it and can drop it.*
 
-Cards are never auto-dismissed; the badge counts undecided cards.
+Cards are never auto-skipped; the badge counts undecided cards.
 
 ---
 
