@@ -1629,6 +1629,39 @@ function currentTenantForDispatch(tenants, unit, wo) {
   return isTenantCurrent(t) ? t : null;
 }
 
+// CAP-036 #21 fix (Sep 24 2026) — real case: 115 W 29th St Apt 2 (Julie Feldman + Alanna
+// McLaughlin) and Apt 3 (Lance Serafica + Emily Marquez) each have TWO active tenants sharing
+// one unit, and only one of them was ever getting work-order SMS (reassignment/completion/
+// scheduled/etc). Root cause was NOT a bad tenant/unit link — both tenants' own Tenants rows
+// correctly carry the same Unit_ID/Property_ID. The bug was that every tenant-notification call
+// site resolved "the" tenant via currentTenantForDispatch, which follows Units.Tenant_ID — a
+// single FK column that can only ever name one occupant — instead of asking the Tenants table
+// for every active tenant actually linked to that unit. Confirmed systemic: at least 8 other
+// live multi-tenant units show the same one-tenant-only pointer (153 W Lanvale Apt 1, 1214 N
+// Calvert Apt 2 & Apt 3, 3014 N Calvert Apt B, 928 N Calvert Apt 2F, 151 W Lanvale Apt 2, plus
+// the Apt 3/20 E Eager test row) — none of those needed a data fix either.
+//
+// tenantsForDispatch returns EVERY currently-active tenant tied to this WO's unit (or, for a
+// whole-property WO with no Unit_ID, every active no-Unit tenant at that property — same
+// fallback currentTenantForDispatch already used). This is deliberately still scoped to ONE
+// unit/property's own tenants, never a building-wide broadcast — that's a separate, already-
+// decided default-off case. Callers that need to actually SEND something still run each
+// returned tenant through isTenantNotifiable (phone present, not background-WO) individually,
+// exactly as they did for the single tenant before this fix.
+function tenantsForDispatch(tenants, unit, wo) {
+  const list = tenants || [];
+  let matches = [];
+  if (wo && wo.Unit_ID) {
+    matches = list.filter(t => t.Unit_ID === wo.Unit_ID && t.Active !== 'FALSE');
+  } else if (wo && wo.Property_ID && !wo.Unit_ID) {
+    matches = list.filter(t => t.Property_ID === wo.Property_ID && !t.Unit_ID && t.Active !== 'FALSE');
+  } else if (wo && wo.Tenant_ID) {
+    const t = list.find(x => String(x.ID) === String(wo.Tenant_ID));
+    if (t) matches = [t];
+  }
+  return matches.filter(isTenantCurrent);
+}
+
 // A WO opened before the tenant's Move_In_Date is "background" to them — work tied to
 // whoever lived there before (e.g. a turnover-cleaning WO opened while the unit was being
 // prepped for their move-in). Shared by isTenantNotifiable (SMS) and tenantWorkorders (portal
@@ -5418,9 +5451,10 @@ async function createWorkOrder(env, body) {
     // existing Tenant_Notify_Created toggle already covers. Delayed 1h so a fast assignment can
     // supersede/bump it (see the tenant_job_received check in processPendingNotifications)
     // instead of the tenant getting "we got it" immediately followed by "you're assigned".
-    const tenant = currentTenantForDispatch(tenants, unit, woLike);
+    // CAP-036 #21: every active tenant in the unit, not just one.
     const tenantNotifyCreated = body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE';
-    if (isTenantNotifiable(tenant, woLike) && tenantNotifyCreated) {
+    if (tenantNotifyCreated) for (const tenant of tenantsForDispatch(tenants, unit, woLike)) {
+      if (!isTenantNotifiable(tenant, woLike)) continue;
       const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
       const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
       const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
@@ -5845,8 +5879,9 @@ async function woCombine(env, body) {
     const unit = units.find(u => u.ID === survivorFresh.Unit_ID);
     const property = properties.find(p => p.ID === survivorFresh.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = currentTenantForDispatch(tenants, unit, survivorFresh);
-    if (isTenantNotifiable(tenant, survivorFresh) && survivorFresh.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (survivorFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, survivorFresh)) {
+      if (!isTenantNotifiable(tenant, survivorFresh)) continue;
       const idList = combinedIds.join(', ');
       const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
       await smsGatedSend(env, { wo_id: survivorId, message_type: 'tenant_wo_combined', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
@@ -6134,8 +6169,9 @@ async function woSplit(env, body) {
     const unit = units.find(u => u.ID === originalFresh.Unit_ID);
     const property = properties.find(p => p.ID === originalFresh.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = currentTenantForDispatch(tenants, unit, originalFresh);
-    if (isTenantNotifiable(tenant, originalFresh) && originalFresh.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (originalFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, originalFresh)) {
+      if (!isTenantNotifiable(tenant, originalFresh)) continue;
       const idList = createdWoIds.join(', ');
       const msg = `Hi ${tenant.First_Name}, work order ${originalId} was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
       await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
@@ -6183,7 +6219,9 @@ async function assignVendor(env, body) {
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner    = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const unit     = units.find(u => u.ID === wo.Unit_ID);
-  const tenant   = currentTenantForDispatch(tenants, unit, wo);
+  // CAP-036 #21: notify every active tenant linked to this unit, not just one — see
+  // tenantsForDispatch's comment for the real Lance/Emily (115 W 29th St) case this fixes.
+  const woTenants = tenantsForDispatch(tenants, unit, wo);
   const room     = (wo.Room||'').trim();
   const address  = property ? `${property.Address}${unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''}${room ? ' ('+room+')' : ''}` : 'the property';
   // Access info (lockbox codes, master key status, etc.) is deliberately NOT built or sent
@@ -6216,16 +6254,19 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
-  if (notify && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
+  if (notify) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface),
     // and a short job label (woJobLabel) so two same-trade/same-address jobs never read
     // identically in a text — "your General job" alone was indistinguishable from any other
-    // General job at the same address.
-    const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
-    const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-    tenantSMSSent = r.sent;
+    // General job at the same address. CAP-036 #21: loops every tenant in the unit (was one).
+    for (const tenant of woTenants) {
+      if (!tenant?.Phone || !isTenantNotifiable(tenant, wo)) continue;
+      const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
+      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
+      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+      if (r.sent) tenantSMSSent = true;
+    }
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
@@ -6279,8 +6320,10 @@ async function updateStatus(env, body) {
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
   if (body.status === 'Complete') {
-    const tenant = currentTenantForDispatch(tenants, unit, wo);
-    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just the one Units.Tenant_ID happens
+    // to name — see tenantsForDispatch's comment for the real Lance/Emily case this fixes.
+    if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
+      if (!isTenantNotifiable(tenant, wo)) continue;
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
       // same-address jobs distinguishable in the text (see tenant_job_assigned's comment).
       // Sep 16 2026 (Brett): dropped the "reply or call us" line — inbound SMS from a tenant
@@ -6297,8 +6340,9 @@ async function updateStatus(env, body) {
   // This is the automation the acceptance gate exists to enable: the status moving to
   // Accepted is the trigger, so a vendor who just starts the job no longer silently skips it.
   if (body.status === 'Accepted') {
-    const tenant = currentTenantForDispatch(tenants, unit, wo);
-    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
+      if (!isTenantNotifiable(tenant, wo)) continue;
       const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${wo.Trade} request at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
@@ -9559,8 +9603,9 @@ async function scheduleWO(env, body) {
   const unit=units.find(u=>u.ID===wo.Unit_ID), property=properties.find(p=>p.ID===wo.Property_ID);
   const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
-    const tenant=currentTenantForDispatch(tenants, unit, wo);
+    // CAP-036 #21: every active tenant in the unit, not just the one Units.Tenant_ID names.
     const address=property?property.Address+(unit&&unit.Unit_Label?' '+formatUnitLabel(unit.Unit_Label):''):'your address';
+    for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       // woJobLabel keeps two same-trade/same-address jobs distinguishable in the text.
@@ -9575,12 +9620,13 @@ async function scheduleWO(env, body) {
       // true when it actually goes out, not what was true when it was scheduled.
       if(schedDate===today||isWithinHour){
         const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_scheduled', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-        tenantSMSSent = r.sent;
+        if (r.sent) tenantSMSSent = true;
       } else {
         let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}
         await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter,{ message_type: 'tenant_job_scheduled', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
         notifyQueued=true;
       }
+    }
     }
   }
   // Owner Scheduled (Sep 15 2026 — real gap found live-testing rule 168): the owner-scheduled
@@ -10505,21 +10551,25 @@ async function tenantManualUpdate(env, body) {
   const [workorders, units, tenants, properties, owners] = await fetchTabs(env, ['Work_Orders','Units','Tenants','Properties','Owners']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const unit = units.find(u => u.ID === wo.Unit_ID);
-  // Reuse the same canonical lookup assignVendor/updateStatus/scheduleWO already use — this
-  // used to be a simpler inline lookup here that missed whole-property (no-Unit) tenants;
-  // see the fix + comment on currentTenantForDispatch itself.
-  const tenant = currentTenantForDispatch(tenants, unit, wo);
-  if (!tenant || !tenant.Phone) return json({ error: 'No tenant with a phone number on this work order' }, 400);
-  // currentTenantForDispatch already confirmed this tenant is current (active, not moved out);
-  // isBackgroundWO catches the other case it doesn't cover — a WO opened before this tenant's
-  // own move-in (background work tied to whoever lived here before them).
-  if (isBackgroundWO(tenant, wo)) return json({ error: 'This WO predates the tenant\'s move-in — not notifiable' }, 400);
+  // CAP-036 #21: tenantsForDispatch returns EVERY active tenant linked to this unit (was
+  // currentTenantForDispatch, which only ever named one via Units.Tenant_ID's single pointer).
+  const woTenants = tenantsForDispatch(tenants, unit, wo).filter(t => t.Phone && !isBackgroundWO(t, wo));
+  if (!woTenants.length) return json({ error: 'No tenant with a phone number on this work order' }, 400);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-  const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
-  const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), r.sent ? 'Sent' : (r.send_ok ? 'Send failed' : 'Queued — gate: ' + r.gate_snapshot)); } catch(_){}
-  return json({ success: true, sent: r.sent, send_ok: r.send_ok, queued_id: r.queued_id, gate_snapshot: r.gate_snapshot });
+  // Same text goes to every tenant in the unit (each gets their own First_Name greeting) —
+  // one admin-typed update, everyone actually living there sees it, same as any other WO SMS.
+  let anySent = false, anySendOk = false, lastGate = '', firstQueuedId = '';
+  for (const tenant of woTenants) {
+    const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+    if (r.sent) anySent = true;
+    if (r.send_ok) anySendOk = true;
+    if (r.gate_snapshot) lastGate = r.gate_snapshot;
+    if (r.queued_id && !firstQueuedId) firstQueuedId = r.queued_id;
+  }
+  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), anySent ? 'Sent' : (anySendOk ? 'Send failed' : 'Queued — gate: ' + lastGate)); } catch(_){}
+  return json({ success: true, sent: anySent, send_ok: anySendOk, queued_id: firstQueuedId, gate_snapshot: lastGate, tenant_count: woTenants.length });
 }
 
 // -- Custom one-off message to a single tenant/owner/vendor (Sep 21 2026) --------------------
