@@ -12358,10 +12358,7 @@ function baKeyTypeToSimple(kt) {
 
 function openBulkAccessModal() {
   var sel = document.getElementById('ba-owner');
-  sel.innerHTML = '<option value="">— select owner —</option>' +
-    safeArray(state.owners).filter(function(o){return o.Active!=='FALSE';}).map(function(o){
-      return '<option value="'+o.ID+'">'+esc((o.First_Name||'')+(o.Last_Name?' '+o.Last_Name:'')+(o.Company?' / '+o.Company:''))+'</option>';
-    }).join('');
+  sel.innerHTML = ownerOptionsHtml('', '<option value="">— select owner —</option>');
   document.getElementById('ba-rows').innerHTML = '<div style="color:var(--muted);font-size:12px">Select an owner to load their properties.</div>';
   document.getElementById('ba-msg').innerHTML = '';
   document.getElementById('ba-submit-btn').disabled = true;
