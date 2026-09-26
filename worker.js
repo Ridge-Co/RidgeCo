@@ -15128,6 +15128,9 @@ async function propertyUpdate(env, body) {
   if (PROPERTY_SOURCE_FIELDS.some(f => fields[f] !== undefined)) {
     try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {}
   }
+  if (fields.Commercial_Subtype !== undefined) {
+    try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {}
+  }
   return await updateRow(env, 'Properties', body.id, fields);
 }
 
