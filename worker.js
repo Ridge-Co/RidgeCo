@@ -12830,7 +12830,17 @@ async function vendorOnboardingStatus(env, url) {
   const vendor = vendors.find(v => String(v.ID) === String(vendorId));
   if (!vendor) return json({ error: 'Vendor not found', vendor_id: vendorId }, 404);
   const status = vendorOnboardingComplete(vendor);
-  return json({ vendor_id: vendorId, complete: status.complete, missing: status.missing });
+  // `values` (Sep 24 2026, Brett's ask) — the vendor's CURRENT stored Billing_Email/
+  // Billing_Address/Tax_ID, so the vendor-portal gate can prefill+lock a field that already has
+  // a real value on file instead of showing only its grey placeholder text on top of real data.
+  // Phone is intentionally not included here — the portal already reads it from the vendor's
+  // own session (session.vendor_phone), same as before this change.
+  const values = {
+    Billing_Email: vendor.Billing_Email || '',
+    Billing_Address: vendor.Billing_Address || '',
+    Tax_ID: vendor.Tax_ID || '',
+  };
+  return json({ vendor_id: vendorId, complete: status.complete, missing: status.missing, values });
 }
 
 // GET /vendor-onboarding-gaps — admin-only bulk report (index.html's new gap-report page). Every

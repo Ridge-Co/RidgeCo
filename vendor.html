@@ -211,7 +211,7 @@ input[type=file]{display:none;}
   </div>
 
   <div id="homeExtraButtons" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-    <button id="btnSubmitStandaloneBill" onclick="openStandaloneBillModal()" style="display:none;flex:1;min-width:150px;background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12.5px;font-weight:bold;padding:11px 10px;cursor:pointer">🧾 <span data-i18n="SUBMIT A BILL">SUBMIT A BILL</span></button>
+    <button id="btnSubmitStandaloneBill" onclick="openStandaloneBillModal()" style="display:none;flex:1;min-width:150px;background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12.5px;font-weight:bold;padding:11px 10px;cursor:pointer">🧾 <span data-i18n="SUBMIT AN INVOICE">SUBMIT AN INVOICE</span></button>
     <button id="btnLogOneOffJob" onclick="openOneOffJobModal()" style="display:none;flex:1;min-width:150px;background:var(--warn);color:#3a2a00;border:none;border-radius:6px;font-family:var(--font);font-size:12.5px;font-weight:bold;padding:11px 10px;cursor:pointer">🔧 <span data-i18n="LOG A ONE-OFF JOB">LOG A ONE-OFF JOB</span></button>
   </div>
 
@@ -998,7 +998,7 @@ function renderWOs(wos) {
           '<textarea id="notes-' + idx + '" placeholder="Add notes (optional)…"></textarea>' +
           '<div class="btn-row">' +
             '<button class="btn btn-sm btn-green" onclick="submitStatus(\'' + wo.ID + '\',' + idx + ')">SAVE STATUS</button>' +
-            '<button class="btn btn-sm" id="bill-btn-' + idx + '" style="background:var(--accent2);color:#fff" onclick="openBillModal(\'' + wo.ID + '\')">💰 Bill</button>' +
+            '<button class="btn btn-sm" id="bill-btn-' + idx + '" style="background:var(--accent2);color:#fff" onclick="openBillModal(\'' + wo.ID + '\')">💰 Submit Invoice</button>' +
           '</div>' +
           '<div id="action-msg-' + idx + '"></div>' +
           '<div id="bill-summary-' + idx + '" style="margin-top:8px"></div>' +
@@ -1380,7 +1380,7 @@ function loadVendorBillSummary(woId, idx) {
     if (!Array.isArray(bills) || !bills.length) {
       wrap.innerHTML = '';
       if (badge) badge.innerHTML = '';
-      if (btn) btn.textContent = '💰 Bill';
+      if (btn) btn.textContent = '💰 Submit Invoice';
       window._vendorBillCache = window._vendorBillCache || {};
       delete window._vendorBillCache[woId];
       return;
@@ -2287,17 +2287,31 @@ function submitMyInfo() {
 // in the same tap (brief section 3c) rather than making the vendor tap Bill twice.
 var _ciWOId = null, _ciVendorName = null, _ciTaxDocUrl = '';
 
-function openCompleteInfoModal(woId, vendorName, missing) {
+function openCompleteInfoModal(woId, vendorName, missing, values) {
   _ciWOId = woId; _ciVendorName = vendorName; _ciTaxDocUrl = '';
+  values = values || {};
   var phone = (session && session.vendor_phone) || '';
   document.getElementById('ci-phone').value = phone;
   // Phone is only locked when it's already on file — a vendor genuinely missing it (rare, but
   // it's in the required list) must still be able to type it in here.
   document.getElementById('ci-phone').readOnly = !!phone;
   document.getElementById('ci-phone').style.opacity = phone ? '0.7' : '1';
-  document.getElementById('ci-billing-email').value = (session && session.vendor_email) || '';
-  document.getElementById('ci-billing-address').value = '';
-  document.getElementById('ci-tax-id').value = '';
+  // Billing Email/Address/Tax ID: prefill + lock exactly like Phone above whenever the vendor
+  // already has a real value on file (from /vendor-onboarding-status's `values`), instead of
+  // leaving these fields showing only grey placeholder text on top of real stored data (the bug
+  // Brett caught via screenshot — Phone was the only field ever actually read back and locked).
+  var billingEmail = values.Billing_Email || '';
+  document.getElementById('ci-billing-email').value = billingEmail;
+  document.getElementById('ci-billing-email').readOnly = !!billingEmail;
+  document.getElementById('ci-billing-email').style.opacity = billingEmail ? '0.7' : '1';
+  var billingAddress = values.Billing_Address || '';
+  document.getElementById('ci-billing-address').value = billingAddress;
+  document.getElementById('ci-billing-address').readOnly = !!billingAddress;
+  document.getElementById('ci-billing-address').style.opacity = billingAddress ? '0.7' : '1';
+  var taxId = values.Tax_ID || '';
+  document.getElementById('ci-tax-id').value = taxId;
+  document.getElementById('ci-tax-id').readOnly = !!taxId;
+  document.getElementById('ci-tax-id').style.opacity = taxId ? '0.7' : '1';
   document.getElementById('ci-tax-doc').value = '';
   document.getElementById('ci-tax-doc-status').textContent = '';
   document.getElementById('ciMsg').innerHTML = '';
@@ -2690,7 +2704,7 @@ function submitVendorSched(modalId) {
 <div class="modal-overlay" id="modal-standalone-bill" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:20px;margin:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">🧾 SUBMIT A BILL</div>
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">🧾 SUBMIT AN INVOICE</div>
       <button onclick="closeStandaloneBillModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
     </div>
     <div style="background:var(--surface2);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:11.5px;color:var(--muted);line-height:1.5">
@@ -2818,7 +2832,7 @@ function openBillModal(woId, vendorName) {
   if (!vendorId) { _openBillModalReal(woId, vendorName); return; } // no session — fail open rather than block
   api('/vendor-onboarding-status?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
     if (res && res.complete) { _openBillModalReal(woId, vendorName); }
-    else { openCompleteInfoModal(woId, vendorName, (res && res.missing) || []); }
+    else { openCompleteInfoModal(woId, vendorName, (res && res.missing) || [], (res && res.values) || {}); }
   }).catch(function() {
     // A network hiccup checking the gate must never block billing outright — fail open, same
     // "never gate work" spirit the rest of this portal already follows.
@@ -3526,7 +3540,7 @@ var ES = {
   'SAVE STATUS':'GUARDAR ESTADO',
   'MATERIALS NEEDED':'MATERIALES NECESARIOS',
   'SUBMIT BILL':'ENVIAR FACTURA',
-  '💰 Bill':'💰 Facturar',
+  '💰 Submit Invoice':'💰 Enviar Factura',
   'By the Hour':'Por Hora',
   'Flat Price':'Precio Fijo',
   'LABOR':'MANO DE OBRA',
@@ -3567,7 +3581,7 @@ var ES = {
   'Saving…':'Guardando…',
   'Error saving — try again':'Error al guardar — intente de nuevo',
   // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026)
-  'SUBMIT A BILL':'ENVIAR UNA FACTURA',
+  'SUBMIT AN INVOICE':'ENVIAR UNA FACTURA',
   'LOG A ONE-OFF JOB':'REGISTRAR UN TRABAJO ÚNICO',
   'PROPERTY':'PROPIEDAD',
   'LINE ITEMS':'ARTÍCULOS',
