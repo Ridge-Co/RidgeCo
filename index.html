@@ -12111,7 +12111,7 @@ function submitEditOwner() {
 }
 
 function openAddOwnerModal() {
-  ['ao-company','ao-first','ao-last','ao-phone','ao-email','ao-pin','ao-rate'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['ao-company','ao-first','ao-last','ao-phone','ao-email','ao-pin','ao-rate','ao-b-name','ao-b-street','ao-b-city','ao-b-state','ao-b-zip','ao-b-phone','ao-b-email'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   document.getElementById('ao-msg').innerHTML = '';
   openModal('modal-add-owner');
 }
