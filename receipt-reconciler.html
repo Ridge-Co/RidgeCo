@@ -1262,6 +1262,7 @@ function rowCard(r){
     html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+(r.Duplicate_Confirmed_Date?(' · purges '+esc(purgeDateLabel(r.Duplicate_Confirmed_Date))):'')+'</span>';
   }
   html += '</div></div>';
+  html += '<div id="'+idAttr+'-reassign"></div>';
   html += '<div class="rc-status" id="'+idAttr+'-status"></div>';
   html += '</div>';
   return html;
