@@ -1,3 +1,128 @@
+# Sep 24, 2026, ~18:18 ET — INFRA FINDING: Cloudflare Workers Builds delayed/stuck (their incident, not our config) -- affects every PR merged to `main`/`staging` today
+
+**What happened:** merged PR #62 (`GET /brettos-tasks-summary`, per `context/TASK_LINKING_BUILD_BRIEF_v1.0.md`)
+and, following this repo's usual assumption ("main auto-deploys via Cloudflare Workers Builds, no
+action needed"), reported it as effectively live. It wasn't. Checked the Cloudflare dashboard
+directly with Brett: the `main`-triggered build for that merge commit (`45cff52`) sat in
+"Initializing" for 26+ minutes without ever reaching Cloning/Installing/Deploying, and the
+Deployments -> Build history view showed **~888 queued builds on `maintenance-hub`** (and ~1,802
+on `maintenance-hub-staging`) -- effectively every build triggered today, most never actually run.
+
+**Root cause confirmed, not guessed:** cloudflarestatus.com lists an active incident, **"Delays
+Starting Cloudflare Workers Builds"** (Minor Impact, Workers Builds affected service), started
+**Sep 24 2026, 1:33 PM EDT** -- matching almost exactly when this repo's queue jammed. This is
+Cloudflare's own infrastructure, currently in "Monitoring" status on their end. **Not a repo
+config problem**: both `maintenance-hub` (branch `main`) and `maintenance-hub-staging` (branch
+`staging`, "Builds for non-production branches" on) are correctly connected via Workers Builds
+Git integration -- confirmed directly in Settings -> Builds on both Workers. No setup change
+needed there.
+
+**Practical implication for every session today:** any PR merged to `main` or pushed to `staging`
+during this window (at minimum #58, #60, #62, #64 -- possibly more) may NOT actually be live in
+production/staging yet, even though several sessions' own summaries said "should deploy shortly."
+Don't trust "merged" == "live" until this clears. Check `/version` or the specific new route
+before telling Brett something is confirmed live.
+
+**Separately unresolved, lower priority:** the Deployments/Version History view on `maintenance-hub`
+also shows several "Manually deployed" entries via `Wrangler`, attributed to Brett, spaced roughly
+hourly through today (**before** this incident started) -- e.g. commits ending `95c4fe1b`,
+`b2ee9841`, `ceb66dd5` etc. Brett confirmed he is not running anything manually and doesn't know
+the source. Checked all Claude sessions from today (7 chats via `recent_chats`) -- none of them
+used `wrangler`; all made the same now-known-wrong "main auto-deploys" assumption this one did.
+Source of those Wrangler deploys is still unidentified. Not urgent right now, but worth a look if
+it recurs, since it means *something* has direct deploy access outside both the Git-integration
+path and any Claude session accounted for here.
+
+**No action needed to fix this** -- Brett is waiting for Cloudflare's incident to clear. Cloudflare
+Workers Builds auto-skips superseded queued builds for the same trigger once it resumes, so the
+newest queued `main` build (which is a superset of everything merged today, including PR #62)
+should deploy on its own without anyone needing to manually retry the specific `45cff52` build
+(which was cancelled mid-session, safely -- it was hung, not making progress). If builds still
+haven't resumed a good while after Cloudflare marks the incident resolved, the manual nudge is:
+Workers & Pages -> `maintenance-hub` -> Deployments -> find the newest `main` build -> "..." menu
+-> Retry (if offered), or ask a session to push a trivial no-op commit to `main` to re-trigger.
+
+---
+
+# Sep 24, 2026, ~17:45 ET — BUILT (branch pushed, PR #66 open, not merged): CAP-036 #12 Vendor Task Requests -- "Flag Vendor Issue" + needs-your-review queue
+
+Confirmed spec: `context/CAPTURE_INBOX.md` CAP-036 item #12. A NEW system, separate from the
+existing `Vendor_Requests`/`processVendorNudges` automatic chase-a-quiet-vendor clock -- this is
+Brett explicitly flagging a vendor issue: three canned request types (Request Photos, Request
+Description Update/Clarification, Other free-typed), always scoped to the vendor's estimate or
+invoice on the WO. Triggered from either the WO detail view or the Review Bills card. Surfaces
+in a dedicated "Needs Your Attention" section at the top of the vendor portal. Vendor "Mark
+Done" does NOT auto-resolve it -- per Brett's explicit instruction, it lands in a "Needs Your
+Review" queue on the Hub's Dev Log page until Brett does his own manual check.
+
+**Built:** new additive `Vendor_Task_Requests` Sheet tab (via the existing `ensureTab`/
+`ensureColumns` pattern); `POST /vendor-task-request/create` (admin, SMS via the existing
+`smsGatedSend` chokepoint), `GET /vendor-task-requests` (admin + vendor session, vendor_id
+forced from the verified session token for a vendor caller), `POST /vendor-task-request/
+mark-done` (vendor-side, sets `vendor_marked_done` -- never the terminal status), `GET
+/vendor-task-requests/pending-review` + `POST /vendor-task-request/mark-reviewed` (admin only,
+the only path to `reviewed_resolved`). `ROLE_SCOPES.vendor` gets exactly the two vendor-facing
+paths. UI: a "Flag Vendor Issue" trigger + this WO's own requests on the WO detail modal
+(index.html), a matching button on each Review Bills card, a "Needs Your Review" section on Dev
+Log, and a "Needs Your Attention" banner at the top of the vendor portal (vendor.html) loaded on
+login.
+
+**Deliberately avoided touching:** per this file's own note that CAP-036 sub-builds are landing
+concurrently across several open PRs, this build did not touch `index.html`'s WO-detail
+action-buttons block (`addBtn(...)` calls inside `openWODetail`) or `vendor.html`'s
+`loadVendorBillSummary` -- both are PR #63's (`feat/cap-036-batch2-photo-delivery-receipts`)
+territory. The new UI is added as its own separate `insertAdjacentHTML` call / function block
+alongside them instead.
+
+**Verified:** new `test/vendor-task-requests.test.mjs`, 27/27 passing (structural, same
+convention as `test/vendor-nudges.test.mjs` -- reads the real `worker.js` source, no live Sheets/
+Twilio calls). Re-ran `test/selftest.test.mjs` (107/107) and `test/vendor-nudges.test.mjs`
+(17/17) against the changed `worker.js` -- no regressions. `node --check` clean on `worker.js`
+and both HTML files' inline `<script>` blocks. **Not verified live** -- `maintenance-hub-staging`
+is several PRs behind several other just-built CAP-036 sub-builds (#56/#58/#59/#61/#63), so this
+pass relied on static/structural verification only, named plainly rather than routed around, same
+as other recent CAP-036 builds have flagged.
+
+**Ship status:** branch `feat/cap-036-vendor-task-requests` pushed to `Ridge-Co/RidgeCo`, PR #66
+(`https://github.com/Ridge-Co/RidgeCo/pull/66`) open, **not merged** -- vendor-facing SMS + a new
+data model, staged for Brett's own review per PAT-033/`AUTONOMY_GUARDRAILS_v1.0`, not
+auto-merged. `context/FEATURE_LOG.md` bumped to v2.10, `[FL-20260924-1745-vtr]`.
+
+---
+
+# Sep 24, 2026, ~17:56 ET — BUILT, staged for Brett: /admin/set-alert-flags (Queue #14/#10 opt-in toggle) — PR #67 open to `main`, NOT auto-merged (SMS-adjacent)
+
+## 🟡 Staged for Brett's review/merge: Failure Alerts / Dead Man's Switch admin toggle
+Full detail: `FEATURE_LOG.md` ([FL-20260924-1756-af]). Brett previously had NO way to flip
+`failure_alert_enabled`/`dead_man_switch_enabled` (Queue #14/#10, shipped dormant Sep 22) himself —
+`/config/set` needs the full `WORKER_SECRET` (no session/UI ever solicits it) and the only
+config-writing UI (Vendor Access Defaults) writes exactly one key. New `POST
+/admin/set-alert-flags` writes ONLY these 2 named Config keys — never a generic key/value
+passthrough, so it structurally cannot become a backdoor generic config setter. Added to
+`HUB_PROD_WRITE_PATHS` (additive) and to `hubTestWriteAllowed()` for staging testing. New Dev Log
+"🔔 ALERTING" section (two checkboxes + Save) mirrors the Vendor Access Defaults UI pattern.
+Branch `feature/alert-flags-admin-toggle`, PR #65 merged to `staging`; PR #67 open to `main` for
+Brett's own review/merge per `AUTONOMY_GUARDRAILS_v1.0` (both alerts eventually page `admin_phone`
+via SMS, so this is SMS-adjacent, not autonomous). **Verification status:** `node --check` clean
+on both `worker.js` and the extracted inline JS from `index.html`; full manual trace of the
+auth-gate cascade + the new `hubTestWriteAllowed` case; the git `staging` branch confirmed
+byte-for-byte to carry the change. **Could NOT complete live HTTP verification via
+`hub_test_post`** — `maintenance-hub-staging`'s live Cloudflare deploy was confirmed stale
+(`BUILD_VERSION` stuck on `2026-09-23.12`) for ~20+ minutes after the PR #65 merge, even after a
+direct nudge commit to the `staging` git branch (which did trigger a new deploy per
+`workers_list()`'s `modified_on`, but the resulting live bundle — fetched via
+`workers_get_worker_code` — still didn't contain `/admin/set-alert-flags`, and didn't even match
+either git branch's content, e.g. it carried unrelated Vendor Standalone Billing code not on
+`staging`). This is a deploy-pipeline drift affecting the whole `maintenance-hub-staging`
+environment today, not specific to this build — see the Vendor Task Requests entry in
+`FEATURE_LOG.md` (PR #66, "maintenance-hub-staging is several PRs behind") hitting the identical
+issue in a separate session around the same time, and the original documented root cause at
+[FL-20260920-1710-sb]. **Next step for Brett or a fresh session:** once the staging deploy catches
+up (no tool in this session can trigger/inspect a Cloudflare Build beyond nudge-commits +
+`workers_get_worker_code` polling), confirm via `hub_test_post('/admin/set-alert-flags',
+{failure_alert_enabled:true})` + `hub_test_get('/config')` read-back, then decide on merging PR
+#67 to `main`.
+
 # Sep 24, 2026, ~17:00 ET — SHIPPED: Allow-list simplification (PR #55) + property/unit linking & duplicate-check (PR #57)
 
 ## 🟢 Live: Allow-list simplification, all 3 changes

@@ -210,7 +210,7 @@ window.addEventListener('pageshow', function(e){
       <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
       <button class="nav-btn" onclick="showPage('vendor-performance',this)">📊 VENDOR PERFORMANCE</button>
       <button class="nav-btn" onclick="showPage('vendor-onboarding',this)">📋 VENDOR ONBOARDING</button>
-      <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
+      <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG <span id="devlog-nav-badge" style="display:none;background:var(--danger);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span></button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
       <button class="nav-btn" onclick="showPage('messaging',this)">📢 MESSAGING</button>
     </nav>
@@ -223,6 +223,10 @@ window.addEventListener('pageshow', function(e){
       <div class="stat-card"><div class="num" id="stat-urgent">—</div><div class="label">URGENT</div></div>
       <div class="stat-card"><div class="num" id="stat-invoiced">—</div><div class="label">AWAITING PAYMENT</div></div>
       <div class="stat-card"><div class="num" id="stat-props">—</div><div class="label">PROPERTIES</div></div>
+    </div>
+    <div id="dashboard-var-tile" style="display:none;background:#fdf2e2;border:1px solid var(--warn);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;cursor:pointer" onclick="goToVendorAccessRequests()">
+      <span style="color:var(--warn);font-weight:bold;font-size:13px">⚠ <span id="dashboard-var-count">0</span> vendor access request(s) pending</span>
+      <span style="color:var(--muted);font-size:11px;margin-left:6px">— review in Dev Log</span>
     </div>
     <div class="section-title">ACTIVE WORK ORDERS</div>
     <div class="wo-list" id="dashboard-wo-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
@@ -393,6 +397,8 @@ window.addEventListener('pageshow', function(e){
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
       <button class="btn small" onclick="bulkSendPinFromTab('vendors-list')">📱 Send PIN to Selected</button>
       <button class="btn small" onclick="bulkSendWelcomeFromTab('vendors-list')">👋 Send Welcome to Selected</button>
+      <button class="btn small secondary" onclick="bulkEnableCanBillNoWO()">🧾 Enable No-WO Billing for Selected</button>
+      <button class="btn small secondary" onclick="bulkEnableCanCreateOwnWO()">🔧 Enable One-Off Job for Selected</button>
       <button class="btn small secondary" onclick="clearPinChecks('vendors-list')">Deselect All</button>
     </div>
     <div id="vendors-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
@@ -752,6 +758,9 @@ window.addEventListener('pageshow', function(e){
     </div>
     <div id="wishlist-filters" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
     <div id="wishlist-list" style="margin-bottom:24px"><div class="loading">No items yet</div></div>
+    <div class="section-title">VENDOR ACCESS REQUESTS <span id="var-nav-count-inline" style="display:none;color:var(--warn);font-size:11px;font-weight:normal">— pending</span></div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Vendors requesting billing access to a property not already on their Billing_Property_Access list (Vendor Standalone Billing, §3d). "Approve once" clears just this request; "Approve ongoing" also adds the property to their standing list.</div>
+    <div id="vendor-access-requests-list" style="margin-bottom:24px"><div class="loading">Loading…</div></div>
     <div class="section-title">TROUBLESHOOTING CACHE</div>
     <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review.</p>
     <button class="btn secondary small" onclick="loadCache()" style="margin-bottom:12px">↻ Refresh Cache List</button>
@@ -1146,6 +1155,7 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
       <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
+      <div class="form-group full"><label>No-WO billing — properties this vendor may bill against directly <span style="font-weight:normal;color:var(--muted)">(only used when "No-WO Bill" is checked)</span></label><div id="ev-billprop-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;margin-top:4px;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
   </div>
@@ -1743,6 +1753,7 @@ function _loadAllFinish(loaded) {
   renderDashboard(); renderWOPage(); renderPropertiesPage();
   renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
   loadWishlist();
+  loadVendorAccessRequests(); // keeps the Dashboard tile + Dev Log nav badge populated from app load, not only when Dev Log is opened
   setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
   processNotificationsBackground();
   toast('Loaded '+loaded+'/8 data sets','success');
@@ -3411,7 +3422,7 @@ function renderVendorsPage() {
   if (!vendors.length) { el.innerHTML='<div class="loading">'+(showInactive?'No inactive vendors.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet'))+'</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
-    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
@@ -3431,6 +3442,8 @@ function renderVendorsPage() {
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Bill_No_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanBillNoWO(\''+v.ID+'\',this.checked)" title="Can submit a standalone bill with no Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Create_Own_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanCreateOwnWO(\''+v.ID+'\',this.checked)" title="Can log their own One-Off Job Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
         (isInactive
@@ -3971,13 +3984,31 @@ function openEditVendorModal(id) {
   document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
   document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
   document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
+  renderEvBillingPropertyGrid(v.Billing_Property_Access||'');
   openModal('modal-edit-vendor');
+}
+// Vendor Standalone Billing (§2) — Billing_Property_Access multi-select, same checkbox-grid
+// pattern as the Add Vendor modal's Trades grid (tradeCheckboxes/'v-trades-grid').
+function renderEvBillingPropertyGrid(csv) {
+  var grid = document.getElementById('ev-billprop-grid');
+  if (!grid) return;
+  var selected = String(csv||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+  var props = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
+  grid.innerHTML = props.map(function(p){
+    var checked = selected.indexOf(String(p.ID))!==-1;
+    return '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text)">' +
+      '<input type="checkbox" class="ev-billprop-check" value="'+p.ID+'"'+(checked?' checked':'')+'> '+esc(p.Address||('Property '+p.ID))+'</label>';
+  }).join('') || '<div style="color:var(--muted);font-size:11px">No properties yet.</div>';
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
+  var billingProps = Array.from(document.querySelectorAll('.ev-billprop-check:checked')).map(function(c){return c.value;});
   var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim(),Active:document.getElementById('ev-active').value==='FALSE'?'FALSE':'TRUE'};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
+    return api('POST','/vendor/set-billing-property-access',{id:id,property_ids:billingProps});
+  }).then(function(res2){
+    if(res2&&res2.error){toast('Vendor updated, but billing-property access failed: '+res2.error,'warn');closeModal('modal-edit-vendor');loadAll();return;}
     toast('Vendor updated','success');closeModal('modal-edit-vendor');loadAll();
   }).catch(function(e){logError('Edit vendor',e.message);toast('Error: '+e.message,'error');});
 }
@@ -4505,6 +4536,60 @@ function renderWishlist(){
 function deleteWishlistItem(id){
   if(!confirm('Remove this item completely? (To keep it as history, use ✓ Done or ✗ N-A instead.)'))return;
   api('POST','/wishlist/delete',{id:id}).then(function(){wishlistItems=wishlistItems.filter(function(i){return String(i.ID)!==String(id);});renderWishlist();}).catch(function(e){toast('Error: '+e.message,'error');});
+}
+
+// ── Vendor Access Requests (Vendor Standalone Billing build brief §3d) ──────────────────────
+// Lazy-fetch-on-open, same pattern as Wishlist/Cache above. One GET backs BOTH the Dev Log
+// section here and the Dashboard's pending-count tile (renderDashboard), on purpose — Brett's
+// ask was that these two badges can never drift apart.
+var vendorAccessRequests = [];
+function loadVendorAccessRequests(){
+  api('GET','/vendor-access-requests?status=pending').then(function(rows){
+    vendorAccessRequests = Array.isArray(rows) ? rows : [];
+    renderVendorAccessRequests();
+    updateVendorAccessRequestBadges();
+  }).catch(function(e){ console.log('Vendor access requests load error', e); });
+}
+function renderVendorAccessRequests(){
+  var el = document.getElementById('vendor-access-requests-list'); if (!el) return;
+  if (!vendorAccessRequests.length) { el.innerHTML = '<div class="loading">No pending requests.</div>'; return; }
+  el.innerHTML = vendorAccessRequests.map(function(r){
+    var prop = safeArray(state.properties).find(function(p){ return String(p.ID)===String(r.Requested_Property_ID); });
+    var addr = prop ? prop.Address : ('Property ' + r.Requested_Property_ID);
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:var(--radius);padding:12px;margin-bottom:8px">' +
+      '<div style="font-size:13px;font-weight:bold">' + esc(r.Vendor_Name||'') + '</div>' +
+      '<div style="font-size:12px;color:var(--text);margin:2px 0">Requesting access to: ' + esc(addr) + '</div>' +
+      (r.Note ? '<div style="font-size:11.5px;color:var(--muted);font-style:italic;margin-bottom:6px">"' + esc(r.Note) + '"</div>' : '') +
+      '<div style="font-size:10.5px;color:var(--muted);margin-bottom:8px">' + esc((r.Created_Date||'').split('T')[0]) + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        '<button class="btn small" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'once\',\'approve\')">✓ Approve once</button>' +
+        '<button class="btn small" style="background:var(--accent2)" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'ongoing\',\'approve\')">✓ Approve ongoing</button>' +
+        '<button class="btn small danger" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'once\',\'deny\')">✗ Deny</button>' +
+      '</div></div>';
+  }).join('');
+}
+function decideVendorAccessRequest(id, scope, decision){
+  api('POST','/vendor-access-requests/approve',{id:id,scope:scope,decision:decision}).then(function(res){
+    if (res && res.error) { toast('Error: '+res.error,'error'); return; }
+    toast(decision==='deny' ? 'Denied' : ('Approved ('+scope+')'), 'success');
+    loadVendorAccessRequests();
+    loadAll(); // Billing_Property_Access may have changed — keep state.vendors fresh
+  }).catch(function(e){ toast('Error: '+e.message,'error'); });
+}
+function updateVendorAccessRequestBadges(){
+  var n = vendorAccessRequests.length;
+  var navBadge = document.getElementById('devlog-nav-badge');
+  if (navBadge) { navBadge.style.display = n>0 ? 'inline-block' : 'none'; navBadge.textContent = String(n); }
+  var inline = document.getElementById('var-nav-count-inline');
+  if (inline) inline.style.display = n>0 ? '' : 'none';
+  var tile = document.getElementById('dashboard-var-tile');
+  var tileCount = document.getElementById('dashboard-var-count');
+  if (tile) tile.style.display = n>0 ? 'block' : 'none';
+  if (tileCount) tileCount.textContent = String(n);
+}
+function goToVendorAccessRequests(){
+  var btn = document.querySelector('.nav-btn[onclick*="devlog"]');
+  showPage('devlog', btn);
 }
 function clearWishlistDone(){
   var gone=wishlistItems.filter(function(i){var s=wlStatusOf(i);return s==='Done'||s==='Not applicable';});
@@ -9370,16 +9455,25 @@ function renderIRCard(b, i) {
       (b.Invoice_File_URL ? ' — <a href="' + esc(b.Invoice_File_URL) + '" target="_blank" style="color:var(--info)">view file ↗</a>' : '') +
       '</div>' : '';
 
+  // Standalone bill (Vendor Standalone Billing build brief §5) — no Work_Orders row at all, so
+  // the lookup below never finds one. Resolve the address straight from Vendor_Bills.Property_ID
+  // instead of silently blanking the card (what used to happen here).
+  var isStandalone = String(b.Standalone||'').toUpperCase()==='TRUE';
+
   // Work order info from state. String-compare the property id — Sheets hands numeric-looking
   // ids back as strings inconsistently, and a strict === silently dropped the address.
-  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
-  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : null;
+  var wo = isStandalone ? null : safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  var standaloneProp = isStandalone ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(b.Property_ID); }) : null;
+  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : standaloneProp;
   var unitRow = wo ? safeArray(state.units).find(function(u) { return String(u.ID) === String(wo.Unit_ID); }) : null;
   var unitLabel = unitRow ? (unitRow.Unit_Label || '') : (wo ? (wo.Unit_Label || '') : '');
-  var addr = prop ? prop.Address : (wo ? (wo.Property_Address || wo.Property_ID || '—') : '—');
+  var addr = prop ? prop.Address : (wo ? (wo.Property_Address || wo.Property_ID || '—') : (isStandalone ? (b.Property_ID || '—') : '—'));
   if (addr && unitLabel) addr = addr + ' — Unit ' + unitLabel;
   var ownerRow = wo
-    ? '<div style="color:var(--muted);font-size:11px">Owner WO Ref: ' + esc(wo.Owner_WO_Ref || '—') + '</div>' : '';
+    ? '<div style="color:var(--muted);font-size:11px">Owner WO Ref: ' + esc(wo.Owner_WO_Ref || '—') + '</div>'
+    : (isStandalone
+      ? '<div style="margin-top:4px"><span style="background:#e8f0fb;border:1px solid var(--info);color:var(--info);border-radius:4px;padding:2px 7px;font-size:10px;font-weight:bold;letter-spacing:.04em">STANDALONE BILL — NO WO</span> <span style="color:var(--muted);font-size:11px;margin-left:6px">Bill-to: ' + esc(b.Bill_To==='ridgeco' ? "Ridge Co's own cost" : 'Property owner') + '</span></div>'
+      : '');
 
   // ── ALREADY HANDLED? ─────────────────────────────────────────
   // A bill only leaves this queue when its Vendor_Bills.Status flips to 'reviewed', which
@@ -9472,6 +9566,12 @@ function renderIRCard(b, i) {
           : '<div style="color:var(--warn);font-size:11.5px;font-style:italic">⚠ No description on this work order — open it to check before approving.</div>') +
         (tenantName ? '<div style="color:var(--muted);font-size:11px;margin-top:8px">Tenant: ' + esc(tenantName) + '</div>' : '') +
         (dateLine ? '<div style="color:var(--muted);font-size:11px;margin-top:2px">' + dateLine + '</div>' : '') +
+      '</div>';
+  } else if (isStandalone) {
+    jobHtml =
+      '<div style="background:#e8f0fb;border:1px solid var(--info);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12.5px;color:var(--text)">' +
+        '🧾 Standalone bill — no Work Order was ever created for this. Property: ' + esc(addr) + '.' +
+        (b.Notes ? '<div style="color:var(--muted);font-size:11.5px;margin-top:6px;font-style:italic">"' + esc(b.Notes) + '"</div>' : '') +
       '</div>';
   } else {
     jobHtml =
@@ -10572,6 +10672,47 @@ function toggleVendorInHouse(id, on) {
     renderVendorsPage();
   }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
 }
+
+// Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2) — same
+// inline-checkbox pattern as toggleVendorInHouse above, one dedicated endpoint per flag.
+function toggleVendorCanBillNoWO(id, on) {
+  api('POST', '/vendor/set-can-bill-no-wo', { id: id, value: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
+    toast(on ? 'Can now submit a bill with no Work Order' : 'No-WO billing turned off', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.Can_Bill_No_WO = on ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
+}
+function toggleVendorCanCreateOwnWO(id, on) {
+  api('POST', '/vendor/set-can-create-own-wo', { id: id, value: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
+    toast(on ? 'Can now log their own One-Off Job' : 'One-Off Job turned off', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.Can_Create_Own_WO = on ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
+}
+// Bulk versions — the Vendors page's existing bulk-checkbox selection (pin-check), applied to
+// either new permission across every selected vendor.
+function bulkSetVendorPermission(field, endpoint) {
+  var checked = Array.from(document.getElementById('vendors-list').querySelectorAll('.pin-check:checked'));
+  if (!checked.length) return;
+  var ids = checked.map(function(cb) { return cb.dataset.id; });
+  if (!confirm('Enable this for ' + ids.length + ' selected vendor(s)?')) return;
+  Promise.all(ids.map(function(id) { return api('POST', endpoint, { id: id, value: true }).catch(function(){ return null; }); }))
+    .then(function() {
+      ids.forEach(function(id) {
+        var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+        if (v) v[field] = 'TRUE';
+      });
+      toast('Updated ' + ids.length + ' vendor(s)', 'success');
+      clearPinChecks('vendors-list');
+      renderVendorsPage();
+    });
+}
+function bulkEnableCanBillNoWO() { bulkSetVendorPermission('Can_Bill_No_WO', '/vendor/set-can-bill-no-wo'); }
+function bulkEnableCanCreateOwnWO() { bulkSetVendorPermission('Can_Create_Own_WO', '/vendor/set-can-create-own-wo'); }
 
 // CAP-036 #17 — self-service vendor deactivate/reactivate. Uses the same generic
 // /vendor/update + Active:'TRUE'/'FALSE' convention already used by the vendor-reject
