@@ -610,6 +610,8 @@ export default {
         if (path === '/set-pin')                  return await updateRow(env, 'Tenants', body.tenant_id, { PIN: body.pin });
         if (path === '/vendor/set-pin')           return await updateRow(env, 'Vendors', body.vendor_id, { PIN: body.pin });
         if (path === '/owner/set-pin')            return await updateRow(env, 'Owners', body.owner_id, { PIN: body.pin });
+        if (path === '/owner/pin-suggest')        return await ownerPinSuggest(env, body);
+        if (path === '/owner/set-pins')           return await ownerPinSet(env, body);
         // Contents (Aug 24, 2026): what a Lockbox key ACTUALLY holds — 'Front Door Only' |
         // 'Front Door + Unit Key' | 'Unit Key Only'. A Building-level lockbox entry is shown
         // to every unit's work order at that property (see getWOLockboxes below), which used
