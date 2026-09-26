@@ -17892,7 +17892,10 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
 
   const payload = { DisplayName: dn };
   if (owner.Company) payload.CompanyName = owner.Company;
-  const email = owner.Billing_Email || '';
+  // Falls back to the plain Email column (Sep 26 2026): the lookup above already used Billing_Email || Email,
+  // but creation only used Billing_Email — so an owner added with just an Email got a QuickBooks customer
+  // with NO email, and their invoices couldn't be emailed (Nirnay Pradhan / Rei, live).
+  const email = String(owner.Billing_Email || owner.Email || '').trim();
   if (email) payload.PrimaryEmailAddr = { Address: email };
   const phone = owner.Billing_Phone || owner.Phone || '';
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };
