@@ -579,8 +579,9 @@ export default {
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
         if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
-        if (path === '/owner/add')                return await addOwnerWithQBSync(env, body);
-        if (path === '/owner/update')             return await updateRow(env, 'Owners', body.id, body.fields);
+        // Billing_* already exist on the live sheet; ensureColumns keeps a fresh/staging sheet from silently dropping them (addRow/updateRow map by existing header only).
+        if (path === '/owner/add')                { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await addOwnerWithQBSync(env, body); }
+        if (path === '/owner/update')             { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await updateRow(env, 'Owners', body.id, body.fields); }
         if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
         if (path === '/owner/held-contact-note') return await setOwnerHeldContactNote(env, body);
