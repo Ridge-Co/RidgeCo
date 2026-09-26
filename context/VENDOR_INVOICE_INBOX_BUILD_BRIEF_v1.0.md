@@ -204,7 +204,7 @@ Regina's Venmo notes often include "less $10 loan repayment" (and sometimes "plu
 
 1. **Foundation (additive):** `Invoice_Inbox` tab; vendor columns (`Direct_Bill`, `Bill_Platform`, `Bill_Platform_Key`, `Default_Property_ID`, `Default_QB_Expense_Account_ID`, `Bill_Customer_ID`, `Pre_Approved`) via `ensureColumns` (check first whether Vendor_Type from the HYBRID brief already exists and reuse); `Payment_Accounts` tab + seed. Nothing live changes.
 2. **Intake:** extend the Apps Script (Invoice rules + record-file drop to "Invoice Inbox" folder), offline test harness like `receipt-mail-to-hub.test.mjs`. Install in brett@ and info@.
-3. **Parsers + classifier + queue:** Stripe/Square/Venmo parsers, generic PDF via existing OCR, `POST /invoice-inbox/scan`, queue rows, Who To Pay section + badge, the four card actions with previews.
+3. **Parsers + classifier + queue:** Stripe/Square/Venmo parsers, generic PDF via existing OCR, `POST /invoice-inbox/scan`, queue rows, Who To Pay section + badge, the card actions (register, attach to WO, record as expense, skip) with previews, and the Step 0 financial-mail filter.
 4. **QuickBooks posting:** bill create, record-payment route, expense route (reuse PR #44 expense path), attachment, payment-account resolution, duplicate guard, backfill run.
 5. **Later (not now):** daily digest by email/text; upload portal for vendors without email; Venmo/Zelle/Cash App parsers; auto-opt-in of "remembered" expense merchants.
 
