@@ -157,3 +157,20 @@ Checked commits: 373 (excluding merges/doc-audit itself)
 - `81edbc6` (2026-09-23 01:12) Part 5: add woDatesLabel/woDateWindowWarning pure helpers + embed in woSelectHTML — best single-entry match: 43%
 - `54caac0` (2026-09-23 00:44) Add receipt-duplicate-audit/flags to HUB_PROD_RO_READ_PATHS — best single-entry match: 33%
 - `6385a8d` (2026-09-23 00:06) Add urgent Part 0: intake-time cross-check against already-processed receipts — best single-entry match: 43%
+
+## Run: 2026-09-25 17:44 UTC
+Since: 2026-09-24 (source: this script's own last recorded run)
+Checked commits: 123 (excluding merges/doc-audit itself)
+**7 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `db4e1f7` (2026-09-24 17:11) TASK_LINKING_BUILD_BRIEF: mark step 2 staged, flag unverified Sheet-sharing open question — best single-entry match: 44%
+- `a50f9ea` (2026-09-24 17:06) Fix: statement importer re-processed the same first 100 rows on resume — add offset/next_offset — best single-entry match: 44%
+- `5d0126e` (2026-09-24 16:59) Add Task Linking + One-Off→System Surfacing build brief (design capture, doc-only) — best single-entry match: 33%
+- `c1ac6cd` (2026-09-24 15:14) Clarify Alex loan deduction floor: no deduction under $100 — best single-entry match: 29%
+- `b3c9353` (2026-09-24 15:12) Add Alex loan deduction formula to CAP-036 (final) — best single-entry match: 33%
+- `96654d0` (2026-09-24 15:07) Resolve Alex loan starting balance as an approximate placeholder — best single-entry match: 43%
+- `4a2b083` (2026-09-24 15:01) Update CAP-036 with Brett's answers: Alex loan source (unconfirmed amount), Pending-Info scope, notification-matrix priority — best single-entry match: 33%
+
+## Run: 2026-09-26 16:50 UTC
+Since: 2026-09-25 (source: this script's own last recorded run)
+Checked commits: 1 (excluding merges/doc-audit itself)
+No gaps flagged.

@@ -187,13 +187,16 @@
       <button class="btn small secondary" onclick="clearBulkSelection()">Clear</button>
     </div>
   </div>
+  <div class="row" id="rc-filter-bar" style="display:none">
+    <input id="rc-filter-input" placeholder="Filter this list by amount, store, or notes…" style="flex:1" oninput="onQueueFilterInput(this.value)">
+  </div>
   <div id="list"><div class="empty">Loading…</div></div>
 </div>
 
 <datalist id="wo-datalist"></datalist>
 
 <script>
-const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['attached_only','📎 Attached only'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'], ['trucks','🚚 Truck Stock'], ['audit','🔍 Audit older'] ];
+const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['attached_only','📎 Attached only'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'], ['trucks','🚚 Truck Stock'], ['audit','🔍 Audit older'], ['search','🔎 Search'] ];
 // Mirrors worker.js's OPEN_WO_STATUSES/RECEIPT_OPEN_STATUSES exactly — keep in sync if that
 // list ever changes server-side. Used only to split the WO picker into open vs closed/past.
 const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
@@ -411,12 +414,39 @@ function rebuildWoDatalist(){
   dl.innerHTML = allWOs.map(w => '<option value="'+esc(w.ID)+'">'+esc(w.ID+' — '+(w.Description||'').slice(0,60))+'</option>').join('');
 }
 
+// Sep 23 2026 build: a lightweight client-side filter over whatever this tab already loaded —
+// no extra round-trip, since the whole point is a fast eyeball check ("did I already process
+// this $101.28 receipt") against a list that's already in memory. lastQueueRows always holds the
+// last unfiltered fetch; queueFilterText survives a tab switch so it doesn't feel like it reset.
+let lastQueueRows = [];
+let queueFilterText = '';
+function toggleFilterBar(show){
+  const bar = document.getElementById('rc-filter-bar');
+  if (bar) bar.style.display = show ? 'flex' : 'none';
+}
+function _clientNorm(s){ return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
+function filterQueueRows(text){
+  const t = _clientNorm(text);
+  if (!t) return lastQueueRows;
+  const tAmount = parseFloat(String(text).replace(/[^0-9.]/g,''));
+  const hasAmount = String(text).replace(/[^0-9.]/g,'').length > 0 && !isNaN(tAmount);
+  return lastQueueRows.filter(r => {
+    if (hasAmount && Math.abs((Number(r.Total)||0) - tAmount) < 0.01) return true;
+    const blob = _clientNorm([r.Vendor, r.PO_Reference, r.Notes, (r.items||[]).join(' ')].filter(Boolean).join(' '));
+    return blob.indexOf(t) >= 0;
+  });
+}
+function onQueueFilterInput(v){ queueFilterText = v; renderFiltered(); }
+function renderFiltered(){ render(filterQueueRows(queueFilterText)); }
+
 async function loadQueue(){
   const status = document.getElementById('conn-status');
   const list = document.getElementById('list');
   list.innerHTML = '<div class="empty">Loading…</div>';
+  toggleFilterBar(false);
   if (curStatus === 'trucks') { await loadTruckStock(status, list); return; }
   if (curStatus === 'audit') { await loadAudit(status, list); return; }
+  if (curStatus === 'search') { await loadSearchTab(status, list); return; }
   try {
     const [rows, wos, props, units] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
@@ -428,9 +458,59 @@ async function loadQueue(){
     allProperties = props || [];
     allUnits = units || [];
     rebuildWoDatalist();
-    render(rows || []);
-    status.textContent = '✅ '+(rows||[]).length+' '+curStatus;
+    lastQueueRows = rows || [];
+    const filterInput = document.getElementById('rc-filter-input');
+    if (filterInput) filterInput.value = queueFilterText;
+    toggleFilterBar(true);
+    renderFiltered();
+    status.textContent = '✅ '+(rows||[]).length+' '+curStatus+(queueFilterText?' ('+filterQueueRows(queueFilterText).length+' shown, filtered)':'');
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
+}
+
+// Brett, Sep 23 2026: "let me manually check whether I already processed this receipt" — a
+// read-only search of the canonical Receipts ledger (not just this session's own queue), so an
+// amount like 101.28 can be looked up directly instead of eyeballing the All tab. Never writes
+// anything.
+let lastSearchQuery = '';
+function searchTabHtml(){
+  return '<div class="section" style="margin-bottom:10px;padding:12px">'
+    + '<div class="row"><input id="rc-search-q" placeholder="amount, store, or description…" style="flex:1" value="'+esc(lastSearchQuery)+'" onkeydown="if(event.key===\'Enter\')runReceiptSearch()">'
+    + '<button class="btn small" onclick="runReceiptSearch()">Search</button></div>'
+    + '<div style="font-size:11px;color:var(--muted)">Searches every receipt ever recorded (billed, expensed, refunded, attached-only) — not just what\'s in this queue.</div>'
+    + '</div><div id="rc-search-results"></div>';
+}
+async function loadSearchTab(statusEl, list){
+  list.innerHTML = searchTabHtml();
+  statusEl.textContent = '';
+  if (lastSearchQuery) runReceiptSearch();
+}
+async function runReceiptSearch(){
+  const qEl = document.getElementById('rc-search-q');
+  const q = qEl ? qEl.value.trim() : '';
+  lastSearchQuery = q;
+  const box = document.getElementById('rc-search-results');
+  if (!box) return;
+  if (!q) { box.innerHTML = '<div class="empty">Type an amount, store, or description above.</div>'; return; }
+  box.innerHTML = '<div class="empty">Searching…</div>';
+  try {
+    const res = await get('/receipt-recon/search?q=' + encodeURIComponent(q));
+    if (res.error) throw new Error(res.error);
+    const results = res.results || [];
+    if (!results.length) { box.innerHTML = '<div class="empty">No matching receipts found.</div>'; return; }
+    box.innerHTML = results.map(searchResultCard).join('');
+  } catch(e){ box.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
+}
+function searchResultCard(r){
+  const where = r.wo_id ? ('WO '+esc(r.wo_id)+(r.wo_description?' — '+esc(r.wo_description.slice(0,50)):'')) : (r.property_address ? esc(r.property_address) : (r.category==='company' ? 'Ridge Co / general expense' : '(no property or WO)'));
+  const qb = r.qb_email_sent ? '<span class="pill suggest">✅ Sent to QuickBooks '+esc((r.qb_email_sent_date||'').slice(0,10))+'</span>' : '<span class="pill warn">Not yet sent to QuickBooks</span>';
+  const active = r.active ? '' : ' <span class="pill danger">Voided</span>';
+  return '<div class="rcard">'
+    + '<div class="rc-top"><div><div class="rc-title">'+esc(r.store||'(store unknown)')+' — $'+money(r.amount)+active+'</div>'
+    + '<div class="rc-sub">'+esc((r.date||'').slice(0,10))+' · '+where+' · '+esc(r.category||'')+(r.added_by?' · added by '+esc(r.added_by):'')+'</div></div>'
+    + '<div>'+qb+'</div></div>'
+    + (r.description ? '<div class="rc-items">'+esc(r.description)+'</div>' : '')
+    + (r.source_file_url ? '<div class="rc-foot"><a href="'+esc(r.source_file_url)+'" target="_blank">View receipt →</a><span></span></div>' : '')
+    + '</div>';
 }
 
 // Truck stock isn't a Receipt_Recon_Queue status — it's a different tab (Sep 2026, Brett's ask)
@@ -1163,12 +1243,26 @@ function rowCard(r){
     // attach to is the same interaction Confirm already uses.
     if (!excluded && !isCompany && !isRefund && isDuplicateFlagged) html += '<button class="btn secondary small" onclick="attachOnlyRow(\''+r.ID+'\', this)">📎 Attach image only, don\'t bill</button>';
     html += '<button class="btn secondary small" onclick="checkDuplicatesOne(\''+r.ID+'\', this)">🔍 Check duplicates</button>';
+    // Sep 23 2026 build: manual refund override for a row the automatic OCR-based refund
+    // detection missed. sug.manual_refund only appears when Brett himself flipped it (see
+    // listReceiptReconQueue in worker.js) — an auto-detected refund doesn't get an "undo" here,
+    // since that's a real scanner finding, not a manual guess.
+    if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', true, this)">🔄 Mark as refund</button>';
+    if (isRefund && sug.manual_refund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', false, this)">↩ Not a refund</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
     if (r.Status === 'skipped') html += '<button class="btn secondary small" onclick="unskipRow(\''+r.ID+'\', this)">↩ Move back to Pending</button>';
+    // Sep 23 2026 build: un-flip a confirmed BMore/Ridge Co expense and rebill it to a property +
+    // work order (Brett's ask — only offered for 'company'-category confirmed rows, and only
+    // works server-side while the original hasn't been emailed to QuickBooks yet).
+    if (r.Status === 'confirmed' && sug.category === 'company') html += '<button class="btn secondary small" onclick="toggleReassign(\''+r.ID+'\')">🔁 Reassign to a work order</button>';
+    // Undo a wrongly confirmed/expensed receipt into the refund flow — reuses the exact Pending
+    // refund UI once it drops back to Pending (see markRefundConfirmed).
+    if (['confirmed','attached_only'].includes(r.Status) && sug.category !== 'refund') html += '<button class="btn secondary small" onclick="markRefundConfirmed(\''+r.ID+'\', this)">↩ Mark as refund</button>';
     html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+(r.Duplicate_Confirmed_Date?(' · purges '+esc(purgeDateLabel(r.Duplicate_Confirmed_Date))):'')+'</span>';
   }
   html += '</div></div>';
+  html += '<div id="'+idAttr+'-reassign"></div>';
   html += '<div class="rc-status" id="'+idAttr+'-status"></div>';
   html += '</div>';
   return html;
@@ -1308,6 +1402,103 @@ async function reverseRefund(id, receiptId, btn){
     statusEl.innerHTML = '<span class="ok">✓ Reversed $'+esc(money(Math.abs(Number(res.amount)||0)))+' against WO '+esc(res.wo_id||'')+'.'+extra+'</span>';
     finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// ── Sep 23 2026 build: reassign a confirmed BMore/Ridge Co expense + manual refund marking ─────
+// Reuses the same property/unit/WO picker helpers (propertyOptions/unitOptions/woSelectHTML)
+// already built for the Pending flow above, just rendered into a per-card toggle panel instead
+// of always-on. onclick toggles it open/closed by checking whether the panel already has content.
+function toggleReassign(id){
+  const box = document.getElementById('rc'+id+'-reassign');
+  if (!box) return;
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  const idAttr = 'rc'+id;
+  const r = rowsById[id] || {};
+  const sug = rowSuggestions[id] || {};
+  const propId = (sug.property && sug.property.id) || '';
+  box.innerHTML = '<div class="rc-fields" style="margin-top:8px">'
+    + '<div><label>Property</label><select id="'+idAttr+'-ra-prop" onchange="refreshReassignUnit(\''+id+'\')">'+propertyOptions(propId)+'</select></div>'
+    + '<div><label>Unit (optional — narrows the work-order list)</label><select id="'+idAttr+'-ra-unit" onchange="refreshReassignWo(\''+id+'\')">'+unitOptions(propId,'')+'</select></div>'
+    + '<div><label>Work order (leave blank to just move the property, no job)</label><select id="'+idAttr+'-ra-wo"></select></div>'
+    + '<div class="full"><label>...or type a WO number directly</label><input id="'+idAttr+'-ra-wo-manual" list="wo-datalist" placeholder="e.g. 1234"></div>'
+    + '<div><label>Amount</label><input id="'+idAttr+'-ra-amt" value="'+esc(money(r.Confirmed_Amount||r.Total))+'"></div>'
+    + '<div><label>Store</label><input id="'+idAttr+'-ra-store" value="'+esc(r.Vendor||'')+'"></div>'
+    + '<div><label>Date</label><input id="'+idAttr+'-ra-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
+    + '<div class="full"><label>Description</label><textarea id="'+idAttr+'-ra-desc">'+esc(r.Confirmed_Description||'')+'</textarea></div>'
+    + '</div>'
+    + '<div class="row"><button class="btn small warnbtn" onclick="submitReassign(\''+id+'\', this)">Post reassignment</button>'
+    + '<span style="font-size:11px;color:var(--muted)">Voids the original BMore/Ridge Co expense (only works if it hasn\'t been emailed to QuickBooks yet) and posts a fresh receipt to whatever you pick here.</span></div>';
+  refreshReassignWo(id);
+}
+function refreshReassignUnit(id){
+  const idAttr = 'rc'+id;
+  const propSel = document.getElementById(idAttr+'-ra-prop');
+  const unitSel = document.getElementById(idAttr+'-ra-unit');
+  if (!propSel || !unitSel) return;
+  unitSel.innerHTML = unitOptions(propSel.value, '');
+  refreshReassignWo(id);
+}
+function refreshReassignWo(id){
+  const idAttr = 'rc'+id;
+  const propSel = document.getElementById(idAttr+'-ra-prop');
+  const unitSel = document.getElementById(idAttr+'-ra-unit');
+  const woSel = document.getElementById(idAttr+'-ra-wo');
+  if (!propSel || !woSel) return;
+  woSel.innerHTML = woSelectHTML(propSel.value, '', false, null, unitSel ? unitSel.value : '', '');
+}
+async function submitReassign(id, btn){
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const propSel = document.getElementById(idAttr+'-ra-prop');
+  const property_id = propSel ? propSel.value.trim() : '';
+  if (!property_id) { statusEl.innerHTML = '<span class="err">Pick a property first.</span>'; return; }
+  const woSel = document.getElementById(idAttr+'-ra-wo');
+  const woManual = document.getElementById(idAttr+'-ra-wo-manual');
+  const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
+  if (wo_id && !allWOs.some(w => String(w.ID) === wo_id)) { statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>'; return; }
+  const amount = document.getElementById(idAttr+'-ra-amt').value.trim();
+  const store = document.getElementById(idAttr+'-ra-store').value.trim();
+  const date = document.getElementById(idAttr+'-ra-date').value.trim();
+  const description = document.getElementById(idAttr+'-ra-desc').value.trim();
+  if (!confirm('Void the original BMore/Ridge Co expense and repost it '+(wo_id?('to WO '+wo_id):'to that property, no work order')+'? This only works if it hasn\'t been emailed to QuickBooks yet.')) return;
+  if (btn) btn.disabled = true;
+  statusEl.innerHTML = '<span class="info">Reassigning…</span>';
+  try {
+    const res = await post('/receipt-recon/reassign', { id, wo_id, property_id, amount, store, date, description });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Reassigned to '+esc(wo_id||('Property '+property_id))+'.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Pending-row manual refund toggle. The card re-renders with different fields once the category
+// flips (see rowCard's isRefund branch), so this does a full reload rather than a DOM patch —
+// same trade-off loadAudit/markAudit already make for their own re-render.
+async function markRefundPending(id, refund, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('rc'+id+'-status');
+  if (statusEl) statusEl.innerHTML = '<span class="info">'+(refund?'Marking as a refund…':'Undoing refund mark…')+'</span>';
+  try {
+    const res = await post('/receipt-recon/mark-refund', { id, refund });
+    if (res.error) throw new Error(res.error);
+    await loadQueue();
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Undo a confirmed/attached-only receipt into the refund flow. On success the row is back in
+// Pending flagged as a refund — finishCard removes it from THIS (confirmed/attached_only) tab;
+// switching to the Pending tab shows it with the normal find-match/negative-expense refund UI.
+async function markRefundConfirmed(id, btn){
+  const statusEl = document.getElementById('rc'+id+'-status');
+  if (!confirm('Pull this receipt back into Pending as a refund? If it was already billed, the original expense/receipt gets voided first (only works if it hasn\'t been emailed to QuickBooks yet) — then it shows up in Pending flagged as a refund, same flow as any other refund.')) return;
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.innerHTML = '<span class="info">Converting to a refund…</span>';
+  try {
+    const res = await post('/receipt-recon/mark-refund-confirmed', { id });
+    if (res.error) throw new Error(res.error);
+    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Moved back to Pending, flagged as a refund.</span>';
+    finishCard(id);
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
 // 1864 Kerns School Rd (Milam Ridge, Property 85 — Brett's own STR, no owner to bill). Found by
