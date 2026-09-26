@@ -12059,6 +12059,9 @@ function openEditOwnerModal(id) {
   document.getElementById('eo-email').value = o.Email||'';
   document.getElementById('eo-rate').value = parseFloat(o.Hourly_Rate)>0 ? parseFloat(o.Hourly_Rate) : '';
   document.getElementById('eo-pin').value = o.PIN||'';
+  document.getElementById('eo-b-name').value = o.Billing_Name||''; document.getElementById('eo-b-street').value = o.Billing_Address||'';
+  document.getElementById('eo-b-city').value = o.Billing_City||''; document.getElementById('eo-b-state').value = o.Billing_State||'';
+  document.getElementById('eo-b-zip').value = o.Billing_Zip||''; document.getElementById('eo-b-phone').value = o.Billing_Phone||''; document.getElementById('eo-b-email').value = o.Billing_Email||'';
   document.getElementById('eo-active').value = o.Active==='FALSE' ? 'FALSE' : 'TRUE';
   document.getElementById('eo-two-toggle').value = o.Tenant_WO_Toggle==='ON'||o.Tenant_WO_Toggle==='OFF' ? o.Tenant_WO_Toggle : '';
   document.getElementById('eo-two-propids').value = o.Tenant_WO_Property_IDs||'';
