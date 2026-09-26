@@ -514,6 +514,7 @@ window.addEventListener('pageshow', function(e){
     </div>
     <div id="owners-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
+      <button class="btn small" onclick="openSetOwnerPinModal()" title="Set (or backfill) the sign-in PIN for the selected owners">🔑 Set PIN for Selected</button>
       <button class="btn small" onclick="bulkSendPinFromTab('owners-list')">📱 Send PIN to Selected</button>
       <button class="btn small secondary" onclick="clearPinChecks('owners-list')">Deselect All</button>
     </div>
