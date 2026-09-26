@@ -127,7 +127,10 @@ export default {
       // the existing, already-gated /vendor/update. The SAME page, opened while already logged
       // into the Hub (mh_auth present), instead calls the normal gated /vendor/add + this same
       // /contact-card/extract admin endpoint — see vendor-setup.html.
-      '/vendor-setup/contact-extract','/vendor-setup/submit'];
+      '/vendor-setup/contact-extract','/vendor-setup/submit',
+      // Owner self-serve onboarding (Sep 26 2026): public at the gate, but every handler requires a valid single-use
+      // invite token minted by Brett (Owner_Invites tab) — see the OWNER SELF-SERVE ONBOARDING block.
+      '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
