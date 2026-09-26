@@ -427,7 +427,7 @@ document.addEventListener('change', function(ev){
 document.addEventListener('click', function(ev){
   var b = ev.target.closest && ev.target.closest('[data-act],#sugg'); if (!b) return;
   var act = b.getAttribute('data-act'), pi = +b.getAttribute('data-pi'), j = +b.getAttribute('data-j');
-  if (b.id === 'sugg') { S.owner.pin = suggestPin(); pinState = { pin:'', ok:null, msg:'' }; delete errs['owner.pin']; render(); checkPin(); saveDraft(); return; }
+  if (b.id === 'sugg') { suggestAndCheck(0); return; }
   if (act === 'next') goNext();
   else if (act === 'back') { S.step--; errs = {}; topMsg = ''; render(); window.scrollTo(0,0); }
   else if (act === 'addprop') { S.properties.push(newProperty()); render(); }
