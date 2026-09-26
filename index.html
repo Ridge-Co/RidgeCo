@@ -1141,9 +1141,39 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
       <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
+      <div class="form-group full" style="border-top:1px solid var(--border);padding-top:10px">
+        <label>Loan / Advance Balance</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span id="ev-loan-balance" style="font-weight:bold;font-size:14px">—</span>
+          <button type="button" class="btn small secondary" onclick="openVendorLoanModal(document.getElementById('ev-id').value, document.getElementById('ev-name').value)">Manage Loan Ledger</button>
+        </div>
+      </div>
       <div class="form-group full"><label>No-WO billing — properties this vendor may bill against directly <span style="font-weight:normal;color:var(--muted)">(only used when "No-WO Bill" is checked)</span></label><div id="ev-billprop-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;margin-top:4px;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
+  </div>
+</div>
+
+<!-- VENDOR LOAN LEDGER MODAL (CAP-036 #13) — reusable for any vendor: Gina's manual Venmo
+     loan/repayment ledger, and a read-only view of Alex's (or anyone's) automatic invoice
+     deductions. Both entry types live in the same Vendor_Loan_Ledger tab, distinguished by
+     Entry_Type, shown together here so the running balance is always the whole story. -->
+<div class="modal-overlay" id="modal-vendor-loan">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">LOAN / ADVANCE LEDGER — <span id="vl-vendor-name"></span></div><button class="modal-close" onclick="closeModal('modal-vendor-loan')">✕</button></div>
+    <input type="hidden" id="vl-vendor-id">
+    <div style="font-size:22px;font-weight:bold;margin-bottom:10px">Balance: <span id="vl-balance">$0.00</span></div>
+    <div class="form-grid" style="margin-bottom:12px">
+      <div class="form-group"><label>Amount</label><input type="number" id="vl-amount" min="0.01" step="0.01" placeholder="0.00"></div>
+      <div class="form-group"><label>Direction</label><select id="vl-direction"><option value="loan">Loan / advance given (balance goes up)</option><option value="repayment">Repayment received (balance goes down)</option></select></div>
+      <div class="form-group"><label>Date</label><input type="date" id="vl-date"></div>
+      <div class="form-group full"><label>Notes</label><input type="text" id="vl-notes" placeholder="e.g. Venmo advance"></div>
+    </div>
+    <button class="btn" onclick="submitVendorLoanEntry()">Add Entry</button>
+    <div style="margin-top:14px;max-height:260px;overflow-y:auto">
+      <table class="data-table"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Balance After</th><th>Notes</th></tr></thead>
+      <tbody id="vl-entries"><tr><td colspan="5" class="loading">Loading…</td></tr></tbody></table>
+    </div>
   </div>
 </div>
 
@@ -3459,6 +3489,7 @@ function renderVendorsPage() {
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Create_Own_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanCreateOwnWO(\''+v.ID+'\',this.checked)" title="Can log their own One-Off Job Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
+        '<button class="btn small secondary" onclick="openVendorLoanModal(\''+v.ID+'\',\''+esc(nm)+'\')" title="Loan/advance ledger">$ Loan</button>' +
         (isInactive
           ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',true)" title="Reactivate this vendor">Reactivate</button>'
           : '<button class="btn small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',false)" title="Deactivate this vendor — hides them from assign/reassign pickers, keeps their history">Deactivate</button>') +
@@ -4033,6 +4064,11 @@ function openEditVendorModal(id) {
   document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
   document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
   document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
+  document.getElementById('ev-loan-balance').textContent = '…';
+  api('GET','/vendor-loan?vendor_id='+encodeURIComponent(v.ID)).then(function(res){
+    var bal = (res && typeof res.balance === 'number') ? res.balance : 0;
+    document.getElementById('ev-loan-balance').textContent = '$' + bal.toFixed(2) + (bal > 0 ? ' owed to Ridge Co' : '');
+  }).catch(function(){ document.getElementById('ev-loan-balance').textContent = '—'; });
   renderEvBillingPropertyGrid(v.Billing_Property_Access||'');
   openModal('modal-edit-vendor');
 }
@@ -4048,6 +4084,116 @@ function renderEvBillingPropertyGrid(csv) {
     return '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text)">' +
       '<input type="checkbox" class="ev-billprop-check" value="'+p.ID+'"'+(checked?' checked':'')+'> '+esc(p.Address||('Property '+p.ID))+'</label>';
   }).join('') || '<div style="color:var(--muted);font-size:11px">No properties yet.</div>';
+}
+
+// ── Vendor Loan/Advance Ledger (CAP-036 #13) — reusable for any vendor. Gina's manual
+// Venmo ledger and Alex's (or anyone else's) automatic invoice deductions share this one
+// modal/tab, distinguished by Entry_Type. ──────────────────────────────────────────────
+function openVendorLoanModal(vendorId, vendorName) {
+  document.getElementById('vl-vendor-id').value = vendorId;
+  document.getElementById('vl-vendor-name').textContent = vendorName || '';
+  document.getElementById('vl-amount').value = '';
+  document.getElementById('vl-notes').value = '';
+  document.getElementById('vl-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('vl-balance').textContent = '…';
+  document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" class="loading">Loading…</td></tr>';
+  openModal('modal-vendor-loan');
+  loadVendorLoanLedger(vendorId);
+}
+function loadVendorLoanLedger(vendorId) {
+  api('GET', '/vendor-loan?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
+    if (!res || res.error) { document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc((res && res.error) || 'Could not load ledger') + '</td></tr>'; return; }
+    var bal = Number(res.balance) || 0;
+    document.getElementById('vl-balance').textContent = '$' + bal.toFixed(2) + (bal > 0 ? ' owed to Ridge Co' : (bal < 0 ? ' (overpaid)' : ' — paid off'));
+    var entries = safeArray(res.entries).slice().reverse();
+    document.getElementById('vl-entries').innerHTML = entries.length
+      ? entries.map(function(e){
+          var amt = Number(e.Amount) || 0;
+          var typeLabel = e.Entry_Type === 'auto-deduction' ? 'Auto (invoice)' : (e.Entry_Type === 'seed' ? 'Starting balance' : 'Manual');
+          return '<tr><td>'+esc(e.Date||'')+'</td><td>'+esc(typeLabel)+'</td>' +
+            '<td style="color:'+(amt>=0?'var(--warn)':'var(--accent2)')+'">'+(amt>=0?'+':'')+'$'+amt.toFixed(2)+'</td>' +
+            '<td>$'+(Number(e.Balance_After)||0).toFixed(2)+'</td><td>'+esc(e.Notes||'')+'</td></tr>';
+        }).join('')
+      : '<tr><td colspan="5" class="loading">No entries yet.</td></tr>';
+  }).catch(function(e) {
+    document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc(e.message) + '</td></tr>';
+  });
+}
+function submitVendorLoanEntry() {
+  var vendorId = document.getElementById('vl-vendor-id').value;
+  var vendorName = document.getElementById('vl-vendor-name').textContent;
+  var amount = parseFloat(document.getElementById('vl-amount').value);
+  if (!(amount > 0)) { toast('Enter an amount greater than 0', 'error'); return; }
+  var body = {
+    vendor_id: vendorId, vendor_name: vendorName,
+    amount: amount, direction: document.getElementById('vl-direction').value,
+    date: document.getElementById('vl-date').value || undefined,
+    notes: document.getElementById('vl-notes').value.trim(),
+  };
+  api('POST', '/vendor-loan/add', body).then(function(res) {
+    if (!res || res.error) { toast('Error: ' + ((res && res.error) || 'unknown error'), 'error'); return; }
+    toast('Ledger entry added', 'success');
+    document.getElementById('vl-amount').value = '';
+    document.getElementById('vl-notes').value = '';
+    loadVendorLoanLedger(vendorId);
+    var evId = document.getElementById('ev-id');
+    if (evId && evId.value === vendorId) document.getElementById('ev-loan-balance').textContent = '$' + Number(res.balance).toFixed(2) + (res.balance > 0 ? ' owed to Ridge Co' : '');
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); });
+}
+
+// ── Vendor Loan/Advance Ledger (CAP-036 #13) — reusable for any vendor. Gina's manual
+// Venmo ledger and Alex's (or anyone else's) automatic invoice deductions share this one
+// modal/tab, distinguished by Entry_Type. ──────────────────────────────────────────────
+function openVendorLoanModal(vendorId, vendorName) {
+  document.getElementById('vl-vendor-id').value = vendorId;
+  document.getElementById('vl-vendor-name').textContent = vendorName || '';
+  document.getElementById('vl-amount').value = '';
+  document.getElementById('vl-notes').value = '';
+  document.getElementById('vl-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('vl-balance').textContent = '…';
+  document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" class="loading">Loading…</td></tr>';
+  openModal('modal-vendor-loan');
+  loadVendorLoanLedger(vendorId);
+}
+function loadVendorLoanLedger(vendorId) {
+  api('GET', '/vendor-loan?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
+    if (!res || res.error) { document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc((res && res.error) || 'Could not load ledger') + '</td></tr>'; return; }
+    var bal = Number(res.balance) || 0;
+    document.getElementById('vl-balance').textContent = '$' + bal.toFixed(2) + (bal > 0 ? ' owed to Ridge Co' : (bal < 0 ? ' (overpaid)' : ' — paid off'));
+    var entries = safeArray(res.entries).slice().reverse();
+    document.getElementById('vl-entries').innerHTML = entries.length
+      ? entries.map(function(e){
+          var amt = Number(e.Amount) || 0;
+          var typeLabel = e.Entry_Type === 'auto-deduction' ? 'Auto (invoice)' : (e.Entry_Type === 'seed' ? 'Starting balance' : 'Manual');
+          return '<tr><td>'+esc(e.Date||'')+'</td><td>'+esc(typeLabel)+'</td>' +
+            '<td style="color:'+(amt>=0?'var(--warn)':'var(--accent2)')+'">'+(amt>=0?'+':'')+'$'+amt.toFixed(2)+'</td>' +
+            '<td>$'+(Number(e.Balance_After)||0).toFixed(2)+'</td><td>'+esc(e.Notes||'')+'</td></tr>';
+        }).join('')
+      : '<tr><td colspan="5" class="loading">No entries yet.</td></tr>';
+  }).catch(function(e) {
+    document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc(e.message) + '</td></tr>';
+  });
+}
+function submitVendorLoanEntry() {
+  var vendorId = document.getElementById('vl-vendor-id').value;
+  var vendorName = document.getElementById('vl-vendor-name').textContent;
+  var amount = parseFloat(document.getElementById('vl-amount').value);
+  if (!(amount > 0)) { toast('Enter an amount greater than 0', 'error'); return; }
+  var body = {
+    vendor_id: vendorId, vendor_name: vendorName,
+    amount: amount, direction: document.getElementById('vl-direction').value,
+    date: document.getElementById('vl-date').value || undefined,
+    notes: document.getElementById('vl-notes').value.trim(),
+  };
+  api('POST', '/vendor-loan/add', body).then(function(res) {
+    if (!res || res.error) { toast('Error: ' + ((res && res.error) || 'unknown error'), 'error'); return; }
+    toast('Ledger entry added', 'success');
+    document.getElementById('vl-amount').value = '';
+    document.getElementById('vl-notes').value = '';
+    loadVendorLoanLedger(vendorId);
+    var evId = document.getElementById('ev-id');
+    if (evId && evId.value === vendorId) document.getElementById('ev-loan-balance').textContent = '$' + Number(res.balance).toFixed(2) + (res.balance > 0 ? ' owed to Ridge Co' : '');
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); });
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;

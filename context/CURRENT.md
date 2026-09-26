@@ -224,6 +224,70 @@ own review/merge per PAT-033.
 
 ---
 
+# Sep 24, 2026, ~19:30 ET — BUILT (branch pushed, PR pending): CAP-036 #13 Vendor Loan/Advance Ledger (Gina manual + Alex automatic-deduction)
+
+Read `context/CAPTURE_INBOX.md`'s CAP-036 #13 entry (fully Brett-confirmed spec) and the actual
+vendor-bill/invoice-payment code (`addVendorBill`, `approveInvoiceReview`, `buildInvoiceLines`,
+`qbSendInvoice`) before touching anything — this is money-adjacent (vendor payments).
+
+**Built:** a reusable Vendor_Loan_Ledger tab (self-provisioning, same addSheet+ensureColumns
+pattern as Trash/Deliveries/Inspections) with ONE running balance per vendor, covering both
+halves of the spec with an `Entry_Type` field:
+
+- **Gina (manual):** admin-only "Manage Loan Ledger" modal — pick a vendor (button on the
+  Vendors page row, or from Edit Vendor), enter amount + direction (loan given / repayment
+  received) + date + notes, running balance shown live. `POST /vendor-loan/add`.
+- **Alex (automatic):** `computeLoanDeduction(laborAmount, currentBalance)` — a pure function,
+  fully unit-tested (`test/vendor-loan-deduction.test.mjs`, 15/15) — implements the exact
+  Brett-confirmed formula: no deduction under $100 labor; 2.5% at $100 scaling linearly to 5%
+  at $500+ labor; $25/invoice cap; round to the nearest $2.50 (down under $350 labor, up at
+  $351+); and a never-rounded, never-over-owed payoff exception when a deduction would clear
+  the balance (checked both before AND after rounding, since rounding up can itself push past
+  the remaining balance). Deduction bases ONLY on the LABOR portion (`Labor_Total`/`Flat_Rate`
+  on the Vendor_Bills row) — materials/reimbursement always passes through untouched, per
+  Brett's stated rationale (materials spend isn't within the vendor's control).
+
+**Where it hooks in:** `qbSendInvoice`'s single-bill send path (the ~95% ordinary case), right
+before the vendor Bill actually POSTs to QuickBooks. The deduction is sized read-only first (so
+the Bill payload carries the already-reduced amount + an appended "(Loan repayment: $X)" on its
+line description), and the ledger entry is only WRITTEN after a real QB Bill id comes back —
+so a failed send that gets retried can never double-deduct. The Send-to-QB **preview** also
+shows the pending deduction (read-only) before Brett ever confirms, and the confirm result's
+`warnings` array states the deduction and new balance plainly — never a silent subtraction.
+Running balance is visible on the vendor's own Edit modal and via the ledger modal.
+
+**Verification:** `node --check` clean on both `worker.js` and the extracted inline `<script>`
+blocks in `index.html`. `test/vendor-loan-deduction.test.mjs` — 15/15, covering the sub-$100
+floor, the $100/$150/$300 mid-scale rounding-down cases, the $350/$351 round-down/round-up
+boundary, the $500+ flat-5%-and-$25-cap case, and both payoff-exception shapes (raw deduction
+already over balance; rounding pushes a still-under-balance raw amount over). Re-ran the
+existing `combined-invoice.test.mjs` (16/16) and `invoice-hours.test.mjs` (7/7) against the
+modified `worker.js` unchanged — the multi-vendor combined-invoice path and the hours×rate
+labor-line logic this build sits next to are both untouched. Diffed the pushed branch content
+against the locally-verified files byte-for-byte to confirm the exact reviewed code shipped.
+
+**Verification gap, named plainly rather than routed around:** could not exercise
+`GET /vendor-loan` (or the send-invoice hook) against `maintenance-hub-staging` — confirmed via
+`GET /version` that staging is still serving the pre-branch `main` build
+(`2026-09-23.12-receipt-recon-reassign-refund-search`), so this branch's new route genuinely
+isn't deployed there yet; a completely unrelated fake path 401s the same way `hub_test_get`
+returned for `/vendor-loan`, which is consistent with staging's own auth gate not recognizing
+an undeployed path rather than anything wrong with the route itself. Same shape of gap as
+CAP-036 #17's `/vendor/update` finding — needs this PR merged (and staging redeployed) before
+a live GET/POST smoke test is possible.
+
+**Still needs Brett:** (1) review/merge the PR (money-adjacent, per PAT-033/AUTONOMY_GUARDRAILS
+— not auto-merged); (2) after it's live, add ONE manual ledger entry seeding Alex's starting
+balance — **$210**, the explicit placeholder he approved (a Home Depot Ryobi combo-kit purchase
+he can't find the exact receipt for) — via the new "Manage Loan Ledger" UI on Alex's vendor
+record; nothing else needs seeding, the ledger tracks correctly from there forward regardless
+of that starting number's exactness.
+
+`context/FEATURE_LOG.md` bumped to v2.09, `[FL-20260924-1930-vl]`. Branch
+`feat/cap-036-vendor-loan-ledger` pushed to `Ridge-Co/RidgeCo`, PR opened next.
+
+---
+
 # Sep 24, 2026, ~16:00 ET — BUILT (branch pushed, PR pending): CAP-036 #17 Vendor active/inactive self-service UI; CAP-036 #18 (deactivate Emmanuel Tires + Brian Furr) BLOCKED — needs an interactive/PAT session
 
 **CAP-036 #17 — checked whether an Active/Inactive toggle already existed before building.**
