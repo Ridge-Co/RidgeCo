@@ -210,7 +210,7 @@ window.addEventListener('pageshow', function(e){
       <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
       <button class="nav-btn" onclick="showPage('vendor-performance',this)">📊 VENDOR PERFORMANCE</button>
       <button class="nav-btn" onclick="showPage('vendor-onboarding',this)">📋 VENDOR ONBOARDING</button>
-      <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG</button>
+      <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG <span id="devlog-nav-badge" style="display:none;background:var(--danger);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span></button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
       <button class="nav-btn" onclick="showPage('messaging',this)">📢 MESSAGING</button>
     </nav>
@@ -223,6 +223,10 @@ window.addEventListener('pageshow', function(e){
       <div class="stat-card"><div class="num" id="stat-urgent">—</div><div class="label">URGENT</div></div>
       <div class="stat-card"><div class="num" id="stat-invoiced">—</div><div class="label">AWAITING PAYMENT</div></div>
       <div class="stat-card"><div class="num" id="stat-props">—</div><div class="label">PROPERTIES</div></div>
+    </div>
+    <div id="dashboard-var-tile" style="display:none;background:#fdf2e2;border:1px solid var(--warn);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;cursor:pointer" onclick="goToVendorAccessRequests()">
+      <span style="color:var(--warn);font-weight:bold;font-size:13px">⚠ <span id="dashboard-var-count">0</span> vendor access request(s) pending</span>
+      <span style="color:var(--muted);font-size:11px;margin-left:6px">— review in Dev Log</span>
     </div>
     <div class="section-title">ACTIVE WORK ORDERS</div>
     <div class="wo-list" id="dashboard-wo-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
@@ -393,6 +397,8 @@ window.addEventListener('pageshow', function(e){
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
       <button class="btn small" onclick="bulkSendPinFromTab('vendors-list')">📱 Send PIN to Selected</button>
       <button class="btn small" onclick="bulkSendWelcomeFromTab('vendors-list')">👋 Send Welcome to Selected</button>
+      <button class="btn small secondary" onclick="bulkEnableCanBillNoWO()">🧾 Enable No-WO Billing for Selected</button>
+      <button class="btn small secondary" onclick="bulkEnableCanCreateOwnWO()">🔧 Enable One-Off Job for Selected</button>
       <button class="btn small secondary" onclick="clearPinChecks('vendors-list')">Deselect All</button>
     </div>
     <div id="vendors-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
@@ -504,10 +510,11 @@ window.addEventListener('pageshow', function(e){
   <div class="page" id="page-owners">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="section-title" style="margin:0">OWNERS &amp; USERS</div>
-      <button class="btn" onclick="openAddOwnerModal()">+ Add Owner</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn secondary" onclick="openOwnerInviteModal()" title="Create a link a new owner fills out themselves — owner, billing, properties, units and PIN land here automatically">📨 Owner Onboarding Link</button><button class="btn" onclick="openAddOwnerModal()">+ Add Owner</button></div>
     </div>
     <div id="owners-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
+      <button class="btn small" onclick="openSetOwnerPinModal()" title="Set (or backfill) the sign-in PIN for the selected owners">🔑 Set PIN for Selected</button>
       <button class="btn small" onclick="bulkSendPinFromTab('owners-list')">📱 Send PIN to Selected</button>
       <button class="btn small secondary" onclick="clearPinChecks('owners-list')">Deselect All</button>
     </div>
@@ -518,6 +525,7 @@ window.addEventListener('pageshow', function(e){
         <option value="active">Active Only</option>
         <option value="inactive">Inactive Only</option>
       </select>
+      <button class="btn small secondary" onclick="selectOwnersMissingPin()" title="Tick every listed owner who has no PIN yet, then tap Set PIN for Selected">☑ Select owners with no PIN</button>
     </div>
     <div id="owners-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
@@ -668,6 +676,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn small" onclick="window.open('inspect.html','_blank')">🔍 Inspection Scheduler — customers, properties, availability</button>
       <button class="btn small" onclick="window.open('action-center.html','_blank')">✅ Action Center — who to pay / to process</button>
       <button class="btn small" onclick="window.open('command-center.html','_blank')">📊 Command Center</button>
+      <button class="btn small" onclick="window.open('https://docs.google.com/spreadsheets/d/1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA/edit','_blank')">📋 BrettOS Tasks — open the Sheet (canonical, read-only here)</button>
       <button class="btn small" onclick="window.open('proposals.html','_blank')">💡 Proposals / greenlit queue</button>
       <button class="btn small" onclick="window.open('deliveries.html','_blank')">🚚 Deliveries</button>
       <button class="btn small" onclick="window.open('tenant-wo-access.html','_blank')">🔓 Tenant Work Order Access</button>
@@ -733,6 +742,9 @@ window.addEventListener('pageshow', function(e){
     </div>
     <div id="wishlist-filters" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
     <div id="wishlist-list" style="margin-bottom:24px"><div class="loading">No items yet</div></div>
+    <div class="section-title">VENDOR ACCESS REQUESTS <span id="var-nav-count-inline" style="display:none;color:var(--warn);font-size:11px;font-weight:normal">— pending</span></div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Vendors requesting billing access to a property not already on their Billing_Property_Access list (Vendor Standalone Billing, §3d). "Approve once" clears just this request; "Approve ongoing" also adds the property to their standing list.</div>
+    <div id="vendor-access-requests-list" style="margin-bottom:24px"><div class="loading">Loading…</div></div>
     <div class="section-title">TROUBLESHOOTING CACHE</div>
     <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review.</p>
     <button class="btn secondary small" onclick="loadCache()" style="margin-bottom:12px">↻ Refresh Cache List</button>
@@ -971,8 +983,9 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group full"><label>Address</label><input type="text" id="p-address" placeholder="123 Main St"></div>
       <div class="form-group"><label>City</label><input type="text" id="p-city" placeholder="Baltimore"></div>
       <div class="form-group"><label>Market</label><select id="p-market"><option>Baltimore</option><option>Waynesboro</option><option>Winchester</option><option>Other</option></select></div>
-      <div class="form-group"><label>Type</label><select id="p-type"><option value="house">House</option><option value="rowhome">Rowhome</option><option value="multi">Multi-Unit</option><option value="condo">Condo</option></select></div>
-      <div class="form-group"><label>Unit Count</label><input type="number" id="p-units" value="1" min="1"></div>
+      <div class="form-group"><label>Type</label><select id="p-type" onchange="apTypeChanged()"><option value="house">House</option><option value="rowhome">Rowhome</option><option value="multi">Multi-Unit</option><option value="condo">Condo</option><option value="commercial">Commercial</option></select></div>
+      <div class="form-group" id="p-subtype-wrap" style="display:none"><label>Commercial Type</label><select id="p-subtype"><option value="">Choose…</option><option value="retail">Retail</option><option value="mixed_use">Mixed use</option><option value="industrial">Industrial</option><option value="office">Office</option></select></div>
+      <div class="form-group"><label>Unit Count <span id="p-units-hint" style="font-weight:normal;color:var(--muted)"></span></label><input type="number" id="p-units" value="1" min="1"></div>
       <div class="form-group"><label>Lockbox Code</label><input type="text" id="p-lockbox" placeholder="4421"></div>
       <div class="form-group"><label>Door Lock Code</label><input type="text" id="p-lockcode" placeholder="1234"></div>
       <div class="form-group"><label>Water Shutoff</label><input type="text" id="p-shutoff" placeholder="Basement left wall"></div>
@@ -1021,7 +1034,8 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group full"><label>Address</label><input type="text" id="ep-address"></div>
       <div class="form-group"><label>City</label><input type="text" id="ep-city"></div>
       <div class="form-group"><label>Market</label><select id="ep-market"><option>Baltimore</option><option>Waynesboro</option><option>Winchester</option><option>Other</option></select></div>
-      <div class="form-group"><label>Type</label><select id="ep-type" onchange="epTypeChanged()"><option value="house">House</option><option value="rowhome">Rowhome</option><option value="multi">Multi-Unit</option><option value="condo">Condo</option></select></div>
+      <div class="form-group"><label>Type</label><select id="ep-type" onchange="epTypeChanged()"><option value="house">House</option><option value="rowhome">Rowhome</option><option value="multi">Multi-Unit</option><option value="condo">Condo</option><option value="commercial">Commercial</option></select></div>
+      <div class="form-group" id="ep-subtype-wrap" style="display:none"><label>Commercial Type</label><select id="ep-subtype"><option value="">Choose…</option><option value="retail">Retail</option><option value="mixed_use">Mixed use</option><option value="industrial">Industrial</option><option value="office">Office</option></select></div>
       <div class="form-group"><label>Lockbox Code</label><input type="text" id="ep-lockbox"></div>
       <div class="form-group"><label>Door Lock Code</label><input type="text" id="ep-lockcode"></div>
       <div class="form-group"><label>Water Shutoff</label><input type="text" id="ep-shutoff"></div>
@@ -1127,8 +1141,39 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
       <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
+      <div class="form-group full" style="border-top:1px solid var(--border);padding-top:10px">
+        <label>Loan / Advance Balance</label>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span id="ev-loan-balance" style="font-weight:bold;font-size:14px">—</span>
+          <button type="button" class="btn small secondary" onclick="openVendorLoanModal(document.getElementById('ev-id').value, document.getElementById('ev-name').value)">Manage Loan Ledger</button>
+        </div>
+      </div>
+      <div class="form-group full"><label>No-WO billing — properties this vendor may bill against directly <span style="font-weight:normal;color:var(--muted)">(only used when "No-WO Bill" is checked)</span></label><div id="ev-billprop-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;margin-top:4px;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div></div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-vendor')">Cancel</button><button class="btn" onclick="submitEditVendor()">Save Changes</button></div>
+  </div>
+</div>
+
+<!-- VENDOR LOAN LEDGER MODAL (CAP-036 #13) — reusable for any vendor: Gina's manual Venmo
+     loan/repayment ledger, and a read-only view of Alex's (or anyone's) automatic invoice
+     deductions. Both entry types live in the same Vendor_Loan_Ledger tab, distinguished by
+     Entry_Type, shown together here so the running balance is always the whole story. -->
+<div class="modal-overlay" id="modal-vendor-loan">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">LOAN / ADVANCE LEDGER — <span id="vl-vendor-name"></span></div><button class="modal-close" onclick="closeModal('modal-vendor-loan')">✕</button></div>
+    <input type="hidden" id="vl-vendor-id">
+    <div style="font-size:22px;font-weight:bold;margin-bottom:10px">Balance: <span id="vl-balance">$0.00</span></div>
+    <div class="form-grid" style="margin-bottom:12px">
+      <div class="form-group"><label>Amount</label><input type="number" id="vl-amount" min="0.01" step="0.01" placeholder="0.00"></div>
+      <div class="form-group"><label>Direction</label><select id="vl-direction"><option value="loan">Loan / advance given (balance goes up)</option><option value="repayment">Repayment received (balance goes down)</option></select></div>
+      <div class="form-group"><label>Date</label><input type="date" id="vl-date"></div>
+      <div class="form-group full"><label>Notes</label><input type="text" id="vl-notes" placeholder="e.g. Venmo advance"></div>
+    </div>
+    <button class="btn" onclick="submitVendorLoanEntry()">Add Entry</button>
+    <div style="margin-top:14px;max-height:260px;overflow-y:auto">
+      <table class="data-table"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Balance After</th><th>Notes</th></tr></thead>
+      <tbody id="vl-entries"><tr><td colspan="5" class="loading">Loading…</td></tr></tbody></table>
+    </div>
   </div>
 </div>
 
@@ -1396,6 +1441,34 @@ function populateTradeControls() {
 }
 
 function safeArray(v) { return Array.isArray(v) ? v : []; }
+
+// ── Owner labels for every owner dropdown (Sep 26 2026) ──────────────────────────────
+// Every picker used to build its own label from First_Name + Last_Name, which is blank for a
+// company-only owner (e.g. "Ridge Co") and unhelpful when the business is the recognizable name.
+// One rule now: business name first; the person's name when there is no business; and never blank
+// (falls back to the Bill-To name, then "Owner #ID"). withPerson appends the contact's name so two
+// owners under one business (e.g. two Goldszmidt Properties contacts) stay distinguishable.
+function ownerPersonName(o) { return (String((o && o.First_Name) || '') + ' ' + String((o && o.Last_Name) || '')).replace(/\s+/g, ' ').trim(); }
+function ownerLabel(o, withPerson) {
+  o = o || {};
+  var biz = String(o.Company || '').trim(), person = ownerPersonName(o);
+  var base = biz || person || String(o.Billing_Name || '').trim() || ('Owner #' + (o.ID || '?'));
+  if (withPerson && biz && person && biz.toLowerCase() !== person.toLowerCase()) base += ' — ' + person;
+  return base;
+}
+// <option> list for an owner picker: active owners only (plus the currently selected one even if
+// inactive), sorted by label, contact name added only where two owners would otherwise look identical.
+function ownerOptionsHtml(selectedId, firstOptionHtml) {
+  var sel = String(selectedId == null ? '' : selectedId);
+  var list = safeArray(state.owners).filter(function(o){ return o.Active !== 'FALSE' || String(o.ID) === sel; });
+  var counts = {};
+  list.forEach(function(o){ var k = ownerLabel(o).toLowerCase(); counts[k] = (counts[k] || 0) + 1; });
+  var rows = list.map(function(o){ return { id: o.ID, label: ownerLabel(o, counts[ownerLabel(o).toLowerCase()] > 1) }; })
+    .sort(function(a, b){ return a.label.toLowerCase().localeCompare(b.label.toLowerCase()); });
+  return (firstOptionHtml || '') + rows.map(function(r){
+    return '<option value="' + esc(String(r.id)) + '"' + (String(r.id) === sel ? ' selected' : '') + '>' + esc(r.label) + '</option>';
+  }).join('');
+}
 var assignWOId = null;
 var invoiceWOId = null;
 
@@ -1724,6 +1797,7 @@ function _loadAllFinish(loaded) {
   renderDashboard(); renderWOPage(); renderPropertiesPage();
   renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
   loadWishlist();
+  loadVendorAccessRequests(); // keeps the Dashboard tile + Dev Log nav badge populated from app load, not only when Dev Log is opened
   setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
   processNotificationsBackground();
   toast('Loaded '+loaded+'/8 data sets','success');
@@ -1811,7 +1885,7 @@ function showPage(name, btn) {
   document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('page-'+name).classList.add('active');
   if (btn) btn.classList.add('active');
-  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); }
+  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); loadVendorAccessRequests(); }
   if (name === 'invoice-review') { loadSendTrack(); loadInvoiceReview(); }
   if (name === 'qb-send') { loadQBQueue(); }
   if (name === 'qb-map')  { loadQBMapping(false); }
@@ -1874,8 +1948,7 @@ function populateFilterDropdowns() {
   var ownerSel = document.getElementById('f-owner');
   if (ownerSel) {
     var cur = ownerSel.value;
-    ownerSel.innerHTML = '<option value="">All Owners</option>' +
-      safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'"'+(o.ID===cur?' selected':'')+'>'+o.First_Name+' '+(o.Last_Name||'')+'</option>'; }).join('');
+    ownerSel.innerHTML = ownerOptionsHtml(cur, '<option value="">All Owners</option>');
   }
   var propSel = document.getElementById('f-property');
   if (propSel) {
@@ -3415,7 +3488,7 @@ function renderVendorsPage() {
   if (!vendors.length) { el.innerHTML='<div class="loading">'+(showInactive?'No inactive vendors.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet'))+'</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
-    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
@@ -3435,8 +3508,11 @@ function renderVendorsPage() {
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Bill_No_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanBillNoWO(\''+v.ID+'\',this.checked)" title="Can submit a standalone bill with no Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Create_Own_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanCreateOwnWO(\''+v.ID+'\',this.checked)" title="Can log their own One-Off Job Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
+        '<button class="btn small secondary" onclick="openVendorLoanModal(\''+v.ID+'\',\''+esc(nm)+'\')" title="Loan/advance ledger">$ Loan</button>' +
         (isInactive
           ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',true)" title="Reactivate this vendor">Reactivate</button>'
           : '<button class="btn small secondary" style="border-color:var(--danger);color:var(--danger)" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',false)" title="Deactivate this vendor — hides them from assign/reassign pickers, keeps their history">Deactivate</button>') +
@@ -3578,11 +3654,7 @@ function renderTenantsPage() {
   var ownerSel = document.getElementById('tenant-filter-owner');
   // Populate once — rebuilding on every keystroke would reset whatever the person picked.
   if (ownerSel && ownerSel.options.length <= 1) {
-    var ownersForFilter = safeArray(state.owners).filter(function(o){return o.Active!=='FALSE';})
-      .sort(function(a,b){ return (a.Company||a.First_Name||'').localeCompare(b.Company||b.First_Name||''); });
-    ownerSel.innerHTML = '<option value="">All Owners</option>' + ownersForFilter.map(function(o){
-      return '<option value="'+o.ID+'">'+esc(o.Company || ((o.First_Name||'')+' '+(o.Last_Name||'')).trim())+'</option>';
-    }).join('');
+    ownerSel.innerHTML = ownerOptionsHtml('', '<option value="">All Owners</option>');
   }
   var ownerFilter = ownerSel ? ownerSel.value : '';
   var ownerExclude = !!((document.getElementById('tenant-filter-owner-exclude')||{}).checked);
@@ -3701,9 +3773,48 @@ function markInvoicePaid(woId){
 }
 
 // ── Add Property ─────────────────────────────────────────────
+// Add Property form state (fixed Sep 26 2026): the modal used to reopen with the LAST property's
+// values still in every field, because nothing ever cleared them. Every field is reset to its
+// default each time the modal opens.
+function apResetForm() {
+  ['p-address','p-city','p-lockbox','p-lockcode','p-shutoff','p-hvac','p-breaker','p-access'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  document.getElementById('p-market').value = 'Baltimore';
+  document.getElementById('p-type').value = 'house';
+  document.getElementById('p-subtype').value = '';
+  document.getElementById('p-units').value = '1';
+  apTypeChanged();
+}
+// house/rowhome are always 1 unit (locked); multi/condo/commercial must be entered (multi needs 2+).
+function apTypeChanged() {
+  var type = document.getElementById('p-type').value;
+  var units = document.getElementById('p-units'), hint = document.getElementById('p-units-hint');
+  document.getElementById('p-subtype-wrap').style.display = type === 'commercial' ? '' : 'none';
+  if (type !== 'commercial') document.getElementById('p-subtype').value = '';
+  if (type === 'house' || type === 'rowhome') {
+    units.value = '1'; units.readOnly = true; units.min = '1'; hint.textContent = '— always 1';
+  } else {
+    if (units.readOnly) units.value = '';
+    units.readOnly = false; units.min = type === 'multi' ? '2' : '1';
+    units.placeholder = type === 'multi' ? '2 or more' : 'How many?';
+    hint.textContent = '— required';
+  }
+}
+function apUnitCountValue() {
+  var type = document.getElementById('p-type').value;
+  return (type === 'house' || type === 'rowhome') ? '1' : String(document.getElementById('p-units').value || '').trim();
+}
+function apValidate() {
+  var type = document.getElementById('p-type').value;
+  if (type === 'commercial' && !document.getElementById('p-subtype').value) return 'Choose the commercial type (retail, mixed use, industrial or office).';
+  if (type === 'multi' || type === 'condo' || type === 'commercial') {
+    var n = parseInt(document.getElementById('p-units').value, 10);
+    if (!isFinite(n) || n < (type === 'multi' ? 2 : 1)) return type === 'multi' ? 'Enter how many units are in this building (2 or more).' : 'Enter the unit count.';
+  }
+  return '';
+}
 function openAddPropertyModal() {
-  document.getElementById('p-owner').innerHTML = '<option value="">No owner assigned</option>' +
-    state.owners.map(function(o){return '<option value="'+o.ID+'">'+o.First_Name+' '+o.Last_Name+'</option>';}).join('');
+  apResetForm();
+  document.getElementById('p-owner').innerHTML = ownerOptionsHtml('', '<option value="">No owner assigned</option>');
   document.getElementById('ap-dupe-warning').style.display = 'none';
   renderApUnlinkedList();
   openModal('modal-add-property');
@@ -3734,9 +3845,10 @@ function linkUnlinkedProperty(propertyId) {
 }
 
 function submitAddProperty(force) {
-  var body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Unit_Count:document.getElementById('p-units').value,Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
+  var body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Commercial_Subtype:(document.getElementById('p-type').value==='commercial'?document.getElementById('p-subtype').value:''),Unit_Count:apUnitCountValue(),Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
   if (force) body.force = true;
   if (!body.Address) { toast('Address required','error'); return; }
+  var apErr = apValidate(); if (apErr) { toast(apErr,'error'); return; }
   var warnBox = document.getElementById('ap-dupe-warning');
   warnBox.style.display = 'none';
   api('POST','/property/add',body).then(function(res){
@@ -3975,13 +4087,146 @@ function openEditVendorModal(id) {
   document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
   document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
   document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
+  document.getElementById('ev-loan-balance').textContent = '…';
+  api('GET','/vendor-loan?vendor_id='+encodeURIComponent(v.ID)).then(function(res){
+    var bal = (res && typeof res.balance === 'number') ? res.balance : 0;
+    document.getElementById('ev-loan-balance').textContent = '$' + bal.toFixed(2) + (bal > 0 ? ' owed to Ridge Co' : '');
+  }).catch(function(){ document.getElementById('ev-loan-balance').textContent = '—'; });
+  renderEvBillingPropertyGrid(v.Billing_Property_Access||'');
   openModal('modal-edit-vendor');
+}
+// Vendor Standalone Billing (§2) — Billing_Property_Access multi-select, same checkbox-grid
+// pattern as the Add Vendor modal's Trades grid (tradeCheckboxes/'v-trades-grid').
+function renderEvBillingPropertyGrid(csv) {
+  var grid = document.getElementById('ev-billprop-grid');
+  if (!grid) return;
+  var selected = String(csv||'').split(',').map(function(s){return s.trim();}).filter(Boolean);
+  var props = sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}));
+  grid.innerHTML = props.map(function(p){
+    var checked = selected.indexOf(String(p.ID))!==-1;
+    return '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--text)">' +
+      '<input type="checkbox" class="ev-billprop-check" value="'+p.ID+'"'+(checked?' checked':'')+'> '+esc(p.Address||('Property '+p.ID))+'</label>';
+  }).join('') || '<div style="color:var(--muted);font-size:11px">No properties yet.</div>';
+}
+
+// ── Vendor Loan/Advance Ledger (CAP-036 #13) — reusable for any vendor. Gina's manual
+// Venmo ledger and Alex's (or anyone else's) automatic invoice deductions share this one
+// modal/tab, distinguished by Entry_Type. ──────────────────────────────────────────────
+function openVendorLoanModal(vendorId, vendorName) {
+  document.getElementById('vl-vendor-id').value = vendorId;
+  document.getElementById('vl-vendor-name').textContent = vendorName || '';
+  document.getElementById('vl-amount').value = '';
+  document.getElementById('vl-notes').value = '';
+  document.getElementById('vl-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('vl-balance').textContent = '…';
+  document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" class="loading">Loading…</td></tr>';
+  openModal('modal-vendor-loan');
+  loadVendorLoanLedger(vendorId);
+}
+function loadVendorLoanLedger(vendorId) {
+  api('GET', '/vendor-loan?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
+    if (!res || res.error) { document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc((res && res.error) || 'Could not load ledger') + '</td></tr>'; return; }
+    var bal = Number(res.balance) || 0;
+    document.getElementById('vl-balance').textContent = '$' + bal.toFixed(2) + (bal > 0 ? ' owed to Ridge Co' : (bal < 0 ? ' (overpaid)' : ' — paid off'));
+    var entries = safeArray(res.entries).slice().reverse();
+    document.getElementById('vl-entries').innerHTML = entries.length
+      ? entries.map(function(e){
+          var amt = Number(e.Amount) || 0;
+          var typeLabel = e.Entry_Type === 'auto-deduction' ? 'Auto (invoice)' : (e.Entry_Type === 'seed' ? 'Starting balance' : 'Manual');
+          return '<tr><td>'+esc(e.Date||'')+'</td><td>'+esc(typeLabel)+'</td>' +
+            '<td style="color:'+(amt>=0?'var(--warn)':'var(--accent2)')+'">'+(amt>=0?'+':'')+'$'+amt.toFixed(2)+'</td>' +
+            '<td>$'+(Number(e.Balance_After)||0).toFixed(2)+'</td><td>'+esc(e.Notes||'')+'</td></tr>';
+        }).join('')
+      : '<tr><td colspan="5" class="loading">No entries yet.</td></tr>';
+  }).catch(function(e) {
+    document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc(e.message) + '</td></tr>';
+  });
+}
+function submitVendorLoanEntry() {
+  var vendorId = document.getElementById('vl-vendor-id').value;
+  var vendorName = document.getElementById('vl-vendor-name').textContent;
+  var amount = parseFloat(document.getElementById('vl-amount').value);
+  if (!(amount > 0)) { toast('Enter an amount greater than 0', 'error'); return; }
+  var body = {
+    vendor_id: vendorId, vendor_name: vendorName,
+    amount: amount, direction: document.getElementById('vl-direction').value,
+    date: document.getElementById('vl-date').value || undefined,
+    notes: document.getElementById('vl-notes').value.trim(),
+  };
+  api('POST', '/vendor-loan/add', body).then(function(res) {
+    if (!res || res.error) { toast('Error: ' + ((res && res.error) || 'unknown error'), 'error'); return; }
+    toast('Ledger entry added', 'success');
+    document.getElementById('vl-amount').value = '';
+    document.getElementById('vl-notes').value = '';
+    loadVendorLoanLedger(vendorId);
+    var evId = document.getElementById('ev-id');
+    if (evId && evId.value === vendorId) document.getElementById('ev-loan-balance').textContent = '$' + Number(res.balance).toFixed(2) + (res.balance > 0 ? ' owed to Ridge Co' : '');
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); });
+}
+
+// ── Vendor Loan/Advance Ledger (CAP-036 #13) — reusable for any vendor. Gina's manual
+// Venmo ledger and Alex's (or anyone else's) automatic invoice deductions share this one
+// modal/tab, distinguished by Entry_Type. ──────────────────────────────────────────────
+function openVendorLoanModal(vendorId, vendorName) {
+  document.getElementById('vl-vendor-id').value = vendorId;
+  document.getElementById('vl-vendor-name').textContent = vendorName || '';
+  document.getElementById('vl-amount').value = '';
+  document.getElementById('vl-notes').value = '';
+  document.getElementById('vl-date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('vl-balance').textContent = '…';
+  document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" class="loading">Loading…</td></tr>';
+  openModal('modal-vendor-loan');
+  loadVendorLoanLedger(vendorId);
+}
+function loadVendorLoanLedger(vendorId) {
+  api('GET', '/vendor-loan?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
+    if (!res || res.error) { document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc((res && res.error) || 'Could not load ledger') + '</td></tr>'; return; }
+    var bal = Number(res.balance) || 0;
+    document.getElementById('vl-balance').textContent = '$' + bal.toFixed(2) + (bal > 0 ? ' owed to Ridge Co' : (bal < 0 ? ' (overpaid)' : ' — paid off'));
+    var entries = safeArray(res.entries).slice().reverse();
+    document.getElementById('vl-entries').innerHTML = entries.length
+      ? entries.map(function(e){
+          var amt = Number(e.Amount) || 0;
+          var typeLabel = e.Entry_Type === 'auto-deduction' ? 'Auto (invoice)' : (e.Entry_Type === 'seed' ? 'Starting balance' : 'Manual');
+          return '<tr><td>'+esc(e.Date||'')+'</td><td>'+esc(typeLabel)+'</td>' +
+            '<td style="color:'+(amt>=0?'var(--warn)':'var(--accent2)')+'">'+(amt>=0?'+':'')+'$'+amt.toFixed(2)+'</td>' +
+            '<td>$'+(Number(e.Balance_After)||0).toFixed(2)+'</td><td>'+esc(e.Notes||'')+'</td></tr>';
+        }).join('')
+      : '<tr><td colspan="5" class="loading">No entries yet.</td></tr>';
+  }).catch(function(e) {
+    document.getElementById('vl-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc(e.message) + '</td></tr>';
+  });
+}
+function submitVendorLoanEntry() {
+  var vendorId = document.getElementById('vl-vendor-id').value;
+  var vendorName = document.getElementById('vl-vendor-name').textContent;
+  var amount = parseFloat(document.getElementById('vl-amount').value);
+  if (!(amount > 0)) { toast('Enter an amount greater than 0', 'error'); return; }
+  var body = {
+    vendor_id: vendorId, vendor_name: vendorName,
+    amount: amount, direction: document.getElementById('vl-direction').value,
+    date: document.getElementById('vl-date').value || undefined,
+    notes: document.getElementById('vl-notes').value.trim(),
+  };
+  api('POST', '/vendor-loan/add', body).then(function(res) {
+    if (!res || res.error) { toast('Error: ' + ((res && res.error) || 'unknown error'), 'error'); return; }
+    toast('Ledger entry added', 'success');
+    document.getElementById('vl-amount').value = '';
+    document.getElementById('vl-notes').value = '';
+    loadVendorLoanLedger(vendorId);
+    var evId = document.getElementById('ev-id');
+    if (evId && evId.value === vendorId) document.getElementById('ev-loan-balance').textContent = '$' + Number(res.balance).toFixed(2) + (res.balance > 0 ? ' owed to Ridge Co' : '');
+  }).catch(function(e) { toast('Error: ' + e.message, 'error'); });
 }
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
+  var billingProps = Array.from(document.querySelectorAll('.ev-billprop-check:checked')).map(function(c){return c.value;});
   var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim(),Active:document.getElementById('ev-active').value==='FALSE'?'FALSE':'TRUE'};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
+    return api('POST','/vendor/set-billing-property-access',{id:id,property_ids:billingProps});
+  }).then(function(res2){
+    if(res2&&res2.error){toast('Vendor updated, but billing-property access failed: '+res2.error,'warn');closeModal('modal-edit-vendor');loadAll();return;}
     toast('Vendor updated','success');closeModal('modal-edit-vendor');loadAll();
   }).catch(function(e){logError('Edit vendor',e.message);toast('Error: '+e.message,'error');});
 }
@@ -4036,12 +4281,14 @@ function submitEditTenant() {
 // entered. Overriding never silently drifts unnoticed — epRenderUnitCountWarning() flags it
 // live if the manual number stops matching the real unit list, which is the exact failure mode
 // that motivated this build (Unit_Count typed into the sheet with zero matching Units rows).
-var EP_MULTI_TYPES = ['multi','condo'];
+var EP_MULTI_TYPES = ['multi','condo','commercial'];
 
 function epTypeChanged(){
   var type = document.getElementById('ep-type').value;
   var isMulti = EP_MULTI_TYPES.indexOf(type)!==-1;
   document.getElementById('ep-units-section').style.display = isMulti ? 'block' : 'none';
+  document.getElementById('ep-subtype-wrap').style.display = type === 'commercial' ? '' : 'none';
+  if (type !== 'commercial') document.getElementById('ep-subtype').value = '';
   document.getElementById('ep-two-units-scope').style.display = isMulti ? 'block' : 'none';
 }
 // Part B, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 — unit-scoping checkboxes for
@@ -4159,13 +4406,12 @@ function openEditPropertyModal(id){
   var p=state.properties.find(function(x){return x.ID===id;}); if(!p) return;
   document.getElementById('ep-id').value=p.ID; document.getElementById('ep-address').value=p.Address||'';
   document.getElementById('ep-city').value=p.City||''; document.getElementById('ep-market').value=p.Market||'Baltimore';
-  document.getElementById('ep-type').value=p.Type||'house'; document.getElementById('ep-lockbox').value=p.Lockbox_Code||'';
+  document.getElementById('ep-type').value=p.Type||'house'; document.getElementById('ep-subtype').value=p.Commercial_Subtype||''; document.getElementById('ep-lockbox').value=p.Lockbox_Code||'';
   document.getElementById('ep-lockcode').value=p.Lock_Code||''; document.getElementById('ep-shutoff').value=p.Water_Shutoff||'';
   document.getElementById('ep-hvac').value=p.HVAC_Filter_Size||''; document.getElementById('ep-breaker').value=p.Breaker_Location||'';
   document.getElementById('ep-access').value=p.Access_Notes||'';
   var epOwnerId = String(p.Owner_ID||'');
-  document.getElementById('ep-owner').innerHTML = '<option value="">No owner assigned</option>' +
-    safeArray(state.owners).map(function(o){return '<option value="'+o.ID+'"'+(String(o.ID)===epOwnerId?' selected':'')+'>'+(o.First_Name+' '+(o.Last_Name||'')).trim()+(o.Company?' — '+o.Company:'')+'</option>';}).join('');
+  document.getElementById('ep-owner').innerHTML = ownerOptionsHtml(epOwnerId, '<option value="">No owner assigned</option>');
   epTypeChanged();
   renderEpUnitsSection(p.ID);
   document.getElementById('ep-two-toggle').value = p.Tenant_WO_Toggle==='ON'||p.Tenant_WO_Toggle==='OFF' ? p.Tenant_WO_Toggle : '';
@@ -4180,11 +4426,17 @@ function openEditPropertyModal(id){
 }
 function submitEditProperty(){
   var id=document.getElementById('ep-id').value;
-  var fields={Address:document.getElementById('ep-address').value,City:document.getElementById('ep-city').value,Market:document.getElementById('ep-market').value,Type:document.getElementById('ep-type').value,Lockbox_Code:document.getElementById('ep-lockbox').value,Lock_Code:document.getElementById('ep-lockcode').value,Water_Shutoff:document.getElementById('ep-shutoff').value,HVAC_Filter_Size:document.getElementById('ep-hvac').value,Breaker_Location:document.getElementById('ep-breaker').value,Access_Notes:document.getElementById('ep-access').value,Owner_ID:document.getElementById('ep-owner').value};
+  var fields={Address:document.getElementById('ep-address').value,City:document.getElementById('ep-city').value,Market:document.getElementById('ep-market').value,Type:document.getElementById('ep-type').value,Commercial_Subtype:(document.getElementById('ep-type').value==='commercial'?document.getElementById('ep-subtype').value:''),Lockbox_Code:document.getElementById('ep-lockbox').value,Lock_Code:document.getElementById('ep-lockcode').value,Water_Shutoff:document.getElementById('ep-shutoff').value,HVAC_Filter_Size:document.getElementById('ep-hvac').value,Breaker_Location:document.getElementById('ep-breaker').value,Access_Notes:document.getElementById('ep-access').value,Owner_ID:document.getElementById('ep-owner').value};
   if (EP_MULTI_TYPES.indexOf(fields.Type) !== -1) {
     var overrideVisible = document.getElementById('ep-unit-count-override-row').style.display !== 'none';
     var overrideVal = document.getElementById('ep-unit-count-override').value;
-    fields.Unit_Count = (overrideVisible && overrideVal !== '') ? overrideVal : String(epComputedUnitCount(id));
+    // Owner-onboarded properties only list the unit(s) the owner wants serviced, so the listed count is
+    // normally LOWER than the owner-reported Unit_Count. Never silently shrink that number; use "Set count manually" to change it.
+    var epProp = state.properties.find(function(x){return x.ID===id;}) || {};
+    var epComputed = epComputedUnitCount(id), epExisting = parseInt(epProp.Unit_Count, 10);
+    var epKeep = epProp.Onboarding_Source === 'self_serve_link' && isFinite(epExisting) && epExisting > epComputed;
+    fields.Unit_Count = (overrideVisible && overrideVal !== '') ? overrideVal : String(epKeep ? epExisting : epComputed);
+    if (epKeep && !(overrideVisible && overrideVal !== '')) toast('Unit count kept at ' + epExisting + ' (as reported by the owner). Use "Set count manually" to change it.', 'success');
   } else {
     fields.Unit_Count = '1';
   }
@@ -4502,6 +4754,60 @@ function deleteWishlistItem(id){
   if(!confirm('Remove this item completely? (To keep it as history, use ✓ Done or ✗ N-A instead.)'))return;
   api('POST','/wishlist/delete',{id:id}).then(function(){wishlistItems=wishlistItems.filter(function(i){return String(i.ID)!==String(id);});renderWishlist();}).catch(function(e){toast('Error: '+e.message,'error');});
 }
+
+// ── Vendor Access Requests (Vendor Standalone Billing build brief §3d) ──────────────────────
+// Lazy-fetch-on-open, same pattern as Wishlist/Cache above. One GET backs BOTH the Dev Log
+// section here and the Dashboard's pending-count tile (renderDashboard), on purpose — Brett's
+// ask was that these two badges can never drift apart.
+var vendorAccessRequests = [];
+function loadVendorAccessRequests(){
+  api('GET','/vendor-access-requests?status=pending').then(function(rows){
+    vendorAccessRequests = Array.isArray(rows) ? rows : [];
+    renderVendorAccessRequests();
+    updateVendorAccessRequestBadges();
+  }).catch(function(e){ console.log('Vendor access requests load error', e); });
+}
+function renderVendorAccessRequests(){
+  var el = document.getElementById('vendor-access-requests-list'); if (!el) return;
+  if (!vendorAccessRequests.length) { el.innerHTML = '<div class="loading">No pending requests.</div>'; return; }
+  el.innerHTML = vendorAccessRequests.map(function(r){
+    var prop = safeArray(state.properties).find(function(p){ return String(p.ID)===String(r.Requested_Property_ID); });
+    var addr = prop ? prop.Address : ('Property ' + r.Requested_Property_ID);
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:var(--radius);padding:12px;margin-bottom:8px">' +
+      '<div style="font-size:13px;font-weight:bold">' + esc(r.Vendor_Name||'') + '</div>' +
+      '<div style="font-size:12px;color:var(--text);margin:2px 0">Requesting access to: ' + esc(addr) + '</div>' +
+      (r.Note ? '<div style="font-size:11.5px;color:var(--muted);font-style:italic;margin-bottom:6px">"' + esc(r.Note) + '"</div>' : '') +
+      '<div style="font-size:10.5px;color:var(--muted);margin-bottom:8px">' + esc((r.Created_Date||'').split('T')[0]) + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        '<button class="btn small" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'once\',\'approve\')">✓ Approve once</button>' +
+        '<button class="btn small" style="background:var(--accent2)" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'ongoing\',\'approve\')">✓ Approve ongoing</button>' +
+        '<button class="btn small danger" onclick="decideVendorAccessRequest(\''+r.ID+'\',\'once\',\'deny\')">✗ Deny</button>' +
+      '</div></div>';
+  }).join('');
+}
+function decideVendorAccessRequest(id, scope, decision){
+  api('POST','/vendor-access-requests/approve',{id:id,scope:scope,decision:decision}).then(function(res){
+    if (res && res.error) { toast('Error: '+res.error,'error'); return; }
+    toast(decision==='deny' ? 'Denied' : ('Approved ('+scope+')'), 'success');
+    loadVendorAccessRequests();
+    loadAll(); // Billing_Property_Access may have changed — keep state.vendors fresh
+  }).catch(function(e){ toast('Error: '+e.message,'error'); });
+}
+function updateVendorAccessRequestBadges(){
+  var n = vendorAccessRequests.length;
+  var navBadge = document.getElementById('devlog-nav-badge');
+  if (navBadge) { navBadge.style.display = n>0 ? 'inline-block' : 'none'; navBadge.textContent = String(n); }
+  var inline = document.getElementById('var-nav-count-inline');
+  if (inline) inline.style.display = n>0 ? '' : 'none';
+  var tile = document.getElementById('dashboard-var-tile');
+  var tileCount = document.getElementById('dashboard-var-count');
+  if (tile) tile.style.display = n>0 ? 'block' : 'none';
+  if (tileCount) tileCount.textContent = String(n);
+}
+function goToVendorAccessRequests(){
+  var btn = document.querySelector('.nav-btn[onclick*="devlog"]');
+  showPage('devlog', btn);
+}
 function clearWishlistDone(){
   var gone=wishlistItems.filter(function(i){var s=wlStatusOf(i);return s==='Done'||s==='Not applicable';});
   if(!gone.length){toast('Nothing Done or N-A to clear','info');return;}
@@ -4737,9 +5043,13 @@ function bulkSendPinFromTab(listId) {
   var scopeEl = (listId && document.getElementById(listId)) || document;
   var checked = Array.from(scopeEl.querySelectorAll('.pin-check:checked'));
   if (!checked.length) return;
-  _pinSendQueue = checked.map(function(cb) {
+  openBulkPinSendQueue(checked.map(function(cb) {
     return { type: cb.dataset.type, id: cb.dataset.id, name: cb.dataset.name, phone: cb.dataset.phone };
-  });
+  }));
+}
+// Opens the existing "send PINs by text" dialog for an explicit list (used by the checkbox flow above and by Set PIN).
+function openBulkPinSendQueue(queue) {
+  _pinSendQueue = queue;
   var listEl = document.getElementById('bulk-pin-list');
   listEl.innerHTML = _pinSendQueue.map(function(item) {
     return '<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface2);border-radius:4px;align-items:center">' +
@@ -5154,7 +5464,7 @@ function renderOwnersPage() {
     var badge = isInactive ? ' <span style="background:var(--danger);color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;letter-spacing:.05em;font-weight:bold;vertical-align:middle">INACTIVE</span>' : '';
     var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '');
     return '<tr'+(isInactive?' style="opacity:0.65"':'')+'>' +
-      '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
+      '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-haspin="'+(o.PIN?'1':'0')+'" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
       '<td>'+display+'</td>' +
       '<td>'+(o.Phone||'—')+'</td>' +
       '<td>'+propCount+' propert'+(propCount===1?'y':'ies')+'</td>' +
@@ -6184,8 +6494,7 @@ function openBulkAssignModal(keyId, keyName) {
   _bulkAssignKeyId = keyId;
   document.getElementById('bulk-assign-title').textContent = 'ASSIGN "' + keyName.toUpperCase() + '" TO ALL PROPERTIES OF:';
   var sel = document.getElementById('bulk-assign-owner');
-  sel.innerHTML = '<option value="">— select owner —</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Last_Name?' '+o.Last_Name:'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  sel.innerHTML = ownerOptionsHtml('', '<option value="">— select owner —</option>');
   document.getElementById('bulk-assign-msg').innerHTML = '';
   openModal('modal-bulk-assign');
 }
@@ -6205,8 +6514,7 @@ function submitBulkAssign() {
 function openAddMasterKeyModal() {
   ['mk-name','mk-code','mk-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('mk-owner');
-  if (sel) sel.innerHTML = '<option value="">No owner (global)</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">No owner (global)</option>');
   openModal('modal-add-masterkey');
 }
 
@@ -6262,8 +6570,7 @@ function renderTemplates() {
 function openAddTemplateModal() {
   ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('tmpl-owner');
-  if (sel) sel.innerHTML = '<option value="">Global (all owners)</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">Global (all owners)</option>');
   var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
   var pr = document.getElementById('tmpl-priority'); if (pr) pr.value = 'normal';
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'ADD WO TEMPLATE';
@@ -9377,16 +9684,25 @@ function renderIRCard(b, i) {
       (b.Invoice_File_URL ? ' — <a href="' + esc(b.Invoice_File_URL) + '" target="_blank" style="color:var(--info)">view file ↗</a>' : '') +
       '</div>' : '';
 
+  // Standalone bill (Vendor Standalone Billing build brief §5) — no Work_Orders row at all, so
+  // the lookup below never finds one. Resolve the address straight from Vendor_Bills.Property_ID
+  // instead of silently blanking the card (what used to happen here).
+  var isStandalone = String(b.Standalone||'').toUpperCase()==='TRUE';
+
   // Work order info from state. String-compare the property id — Sheets hands numeric-looking
   // ids back as strings inconsistently, and a strict === silently dropped the address.
-  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
-  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : null;
+  var wo = isStandalone ? null : safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  var standaloneProp = isStandalone ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(b.Property_ID); }) : null;
+  var prop = wo ? safeArray(state.properties).find(function(p) { return String(p.ID) === String(wo.Property_ID); }) : standaloneProp;
   var unitRow = wo ? safeArray(state.units).find(function(u) { return String(u.ID) === String(wo.Unit_ID); }) : null;
   var unitLabel = unitRow ? (unitRow.Unit_Label || '') : (wo ? (wo.Unit_Label || '') : '');
-  var addr = prop ? prop.Address : (wo ? (wo.Property_Address || wo.Property_ID || '—') : '—');
+  var addr = prop ? prop.Address : (wo ? (wo.Property_Address || wo.Property_ID || '—') : (isStandalone ? (b.Property_ID || '—') : '—'));
   if (addr && unitLabel) addr = addr + ' — Unit ' + unitLabel;
   var ownerRow = wo
-    ? '<div style="color:var(--muted);font-size:11px">Owner WO Ref: ' + esc(wo.Owner_WO_Ref || '—') + '</div>' : '';
+    ? '<div style="color:var(--muted);font-size:11px">Owner WO Ref: ' + esc(wo.Owner_WO_Ref || '—') + '</div>'
+    : (isStandalone
+      ? '<div style="margin-top:4px"><span style="background:#e8f0fb;border:1px solid var(--info);color:var(--info);border-radius:4px;padding:2px 7px;font-size:10px;font-weight:bold;letter-spacing:.04em">STANDALONE BILL — NO WO</span> <span style="color:var(--muted);font-size:11px;margin-left:6px">Bill-to: ' + esc(b.Bill_To==='ridgeco' ? "Ridge Co's own cost" : 'Property owner') + '</span></div>'
+      : '');
 
   // ── ALREADY HANDLED? ─────────────────────────────────────────
   // A bill only leaves this queue when its Vendor_Bills.Status flips to 'reviewed', which
@@ -9479,6 +9795,12 @@ function renderIRCard(b, i) {
           : '<div style="color:var(--warn);font-size:11.5px;font-style:italic">⚠ No description on this work order — open it to check before approving.</div>') +
         (tenantName ? '<div style="color:var(--muted);font-size:11px;margin-top:8px">Tenant: ' + esc(tenantName) + '</div>' : '') +
         (dateLine ? '<div style="color:var(--muted);font-size:11px;margin-top:2px">' + dateLine + '</div>' : '') +
+      '</div>';
+  } else if (isStandalone) {
+    jobHtml =
+      '<div style="background:#e8f0fb;border:1px solid var(--info);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12.5px;color:var(--text)">' +
+        '🧾 Standalone bill — no Work Order was ever created for this. Property: ' + esc(addr) + '.' +
+        (b.Notes ? '<div style="color:var(--muted);font-size:11.5px;margin-top:6px;font-style:italic">"' + esc(b.Notes) + '"</div>' : '') +
       '</div>';
   } else {
     jobHtml =
@@ -10579,6 +10901,47 @@ function toggleVendorInHouse(id, on) {
     renderVendorsPage();
   }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
 }
+
+// Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2) — same
+// inline-checkbox pattern as toggleVendorInHouse above, one dedicated endpoint per flag.
+function toggleVendorCanBillNoWO(id, on) {
+  api('POST', '/vendor/set-can-bill-no-wo', { id: id, value: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
+    toast(on ? 'Can now submit a bill with no Work Order' : 'No-WO billing turned off', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.Can_Bill_No_WO = on ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
+}
+function toggleVendorCanCreateOwnWO(id, on) {
+  api('POST', '/vendor/set-can-create-own-wo', { id: id, value: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
+    toast(on ? 'Can now log their own One-Off Job' : 'One-Off Job turned off', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.Can_Create_Own_WO = on ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
+}
+// Bulk versions — the Vendors page's existing bulk-checkbox selection (pin-check), applied to
+// either new permission across every selected vendor.
+function bulkSetVendorPermission(field, endpoint) {
+  var checked = Array.from(document.getElementById('vendors-list').querySelectorAll('.pin-check:checked'));
+  if (!checked.length) return;
+  var ids = checked.map(function(cb) { return cb.dataset.id; });
+  if (!confirm('Enable this for ' + ids.length + ' selected vendor(s)?')) return;
+  Promise.all(ids.map(function(id) { return api('POST', endpoint, { id: id, value: true }).catch(function(){ return null; }); }))
+    .then(function() {
+      ids.forEach(function(id) {
+        var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+        if (v) v[field] = 'TRUE';
+      });
+      toast('Updated ' + ids.length + ' vendor(s)', 'success');
+      clearPinChecks('vendors-list');
+      renderVendorsPage();
+    });
+}
+function bulkEnableCanBillNoWO() { bulkSetVendorPermission('Can_Bill_No_WO', '/vendor/set-can-bill-no-wo'); }
+function bulkEnableCanCreateOwnWO() { bulkSetVendorPermission('Can_Create_Own_WO', '/vendor/set-can-create-own-wo'); }
 
 // CAP-036 #17 — self-service vendor deactivate/reactivate. Uses the same generic
 // /vendor/update + Active:'TRUE'/'FALSE' convention already used by the vendor-reject
@@ -11700,6 +12063,14 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div class="form-group"><label>Email</label><input type="email" id="ao-email"></div>
       <div class="form-group"><label>Your Rate $/hr <span style="font-weight:normal;color:var(--muted)">(blank = $85)</span></label><input type="number" step="5" min="0" id="ao-rate" placeholder="85"></div>
       <div class="form-group full"><label>PIN <span style="font-weight:normal;color:var(--muted)">(3 letters + last 5 of phone, e.g. ABC58842)</span></label><input type="text" id="ao-pin" placeholder="ABC58842" maxlength="8"></div>
+      <div class="form-group full" style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">BILLING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— used on invoices and for the QuickBooks customer</span></div></div>
+      <div class="form-group full"><label>Bill To Name <span style="font-weight:normal;color:var(--muted)">(blank = company, else owner name)</span></label><input type="text" id="ao-b-name"></div>
+      <div class="form-group full"><label>Billing Street Address</label><input type="text" id="ao-b-street" autocomplete="off"></div>
+      <div class="form-group"><label>City</label><input type="text" id="ao-b-city"></div>
+      <div class="form-group"><label>State</label><input type="text" id="ao-b-state" maxlength="2" style="text-transform:uppercase" placeholder="MD"></div>
+      <div class="form-group"><label>ZIP</label><input type="text" id="ao-b-zip" maxlength="10"></div>
+      <div class="form-group"><label>Billing Phone</label><input type="tel" id="ao-b-phone"></div>
+      <div class="form-group full"><label>Billing Email</label><input type="email" id="ao-b-email"></div>
     </div>
     <p style="color:var(--muted);font-size:11px;margin-top:8px">After adding the owner, go to Properties → Edit each property to link them to this owner. Or use a property's Owner ID field.</p>
     <div id="ao-msg"></div>
@@ -11707,6 +12078,45 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <button class="btn secondary" onclick="closeModal('modal-add-owner')">Cancel</button>
       <button class="btn" onclick="submitAddOwner()">ADD OWNER</button>
     </div>
+  </div>
+</div>
+
+<!-- SET OWNER PINS MODAL (Sep 26 2026) -->
+<div class="modal-overlay" id="modal-set-owner-pin">
+  <div class="modal" style="max-width:680px">
+    <div class="modal-header"><div class="modal-title">SET OWNER PINS</div><button class="modal-close" onclick="closeModal('modal-set-owner-pin')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Sets the sign-in PIN for the owners you selected. Owners who onboard themselves choose their own — this is for filling in the rest. Suggested PINs use our normal format (3 random letters + the last 5 digits of their phone). Tap a PIN to type your own: 3 letters then 5 numbers, not a simple run like 12345, and nobody else can already have it. <b>Nothing is saved until you tap Save.</b></p>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin-bottom:10px"><input type="checkbox" id="spn-overwrite" onchange="loadOwnerPinSuggestions()"> Also replace PINs that are already set</label>
+    <div id="spn-list"><div class="loading">Loading…</div></div>
+    <div id="spn-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-set-owner-pin')">Close</button>
+      <button class="btn secondary" onclick="loadOwnerPinSuggestions()" title="Throw away edits and suggest again">New suggestions</button>
+      <button class="btn" id="spn-save" onclick="saveOwnerPins()" disabled>Save PINs</button>
+    </div>
+    <div id="spn-after" style="display:none;border-top:1px solid var(--border);margin-top:12px;padding-top:10px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Saved. Want to text these owners their PIN now?</div>
+      <button class="btn small" id="spn-send" onclick="spnSendTexts()">📱 Text these PINs to the owners</button>
+    </div>
+  </div>
+</div>
+
+<!-- OWNER ONBOARDING LINK MODAL (Sep 26 2026) -->
+<div class="modal-overlay" id="modal-owner-invite">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header"><div class="modal-title">OWNER ONBOARDING LINK</div><button class="modal-close" onclick="closeModal('modal-owner-invite')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Send this link to a new owner. They enter their own billing info, properties, units, tenant/access info and PIN — it lands in Owners, Properties, Units, Tenants and Keys with no typing on your end. Each link works once. New properties and tenants start with SMS <b>off</b> until you turn it on.</p>
+    <div class="form-grid">
+      <div class="form-group"><label>Owner name <span style="font-weight:normal;color:var(--muted)">(optional — pre-fills)</span></label><input type="text" id="oi-name" placeholder="Pat Lee"></div>
+      <div class="form-group"><label>Phone <span style="font-weight:normal;color:var(--muted)">(optional)</span></label><input type="tel" id="oi-phone"></div>
+      <div class="form-group"><label>Email <span style="font-weight:normal;color:var(--muted)">(optional)</span></label><input type="email" id="oi-email"></div>
+      <div class="form-group"><label>Link good for</label><select id="oi-days"><option value="7">7 days</option><option value="14" selected>14 days</option><option value="30">30 days</option></select></div>
+      <div class="form-group full"><label>Note to self <span style="font-weight:normal;color:var(--muted)">(optional)</span></label><input type="text" id="oi-note" placeholder="Referred by Dana, 3 rowhomes in Hampden"></div>
+    </div>
+    <div id="oi-msg"></div>
+    <div id="oi-result"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-owner-invite')">Close</button><button class="btn" id="oi-create-btn" onclick="createOwnerInvite()">Create Link</button></div>
+    <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">RECENT LINKS</div><div id="oi-list"><div class="loading">Loading…</div></div></div>
   </div>
 </div>
 
@@ -11726,6 +12136,16 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div class="form-group"><label>Active</label>
         <select id="eo-active"><option value="TRUE">Active</option><option value="FALSE">Inactive</option></select>
       </div>
+    </div>
+    <div class="form-grid" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+      <div class="form-group full"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">BILLING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— used on invoices and for the QuickBooks customer</span></div></div>
+      <div class="form-group full"><label>Bill To Name <span style="font-weight:normal;color:var(--muted)">(blank = company, else owner name)</span></label><input type="text" id="eo-b-name"></div>
+      <div class="form-group full"><label>Billing Street Address</label><input type="text" id="eo-b-street" autocomplete="off"></div>
+      <div class="form-group"><label>City</label><input type="text" id="eo-b-city"></div>
+      <div class="form-group"><label>State</label><input type="text" id="eo-b-state" maxlength="2" style="text-transform:uppercase" placeholder="MD"></div>
+      <div class="form-group"><label>ZIP</label><input type="text" id="eo-b-zip" maxlength="10"></div>
+      <div class="form-group"><label>Billing Phone</label><input type="tel" id="eo-b-phone"></div>
+      <div class="form-group full"><label>Billing Email</label><input type="email" id="eo-b-email"></div>
     </div>
     <div class="form-grid" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
       <div class="form-group full"><label>Tenant Work Order Submission <span id="eo-two-effective" style="font-weight:normal"></span></label>
@@ -11892,6 +12312,9 @@ function openEditOwnerModal(id) {
   document.getElementById('eo-email').value = o.Email||'';
   document.getElementById('eo-rate').value = parseFloat(o.Hourly_Rate)>0 ? parseFloat(o.Hourly_Rate) : '';
   document.getElementById('eo-pin').value = o.PIN||'';
+  document.getElementById('eo-b-name').value = o.Billing_Name||''; document.getElementById('eo-b-street').value = o.Billing_Address||'';
+  document.getElementById('eo-b-city').value = o.Billing_City||''; document.getElementById('eo-b-state').value = o.Billing_State||'';
+  document.getElementById('eo-b-zip').value = o.Billing_Zip||''; document.getElementById('eo-b-phone').value = o.Billing_Phone||''; document.getElementById('eo-b-email').value = o.Billing_Email||'';
   document.getElementById('eo-active').value = o.Active==='FALSE' ? 'FALSE' : 'TRUE';
   document.getElementById('eo-two-toggle').value = o.Tenant_WO_Toggle==='ON'||o.Tenant_WO_Toggle==='OFF' ? o.Tenant_WO_Toggle : '';
   document.getElementById('eo-two-propids').value = o.Tenant_WO_Property_IDs||'';
@@ -11918,6 +12341,9 @@ function submitEditOwner() {
     Email: document.getElementById('eo-email').value.trim(),
     Hourly_Rate: (eoRate > 0 ? String(eoRate) : ''),
     PIN: document.getElementById('eo-pin').value.trim().toUpperCase(),
+    Billing_Name: document.getElementById('eo-b-name').value.trim(), Billing_Address: document.getElementById('eo-b-street').value.trim(),
+    Billing_City: document.getElementById('eo-b-city').value.trim(), Billing_State: document.getElementById('eo-b-state').value.trim().toUpperCase(),
+    Billing_Zip: document.getElementById('eo-b-zip').value.trim(), Billing_Phone: document.getElementById('eo-b-phone').value.trim(), Billing_Email: document.getElementById('eo-b-email').value.trim(),
     Active: document.getElementById('eo-active').value,
   };
   var twoToggle = document.getElementById('eo-two-toggle').value;
@@ -11938,7 +12364,7 @@ function submitEditOwner() {
 }
 
 function openAddOwnerModal() {
-  ['ao-company','ao-first','ao-last','ao-phone','ao-email','ao-pin','ao-rate'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['ao-company','ao-first','ao-last','ao-phone','ao-email','ao-pin','ao-rate','ao-b-name','ao-b-street','ao-b-city','ao-b-state','ao-b-zip','ao-b-phone','ao-b-email'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   document.getElementById('ao-msg').innerHTML = '';
   openModal('modal-add-owner');
 }
@@ -11952,6 +12378,9 @@ function submitAddOwner() {
     Company: comp, Phone: document.getElementById('ao-phone').value.trim(),
     Email: document.getElementById('ao-email').value.trim(),
     PIN: document.getElementById('ao-pin').value.trim().toUpperCase(),
+    Billing_Name: document.getElementById('ao-b-name').value.trim(), Billing_Address: document.getElementById('ao-b-street').value.trim(),
+    Billing_City: document.getElementById('ao-b-city').value.trim(), Billing_State: document.getElementById('ao-b-state').value.trim().toUpperCase(),
+    Billing_Zip: document.getElementById('ao-b-zip').value.trim(), Billing_Phone: document.getElementById('ao-b-phone').value.trim(), Billing_Email: document.getElementById('ao-b-email').value.trim(),
     // Blank = follow the default ($85). Only a real number pins a per-customer rate.
     Hourly_Rate: (aoRate > 0 ? String(aoRate) : ''),
     Active: 'TRUE',
@@ -11959,6 +12388,167 @@ function submitAddOwner() {
     if (res.id) { toast('Owner added — ID: '+res.id,'success'); closeModal('modal-add-owner'); loadAll(); renderOwnersPage(); }
     else document.getElementById('ao-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+(res.error||'Error')+'</div>';
   });
+}
+
+// ── Set / backfill owner PINs (Sep 26 2026) ───────────────────────────────────────────
+// Rules mirror the server (ownerOnboardPinCheck): 3 letters + 5 digits, not a simple run. The server re-checks
+// everything, including that no other login already has the PIN, when Save is tapped.
+var _spnRows = [], _spnIds = [], _spnSaved = [];
+function spnRuleError(pin) {
+  var p = String(pin || '').toUpperCase();
+  if (!/^[A-Z]{3}\d{5}$/.test(p)) return '3 letters then 5 numbers (e.g. ABC12345)';
+  var d = p.slice(3);
+  if (/^(\d)\1{4}$/.test(d) || '0123456789'.indexOf(d) >= 0 || '9876543210'.indexOf(d) >= 0) return 'numbers can\'t be a simple run';
+  if (/^(.)\1\1$/.test(p.slice(0, 3))) return 'letters can\'t all match';
+  return '';
+}
+function selectOwnersMissingPin() {
+  var cbs = document.getElementById('owners-list').querySelectorAll('.pin-check'), n = 0;
+  cbs.forEach(function(cb){ var miss = cb.getAttribute('data-haspin') === '0'; cb.checked = miss; if (miss) n++; });
+  updatePinActionBar('owners-action-bar');
+  toast(n ? n + ' owner' + (n === 1 ? '' : 's') + ' with no PIN selected — tap Set PIN for Selected' : 'Every listed owner already has a PIN', 'success');
+}
+function openSetOwnerPinModal() {
+  var ids = Array.from(document.getElementById('owners-list').querySelectorAll('.pin-check:checked')).map(function(cb){ return cb.getAttribute('data-id'); });
+  if (!ids.length) { toast('Select one or more owners first', 'error'); return; }
+  _spnIds = ids; _spnSaved = [];
+  // One owner selected = an explicit "set this owner's PIN", so offer a replacement even if they already have one.
+  document.getElementById('spn-overwrite').checked = ids.length === 1;
+  document.getElementById('spn-after').style.display = 'none';
+  document.getElementById('spn-msg').innerHTML = '';
+  openModal('modal-set-owner-pin');
+  loadOwnerPinSuggestions();
+}
+function loadOwnerPinSuggestions() {
+  var el = document.getElementById('spn-list');
+  el.innerHTML = '<div class="loading">Loading…</div>';
+  document.getElementById('spn-save').disabled = true;
+  api('POST', '/owner/pin-suggest', { owner_ids: _spnIds, overwrite: document.getElementById('spn-overwrite').checked }).then(function(res){
+    if (!res || res.error) { el.innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc((res && res.error) || 'Could not suggest PINs') + '</div>'; return; }
+    _spnRows = safeArray(res.rows).map(function(r){
+      var o = safeArray(state.owners).find(function(x){ return String(x.ID) === String(r.owner_id); });
+      return { id: r.owner_id, label: o ? ownerLabel(o, true) : ('Owner #' + r.owner_id), phone: r.phone || '', current: r.current_pin || '', pin: r.proposed_pin || '',
+               skipped: r.skipped || '', error: r.error || '', note: r.note || '', fromPhone: !!r.from_phone, status: '' };
+    });
+    renderSpnRows();
+  }).catch(function(e){ el.innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(e.message || 'Error') + '</div>'; });
+}
+function renderSpnRows() {
+  var el = document.getElementById('spn-list');
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Owner</th><th>Phone</th><th>Current PIN</th><th>New PIN</th></tr></thead><tbody>' +
+    _spnRows.map(function(r, i){
+      var cell;
+      if (r.error) cell = '<span style="color:var(--danger)">' + esc(r.error) + '</span>';
+      else if (r.skipped) cell = '<span style="color:var(--muted)">' + esc(r.skipped) + ' — kept</span>';
+      else cell = '<input type="text" class="spn-pin" data-i="' + i + '" value="' + esc(r.pin) + '" maxlength="8" autocomplete="off" style="width:110px;text-transform:uppercase;font-weight:bold;letter-spacing:.08em" oninput="spnEdit(' + i + ',this)">' +
+                  '<div class="spn-st" id="spn-st-' + i + '" style="font-size:10px;min-height:12px"></div>';
+      return '<tr><td>' + esc(r.label) + (r.note ? '<div style="font-size:10px;color:#9a5b00">' + esc(r.note) + '</div>' : '') + '</td><td>' + esc(r.phone || '—') + (r.phone ? '' : '<div style="font-size:10px;color:var(--muted)">no phone — random digits</div>') + '</td>' +
+             '<td style="color:' + (r.current ? 'var(--accent2)' : 'var(--danger)') + ';font-weight:bold">' + esc(r.current || '—') + '</td><td>' + cell + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+  spnValidate();
+}
+function spnEdit(i, inp) {
+  var v = inp.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  if (inp.value !== v) inp.value = v;
+  _spnRows[i].pin = v; spnValidate();
+}
+function spnValidate() {
+  var seen = {}, okCount = 0, bad = 0;
+  _spnRows.forEach(function(r){ if (r.pin && !r.skipped && !r.error) seen[r.pin] = (seen[r.pin] || 0) + 1; });
+  _spnRows.forEach(function(r, i){
+    var st = document.getElementById('spn-st-' + i); if (r.skipped || r.error) return;
+    var msg = r.status === 'saved' ? '' : (r.pin ? (spnRuleError(r.pin) || (seen[r.pin] > 1 ? 'same PIN used twice here' : '')) : 'enter a PIN or leave blank to skip');
+    var ok = r.pin && !msg;
+    r.valid = !!ok;
+    if (st) { st.style.color = r.status === 'saved' ? 'var(--accent2)' : (ok ? 'var(--accent2)' : (r.pin ? 'var(--danger)' : 'var(--muted)')); st.textContent = r.status === 'saved' ? '✓ saved' : (r.status === 'failed' ? ('✗ ' + r.failMsg) : (ok ? '✓ ok' : msg)); }
+    if (r.status !== 'saved') { if (ok) okCount++; else if (r.pin) bad++; }
+  });
+  var btn = document.getElementById('spn-save');
+  btn.disabled = !(okCount > 0 && bad === 0);
+  btn.textContent = okCount ? 'Save ' + okCount + ' PIN' + (okCount === 1 ? '' : 's') : 'Save PINs';
+}
+function saveOwnerPins() {
+  var todo = _spnRows.filter(function(r){ return r.valid && r.status !== 'saved'; });
+  if (!todo.length) return;
+  var btn = document.getElementById('spn-save'); btn.disabled = true; btn.textContent = 'Saving…';
+  api('POST', '/owner/set-pins', { assignments: todo.map(function(r){ return { owner_id: r.id, pin: r.pin }; }) }).then(function(res){
+    if (!res || res.error) { document.getElementById('spn-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc((res && res.error) || 'Could not save') + '</div>'; spnValidate(); return; }
+    safeArray(res.results).forEach(function(x){
+      var r = _spnRows.find(function(q){ return String(q.id) === String(x.owner_id); }); if (!r) return;
+      if (x.ok) { r.status = 'saved'; r.current = x.pin; r.valid = false; if (!_spnSaved.some(function(q){ return String(q.id) === String(r.id); })) _spnSaved.push({ id: r.id, label: r.label, phone: r.phone }); }
+      else { r.status = 'failed'; r.failMsg = x.error || 'failed'; }
+    });
+    renderSpnRows();
+    var failed = _spnRows.filter(function(r){ return r.status === 'failed'; }).length;
+    document.getElementById('spn-msg').innerHTML = '<div style="font-size:12px;color:' + (failed ? '#9a5b00' : 'var(--accent2)') + ';margin-top:6px">Saved ' + res.saved + ' PIN' + (res.saved === 1 ? '' : 's') + (failed ? ' — ' + failed + ' need attention (fix the PIN and save again)' : '') + '.</div>';
+    if (_spnSaved.length) document.getElementById('spn-after').style.display = '';
+    loadAll(); 
+  }).catch(function(e){ document.getElementById('spn-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(e.message || 'Error') + '</div>'; spnValidate(); });
+}
+function spnSendTexts() {
+  var q = _spnSaved.filter(function(r){ return r.phone; }).map(function(r){ return { type: 'owner', id: r.id, name: r.label, phone: r.phone }; });
+  if (!q.length) { toast('None of the saved owners has a phone number to text', 'error'); return; }
+  closeModal('modal-set-owner-pin');
+  openBulkPinSendQueue(q);
+}
+
+// ── Owner onboarding links (Sep 26 2026) ─────────────────────────────────────────────
+function openOwnerInviteModal() {
+  ['oi-name','oi-phone','oi-email','oi-note'].forEach(function(id){ document.getElementById(id).value=''; });
+  document.getElementById('oi-msg').innerHTML=''; document.getElementById('oi-result').innerHTML='';
+  document.getElementById('oi-days').value='14';
+  openModal('modal-owner-invite');
+  loadOwnerInvites();
+}
+function copyText(text, okMsg) {
+  function fallback(){ var t=document.createElement('textarea'); t.value=text; t.style.position='fixed'; t.style.opacity='0'; document.body.appendChild(t); t.select(); try{document.execCommand('copy');toast(okMsg||'Copied','success');}catch(e){toast('Copy failed — select and copy the link manually','error');} document.body.removeChild(t); }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function(){ toast(okMsg||'Copied','success'); }).catch(fallback); else fallback();
+}
+function createOwnerInvite() {
+  var btn = document.getElementById('oi-create-btn'); btn.disabled = true;
+  document.getElementById('oi-msg').innerHTML='';
+  api('POST','/owner-onboard/invite/create',{
+    name: document.getElementById('oi-name').value.trim(), phone: document.getElementById('oi-phone').value.trim(),
+    email: document.getElementById('oi-email').value.trim(), note: document.getElementById('oi-note').value.trim(),
+    days: parseInt(document.getElementById('oi-days').value,10)||14
+  }).then(function(res){
+    btn.disabled = false;
+    if (!res || res.error || !res.link) { document.getElementById('oi-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc((res&&res.error)||'Could not create the link')+'</div>'; return; }
+    document.getElementById('oi-result').innerHTML =
+      '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:10px;margin:10px 0"><div style="font-weight:bold;color:var(--accent2);font-size:12px;margin-bottom:6px">Link created — send it to the owner</div>' +
+      '<input type="text" readonly id="oi-link" value="'+esc(res.link)+'" onclick="this.select()" style="width:100%;font-size:12px;margin-bottom:8px">' +
+      '<button class="btn small" onclick="copyText(document.getElementById(\'oi-link\').value,\'Link copied\')">Copy link</button> ' +
+      '<button class="btn small secondary" onclick="window.open(document.getElementById(\'oi-link\').value,\'_blank\')">Preview</button></div>';
+    copyText(res.link, 'Link created and copied');
+    loadOwnerInvites();
+  }).catch(function(e){ btn.disabled = false; document.getElementById('oi-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(e.message||'Error')+'</div>'; });
+}
+function loadOwnerInvites() {
+  var el = document.getElementById('oi-list');
+  api('GET','/owner-onboard/invites').then(function(rows){
+    rows = safeArray(rows);
+    if (!rows.length) { el.innerHTML='<div style="color:var(--muted);font-size:12px">No links yet.</div>'; return; }
+    var pill = {pending:'background:#e8f0fb;color:#1d4ed8',used:'background:#eaf6ee;color:#166534',expired:'background:#f3f5f8;color:#66707c',revoked:'background:#fdecea;color:#b42318',processing:'background:#fff3e0;color:#9a5b00'};
+    el.innerHTML = rows.slice(0,25).map(function(r){
+      var s = {}; try { s = JSON.parse(r.summary || '{}'); } catch(e) {}
+      var warn = safeArray(s.warnings);
+      var ownerLbl = r.owner_id ? (function(){ var o = safeArray(state.owners).find(function(x){ return String(x.ID)===String(r.owner_id); }); return o ? ((o.Company||((o.First_Name||'')+' '+(o.Last_Name||'')).trim())) : ('Owner '+r.owner_id); })() : '';
+      return '<div style="border-top:1px solid var(--border);padding:8px 0;font-size:12px">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap"><span><span style="'+(pill[r.status]||'')+';padding:1px 8px;border-radius:10px;font-size:10px;font-weight:bold;text-transform:uppercase">'+esc(r.status)+'</span> ' +
+        '<b>'+esc(ownerLbl||r.name||'(no name)')+'</b> <span style="color:var(--muted)">'+esc((r.used||r.created||'').slice(0,10))+'</span></span><span>' +
+        (r.link ? '<button class="btn small secondary" onclick="copyText(\''+esc(r.link)+'\',\'Link copied\')">Copy link</button> <button class="btn small secondary" onclick="revokeOwnerInvite(\''+esc(r.id)+'\')">Revoke</button>' : '') + '</span></div>' +
+        (r.note ? '<div style="color:var(--muted)">'+esc(r.note)+'</div>' : '') +
+        (r.status==='used' ? '<div style="color:var(--muted)">'+safeArray(s.properties).length+' propert'+(safeArray(s.properties).length===1?'y':'ies')+' added'+(r.needs_review?' · <b style="color:#9a5b00">needs your review</b>':' · all clear')+'</div>' : '') +
+        (warn.length ? '<ul style="margin:4px 0 0 18px;color:#9a5b00">'+warn.map(function(w){ return '<li>'+esc(w)+'</li>'; }).join('')+'</ul>' : '') +
+      '</div>';
+    }).join('');
+  }).catch(function(e){ el.innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(e.message||'Could not load links')+'</div>'; });
+}
+function revokeOwnerInvite(id) {
+  api('POST','/owner-onboard/invite/revoke',{id:id}).then(function(res){
+    if (res && res.error) { toast(res.error,'error'); return; }
+    toast('Link revoked','success'); loadOwnerInvites();
+  }).catch(function(e){ toast('Error: '+e.message,'error'); });
 }
 
 // ── Link Property to Owner (owner-side quick action; same write as Edit Property's Owner field) ──
@@ -11970,7 +12560,7 @@ function openLinkPropertyModal(ownerId, ownerLabel) {
   sel.innerHTML = '<option value="">Select a property…</option>' +
     sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';})).map(function(p){
       var curOwner = p.Owner_ID ? safeArray(state.owners).find(function(o){return String(o.ID)===String(p.Owner_ID);}) : null;
-      var curLabel = curOwner ? ((curOwner.First_Name+' '+(curOwner.Last_Name||'')).trim() || curOwner.Company) : '';
+      var curLabel = curOwner ? ownerLabel(curOwner) : '';
       var already = String(p.Owner_ID||'')===String(ownerId);
       return '<option value="'+p.ID+'"'+(already?' disabled':'')+'>'+p.Address+(p.City?', '+p.City:'')+
         (already ? ' — already linked' : (curLabel ? ' — currently: '+curLabel : ' — no owner'))+'</option>';
@@ -12105,10 +12695,7 @@ function baKeyTypeToSimple(kt) {
 
 function openBulkAccessModal() {
   var sel = document.getElementById('ba-owner');
-  sel.innerHTML = '<option value="">— select owner —</option>' +
-    safeArray(state.owners).filter(function(o){return o.Active!=='FALSE';}).map(function(o){
-      return '<option value="'+o.ID+'">'+esc((o.First_Name||'')+(o.Last_Name?' '+o.Last_Name:'')+(o.Company?' / '+o.Company:''))+'</option>';
-    }).join('');
+  sel.innerHTML = ownerOptionsHtml('', '<option value="">— select owner —</option>');
   document.getElementById('ba-rows').innerHTML = '<div style="color:var(--muted);font-size:12px">Select an owner to load their properties.</div>';
   document.getElementById('ba-msg').innerHTML = '';
   document.getElementById('ba-submit-btn').disabled = true;

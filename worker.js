@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-23.12-receipt-recon-reassign-refund-search';
+const BUILD_VERSION = '2026-09-26.3-receipt-recon-reassign-refund-search';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -127,7 +127,10 @@ export default {
       // the existing, already-gated /vendor/update. The SAME page, opened while already logged
       // into the Hub (mh_auth present), instead calls the normal gated /vendor/add + this same
       // /contact-card/extract admin endpoint — see vendor-setup.html.
-      '/vendor-setup/contact-extract','/vendor-setup/submit'];
+      '/vendor-setup/contact-extract','/vendor-setup/submit',
+      // Owner self-serve onboarding (Sep 26 2026): public at the gate, but every handler requires a valid single-use
+      // invite token minted by Brett (Owner_Invites tab) — see the OWNER SELF-SERVE ONBOARDING block.
+      '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -297,6 +300,7 @@ export default {
             '/tenant-by-pin',         // tenantByPin -> pinLookup: writes PIN_Lockout on every call (recordPinFailure/clearPinLockout)
             '/owner-by-pin',          // ownerByPin -> pinLookup: same PIN_Lockout write path as /tenant-by-pin
             '/vendor-by-pin',         // vendorByPin -> pinLookup: same PIN_Lockout write path as /tenant-by-pin
+            '/owner-onboard/invites', // returns live single-use owner-onboarding invite links (tokens) — a read-only token must not be able to mint access
           ];
           const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && !HUB_PROD_RO_EXCLUDE_PATHS.includes(path);
           // Narrow WRITE-CAPABLE token for safe, allow-listed production writes (Sep 22 2026,
@@ -398,6 +402,8 @@ export default {
         // the /workorder tenant path above.
         if (path === '/tenant-session-refresh') return await tenantSessionRefresh(env, callerRole, callerSessionId);
         if (path === '/owner-by-pin')           return await ownerByPin(env, url);
+        if (path === '/owner-onboard/info')     return await ownerOnboardInfo(env, url);
+        if (path === '/owner-onboard/invites')  return await ownerOnboardInvites(env);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url);
         if (path === '/vendor-workorders')      return await vendorWorkorders(env, url);
@@ -419,7 +425,9 @@ export default {
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
+        if (path === '/vendor-loan')            return await vendorLoanGet(env, url);
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
+        if (path === '/vendor-access-requests') return await listVendorAccessRequests(env, url);
         if (path === '/estimates')              return await listEstimates(env, url);
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
         if (path === '/stale-wos')              return await staleWos(env, url);
@@ -447,6 +455,7 @@ export default {
         if (path === '/ar/report/opt-in')       return await arReportOptInRead(env, url);
         if (path === '/ar-report/view')         return await arReportView(env, url);
         if (path === '/vendor-performance')     return await vendorPerformance(env, url);
+        if (path === '/brettos-tasks-summary') return await brettosTasksSummary(env, url);
         if (path === '/vendor-onboarding-status') return await vendorOnboardingStatus(env, url);
         if (path === '/vendor-onboarding-gaps') return await vendorOnboardingGaps(env);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
@@ -565,14 +574,15 @@ export default {
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
-        if (path === '/property/add')             return await propertyAddWithDupeCheck(env, body);
+        if (path === '/property/add')             { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); return await propertyAddWithDupeCheck(env, body); }
         if (path === '/property/update')          return await propertyUpdate(env, body);
         if (path === '/unit/add')                 return await unitAddWithDupeCheck(env, body);
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
         if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
-        if (path === '/owner/add')                return await addOwnerWithQBSync(env, body);
-        if (path === '/owner/update')             return await updateRow(env, 'Owners', body.id, body.fields);
+        // Billing_* already exist on the live sheet; ensureColumns keeps a fresh/staging sheet from silently dropping them (addRow/updateRow map by existing header only).
+        if (path === '/owner/add')                { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await addOwnerWithQBSync(env, body); }
+        if (path === '/owner/update')             { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await updateRow(env, 'Owners', body.id, body.fields); }
         if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
         if (path === '/owner/held-contact-note') return await setOwnerHeldContactNote(env, body);
@@ -594,9 +604,15 @@ export default {
         if (path === '/contact-card/extract')     return await contactCardExtractFromBody(env, body);
         if (path === '/vendor-setup/contact-extract') return await contactCardExtractFromBody(env, body);
         if (path === '/vendor-setup/submit')      return await vendorSetupSubmit(env, body);
+        if (path === '/owner-onboard/check-pin')  return await ownerOnboardCheckPin(env, body);
+        if (path === '/owner-onboard/submit')     return await ownerOnboardSubmit(env, body, _clientIP);
+        if (path === '/owner-onboard/invite/create') return await ownerOnboardInviteCreate(env, body);
+        if (path === '/owner-onboard/invite/revoke') return await ownerOnboardInviteRevoke(env, body);
         if (path === '/set-pin')                  return await updateRow(env, 'Tenants', body.tenant_id, { PIN: body.pin });
         if (path === '/vendor/set-pin')           return await updateRow(env, 'Vendors', body.vendor_id, { PIN: body.pin });
         if (path === '/owner/set-pin')            return await updateRow(env, 'Owners', body.owner_id, { PIN: body.pin });
+        if (path === '/owner/pin-suggest')        return await ownerPinSuggest(env, body);
+        if (path === '/owner/set-pins')           return await ownerPinSet(env, body);
         // Contents (Aug 24, 2026): what a Lockbox key ACTUALLY holds — 'Front Door Only' |
         // 'Front Door + Unit Key' | 'Unit Key Only'. A Building-level lockbox entry is shown
         // to every unit's work order at that property (see getWOLockboxes below), which used
@@ -655,6 +671,14 @@ export default {
         if (path === '/create-upload-session')    return await createUploadSession(env, body);
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
+        if (path === '/vendor-loan/add')          return await vendorLoanAdd(env, body);
+        if (path === '/vendor-bill/add-standalone') return await addVendorBillStandalone(env, body);
+        if (path === '/vendor/request-property-access') return await vendorRequestPropertyAccess(env, body);
+        if (path === '/vendor-access-requests/approve') return await vendorAccessRequestApprove(env, body);
+        if (path === '/workorder/self-serve')     return await workorderSelfServe(env, body);
+        if (path === '/vendor/set-can-bill-no-wo') return await vendorSetCanBillNoWO(env, body);
+        if (path === '/vendor/set-can-create-own-wo') return await vendorSetCanCreateOwnWO(env, body);
+        if (path === '/vendor/set-billing-property-access') return await vendorSetBillingPropertyAccess(env, body);
         if (path === '/vendor/update-contact')    return await vendorUpdateContact(env, body);
         if (path === '/vendor-bill/extract')      return await vendorBillExtract(env, body);
         if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
@@ -727,6 +751,7 @@ export default {
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
         if (path === '/receipt-recon/scan')       return await receiptReconScan(env, body);
+        if (path === '/receipt-recon/import-statement') return await receiptReconImportStatement(env, body);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
         if (path === '/receipt/attach-only')      return await receiptAttachOnly(env, body);
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
@@ -1202,6 +1227,14 @@ async function vendorByPin(env, url) {
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
       vendor_trades: vendor.Trades||vendor.Trade||'', vendor_rate: vendor.Hourly_Rate||'', language: vendor.Language||'en',
       vendor_email: vendor.Email||'', vendor_company: vendor.Company||'',
+      // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §3a/§4a):
+      // carried on the session so vendor.html can show/hide the "Submit a Bill" / "Log a
+      // One-Off Job" home-screen buttons without a separate round trip. Every write these
+      // enable is still re-checked server-side against the live Vendors row — this is
+      // display-only, never itself a grant of access.
+      can_bill_no_wo: String(vendor.Can_Bill_No_WO || '').toUpperCase() === 'TRUE',
+      can_create_own_wo: String(vendor.Can_Create_Own_WO || '').toUpperCase() === 'TRUE',
+      billing_property_access: vendor.Billing_Property_Access || '',
       token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET),
     });
   });
@@ -1597,6 +1630,39 @@ function currentTenantForDispatch(tenants, unit, wo) {
     t = (tenants || []).find(x => x.Property_ID === wo.Property_ID && !x.Unit_ID && x.Active !== 'FALSE');
   }
   return isTenantCurrent(t) ? t : null;
+}
+
+// CAP-036 #21 fix (Sep 24 2026) — real case: 115 W 29th St Apt 2 (Julie Feldman + Alanna
+// McLaughlin) and Apt 3 (Lance Serafica + Emily Marquez) each have TWO active tenants sharing
+// one unit, and only one of them was ever getting work-order SMS (reassignment/completion/
+// scheduled/etc). Root cause was NOT a bad tenant/unit link — both tenants' own Tenants rows
+// correctly carry the same Unit_ID/Property_ID. The bug was that every tenant-notification call
+// site resolved "the" tenant via currentTenantForDispatch, which follows Units.Tenant_ID — a
+// single FK column that can only ever name one occupant — instead of asking the Tenants table
+// for every active tenant actually linked to that unit. Confirmed systemic: at least 8 other
+// live multi-tenant units show the same one-tenant-only pointer (153 W Lanvale Apt 1, 1214 N
+// Calvert Apt 2 & Apt 3, 3014 N Calvert Apt B, 928 N Calvert Apt 2F, 151 W Lanvale Apt 2, plus
+// the Apt 3/20 E Eager test row) — none of those needed a data fix either.
+//
+// tenantsForDispatch returns EVERY currently-active tenant tied to this WO's unit (or, for a
+// whole-property WO with no Unit_ID, every active no-Unit tenant at that property — same
+// fallback currentTenantForDispatch already used). This is deliberately still scoped to ONE
+// unit/property's own tenants, never a building-wide broadcast — that's a separate, already-
+// decided default-off case. Callers that need to actually SEND something still run each
+// returned tenant through isTenantNotifiable (phone present, not background-WO) individually,
+// exactly as they did for the single tenant before this fix.
+function tenantsForDispatch(tenants, unit, wo) {
+  const list = tenants || [];
+  let matches = [];
+  if (wo && wo.Unit_ID) {
+    matches = list.filter(t => t.Unit_ID === wo.Unit_ID && t.Active !== 'FALSE');
+  } else if (wo && wo.Property_ID && !wo.Unit_ID) {
+    matches = list.filter(t => t.Property_ID === wo.Property_ID && !t.Unit_ID && t.Active !== 'FALSE');
+  } else if (wo && wo.Tenant_ID) {
+    const t = list.find(x => String(x.ID) === String(wo.Tenant_ID));
+    if (t) matches = [t];
+  }
+  return matches.filter(isTenantCurrent);
 }
 
 // A WO opened before the tenant's Move_In_Date is "background" to them — work tied to
@@ -2099,6 +2165,100 @@ function receiptReconFindRescanMatches(candidate, existingReceipts, existingQueu
   return matches;
 }
 
+// ── Statement importer (Sep 24 2026) — STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0 Phase 1
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// PURE — checks ONE normalized statement line (from a bulk vendor statement — Home Depot, Lowe's,
+// a credit card, etc.) against already-captured Receipts and Receipt_Recon_Queue rows. Deliberately
+// reuses the SAME comparison primitives as receiptReconFindRescanMatches above (_rcNorm,
+// .toFixed(2) string equality for money, same Active/Status filters) rather than inventing a
+// second dedup/matching algorithm — the brief's explicit, load-bearing instruction. Never image
+// matching (a statement line never looks like a receipt photo).
+// Returns { confidence: 'confirmed'|'possible'|null, ...matchDetails }:
+//   1. 'confirmed' — exact amount (to the cent) AND exact date AND normalized vendor match,
+//      against a live Receipts row (Active !== 'FALSE') or a non-pending Receipt_Recon_Queue row.
+//   2. 'confirmed' — line.ref (PO/invoice number) exact-matches PO_Reference or Invoice_Number on
+//      an existing Receipt_Recon_Queue row, at the same amount, even if the date differs by a day
+//      or two (a reference match is a stronger signal than date proximity). Receipts itself has no
+//      PO/invoice-number column (confirmed live, addReceipt above) — checked against Description
+//      there as a best-effort fallback only.
+//   3. 'possible' — same amount (exact) AND date within ±3 calendar days (same day-window math as
+//      qbDuplicateBillsNear) AND normalized vendor roughly matches (substring either direction) —
+//      weaker signal, still surfaced, never silently suppressed.
+//   4. null — no match.
+function statementLineMatch(line, existingReceipts, existingQueueRows) {
+  const amt = (Number(line && line.amount) || 0).toFixed(2);
+  const st = _rcNorm(line && (line.vendor || line.store));
+  const date = String((line && line.date) || '').trim();
+  const ref = String((line && line.ref) || '').trim();
+  const roughMatch = (a, b) => !!a && !!b && (a.indexOf(b) >= 0 || b.indexOf(a) >= 0);
+
+  // 1) Exact match — amount + date + normalized vendor.
+  if (date && st && Number(amt) > 0) {
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Date || '') !== date) continue;
+      if (_rcNorm(r.Store) !== st) continue;
+      return { confidence: 'confirmed', type: 'exact_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+    }
+    for (const r of (existingQueueRows || [])) {
+      const status = r.Status || 'pending';
+      if (status === 'pending') continue;
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (String(r.Receipt_Date || '') !== date) continue;
+      if (_rcNorm(r.Vendor) !== st) continue;
+      return { confidence: 'confirmed', type: 'exact_queue', queue_id: r.ID, status };
+    }
+  }
+
+  // 2) Reference match — same amount, exact PO/invoice number, date can differ.
+  if (ref && Number(amt) > 0) {
+    for (const r of (existingQueueRows || [])) {
+      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+      if (ref === String(r.PO_Reference || '').trim() || ref === String(r.Invoice_Number || '').trim()) {
+        return { confidence: 'confirmed', type: 'ref_queue', queue_id: r.ID, status: r.Status || 'pending' };
+      }
+    }
+    for (const r of (existingReceipts || [])) {
+      if (r.Active === 'FALSE') continue;
+      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+      if (ref === String(r.Description || '').trim()) {
+        return { confidence: 'confirmed', type: 'ref_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+      }
+    }
+  }
+
+  // 3) Possible — same amount, date within ±3 days, vendor roughly matches.
+  if (date && Number(amt) > 0) {
+    const d = new Date(date + 'T00:00:00Z');
+    if (!isNaN(d)) {
+      const from = d.getTime() - 3 * 86400000, to = d.getTime() + 3 * 86400000;
+      for (const r of (existingReceipts || [])) {
+        if (r.Active === 'FALSE') continue;
+        if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
+        const rd = new Date(String(r.Date || '') + 'T00:00:00Z'); if (isNaN(rd)) continue;
+        if (rd.getTime() < from || rd.getTime() > to) continue;
+        if (st && !roughMatch(_rcNorm(r.Store), st)) continue;
+        return { confidence: 'possible', type: 'window_receipt', receipt_id: r.ID, wo_id: r.WO_ID || '' };
+      }
+      for (const r of (existingQueueRows || [])) {
+        const status = r.Status || 'pending';
+        if (status === 'pending') continue;
+        if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+        if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+        const rd = new Date(String(r.Receipt_Date || '') + 'T00:00:00Z'); if (isNaN(rd)) continue;
+        if (rd.getTime() < from || rd.getTime() > to) continue;
+        if (st && !roughMatch(_rcNorm(r.Vendor), st)) continue;
+        return { confidence: 'possible', type: 'window_queue', queue_id: r.ID, status };
+      }
+    }
+  }
+
+  return { confidence: null };
+}
+
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
@@ -2181,6 +2341,110 @@ async function receiptReconScan(env, body) {
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
   return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
+}
+
+// POST /receipt-recon/import-statement { vendor, rows:[{date,amount,description,ref}], source_file_id?,
+// source_file_name?, source_file_url? } OR { vendor, file_id, mime_type, source_file_name? } —
+// Statement importer Phase 1 (Sep 24 2026, STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0).
+// Lands EVERY unmatched/possibly-matched line from a bulk vendor statement into the SAME
+// Receipt_Recon_Queue Brett already works daily — not a new screen — tagged Entry_Source:'statement'
+// so he can tell a statement line apart from a normally scanned receipt. Confirmed matches are
+// never inserted (no action needed); this never writes a Receipt directly, same non-billing
+// discipline as receiptReconScan above. CSV rows are parsed CLIENT-SIDE (index.html) per this
+// codebase's hubBulkImport convention — confirmed live, no server-side CSV parser exists — so the
+// `rows` shape here is already-parsed objects, never raw CSV text.
+async function receiptReconImportStatement(env, body) {
+  body = body || {};
+  const vendor = String(body.vendor || '').trim();
+  if (!vendor) return json({ error: 'vendor required' }, 400);
+  const hasRows = Array.isArray(body.rows) && body.rows.length;
+  const hasFile = !!(body.file_id && body.mime_type);
+  if (!hasRows && !hasFile) return json({ error: 'rows (array) or file_id+mime_type required' }, 400);
+  if (hasRows && body.rows.length > 500) return json({ error: 'Too many rows in one call — split into batches of 500 or fewer.' }, 400);
+
+  let workingRows = [];
+  let detectedVendor = '';
+  let sourceFileId = body.source_file_id || '';
+  const sourceFileName = body.source_file_name || '';
+  const sourceFileUrl = body.source_file_url || '';
+
+  if (hasFile) {
+    sourceFileId = body.file_id;
+    let dl;
+    try {
+      const tok = await getAccessToken(env);
+      dl = await driveDownload(tok, body.file_id);
+    } catch (e) {
+      return json({ error: 'Could not download the file: ' + (e && e.message || e) }, 500);
+    }
+    const ex = await statementExtract(env, dl.bytes, dl.mime);
+    detectedVendor = ex.vendor_detected || '';
+    // statementExtract's own lines already use `amount`; documented here in case an older/altered
+    // extractor response ever returns `total` instead — mapped defensively, never silently dropped.
+    workingRows = (ex.lines || []).map(l => ({
+      date: l.date || '', amount: (l.amount !== undefined && l.amount !== null) ? l.amount : l.total,
+      description: l.description || '', ref: l.ref || '',
+    }));
+  } else {
+    workingRows = body.rows;
+  }
+
+  await ensureTab(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  await ensureColumns(env, 'Receipt_Recon_Queue', RECEIPT_RECON_QUEUE_HEADERS);
+  const [receipts, queueRows] = await fetchTabs(env, ['Receipts', 'Receipt_Recon_Queue']);
+
+  // Cloudflare-subrequest-safety cap, same pattern as receiptReconScan's `cap`/`remaining` above —
+  // a big statement (hundreds of lines) must never blow the per-invocation subrequest limit
+  // partway through. FIXED (Sep 24 2026 review): rows past the cap used to always be re-taken from
+  // the START of workingRows on the next call — since a just-inserted row is Status:'pending' and
+  // statementLineMatch correctly treats 'pending' as NOT yet dispositioned (never counts as a prior
+  // match), that meant the first 100 lines got duplicate-inserted every subsequent call instead of
+  // dedupe-skipping. Fix: the CALLER now tracks and sends `offset` (default 0) so each call
+  // processes a genuinely different slice — `next_offset` tells it exactly where to resume, so
+  // nothing is ever reprocessed and nothing is silently skipped.
+  const IMPORT_STATEMENT_MAX_WRITES = 100;
+  const offset = Math.max(0, parseInt(body.offset, 10) || 0);
+  const toProcess = workingRows.slice(offset, offset + IMPORT_STATEMENT_MAX_WRITES);
+  const nextOffset = offset + toProcess.length;
+  const remaining = Math.max(0, workingRows.length - nextOffset);
+
+  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0;
+  const errors = [];
+  const today = new Date().toISOString().split('T')[0];
+
+  for (const line of toProcess) {
+    const amt = Number(line && line.amount);
+    const date = String((line && line.date) || '').trim();
+    if (!isFinite(amt) || amt <= 0 || !date) { skipped_invalid++; continue; }
+    const lineVendor = (line && line.vendor) || vendor;
+    const normLine = { amount: amt, date, ref: (line && line.ref) || '', vendor: lineVendor };
+    let match;
+    try { match = statementLineMatch(normLine, receipts, queueRows); }
+    catch (e) { errors.push('match failed: ' + (e && e.message || e)); match = { confidence: null }; }
+
+    if (match.confidence === 'confirmed') { matched_confirmed++; continue; }
+    if (match.confidence === 'possible') flagged_possible++;
+
+    const noteBase = `From ${vendor} statement upload (${sourceFileName || 'uploaded ' + today}).`;
+    const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '');
+    try {
+      await addRow(env, 'Receipt_Recon_Queue', {
+        Source_File_ID: sourceFileId || '', Source_File_URL: sourceFileUrl || '', File_Name: sourceFileName || '',
+        Received_Date: new Date().toISOString(), Vendor: lineVendor, Receipt_Date: date,
+        Total: String(amt), PO_Reference: (line && line.ref) || '', Items: '[]',
+        Items_Summary: JSON.stringify([(line && line.description) || '']).slice(0, 4000),
+        Card_Last4: '', Invoice_Number: '', Suggestion: '', Status: 'pending',
+        Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: notes, Active: 'TRUE',
+        Gmail_Message_ID: '', Entry_Source: 'statement', Rescan_Match_JSON: '[]',
+      });
+      inserted++;
+    } catch (e) { errors.push('insert failed: ' + (e && e.message || e)); }
+  }
+
+  return json({
+    success: true, vendor, vendor_detected: detectedVendor || undefined, total_lines: workingRows.length,
+    matched_confirmed, flagged_possible, inserted, skipped_invalid, remaining, next_offset: nextOffset, errors,
+  });
 }
 
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
@@ -2322,6 +2586,10 @@ async function receiptReconConfirm(env, body) {
     else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
   }
   if (addJson && addJson.success) {
+    // Confirmed_Receipt_ID (Sep 23 2026 build): the actual Receipts row this confirmation wrote,
+    // so a later Reassign / Mark-as-refund on this queue row can find and void the exact right
+    // row instead of guessing from amount/store/date. Blank on a duplicate skip — nothing new
+    // was written in that case.
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: addJson.duplicate ? 'skipped' : 'confirmed',
       Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
@@ -4202,6 +4470,52 @@ function scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal) {
 // the deposit booking (scopeProposalBook) and the final-balance booking (scopeProposalBookFinal,
 // Sep 2 2026) so the two halves of a job can never resolve to a different customer/vendor/trade
 // due to duplicated logic drifting apart.
+// ── Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief) ───────────
+// PURE helpers — no I/O, unit-tested by test/vendor-standalone-billing-selfserve.test.mjs.
+
+// §4a/4b: a One-Off Job (self-serve WO) can never be created with no stated reason. 'other'
+// requires a real note; 'owner'/'brett' accept one but don't require it.
+function validateApprovalSource(source, note) {
+  const s = String(source || '').trim().toLowerCase();
+  if (!['owner', 'brett', 'other'].includes(s)) {
+    return { ok: false, error: 'Approval_Source must be owner, brett, or other' };
+  }
+  if (s === 'other' && !String(note || '').trim()) {
+    return { ok: false, error: 'Approval_Note is required when Approval_Source is "other"' };
+  }
+  return { ok: true, source: s, note: String(note || '').trim() };
+}
+
+// §3c: never trust the client — a standalone bill may only target a property the vendor's
+// own Billing_Property_Access allow-list already carries (or that an approved access-request
+// has since appended to it — see vendorAccessRequestApprove).
+function vendorHasBillingPropertyAccess(vendor, propertyId) {
+  const list = String((vendor && vendor.Billing_Property_Access) || '').split(',').map(s => s.trim()).filter(Boolean);
+  return list.includes(String(propertyId || '').trim());
+}
+
+// §3c: same Total/Receipts_Total/Receipts_Reimburse_Total shape addVendorBill's normal
+// hourly/flat + receipts flow already produces (and Review Bills' irCalc() already reads) —
+// Total is what's actually owed TO THE VENDOR (excludes items paid on Ridge Co's own card),
+// Receipts_Total is the full billable amount (both pay modes) that reaches the customer
+// invoice via buildInvoiceLines. Keeping this identical to the existing formula means no
+// downstream code (irCalc, buildInvoiceLines) needs to know a bill is standalone at all.
+function computeStandaloneBillTotals(lineItems) {
+  const items = Array.isArray(lineItems) ? lineItems : [];
+  let receiptsTotal = 0, reimburseTotal = 0;
+  for (const it of items) {
+    const amt = +(Number(it && it.amount) || 0);
+    if (amt <= 0) continue;
+    receiptsTotal += amt;
+    if (!it || it.pay !== 'account') reimburseTotal += amt;
+  }
+  return {
+    receipts_total: +receiptsTotal.toFixed(2),
+    receipts_reimburse_total: +reimburseTotal.toFixed(2),
+    total: +reimburseTotal.toFixed(2),
+  };
+}
+
 async function scopeSigResolveParties(env, s, row) {
   let selections = {}; try { selections = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
   const items = scopeParseItems(s);
@@ -5095,7 +5409,13 @@ async function createWorkOrder(env, body) {
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
   const woId = `WO-${nextWONum}`, now = new Date().toISOString();
-  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'' }[h] ?? ''));
+  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'',
+    // Self-Serve Work Orders ("One-Off Job", Sep 24 2026 build brief §4b) — blank/no-op for
+    // every other caller (tenant submit.html, the Hub's New WO modal, etc.); only
+    // workorderSelfServe ever sends these three, and only after ensureColumns has already
+    // added them to Work_Orders.
+    Created_By_Vendor: body.created_by_vendor||'', Approval_Source: body.approval_source||'', Approval_Note: body.approval_note||''
+  }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   try {
     const tenants = await fetchTab(env, 'Tenants');
@@ -5134,9 +5454,10 @@ async function createWorkOrder(env, body) {
     // existing Tenant_Notify_Created toggle already covers. Delayed 1h so a fast assignment can
     // supersede/bump it (see the tenant_job_received check in processPendingNotifications)
     // instead of the tenant getting "we got it" immediately followed by "you're assigned".
-    const tenant = currentTenantForDispatch(tenants, unit, woLike);
+    // CAP-036 #21: every active tenant in the unit, not just one.
     const tenantNotifyCreated = body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE';
-    if (isTenantNotifiable(tenant, woLike) && tenantNotifyCreated) {
+    if (tenantNotifyCreated) for (const tenant of tenantsForDispatch(tenants, unit, woLike)) {
+      if (!isTenantNotifiable(tenant, woLike)) continue;
       const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
       const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
       const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
@@ -5145,6 +5466,58 @@ async function createWorkOrder(env, body) {
   } catch (e) { /* non-fatal */ }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){}
   return json({ success: true, id: woId });
+}
+
+// POST /workorder/self-serve { vendor_id, property_id, trade?, description, approval_source,
+//   approval_note? }
+// "Log a One-Off Job" (Sep 24 2026 build brief §4b) — a thin wrapper around createWorkOrder
+// for a vendor with Vendors.Can_Create_Own_WO='TRUE'. Deliberately NOT property-restricted
+// (§4a: "it's going to be a one-off system") — any active property is fair game, unlike the
+// billing flow's Billing_Property_Access allow-list. The one hard requirement is the
+// Approval_Source attestation: this is the ONLY substitute for Brett originating the WO
+// himself, so it is validated server-side and never trusted from the client alone.
+async function workorderSelfServe(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  const description = String(body.description || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+  if (!description) return json({ error: 'description required' }, 400);
+
+  const approval = validateApprovalSource(body.approval_source, body.approval_note);
+  if (!approval.ok) return json({ error: approval.error }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  if (String(vendor.Can_Create_Own_WO || '').toUpperCase() !== 'TRUE') {
+    return json({ error: 'This vendor is not enabled for self-serve work orders' }, 403);
+  }
+  const prop = properties.find(p => String(p.ID) === propertyId && p.Active !== 'FALSE');
+  if (!prop) return json({ error: 'Property not found or inactive' }, 404);
+
+  await ensureColumns(env, 'Work_Orders', ['Created_By_Vendor', 'Approval_Source', 'Approval_Note']);
+
+  // createWorkOrder itself always sets Vendor_ID to blank on create (assignment is a separate
+  // step everywhere in this app) — the vendor is assigned to themselves via the normal
+  // assignVendor() chokepoint right after, exactly like any other WO, so this never bypasses
+  // that pipeline's own SMS/notification/audit side effects.
+  const createRes = await createWorkOrder(env, {
+    property_id: propertyId, trade: vendor.Trade || '', description,
+    priority: 'normal', type: 'vendor_self_serve', created_by: 'vendor:' + vendorId,
+    created_by_vendor: 'TRUE', approval_source: approval.source, approval_note: approval.note,
+  });
+  let created = null;
+  try { created = await createRes.clone().json(); } catch (e) { return createRes; }
+  if (!created || created.error) return createRes;
+  if (created.duplicate) return json(created);
+
+  // Server-side, never a client-supplied vendor id (same class of hardening as the Sep 16
+  // 2026 tenant-submission fix) — the vendor is ALWAYS assigned to themselves, never anyone else.
+  try { await assignVendor(env, { wo_id: created.id, vendor_id: vendorId, notify: false }); }
+  catch (e) { /* WO exists even if the self-assign step fails; Brett can assign it manually */ }
+
+  return json({ success: true, id: created.id });
 }
 
 async function appendWONotes(env, body) {
@@ -5509,8 +5882,9 @@ async function woCombine(env, body) {
     const unit = units.find(u => u.ID === survivorFresh.Unit_ID);
     const property = properties.find(p => p.ID === survivorFresh.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = currentTenantForDispatch(tenants, unit, survivorFresh);
-    if (isTenantNotifiable(tenant, survivorFresh) && survivorFresh.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (survivorFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, survivorFresh)) {
+      if (!isTenantNotifiable(tenant, survivorFresh)) continue;
       const idList = combinedIds.join(', ');
       const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
       await smsGatedSend(env, { wo_id: survivorId, message_type: 'tenant_wo_combined', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
@@ -5798,8 +6172,9 @@ async function woSplit(env, body) {
     const unit = units.find(u => u.ID === originalFresh.Unit_ID);
     const property = properties.find(p => p.ID === originalFresh.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = currentTenantForDispatch(tenants, unit, originalFresh);
-    if (isTenantNotifiable(tenant, originalFresh) && originalFresh.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (originalFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, originalFresh)) {
+      if (!isTenantNotifiable(tenant, originalFresh)) continue;
       const idList = createdWoIds.join(', ');
       const msg = `Hi ${tenant.First_Name}, work order ${originalId} was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
       await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
@@ -5847,7 +6222,9 @@ async function assignVendor(env, body) {
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner    = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const unit     = units.find(u => u.ID === wo.Unit_ID);
-  const tenant   = currentTenantForDispatch(tenants, unit, wo);
+  // CAP-036 #21: notify every active tenant linked to this unit, not just one — see
+  // tenantsForDispatch's comment for the real Lance/Emily (115 W 29th St) case this fixes.
+  const woTenants = tenantsForDispatch(tenants, unit, wo);
   const room     = (wo.Room||'').trim();
   const address  = property ? `${property.Address}${unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''}${room ? ' ('+room+')' : ''}` : 'the property';
   // Access info (lockbox codes, master key status, etc.) is deliberately NOT built or sent
@@ -5880,16 +6257,19 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
-  if (notify && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
+  if (notify) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface),
     // and a short job label (woJobLabel) so two same-trade/same-address jobs never read
     // identically in a text — "your General job" alone was indistinguishable from any other
-    // General job at the same address.
-    const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
-    const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-    tenantSMSSent = r.sent;
+    // General job at the same address. CAP-036 #21: loops every tenant in the unit (was one).
+    for (const tenant of woTenants) {
+      if (!tenant?.Phone || !isTenantNotifiable(tenant, wo)) continue;
+      const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
+      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
+      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+      if (r.sent) tenantSMSSent = true;
+    }
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
@@ -5943,8 +6323,10 @@ async function updateStatus(env, body) {
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
   if (body.status === 'Complete') {
-    const tenant = currentTenantForDispatch(tenants, unit, wo);
-    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just the one Units.Tenant_ID happens
+    // to name — see tenantsForDispatch's comment for the real Lance/Emily case this fixes.
+    if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
+      if (!isTenantNotifiable(tenant, wo)) continue;
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
       // same-address jobs distinguishable in the text (see tenant_job_assigned's comment).
       // Sep 16 2026 (Brett): dropped the "reply or call us" line — inbound SMS from a tenant
@@ -5961,8 +6343,9 @@ async function updateStatus(env, body) {
   // This is the automation the acceptance gate exists to enable: the status moving to
   // Accepted is the trigger, so a vendor who just starts the job no longer silently skips it.
   if (body.status === 'Accepted') {
-    const tenant = currentTenantForDispatch(tenants, unit, wo);
-    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
+      if (!isTenantNotifiable(tenant, wo)) continue;
       const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${wo.Trade} request at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
@@ -6691,6 +7074,166 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   }
 }
 
+// ── Vendor Loan/Advance Ledger (CAP-036 #13, Sep 24 2026, Brett-confirmed) ──────────────────
+// A GENERAL, reusable running-balance ledger on the Vendor record — any vendor, not
+// hardcoded to Gina or Alex. One tab covers both use cases, distinguished by Entry_Type:
+//   'manual'         — Gina (Venmo, bypasses the invoice-payment system on purpose): Brett
+//                       adds an entry with an amount + direction + date; balance moves either
+//                       way (a loan/advance increases it, a repayment decreases it).
+//   'auto-deduction' — Alex (and any other vendor with a nonzero balance): automatically
+//                       deducted from the LABOR portion of each invoice at bill-payment time
+//                       (see applyVendorLoanDeduction, called from qbSendInvoice).
+//   'seed'           — a one-time starting-balance entry (e.g. Alex's $210 placeholder).
+// Amount is stored SIGNED (+ increases balance / a loan given, − decreases it / a repayment)
+// so the running balance is always just a sum — Balance_After is a snapshot for fast display,
+// recomputed from the full history so a stray edit can never leave it silently wrong.
+// Self-provisions on first write, same pattern as ensureTrashTabs/ensureDeliveryTab/ensureInspTabs.
+const LOAN_LEDGER_TAB = 'Vendor_Loan_Ledger';
+const LOAN_LEDGER_HEADERS = ['ID','Vendor_ID','Vendor_Name','Entry_Type','Direction','Amount','Balance_After','Labor_Amount','Bill_ID','WO_ID','Date','Notes','Entered_By','Created_Date','Active'];
+
+async function ensureLoanLedgerTab(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  if (!titles.includes(LOAN_LEDGER_TAB)) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: LOAN_LEDGER_TAB } } }] });
+  }
+  await ensureColumns(env, LOAN_LEDGER_TAB, LOAN_LEDGER_HEADERS);
+}
+
+// Sum of every active entry's signed Amount for one vendor = the current balance.
+// Balance > 0 means the vendor owes Ridge Co (a loan/advance outstanding); 0 or less
+// means paid off (a negative balance would mean Brett owes THEM, which the deduction
+// logic below can never create — it stops exactly at 0, see computeLoanDeduction).
+async function getVendorLoanBalance(env, vendorId) {
+  let rows = [];
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { return 0; } // tab doesn't exist yet → no loans
+  return rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
+    .reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
+}
+
+// Appends one ledger entry and returns the new running balance. `direction` is 'loan' (balance
+// goes up) or 'repayment' (balance goes down) — the caller passes a positive `amount` either
+// way; the sign is applied here so a mistaken negative amount can never flip the meaning.
+async function addVendorLoanEntry(env, opts) {
+  await ensureLoanLedgerTab(env);
+  const direction = opts.direction === 'loan' ? 'loan' : 'repayment';
+  const signedAmount = direction === 'loan' ? Math.abs(Number(opts.amount) || 0) : -Math.abs(Number(opts.amount) || 0);
+  const priorBalance = await getVendorLoanBalance(env, opts.vendorId);
+  const balanceAfter = +(priorBalance + signedAmount).toFixed(2);
+  const row = {
+    Vendor_ID: String(opts.vendorId),
+    Vendor_Name: opts.vendorName || '',
+    Entry_Type: opts.entryType || 'manual',   // manual | auto-deduction | seed
+    Direction: direction,
+    Amount: signedAmount.toFixed(2),
+    Balance_After: balanceAfter.toFixed(2),
+    Labor_Amount: (opts.laborAmount != null && opts.laborAmount !== '') ? Number(opts.laborAmount).toFixed(2) : '',
+    Bill_ID: opts.billId || '',
+    WO_ID: opts.woId || '',
+    Date: opts.date || new Date().toISOString().split('T')[0],
+    Notes: opts.notes || '',
+    Entered_By: opts.enteredBy || 'Brett',
+  };
+  await addRow(env, LOAN_LEDGER_TAB, row);
+  return balanceAfter;
+}
+
+// GET /vendor-loan?vendor_id=X — running balance + full entry history for one vendor
+// (admin UI: Vendor edit view + the manual-entry ledger modal).
+async function vendorLoanGet(env, url) {
+  const vendorId = (url.searchParams.get('vendor_id') || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  let rows = [];
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { rows = []; } // no tab yet = no history
+  const entries = rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
+    .sort((a, b) => (parseInt(a.ID) || 0) - (parseInt(b.ID) || 0));
+  const balance = entries.reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
+  return json({ vendor_id: vendorId, balance: +balance.toFixed(2), entries });
+}
+
+// POST /vendor-loan/add { vendor_id, vendor_name?, amount, direction: 'loan'|'repayment',
+// date?, notes?, entered_by? } — Gina's manual ledger (and anyone else's manual correction).
+// Always Entry_Type 'manual'; the automatic path (applyVendorLoanDeduction) writes its own
+// 'auto-deduction' rows directly and never goes through this endpoint.
+async function vendorLoanAdd(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const amount = Number(body.amount);
+  const direction = body.direction === 'loan' ? 'loan' : (body.direction === 'repayment' ? 'repayment' : null);
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!(amount > 0)) return json({ error: 'amount must be a positive number' }, 400);
+  if (!direction) return json({ error: "direction must be 'loan' or 'repayment'" }, 400);
+  const balance = await addVendorLoanEntry(env, {
+    vendorId, vendorName: body.vendor_name || '', entryType: 'manual', direction,
+    amount, date: body.date || '', notes: body.notes || '', enteredBy: body.entered_by || 'Brett',
+  });
+  return json({ success: true, balance });
+}
+
+// PURE — the Alex/vendor-loan automatic-deduction formula (CAP-036 #13, Sep 24 2026,
+// Brett-confirmed spec; edge cases pinned in test/vendor-loan-deduction.test.mjs).
+//   laborAmount    — the LABOR-ONLY portion of the invoice being paid. Never materials or
+//                    reimbursement — those pass through to the vendor untouched regardless
+//                    of loan balance (Brett's stated rationale: materials spend isn't within
+//                    the vendor's control, so it must not speed up repayment).
+//   currentBalance — the vendor's loan balance BEFORE this invoice's deduction.
+// Returns the dollar amount to deduct. $0 whenever there's no balance to repay or labor is
+// under $100. Otherwise: 2.5% of labor at exactly $100, scaling linearly up to 5% at $500+
+// labor, capped at $25/invoice, then rounded to the nearest $2.50 — DOWN when labor is under
+// $350, UP at $351+ (exactly $350 rounds down, same side as "under"). The one exception: a
+// deduction that would clear the balance is never rounded and never exceeds what's actually
+// owed — it pays the exact remaining balance instead, whether that shortfall shows up before
+// or only after rounding.
+function computeLoanDeduction(laborAmount, currentBalance) {
+  const labor = Number(laborAmount) || 0;
+  const balance = Number(currentBalance) || 0;
+  if (balance <= 0 || labor < 100) return 0;
+
+  const pct = labor >= 500 ? 0.05 : 0.025 + (labor - 100) * (0.05 - 0.025) / (500 - 100);
+  let deduction = Math.min(labor * pct, 25);
+
+  // Payoff check #1: the raw (capped, unrounded) deduction already clears the balance.
+  if (deduction >= balance) return +balance.toFixed(2);
+
+  const roundUp = labor >= 351;
+  deduction = roundUp ? Math.ceil(deduction / 2.5) * 2.5 : Math.floor(deduction / 2.5) * 2.5;
+
+  // Payoff check #2: rounding (specifically rounding UP) can push it past the balance too.
+  if (deduction >= balance) return +balance.toFixed(2);
+
+  return +deduction.toFixed(2);
+}
+
+// STEP 1 (read-only) — figures out whether a loan deduction applies to this bill and how
+// much, WITHOUT writing anything. Split from the ledger write (recordVendorLoanDeduction,
+// below) on purpose: qbSendInvoice's bill POST can fail (a bad vendor ref, an Intuit hiccup)
+// and get retried on the next send attempt, and this row's QB_Bill_ID only gets set on
+// success — so writing the ledger entry here, before we know the bill actually posted, would
+// double-deduct on every retry of a failed send. Compute the adjustment early (to size the
+// bill payload correctly); record it only after billId comes back real.
+async function computeVendorLoanAdjustment(env, { vendorId, vendorCost, billRow }) {
+  const balance = await getVendorLoanBalance(env, vendorId);
+  if (!(balance > 0)) return { deduction: 0, laborAmount: 0, balance: 0 };
+
+  const isFlat = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'flat';
+  const laborAmount = isFlat ? (parseFloat(billRow && billRow.Flat_Rate) || 0) : (parseFloat(billRow && billRow.Labor_Total) || 0);
+  const deduction = computeLoanDeduction(laborAmount, balance);
+  // Never deduct more than the vendor is actually being paid on this bill — the loan ledger
+  // is repaid out of what they're owed, not created as a negative payable.
+  const safeDeduction = Math.min(deduction, Math.max(0, vendorCost));
+  return { deduction: safeDeduction > 0 ? safeDeduction : 0, laborAmount, balance };
+}
+
+// STEP 2 (writes) — call ONLY after the QuickBooks Bill has actually been created (a real
+// billId came back). General on purpose — ANY vendor with a nonzero balance gets this, not
+// just Alex.
+async function recordVendorLoanDeduction(env, { vendorId, vendorName, deduction, laborAmount, billId, woId }) {
+  return await addVendorLoanEntry(env, {
+    vendorId, vendorName, entryType: 'auto-deduction', direction: 'repayment',
+    amount: deduction, laborAmount, billId, woId,
+    notes: `Auto-deducted from invoice payment (labor $${Number(laborAmount).toFixed(2)})`,
+  });
+}
+
 async function addVendorBill(env, body) {
   // Vendor_Bills stores Created_Date as a date only, so the finest duplicate window
   // available here is the same day: same job, same vendor, same total, same day, still
@@ -6777,6 +7320,174 @@ async function addVendorBill(env, body) {
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
   try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
   return res;
+}
+
+// POST /vendor-bill/add-standalone { vendor_id, property_id, bill_to:'owner'|'ridgeco',
+//   line_items:[{description,amount,pay:'reimburse'|'account',url}], notes?, invoice_description? }
+// Vendor Standalone Billing (Sep 24 2026 build brief §3c) — lets a vendor with
+// Vendors.Can_Bill_No_WO='TRUE' submit a bill with NO Work_Orders row at all (Sierra Taylor's
+// tenant-treats/small-extras case). Writes a Vendor_Bills row with WO_ID left BLANK — already
+// tolerated everywhere downstream (addVendorBill's WO-auto-complete step is a no-op on a blank
+// WO_ID; addReceipt has supported a bare property_id with no wo_id since the one-tap-expense
+// build) — plus three new columns (Property_ID, Bill_To, Standalone) that qbSendInvoice's new
+// standalone branch (qbSendStandaloneInvoice) and Review Bills' renderIRCard use to resolve
+// Owner/QuickBooks straight from Property_ID, the same shape scopeSigResolveParties() already
+// uses for signed Scope Proposals. Every other field (Bill_Type/Hours/Truck_Stock/Receipts_JSON/
+// Receipts_Total/Receipts_Reimburse_Total/Total) matches the existing hourly/flat bill shape
+// EXACTLY, on purpose — Review Bills' irCalc()/renderIRCard money math and the QuickBooks send
+// path never need to know a bill is standalone; only the owner-resolution step does.
+async function addVendorBillStandalone(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  const billTo = String(body.bill_to || '').trim().toLowerCase();
+  const items = Array.isArray(body.line_items) ? body.line_items : [];
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+  if (!['owner', 'ridgeco'].includes(billTo)) return json({ error: "bill_to must be 'owner' or 'ridgeco'" }, 400);
+  const validItems = items.filter(it => it && (+it.amount || 0) > 0);
+  if (!validItems.length) return json({ error: 'At least one line item with an amount is required' }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  // Never trust the client — re-check the permission and the property allow-list server-side,
+  // same principle as the Sep 16 2026 tenant-submission hardening.
+  if (String(vendor.Can_Bill_No_WO || '').toUpperCase() !== 'TRUE') {
+    return json({ error: 'This vendor is not enabled for standalone billing' }, 403);
+  }
+  const prop = properties.find(p => String(p.ID) === propertyId);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+  if (!vendorHasBillingPropertyAccess(vendor, propertyId)) {
+    return json({ error: 'You do not have billing access to this property yet. Use "Request access to another property" first.' }, 403);
+  }
+
+  const receipts = validItems.map(it => ({
+    amount: +(+it.amount || 0).toFixed(2),
+    desc: String(it.description || it.desc || '').trim(),
+    url: String(it.url || '').trim(),
+    pay: it.pay === 'account' ? 'account' : 'reimburse',
+  }));
+  const totals = computeStandaloneBillTotals(receipts);
+  if (totals.receipts_total <= 0) return json({ error: 'Total must be greater than $0' }, 400);
+
+  await ensureColumns(env, 'Vendor_Bills', ['Property_ID', 'Bill_To', 'Standalone']);
+
+  // Same duplicate-guard shape addVendorBill already uses (vendor+property+total+day), scoped
+  // to Standalone rows only so it never collides with an ordinary WO-anchored bill.
+  const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
+    Vendor_ID: vendorId, Property_ID: propertyId, Total: totals.total.toFixed(2), Standalone: 'TRUE',
+  }, 86400);
+  if (dupe) return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
+
+  const vendorName = vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + vendorId);
+  const now = new Date();
+  const res = await addRow(env, 'Vendor_Bills', {
+    WO_ID: '', Vendor_ID: vendorId, Vendor_Name: vendorName,
+    Bill_Type: 'flat', Hours: '0', Rate: '0', Labor_Total: '0', Flat_Rate: '0',
+    Truck_Stock: '0', Truck_Desc: '',
+    Receipts_JSON: JSON.stringify(receipts),
+    Receipts_Total: totals.receipts_total.toFixed(2),
+    Receipts_Reimburse_Total: totals.receipts_reimburse_total.toFixed(2),
+    Total: totals.total.toFixed(2),
+    Notes: String(body.notes || ''),
+    Invoice_Description: String(body.invoice_description || '').trim() || (vendorName + ' — standalone bill'),
+    Property_ID: propertyId, Bill_To: billTo, Standalone: 'TRUE',
+    Status: 'submitted', Submitted_At: now.toISOString(), Created_Date: now.toISOString().split('T')[0],
+  });
+  return res;
+}
+
+// POST /vendor/request-property-access { vendor_id, property_id, note? }
+// Vendor Standalone Billing (§3b/§3d) — a vendor whose Billing_Property_Access allow-list
+// doesn't yet cover a property they need to bill against can ask for it here instead of being
+// stuck. Writes a Vendor_Access_Requests row (Brett approves/denies from Dev Log or the
+// Dashboard badge — see vendorAccessRequestApprove) and fires the same admin-alert SMS every
+// other "Brett, look at this" flow in this file uses (config.admin_phone + sendSMS).
+async function vendorRequestPropertyAccess(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  const prop = properties.find(p => String(p.ID) === propertyId);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+
+  await ensureColumns(env, 'Vendor_Access_Requests', [
+    'ID', 'Vendor_ID', 'Vendor_Name', 'Requested_Property_ID', 'Note', 'Status',
+    'Created_Date', 'Decided_Date', 'Active',
+  ]);
+  const vendorName = vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + vendorId);
+  const res = await addRow(env, 'Vendor_Access_Requests', {
+    Vendor_ID: vendorId, Vendor_Name: vendorName, Requested_Property_ID: propertyId,
+    Note: String(body.note || ''), Status: 'pending', Created_Date: new Date().toISOString(),
+  });
+  try {
+    const config = await getConfig(env);
+    if (config.admin_phone) {
+      await sendSMS(env, config.admin_phone,
+        `🔑 ${vendorName} requested billing access to ${prop.Address || ('property ' + propertyId)}. Review in Hub → Dev Log → Vendor Access Requests.`);
+    }
+  } catch (e) { /* non-fatal — the request row is already saved */ }
+  return res;
+}
+
+// GET /vendor-access-requests?status=pending  (or &count_only=1 for the dashboard/nav badges)
+// Vendor Standalone Billing (§3d) — one query backs BOTH the Dev Log section and the
+// Dashboard pending-count tile, deliberately, so the two badges can never drift apart.
+async function listVendorAccessRequests(env, url) {
+  const status = (url.searchParams.get('status') || '').trim().toLowerCase();
+  const countOnly = url.searchParams.get('count_only') === '1';
+  let rows = [];
+  try { rows = await fetchTab(env, 'Vendor_Access_Requests'); } catch (e) { rows = []; }
+  let results = rows.filter(r => r.Active !== 'FALSE');
+  if (status) results = results.filter(r => String(r.Status || 'pending').toLowerCase() === status);
+  if (countOnly) return json({ count: results.length });
+  return json(results);
+}
+
+// POST /vendor-access-requests/approve { id, scope:'once'|'ongoing', decision:'approve'|'deny' }
+// Vendor Standalone Billing (§3d). 'once' resolves the pending item without touching the
+// vendor's standing Billing_Property_Access list; 'ongoing' also appends the requested
+// property to it, so future bills against it clear the server-side allow-list check without
+// another request. A deny just closes the row out — no Vendors write at all.
+async function vendorAccessRequestApprove(env, body) {
+  const id = String(body.id || '').trim();
+  const decision = String(body.decision || '').trim().toLowerCase();
+  const scope = String(body.scope || 'once').trim().toLowerCase();
+  if (!id) return json({ error: 'id required' }, 400);
+  if (!['approve', 'deny'].includes(decision)) return json({ error: "decision must be 'approve' or 'deny'" }, 400);
+
+  const rows = await fetchTab(env, 'Vendor_Access_Requests');
+  const reqRow = rows.find(r => String(r.ID) === id);
+  if (!reqRow) return json({ error: 'Request not found' }, 404);
+
+  const today = new Date().toISOString();
+  if (decision === 'deny') {
+    await updateRow(env, 'Vendor_Access_Requests', id, { Status: 'denied', Decided_Date: today });
+    return json({ success: true, id, status: 'denied' });
+  }
+
+  const newStatus = scope === 'ongoing' ? 'approved_ongoing' : 'approved_once';
+  await updateRow(env, 'Vendor_Access_Requests', id, { Status: newStatus, Decided_Date: today });
+
+  if (scope === 'ongoing' && reqRow.Vendor_ID && reqRow.Requested_Property_ID) {
+    try {
+      const vendors = await fetchTab(env, 'Vendors');
+      const vendor = vendors.find(v => String(v.ID) === String(reqRow.Vendor_ID));
+      if (vendor) {
+        const list = String(vendor.Billing_Property_Access || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (!list.includes(String(reqRow.Requested_Property_ID))) {
+          list.push(String(reqRow.Requested_Property_ID));
+          await ensureColumns(env, 'Vendors', ['Billing_Property_Access']);
+          await updateRow(env, 'Vendors', reqRow.Vendor_ID, { Billing_Property_Access: list.join(',') });
+        }
+      }
+    } catch (e) { /* the request itself is already resolved; the vendor list append is best-effort */ }
+  }
+  return json({ success: true, id, status: newStatus });
 }
 
 // POST /vendor-bill/edit-receipts { bill_id, receipts:[{amount,desc,pay,url}], edited_by? }
@@ -9055,8 +9766,9 @@ async function scheduleWO(env, body) {
   const unit=units.find(u=>u.ID===wo.Unit_ID), property=properties.find(p=>p.ID===wo.Property_ID);
   const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
-    const tenant=currentTenantForDispatch(tenants, unit, wo);
+    // CAP-036 #21: every active tenant in the unit, not just the one Units.Tenant_ID names.
     const address=property?property.Address+(unit&&unit.Unit_Label?' '+formatUnitLabel(unit.Unit_Label):''):'your address';
+    for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       // woJobLabel keeps two same-trade/same-address jobs distinguishable in the text.
@@ -9071,12 +9783,13 @@ async function scheduleWO(env, body) {
       // true when it actually goes out, not what was true when it was scheduled.
       if(schedDate===today||isWithinHour){
         const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_scheduled', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-        tenantSMSSent = r.sent;
+        if (r.sent) tenantSMSSent = true;
       } else {
         let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}
         await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter,{ message_type: 'tenant_job_scheduled', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
         notifyQueued=true;
       }
+    }
     }
   }
   // Owner Scheduled (Sep 15 2026 — real gap found live-testing rule 168): the owner-scheduled
@@ -10001,21 +10714,25 @@ async function tenantManualUpdate(env, body) {
   const [workorders, units, tenants, properties, owners] = await fetchTabs(env, ['Work_Orders','Units','Tenants','Properties','Owners']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const unit = units.find(u => u.ID === wo.Unit_ID);
-  // Reuse the same canonical lookup assignVendor/updateStatus/scheduleWO already use — this
-  // used to be a simpler inline lookup here that missed whole-property (no-Unit) tenants;
-  // see the fix + comment on currentTenantForDispatch itself.
-  const tenant = currentTenantForDispatch(tenants, unit, wo);
-  if (!tenant || !tenant.Phone) return json({ error: 'No tenant with a phone number on this work order' }, 400);
-  // currentTenantForDispatch already confirmed this tenant is current (active, not moved out);
-  // isBackgroundWO catches the other case it doesn't cover — a WO opened before this tenant's
-  // own move-in (background work tied to whoever lived here before them).
-  if (isBackgroundWO(tenant, wo)) return json({ error: 'This WO predates the tenant\'s move-in — not notifiable' }, 400);
+  // CAP-036 #21: tenantsForDispatch returns EVERY active tenant linked to this unit (was
+  // currentTenantForDispatch, which only ever named one via Units.Tenant_ID's single pointer).
+  const woTenants = tenantsForDispatch(tenants, unit, wo).filter(t => t.Phone && !isBackgroundWO(t, wo));
+  if (!woTenants.length) return json({ error: 'No tenant with a phone number on this work order' }, 400);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-  const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
-  const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), r.sent ? 'Sent' : (r.send_ok ? 'Send failed' : 'Queued — gate: ' + r.gate_snapshot)); } catch(_){}
-  return json({ success: true, sent: r.sent, send_ok: r.send_ok, queued_id: r.queued_id, gate_snapshot: r.gate_snapshot });
+  // Same text goes to every tenant in the unit (each gets their own First_Name greeting) —
+  // one admin-typed update, everyone actually living there sees it, same as any other WO SMS.
+  let anySent = false, anySendOk = false, lastGate = '', firstQueuedId = '';
+  for (const tenant of woTenants) {
+    const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+    if (r.sent) anySent = true;
+    if (r.send_ok) anySendOk = true;
+    if (r.gate_snapshot) lastGate = r.gate_snapshot;
+    if (r.queued_id && !firstQueuedId) firstQueuedId = r.queued_id;
+  }
+  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), anySent ? 'Sent' : (anySendOk ? 'Send failed' : 'Queued — gate: ' + lastGate)); } catch(_){}
+  return json({ success: true, sent: anySent, send_ok: anySendOk, queued_id: firstQueuedId, gate_snapshot: lastGate, tenant_count: woTenants.length });
 }
 
 // -- Custom one-off message to a single tenant/owner/vendor (Sep 21 2026) --------------------
@@ -11999,6 +12716,82 @@ async function vendorPerformance(env, url) {
   });
 }
 
+// GET /brettos-tasks-summary — READ-ONLY glance summary of the BrettOS Tasks Sheet (Brett's
+// real, canonical task tracker — a SEPARATE Google Sheet from this repo's own env.SHEET_ID /
+// "RidgeCo Main"; sheet id lives in env.BRETTOS_TASKS_SHEET_ID, never hardcoded here since this
+// repo is public — same reasoning CREDENTIALS_MAP.md gives for keeping identifiers out of it).
+// Per context/TASK_LINKING_BUILD_BRIEF_v1.0.md (Sep 24 2026, decision #1): the BrettOS Sheet
+// stays canonical for tasks — never mirrored or written here — this endpoint only surfaces
+// counts + a handful of top-open items so Brett can see what's open without leaving the Hub
+// (Command Center card + Dev Log link). Never writes. Admin-gated by omission from PUBLIC_PATHS,
+// same convention as vendorPerformance/opsTelemetryRead above.
+//
+// Auth reuse note: uses the SAME getAccessToken(env)/GOOGLE_SA_EMAIL/GOOGLE_SA_KEY runtime
+// service-account JWT this file already uses for env.SHEET_ID, but points it at a DIFFERENT
+// spreadsheet id — the same "auth is the SA, target sheet is a separate id" pattern
+// importKeyRegistry already uses for env.KEY_REGISTRY_SHEET_ID. Fully inert (clean 500, not a
+// crash) until env.BRETTOS_TASKS_SHEET_ID is set. OPEN QUESTION (not resolved by this build,
+// flagged in the PR): whether the BrettOS Tasks Sheet has actually been shared as
+// Viewer/Editor with the runtime SA (maintenance-hub-sheets@maintenance-hub-498819...) —
+// CREDENTIALS_MAP.md's "Known Sheets" table lists only RidgeCo Main as confirmed-shared, and
+// the existing nightly Entities sync runs the OTHER direction (BrettOS pulls FROM this Worker's
+// GET /public/entities-feed, not this Worker reading the BrettOS Sheet) — so that sync's
+// credentials don't establish this endpoint's access either way. If the SA hasn't been shared,
+// this 500s with a clear Google "caller does not have permission" message rather than failing
+// silently — see PAT-027.
+async function brettosTasksSummary(env, url) {
+  const sheetId = env.BRETTOS_TASKS_SHEET_ID;
+  if (!sheetId) return json({ error: 'BRETTOS_TASKS_SHEET_ID not set' }, 500);
+  const limit = Math.max(1, Math.min(25, parseInt(url.searchParams.get('limit') || '8') || 8));
+  let token;
+  try { token = await getAccessToken(env); }
+  catch (e) { return json({ error: `BrettOS Tasks auth error: ${e.message}` }, 500); }
+  const resp = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/Tasks`, { headers: { 'Authorization': `Bearer ${token}` } });
+  const data = await resp.json();
+  if (data.error) return json({ error: `BrettOS Tasks read error: ${data.error.message}` }, 400);
+  const rows = data.values || [];
+  const sheetUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+  if (rows.length < 2) return json({ ok: true, as_of: new Date().toISOString(), total: 0, open_total: 0, by_status: {}, by_venture: {}, top_open: [], sheet_url: sheetUrl });
+  const headers = rows[0];
+  const tasks = rows.slice(1).map(r => { const o = {}; headers.forEach((hh, i) => { o[hh] = (r[i] !== undefined) ? r[i] : ''; }); return o; });
+
+  // Status set is confirmed-live-but-not-exhaustive per the build brief ("check what statuses
+  // actually appear") — rather than hardcode an assumed set of "open" labels, treat anything
+  // that looks like a closed/done label as closed and everything else (including a status this
+  // code has never seen) as open, so a future status value never silently vanishes from counts.
+  const DONE_STATUSES = new Set(['done', 'complete', 'completed', 'closed', 'cancelled', 'canceled']);
+  const isOpen = t => !DONE_STATUSES.has(String(t.Status || '').toLowerCase().trim());
+
+  const by_status = {}, by_venture = {};
+  for (const t of tasks) {
+    const st = t.Status || '(blank)', ve = t.Venture || '(blank)';
+    by_status[st] = (by_status[st] || 0) + 1;
+    by_venture[ve] = (by_venture[ve] || 0) + 1;
+  }
+
+  const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, medium: 2, low: 3 };
+  const rank = t => { const p = PRIORITY_RANK[String(t.Priority || '').toLowerCase().trim()]; return p === undefined ? 4 : p; };
+  const open = tasks.filter(isOpen);
+  const top_open = open.slice()
+    .sort((a, b) => {
+      const rd = rank(a) - rank(b);
+      if (rd !== 0) return rd;
+      return String(b.Created_Date || '').localeCompare(String(a.Created_Date || '')); // newer first, tiebreak
+    })
+    .slice(0, limit)
+    .map(t => ({
+      task_id: t.Task_ID || '', title: t.Title || '', status: t.Status || '', venture: t.Venture || '',
+      priority: t.Priority || '', due_date: t.Due_Date || '', created_date: t.Created_Date || '',
+      next_action: t.Next_Action || '',
+    }));
+
+  return json({
+    ok: true, as_of: new Date().toISOString(),
+    total: tasks.length, open_total: open.length,
+    by_status, by_venture, top_open, sheet_url: sheetUrl,
+  });
+}
+
 // GET /ar/invoices — READ-ONLY invoice status board, straight from QuickBooks. Solves the thing
 // QuickBooks' own UI can't filter: invoices Brett CREATED but never SENT (they sit). QuickBooks
 // exposes EmailStatus (NotSet / NeedToSend / EmailSent) — anything other than EmailSent = not yet
@@ -12922,6 +13715,40 @@ async function receiptExtract(env, bytes, mime) {
   catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0, refund: false, refund_reason: '' }; }
 }
 
+// Read a BULK VENDOR STATEMENT (photo/scan/PDF — Home Depot, Lowe's, a credit card, a future Ace
+// Hardware account) with Claude vision → strict JSON of every transaction line, not just one.
+// Sibling to receiptExtract above, copying its exact conventions on purpose (Statement importer
+// Phase 1, Sep 24 2026 — STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0): same bytesToB64 +
+// isPdf media-block branching, same routeAI(env, {type, moneyFacing:true, media, prompt, maxTokens,
+// source}) call shape, same ```json fence-stripping before JSON.parse, same fail-open
+// default-object return on a parse error — never throws, so a bad/unreadable statement upload
+// fails open with an empty lines array rather than 500ing the import endpoint.
+async function statementExtract(env, bytes, mime) {
+  try {
+    const b64 = bytesToB64(bytes), isPdf = /pdf/i.test(mime);
+    const media = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
+      : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
+    const prompt = `You are a bulk statement data extractor for a property-maintenance business. This document is a VENDOR STATEMENT or CREDIT CARD STATEMENT listing MANY separate transaction lines (not a single receipt) — e.g. a Home Depot Pro account statement, a Lowe's commercial statement, or a credit card statement. Read EVERY distinct transaction/purchase line on the document, not just some of them — statements often run to dozens of lines across multiple pages/sections. Return ONLY strict minified JSON with keys: vendor_detected (the statement issuer's name as printed, e.g. "The Home Depot Pro", string, else ""), lines (array of objects, one per distinct transaction line, each with: date ("YYYY-MM-DD" if determinable, else ""), amount (the line's charge amount as a plain positive number — use the absolute value even if shown as a credit/negative on the statement; null if unreadable), description (short verbatim text describing the purchase/line, e.g. store location, department, or item description, else ""), ref (the transaction's own PO number, invoice number, order number, or reference code AS PRINTED on that line, exactly as shown, else "")). Skip statement-level summary lines (previous balance, payments received, finance charges, total due) — only include actual purchase/transaction lines. JSON only, no prose.`;
+    const r = await routeAI(env, { type: 'statement_parse', moneyFacing: true, media, prompt, maxTokens: 4000, source: 'statementExtract' });
+    const txt = (r.result || '').trim();
+    const parsed = JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim());
+    const lines = Array.isArray(parsed.lines) ? parsed.lines.slice(0, 500).map(x => ({
+      date: String((x && x.date) || ''),
+      amount: (x && typeof x.amount === 'number' && isFinite(x.amount)) ? Math.abs(x.amount)
+        : ((x && x.amount !== null && x.amount !== undefined && x.amount !== '' && isFinite(Number(x.amount))) ? Math.abs(Number(x.amount)) : null),
+      description: String((x && x.description) || ''),
+      ref: String((x && x.ref) || ''),
+    })) : [];
+    return { vendor_detected: String((parsed && parsed.vendor_detected) || ''), lines };
+  } catch (e) {
+    // routeAI threw (missing key, network) or the model's text didn't parse as JSON — fail open
+    // with an empty lines array rather than throwing into the import endpoint (same discipline as
+    // invoiceExtract's fail-open wrapper above).
+    return { vendor_detected: '', lines: [], _error: true, _error_message: String((e && e.message) || e) };
+  }
+}
+
 // Read a VENDOR INVOICE (photo or PDF) with Claude vision → strict JSON suggestion. This is the
 // read half of the "vendor picks a file → it's read automatically → confirm & Submit" flow
 // (Brett's ask, Aug 31 2026): no separate "read" button, the file is OCR'd the instant it's
@@ -13101,6 +13928,511 @@ async function vendorSetupSubmit(env, body) {
     Status: 'pending_review', Active: 'TRUE',
   };
   return await addRow(env, 'Vendors', fields);
+}
+
+// ── OWNER SELF-SERVE ONBOARDING (Sep 26 2026) ────────────────────────────────────────────
+// Brett sends a prospective owner ONE link (owner-onboard.html?t=TOKEN). The owner fills in who
+// they are, how to bill them, their properties, and at least one unit's occupancy/access info, and
+// it lands straight in Owners / Properties / Units / Tenants / Keys — no manual data entry.
+//
+// Security model (public endpoints, no Hub login):
+//   • Every public call needs a valid, unexpired, unrevoked, single-use invite token minted by
+//     Brett from the Hub (Owner_Invites tab). Tokens are 144 random bits, never derivable.
+//   • /owner-onboard/submit claims the invite (pending → processing → used) before writing, so a
+//     double-tap / replay cannot create two owners.
+//   • /owner-onboard/check-pin is capped per token so it can't be used to enumerate PINs.
+//   • New properties/tenants are created with SMS_Enabled='FALSE' (Brett flips SMS on per property
+//     once the data is confirmed clean, same rollout rule as every other property). The owner's own
+//     SMS_Enabled follows their consent checkbox.
+//   • An existing property at the same address is NEVER duplicated: unowned → linked to this owner,
+//     owned by someone else → left alone and flagged for Brett's review.
+// Owner PINs keep the platform-wide format (3 letters + 5 digits) — owner login, the PIN sweep and
+// the daily selftest all enforce it — plus a uniqueness check across Owners/Owner_Users/Vendors/Tenants.
+
+const OWNER_BILLING_COLS = ['Billing_Name','Billing_Address','Billing_City','Billing_State','Billing_Zip','Billing_Phone','Billing_Email'];
+const OWNER_INVITE_HEADERS = ['ID','Token','Status','Created_Date','Expires_Date','Prefill_Name','Prefill_Phone','Prefill_Email','Note','Check_Attempts','Claim_Nonce','Used_Date','Owner_ID','Needs_Review','Result_Summary','Active'];
+const OWNER_ONBOARD_TYPES = ['house','rowhome','multi','condo','commercial'];
+const OWNER_ONBOARD_SUBTYPES = ['retail','mixed_use','industrial','office'];
+const OWNER_ONBOARD_MAX_PROPERTIES = 25;
+const OWNER_ONBOARD_MAX_UNITS = 50;
+const OWNER_ONBOARD_MAX_CHECKS = 25;
+const OWNER_ONBOARD_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
+
+// ── pure helpers (source-sliced by test/owner-onboarding.test.mjs — keep them dependency-free) ──
+function ooClean(v, max) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max || 200);
+}
+function ooDigits(v) { return String(v == null ? '' : v).replace(/\D/g, ''); }
+function ooPhoneOk(v) {
+  const d = ooDigits(v);
+  return d.length === 10 ? /^[2-9]\d{9}$/.test(d) : (d.length === 11 && d[0] === '1' && /^[2-9]\d{9}$/.test(d.slice(1)));
+}
+function ooEmailOk(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || '')) && String(v).length <= 120; }
+
+// PIN rule: exactly 3 letters + 5 digits (platform-wide format), digits not a trivially guessable run.
+function ownerOnboardPinCheck(pin) {
+  const p = String(pin == null ? '' : pin).trim().toUpperCase();
+  if (!/^[A-Z]{3}\d{5}$/.test(p)) return { ok: false, pin: p, reason: 'PIN must be 3 letters followed by 5 numbers (example: ABC12345).' };
+  const d = p.slice(3);
+  if (/^(\d)\1{4}$/.test(d)) return { ok: false, pin: p, reason: 'The 5 numbers can\'t all be the same digit.' };
+  if ('0123456789'.includes(d) || '9876543210'.includes(d)) return { ok: false, pin: p, reason: 'The 5 numbers can\'t be a simple 12345-style run.' };
+  if (/^(.)\1\1$/.test(p.slice(0, 3))) return { ok: false, pin: p, reason: 'The 3 letters can\'t all be the same letter.' };
+  return { ok: true, pin: p, reason: '' };
+}
+
+function ownerOnboardInferMarket(city) {
+  const c = String(city || '').toLowerCase();
+  if (c.includes('baltimore')) return 'Baltimore';
+  if (c.includes('waynesboro')) return 'Waynesboro';
+  if (c.includes('winchester')) return 'Winchester';
+  return 'Other';
+}
+
+// Splits nothing and trusts nothing: returns { ok, errors:[{field,message}], clean } where `clean`
+// is the sanitized, length-capped structure the submit handler writes. Pure — no I/O.
+function ownerOnboardValidate(input) {
+  const errors = [];
+  const err = (field, message) => errors.push({ field, message });
+  const inp = (input && typeof input === 'object') ? input : {};
+  const o = (inp.owner && typeof inp.owner === 'object') ? inp.owner : {};
+  const clean = { owner: {}, properties: [], sms_consent: inp.sms_consent === true };
+
+  // ── owner ──
+  const first = ooClean(o.first, 60), last = ooClean(o.last, 60);
+  if (!first) err('owner.first', 'First name is required.');
+  if (!last) err('owner.last', 'Last name is required.');
+  const choice = o.business_choice === 'business' ? 'business' : (o.business_choice === 'name' ? 'name' : '');
+  if (!choice) err('owner.business_choice', 'Please choose whether to bill under your name or a business name.');
+  const biz = ooClean(o.business_name, 120);
+  if (choice === 'business' && biz.length < 2) err('owner.business_name', 'Enter the business name.');
+  if (!ooPhoneOk(o.phone)) err('owner.phone', 'Enter a valid 10-digit contact phone number.');
+  const bemail = ooClean(o.billing_email, 120).toLowerCase();
+  if (!ooEmailOk(bemail)) err('owner.billing_email', 'Enter a valid billing email address.');
+  const ba = (o.billing_address && typeof o.billing_address === 'object') ? o.billing_address : {};
+  const street = ooClean(ba.street, 120), bcity = ooClean(ba.city, 60), bstate = ooClean(ba.state, 2).toUpperCase(), bzip = ooClean(ba.zip, 10);
+  if (street.length < 3) err('owner.billing_address.street', 'Enter the billing street address.');
+  if (bcity.length < 2) err('owner.billing_address.city', 'Enter the billing city.');
+  if (!OWNER_ONBOARD_STATES.includes(bstate)) err('owner.billing_address.state', 'Choose the billing state.');
+  if (!/^\d{5}(-\d{4})?$/.test(bzip)) err('owner.billing_address.zip', 'Enter a valid ZIP code.');
+  const pinChk = ownerOnboardPinCheck(o.pin);
+  if (!pinChk.ok) err('owner.pin', pinChk.reason);
+  clean.owner = {
+    first, last, business_choice: choice, business_name: choice === 'business' ? biz : '',
+    phone: ooDigits(o.phone).slice(-10), billing_email: bemail,
+    billing_address: { street, city: bcity, state: bstate, zip: bzip }, pin: pinChk.pin,
+  };
+
+  // ── properties ──
+  const props = Array.isArray(inp.properties) ? inp.properties : [];
+  if (!props.length) err('properties', 'Add at least one property.');
+  if (props.length > OWNER_ONBOARD_MAX_PROPERTIES) err('properties', 'Too many properties in one submission (max ' + OWNER_ONBOARD_MAX_PROPERTIES + ').');
+  let resolvedUnits = 0;
+  props.slice(0, OWNER_ONBOARD_MAX_PROPERTIES).forEach((p, pi) => {
+    const pf = (f) => 'properties[' + pi + '].' + f;
+    p = (p && typeof p === 'object') ? p : {};
+    const address = ooClean(p.address, 120), city = ooClean(p.city, 60);
+    const type = OWNER_ONBOARD_TYPES.includes(p.type) ? p.type : '';
+    if (address.length < 3) err(pf('address'), 'Enter the property address.');
+    if (city.length < 2) err(pf('city'), 'Enter the property city.');
+    if (!type) err(pf('type'), 'Choose the property type.');
+    let subtype = '';
+    if (type === 'commercial') {
+      subtype = OWNER_ONBOARD_SUBTYPES.includes(p.subtype) ? p.subtype : '';
+      if (!subtype) err(pf('subtype'), 'Choose the commercial type (retail, mixed use, industrial or office).');
+    }
+    // Unit count: house/rowhome are always 1; the rest must be entered (multi needs at least 2).
+    let unitCount = 1;
+    const single = type === 'house' || type === 'rowhome';
+    if (!single) {
+      unitCount = parseInt(p.unit_count, 10);
+      const min = type === 'multi' ? 2 : 1;
+      if (!Number.isFinite(unitCount) || unitCount < min || unitCount > 500) {
+        err(pf('unit_count'), type === 'multi' ? 'Enter how many units are at this address (2 or more).' : 'Enter how many units are at this address.');
+        unitCount = 0;
+      }
+    }
+    const units = Array.isArray(p.units) ? p.units : [];
+    if (!units.length) err(pf('units'), single ? 'Tell us whether this property is occupied or vacant.' : 'Add at least one unit — the one you need service at.');
+    if (units.length > OWNER_ONBOARD_MAX_UNITS) err(pf('units'), 'Too many units listed for one property (max ' + OWNER_ONBOARD_MAX_UNITS + ').');
+    if (!single && unitCount && units.length > unitCount) err(pf('units'), 'You listed more units than the unit count above.');
+    const seen = new Set();
+    const cleanUnits = [];
+    units.slice(0, OWNER_ONBOARD_MAX_UNITS).forEach((u, ui) => {
+      const uf = (f) => pf('units[' + ui + '].' + f);
+      u = (u && typeof u === 'object') ? u : {};
+      const label = single ? '' : ooClean(u.label, 40);
+      if (!single) {
+        if (!label) err(uf('label'), 'Enter the unit name or number (like Apt 2 or Suite 100).');
+        else if (seen.has(label.toLowerCase())) err(uf('label'), 'Two units have the same name.');
+        seen.add(label.toLowerCase());
+      }
+      const status = ['tenant','vacant','later'].includes(u.status) ? u.status : '';
+      if (!status) err(uf('status'), 'Choose occupied, vacant, or "I will provide this later".');
+      const cu = { label, status, tenant: null, access: null };
+      if (status === 'tenant') {
+        const t = (u.tenant && typeof u.tenant === 'object') ? u.tenant : {};
+        const tf = ooClean(t.first, 60), tl = ooClean(t.last, 60), te = ooClean(t.email, 120).toLowerCase();
+        if (!tf) err(uf('tenant.first'), 'Enter the tenant\'s first name.');
+        if (!ooPhoneOk(t.phone)) err(uf('tenant.phone'), 'Enter the tenant\'s 10-digit phone number.');
+        if (te && !ooEmailOk(te)) err(uf('tenant.email'), 'That tenant email doesn\'t look right.');
+        cu.tenant = { first: tf, last: tl, phone: ooDigits(t.phone).slice(-10), email: te };
+        resolvedUnits++;
+      } else if (status === 'vacant') {
+        const a = (u.access && typeof u.access === 'object') ? u.access : {};
+        const method = a.method === 'lockbox' ? 'lockbox' : (a.method === 'none' ? 'none' : '');
+        if (!method) err(uf('access.method'), 'Choose a lockbox, or tell us there is no lockbox.');
+        const code = ooClean(a.code, 30), location = ooClean(a.location, 120), note = ooClean(a.note, 400);
+        if (method === 'lockbox' && code.length < 2) err(uf('access.code'), 'Enter the lockbox code.');
+        if (method === 'none' && note.length < 5) err(uf('access.note'), 'With no lockbox, tell us how we get in (who has a key, a door code, who to call).');
+        cu.access = { method, code: method === 'lockbox' ? code : '', location: method === 'lockbox' ? location : '', note };
+        resolvedUnits++;
+      }
+      cleanUnits.push(cu);
+    });
+    clean.properties.push({ address, city, type, subtype, unit_count: unitCount, units: cleanUnits });
+  });
+  if (props.length && resolvedUnits < 1) err('properties', 'We need at least one unit that is either occupied (with tenant contact info) or vacant (with access info) — "provide later" alone isn\'t enough.');
+  return { ok: errors.length === 0, errors, clean };
+}
+
+function ooToken() {
+  const b = new Uint8Array(18); crypto.getRandomValues(b);
+  let s = ''; for (const x of b) s += String.fromCharCode(x);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function ooInviteState(inv, now) {
+  if (!inv) return 'invalid';
+  if (inv.Active === 'FALSE') return 'revoked';
+  const st = String(inv.Status || 'pending');
+  if (st === 'used' || st === 'revoked' || st === 'processing') return st;
+  const exp = Date.parse(inv.Expires_Date || '');
+  if (Number.isFinite(exp) && exp < (now || Date.now())) return 'expired';
+  return 'pending';
+}
+async function ooFindInvite(env, token) {
+  const t = String(token || '').trim();
+  if (!/^[A-Za-z0-9_-]{20,40}$/.test(t)) return null;
+  await ensureTab(env, 'Owner_Invites', OWNER_INVITE_HEADERS);
+  const rows = await fetchTab(env, 'Owner_Invites');
+  return rows.find(r => r.Token === t) || null;
+}
+function ooInviteProblem(state) {
+  if (state === 'used' || state === 'processing') return 'This link has already been used. If you need to make changes, please contact us.';
+  if (state === 'expired') return 'This link has expired. Please ask us for a new one.';
+  if (state === 'revoked') return 'This link is no longer active. Please ask us for a new one.';
+  return 'This link isn\'t valid. Please check that you copied the whole link, or ask us for a new one.';
+}
+
+// POST /owner-onboard/invite/create (admin) — {name?, phone?, email?, note?, days?}
+async function ownerOnboardInviteCreate(env, body) {
+  body = body || {};
+  await ensureTab(env, 'Owner_Invites', OWNER_INVITE_HEADERS);
+  const days = Math.min(60, Math.max(1, parseInt(body.days, 10) || 14));
+  const now = new Date();
+  const token = ooToken();
+  const row = {
+    Token: token, Status: 'pending', Created_Date: now.toISOString(),
+    Expires_Date: new Date(now.getTime() + days * 86400000).toISOString(),
+    Prefill_Name: ooClean(body.name, 120), Prefill_Phone: ooDigits(body.phone).slice(-10), Prefill_Email: ooClean(body.email, 120),
+    Note: ooClean(body.note, 300), Check_Attempts: '0', Needs_Review: 'FALSE', Active: 'TRUE',
+  };
+  const r = await addRow(env, 'Owner_Invites', row);
+  let id = ''; try { id = (await r.clone().json()).id || ''; } catch (e) {}
+  return json({ success: true, id, token, link: `${PORTAL_BASE}/owner-onboard.html?t=${token}`, expires: row.Expires_Date });
+}
+
+// GET /owner-onboard/invites (admin) — newest first, with the shareable link and outcome.
+async function ownerOnboardInvites(env) {
+  await ensureTab(env, 'Owner_Invites', OWNER_INVITE_HEADERS);
+  const rows = await fetchTab(env, 'Owner_Invites');
+  const now = Date.now();
+  return json(rows.filter(r => r.Token).reverse().map(r => {
+    const state = ooInviteState(r, now);
+    return {
+      id: r.ID, status: state, name: r.Prefill_Name || '', phone: r.Prefill_Phone || '', email: r.Prefill_Email || '', note: r.Note || '',
+      created: r.Created_Date || '', expires: r.Expires_Date || '', used: r.Used_Date || '', owner_id: r.Owner_ID || '',
+      needs_review: r.Needs_Review === 'TRUE', summary: r.Result_Summary || '',
+      link: state === 'pending' ? `${PORTAL_BASE}/owner-onboard.html?t=${r.Token}` : '',
+    };
+  }));
+}
+
+// POST /owner-onboard/invite/revoke (admin) — {id}
+async function ownerOnboardInviteRevoke(env, body) {
+  if (!body || !body.id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Owner_Invites');
+  const inv = rows.find(r => String(r.ID) === String(body.id));
+  if (!inv) return json({ error: 'Invite not found' }, 404);
+  if (inv.Status === 'used' || inv.Status === 'processing') return json({ error: 'That invite was already used — nothing to revoke.' }, 409);
+  await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'revoked', Active: 'FALSE' });
+  return json({ success: true });
+}
+
+// GET /owner-onboard/info?token= (public) — only what the form needs to prefill.
+async function ownerOnboardInfo(env, url) {
+  const inv = await ooFindInvite(env, url.searchParams.get('token'));
+  const state = ooInviteState(inv, Date.now());
+  if (state !== 'pending') return json({ valid: false, message: ooInviteProblem(state) });
+  const parts = String(inv.Prefill_Name || '').trim().split(/\s+/);
+  return json({ valid: true, prefill: { first: parts[0] || '', last: parts.slice(1).join(' '), phone: inv.Prefill_Phone || '', email: inv.Prefill_Email || '' } });
+}
+
+// PINs already in use anywhere a PIN can log in (mirrors the selftest's cross-tab duplicate check).
+async function ooPinTaken(env, pin) {
+  const [owners, ownerUsers, vendors, tenants] = await fetchTabs(env, ['Owners', 'Owner_Users', 'Vendors', 'Tenants']);
+  const p = String(pin).toLowerCase();
+  return [owners, ownerUsers, vendors, tenants].some(rows => (rows || []).some(r => r.Active !== 'FALSE' && String(r.PIN || '').toLowerCase() === p));
+}
+
+// POST /owner-onboard/check-pin (public) — {token, pin} → {ok, available, reason}. Capped per token.
+async function ownerOnboardCheckPin(env, body) {
+  body = body || {};
+  const inv = await ooFindInvite(env, body.token);
+  const state = ooInviteState(inv, Date.now());
+  if (state !== 'pending') return json({ ok: false, available: false, reason: ooInviteProblem(state) }, 403);
+  const attempts = parseInt(inv.Check_Attempts, 10) || 0;
+  if (attempts >= OWNER_ONBOARD_MAX_CHECKS) return json({ ok: false, available: false, reason: 'Too many PIN checks — please pick a PIN and submit, or contact us.' }, 429);
+  await updateRow(env, 'Owner_Invites', inv.ID, { Check_Attempts: String(attempts + 1) });
+  const chk = ownerOnboardPinCheck(body.pin);
+  if (!chk.ok) return json({ ok: false, available: false, reason: chk.reason });
+  const taken = await ooPinTaken(env, chk.pin);
+  return json({ ok: true, available: !taken, reason: taken ? 'That PIN is already taken — please try a different one.' : '' });
+}
+
+// POST /owner-onboard/submit (public) — {token, owner, properties, sms_consent}. clientIP is recorded
+// with the SMS consent as evidence of opt-in.
+async function ownerOnboardSubmit(env, body, clientIP) {
+  body = body || {};
+  const inv = await ooFindInvite(env, body.token);
+  const state = ooInviteState(inv, Date.now());
+  if (state !== 'pending') return json({ error: ooInviteProblem(state) }, 403);
+  const v = ownerOnboardValidate(body);
+  if (!v.ok) return json({ error: 'Please fix the highlighted items.', errors: v.errors }, 422);
+  const c = v.clean;
+
+  // Uniqueness checks BEFORE claiming the invite, so a fixable problem never burns the link.
+  if (await ooPinTaken(env, c.owner.pin)) return json({ error: 'Please fix the highlighted items.', errors: [{ field: 'owner.pin', message: 'That PIN is already taken — please try a different one.' }] }, 422);
+  const owners = await fetchTab(env, 'Owners');
+  const phoneNorm = normalizePhone(c.owner.phone);
+  if (owners.some(o => o.Active !== 'FALSE' && normalizePhone(o.Phone) === phoneNorm)) {
+    return json({ error: 'We already have an account with that phone number. Please contact us and we\'ll get you set up — no need to fill this out again.' }, 409);
+  }
+
+  // Claim the invite (pending → processing) and confirm we won any race for it.
+  const nonce = ooToken();
+  await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'processing', Claim_Nonce: nonce });
+  const again = (await fetchTab(env, 'Owner_Invites')).find(r => String(r.ID) === String(inv.ID));
+  if (!again || again.Claim_Nonce !== nonce) return json({ error: ooInviteProblem('used') }, 409);
+
+  const warnings = [];
+  const summary = { owner_id: '', properties: [], later_units: 0 };
+  const today = new Date().toISOString().split('T')[0];
+  const nowIso = new Date().toISOString();
+  let ownerId = '';
+  try {
+    await ensureColumns(env, 'Owners', ['Billing_Name','Billing_Address','Billing_City','Billing_State','Billing_Zip','Billing_Phone','Billing_Email','SMS_Enabled','SMS_Consent','SMS_Consent_Date','SMS_Consent_IP','SMS_Consent_Version','Onboarding_Source','Onboarding_Date']);
+    await ensureColumns(env, 'Properties', ['Commercial_Subtype','SMS_Enabled','Onboarding_Source','Access_Notes']);
+    await ensureColumns(env, 'Tenants', ['SMS_Enabled','Onboarding_Source']);
+    await ensureColumns(env, 'Units', ['Notes']);
+    await ensureColumns(env, 'Keys', ['Possession_Status','Lockbox_Location','Lockbox_Code','Key_Code']);
+
+    const fullName = (c.owner.first + ' ' + c.owner.last).trim();
+    const ownerRes = await addOwnerWithQBSync(env, {
+      First_Name: c.owner.first, Last_Name: c.owner.last,
+      Company: c.owner.business_name, Phone: c.owner.phone, Email: c.owner.billing_email, PIN: c.owner.pin, Active: 'TRUE',
+      Billing_Name: c.owner.business_choice === 'business' ? c.owner.business_name : fullName,
+      Billing_Address: c.owner.billing_address.street, Billing_City: c.owner.billing_address.city,
+      Billing_State: c.owner.billing_address.state, Billing_Zip: c.owner.billing_address.zip,
+      Billing_Phone: c.owner.phone, Billing_Email: c.owner.billing_email,
+      SMS_Enabled: c.sms_consent ? 'TRUE' : 'FALSE',
+      SMS_Consent: c.sms_consent ? 'TRUE' : 'FALSE', SMS_Consent_Date: c.sms_consent ? nowIso : '',
+      SMS_Consent_IP: c.sms_consent ? ooClean(clientIP, 60) : '', SMS_Consent_Version: c.sms_consent ? ooClean(body.consent_version || 'onboard-2026-09-26', 40) : '',
+      Onboarding_Source: 'self_serve_link', Onboarding_Date: nowIso,
+    });
+    ownerId = (await ownerRes.clone().json()).id || '';
+    if (!ownerId) throw new Error('owner row was not created');
+    summary.owner_id = ownerId;
+  } catch (e) {
+    // Nothing usable was written for the owner — release the invite so the owner can retry.
+    await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'pending', Claim_Nonce: '' }).catch(() => {});
+    return json({ error: 'We couldn\'t save your information just now. Nothing was submitted — please try again in a minute.' }, 500);
+  }
+
+  for (const p of c.properties) {
+    const rec = { address: p.address, property_id: '', action: '', unit_ids: [], tenant_ids: [] };
+    summary.properties.push(rec);
+    try {
+      // 1. property: create, link an unowned match, or leave an owned match alone
+      const single = p.type === 'house' || p.type === 'rowhome';
+      const matches = await findSimilarProperties(env, p.address, p.city);
+      let propertyId = '';
+      if (matches.length) {
+        const unowned = matches.find(m => !m.owner_id);
+        if (unowned) {
+          propertyId = String(unowned.id);
+          await updateRow(env, 'Properties', propertyId, { Owner_ID: ownerId });
+          rec.action = 'linked_existing';
+          warnings.push(`${p.address}: already in the Hub (ID ${propertyId}, no owner) — linked to this owner. Check its type/unit count.`);
+        } else {
+          rec.action = 'skipped_owned_by_other';
+          warnings.push(`${p.address}: already in the Hub under another owner (property ID ${matches[0].id}) — NOT linked and its units/tenants were not added. Review before doing anything.`);
+          continue;
+        }
+      } else {
+        const pr = await addRow(env, 'Properties', {
+          Address: p.address, City: p.city, Market: ownerOnboardInferMarket(p.city), Type: p.type,
+          Commercial_Subtype: p.subtype, Unit_Count: String(single ? 1 : p.unit_count), Owner_ID: ownerId,
+          Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'self_serve_link',
+        });
+        propertyId = String((await pr.clone().json()).id || '');
+        if (!propertyId) throw new Error('property row was not created');
+        rec.action = 'created';
+      }
+      rec.property_id = propertyId;
+
+      // 2. units / tenants / access
+      const accessLines = [];
+      for (const u of p.units) {
+        let unitId = '';
+        if (!single) {
+          const notes = u.status === 'later' ? 'Owner will provide tenant/access info later (self-serve onboarding).'
+            : (u.status === 'vacant' ? ('VACANT. ' + (u.access.method === 'none' ? 'No lockbox: ' + u.access.note : (u.access.note || ''))).trim() : '');
+          const ur = await addRow(env, 'Units', { Property_ID: propertyId, Unit_Label: u.label, Tenant_ID: '', Notes: notes, Active: 'TRUE', Property_Address: p.address });
+          unitId = String((await ur.clone().json()).id || '');
+          if (unitId) rec.unit_ids.push(unitId);
+        }
+        if (u.status === 'tenant') {
+          const tr = await addRow(env, 'Tenants', {
+            First_Name: u.tenant.first, Last_Name: u.tenant.last, Phone: u.tenant.phone, Email: u.tenant.email,
+            Property_ID: propertyId, Unit_ID: unitId, Move_In_Date: '', Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'self_serve_link',
+          });
+          const tid = String((await tr.clone().json()).id || '');
+          if (tid) { rec.tenant_ids.push(tid); if (unitId) await updateRow(env, 'Units', unitId, { Tenant_ID: tid }); }
+        } else if (u.status === 'vacant') {
+          if (u.access.method === 'lockbox') {
+            await addRow(env, 'Keys', {
+              Property_ID: propertyId, Unit_ID: unitId, Unit_Label: u.label, Owner_ID: ownerId,
+              Key_Type: single ? 'Building-Lockbox' : 'Unit-Lockbox', Key_Code: u.access.code, Lockbox_Code: u.access.code,
+              Lockbox_Location: u.access.location, Notes: 'Provided by owner during self-serve onboarding — not yet verified on site.' + (u.access.note ? ' ' + u.access.note : ''),
+              Status: 'Active', Possession_Status: 'Have It', Last_Changed: today, Active: 'TRUE',
+            });
+          } else {
+            accessLines.push((u.label ? `Unit ${u.label}: ` : '') + 'No lockbox — ' + u.access.note);
+          }
+        } else {
+          summary.later_units++;
+        }
+      }
+      if (accessLines.length && rec.action === 'created') {
+        await updateRow(env, 'Properties', propertyId, { Access_Notes: accessLines.join(' | ') });
+      } else if (accessLines.length) {
+        warnings.push(`${p.address}: vacant-unit access note(s) not written because the property already existed — "${accessLines.join(' | ')}"`);
+      }
+    } catch (e) {
+      rec.action = (rec.action || 'failed') + '_with_error';
+      warnings.push(`${p.address}: something went wrong partway (${String(e && e.message || e).slice(0, 120)}). Check this property, its units and tenants.`);
+    }
+  }
+  if (summary.later_units) warnings.push(`${summary.later_units} unit(s) marked "I will provide this later" — follow up for tenant/access info.`);
+  if (!c.sms_consent) warnings.push('Owner did NOT check the SMS permission box — owner SMS is switched off for them.');
+
+  const needsReview = warnings.length > 0;
+  await updateRow(env, 'Owner_Invites', inv.ID, {
+    Status: 'used', Used_Date: nowIso, Owner_ID: ownerId, Needs_Review: needsReview ? 'TRUE' : 'FALSE',
+    Result_Summary: JSON.stringify({ ...summary, warnings }).slice(0, 45000),
+  }).catch(() => {});
+
+  try {
+    const cfg = await fetchConfig(env);
+    if (cfg.admin_phone) {
+      await sendSMS(env, cfg.admin_phone, `🆕 ${(c.owner.business_name || (c.owner.first + ' ' + c.owner.last)).trim()} finished owner onboarding: ${c.properties.length} propert${c.properties.length === 1 ? 'y' : 'ies'}.${needsReview ? ' ⚠ ' + warnings.length + ' item(s) need your review (Hub → Owners → Onboarding).' : ''}`);
+    }
+  } catch (e) { /* notification is best-effort */ }
+
+  return json({ success: true, first_name: c.owner.first, properties: c.properties.length });
+}
+
+// ── OWNER PIN BACKFILL (Sep 26 2026) ─────────────────────────────────────────────────────
+// Owners who onboard themselves pick their own PIN; this covers the ones who don't (and older owners with none).
+// Two admin-only endpoints, deliberately separate so nothing is written until Brett has seen the PINs:
+//   POST /owner/pin-suggest {owner_ids, overwrite?}  -> proposes a PIN per owner, WRITES NOTHING
+//   POST /owner/set-pins    {assignments:[{owner_id,pin}]} -> validates every PIN, then saves the good ones
+// PIN rules are the platform's (3 letters + 5 digits, not a simple run — ownerOnboardPinCheck) and a PIN must
+// not be in use by ANY other active login (Owners / Owner_Users / Vendors / Tenants), same check the selftest runs.
+// (The older /owner/set-pin still exists but writes whatever it is given with no checks — these replace it for the UI.)
+const OWNER_PIN_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+// Pure: our normal PIN — 3 random letters + the last 5 digits of the phone; 5 random digits when there is no usable
+// phone (fewer than 5 digits, or a last-5 the PIN rules reject). Adds what it returns to takenSet so a batch never repeats.
+function ownerPinPropose(phone, takenSet, rnd) {
+  rnd = rnd || Math.random;
+  const last5 = String(phone == null ? '' : phone).replace(/\D/g, '').slice(-5);
+  const useLast5 = last5.length === 5 && ownerOnboardPinCheck('ABC' + last5).ok;
+  for (let i = 0; i < 200; i++) {
+    let pin = '';
+    for (let k = 0; k < 3; k++) pin += OWNER_PIN_ALPHA[Math.floor(rnd() * OWNER_PIN_ALPHA.length)];
+    if (useLast5) pin += last5; else for (let k = 0; k < 5; k++) pin += Math.floor(rnd() * 10);
+    if (ownerOnboardPinCheck(pin).ok && !takenSet.has(pin.toLowerCase())) { takenSet.add(pin.toLowerCase()); return { pin, from_phone: useLast5 }; }
+  }
+  return { pin: '', from_phone: false };
+}
+// pin(lowercase) -> ["Owners:12", "Tenants:40", ...] for every ACTIVE login that has one
+async function ooPinHolders(env) {
+  const tabs = ['Owners', 'Owner_Users', 'Vendors', 'Tenants'];
+  const data = await fetchTabs(env, tabs);
+  const map = new Map();
+  tabs.forEach((tab, i) => (data[i] || []).forEach(r => {
+    const pin = String(r.PIN || '').trim().toLowerCase();
+    if (!pin || r.Active === 'FALSE') return;
+    const list = map.get(pin) || []; list.push(tab + ':' + r.ID); map.set(pin, list);
+  }));
+  return map;
+}
+async function ownerPinSuggest(env, body) {
+  const ids = Array.isArray(body && body.owner_ids) ? body.owner_ids.map(x => String(x)).slice(0, 200) : [];
+  if (!ids.length) return json({ error: 'owner_ids required' }, 400);
+  const overwrite = !!(body && body.overwrite === true);
+  const owners = await fetchTab(env, 'Owners');
+  const taken = new Set((await ooPinHolders(env)).keys());
+  const rows = ids.map(id => {
+    const o = owners.find(x => String(x.ID) === id);
+    if (!o) return { owner_id: id, error: 'Owner not found' };
+    const current = String(o.PIN || '').trim();
+    const row = { owner_id: id, phone: o.Phone || '', current_pin: current, proposed_pin: '', note: '' };
+    if (!String(o.First_Name || '').trim()) row.note = 'No first name on file — owners sign in with first name + PIN, so add one too.';
+    if (current && !overwrite) { row.skipped = 'Already has a PIN'; return row; }
+    const pr = ownerPinPropose(o.Phone, taken);
+    row.proposed_pin = pr.pin;
+    row.from_phone = pr.from_phone;
+    return row;
+  });
+  return json({ success: true, rows });
+}
+async function ownerPinSet(env, body) {
+  const asg = Array.isArray(body && body.assignments) ? body.assignments.slice(0, 200) : [];
+  if (!asg.length) return json({ error: 'assignments required' }, 400);
+  const owners = await fetchTab(env, 'Owners');
+  const holders = await ooPinHolders(env);
+  const inBatch = new Map(); // pin(lowercase) -> owner_id
+  const results = [];
+  let saved = 0;
+  for (const a of asg) {
+    const id = String(a && a.owner_id != null ? a.owner_id : '');
+    const chk = ownerOnboardPinCheck(a && a.pin);
+    const o = owners.find(x => String(x.ID) === id);
+    if (!o) { results.push({ owner_id: id, ok: false, error: 'Owner not found' }); continue; }
+    if (!chk.ok) { results.push({ owner_id: id, ok: false, error: chk.reason }); continue; }
+    const key = chk.pin.toLowerCase();
+    if ((holders.get(key) || []).some(h => h !== 'Owners:' + id)) { results.push({ owner_id: id, ok: false, error: 'That PIN is already used by another login.' }); continue; }
+    if (inBatch.has(key) && inBatch.get(key) !== id) { results.push({ owner_id: id, ok: false, error: 'Two owners in this batch were given the same PIN.' }); continue; }
+    try {
+      await updateRow(env, 'Owners', id, { PIN: chk.pin });
+      inBatch.set(key, id); saved++;
+      results.push({ owner_id: id, ok: true, pin: chk.pin });
+    } catch (e) {
+      results.push({ owner_id: id, ok: false, error: 'Could not save (' + String((e && e.message) || e).slice(0, 80) + ')' });
+    }
+  }
+  return json({ success: true, saved, failed: results.length - saved, results });
 }
 
 // POST /vendor-bill/extract — vendor.html PIN-portal "Submit Bill" modal. Vendor-role-gated
@@ -13600,7 +14932,16 @@ async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 const ROLE_SCOPES = {
-  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact'],
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact',
+    // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2-4):
+    // gated per-vendor by Vendors.Can_Bill_No_WO / Can_Create_Own_WO, re-checked server-side
+    // inside each handler — being in this scope list only means a vendor SESSION may call the
+    // path at all, never that the specific vendor is allowed to (never trust the client).
+    // '/properties' (read-only) is added for the same build: the standalone-bill property
+    // picker, the "request access to another property" picker, and the One-Off Job property
+    // picker all need real addresses to show, not just IDs — same address-only data an owner
+    // session already sees via /owner-properties.
+    '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties'],
   tenant: ['/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
   owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view'],
 };
@@ -14247,6 +15588,22 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  if (path === '/owner/pin-suggest') return true; // proposes PINs, writes nothing
+  if (path === '/owner/set-pins') {
+    // Writes Owners.PIN — only ever onto TEST- owners (same isTestRecord check as every other owner write here).
+    const _a = body && body.assignments;
+    if (!Array.isArray(_a) || !_a.length) return false;
+    for (const x of _a) { if (!(await isTestRecord(env, 'Owners', x && x.owner_id))) return false; }
+    return true;
+  }
+  if (path === '/owner-onboard/invite/create') {
+    // Creates only an invite row (no owner/property data) — restricted to TEST- prefilled invites.
+    return String((body && body.name) || '').startsWith('TEST-');
+  }
+  if (path === '/owner-onboard/invite/revoke') {
+    const _inv = (await fetchTab(env, 'Owner_Invites')).find(r => String(r.ID) === String(body && body.id));
+    return !!_inv && String(_inv.Prefill_Name || '').startsWith('TEST-');
+  }
   if (path === '/receipt/attach-only') {
     // Same reasoning as /status below: the write only ever lands on Receipts (never Vendor_Bills
     // or Invoice_Review — see receiptAttachOnly's own comment), tied to an existing Work_Orders
@@ -14502,6 +15859,9 @@ async function propertyUpdate(env, body) {
   const fields = (body && body.fields) || {};
   if (PROPERTY_SOURCE_FIELDS.some(f => fields[f] !== undefined)) {
     try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {}
+  }
+  if (fields.Commercial_Subtype !== undefined) {
+    try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {}
   }
   return await updateRow(env, 'Properties', body.id, fields);
 }
@@ -15786,6 +17146,38 @@ async function qbSetVendorInHouse(env, body) {
   return json({ success: true, id, in_house: on });
 }
 
+// POST /vendor/set-can-bill-no-wo { id, value } — Vendors page inline checkbox, exact same
+// pattern as qbSetVendorInHouse above (Vendor Standalone Billing build brief §2).
+async function vendorSetCanBillNoWO(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const on = body.value === true || String(body.value).toUpperCase() === 'TRUE';
+  await ensureColumns(env, 'Vendors', ['Can_Bill_No_WO']);
+  await updateRow(env, 'Vendors', id, { Can_Bill_No_WO: on ? 'TRUE' : 'FALSE' });
+  return json({ success: true, id, value: on });
+}
+
+// POST /vendor/set-can-create-own-wo { id, value } — same pattern, the "One-Off Job" flag.
+async function vendorSetCanCreateOwnWO(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const on = body.value === true || String(body.value).toUpperCase() === 'TRUE';
+  await ensureColumns(env, 'Vendors', ['Can_Create_Own_WO']);
+  await updateRow(env, 'Vendors', id, { Can_Create_Own_WO: on ? 'TRUE' : 'FALSE' });
+  return json({ success: true, id, value: on });
+}
+
+// POST /vendor/set-billing-property-access { id, property_ids:[...] } — the Edit Vendor
+// modal's property multi-select (mirrors the existing Trades checkbox-grid pattern).
+async function vendorSetBillingPropertyAccess(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const ids = Array.isArray(body.property_ids) ? body.property_ids.map(String) : [];
+  await ensureColumns(env, 'Vendors', ['Billing_Property_Access']);
+  await updateRow(env, 'Vendors', id, { Billing_Property_Access: ids.join(',') });
+  return json({ success: true, id, property_ids: ids });
+}
+
 // POST /qb/create-subcustomer { kind: 'property'|'unit', id }
 // Creates the sub-customer under its parent and stores the id. Only ever on request —
 // the same rule as customers: nothing appears in QuickBooks without Brett asking for it.
@@ -16810,7 +18202,10 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
 
   const payload = { DisplayName: dn };
   if (owner.Company) payload.CompanyName = owner.Company;
-  const email = owner.Billing_Email || '';
+  // Falls back to the plain Email column (Sep 26 2026): the lookup above already used Billing_Email || Email,
+  // but creation only used Billing_Email — so an owner added with just an Email got a QuickBooks customer
+  // with NO email, and their invoices couldn't be emailed (Nirnay Pradhan / Rei, live).
+  const email = String(owner.Billing_Email || owner.Email || '').trim();
   if (email) payload.PrimaryEmailAddr = { Address: email };
   const phone = owner.Billing_Phone || owner.Phone || '';
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };
@@ -18380,6 +19775,138 @@ async function qbReadyQueue(env, url) {
 // Preview returns the resolved customer/vendor/trade + exact lines with ZERO writes.
 // Confirm creates the QB Invoice + Bill (find-or-create customer/vendor), writes the
 // ids + status back to the Invoice_Review row, and flips the WO to Invoiced.
+// Vendor Standalone Billing (Sep 24 2026 build brief §5) — a standalone Vendor_Bills row
+// (WO_ID blank, Standalone='TRUE') has no Work_Orders row to resolve Owner/QuickBooks through,
+// so it can't go down qbSendInvoice's normal wo→prop→owner chain (nor its WO-grouping/combine
+// path — qbGroupOpenRows groups by WO_ID, and every standalone bill shares a blank one, which
+// would otherwise lump UNRELATED standalone bills from different vendors/properties into a
+// single QuickBooks invoice). Isolated into its own function, deliberately NOT threaded into
+// the main WO-invoice code path below, so this new, less-tested branch can never change the
+// behavior of the ordinary WO-anchored send that every existing job already depends on.
+// Resolves Owner straight from Vendor_Bills.Property_ID, mirroring scopeSigResolveParties().
+async function qbSendStandaloneInvoice(env, body, ctx) {
+  const { ir, billRow, previewOnly } = ctx;
+  const [props, owners, vendors] = await fetchTabs(env, ['Properties', 'Owners', 'Vendors']);
+  const prop   = props.find(p => String(p.ID) === String(billRow.Property_ID)) || {};
+  const owner  = prop.Owner_ID ? (owners.find(o => String(o.ID) === String(prop.Owner_ID)) || null) : null;
+  const vendor = vendors.find(v => String(v.ID) === String(ir.Vendor_ID)) || {};
+  const billTo = qbResolveBillTo(owner, prop, null);
+  const billToRidgeco = String(billRow.Bill_To || '').toLowerCase() === 'ridgeco';
+
+  const resolved = resolveTrade(vendor.Trade);
+  const tradeName = resolved.name;
+  const trade = QB_TRADE_MAP[tradeName];
+
+  const warnings = ['Standalone bill — no work order.'];
+  if (!resolved.matched) warnings.push('Vendor trade "' + (vendor.Trade || 'blank') + '" is not in the QuickBooks map — booking to General.');
+  if (!billToRidgeco && !owner) warnings.push('No owner found for this property — set the property owner before sending, or bill it to Ridge Co instead.');
+
+  const custTotal  = Number(ir.Customer_Total) || 0;
+  const vendorCost = Number(ir.Vendor_Cost) || 0;
+  if (!billToRidgeco && custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
+  if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
+
+  // One invoice/bill line per submitted line item, straight off the bill's own descriptions —
+  // there is no WO description to fall back to for a standalone bill (§5).
+  let receipts = [];
+  try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+  const itemRef = { value: trade.item };
+  const invLines = (Array.isArray(receipts) ? receipts : []).map(rc => {
+    const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
+    return amt > 0 ? {
+      DetailType: 'SalesItemLineDetail', Amount: amt,
+      Description: (String((rc && rc.desc) || 'Item')).slice(0, 4000),
+      SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: amt },
+    } : null;
+  }).filter(Boolean);
+  if (!invLines.length && custTotal > 0) {
+    invLines.push({ DetailType: 'SalesItemLineDetail', Amount: custTotal,
+      Description: (billRow.Invoice_Description || (ir.Vendor_Name + ' — standalone bill')).slice(0, 4000),
+      SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: custTotal } });
+  }
+
+  const vendDisplay = vendor.Name || ir.Vendor_Name || ('Vendor ' + (ir.Vendor_ID || ''));
+  const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
+  const txnDate = ir.Approved_Date || new Date().toISOString().split('T')[0];
+  const note = `RidgeCo IR ${ir.ID} · Standalone · Bill ${ir.Bill_ID}`;
+
+  const invoicePayload = { Line: invLines, TxnDate: txnDate, PrivateNote: note };
+  const billPayload = {
+    Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +vendorCost.toFixed(2),
+      Description: (vendDisplay + ' — ' + tradeName + ' — standalone').slice(0, 4000),
+      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+    TxnDate: txnDate, PrivateNote: note,
+  };
+  const termDays = vendorTermDays(vendor);
+  const dueDate = new Date(txnDate + 'T12:00:00');
+  dueDate.setDate(dueDate.getDate() + termDays);
+  billPayload.DueDate = termDays > 0 ? dueDate.toISOString().split('T')[0] : txnDate;
+
+  const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
+  const haveBill = !!(ir.QB_Bill_ID && ir.QB_Bill_ID.trim());
+
+  if (previewOnly) {
+    return json({ preview: {
+      ir_id: ir.ID, wo_id: '', standalone: true, trade: tradeName,
+      bill_to: { level: billToRidgeco ? 'ridgeco' : billTo.level, display: billToRidgeco ? 'Ridge Co (own cost)' : billTo.display,
+                 property: qbPropertyDisplayName(prop), property_id: prop.ID || '' },
+      customer: billToRidgeco ? null : { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', owner_id: (owner && owner.ID) || '' },
+      vendor: { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '', vendor_id: vendor.ID || '' },
+      invoice: billToRidgeco ? null : { total: +custTotal.toFixed(2), lines: invLines.map(l => ({ desc: l.Description, amount: l.Amount })) },
+      bill: { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0 },
+      already: { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
+      warnings,
+    }});
+  }
+
+  if (!billToRidgeco && !haveInv && (!owner || custTotal <= 0)) {
+    return json({ ok: false, error: billToRidgeco ? '' : (!owner ? 'No owner on this property — cannot create a QB customer.' : 'Customer_Total is 0 — nothing to invoice.'), warnings });
+  }
+
+  const token = await qbAccessToken(env);
+  const errors = [];
+  let invoiceId = ir.QB_Invoice_ID || '', billId = ir.QB_Bill_ID || '';
+
+  if (!billToRidgeco && !haveInv) {
+    let customerId = billTo.level !== 'owner' && billTo.qb_id ? billTo.qb_id : '';
+    if (!customerId) { try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); } catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); } }
+    invoicePayload.CustomerRef = { value: customerId };
+    const billEmail = (owner && (owner.Billing_Email || owner.Email) || '').trim();
+    if (billEmail && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail)) invoicePayload.BillEmail = { Address: billEmail };
+    let r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+    invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    if (!invoiceId) errors.push('Invoice: ' + (qbFault(r) || 'unknown error'));
+  }
+
+  const vendorInHouse = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+  if (vendorInHouse && vendorCost > 0) warnings.push(`No vendor bill created — ${vendDisplay} is marked in-house, so there's no payable.`);
+  if (!haveBill && vendorCost > 0 && !vendorInHouse) {
+    let vendorId = '';
+    try { vendorId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token); } catch (e) { errors.push('Vendor: ' + e.message); }
+    if (vendorId) {
+      billPayload.VendorRef = { value: vendorId };
+      const dueTermId = await qbTermForDays(env, token, termDays);
+      if (dueTermId) billPayload.SalesTermRef = { value: dueTermId };
+      const r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+      billId = (r && r.Bill && r.Bill.Id) || '';
+      if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+    }
+  }
+
+  if (invoiceId || billId) { try { await qbAttachReceipts(env, token, invoiceId, billId, billRow, warnings); } catch (e) { warnings.push('Attachments error: ' + (e.message || '')); } }
+
+  const billNotOwed = vendorCost <= 0 || vendorInHouse;
+  const status = ((invoiceId || billToRidgeco) && (billId || billNotOwed)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
+  try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); } catch (e) {}
+  await updateRow(env, 'Invoice_Review', ir.ID, {
+    QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
+    QB_Bill_To: billToRidgeco ? 'ridgeco' : (billTo.level + (billTo.display ? ': ' + billTo.display : '')),
+    QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
+  });
+  if (errors.length) return json({ ok: false, error: errors.join('; '), warnings, invoice_id: invoiceId, bill_id: billId });
+  return json({ ok: true, invoice_id: invoiceId, bill_id: billId, status, warnings });
+}
+
 async function qbSendInvoice(env, body) {
   try {
     const previewOnly = !!body.preview_only;
@@ -18397,6 +19924,10 @@ async function qbSendInvoice(env, body) {
     const [wos, props, owners, vendors, bills, units, allTimeEntries] = await fetchTabs(env, [
       'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units','Time_Entries',
     ]);
+    const billRowEarly = bills.find(b => String(b.ID) === String(ir.Bill_ID)) || {};
+    if (String(billRowEarly.Standalone || '').toUpperCase() === 'TRUE') {
+      return await qbSendStandaloneInvoice(env, body, { ir, billRow: billRowEarly, previewOnly });
+    }
     const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
     const wo      = findWO(wos, ir.WO_ID) || {};
     const prop    = props.find(p => p.ID === wo.Property_ID) || {};
@@ -18451,7 +19982,7 @@ async function qbSendInvoice(env, body) {
     }
 
     const custTotal  = Number(ir.Customer_Total) || 0;
-    const vendorCost = Number(ir.Vendor_Cost) || 0;
+    let vendorCost = Number(ir.Vendor_Cost) || 0;
     if (custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
     if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
 
@@ -18555,6 +20086,21 @@ async function qbSendInvoice(env, body) {
         warnings.push('No job-photo folder on this work order, so the invoice will carry no photo link. Upload a photo to the job to create one.');
       }
 
+      // Loan-ledger preview — READ-ONLY (no ledger write here; that only happens on confirm,
+      // below). Shown so Brett sees the deduction before it happens, not after.
+      let previewLoanDeduction = 0, previewLoanBalance = 0;
+      if (!previewInHouse && vendorCost > 0 && vendor.ID) {
+        try {
+          previewLoanBalance = await getVendorLoanBalance(env, vendor.ID);
+          if (previewLoanBalance > 0) {
+            const isFlatPrev = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'flat';
+            const laborPrev = isFlatPrev ? (parseFloat(billRow && billRow.Flat_Rate) || 0) : (parseFloat(billRow && billRow.Labor_Total) || 0);
+            previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), vendorCost);
+            if (previewLoanDeduction > 0) warnings.push(`Loan repayment: $${previewLoanDeduction.toFixed(2)} will be deducted from ${vendDisplay}'s payment (current balance $${previewLoanBalance.toFixed(2)}).`);
+          }
+        } catch (e) { /* best-effort — confirm still applies/records the real deduction */ }
+      }
+
       return json({ preview: {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
@@ -18570,11 +20116,12 @@ async function qbSendInvoice(env, body) {
         vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '',
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
-        bill:     { total: +vendorCost.toFixed(2), account: trade.expense,
+        bill:     { total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
                     terms: vendorTermLabel(vendor),
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
-                    skipped: vendorCost <= 0 || previewInHouse, in_house: previewInHouse, attach_receipts: reimburseWithUrl },
+                    skipped: vendorCost <= 0 || previewInHouse, in_house: previewInHouse, attach_receipts: reimburseWithUrl,
+                    loan_deduction: +previewLoanDeduction.toFixed(2), loan_balance: +previewLoanBalance.toFixed(2) },
         photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
         warnings,
@@ -18714,6 +20261,20 @@ async function qbSendInvoice(env, body) {
       try { vendorId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token); }
       catch (e) { errors.push('Vendor: ' + e.message); }
       if (vendorId) {
+        // Loan-ledger deduction (CAP-036 #13) — sized here (read-only) so the bill posts at
+        // the already-reduced amount; the ledger itself is only WRITTEN below once billId
+        // comes back real (see computeVendorLoanAdjustment's comment for why: a failed bill
+        // POST that gets retried must not deduct twice). General on purpose — any vendor with
+        // a nonzero balance gets this, not just Alex.
+        let loanAdj = { deduction: 0, laborAmount: 0, balance: 0 };
+        try {
+          loanAdj = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost, billRow });
+          if (loanAdj.deduction > 0) {
+            vendorCost = +(vendorCost - loanAdj.deduction).toFixed(2);
+            billPayload.Line[0].Amount = +vendorCost.toFixed(2);
+            billPayload.Line[0].Description = (billPayload.Line[0].Description + ` (Loan repayment: $${loanAdj.deduction.toFixed(2)})`).slice(0, 4000);
+          }
+        } catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
         billPayload.VendorRef = { value: vendorId };
         // Terms, so the bill reads "Due on receipt" rather than showing a blank term
         // alongside a same-day due date.
@@ -18734,8 +20295,29 @@ async function qbSendInvoice(env, body) {
           r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
           billId = (r && r.Bill && r.Bill.Id) || '';
         }
-        if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
-        else billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+        if (!billId) {
+          errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+          // Bill never posted — undo the in-memory reduction so a later retry (once the real
+          // problem is fixed) sizes the bill against the UN-deducted amount and this same
+          // loan adjustment gets computed (and recorded) fresh next time, not skipped.
+          if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
+        } else {
+          billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (loanAdj.deduction > 0) {
+            try {
+              const newBalance = await recordVendorLoanDeduction(env, {
+                vendorId: vendor.ID, vendorName: vendDisplay, deduction: loanAdj.deduction,
+                laborAmount: loanAdj.laborAmount, billId: ir.Bill_ID, woId: ir.WO_ID,
+              });
+              warnings.push(`Loan repayment: $${loanAdj.deduction.toFixed(2)} deducted from ${vendDisplay}'s payment (balance now $${newBalance.toFixed(2)}).`);
+            } catch (e) {
+              // The bill already posted at the reduced amount — the money-correct side is
+              // done. Only the ledger ROW failed to write; say so plainly rather than losing
+              // track of a deduction that already happened.
+              warnings.push(`⚠ Bill posted with a $${loanAdj.deduction.toFixed(2)} loan deduction already applied, but the ledger entry failed to save (${e.message || 'error'}) — add it manually on the vendor's loan ledger.`);
+            }
+          }
+        }
       }
     }
 

@@ -210,6 +210,11 @@ input[type=file]{display:none;}
   <button class="btn btn-sm btn-muted" onclick="openFeedback()" style="font-size:10px;padding:4px 8px">💬 FEEDBACK</button>
   </div>
 
+  <div id="homeExtraButtons" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <button id="btnSubmitStandaloneBill" onclick="openStandaloneBillModal()" style="display:none;flex:1;min-width:150px;background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12.5px;font-weight:bold;padding:11px 10px;cursor:pointer">🧾 <span data-i18n="SUBMIT A BILL">SUBMIT A BILL</span></button>
+    <button id="btnLogOneOffJob" onclick="openOneOffJobModal()" style="display:none;flex:1;min-width:150px;background:var(--warn);color:#3a2a00;border:none;border-radius:6px;font-family:var(--font);font-size:12.5px;font-weight:bold;padding:11px 10px;cursor:pointer">🔧 <span data-i18n="LOG A ONE-OFF JOB">LOG A ONE-OFF JOB</span></button>
+  </div>
+
   <div class="tabs">
     <div class="tab active" id="tabOpen" data-i18n="OPEN JOBS" onclick="switchTab('open')">OPEN JOBS</div>
     <div class="tab" id="tabAll" data-i18n="ALL JOBS" onclick="switchTab('all')">ALL JOBS</div>
@@ -317,6 +322,14 @@ function onLoginSuccess(data, persist) {
   show('screenLogin', false);
   show('screenDash', true);
   applyTranslations();
+  // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §3a/§4a) —
+  // home-screen buttons, shown only when the vendor's own session carries the flag. Both
+  // default to hidden (see the buttons' own inline style) so a session predating this build
+  // (or restored from localStorage before a re-login) never shows either by accident.
+  var billBtn = document.getElementById('btnSubmitStandaloneBill');
+  if (billBtn) billBtn.style.display = (data.can_bill_no_wo === true || String(data.can_bill_no_wo).toUpperCase() === 'TRUE') ? '' : 'none';
+  var oneOffBtn = document.getElementById('btnLogOneOffJob');
+  if (oneOffBtn) oneOffBtn.style.display = (data.can_create_own_wo === true || String(data.can_create_own_wo).toUpperCase() === 'TRUE') ? '' : 'none';
   loadWorkOrders();
   if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
 }
@@ -390,6 +403,280 @@ function doLogout() {
   show('screenDash', false);
   show('screenLogin', true);
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+}
+
+// ══════════════════════════════════════════════════════════════
+// Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief)
+// ══════════════════════════════════════════════════════════════
+var _allProperties = null; // lazy-fetched once, shared by all three new pickers below
+function _loadAllPropertiesOnce() {
+  if (_allProperties) return Promise.resolve(_allProperties);
+  return api('/properties').then(function(rows) {
+    _allProperties = Array.isArray(rows) ? rows.filter(function(p){ return p && p.Active !== 'FALSE'; }) : [];
+    return _allProperties;
+  }).catch(function() { _allProperties = []; return _allProperties; });
+}
+function _billingPropertyIds() {
+  return String((session && session.billing_property_access) || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+}
+
+// ── Submit a Bill (standalone, no WO) — §3a/§3b ─────────────────────────────
+var _sbItemCount = 0;
+var _sbPay = {};
+var _sbUploadedPhotos = {};
+var _sbBillTo = 'owner';
+var _sbSubmitting = false;
+
+function openStandaloneBillModal() {
+  _sbItemCount = 0; _sbPay = {}; _sbUploadedPhotos = {}; _sbSubmitting = false;
+  document.getElementById('sb-items-list').innerHTML = '';
+  document.getElementById('sb-notes').value = '';
+  document.getElementById('sb-msg').innerHTML = '';
+  setStandaloneBillTo('owner');
+  addStandaloneItemRow();
+  var sel = document.getElementById('sb-property');
+  sel.innerHTML = '<option value="">Loading…</option>';
+  _loadAllPropertiesOnce().then(function(all) {
+    var ids = _billingPropertyIds();
+    var mine = all.filter(function(p) { return ids.indexOf(String(p.ID)) !== -1; });
+    sel.innerHTML = mine.length
+      ? mine.map(function(p) { return '<option value="' + p.ID + '">' + esc(p.Address || ('Property ' + p.ID)) + '</option>'; }).join('')
+      : '<option value="">No properties on your billing list yet — request access below</option>';
+  });
+  calcStandaloneBillTotal();
+  document.getElementById('modal-standalone-bill').style.display = 'flex';
+}
+function closeStandaloneBillModal() {
+  document.getElementById('modal-standalone-bill').style.display = 'none';
+  _sbSubmitting = false;
+  var btn = document.getElementById('sb-submit-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'SUBMIT BILL'; }
+}
+function setStandaloneBillTo(mode) {
+  _sbBillTo = mode;
+  var ownerBtn = document.getElementById('sb-billto-owner'), ridgecoBtn = document.getElementById('sb-billto-ridgeco');
+  var onOwner = mode === 'owner';
+  ownerBtn.style.border = '2px solid ' + (onOwner ? 'var(--accent)' : 'var(--border)');
+  ownerBtn.style.background = onOwner ? 'var(--accent)' : 'var(--surface2)';
+  ownerBtn.style.color = onOwner ? '#fff' : 'var(--muted)';
+  ridgecoBtn.style.border = '2px solid ' + (!onOwner ? 'var(--accent)' : 'var(--border)');
+  ridgecoBtn.style.background = !onOwner ? 'var(--accent)' : 'var(--surface2)';
+  ridgecoBtn.style.color = !onOwner ? '#fff' : 'var(--muted)';
+}
+function addStandaloneItemRow() {
+  _sbItemCount++;
+  var n = _sbItemCount;
+  _sbPay[n] = 'reimburse'; // default "I paid, reimburse me" — Sierra's usual case
+  var div = document.createElement('div');
+  div.id = 'sb-item-row-' + n;
+  div.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px';
+  div.innerHTML = '<div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">' +
+    '<span style="color:var(--muted);font-size:16px">$</span>' +
+    '<input type="number" id="sb-amt-' + n + '" placeholder="0.00" min="0" step="0.01" oninput="calcStandaloneBillTotal()" style="width:100px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:7px;border-radius:6px">' +
+    '<input type="text" id="sb-desc-' + n + '" placeholder="What was this for? (e.g. tenant treats)" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:7px;border-radius:6px">' +
+    '<button onclick="removeStandaloneItemRow(' + n + ')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px">×</button>' +
+    '</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+    '<button type="button" id="sb-photo-lbl-' + n + '" onclick="document.getElementById(\'sb-photo-input-' + n + '\').click()" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 10px;min-height:36px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--muted);display:flex;align-items:center;gap:6px">📷 Upload Receipt</button>' +
+    '<input type="file" id="sb-photo-input-' + n + '" accept="image/*,application/pdf" onchange="uploadStandalonePhoto(' + n + ',this)" style="display:none">' +
+    '<span id="sb-photo-status-' + n + '" style="font-size:11px;color:var(--muted)"></span>' +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text);font-weight:bold;margin-bottom:5px">💳 Who paid for this? — REQUIRED</div>' +
+    '<div style="display:flex;gap:6px">' +
+      '<button type="button" id="sb-pay-reimburse-' + n + '" onclick="setStandalonePay(' + n + ',\'reimburse\')" style="flex:1;padding:9px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid #8a6100;background:#fff3cd;color:#8a6100">💵 I paid, reimburse me ✓</button>' +
+      '<button type="button" id="sb-pay-account-' + n + '" onclick="setStandalonePay(' + n + ',\'account\')" style="flex:1;padding:9px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid var(--border);background:var(--surface);color:var(--muted)">💳 Charged to Brett\'s/company card</button>' +
+    '</div>';
+  document.getElementById('sb-items-list').appendChild(div);
+}
+function removeStandaloneItemRow(n) {
+  var row = document.getElementById('sb-item-row-' + n);
+  if (row) row.remove();
+  delete _sbUploadedPhotos[n];
+  calcStandaloneBillTotal();
+}
+function setStandalonePay(n, mode) {
+  _sbPay[n] = mode;
+  var rb = document.getElementById('sb-pay-reimburse-' + n), ab = document.getElementById('sb-pay-account-' + n);
+  if (!rb || !ab) return;
+  var onAccount = mode === 'account';
+  ab.style.border = '2px solid ' + (onAccount ? '#1a7a3c' : 'var(--border)');
+  ab.style.background = onAccount ? '#e6f4ea' : 'var(--surface)';
+  ab.style.color = onAccount ? '#1a7a3c' : 'var(--muted)';
+  ab.innerHTML = '💳 Charged to Brett\'s/company card' + (onAccount ? ' ✓' : '');
+  rb.style.border = '2px solid ' + (!onAccount ? '#8a6100' : 'var(--border)');
+  rb.style.background = !onAccount ? '#fff3cd' : 'var(--surface)';
+  rb.style.color = !onAccount ? '#8a6100' : 'var(--muted)';
+  rb.innerHTML = '💵 I paid, reimburse me' + (!onAccount ? ' ✓' : '');
+}
+function uploadStandalonePhoto(n, input) {
+  var file = input.files[0]; if (!file) return;
+  var statusEl = document.getElementById('sb-photo-status-' + n);
+  var lblEl = document.getElementById('sb-photo-lbl-' + n);
+  statusEl.textContent = 'Uploading…'; statusEl.style.color = 'var(--muted)';
+  var fd = new FormData();
+  fd.append('file', file); fd.append('file_type', 'receipt');
+  fetch(WORKER + '/upload-photo', { method: 'POST', headers: { 'X-Auth-Token': SECRET }, body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(res) {
+      if (res.url) {
+        _sbUploadedPhotos[n] = res.url;
+        statusEl.textContent = '✓ Uploaded'; statusEl.style.color = 'var(--accent2)';
+        lblEl.style.borderColor = 'var(--accent2)'; lblEl.style.color = 'var(--accent2)';
+      } else { statusEl.textContent = '⚠ Upload failed'; statusEl.style.color = 'var(--danger)'; }
+    }).catch(function() { statusEl.textContent = '⚠ Error'; statusEl.style.color = 'var(--danger)'; });
+}
+function calcStandaloneBillTotal() {
+  var total = 0;
+  for (var i = 1; i <= _sbItemCount; i++) {
+    var el = document.getElementById('sb-amt-' + i);
+    if (el) total += parseFloat(el.value) || 0;
+  }
+  var out = document.getElementById('sb-grand-total');
+  if (out) out.textContent = '$' + total.toFixed(2);
+  return total;
+}
+function submitStandaloneBill() {
+  if (_sbSubmitting) return;
+  var msgEl = document.getElementById('sb-msg');
+  var propertyId = document.getElementById('sb-property').value;
+  if (!propertyId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
+  var items = [];
+  for (var i = 1; i <= _sbItemCount; i++) {
+    var amtEl = document.getElementById('sb-amt-' + i);
+    if (!amtEl) continue;
+    var amt = parseFloat(amtEl.value) || 0;
+    var desc = (document.getElementById('sb-desc-' + i) || {}).value || '';
+    if (amt > 0) items.push({ amount: amt, description: desc, url: _sbUploadedPhotos[i] || '', pay: (_sbPay[i] === 'account' ? 'account' : 'reimburse') });
+  }
+  if (!items.length) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Enter at least one line item.</div>'; return; }
+  msgEl.innerHTML = '';
+  _sbSubmitting = true;
+  var btn = document.getElementById('sb-submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  api('POST', '/vendor-bill/add-standalone', {
+    vendor_id: session.vendor_id, property_id: propertyId, bill_to: _sbBillTo,
+    line_items: items, notes: document.getElementById('sb-notes').value,
+  }).then(function(res) {
+    if (res && (res.id || res.success)) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#eaf6ee;border-radius:6px">✓ Bill submitted!</div>';
+      btn.textContent = '✓ SUBMITTED';
+      setTimeout(function() { closeStandaloneBillModal(); }, 1600);
+    } else {
+      _sbSubmitting = false; btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error submitting') + '</div>';
+    }
+  }).catch(function(e) {
+    _sbSubmitting = false; btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>';
+  });
+}
+
+// ── Request access to another property (§3b/§3d) ────────────────────────────
+function openRequestPropertyAccessModal() {
+  var sel = document.getElementById('rpa-property');
+  sel.innerHTML = '<option value="">Loading…</option>';
+  document.getElementById('rpa-note').value = '';
+  document.getElementById('rpa-msg').innerHTML = '';
+  _loadAllPropertiesOnce().then(function(all) {
+    var ids = _billingPropertyIds();
+    var notMine = all.filter(function(p) { return ids.indexOf(String(p.ID)) === -1; });
+    sel.innerHTML = notMine.map(function(p) { return '<option value="' + p.ID + '">' + esc(p.Address || ('Property ' + p.ID)) + '</option>'; }).join('') ||
+      '<option value="">No other properties found</option>';
+  });
+  document.getElementById('modal-request-property-access').style.display = 'flex';
+}
+function closeRequestPropertyAccessModal() {
+  document.getElementById('modal-request-property-access').style.display = 'none';
+}
+function submitRequestPropertyAccess() {
+  var propertyId = document.getElementById('rpa-property').value;
+  var msgEl = document.getElementById('rpa-msg');
+  if (!propertyId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
+  var btn = document.getElementById('rpa-submit-btn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  api('POST', '/vendor/request-property-access', {
+    vendor_id: session.vendor_id, property_id: propertyId, note: document.getElementById('rpa-note').value,
+  }).then(function(res) {
+    btn.disabled = false; btn.textContent = 'Send Request';
+    if (res && (res.success || res.id)) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:12px">✓ Request sent — Brett has been notified.</div>';
+      setTimeout(function() { closeRequestPropertyAccessModal(); }, 1600);
+    } else {
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error sending request') + '</div>';
+    }
+  }).catch(function() { btn.disabled = false; btn.textContent = 'Send Request'; msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>'; });
+}
+
+// ── Log a One-Off Job (self-serve WO) — §4a/§4b ─────────────────────────────
+var _ooApprovalSource = '';
+var _ooSubmitting = false;
+function openOneOffJobModal() {
+  _ooApprovalSource = ''; _ooSubmitting = false;
+  document.getElementById('oo-description').value = '';
+  document.getElementById('oo-approval-note').value = '';
+  document.getElementById('oo-note-required-lbl').style.display = 'none';
+  document.getElementById('oo-msg').innerHTML = '';
+  ['owner', 'brett', 'other'].forEach(function(s) {
+    var b = document.getElementById('oo-src-' + s);
+    if (b) { b.style.border = '2px solid var(--border)'; b.style.background = 'var(--surface2)'; }
+  });
+  var sel = document.getElementById('oo-property');
+  sel.innerHTML = '<option value="">Loading…</option>';
+  // Deliberately NOT restricted to Billing_Property_Access (§4a) — any active property.
+  _loadAllPropertiesOnce().then(function(all) {
+    sel.innerHTML = all.map(function(p) { return '<option value="' + p.ID + '">' + esc(p.Address || ('Property ' + p.ID)) + '</option>'; }).join('') ||
+      '<option value="">No properties found</option>';
+  });
+  document.getElementById('modal-one-off-job').style.display = 'flex';
+}
+function closeOneOffJobModal() {
+  document.getElementById('modal-one-off-job').style.display = 'none';
+  _ooSubmitting = false;
+  var btn = document.getElementById('oo-submit-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'LOG JOB'; }
+}
+function setOneOffApprovalSource(source) {
+  _ooApprovalSource = source;
+  ['owner', 'brett', 'other'].forEach(function(s) {
+    var b = document.getElementById('oo-src-' + s);
+    if (!b) return;
+    var on = s === source;
+    b.style.border = '2px solid ' + (on ? 'var(--accent)' : 'var(--border)');
+    b.style.background = on ? 'var(--accent)' : 'var(--surface2)';
+    b.style.color = on ? '#fff' : 'var(--text)';
+  });
+  document.getElementById('oo-note-required-lbl').style.display = source === 'other' ? '' : 'none';
+}
+function submitOneOffJob() {
+  if (_ooSubmitting) return;
+  var msgEl = document.getElementById('oo-msg');
+  var propertyId = document.getElementById('oo-property').value;
+  var description = document.getElementById('oo-description').value.trim();
+  var note = document.getElementById('oo-approval-note').value.trim();
+  if (!propertyId) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select a property.</div>'; return; }
+  if (!description) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Describe what needs doing.</div>'; return; }
+  if (!_ooApprovalSource) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Select who authorized this.</div>'; return; }
+  if (_ooApprovalSource === 'other' && !note) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">A note is required for "Other".</div>'; return; }
+  msgEl.innerHTML = '';
+  _ooSubmitting = true;
+  var btn = document.getElementById('oo-submit-btn');
+  btn.disabled = true; btn.textContent = 'Logging…';
+  api('POST', '/workorder/self-serve', {
+    vendor_id: session.vendor_id, property_id: propertyId, description: description,
+    approval_source: _ooApprovalSource, approval_note: note,
+  }).then(function(res) {
+    if (res && (res.id || res.success)) {
+      msgEl.innerHTML = '<div style="color:var(--accent2);font-size:13px;padding:8px;background:#eaf6ee;border-radius:6px">✓ Job logged' + (res.id ? ' — ' + esc(res.id) : '') + '!</div>';
+      btn.textContent = '✓ LOGGED';
+      setTimeout(function() { closeOneOffJobModal(); loadWorkOrders(); }, 1600);
+    } else {
+      _ooSubmitting = false; btn.disabled = false; btn.textContent = 'LOG JOB';
+      msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error logging job') + '</div>';
+    }
+  }).catch(function() {
+    _ooSubmitting = false; btn.disabled = false; btn.textContent = 'LOG JOB';
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>';
+  });
 }
 
 // Restore a persisted session so a reload / auto-refresh keeps the vendor logged in.
@@ -2308,6 +2595,118 @@ function submitVendorSched(modalId) {
   </div>
 </div>
 
+<!-- STANDALONE BILL MODAL (Vendor Standalone Billing build brief §3b) — "Submit a Bill",
+     completely separate from the WO-anchored modal above. Only shown to a vendor whose
+     session carries can_bill_no_wo === true. -->
+<div class="modal-overlay" id="modal-standalone-bill" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:20px;margin:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">🧾 SUBMIT A BILL</div>
+      <button onclick="closeStandaloneBillModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div style="background:var(--surface2);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:11.5px;color:var(--muted);line-height:1.5">
+      Use this to bill for something you did that <b>isn't</b> tied to a specific Work Order, like tenant treats or a small extra at one of your properties. If a Work Order already exists for the job, submit your invoice from that Work Order instead — this is only for work that never had one.
+    </div>
+
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px" data-i18n="PROPERTY">PROPERTY</label>
+      <select id="sb-property" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:9px;border-radius:6px"></select>
+      <div style="margin-top:6px"><a href="javascript:void(0)" onclick="openRequestPropertyAccessModal()" style="color:var(--info);font-size:11.5px;text-decoration:underline" data-i18n="Request access to another property">Request access to another property</a></div>
+    </div>
+
+    <div style="margin-bottom:8px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px" data-i18n="LINE ITEMS">LINE ITEMS</label>
+      <div id="sb-items-list" style="display:flex;flex-direction:column;gap:10px;margin-bottom:8px"></div>
+      <button type="button" onclick="addStandaloneItemRow()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--font);font-size:12px;color:var(--text);cursor:pointer" data-i18n="+ Add line item">+ Add line item</button>
+    </div>
+
+    <div style="margin:14px 0">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:6px" data-i18n="BILL TO">BILL TO</label>
+      <div style="display:flex;gap:6px">
+        <button type="button" id="sb-billto-owner" onclick="setStandaloneBillTo('owner')" style="flex:1;padding:10px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid var(--accent);background:var(--accent);color:#fff">🏠 Property owner</button>
+        <button type="button" id="sb-billto-ridgeco" onclick="setStandaloneBillTo('ridgeco')" style="flex:1;padding:10px 6px;border-radius:6px;font-family:var(--font);font-weight:bold;font-size:12px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--muted)">🏢 Ridge Co's own cost</button>
+      </div>
+    </div>
+
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">NOTES (optional)</label>
+      <textarea id="sb-notes" style="width:100%;min-height:50px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px"></textarea>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);padding-top:10px;margin-bottom:14px">
+      <span style="font-size:12px;color:var(--muted)">TOTAL</span>
+      <span id="sb-grand-total" style="font-size:1.3rem;font-weight:bold;color:var(--accent2)">$0.00</span>
+    </div>
+
+    <div id="sb-msg" style="margin-bottom:10px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeStandaloneBillModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
+      <button id="sb-submit-btn" onclick="submitStandaloneBill()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT BILL</button>
+    </div>
+  </div>
+</div>
+
+<!-- Request property access — small sub-form opened from the modal above -->
+<div class="modal-overlay" id="modal-request-property-access" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:310;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:400px;padding:20px;margin:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="color:var(--accent);font-size:.9rem;font-weight:bold">REQUEST PROPERTY ACCESS</div>
+      <button onclick="closeRequestPropertyAccessModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">PROPERTY</label>
+    <select id="rpa-property" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:9px;border-radius:6px;margin-bottom:10px"></select>
+    <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">NOTE (optional)</label>
+    <textarea id="rpa-note" style="width:100%;min-height:50px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px;margin-bottom:12px"></textarea>
+    <div id="rpa-msg" style="margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeRequestPropertyAccessModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
+      <button id="rpa-submit-btn" onclick="submitRequestPropertyAccess()" style="background:var(--info);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer" data-i18n="Send Request">Send Request</button>
+    </div>
+  </div>
+</div>
+
+<!-- ONE-OFF JOB MODAL (Vendor Standalone Billing build brief §4a) — self-serve WO creation.
+     Only shown to a vendor whose session carries can_create_own_wo === true. -->
+<div class="modal-overlay" id="modal-one-off-job" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:20px;margin:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">🔧 LOG A ONE-OFF JOB</div>
+      <button onclick="closeOneOffJobModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
+    </div>
+    <div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:11.5px;color:#6b5200;line-height:1.55">
+      Use this only when you're doing a job today that hasn't been entered as a Work Order yet — like a quick call where Brett said "go do X." <b>This is not a substitute for regular Work Orders</b>, and it shouldn't become your normal way of getting jobs. If you're getting jobs verbally on a regular basis, talk to Brett — he can set up a recurring job or a different process so this stays the exception, not the rule.
+    </div>
+
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">PROPERTY</label>
+      <select id="oo-property" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:14px;padding:9px;border-radius:6px"></select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px" data-i18n="WHAT NEEDS DOING">WHAT NEEDS DOING</label>
+      <textarea id="oo-description" style="width:100%;min-height:70px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px"></textarea>
+    </div>
+
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:6px" data-i18n="WHO AUTHORIZED THIS? — REQUIRED">WHO AUTHORIZED THIS? — REQUIRED</label>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <button type="button" id="oo-src-owner" onclick="setOneOffApprovalSource('owner')" style="text-align:left;padding:10px;border-radius:6px;font-family:var(--font);font-size:12.5px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--text)">🏠 Owner requested it — the property owner asked for this directly</button>
+        <button type="button" id="oo-src-brett" onclick="setOneOffApprovalSource('brett')" style="text-align:left;padding:10px;border-radius:6px;font-family:var(--font);font-size:12.5px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--text)">📞 Brett requested it — he called/texted before you entered this</button>
+        <button type="button" id="oo-src-other" onclick="setOneOffApprovalSource('other')" style="text-align:left;padding:10px;border-radius:6px;font-family:var(--font);font-size:12.5px;cursor:pointer;border:2px solid var(--border);background:var(--surface2);color:var(--text)">✏️ Other — explain below (required)</button>
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">NOTE <span id="oo-note-required-lbl" style="display:none;color:var(--danger)">(required for "Other")</span></label>
+      <textarea id="oo-approval-note" placeholder="e.g. owner Jennifer called me directly 9/24" style="width:100%;min-height:50px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px;border-radius:6px"></textarea>
+    </div>
+
+    <div id="oo-msg" style="margin-bottom:10px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeOneOffJobModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
+      <button id="oo-submit-btn" onclick="submitOneOffJob()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer" data-i18n="LOG JOB">LOG JOB</button>
+    </div>
+  </div>
+</div>
+
 <script>
 var _billWOId = null;
 var _billType = 'hourly';
@@ -3078,6 +3477,27 @@ var ES = {
   'Phone, billing email, billing address, and tax ID are all required.':'Se requieren teléfono, correo de facturación, dirección de facturación y número de identificación fiscal.',
   'Saving…':'Guardando…',
   'Error saving — try again':'Error al guardar — intente de nuevo',
+  // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026)
+  'SUBMIT A BILL':'ENVIAR UNA FACTURA',
+  'LOG A ONE-OFF JOB':'REGISTRAR UN TRABAJO ÚNICO',
+  'PROPERTY':'PROPIEDAD',
+  'LINE ITEMS':'ARTÍCULOS',
+  '+ Add line item':'+ Agregar artículo',
+  'BILL TO':'FACTURAR A',
+  'Property owner':'Dueño de la propiedad',
+  "Ridge Co's own cost":'Costo propio de Ridge Co',
+  'Request access to another property':'Solicitar acceso a otra propiedad',
+  'Select a property.':'Seleccione una propiedad.',
+  'Enter at least one line item.':'Ingrese al menos un artículo.',
+  'I paid, reimburse me':'Yo pagué, reembólseme',
+  "Charged to Brett's/company card":'Cargado a la tarjeta de Brett/la empresa',
+  'WHAT NEEDS DOING':'QUÉ SE NECESITA HACER',
+  'WHO AUTHORIZED THIS? — REQUIRED':'¿QUIÉN AUTORIZÓ ESTO? — REQUERIDO',
+  'Describe what needs doing.':'Describa lo que se necesita hacer.',
+  'Select who authorized this.':'Seleccione quién autorizó esto.',
+  'A note is required for "Other".':'Se requiere una nota para "Otro".',
+  'LOG JOB':'REGISTRAR TRABAJO',
+  'Send Request':'Enviar Solicitud',
 };
 
 function t(key) {
