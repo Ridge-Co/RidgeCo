@@ -1206,11 +1206,11 @@ window.addEventListener('pageshow', function(e){
       </label>
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
         <input type="checkbox" id="safety-notify-created" checked style="width:auto;padding:0;font-size:16px">
-        <div><div style="font-size:13px">Notify tenant when created</div><div style="color:var(--muted);font-size:11px">Sends SMS to tenant on creation</div></div>
+        <div><div id="safety-notify-created-label" style="font-size:13px">Notify tenant when created</div><div id="safety-notify-created-sub" style="color:var(--muted);font-size:11px">Sends SMS to tenant on creation</div></div>
       </label>
       <label style="display:flex;align-items:center;gap:10px;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--text)">
         <input type="checkbox" id="safety-notify-updates" checked style="width:auto;padding:0;font-size:16px">
-        <div><div style="font-size:13px">Notify tenant on status updates</div><div style="color:var(--muted);font-size:11px">Sends SMS when status changes to Complete etc.</div></div>
+        <div><div id="safety-notify-updates-label" style="font-size:13px">Notify tenant on status updates</div><div id="safety-notify-updates-sub" style="color:var(--muted);font-size:11px">Sends SMS when status changes to Complete etc.</div></div>
       </label>
     </div>
     <div class="modal-actions" id="newwo-safety-actions">
@@ -2140,6 +2140,7 @@ function openWODetail(woId) {
   var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:-24px -24px 14px;padding:12px 24px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<button class="btn small" onclick="openEditWOModal(\''+woId+'\')">✏️ Edit</button>' +
     '<button class="btn small secondary" onclick="sendTenantManualUpdate(\''+woId+'\')">📱 Send update</button>' +
+    '<button class="btn small secondary" onclick="sendPhotoRequestSMS(\''+woId+'\')" title="Canned text asking the tenant for photos of the issue">📸 Request photos</button>' +
     '<button class="btn small secondary" onclick="openWOMessageModal(\''+woId+'\')" title="Send a one-off message to the tenant, owner, or vendor on this job">✉️ Message</button>' +
     '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:var(--radius)">' +
     '<option value="">Status: '+(wo.Status||'—')+' ▾</option>' +
@@ -2998,10 +2999,32 @@ function openTenantSafetyScreen() {
   var trade  = document.getElementById('wo-trade').value;
   if (!propId) { toast('Select a property','error'); return; }
   if (!trade)  { toast('Select a trade','error'); return; }
+  // CAP-036 #5 (Sep 24 2026): a whole-property WO (no Unit picked) on a property that actually
+  // HAS units is the "common area / whole building" case Brett doesn't want defaulted to
+  // texting tenants. A single-family property with zero Units rows isn't multi-unit at all —
+  // "whole property" there just means the one tenant, so that case keeps the old default.
+  var unitId = document.getElementById('wo-unit').value;
+  var propUnits = safeArray(state.units).filter(function(u){ return String(u.Property_ID) === String(propId) && u.Active !== 'FALSE'; });
+  var isWholeMultiUnit = !unitId && propUnits.length > 0;
   // Reset safety screen to defaults
   document.getElementById('safety-visible').checked = true;
-  document.getElementById('safety-notify-created').checked = true;
-  document.getElementById('safety-notify-updates').checked = true;
+  document.getElementById('safety-notify-created').checked = !isWholeMultiUnit;
+  document.getElementById('safety-notify-updates').checked = !isWholeMultiUnit;
+  var createdLabel = document.getElementById('safety-notify-created-label');
+  var createdSub   = document.getElementById('safety-notify-created-sub');
+  var updatesLabel = document.getElementById('safety-notify-updates-label');
+  var updatesSub   = document.getElementById('safety-notify-updates-sub');
+  if (isWholeMultiUnit) {
+    if (createdLabel) createdLabel.textContent = 'Notify all tenants in this property when created';
+    if (createdSub)   createdSub.textContent   = 'Whole-property job, no single unit — sends SMS to tenants with no unit on file. Off by default for common-area/building-wide work.';
+    if (updatesLabel) updatesLabel.textContent = 'Notify all tenants in this property on status updates';
+    if (updatesSub)   updatesSub.textContent   = 'Sends SMS to tenants with no unit on file when status changes to Complete etc.';
+  } else {
+    if (createdLabel) createdLabel.textContent = 'Notify tenant when created';
+    if (createdSub)   createdSub.textContent   = 'Sends SMS to tenant on creation';
+    if (updatesLabel) updatesLabel.textContent = 'Notify tenant on status updates';
+    if (updatesSub)   updatesSub.textContent   = 'Sends SMS when status changes to Complete etc.';
+  }
   if (typeof resetNewWOSafetyModal === 'function') resetNewWOSafetyModal();
   openModal('modal-tenant-safety');
 }
@@ -4466,6 +4489,25 @@ function sendTenantManualUpdate(woId) {
   }).catch(function(e) { alert('Could not send: ' + (e && e.message ? e.message : 'unknown error')); });
 }
 
+// CAP-036 #1 (Sep 24 2026) — canned "request photos" template, same send path as
+// sendTenantManualUpdate above (POST /wo/tenant-update-manual — same gating, audit log, and
+// Hi-{First_Name}/Ref-{wo_id} framing). Pre-fills the prompt with the canned ask instead of
+// starting blank; Brett can still edit it before it goes out.
+function sendPhotoRequestSMS(woId) {
+  var defaultMsg = 'could you send us a few photos of the issue when you get a chance? It helps us line up the right parts/vendor faster.';
+  var msg = prompt('Photo request to send the tenant on ' + woId + ':\n\n' +
+    '(Sent as: "Hi [tenant\'s first name], " + what you type here + " Ref: ' + woId + '." — edit if you want, or just send as-is.)', defaultMsg);
+  if (msg === null) return;
+  msg = msg.trim();
+  if (!msg) { alert('Nothing sent — message was empty.'); return; }
+  api('POST', '/wo/tenant-update-manual', { wo_id: woId, message: msg, updated_by: 'Admin', updated_by_role: 'admin' }).then(function(r) {
+    if (r && r.error) { alert('Could not send: ' + r.error); return; }
+    if (r && r.sent) { alert('Sent.'); return; }
+    if (r && r.send_ok === false) { alert('Queued, not sent — SMS is currently gated off (' + (r.gate_snapshot || 'Global OFF') + '). It\'ll show in the Message Queue review screen once Global/Property/Tenant SMS are turned on.'); return; }
+    alert('Queued but the send itself failed — check the Message Queue review screen.');
+  }).catch(function(e) { alert('Could not send: ' + (e && e.message ? e.message : 'unknown error')); });
+}
+
 function tenantToggle(field, currentVal, label, woId) {
   var isOn = currentVal !== "FALSE";
   var color = isOn ? "var(--accent2)" : "var(--danger)";
@@ -4945,13 +4987,24 @@ function openWOMessageModal(woId) {
   if (options.length === 1) { var o = options[0]; openSendMessageModal(o.type, o.id, o.name, o.phone, woId); return; }
   _pickSendMessageRecipient(options, woId);
 }
+// CAP-036 #2 (Sep 24 2026) — was a prompt()+parseInt "type 1/2/3" picker; Brett asked for
+// real button-select wherever the Hub makes someone type a number to choose from a list of
+// messaging recipients. Renders one button per option in a small modal instead.
+var _pickRecipientOptions = null, _pickRecipientWOId = null;
 function _pickSendMessageRecipient(options, woId) {
-  var pick = prompt('Message who on this job?\n' + options.map(function(o, i){ return (i+1) + ') ' + o.name + ' (' + o.type + ')'; }).join('\n'));
-  if (pick === null) return;
-  var idx = parseInt(pick, 10) - 1;
-  if (isNaN(idx) || !options[idx]) { alert('Enter a number from the list.'); return; }
-  var o = options[idx];
-  openSendMessageModal(o.type, o.id, o.name, o.phone, woId);
+  _pickRecipientOptions = options; _pickRecipientWOId = woId;
+  var host = document.getElementById('pick-recipient-list');
+  host.innerHTML = options.map(function(o, i) {
+    return '<button class="btn secondary" style="text-align:left;width:100%" onclick="_chooseSendMessageRecipient(' + i + ')">' +
+      esc(o.name) + ' <span style="color:var(--muted);font-weight:normal">(' + esc(o.type) + ')</span></button>';
+  }).join('');
+  openModal('modal-pick-recipient');
+}
+function _chooseSendMessageRecipient(idx) {
+  var o = _pickRecipientOptions && _pickRecipientOptions[idx];
+  if (!o) return;
+  closeModal('modal-pick-recipient');
+  openSendMessageModal(o.type, o.id, o.name, o.phone, _pickRecipientWOId);
 }
 function confirmSendMessage() {
   if (!_sendMessageCtx) return;
@@ -11652,6 +11705,16 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
      to a work order (WO detail's "✉️ Message" button pre-fills the recipient from the job and
      logs the exchange to that WO's audit trail). Reuses the same smsGatedSend/queue/opt-out
      pipeline as every other outbound text in the Hub — nothing new to gate or audit separately. -->
+<!-- PICK MESSAGE RECIPIENT MODAL — button-select replacement for the old "type 1/2/3" prompt
+     (CAP-036 #2, Sep 24 2026). Only shown when a WO has more than one of tenant/owner/vendor
+     on file; _pickSendMessageRecipient() fills #pick-recipient-list with one button per option. -->
+<div class="modal-overlay" id="modal-pick-recipient">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header"><div class="modal-title">MESSAGE WHO?</div><button class="modal-close" onclick="closeModal('modal-pick-recipient')">✕</button></div>
+    <div id="pick-recipient-list" style="display:flex;flex-direction:column;gap:8px"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-send-message">
   <div class="modal" style="max-width:480px">
     <div class="modal-title">✉️ SEND MESSAGE</div>

@@ -132,6 +132,83 @@ up (no tool in this session can trigger/inspect a Cloudflare Build beyond nudge-
 {failure_alert_enabled:true})` + `hub_test_get('/config')` read-back, then decide on merging PR
 #67 to `main`.
 
+---
+
+# Sep 24, 2026, ~17:20 ET — BUILT (branch pushed, PR pending): CAP-036 batch 2 — photo-request SMS, delivery Twilio relay, store dropdown, button-select recipient picker, whole-property notify default, itemized vendor-portal receipts
+
+Full detail: `context/FEATURE_LOG.md` ([FL-20260924-1720-p2]). This batch covers CAP-036's
+items #1, #2, #5, #6, #7, #8, #11 (its own numbering — items #3/#4 are the separate
+notification-matrix deep dive, not touched; #12–#18 are separate builds already shipped or in
+flight in PRs #56/#58/#59/#61, not touched).
+
+**#1 — Photo-request SMS template + button on the WO.** New `📸 Request photos` button on the
+WO detail sticky bar (`sendPhotoRequestSMS`), alongside the existing `📱 Send update` button.
+Reuses the exact same `/wo/tenant-update-manual` chokepoint (same gating/audit/framing) with a
+canned default message pre-filled into the prompt instead of starting blank — Brett can still
+edit before it sends.
+
+**#2 — Number-entry → button-select for choosing an SMS recipient.** Searched worker.js/
+index.html/vendor.html for the "type 1/2/3" pattern and found exactly one real instance:
+`_pickSendMessageRecipient` (WO detail's ✉️ Message button, when a WO has more than one of
+tenant/owner/vendor on file). Replaced the `prompt()`+`parseInt` with a real button list in a
+new `#modal-pick-recipient` modal. (Everything else numbered — e.g. lockbox Possession_Status —
+is an unrelated single-field picker, not recipient selection, so left alone.)
+
+**#6 — Delivery relay through Twilio SMS + email.** `deliveries.html`'s "✉ Relay to tenant"
+button used to build an `sms:` URI that only ever opened the ADMIN's own phone's native
+messaging app — nothing was sent through Ridge Co's number, and there was no email at all
+(Phase 0 design comment: "no Twilio, no customer send," written before Twilio was wired up).
+New `POST /delivery/relay` actually sends: SMS via the existing `sendSMS` chokepoint (same
+admin-triggered direct-send pattern as `sendPinMessage`/`welcomeSend`'s non-gated sends) and
+email via the existing `gmailSendEmail` chokepoint when the tenant has one on file — no new
+send infrastructure. The client still lets Brett edit the text in a prompt before it goes out.
+
+**#7 — Delivery store field dropdown.** `deliveries.html`'s Store field is now a Home
+Depot/Lowe's/Ace Hardware/Walmart/Other dropdown, with the existing free-text input kept as the
+actual value (`#df-store`) that gets saved — an "Other…" selection reveals it for typing. No
+backend change; the Store column still accepts any string.
+
+**#8 — Delivery property picker → address prefill.** Checked `onPropertyChange()` in
+`deliveries.html` before building anything: it ALREADY fills `#df-address` from the selected
+property's address when the field is blank, and still lets Brett override it. Verified working,
+no change needed — CAP-036's note that this "doesn't populate" appears to predate this code, or
+was never actually broken.
+
+**#5 — Whole-property multi-unit WO tenant-SMS checkbox.** The tenant-safety screen shown on
+every WO creation (`openTenantSafetyScreen`) always defaulted both "Notify tenant..." checkboxes
+to checked regardless of whether a Unit was picked, with generic singular-tenant labels. Now: for
+a whole-property WO (no Unit selected) on a property that actually HAS units (`propUnits.length
+> 0` — a real multi-unit building, not a single-family property with zero Units rows), both
+checkboxes default UNCHECKED and relabel to "Notify all tenants in this property...". Single-unit
+and single-family WOs are unaffected — verified the underlying dispatch (`tenantsForDispatch`/
+`createWorkOrder`) already only ever reaches no-Unit tenants for a whole-property WO, never every
+unit's tenant, so this changes the default+label, not who could actually be reached.
+
+**#11 — Itemized receipts on Review Bills + vendor portal.** Found Review Bills' side ALREADY
+LIVE (`renderReceiptsJsonBreakdown` in index.html shows every `Receipts_JSON` line with a
+💳 CARD / 💵 REIMBURSE badge). The real gap was the vendor portal's own bill summary
+(`loadVendorBillSummary` in vendor.html), which listed each receipt's amount/description/photo
+link but never the pay-mode coding — added the same badge there so a vendor sees exactly how a
+receipt will be coded before it goes anywhere.
+
+**Verification:** `node --check` clean on worker.js and every inline `<script>` block in
+index.html/vendor.html. Two new structural test files — `test/delivery-relay.test.mjs` (10/10)
+and `test/cap-036-batch2-ui.test.mjs` (19/19) — same source-grab convention as
+`welcome-send.test.mjs`/`tenant-wo-settings-ui.test.mjs` (heavy Sheets/Twilio/Gmail I/O isn't
+worth mocking here). Ran a sample of pre-existing tests (`tenant-dispatch-whole-property`,
+`message-queue`, `tenant-note-notify`, `vendor-portal-link`) against the modified files —
+unaffected, no regressions. **`maintenance-hub-staging` was on `/version` 2026-09-23.12 at build
+time — predates even PR #55/#57, so stale relative to this branch — verified statically/locally
+instead of via a live staging smoke-test**, same allowance CAP-036's other builds have used.
+
+**Ship status:** all 7 items land in one PR (`feat/cap-036-batch2-photo-delivery-receipts`) since
+none of it needs to ship independently — per Brett's own scoping note. #1/#2/#8 touch real
+tenant communications (a canned SMS send, a message-recipient picker, and default notify
+behavior) so this is staged as a branch+PR for Brett's review per `AUTONOMY_GUARDRAILS_v1.0`,
+not auto-merged; #5(store)/#6(relay send)/#7(prefill, no-op)/#11 are UI-only or read-only but
+included in the same PR.
+
+---
 # Sep 24, 2026, ~17:00 ET — SHIPPED: Allow-list simplification (PR #55) + property/unit linking & duplicate-check (PR #57)
 
 ## 🟢 Live: Allow-list simplification, all 3 changes
