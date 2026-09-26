@@ -414,12 +414,39 @@ function rebuildWoDatalist(){
   dl.innerHTML = allWOs.map(w => '<option value="'+esc(w.ID)+'">'+esc(w.ID+' — '+(w.Description||'').slice(0,60))+'</option>').join('');
 }
 
+// Sep 23 2026 build: a lightweight client-side filter over whatever this tab already loaded —
+// no extra round-trip, since the whole point is a fast eyeball check ("did I already process
+// this $101.28 receipt") against a list that's already in memory. lastQueueRows always holds the
+// last unfiltered fetch; queueFilterText survives a tab switch so it doesn't feel like it reset.
+let lastQueueRows = [];
+let queueFilterText = '';
+function toggleFilterBar(show){
+  const bar = document.getElementById('rc-filter-bar');
+  if (bar) bar.style.display = show ? 'flex' : 'none';
+}
+function _clientNorm(s){ return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
+function filterQueueRows(text){
+  const t = _clientNorm(text);
+  if (!t) return lastQueueRows;
+  const tAmount = parseFloat(String(text).replace(/[^0-9.]/g,''));
+  const hasAmount = String(text).replace(/[^0-9.]/g,'').length > 0 && !isNaN(tAmount);
+  return lastQueueRows.filter(r => {
+    if (hasAmount && Math.abs((Number(r.Total)||0) - tAmount) < 0.01) return true;
+    const blob = _clientNorm([r.Vendor, r.PO_Reference, r.Notes, (r.items||[]).join(' ')].filter(Boolean).join(' '));
+    return blob.indexOf(t) >= 0;
+  });
+}
+function onQueueFilterInput(v){ queueFilterText = v; renderFiltered(); }
+function renderFiltered(){ render(filterQueueRows(queueFilterText)); }
+
 async function loadQueue(){
   const status = document.getElementById('conn-status');
   const list = document.getElementById('list');
   list.innerHTML = '<div class="empty">Loading…</div>';
+  toggleFilterBar(false);
   if (curStatus === 'trucks') { await loadTruckStock(status, list); return; }
   if (curStatus === 'audit') { await loadAudit(status, list); return; }
+  if (curStatus === 'search') { await loadSearchTab(status, list); return; }
   try {
     const [rows, wos, props, units] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
