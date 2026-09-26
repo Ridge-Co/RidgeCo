@@ -1,3 +1,12 @@
+# Sep 26, 2026, ~12:50 ET — BUILT + STAGING-VERIFIED (PR to `main` open, NOT merged): Owner self-serve onboarding link, owner billing address, commercial property type, Add Property "fields persist" fix
+
+Full brief: `context/OWNER_SELF_ONBOARDING_BUILD_BRIEF_v1.0.md`; FEATURE_LOG `[FL-20260926-1245-oo]`. Brett sends a single-use link (Hub → Owners → 📨 Owner Onboarding Link); the owner enters name / business-or-name (required choice) / contact phone / billing email / billing address / PIN (3 letters + 5 digits — the platform's existing owner PIN format) / properties (address, city, type, unit count; commercial + retail/mixed use/industrial/office) / units (occupied → tenant name+phone, vacant → lockbox+code or no-lockbox+note, or "provide later" — at least one resolved unit overall) / optional unchecked SMS-permission box, and it lands in Owners, Properties, Units, Tenants, Keys with SMS off on new properties/tenants. Admin gets an SMS summary; the invite list shows a Needs-review flag with reasons. Add Property now resets every field on open (it never did before). Owners have billing-address fields in Add/Edit Owner.
+
+**Update (later Sep 26):** also on this branch/PR — Owners page **Set PIN for Selected** + **Select owners with no PIN** (backfill PINs for owners who don't set their own; `/owner/pin-suggest`, `/owner/set-pins`), staging build `2026-09-26.2-owner-set-pin`, live-tested on TEST owner 25. Also the QuickBooks owner-customer email fix (existing QB customers 459/460 still need "Fix QB emails" run by Brett).
+**Status:** branch `feat/owner-self-onboarding`; `maintenance-hub-staging` was exercised end to end with real Sheet read-back. Also: `staging` was brought current with `main` (PRs #71/#72). **Needs Brett:** merge the PR to `main` (auto-deploys the Worker; GitHub Pages serves `owner-onboard.html`), then send himself a test link and click through once on his phone. **Left as-is / decisions:** SMS consent is optional + unchecked (compliance-safe); not exercised live: unowned-property → link path, QuickBooks customer creation, admin SMS (all staging-stubbed or test-token-restricted).
+
+---
+
 # Sep 24, 2026, ~18:18 ET — INFRA FINDING: Cloudflare Workers Builds delayed/stuck (their incident, not our config) -- affects every PR merged to `main`/`staging` today
 
 **What happened:** merged PR #62 (`GET /brettos-tasks-summary`, per `context/TASK_LINKING_BUILD_BRIEF_v1.0.md`)
