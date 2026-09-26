@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-23.12-receipt-recon-reassign-refund-search';
+const BUILD_VERSION = '2026-09-26.1-owner-self-onboarding';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -127,7 +127,10 @@ export default {
       // the existing, already-gated /vendor/update. The SAME page, opened while already logged
       // into the Hub (mh_auth present), instead calls the normal gated /vendor/add + this same
       // /contact-card/extract admin endpoint — see vendor-setup.html.
-      '/vendor-setup/contact-extract','/vendor-setup/submit'];
+      '/vendor-setup/contact-extract','/vendor-setup/submit',
+      // Owner self-serve onboarding (Sep 26 2026): public at the gate, but every handler requires a valid single-use
+      // invite token minted by Brett (Owner_Invites tab) — see the OWNER SELF-SERVE ONBOARDING block.
+      '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -297,6 +300,7 @@ export default {
             '/tenant-by-pin',         // tenantByPin -> pinLookup: writes PIN_Lockout on every call (recordPinFailure/clearPinLockout)
             '/owner-by-pin',          // ownerByPin -> pinLookup: same PIN_Lockout write path as /tenant-by-pin
             '/vendor-by-pin',         // vendorByPin -> pinLookup: same PIN_Lockout write path as /tenant-by-pin
+            '/owner-onboard/invites', // returns live single-use owner-onboarding invite links (tokens) — a read-only token must not be able to mint access
           ];
           const _prodRoOk = !!env.HUB_PROD_RO_TOKEN && _tok === env.HUB_PROD_RO_TOKEN && request.method === 'GET' && !HUB_PROD_RO_EXCLUDE_PATHS.includes(path);
           // Narrow WRITE-CAPABLE token for safe, allow-listed production writes (Sep 22 2026,
@@ -398,6 +402,8 @@ export default {
         // the /workorder tenant path above.
         if (path === '/tenant-session-refresh') return await tenantSessionRefresh(env, callerRole, callerSessionId);
         if (path === '/owner-by-pin')           return await ownerByPin(env, url);
+        if (path === '/owner-onboard/info')     return await ownerOnboardInfo(env, url);
+        if (path === '/owner-onboard/invites')  return await ownerOnboardInvites(env);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url);
         if (path === '/vendor-workorders')      return await vendorWorkorders(env, url);
@@ -567,14 +573,15 @@ export default {
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
-        if (path === '/property/add')             return await propertyAddWithDupeCheck(env, body);
+        if (path === '/property/add')             { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); return await propertyAddWithDupeCheck(env, body); }
         if (path === '/property/update')          return await propertyUpdate(env, body);
         if (path === '/unit/add')                 return await unitAddWithDupeCheck(env, body);
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
         if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
-        if (path === '/owner/add')                return await addOwnerWithQBSync(env, body);
-        if (path === '/owner/update')             return await updateRow(env, 'Owners', body.id, body.fields);
+        // Billing_* already exist on the live sheet; ensureColumns keeps a fresh/staging sheet from silently dropping them (addRow/updateRow map by existing header only).
+        if (path === '/owner/add')                { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await addOwnerWithQBSync(env, body); }
+        if (path === '/owner/update')             { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await updateRow(env, 'Owners', body.id, body.fields); }
         if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
         if (path === '/owner/held-contact-note') return await setOwnerHeldContactNote(env, body);
@@ -596,6 +603,10 @@ export default {
         if (path === '/contact-card/extract')     return await contactCardExtractFromBody(env, body);
         if (path === '/vendor-setup/contact-extract') return await contactCardExtractFromBody(env, body);
         if (path === '/vendor-setup/submit')      return await vendorSetupSubmit(env, body);
+        if (path === '/owner-onboard/check-pin')  return await ownerOnboardCheckPin(env, body);
+        if (path === '/owner-onboard/submit')     return await ownerOnboardSubmit(env, body, _clientIP);
+        if (path === '/owner-onboard/invite/create') return await ownerOnboardInviteCreate(env, body);
+        if (path === '/owner-onboard/invite/revoke') return await ownerOnboardInviteRevoke(env, body);
         if (path === '/set-pin')                  return await updateRow(env, 'Tenants', body.tenant_id, { PIN: body.pin });
         if (path === '/vendor/set-pin')           return await updateRow(env, 'Vendors', body.vendor_id, { PIN: body.pin });
         if (path === '/owner/set-pin')            return await updateRow(env, 'Owners', body.owner_id, { PIN: body.pin });
@@ -13717,6 +13728,428 @@ async function vendorSetupSubmit(env, body) {
   return await addRow(env, 'Vendors', fields);
 }
 
+// ── OWNER SELF-SERVE ONBOARDING (Sep 26 2026) ────────────────────────────────────────────
+// Brett sends a prospective owner ONE link (owner-onboard.html?t=TOKEN). The owner fills in who
+// they are, how to bill them, their properties, and at least one unit's occupancy/access info, and
+// it lands straight in Owners / Properties / Units / Tenants / Keys — no manual data entry.
+//
+// Security model (public endpoints, no Hub login):
+//   • Every public call needs a valid, unexpired, unrevoked, single-use invite token minted by
+//     Brett from the Hub (Owner_Invites tab). Tokens are 144 random bits, never derivable.
+//   • /owner-onboard/submit claims the invite (pending → processing → used) before writing, so a
+//     double-tap / replay cannot create two owners.
+//   • /owner-onboard/check-pin is capped per token so it can't be used to enumerate PINs.
+//   • New properties/tenants are created with SMS_Enabled='FALSE' (Brett flips SMS on per property
+//     once the data is confirmed clean, same rollout rule as every other property). The owner's own
+//     SMS_Enabled follows their consent checkbox.
+//   • An existing property at the same address is NEVER duplicated: unowned → linked to this owner,
+//     owned by someone else → left alone and flagged for Brett's review.
+// Owner PINs keep the platform-wide format (3 letters + 5 digits) — owner login, the PIN sweep and
+// the daily selftest all enforce it — plus a uniqueness check across Owners/Owner_Users/Vendors/Tenants.
+
+const OWNER_BILLING_COLS = ['Billing_Name','Billing_Address','Billing_City','Billing_State','Billing_Zip','Billing_Phone','Billing_Email'];
+const OWNER_INVITE_HEADERS = ['ID','Token','Status','Created_Date','Expires_Date','Prefill_Name','Prefill_Phone','Prefill_Email','Note','Check_Attempts','Claim_Nonce','Used_Date','Owner_ID','Needs_Review','Result_Summary','Active'];
+const OWNER_ONBOARD_TYPES = ['house','rowhome','multi','condo','commercial'];
+const OWNER_ONBOARD_SUBTYPES = ['retail','mixed_use','industrial','office'];
+const OWNER_ONBOARD_MAX_PROPERTIES = 25;
+const OWNER_ONBOARD_MAX_UNITS = 50;
+const OWNER_ONBOARD_MAX_CHECKS = 25;
+const OWNER_ONBOARD_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
+
+// ── pure helpers (source-sliced by test/owner-onboarding.test.mjs — keep them dependency-free) ──
+function ooClean(v, max) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max || 200);
+}
+function ooDigits(v) { return String(v == null ? '' : v).replace(/\D/g, ''); }
+function ooPhoneOk(v) {
+  const d = ooDigits(v);
+  return d.length === 10 ? /^[2-9]\d{9}$/.test(d) : (d.length === 11 && d[0] === '1' && /^[2-9]\d{9}$/.test(d.slice(1)));
+}
+function ooEmailOk(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || '')) && String(v).length <= 120; }
+
+// PIN rule: exactly 3 letters + 5 digits (platform-wide format), digits not a trivially guessable run.
+function ownerOnboardPinCheck(pin) {
+  const p = String(pin == null ? '' : pin).trim().toUpperCase();
+  if (!/^[A-Z]{3}\d{5}$/.test(p)) return { ok: false, pin: p, reason: 'PIN must be 3 letters followed by 5 numbers (example: ABC12345).' };
+  const d = p.slice(3);
+  if (/^(\d)\1{4}$/.test(d)) return { ok: false, pin: p, reason: 'The 5 numbers can\'t all be the same digit.' };
+  if ('0123456789'.includes(d) || '9876543210'.includes(d)) return { ok: false, pin: p, reason: 'The 5 numbers can\'t be a simple 12345-style run.' };
+  if (/^(.)\1\1$/.test(p.slice(0, 3))) return { ok: false, pin: p, reason: 'The 3 letters can\'t all be the same letter.' };
+  return { ok: true, pin: p, reason: '' };
+}
+
+function ownerOnboardInferMarket(city) {
+  const c = String(city || '').toLowerCase();
+  if (c.includes('baltimore')) return 'Baltimore';
+  if (c.includes('waynesboro')) return 'Waynesboro';
+  if (c.includes('winchester')) return 'Winchester';
+  return 'Other';
+}
+
+// Splits nothing and trusts nothing: returns { ok, errors:[{field,message}], clean } where `clean`
+// is the sanitized, length-capped structure the submit handler writes. Pure — no I/O.
+function ownerOnboardValidate(input) {
+  const errors = [];
+  const err = (field, message) => errors.push({ field, message });
+  const inp = (input && typeof input === 'object') ? input : {};
+  const o = (inp.owner && typeof inp.owner === 'object') ? inp.owner : {};
+  const clean = { owner: {}, properties: [], sms_consent: inp.sms_consent === true };
+
+  // ── owner ──
+  const first = ooClean(o.first, 60), last = ooClean(o.last, 60);
+  if (!first) err('owner.first', 'First name is required.');
+  if (!last) err('owner.last', 'Last name is required.');
+  const choice = o.business_choice === 'business' ? 'business' : (o.business_choice === 'name' ? 'name' : '');
+  if (!choice) err('owner.business_choice', 'Please choose whether to bill under your name or a business name.');
+  const biz = ooClean(o.business_name, 120);
+  if (choice === 'business' && biz.length < 2) err('owner.business_name', 'Enter the business name.');
+  if (!ooPhoneOk(o.phone)) err('owner.phone', 'Enter a valid 10-digit contact phone number.');
+  const bemail = ooClean(o.billing_email, 120).toLowerCase();
+  if (!ooEmailOk(bemail)) err('owner.billing_email', 'Enter a valid billing email address.');
+  const ba = (o.billing_address && typeof o.billing_address === 'object') ? o.billing_address : {};
+  const street = ooClean(ba.street, 120), bcity = ooClean(ba.city, 60), bstate = ooClean(ba.state, 2).toUpperCase(), bzip = ooClean(ba.zip, 10);
+  if (street.length < 3) err('owner.billing_address.street', 'Enter the billing street address.');
+  if (bcity.length < 2) err('owner.billing_address.city', 'Enter the billing city.');
+  if (!OWNER_ONBOARD_STATES.includes(bstate)) err('owner.billing_address.state', 'Choose the billing state.');
+  if (!/^\d{5}(-\d{4})?$/.test(bzip)) err('owner.billing_address.zip', 'Enter a valid ZIP code.');
+  const pinChk = ownerOnboardPinCheck(o.pin);
+  if (!pinChk.ok) err('owner.pin', pinChk.reason);
+  clean.owner = {
+    first, last, business_choice: choice, business_name: choice === 'business' ? biz : '',
+    phone: ooDigits(o.phone).slice(-10), billing_email: bemail,
+    billing_address: { street, city: bcity, state: bstate, zip: bzip }, pin: pinChk.pin,
+  };
+
+  // ── properties ──
+  const props = Array.isArray(inp.properties) ? inp.properties : [];
+  if (!props.length) err('properties', 'Add at least one property.');
+  if (props.length > OWNER_ONBOARD_MAX_PROPERTIES) err('properties', 'Too many properties in one submission (max ' + OWNER_ONBOARD_MAX_PROPERTIES + ').');
+  let resolvedUnits = 0;
+  props.slice(0, OWNER_ONBOARD_MAX_PROPERTIES).forEach((p, pi) => {
+    const pf = (f) => 'properties[' + pi + '].' + f;
+    p = (p && typeof p === 'object') ? p : {};
+    const address = ooClean(p.address, 120), city = ooClean(p.city, 60);
+    const type = OWNER_ONBOARD_TYPES.includes(p.type) ? p.type : '';
+    if (address.length < 3) err(pf('address'), 'Enter the property address.');
+    if (city.length < 2) err(pf('city'), 'Enter the property city.');
+    if (!type) err(pf('type'), 'Choose the property type.');
+    let subtype = '';
+    if (type === 'commercial') {
+      subtype = OWNER_ONBOARD_SUBTYPES.includes(p.subtype) ? p.subtype : '';
+      if (!subtype) err(pf('subtype'), 'Choose the commercial type (retail, mixed use, industrial or office).');
+    }
+    // Unit count: house/rowhome are always 1; the rest must be entered (multi needs at least 2).
+    let unitCount = 1;
+    const single = type === 'house' || type === 'rowhome';
+    if (!single) {
+      unitCount = parseInt(p.unit_count, 10);
+      const min = type === 'multi' ? 2 : 1;
+      if (!Number.isFinite(unitCount) || unitCount < min || unitCount > 500) {
+        err(pf('unit_count'), type === 'multi' ? 'Enter how many units are at this address (2 or more).' : 'Enter how many units are at this address.');
+        unitCount = 0;
+      }
+    }
+    const units = Array.isArray(p.units) ? p.units : [];
+    if (!units.length) err(pf('units'), single ? 'Tell us whether this property is occupied or vacant.' : 'Add at least one unit — the one you need service at.');
+    if (units.length > OWNER_ONBOARD_MAX_UNITS) err(pf('units'), 'Too many units listed for one property (max ' + OWNER_ONBOARD_MAX_UNITS + ').');
+    if (!single && unitCount && units.length > unitCount) err(pf('units'), 'You listed more units than the unit count above.');
+    const seen = new Set();
+    const cleanUnits = [];
+    units.slice(0, OWNER_ONBOARD_MAX_UNITS).forEach((u, ui) => {
+      const uf = (f) => pf('units[' + ui + '].' + f);
+      u = (u && typeof u === 'object') ? u : {};
+      const label = single ? '' : ooClean(u.label, 40);
+      if (!single) {
+        if (!label) err(uf('label'), 'Enter the unit name or number (like Apt 2 or Suite 100).');
+        else if (seen.has(label.toLowerCase())) err(uf('label'), 'Two units have the same name.');
+        seen.add(label.toLowerCase());
+      }
+      const status = ['tenant','vacant','later'].includes(u.status) ? u.status : '';
+      if (!status) err(uf('status'), 'Choose occupied, vacant, or "I will provide this later".');
+      const cu = { label, status, tenant: null, access: null };
+      if (status === 'tenant') {
+        const t = (u.tenant && typeof u.tenant === 'object') ? u.tenant : {};
+        const tf = ooClean(t.first, 60), tl = ooClean(t.last, 60), te = ooClean(t.email, 120).toLowerCase();
+        if (!tf) err(uf('tenant.first'), 'Enter the tenant\'s first name.');
+        if (!ooPhoneOk(t.phone)) err(uf('tenant.phone'), 'Enter the tenant\'s 10-digit phone number.');
+        if (te && !ooEmailOk(te)) err(uf('tenant.email'), 'That tenant email doesn\'t look right.');
+        cu.tenant = { first: tf, last: tl, phone: ooDigits(t.phone).slice(-10), email: te };
+        resolvedUnits++;
+      } else if (status === 'vacant') {
+        const a = (u.access && typeof u.access === 'object') ? u.access : {};
+        const method = a.method === 'lockbox' ? 'lockbox' : (a.method === 'none' ? 'none' : '');
+        if (!method) err(uf('access.method'), 'Choose a lockbox, or tell us there is no lockbox.');
+        const code = ooClean(a.code, 30), location = ooClean(a.location, 120), note = ooClean(a.note, 400);
+        if (method === 'lockbox' && code.length < 2) err(uf('access.code'), 'Enter the lockbox code.');
+        if (method === 'none' && note.length < 5) err(uf('access.note'), 'With no lockbox, tell us how we get in (who has a key, a door code, who to call).');
+        cu.access = { method, code: method === 'lockbox' ? code : '', location: method === 'lockbox' ? location : '', note };
+        resolvedUnits++;
+      }
+      cleanUnits.push(cu);
+    });
+    clean.properties.push({ address, city, type, subtype, unit_count: unitCount, units: cleanUnits });
+  });
+  if (props.length && resolvedUnits < 1) err('properties', 'We need at least one unit that is either occupied (with tenant contact info) or vacant (with access info) — "provide later" alone isn\'t enough.');
+  return { ok: errors.length === 0, errors, clean };
+}
+
+function ooToken() {
+  const b = new Uint8Array(18); crypto.getRandomValues(b);
+  let s = ''; for (const x of b) s += String.fromCharCode(x);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function ooInviteState(inv, now) {
+  if (!inv) return 'invalid';
+  if (inv.Active === 'FALSE') return 'revoked';
+  const st = String(inv.Status || 'pending');
+  if (st === 'used' || st === 'revoked' || st === 'processing') return st;
+  const exp = Date.parse(inv.Expires_Date || '');
+  if (Number.isFinite(exp) && exp < (now || Date.now())) return 'expired';
+  return 'pending';
+}
+async function ooFindInvite(env, token) {
+  const t = String(token || '').trim();
+  if (!/^[A-Za-z0-9_-]{20,40}$/.test(t)) return null;
+  await ensureTab(env, 'Owner_Invites', OWNER_INVITE_HEADERS);
+  const rows = await fetchTab(env, 'Owner_Invites');
+  return rows.find(r => r.Token === t) || null;
+}
+function ooInviteProblem(state) {
+  if (state === 'used' || state === 'processing') return 'This link has already been used. If you need to make changes, please contact us.';
+  if (state === 'expired') return 'This link has expired. Please ask us for a new one.';
+  if (state === 'revoked') return 'This link is no longer active. Please ask us for a new one.';
+  return 'This link isn\'t valid. Please check that you copied the whole link, or ask us for a new one.';
+}
+
+// POST /owner-onboard/invite/create (admin) — {name?, phone?, email?, note?, days?}
+async function ownerOnboardInviteCreate(env, body) {
+  body = body || {};
+  await ensureTab(env, 'Owner_Invites', OWNER_INVITE_HEADERS);
+  const days = Math.min(60, Math.max(1, parseInt(body.days, 10) || 14));
+  const now = new Date();
+  const token = ooToken();
+  const row = {
+    Token: token, Status: 'pending', Created_Date: now.toISOString(),
+    Expires_Date: new Date(now.getTime() + days * 86400000).toISOString(),
+    Prefill_Name: ooClean(body.name, 120), Prefill_Phone: ooDigits(body.phone).slice(-10), Prefill_Email: ooClean(body.email, 120),
+    Note: ooClean(body.note, 300), Check_Attempts: '0', Needs_Review: 'FALSE', Active: 'TRUE',
+  };
+  const r = await addRow(env, 'Owner_Invites', row);
+  let id = ''; try { id = (await r.clone().json()).id || ''; } catch (e) {}
+  return json({ success: true, id, token, link: `${PORTAL_BASE}/owner-onboard.html?t=${token}`, expires: row.Expires_Date });
+}
+
+// GET /owner-onboard/invites (admin) — newest first, with the shareable link and outcome.
+async function ownerOnboardInvites(env) {
+  await ensureTab(env, 'Owner_Invites', OWNER_INVITE_HEADERS);
+  const rows = await fetchTab(env, 'Owner_Invites');
+  const now = Date.now();
+  return json(rows.filter(r => r.Token).reverse().map(r => {
+    const state = ooInviteState(r, now);
+    return {
+      id: r.ID, status: state, name: r.Prefill_Name || '', phone: r.Prefill_Phone || '', email: r.Prefill_Email || '', note: r.Note || '',
+      created: r.Created_Date || '', expires: r.Expires_Date || '', used: r.Used_Date || '', owner_id: r.Owner_ID || '',
+      needs_review: r.Needs_Review === 'TRUE', summary: r.Result_Summary || '',
+      link: state === 'pending' ? `${PORTAL_BASE}/owner-onboard.html?t=${r.Token}` : '',
+    };
+  }));
+}
+
+// POST /owner-onboard/invite/revoke (admin) — {id}
+async function ownerOnboardInviteRevoke(env, body) {
+  if (!body || !body.id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Owner_Invites');
+  const inv = rows.find(r => String(r.ID) === String(body.id));
+  if (!inv) return json({ error: 'Invite not found' }, 404);
+  if (inv.Status === 'used' || inv.Status === 'processing') return json({ error: 'That invite was already used — nothing to revoke.' }, 409);
+  await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'revoked', Active: 'FALSE' });
+  return json({ success: true });
+}
+
+// GET /owner-onboard/info?token= (public) — only what the form needs to prefill.
+async function ownerOnboardInfo(env, url) {
+  const inv = await ooFindInvite(env, url.searchParams.get('token'));
+  const state = ooInviteState(inv, Date.now());
+  if (state !== 'pending') return json({ valid: false, message: ooInviteProblem(state) });
+  const parts = String(inv.Prefill_Name || '').trim().split(/\s+/);
+  return json({ valid: true, prefill: { first: parts[0] || '', last: parts.slice(1).join(' '), phone: inv.Prefill_Phone || '', email: inv.Prefill_Email || '' } });
+}
+
+// PINs already in use anywhere a PIN can log in (mirrors the selftest's cross-tab duplicate check).
+async function ooPinTaken(env, pin) {
+  const [owners, ownerUsers, vendors, tenants] = await fetchTabs(env, ['Owners', 'Owner_Users', 'Vendors', 'Tenants']);
+  const p = String(pin).toLowerCase();
+  return [owners, ownerUsers, vendors, tenants].some(rows => (rows || []).some(r => r.Active !== 'FALSE' && String(r.PIN || '').toLowerCase() === p));
+}
+
+// POST /owner-onboard/check-pin (public) — {token, pin} → {ok, available, reason}. Capped per token.
+async function ownerOnboardCheckPin(env, body) {
+  body = body || {};
+  const inv = await ooFindInvite(env, body.token);
+  const state = ooInviteState(inv, Date.now());
+  if (state !== 'pending') return json({ ok: false, available: false, reason: ooInviteProblem(state) }, 403);
+  const attempts = parseInt(inv.Check_Attempts, 10) || 0;
+  if (attempts >= OWNER_ONBOARD_MAX_CHECKS) return json({ ok: false, available: false, reason: 'Too many PIN checks — please pick a PIN and submit, or contact us.' }, 429);
+  await updateRow(env, 'Owner_Invites', inv.ID, { Check_Attempts: String(attempts + 1) });
+  const chk = ownerOnboardPinCheck(body.pin);
+  if (!chk.ok) return json({ ok: false, available: false, reason: chk.reason });
+  const taken = await ooPinTaken(env, chk.pin);
+  return json({ ok: true, available: !taken, reason: taken ? 'That PIN is already taken — please try a different one.' : '' });
+}
+
+// POST /owner-onboard/submit (public) — {token, owner, properties, sms_consent}. clientIP is recorded
+// with the SMS consent as evidence of opt-in.
+async function ownerOnboardSubmit(env, body, clientIP) {
+  body = body || {};
+  const inv = await ooFindInvite(env, body.token);
+  const state = ooInviteState(inv, Date.now());
+  if (state !== 'pending') return json({ error: ooInviteProblem(state) }, 403);
+  const v = ownerOnboardValidate(body);
+  if (!v.ok) return json({ error: 'Please fix the highlighted items.', errors: v.errors }, 422);
+  const c = v.clean;
+
+  // Uniqueness checks BEFORE claiming the invite, so a fixable problem never burns the link.
+  if (await ooPinTaken(env, c.owner.pin)) return json({ error: 'Please fix the highlighted items.', errors: [{ field: 'owner.pin', message: 'That PIN is already taken — please try a different one.' }] }, 422);
+  const owners = await fetchTab(env, 'Owners');
+  const phoneNorm = normalizePhone(c.owner.phone);
+  if (owners.some(o => o.Active !== 'FALSE' && normalizePhone(o.Phone) === phoneNorm)) {
+    return json({ error: 'We already have an account with that phone number. Please contact us and we\'ll get you set up — no need to fill this out again.' }, 409);
+  }
+
+  // Claim the invite (pending → processing) and confirm we won any race for it.
+  const nonce = ooToken();
+  await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'processing', Claim_Nonce: nonce });
+  const again = (await fetchTab(env, 'Owner_Invites')).find(r => String(r.ID) === String(inv.ID));
+  if (!again || again.Claim_Nonce !== nonce) return json({ error: ooInviteProblem('used') }, 409);
+
+  const warnings = [];
+  const summary = { owner_id: '', properties: [], later_units: 0 };
+  const today = new Date().toISOString().split('T')[0];
+  const nowIso = new Date().toISOString();
+  let ownerId = '';
+  try {
+    await ensureColumns(env, 'Owners', ['Billing_Name','Billing_Address','Billing_City','Billing_State','Billing_Zip','Billing_Phone','Billing_Email','SMS_Enabled','SMS_Consent','SMS_Consent_Date','SMS_Consent_IP','SMS_Consent_Version','Onboarding_Source','Onboarding_Date']);
+    await ensureColumns(env, 'Properties', ['Commercial_Subtype','SMS_Enabled','Onboarding_Source','Access_Notes']);
+    await ensureColumns(env, 'Tenants', ['SMS_Enabled','Onboarding_Source']);
+    await ensureColumns(env, 'Units', ['Notes']);
+    await ensureColumns(env, 'Keys', ['Possession_Status','Lockbox_Location','Lockbox_Code','Key_Code']);
+
+    const fullName = (c.owner.first + ' ' + c.owner.last).trim();
+    const ownerRes = await addOwnerWithQBSync(env, {
+      First_Name: c.owner.first, Last_Name: c.owner.last,
+      Company: c.owner.business_name, Phone: c.owner.phone, Email: c.owner.billing_email, PIN: c.owner.pin, Active: 'TRUE',
+      Billing_Name: c.owner.business_choice === 'business' ? c.owner.business_name : fullName,
+      Billing_Address: c.owner.billing_address.street, Billing_City: c.owner.billing_address.city,
+      Billing_State: c.owner.billing_address.state, Billing_Zip: c.owner.billing_address.zip,
+      Billing_Phone: c.owner.phone, Billing_Email: c.owner.billing_email,
+      SMS_Enabled: c.sms_consent ? 'TRUE' : 'FALSE',
+      SMS_Consent: c.sms_consent ? 'TRUE' : 'FALSE', SMS_Consent_Date: c.sms_consent ? nowIso : '',
+      SMS_Consent_IP: c.sms_consent ? ooClean(clientIP, 60) : '', SMS_Consent_Version: c.sms_consent ? ooClean(body.consent_version || 'onboard-2026-09-26', 40) : '',
+      Onboarding_Source: 'self_serve_link', Onboarding_Date: nowIso,
+    });
+    ownerId = (await ownerRes.clone().json()).id || '';
+    if (!ownerId) throw new Error('owner row was not created');
+    summary.owner_id = ownerId;
+  } catch (e) {
+    // Nothing usable was written for the owner — release the invite so the owner can retry.
+    await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'pending', Claim_Nonce: '' }).catch(() => {});
+    return json({ error: 'We couldn\'t save your information just now. Nothing was submitted — please try again in a minute.' }, 500);
+  }
+
+  for (const p of c.properties) {
+    const rec = { address: p.address, property_id: '', action: '', unit_ids: [], tenant_ids: [] };
+    summary.properties.push(rec);
+    try {
+      // 1. property: create, link an unowned match, or leave an owned match alone
+      const single = p.type === 'house' || p.type === 'rowhome';
+      const matches = await findSimilarProperties(env, p.address, p.city);
+      let propertyId = '';
+      if (matches.length) {
+        const unowned = matches.find(m => !m.owner_id);
+        if (unowned) {
+          propertyId = String(unowned.id);
+          await updateRow(env, 'Properties', propertyId, { Owner_ID: ownerId });
+          rec.action = 'linked_existing';
+          warnings.push(`${p.address}: already in the Hub (ID ${propertyId}, no owner) — linked to this owner. Check its type/unit count.`);
+        } else {
+          rec.action = 'skipped_owned_by_other';
+          warnings.push(`${p.address}: already in the Hub under another owner (property ID ${matches[0].id}) — NOT linked and its units/tenants were not added. Review before doing anything.`);
+          continue;
+        }
+      } else {
+        const pr = await addRow(env, 'Properties', {
+          Address: p.address, City: p.city, Market: ownerOnboardInferMarket(p.city), Type: p.type,
+          Commercial_Subtype: p.subtype, Unit_Count: String(single ? 1 : p.unit_count), Owner_ID: ownerId,
+          Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'self_serve_link',
+        });
+        propertyId = String((await pr.clone().json()).id || '');
+        if (!propertyId) throw new Error('property row was not created');
+        rec.action = 'created';
+      }
+      rec.property_id = propertyId;
+
+      // 2. units / tenants / access
+      const accessLines = [];
+      for (const u of p.units) {
+        let unitId = '';
+        if (!single) {
+          const notes = u.status === 'later' ? 'Owner will provide tenant/access info later (self-serve onboarding).'
+            : (u.status === 'vacant' ? ('VACANT. ' + (u.access.method === 'none' ? 'No lockbox: ' + u.access.note : (u.access.note || ''))).trim() : '');
+          const ur = await addRow(env, 'Units', { Property_ID: propertyId, Unit_Label: u.label, Tenant_ID: '', Notes: notes, Active: 'TRUE', Property_Address: p.address });
+          unitId = String((await ur.clone().json()).id || '');
+          if (unitId) rec.unit_ids.push(unitId);
+        }
+        if (u.status === 'tenant') {
+          const tr = await addRow(env, 'Tenants', {
+            First_Name: u.tenant.first, Last_Name: u.tenant.last, Phone: u.tenant.phone, Email: u.tenant.email,
+            Property_ID: propertyId, Unit_ID: unitId, Move_In_Date: '', Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'self_serve_link',
+          });
+          const tid = String((await tr.clone().json()).id || '');
+          if (tid) { rec.tenant_ids.push(tid); if (unitId) await updateRow(env, 'Units', unitId, { Tenant_ID: tid }); }
+        } else if (u.status === 'vacant') {
+          if (u.access.method === 'lockbox') {
+            await addRow(env, 'Keys', {
+              Property_ID: propertyId, Unit_ID: unitId, Unit_Label: u.label, Owner_ID: ownerId,
+              Key_Type: single ? 'Building-Lockbox' : 'Unit-Lockbox', Key_Code: u.access.code, Lockbox_Code: u.access.code,
+              Lockbox_Location: u.access.location, Notes: 'Provided by owner during self-serve onboarding — not yet verified on site.' + (u.access.note ? ' ' + u.access.note : ''),
+              Status: 'Active', Possession_Status: 'Have It', Last_Changed: today, Active: 'TRUE',
+            });
+          } else {
+            accessLines.push((u.label ? `Unit ${u.label}: ` : '') + 'No lockbox — ' + u.access.note);
+          }
+        } else {
+          summary.later_units++;
+        }
+      }
+      if (accessLines.length && rec.action === 'created') {
+        await updateRow(env, 'Properties', propertyId, { Access_Notes: accessLines.join(' | ') });
+      } else if (accessLines.length) {
+        warnings.push(`${p.address}: vacant-unit access note(s) not written because the property already existed — "${accessLines.join(' | ')}"`);
+      }
+    } catch (e) {
+      rec.action = (rec.action || 'failed') + '_with_error';
+      warnings.push(`${p.address}: something went wrong partway (${String(e && e.message || e).slice(0, 120)}). Check this property, its units and tenants.`);
+    }
+  }
+  if (summary.later_units) warnings.push(`${summary.later_units} unit(s) marked "I will provide this later" — follow up for tenant/access info.`);
+  if (!c.sms_consent) warnings.push('Owner did NOT check the SMS permission box — owner SMS is switched off for them.');
+
+  const needsReview = warnings.length > 0;
+  await updateRow(env, 'Owner_Invites', inv.ID, {
+    Status: 'used', Used_Date: nowIso, Owner_ID: ownerId, Needs_Review: needsReview ? 'TRUE' : 'FALSE',
+    Result_Summary: JSON.stringify({ ...summary, warnings }).slice(0, 45000),
+  }).catch(() => {});
+
+  try {
+    const cfg = await fetchConfig(env);
+    if (cfg.admin_phone) {
+      await sendSMS(env, cfg.admin_phone, `🆕 ${(c.owner.business_name || (c.owner.first + ' ' + c.owner.last)).trim()} finished owner onboarding: ${c.properties.length} propert${c.properties.length === 1 ? 'y' : 'ies'}.${needsReview ? ' ⚠ ' + warnings.length + ' item(s) need your review (Hub → Owners → Onboarding).' : ''}`);
+    }
+  } catch (e) { /* notification is best-effort */ }
+
+  return json({ success: true, first_name: c.owner.first, properties: c.properties.length });
+}
+
 // POST /vendor-bill/extract — vendor.html PIN-portal "Submit Bill" modal. Vendor-role-gated
 // (see ROLE_SCOPES) exactly like the other vendor-portal endpoints — no new auth scheme. Same
 // {image_b64, mime} input shape as /receipt-intake (no separate Drive upload-session round trip
@@ -14907,6 +15340,14 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  if (path === '/owner-onboard/invite/create') {
+    // Creates only an invite row (no owner/property data) — restricted to TEST- prefilled invites.
+    return String((body && body.name) || '').startsWith('TEST-');
+  }
+  if (path === '/owner-onboard/invite/revoke') {
+    const _inv = (await fetchTab(env, 'Owner_Invites')).find(r => String(r.ID) === String(body && body.id));
+    return !!_inv && String(_inv.Prefill_Name || '').startsWith('TEST-');
+  }
   if (path === '/receipt/attach-only') {
     // Same reasoning as /status below: the write only ever lands on Receipts (never Vendor_Bills
     // or Invoice_Review — see receiptAttachOnly's own comment), tied to an existing Work_Orders
@@ -15163,6 +15604,9 @@ async function propertyUpdate(env, body) {
   const fields = (body && body.fields) || {};
   if (PROPERTY_SOURCE_FIELDS.some(f => fields[f] !== undefined)) {
     try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {}
+  }
+  if (fields.Commercial_Subtype !== undefined) {
+    try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {}
   }
   return await updateRow(env, 'Properties', body.id, fields);
 }
