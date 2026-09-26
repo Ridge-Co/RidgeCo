@@ -1409,6 +1409,34 @@ function populateTradeControls() {
 }
 
 function safeArray(v) { return Array.isArray(v) ? v : []; }
+
+// ── Owner labels for every owner dropdown (Sep 26 2026) ──────────────────────────────
+// Every picker used to build its own label from First_Name + Last_Name, which is blank for a
+// company-only owner (e.g. "Ridge Co") and unhelpful when the business is the recognizable name.
+// One rule now: business name first; the person's name when there is no business; and never blank
+// (falls back to the Bill-To name, then "Owner #ID"). withPerson appends the contact's name so two
+// owners under one business (e.g. two Goldszmidt Properties contacts) stay distinguishable.
+function ownerPersonName(o) { return (String((o && o.First_Name) || '') + ' ' + String((o && o.Last_Name) || '')).replace(/\s+/g, ' ').trim(); }
+function ownerLabel(o, withPerson) {
+  o = o || {};
+  var biz = String(o.Company || '').trim(), person = ownerPersonName(o);
+  var base = biz || person || String(o.Billing_Name || '').trim() || ('Owner #' + (o.ID || '?'));
+  if (withPerson && biz && person && biz.toLowerCase() !== person.toLowerCase()) base += ' — ' + person;
+  return base;
+}
+// <option> list for an owner picker: active owners only (plus the currently selected one even if
+// inactive), sorted by label, contact name added only where two owners would otherwise look identical.
+function ownerOptionsHtml(selectedId, firstOptionHtml) {
+  var sel = String(selectedId == null ? '' : selectedId);
+  var list = safeArray(state.owners).filter(function(o){ return o.Active !== 'FALSE' || String(o.ID) === sel; });
+  var counts = {};
+  list.forEach(function(o){ var k = ownerLabel(o).toLowerCase(); counts[k] = (counts[k] || 0) + 1; });
+  var rows = list.map(function(o){ return { id: o.ID, label: ownerLabel(o, counts[ownerLabel(o).toLowerCase()] > 1) }; })
+    .sort(function(a, b){ return a.label.toLowerCase().localeCompare(b.label.toLowerCase()); });
+  return (firstOptionHtml || '') + rows.map(function(r){
+    return '<option value="' + esc(String(r.id)) + '"' + (String(r.id) === sel ? ' selected' : '') + '>' + esc(r.label) + '</option>';
+  }).join('');
+}
 var assignWOId = null;
 var invoiceWOId = null;
 
