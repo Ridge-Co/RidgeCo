@@ -194,7 +194,9 @@ Regina's Venmo notes often include "less $10 loan repayment" (and sometimes "plu
 
 1. ~~Loan repayments on Regina's Venmo notes~~ — RESOLVED Sep 26: not in QuickBooks, tracked separately (Section 9b).
 2. ~~Backfill Regina's past Venmo payments~~ — RESOLVED Sep 26: yes, missing ones into QB as paid (Section 10).
-3. **Dismiss is kept for non-financial mail only** — still unconfirmed by Brett. Default stands unless he says otherwise.
+3. ~~Dismiss for non-financial mail~~ — RESOLVED Sep 26: non-financial mail is not on the card at all (Section 5, Step 0). The only remaining "get it off the card" action is Skip for duplicates / not-a-real-charge, which was my addition.
+
+**No open questions remain for Brett.** Design is ready for a build session once PR #44 and PR #60 are merged.
 
 ---
 
