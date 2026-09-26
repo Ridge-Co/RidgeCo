@@ -2550,6 +2550,10 @@ async function receiptReconConfirm(env, body) {
     else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
   }
   if (addJson && addJson.success) {
+    // Confirmed_Receipt_ID (Sep 23 2026 build): the actual Receipts row this confirmation wrote,
+    // so a later Reassign / Mark-as-refund on this queue row can find and void the exact right
+    // row instead of guessing from amount/store/date. Blank on a duplicate skip — nothing new
+    // was written in that case.
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: addJson.duplicate ? 'skipped' : 'confirmed',
       Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
