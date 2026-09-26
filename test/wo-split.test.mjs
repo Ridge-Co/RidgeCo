@@ -77,6 +77,7 @@ const findLockedVendorBillSrc  = grab(wsrc, 'async function findLockedVendorBill
 const woSplitSrc               = grab(wsrc, 'async function woSplit(');
 const isTenantCurrentSrc       = grab(wsrc, 'function isTenantCurrent(');
 const currentTenantSrc         = grab(wsrc, 'function currentTenantForDispatch(');
+const tenantsForDispatchSrc    = grab(wsrc, 'function tenantsForDispatch(');
 const isBackgroundWOSrc        = grab(wsrc, 'function isBackgroundWO(');
 const isTenantNotifiableSrc    = grab(wsrc, 'function isTenantNotifiable(');
 const smsGateDecisionSrc       = grab(wsrc, 'function smsGateDecision(');
@@ -204,7 +205,7 @@ function build(db, fetchOpts) {
     reasonsSrc, columnsSrc, woVoidSrc, woUnvoidSrc,
     findRecentDupeSrc, claimCacheSrc, addRowSrc, updateRowSrc, createWorkOrderSrc,
     splitOrigFieldsSrc, splitMaxNewSrc, timeEntryLockSrc, vendorBillLockSrc, findLockedVendorBillSrc, woSplitSrc,
-    isTenantCurrentSrc, currentTenantSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
+    isTenantCurrentSrc, currentTenantSrc, tenantsForDispatchSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc,
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
     etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,

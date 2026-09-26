@@ -169,3 +169,8 @@ Checked commits: 123 (excluding merges/doc-audit itself)
 - `b3c9353` (2026-09-24 15:12) Add Alex loan deduction formula to CAP-036 (final) — best single-entry match: 33%
 - `96654d0` (2026-09-24 15:07) Resolve Alex loan starting balance as an approximate placeholder — best single-entry match: 43%
 - `4a2b083` (2026-09-24 15:01) Update CAP-036 with Brett's answers: Alex loan source (unconfirmed amount), Pending-Info scope, notification-matrix priority — best single-entry match: 33%
+
+## Run: 2026-09-26 16:50 UTC
+Since: 2026-09-25 (source: this script's own last recorded run)
+Checked commits: 1 (excluding merges/doc-audit itself)
+No gaps flagged.

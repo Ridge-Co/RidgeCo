@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-26.2-owner-set-pin';
+const BUILD_VERSION = '2026-09-26.3-receipt-recon-reassign-refund-search';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -425,6 +425,7 @@ export default {
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
+        if (path === '/vendor-loan')            return await vendorLoanGet(env, url);
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
         if (path === '/vendor-access-requests') return await listVendorAccessRequests(env, url);
         if (path === '/estimates')              return await listEstimates(env, url);
@@ -670,6 +671,7 @@ export default {
         if (path === '/create-upload-session')    return await createUploadSession(env, body);
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
+        if (path === '/vendor-loan/add')          return await vendorLoanAdd(env, body);
         if (path === '/vendor-bill/add-standalone') return await addVendorBillStandalone(env, body);
         if (path === '/vendor/request-property-access') return await vendorRequestPropertyAccess(env, body);
         if (path === '/vendor-access-requests/approve') return await vendorAccessRequestApprove(env, body);
@@ -785,6 +787,7 @@ export default {
         if (path === '/trash/unmark-skipped')     return await trashUnmarkSkipped(env, body);
         if (path === '/delivery/add')             return await deliveryAdd(env, body);
         if (path === '/delivery/update')          return await updateRow(env, 'Deliveries', body.id, body.fields);
+        if (path === '/delivery/relay')           return await deliveryRelay(env, body);
         if (path === '/proposal/sign')            return await proposalSign(env, body);
         if (path === '/proposal/book')            return await proposalBook(env, body);
         if (path === '/proposal/unbook')          return await proposalUnbook(env, body);
@@ -1634,6 +1637,39 @@ function currentTenantForDispatch(tenants, unit, wo) {
     t = (tenants || []).find(x => x.Property_ID === wo.Property_ID && !x.Unit_ID && x.Active !== 'FALSE');
   }
   return isTenantCurrent(t) ? t : null;
+}
+
+// CAP-036 #21 fix (Sep 24 2026) — real case: 115 W 29th St Apt 2 (Julie Feldman + Alanna
+// McLaughlin) and Apt 3 (Lance Serafica + Emily Marquez) each have TWO active tenants sharing
+// one unit, and only one of them was ever getting work-order SMS (reassignment/completion/
+// scheduled/etc). Root cause was NOT a bad tenant/unit link — both tenants' own Tenants rows
+// correctly carry the same Unit_ID/Property_ID. The bug was that every tenant-notification call
+// site resolved "the" tenant via currentTenantForDispatch, which follows Units.Tenant_ID — a
+// single FK column that can only ever name one occupant — instead of asking the Tenants table
+// for every active tenant actually linked to that unit. Confirmed systemic: at least 8 other
+// live multi-tenant units show the same one-tenant-only pointer (153 W Lanvale Apt 1, 1214 N
+// Calvert Apt 2 & Apt 3, 3014 N Calvert Apt B, 928 N Calvert Apt 2F, 151 W Lanvale Apt 2, plus
+// the Apt 3/20 E Eager test row) — none of those needed a data fix either.
+//
+// tenantsForDispatch returns EVERY currently-active tenant tied to this WO's unit (or, for a
+// whole-property WO with no Unit_ID, every active no-Unit tenant at that property — same
+// fallback currentTenantForDispatch already used). This is deliberately still scoped to ONE
+// unit/property's own tenants, never a building-wide broadcast — that's a separate, already-
+// decided default-off case. Callers that need to actually SEND something still run each
+// returned tenant through isTenantNotifiable (phone present, not background-WO) individually,
+// exactly as they did for the single tenant before this fix.
+function tenantsForDispatch(tenants, unit, wo) {
+  const list = tenants || [];
+  let matches = [];
+  if (wo && wo.Unit_ID) {
+    matches = list.filter(t => t.Unit_ID === wo.Unit_ID && t.Active !== 'FALSE');
+  } else if (wo && wo.Property_ID && !wo.Unit_ID) {
+    matches = list.filter(t => t.Property_ID === wo.Property_ID && !t.Unit_ID && t.Active !== 'FALSE');
+  } else if (wo && wo.Tenant_ID) {
+    const t = list.find(x => String(x.ID) === String(wo.Tenant_ID));
+    if (t) matches = [t];
+  }
+  return matches.filter(isTenantCurrent);
 }
 
 // A WO opened before the tenant's Move_In_Date is "background" to them — work tied to
@@ -2557,6 +2593,10 @@ async function receiptReconConfirm(env, body) {
     else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
   }
   if (addJson && addJson.success) {
+    // Confirmed_Receipt_ID (Sep 23 2026 build): the actual Receipts row this confirmation wrote,
+    // so a later Reassign / Mark-as-refund on this queue row can find and void the exact right
+    // row instead of guessing from amount/store/date. Blank on a duplicate skip — nothing new
+    // was written in that case.
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: addJson.duplicate ? 'skipped' : 'confirmed',
       Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
@@ -5421,9 +5461,10 @@ async function createWorkOrder(env, body) {
     // existing Tenant_Notify_Created toggle already covers. Delayed 1h so a fast assignment can
     // supersede/bump it (see the tenant_job_received check in processPendingNotifications)
     // instead of the tenant getting "we got it" immediately followed by "you're assigned".
-    const tenant = currentTenantForDispatch(tenants, unit, woLike);
+    // CAP-036 #21: every active tenant in the unit, not just one.
     const tenantNotifyCreated = body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE';
-    if (isTenantNotifiable(tenant, woLike) && tenantNotifyCreated) {
+    if (tenantNotifyCreated) for (const tenant of tenantsForDispatch(tenants, unit, woLike)) {
+      if (!isTenantNotifiable(tenant, woLike)) continue;
       const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
       const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
       const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
@@ -5848,8 +5889,9 @@ async function woCombine(env, body) {
     const unit = units.find(u => u.ID === survivorFresh.Unit_ID);
     const property = properties.find(p => p.ID === survivorFresh.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = currentTenantForDispatch(tenants, unit, survivorFresh);
-    if (isTenantNotifiable(tenant, survivorFresh) && survivorFresh.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (survivorFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, survivorFresh)) {
+      if (!isTenantNotifiable(tenant, survivorFresh)) continue;
       const idList = combinedIds.join(', ');
       const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
       await smsGatedSend(env, { wo_id: survivorId, message_type: 'tenant_wo_combined', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
@@ -6137,8 +6179,9 @@ async function woSplit(env, body) {
     const unit = units.find(u => u.ID === originalFresh.Unit_ID);
     const property = properties.find(p => p.ID === originalFresh.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = currentTenantForDispatch(tenants, unit, originalFresh);
-    if (isTenantNotifiable(tenant, originalFresh) && originalFresh.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (originalFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, originalFresh)) {
+      if (!isTenantNotifiable(tenant, originalFresh)) continue;
       const idList = createdWoIds.join(', ');
       const msg = `Hi ${tenant.First_Name}, work order ${originalId} was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
       await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
@@ -6186,7 +6229,9 @@ async function assignVendor(env, body) {
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner    = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const unit     = units.find(u => u.ID === wo.Unit_ID);
-  const tenant   = currentTenantForDispatch(tenants, unit, wo);
+  // CAP-036 #21: notify every active tenant linked to this unit, not just one — see
+  // tenantsForDispatch's comment for the real Lance/Emily (115 W 29th St) case this fixes.
+  const woTenants = tenantsForDispatch(tenants, unit, wo);
   const room     = (wo.Room||'').trim();
   const address  = property ? `${property.Address}${unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''}${room ? ' ('+room+')' : ''}` : 'the property';
   // Access info (lockbox codes, master key status, etc.) is deliberately NOT built or sent
@@ -6219,16 +6264,19 @@ async function assignVendor(env, body) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
     vendorSMSSent = r.sent;
   }
-  if (notify && tenant?.Phone && isTenantNotifiable(tenant, wo)) {
+  if (notify) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface),
     // and a short job label (woJobLabel) so two same-trade/same-address jobs never read
     // identically in a text — "your General job" alone was indistinguishable from any other
-    // General job at the same address.
-    const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
-    const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-    tenantSMSSent = r.sent;
+    // General job at the same address. CAP-036 #21: loops every tenant in the unit (was one).
+    for (const tenant of woTenants) {
+      if (!tenant?.Phone || !isTenantNotifiable(tenant, wo)) continue;
+      const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
+      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
+      const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+      if (r.sent) tenantSMSSent = true;
+    }
   }
   await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
@@ -6282,8 +6330,10 @@ async function updateStatus(env, body) {
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
   const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
   if (body.status === 'Complete') {
-    const tenant = currentTenantForDispatch(tenants, unit, wo);
-    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just the one Units.Tenant_ID happens
+    // to name — see tenantsForDispatch's comment for the real Lance/Emily case this fixes.
+    if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
+      if (!isTenantNotifiable(tenant, wo)) continue;
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_completed. woJobLabel keeps two same-trade/
       // same-address jobs distinguishable in the text (see tenant_job_assigned's comment).
       // Sep 16 2026 (Brett): dropped the "reply or call us" line — inbound SMS from a tenant
@@ -6300,8 +6350,9 @@ async function updateStatus(env, body) {
   // This is the automation the acceptance gate exists to enable: the status moving to
   // Accepted is the trigger, so a vendor who just starts the job no longer silently skips it.
   if (body.status === 'Accepted') {
-    const tenant = currentTenantForDispatch(tenants, unit, wo);
-    if (isTenantNotifiable(tenant, wo) && wo.Tenant_Notify_Updates !== 'FALSE') {
+    // CAP-036 #21: every active tenant in the unit, not just one.
+    if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
+      if (!isTenantNotifiable(tenant, wo)) continue;
       const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${wo.Trade} request at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
@@ -7028,6 +7079,166 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
     // Per-WO communication audit (Sep 20 2026) — same visibility as the SMS side (smsGatedSend).
     try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_invoice_confirmation', messageBody: subject + '\n\n' + html.filter(Boolean).join('\n'), outcome: emailOutcome }); } catch (e) {}
   }
+}
+
+// ── Vendor Loan/Advance Ledger (CAP-036 #13, Sep 24 2026, Brett-confirmed) ──────────────────
+// A GENERAL, reusable running-balance ledger on the Vendor record — any vendor, not
+// hardcoded to Gina or Alex. One tab covers both use cases, distinguished by Entry_Type:
+//   'manual'         — Gina (Venmo, bypasses the invoice-payment system on purpose): Brett
+//                       adds an entry with an amount + direction + date; balance moves either
+//                       way (a loan/advance increases it, a repayment decreases it).
+//   'auto-deduction' — Alex (and any other vendor with a nonzero balance): automatically
+//                       deducted from the LABOR portion of each invoice at bill-payment time
+//                       (see applyVendorLoanDeduction, called from qbSendInvoice).
+//   'seed'           — a one-time starting-balance entry (e.g. Alex's $210 placeholder).
+// Amount is stored SIGNED (+ increases balance / a loan given, − decreases it / a repayment)
+// so the running balance is always just a sum — Balance_After is a snapshot for fast display,
+// recomputed from the full history so a stray edit can never leave it silently wrong.
+// Self-provisions on first write, same pattern as ensureTrashTabs/ensureDeliveryTab/ensureInspTabs.
+const LOAN_LEDGER_TAB = 'Vendor_Loan_Ledger';
+const LOAN_LEDGER_HEADERS = ['ID','Vendor_ID','Vendor_Name','Entry_Type','Direction','Amount','Balance_After','Labor_Amount','Bill_ID','WO_ID','Date','Notes','Entered_By','Created_Date','Active'];
+
+async function ensureLoanLedgerTab(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  if (!titles.includes(LOAN_LEDGER_TAB)) {
+    await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: LOAN_LEDGER_TAB } } }] });
+  }
+  await ensureColumns(env, LOAN_LEDGER_TAB, LOAN_LEDGER_HEADERS);
+}
+
+// Sum of every active entry's signed Amount for one vendor = the current balance.
+// Balance > 0 means the vendor owes Ridge Co (a loan/advance outstanding); 0 or less
+// means paid off (a negative balance would mean Brett owes THEM, which the deduction
+// logic below can never create — it stops exactly at 0, see computeLoanDeduction).
+async function getVendorLoanBalance(env, vendorId) {
+  let rows = [];
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { return 0; } // tab doesn't exist yet → no loans
+  return rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
+    .reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
+}
+
+// Appends one ledger entry and returns the new running balance. `direction` is 'loan' (balance
+// goes up) or 'repayment' (balance goes down) — the caller passes a positive `amount` either
+// way; the sign is applied here so a mistaken negative amount can never flip the meaning.
+async function addVendorLoanEntry(env, opts) {
+  await ensureLoanLedgerTab(env);
+  const direction = opts.direction === 'loan' ? 'loan' : 'repayment';
+  const signedAmount = direction === 'loan' ? Math.abs(Number(opts.amount) || 0) : -Math.abs(Number(opts.amount) || 0);
+  const priorBalance = await getVendorLoanBalance(env, opts.vendorId);
+  const balanceAfter = +(priorBalance + signedAmount).toFixed(2);
+  const row = {
+    Vendor_ID: String(opts.vendorId),
+    Vendor_Name: opts.vendorName || '',
+    Entry_Type: opts.entryType || 'manual',   // manual | auto-deduction | seed
+    Direction: direction,
+    Amount: signedAmount.toFixed(2),
+    Balance_After: balanceAfter.toFixed(2),
+    Labor_Amount: (opts.laborAmount != null && opts.laborAmount !== '') ? Number(opts.laborAmount).toFixed(2) : '',
+    Bill_ID: opts.billId || '',
+    WO_ID: opts.woId || '',
+    Date: opts.date || new Date().toISOString().split('T')[0],
+    Notes: opts.notes || '',
+    Entered_By: opts.enteredBy || 'Brett',
+  };
+  await addRow(env, LOAN_LEDGER_TAB, row);
+  return balanceAfter;
+}
+
+// GET /vendor-loan?vendor_id=X — running balance + full entry history for one vendor
+// (admin UI: Vendor edit view + the manual-entry ledger modal).
+async function vendorLoanGet(env, url) {
+  const vendorId = (url.searchParams.get('vendor_id') || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  let rows = [];
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { rows = []; } // no tab yet = no history
+  const entries = rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
+    .sort((a, b) => (parseInt(a.ID) || 0) - (parseInt(b.ID) || 0));
+  const balance = entries.reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
+  return json({ vendor_id: vendorId, balance: +balance.toFixed(2), entries });
+}
+
+// POST /vendor-loan/add { vendor_id, vendor_name?, amount, direction: 'loan'|'repayment',
+// date?, notes?, entered_by? } — Gina's manual ledger (and anyone else's manual correction).
+// Always Entry_Type 'manual'; the automatic path (applyVendorLoanDeduction) writes its own
+// 'auto-deduction' rows directly and never goes through this endpoint.
+async function vendorLoanAdd(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const amount = Number(body.amount);
+  const direction = body.direction === 'loan' ? 'loan' : (body.direction === 'repayment' ? 'repayment' : null);
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!(amount > 0)) return json({ error: 'amount must be a positive number' }, 400);
+  if (!direction) return json({ error: "direction must be 'loan' or 'repayment'" }, 400);
+  const balance = await addVendorLoanEntry(env, {
+    vendorId, vendorName: body.vendor_name || '', entryType: 'manual', direction,
+    amount, date: body.date || '', notes: body.notes || '', enteredBy: body.entered_by || 'Brett',
+  });
+  return json({ success: true, balance });
+}
+
+// PURE — the Alex/vendor-loan automatic-deduction formula (CAP-036 #13, Sep 24 2026,
+// Brett-confirmed spec; edge cases pinned in test/vendor-loan-deduction.test.mjs).
+//   laborAmount    — the LABOR-ONLY portion of the invoice being paid. Never materials or
+//                    reimbursement — those pass through to the vendor untouched regardless
+//                    of loan balance (Brett's stated rationale: materials spend isn't within
+//                    the vendor's control, so it must not speed up repayment).
+//   currentBalance — the vendor's loan balance BEFORE this invoice's deduction.
+// Returns the dollar amount to deduct. $0 whenever there's no balance to repay or labor is
+// under $100. Otherwise: 2.5% of labor at exactly $100, scaling linearly up to 5% at $500+
+// labor, capped at $25/invoice, then rounded to the nearest $2.50 — DOWN when labor is under
+// $350, UP at $351+ (exactly $350 rounds down, same side as "under"). The one exception: a
+// deduction that would clear the balance is never rounded and never exceeds what's actually
+// owed — it pays the exact remaining balance instead, whether that shortfall shows up before
+// or only after rounding.
+function computeLoanDeduction(laborAmount, currentBalance) {
+  const labor = Number(laborAmount) || 0;
+  const balance = Number(currentBalance) || 0;
+  if (balance <= 0 || labor < 100) return 0;
+
+  const pct = labor >= 500 ? 0.05 : 0.025 + (labor - 100) * (0.05 - 0.025) / (500 - 100);
+  let deduction = Math.min(labor * pct, 25);
+
+  // Payoff check #1: the raw (capped, unrounded) deduction already clears the balance.
+  if (deduction >= balance) return +balance.toFixed(2);
+
+  const roundUp = labor >= 351;
+  deduction = roundUp ? Math.ceil(deduction / 2.5) * 2.5 : Math.floor(deduction / 2.5) * 2.5;
+
+  // Payoff check #2: rounding (specifically rounding UP) can push it past the balance too.
+  if (deduction >= balance) return +balance.toFixed(2);
+
+  return +deduction.toFixed(2);
+}
+
+// STEP 1 (read-only) — figures out whether a loan deduction applies to this bill and how
+// much, WITHOUT writing anything. Split from the ledger write (recordVendorLoanDeduction,
+// below) on purpose: qbSendInvoice's bill POST can fail (a bad vendor ref, an Intuit hiccup)
+// and get retried on the next send attempt, and this row's QB_Bill_ID only gets set on
+// success — so writing the ledger entry here, before we know the bill actually posted, would
+// double-deduct on every retry of a failed send. Compute the adjustment early (to size the
+// bill payload correctly); record it only after billId comes back real.
+async function computeVendorLoanAdjustment(env, { vendorId, vendorCost, billRow }) {
+  const balance = await getVendorLoanBalance(env, vendorId);
+  if (!(balance > 0)) return { deduction: 0, laborAmount: 0, balance: 0 };
+
+  const isFlat = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'flat';
+  const laborAmount = isFlat ? (parseFloat(billRow && billRow.Flat_Rate) || 0) : (parseFloat(billRow && billRow.Labor_Total) || 0);
+  const deduction = computeLoanDeduction(laborAmount, balance);
+  // Never deduct more than the vendor is actually being paid on this bill — the loan ledger
+  // is repaid out of what they're owed, not created as a negative payable.
+  const safeDeduction = Math.min(deduction, Math.max(0, vendorCost));
+  return { deduction: safeDeduction > 0 ? safeDeduction : 0, laborAmount, balance };
+}
+
+// STEP 2 (writes) — call ONLY after the QuickBooks Bill has actually been created (a real
+// billId came back). General on purpose — ANY vendor with a nonzero balance gets this, not
+// just Alex.
+async function recordVendorLoanDeduction(env, { vendorId, vendorName, deduction, laborAmount, billId, woId }) {
+  return await addVendorLoanEntry(env, {
+    vendorId, vendorName, entryType: 'auto-deduction', direction: 'repayment',
+    amount: deduction, laborAmount, billId, woId,
+    notes: `Auto-deducted from invoice payment (labor $${Number(laborAmount).toFixed(2)})`,
+  });
 }
 
 async function addVendorBill(env, body) {
@@ -9562,8 +9773,9 @@ async function scheduleWO(env, body) {
   const unit=units.find(u=>u.ID===wo.Unit_ID), property=properties.find(p=>p.ID===wo.Property_ID);
   const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
   if(body.notify_tenant&&wo.Tenant_Notify_Updates!=='FALSE'){
-    const tenant=currentTenantForDispatch(tenants, unit, wo);
+    // CAP-036 #21: every active tenant in the unit, not just the one Units.Tenant_ID names.
     const address=property?property.Address+(unit&&unit.Unit_Label?' '+formatUnitLabel(unit.Unit_Label):''):'your address';
+    for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       // woJobLabel keeps two same-trade/same-address jobs distinguishable in the text.
@@ -9578,12 +9790,13 @@ async function scheduleWO(env, body) {
       // true when it actually goes out, not what was true when it was scheduled.
       if(schedDate===today||isWithinHour){
         const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_scheduled', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-        tenantSMSSent = r.sent;
+        if (r.sent) tenantSMSSent = true;
       } else {
         let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}
         await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter,{ message_type: 'tenant_job_scheduled', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
         notifyQueued=true;
       }
+    }
     }
   }
   // Owner Scheduled (Sep 15 2026 — real gap found live-testing rule 168): the owner-scheduled
@@ -10508,21 +10721,25 @@ async function tenantManualUpdate(env, body) {
   const [workorders, units, tenants, properties, owners] = await fetchTabs(env, ['Work_Orders','Units','Tenants','Properties','Owners']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
   const unit = units.find(u => u.ID === wo.Unit_ID);
-  // Reuse the same canonical lookup assignVendor/updateStatus/scheduleWO already use — this
-  // used to be a simpler inline lookup here that missed whole-property (no-Unit) tenants;
-  // see the fix + comment on currentTenantForDispatch itself.
-  const tenant = currentTenantForDispatch(tenants, unit, wo);
-  if (!tenant || !tenant.Phone) return json({ error: 'No tenant with a phone number on this work order' }, 400);
-  // currentTenantForDispatch already confirmed this tenant is current (active, not moved out);
-  // isBackgroundWO catches the other case it doesn't cover — a WO opened before this tenant's
-  // own move-in (background work tied to whoever lived here before them).
-  if (isBackgroundWO(tenant, wo)) return json({ error: 'This WO predates the tenant\'s move-in — not notifiable' }, 400);
+  // CAP-036 #21: tenantsForDispatch returns EVERY active tenant linked to this unit (was
+  // currentTenantForDispatch, which only ever named one via Units.Tenant_ID's single pointer).
+  const woTenants = tenantsForDispatch(tenants, unit, wo).filter(t => t.Phone && !isBackgroundWO(t, wo));
+  if (!woTenants.length) return json({ error: 'No tenant with a phone number on this work order' }, 400);
   const property = properties.find(p => p.ID === wo.Property_ID);
   const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-  const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
-  const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
-  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), r.sent ? 'Sent' : (r.send_ok ? 'Send failed' : 'Queued — gate: ' + r.gate_snapshot)); } catch(_){}
-  return json({ success: true, sent: r.sent, send_ok: r.send_ok, queued_id: r.queued_id, gate_snapshot: r.gate_snapshot });
+  // Same text goes to every tenant in the unit (each gets their own First_Name greeting) —
+  // one admin-typed update, everyone actually living there sees it, same as any other WO SMS.
+  let anySent = false, anySendOk = false, lastGate = '', firstQueuedId = '';
+  for (const tenant of woTenants) {
+    const msg = `Hi ${tenant.First_Name}, ${message} Ref: ${body.wo_id}.`;
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_manual', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+    if (r.sent) anySent = true;
+    if (r.send_ok) anySendOk = true;
+    if (r.gate_snapshot) lastGate = r.gate_snapshot;
+    if (r.queued_id && !firstQueuedId) firstQueuedId = r.queued_id;
+  }
+  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), anySent ? 'Sent' : (anySendOk ? 'Send failed' : 'Queued — gate: ' + lastGate)); } catch(_){}
+  return json({ success: true, sent: anySent, send_ok: anySendOk, queued_id: firstQueuedId, gate_snapshot: lastGate, tenant_count: woTenants.length });
 }
 
 // -- Custom one-off message to a single tenant/owner/vendor (Sep 21 2026) --------------------
@@ -19820,7 +20037,7 @@ async function qbSendInvoice(env, body) {
     }
 
     const custTotal  = Number(ir.Customer_Total) || 0;
-    const vendorCost = Number(ir.Vendor_Cost) || 0;
+    let vendorCost = Number(ir.Vendor_Cost) || 0;
     if (custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
     if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
 
@@ -19924,6 +20141,21 @@ async function qbSendInvoice(env, body) {
         warnings.push('No job-photo folder on this work order, so the invoice will carry no photo link. Upload a photo to the job to create one.');
       }
 
+      // Loan-ledger preview — READ-ONLY (no ledger write here; that only happens on confirm,
+      // below). Shown so Brett sees the deduction before it happens, not after.
+      let previewLoanDeduction = 0, previewLoanBalance = 0;
+      if (!previewInHouse && vendorCost > 0 && vendor.ID) {
+        try {
+          previewLoanBalance = await getVendorLoanBalance(env, vendor.ID);
+          if (previewLoanBalance > 0) {
+            const isFlatPrev = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'flat';
+            const laborPrev = isFlatPrev ? (parseFloat(billRow && billRow.Flat_Rate) || 0) : (parseFloat(billRow && billRow.Labor_Total) || 0);
+            previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), vendorCost);
+            if (previewLoanDeduction > 0) warnings.push(`Loan repayment: $${previewLoanDeduction.toFixed(2)} will be deducted from ${vendDisplay}'s payment (current balance $${previewLoanBalance.toFixed(2)}).`);
+          }
+        } catch (e) { /* best-effort — confirm still applies/records the real deduction */ }
+      }
+
       return json({ preview: {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
@@ -19939,11 +20171,12 @@ async function qbSendInvoice(env, body) {
         vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '',
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
-        bill:     { total: +vendorCost.toFixed(2), account: trade.expense,
+        bill:     { total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
                     terms: vendorTermLabel(vendor),
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
-                    skipped: vendorCost <= 0 || previewInHouse, in_house: previewInHouse, attach_receipts: reimburseWithUrl },
+                    skipped: vendorCost <= 0 || previewInHouse, in_house: previewInHouse, attach_receipts: reimburseWithUrl,
+                    loan_deduction: +previewLoanDeduction.toFixed(2), loan_balance: +previewLoanBalance.toFixed(2) },
         photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
         warnings,
@@ -20083,6 +20316,20 @@ async function qbSendInvoice(env, body) {
       try { vendorId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token); }
       catch (e) { errors.push('Vendor: ' + e.message); }
       if (vendorId) {
+        // Loan-ledger deduction (CAP-036 #13) — sized here (read-only) so the bill posts at
+        // the already-reduced amount; the ledger itself is only WRITTEN below once billId
+        // comes back real (see computeVendorLoanAdjustment's comment for why: a failed bill
+        // POST that gets retried must not deduct twice). General on purpose — any vendor with
+        // a nonzero balance gets this, not just Alex.
+        let loanAdj = { deduction: 0, laborAmount: 0, balance: 0 };
+        try {
+          loanAdj = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost, billRow });
+          if (loanAdj.deduction > 0) {
+            vendorCost = +(vendorCost - loanAdj.deduction).toFixed(2);
+            billPayload.Line[0].Amount = +vendorCost.toFixed(2);
+            billPayload.Line[0].Description = (billPayload.Line[0].Description + ` (Loan repayment: $${loanAdj.deduction.toFixed(2)})`).slice(0, 4000);
+          }
+        } catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
         billPayload.VendorRef = { value: vendorId };
         // Terms, so the bill reads "Due on receipt" rather than showing a blank term
         // alongside a same-day due date.
@@ -20103,8 +20350,29 @@ async function qbSendInvoice(env, body) {
           r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
           billId = (r && r.Bill && r.Bill.Id) || '';
         }
-        if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
-        else billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+        if (!billId) {
+          errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+          // Bill never posted — undo the in-memory reduction so a later retry (once the real
+          // problem is fixed) sizes the bill against the UN-deducted amount and this same
+          // loan adjustment gets computed (and recorded) fresh next time, not skipped.
+          if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
+        } else {
+          billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (loanAdj.deduction > 0) {
+            try {
+              const newBalance = await recordVendorLoanDeduction(env, {
+                vendorId: vendor.ID, vendorName: vendDisplay, deduction: loanAdj.deduction,
+                laborAmount: loanAdj.laborAmount, billId: ir.Bill_ID, woId: ir.WO_ID,
+              });
+              warnings.push(`Loan repayment: $${loanAdj.deduction.toFixed(2)} deducted from ${vendDisplay}'s payment (balance now $${newBalance.toFixed(2)}).`);
+            } catch (e) {
+              // The bill already posted at the reduced amount — the money-correct side is
+              // done. Only the ledger ROW failed to write; say so plainly rather than losing
+              // track of a deduction that already happened.
+              warnings.push(`⚠ Bill posted with a $${loanAdj.deduction.toFixed(2)} loan deduction already applied, but the ledger entry failed to save (${e.message || 'error'}) — add it manually on the vendor's loan ledger.`);
+            }
+          }
+        }
       }
     }
 
@@ -20539,6 +20807,45 @@ async function deliveryAdd(env, body) {
     Created_Date: new Date().toISOString(), Active: 'TRUE',
   });
   try { const aj = await add.json(); return json({ success: true, id: aj.id, wo_id: createdWO }); } catch (_) { return add; }
+}
+
+// POST /delivery/relay { id, message, preview_only? } — CAP-036 #6 (Sep 24 2026). Actually
+// sends the tenant relay via Twilio SMS + email instead of deliveries.html's old sms: URI
+// (which only ever opened the ADMIN's own phone app — nothing was sent through Ridge Co's
+// number, and there was no email at all). message is client-typed (deliveries.html still
+// builds the default text and lets Brett edit it before sending, same preview pattern as
+// sendTenantManualUpdate) — this endpoint just does the actual send + email.
+async function deliveryRelay(env, body) {
+  const id = String((body && body.id) || '').trim();
+  if (!id) return json({ error: 'id required' }, 400);
+  const message = String((body && body.message) || '').trim();
+  if (!message) return json({ error: 'message required' }, 400);
+  await ensureDeliveryTab(env);
+  const [dels, tenants] = await fetchTabs(env, ['Deliveries', 'Tenants']);
+  const d = dels.find(x => String(x.ID) === id);
+  if (!d) return json({ error: `No delivery ${id}` }, 404);
+  const tenant = d.Tenant_ID ? tenants.find(t => String(t.ID) === String(d.Tenant_ID)) : null;
+  // Same priority as deliveries.html's relayTarget(): tenant if that's who's meeting it and
+  // has a phone, else the manual backup contact, else fall back to the tenant's phone anyway.
+  let targetPhone = '', targetName = '';
+  if (d.Onsite_Contact === 'tenant' && tenant && tenant.Phone) { targetPhone = tenant.Phone; targetName = tenant.First_Name || 'tenant'; }
+  else if (d.Onsite_Contact_Phone) { targetPhone = d.Onsite_Contact_Phone; targetName = d.Backup_Contact || 'on-site contact'; }
+  else if (tenant && tenant.Phone) { targetPhone = tenant.Phone; targetName = tenant.First_Name || 'tenant'; }
+  const tenantEmail = tenant ? (tenant.Email || '') : '';
+  if (body.preview_only) return json({ preview: message, phone: targetPhone, name: targetName, email: tenantEmail });
+  if (!targetPhone) return json({ error: 'No phone number on file for the contact' }, 400);
+  const smsResult = await sendSMS(env, targetPhone, message);
+  const smsSent = !(smsResult && smsResult.error);
+  let emailSent = false;
+  if (tenantEmail) {
+    try {
+      const subject = 'Delivery update' + (d.Store ? (' — ' + d.Store) : '');
+      await gmailSendEmail(env, { to: tenantEmail, subject, html: '<p>' + message.replace(/\n/g, '<br>') + '</p>' });
+      emailSent = true;
+    } catch (e) { emailSent = false; }
+  }
+  try { await logSMS(env, (d.Linked_WO_IDs || '').split(',')[0] || '', 'delivery_relay', id, targetPhone, message); } catch (_) {}
+  return json({ success: true, sms_sent: smsSent, email_sent: emailSent, phone: targetPhone, email: tenantEmail });
 }
 
 // Monday-anchored week key (YYYY-MM-DD of that week's Monday). Date-only + UTC
