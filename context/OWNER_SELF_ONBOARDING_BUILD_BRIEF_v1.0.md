@@ -41,6 +41,9 @@ Owner **Billing** section in Add/Edit Owner; Owners page **Owner Onboarding Link
 - Live on `maintenance-hub-staging`: invite create/list/revoke rules; prefill; PIN taken/weak/available; invalid submit → 422 without burning the link; full submit (business billing, multi with vacant-lockbox + later + tenant units, rowhome, commercial, house) read back from Owners/Properties/Units/Tenants/Keys; replay → 403; duplicate phone → 409; owned-by-other address skipped and flagged.
 - Pre-existing, unrelated failures on `main` (unchanged): `test/bill-to-note.test.mjs` (2), `test/receipt-attach-only.test.mjs`.
 
+## Set PIN backfill (added later Sep 26)
+Owners page → tick owners (or **Select owners with no PIN**) → **🔑 Set PIN for Selected**. Editable preview with phone-based suggestions, live rule checks, per-owner saved/refused status, optional "Text these PINs". Endpoints `/owner/pin-suggest` (no writes) and `/owner/set-pins` (validated, unique across logins, per-row results, TEST-only on staging token). Tests: `owner-pin-backfill` (36), `manual-verify-owner-set-pin-ui` (33). Live on staging (owner 25): suggest, set + read-back, weak PIN refused, duplicate PIN refused, non-TEST owner 403.
+
 ## Not exercised live (named plainly)
 - The "unowned existing property → link" path (the staging test token can't edit non-TEST rows, so it would have left a real staging property linked to a test owner) — it is a single `updateRow(Properties, id, {Owner_ID})`, the same write `linkUnlinkedProperty` already uses.
 - QuickBooks customer creation and the admin SMS are stubbed on staging. `SMS_Consent_IP` is blank on staging (calls arrive through a service binding with no client IP); a real browser hit on production carries `CF-Connecting-IP`.
