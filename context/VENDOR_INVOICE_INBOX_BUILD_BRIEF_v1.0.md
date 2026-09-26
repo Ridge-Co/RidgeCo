@@ -101,7 +101,9 @@ Square and Venmo keys are weaker (a display name can be faked), so: require SPF/
 
 ## 5. Classification + the queue
 
-For each new inbound record, in order:
+**Step 0 — financial mail only.** Before anything is classified, the parser decides whether the email is an invoice, a receipt or a payment confirmation (amount + merchant/payee + invoice or transaction id present). Anything else that a broad platform rule happened to catch (marketing, account notices, "you were paid" mail, password resets) is **dropped silently and written only to the Log tab**. It never becomes a card, never counts toward the badge, and is never queued. Those emails are left to other automations or manual checking. The intake rules stay narrow on purpose (invoice/receipt/payment subjects and senders only) so that Step 0 rarely has anything to drop.
+
+For each remaining inbound record, in order:
 
 1. **Registered direct-bill vendor** (platform + key match, auth passed) → automatic path (Section 6).
 2. **Known WO vendor** (matches an existing Vendors row that is not direct-bill) → queue card with suggested open work orders for that vendor.
