@@ -16,7 +16,14 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ FAIL: ' + m); } };
 
 const OWNERS = [{ ID: '7', First_Name: 'Pat', Last_Name: 'Lee', Company: 'Lee Holdings', Phone: '4105550142', Email: 'pat@x.com', Active: 'TRUE', PIN: 'PAT48213',
-  Billing_Name: 'Lee Holdings LLC', Billing_Address: '12 Main St', Billing_City: 'Baltimore', Billing_State: 'MD', Billing_Zip: '21201', Billing_Phone: '4105550142', Billing_Email: 'bill@x.com' }];
+  Billing_Name: 'Lee Holdings LLC', Billing_Address: '12 Main St', Billing_City: 'Baltimore', Billing_State: 'MD', Billing_Zip: '21201', Billing_Phone: '4105550142', Billing_Email: 'bill@x.com' },
+  // Owner-dropdown fixtures (Sep 26 2026): company-only, person-only, two contacts under one business, inactive, nameless
+  { ID: '15', First_Name: '', Last_Name: '', Company: 'Ridge Co', Active: 'TRUE' },
+  { ID: '16', First_Name: 'Dan', Last_Name: 'Glecker', Company: '', Active: 'TRUE' },
+  { ID: '3', First_Name: 'Jennifer', Last_Name: 'Goldszmidt', Company: 'Goldszmidt Properties', Active: 'TRUE' },
+  { ID: '19', First_Name: 'Adrian', Last_Name: 'Goldszmidt', Company: 'Goldszmidt Properties', Active: 'TRUE' },
+  { ID: '30', First_Name: '', Last_Name: '', Company: '', Active: 'TRUE' },
+  { ID: '18', First_Name: 'Mark', Last_Name: 'Passerelli', Company: 'Zed Inactive Co', Active: 'FALSE' }];
 const PROPS = [
   { ID: '50', Address: '9 Elm St', City: 'Winchester', Type: 'multi', Unit_Count: '4', Owner_ID: '7', Active: 'TRUE', Onboarding_Source: 'self_serve_link', Market: 'Winchester' },
   { ID: '51', Address: '100 Market St', City: 'Baltimore', Type: 'commercial', Commercial_Subtype: 'retail', Unit_Count: '2', Owner_ID: '7', Active: 'TRUE', Market: 'Baltimore' },
