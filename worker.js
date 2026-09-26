@@ -14864,6 +14864,14 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  if (path === '/owner-onboard/invite/create') {
+    // Creates only an invite row (no owner/property data) — restricted to TEST- prefilled invites.
+    return String((body && body.name) || '').startsWith('TEST-');
+  }
+  if (path === '/owner-onboard/invite/revoke') {
+    const _inv = (await fetchTab(env, 'Owner_Invites')).find(r => String(r.ID) === String(body && body.id));
+    return !!_inv && String(_inv.Prefill_Name || '').startsWith('TEST-');
+  }
   if (path === '/receipt/attach-only') {
     // Same reasoning as /status below: the write only ever lands on Receipts (never Vendor_Bills
     // or Invoice_Review — see receiptAttachOnly's own comment), tied to an existing Work_Orders
