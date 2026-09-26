@@ -436,10 +436,28 @@ document.addEventListener('click', function(ev){
   else if (act === 'rmunit') { S.properties[pi].units.splice(j, 1); errs = {}; render(); }
   saveDraft();
 });
+// Our normal PIN: 3 random letters + the last 5 digits of the owner's phone. Falls back to 5 random digits
+// only when there's no phone yet or the phone's last 5 would be a trivial run (which the PIN rules reject).
 function suggestPin(){
-  var A = 'ABCDEFGHJKLMNPQRSTUVWXYZ', p, tries = 0;
-  do { p = ''; for (var i=0;i<3;i++) p += A[Math.floor(Math.random()*A.length)]; for (var k=0;k<5;k++) p += Math.floor(Math.random()*10); var r = pinRules(p); tries++; } while (!(r.numbers && r.simple) && tries < 50);
+  var A = 'ABCDEFGHJKLMNPQRSTUVWXYZ', p, tries = 0, last5 = digits(S.owner.phone).slice(-5);
+  var useLast5 = last5.length === 5 && pinRules('ABC' + last5).simple;
+  do {
+    p = ''; for (var i=0;i<3;i++) p += A[Math.floor(Math.random()*A.length)];
+    if (useLast5) p += last5; else for (var k=0;k<5;k++) p += Math.floor(Math.random()*10);
+    var r = pinRules(p); tries++;
+  } while (!(r.numbers && r.simple) && tries < 50);
   return p;
+}
+// Suggest, check availability, and quietly try fresh letters if that PIN is already taken (up to 5 tries).
+function suggestAndCheck(attempt){
+  S.owner.pin = suggestPin(); pinState = { pin:'', ok:null, msg:'' }; delete errs['owner.pin']; render(); saveDraft();
+  var pin = S.owner.pin.toUpperCase();
+  api('/owner-onboard/check-pin', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token: TOKEN, pin: pin }) }).then(function(j){
+    if (S.owner.pin.toUpperCase() !== pin) return;
+    if (j.available) { pinState = { pin: pin, ok: true, msg: '' }; updatePinUI(); return; }
+    if ((attempt || 0) < 4 && j.ok) { suggestAndCheck((attempt || 0) + 1); return; }
+    pinState = { pin: pin, ok: false, msg: j.reason || 'That PIN is not available.' }; updatePinUI();
+  }).catch(function(){ /* the server re-checks on submit */ });
 }
 
 // ── boot ────────────────────────────────────────────────────────────────
