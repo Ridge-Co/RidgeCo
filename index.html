@@ -12137,6 +12137,65 @@ function submitAddOwner() {
   });
 }
 
+// ── Owner onboarding links (Sep 26 2026) ─────────────────────────────────────────────
+function openOwnerInviteModal() {
+  ['oi-name','oi-phone','oi-email','oi-note'].forEach(function(id){ document.getElementById(id).value=''; });
+  document.getElementById('oi-msg').innerHTML=''; document.getElementById('oi-result').innerHTML='';
+  document.getElementById('oi-days').value='14';
+  openModal('modal-owner-invite');
+  loadOwnerInvites();
+}
+function copyText(text, okMsg) {
+  function fallback(){ var t=document.createElement('textarea'); t.value=text; t.style.position='fixed'; t.style.opacity='0'; document.body.appendChild(t); t.select(); try{document.execCommand('copy');toast(okMsg||'Copied','success');}catch(e){toast('Copy failed — select and copy the link manually','error');} document.body.removeChild(t); }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function(){ toast(okMsg||'Copied','success'); }).catch(fallback); else fallback();
+}
+function createOwnerInvite() {
+  var btn = document.getElementById('oi-create-btn'); btn.disabled = true;
+  document.getElementById('oi-msg').innerHTML='';
+  api('POST','/owner-onboard/invite/create',{
+    name: document.getElementById('oi-name').value.trim(), phone: document.getElementById('oi-phone').value.trim(),
+    email: document.getElementById('oi-email').value.trim(), note: document.getElementById('oi-note').value.trim(),
+    days: parseInt(document.getElementById('oi-days').value,10)||14
+  }).then(function(res){
+    btn.disabled = false;
+    if (!res || res.error || !res.link) { document.getElementById('oi-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc((res&&res.error)||'Could not create the link')+'</div>'; return; }
+    document.getElementById('oi-result').innerHTML =
+      '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:10px;margin:10px 0"><div style="font-weight:bold;color:var(--accent2);font-size:12px;margin-bottom:6px">Link created — send it to the owner</div>' +
+      '<input type="text" readonly id="oi-link" value="'+esc(res.link)+'" onclick="this.select()" style="width:100%;font-size:12px;margin-bottom:8px">' +
+      '<button class="btn small" onclick="copyText(document.getElementById(\'oi-link\').value,\'Link copied\')">Copy link</button> ' +
+      '<button class="btn small secondary" onclick="window.open(document.getElementById(\'oi-link\').value,\'_blank\')">Preview</button></div>';
+    copyText(res.link, 'Link created and copied');
+    loadOwnerInvites();
+  }).catch(function(e){ btn.disabled = false; document.getElementById('oi-msg').innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(e.message||'Error')+'</div>'; });
+}
+function loadOwnerInvites() {
+  var el = document.getElementById('oi-list');
+  api('GET','/owner-onboard/invites').then(function(rows){
+    rows = safeArray(rows);
+    if (!rows.length) { el.innerHTML='<div style="color:var(--muted);font-size:12px">No links yet.</div>'; return; }
+    var pill = {pending:'background:#e8f0fb;color:#1d4ed8',used:'background:#eaf6ee;color:#166534',expired:'background:#f3f5f8;color:#66707c',revoked:'background:#fdecea;color:#b42318',processing:'background:#fff3e0;color:#9a5b00'};
+    el.innerHTML = rows.slice(0,25).map(function(r){
+      var s = {}; try { s = JSON.parse(r.summary || '{}'); } catch(e) {}
+      var warn = safeArray(s.warnings);
+      var ownerLbl = r.owner_id ? (function(){ var o = safeArray(state.owners).find(function(x){ return String(x.ID)===String(r.owner_id); }); return o ? ((o.Company||((o.First_Name||'')+' '+(o.Last_Name||'')).trim())) : ('Owner '+r.owner_id); })() : '';
+      return '<div style="border-top:1px solid var(--border);padding:8px 0;font-size:12px">' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap"><span><span style="'+(pill[r.status]||'')+';padding:1px 8px;border-radius:10px;font-size:10px;font-weight:bold;text-transform:uppercase">'+esc(r.status)+'</span> ' +
+        '<b>'+esc(ownerLbl||r.name||'(no name)')+'</b> <span style="color:var(--muted)">'+esc((r.used||r.created||'').slice(0,10))+'</span></span><span>' +
+        (r.link ? '<button class="btn small secondary" onclick="copyText(\''+esc(r.link)+'\',\'Link copied\')">Copy link</button> <button class="btn small secondary" onclick="revokeOwnerInvite(\''+esc(r.id)+'\')">Revoke</button>' : '') + '</span></div>' +
+        (r.note ? '<div style="color:var(--muted)">'+esc(r.note)+'</div>' : '') +
+        (r.status==='used' ? '<div style="color:var(--muted)">'+safeArray(s.properties).length+' propert'+(safeArray(s.properties).length===1?'y':'ies')+' added'+(r.needs_review?' · <b style="color:#9a5b00">needs your review</b>':' · all clear')+'</div>' : '') +
+        (warn.length ? '<ul style="margin:4px 0 0 18px;color:#9a5b00">'+warn.map(function(w){ return '<li>'+esc(w)+'</li>'; }).join('')+'</ul>' : '') +
+      '</div>';
+    }).join('');
+  }).catch(function(e){ el.innerHTML='<div style="color:var(--danger);font-size:12px">'+esc(e.message||'Could not load links')+'</div>'; });
+}
+function revokeOwnerInvite(id) {
+  api('POST','/owner-onboard/invite/revoke',{id:id}).then(function(res){
+    if (res && res.error) { toast(res.error,'error'); return; }
+    toast('Link revoked','success'); loadOwnerInvites();
+  }).catch(function(e){ toast('Error: '+e.message,'error'); });
+}
+
 // ── Link Property to Owner (owner-side quick action; same write as Edit Property's Owner field) ──
 function openLinkPropertyModal(ownerId, ownerLabel) {
   document.getElementById('lp-owner-id').value = ownerId;
