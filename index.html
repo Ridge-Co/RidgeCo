@@ -510,7 +510,7 @@ window.addEventListener('pageshow', function(e){
   <div class="page" id="page-owners">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="section-title" style="margin:0">OWNERS &amp; USERS</div>
-      <button class="btn" onclick="openAddOwnerModal()">+ Add Owner</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn secondary" onclick="openOwnerInviteModal()" title="Create a link a new owner fills out themselves — owner, billing, properties, units and PIN land here automatically">📨 Owner Onboarding Link</button><button class="btn" onclick="openAddOwnerModal()">+ Add Owner</button></div>
     </div>
     <div id="owners-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
