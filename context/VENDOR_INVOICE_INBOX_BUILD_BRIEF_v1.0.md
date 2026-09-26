@@ -225,7 +225,7 @@ Pure/offline (fixtures from real emails):
 1. Square: invoice, "updated", 5 reminders, and "paid" for #000040 → exactly **one** bill and **one** payment; final state paid $160.00; DocNumber `000040`.
 2. Square "updated" with a changed amount on an unpaid bill → bill updated + flagged; on a paid bill → flagged, not changed.
 3. Stripe receipt from an unregistered `acct_` → queue card, nothing posted; after registering → same email becomes a paid bill; second registered receipt with no prior invoice → bill+payment created in one step.
-4. Venmo "You paid Regina Saville" with property named in the note → bill for 1864 Kerns School Rd, DocNumber from Venmo transaction id, paid from …6287; note containing "loan repayment" → queue (until Q1 answered).
+4. Venmo "You paid Regina Saville" with property named in the note → bill for 1864 Kerns School Rd, DocNumber from Venmo transaction id, paid from …6287. A note like "6 hrs less $10 loan repayment" → bill and payment at the **Venmo amount actually paid** (not gross), `Loan_Repayment_Amount=10` stored on the Invoice_Inbox row, **no loan entry of any kind posted to QuickBooks**, and the item is NOT queued.
 5. Payment account resolution: "Visa 2326" → …6287; unknown last-4 → queue asks for account, then remembers.
 6. Amount sanity: registered vendor invoice >25% above last-5 max → queue; within range → auto.
 7. Auth: email failing SPF/DKIM → queue, never automation.
