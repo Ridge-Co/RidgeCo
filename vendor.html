@@ -219,6 +219,7 @@ input[type=file]{display:none;}
     <div class="tab active" id="tabOpen" data-i18n="OPEN JOBS" onclick="switchTab('open')">OPEN JOBS</div>
     <div class="tab" id="tabAll" data-i18n="ALL JOBS" onclick="switchTab('all')">ALL JOBS</div>
     <div class="tab" id="tabDue" data-i18n="NEEDS INVOICE" onclick="switchTab('due')">NEEDS INVOICE</div>
+    <div class="tab" id="tabInvoiced" data-i18n="INVOICED" onclick="switchTab('invoiced')">INVOICED</div>
   </div>
 
   <div id="vtrBanner"></div>
@@ -821,8 +822,40 @@ function fetchDueWOs() {
     return wos.filter(function(w) { return isCompleteNotInvoiced(w) && !billedWOIds[w.ID]; });
   });
 }
+// "INVOICED" tab (CAP-036 #14, Sep 24 2026): every job this vendor has billed for, at least
+// once — the counterpart to the "NEEDS INVOICE" tab above. Brett's own ask: bills flagged
+// "Invoiced — Pending Info" sort to the TOP so the vendor sees what's blocking their payment
+// first; this tab had no sort/group logic at all before, so this is a minimal one, not a
+// redesign — sortKey 0 (pending info) < 1 (submitted, awaiting review) < 2 (reviewed, closest
+// to paid), newest-billed first within each group.
+function invoicedSortKey(wo, billsByWO) {
+  var bills = billsByWO[wo.ID] || [];
+  if (!bills.length) return 3;
+  var anyPending = bills.some(function(b) { return String(b.Pending_Info || '').toUpperCase() === 'TRUE'; });
+  if (anyPending) return 0;
+  var anyUnreviewed = bills.some(function(b) { return b.Status !== 'reviewed'; });
+  return anyUnreviewed ? 1 : 2;
+}
+function fetchInvoicedWOs() {
+  return Promise.all([
+    api('/vendor-workorders?vendor_id=' + session.vendor_id + '&include_closed=true'),
+    api('/vendor-bills?vendor_id=' + session.vendor_id)
+  ]).then(function(results) {
+    var wos = results[0] || [], bills = results[1] || [];
+    var billsByWO = {};
+    bills.forEach(function(b) { if (b.WO_ID) { (billsByWO[b.WO_ID] = billsByWO[b.WO_ID] || []).push(b); } });
+    var invoiced = wos.filter(function(w) { return !!(billsByWO[w.ID] && billsByWO[w.ID].length); });
+    invoiced.sort(function(a, b) {
+      var ka = invoicedSortKey(a, billsByWO), kb = invoicedSortKey(b, billsByWO);
+      if (ka !== kb) return ka - kb;
+      return new Date(b.Created_Date || 0) - new Date(a.Created_Date || 0);
+    });
+    return invoiced;
+  });
+}
 function loadWOsForCurrentTab() {
   if (currentTab === 'due') return fetchDueWOs();
+  if (currentTab === 'invoiced') return fetchInvoicedWOs();
   var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
   return api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed);
 }
@@ -832,6 +865,7 @@ function switchTab(tab) {
   document.getElementById('tabOpen').className = 'tab' + (tab === 'open' ? ' active' : '');
   document.getElementById('tabAll').className = 'tab' + (tab === 'all' ? ' active' : '');
   document.getElementById('tabDue').className = 'tab' + (tab === 'due' ? ' active' : '');
+  document.getElementById('tabInvoiced').className = 'tab' + (tab === 'invoiced' ? ' active' : '');
   loadWorkOrders();
 }
 
@@ -854,7 +888,7 @@ function loadWorkOrders() {
 function renderWOs(wos) {
   var list = document.getElementById('woList');
   if (!wos || !wos.length) {
-    var emptyMsg = currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : 'No work orders.';
+    var emptyMsg = currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : currentTab === 'invoiced' ? 'No invoiced jobs yet.' : 'No work orders.';
     list.innerHTML = '<div class="empty"><div class="icon">✓</div>' + emptyMsg + '</div>';
     return;
   }
@@ -1390,7 +1424,17 @@ function loadVendorBillSummary(woId, idx) {
         return '<div>🧾 ' + esc(r.desc||'Receipt') + ': $' + parseFloat(r.amount||0).toFixed(2) + payBadge + (viewHref ? ' <a href="'+esc(viewHref)+'" target="_blank" style="color:var(--info);font-size:10px">View</a>' : '') + '</div>';
       }).join('');
       var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--muted)';
-      return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:6px">' +
+      // CAP-036 #14: "Invoiced — Pending Info" — for the vendor's benefit, so they know
+      // something's needed before they get paid, without having to call and ask. A flag on
+      // top of Status (bill.Status stays 'submitted'/'reviewed' either way).
+      var pendingInfo = String(bill.Pending_Info || '').toUpperCase() === 'TRUE';
+      var pendingInfoHtml = pendingInfo
+        ? '<div style="background:#fdeaea;border:1px solid var(--danger);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11.5px;color:#7a1418;line-height:1.5">' +
+            '<div style="font-weight:bold">⏳ NEEDS SOMETHING BEFORE THIS CAN BE PAID</div>' +
+            '<div>' + esc(bill.Pending_Info_Note || 'Contact Ridge Co for details.') + '</div>' +
+          '</div>'
+        : '';
+      return pendingInfoHtml + '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
           '<div style="font-size:10px;letter-spacing:.08em;color:var(--accent2);font-weight:bold">💰 BILL SUBMITTED</div>' +
           '<div style="font-size:18px;font-weight:bold;color:var(--accent2)">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +

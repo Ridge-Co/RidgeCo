@@ -9579,6 +9579,13 @@ function loadInvoiceReview() {
     return api('GET', '/vendor-bills?status=submitted');
   }).then(function(bills) {
     _irBills = Array.isArray(bills) ? bills : [];
+    // CAP-036 #14: bills flagged "Invoiced — Pending Info" sort to the TOP of the queue, so
+    // whatever's blocking payment is the first thing Brett sees, not buried in the list.
+    _irBills.sort(function(a, b) {
+      var ap = String(a.Pending_Info || '').toUpperCase() === 'TRUE' ? 0 : 1;
+      var bp = String(b.Pending_Info || '').toUpperCase() === 'TRUE' ? 0 : 1;
+      return ap - bp;
+    });
     var fhost = document.getElementById('ir-filters');
     if (!_irBills.length) {
       if (fhost) fhost.innerHTML = '';
@@ -9961,7 +9968,23 @@ function renderIRCard(b, i) {
       '</div>';
   }
 
+  // CAP-036 #14 — "Invoiced — Pending Info": Brett needs something more (photos, receipts, a
+  // better description) before this bill can be paid. Deliberately a flag on top of Status
+  // (Status stays 'submitted'/'reviewed'), so this banner can appear alongside anything else
+  // on the card. Loudest banner on the card by design — this is exactly what's supposed to
+  // hold the bill back from Send to QuickBooks (soft block, overridable — see qbSendInvoice).
+  var pendingInfo = String(b.Pending_Info || '').toUpperCase() === 'TRUE';
+  var pendingInfoHtml = pendingInfo
+    ? '<div style="background:#f9e4e4;border:1px solid var(--danger);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#7a1418;line-height:1.55">' +
+        '<div style="font-weight:bold;margin-bottom:2px">⏳ INVOICED — PENDING INFO' + (b.Pending_Info_Set_By ? ' (flagged by ' + esc(b.Pending_Info_Set_By) + ')' : '') + '</div>' +
+        '<div>' + esc(b.Pending_Info_Note || 'Needs something before this can be paid.') + '</div>' +
+        '<button onclick="irClearPendingInfo(' + i + ')" style="margin-top:8px;background:#fff;border:1px solid var(--danger);color:var(--danger);border-radius:6px;font-family:var(--font);font-size:11px;font-weight:bold;padding:6px 10px;cursor:pointer">✓ Info received — clear flag</button>' +
+      '</div>'
+    : '';
+
   return '<div id="ir-card-'+i+'" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">' +
+
+    pendingInfoHtml +
 
     // Header
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:10px">' +
@@ -10014,6 +10037,7 @@ function renderIRCard(b, i) {
 
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">' +
       '<button onclick="irSkip('+i+')" title="Hides this card until the next refresh \u2014 the bill stays in the queue" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:9px 14px;cursor:pointer">Hide for now</button>' +
+      (pendingInfo ? '' : '<button onclick="irFlagPendingInfo('+i+')" title="Flag this bill as invoiced but needing something before it can be paid" style="background:var(--surface2);border:1px solid var(--warn);color:var(--warn);border-radius:6px;font-family:var(--font);font-size:12px;padding:9px 14px;cursor:pointer">Flag: needs info</button>') +
       (b.Vendor_ID ? '<button onclick="openVendorTaskRequestModal(\''+esc(woId)+'\',\''+esc(b.Vendor_ID)+'\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:9px 14px;cursor:pointer">🚩 Flag Vendor Issue</button>' : '') +
     '</div>' +
 
@@ -10218,6 +10242,31 @@ function irApprove(i) {
 function irSkip(i) {
   var card = document.getElementById('ir-card-'+i);
   if (card) { card.style.display = 'none'; }
+}
+
+// CAP-036 #14 — "Invoiced — Pending Info": flag/clear on a bill from Review Bills. Setting
+// it requires a note (what's missing); clearing does not. Reloads the whole queue after
+// either so the sort (flagged first) and the banner both stay accurate.
+function irFlagPendingInfo(i) {
+  var b = _irBills[i];
+  if (!b) return;
+  var note = prompt('What\'s needed before this can be paid? (e.g. "need photos", "need receipts", "description too vague")');
+  if (note === null) return;
+  note = note.trim();
+  if (!note) { toast('A note is required to flag pending info', 'error'); return; }
+  api('POST', '/vendor-bill/set-pending-info', { id: b.ID, pending_info: true, note: note, set_by: 'Brett' }).then(function(res) {
+    if (res && res.success) { toast('Flagged — needs info before paying', 'success'); loadInvoiceReview(); }
+    else toast('Could not flag: ' + (res && res.error || '?'), 'error');
+  }).catch(function(e) { toast('Error: ' + (e.message || '?'), 'error'); });
+}
+function irClearPendingInfo(i) {
+  var b = _irBills[i];
+  if (!b) return;
+  if (!confirm('Clear the Pending Info flag on this bill?')) return;
+  api('POST', '/vendor-bill/set-pending-info', { id: b.ID, pending_info: false, set_by: 'Brett' }).then(function(res) {
+    if (res && res.success) { toast('Cleared', 'success'); loadInvoiceReview(); }
+    else toast('Could not clear: ' + (res && res.error || '?'), 'error');
+  }).catch(function(e) { toast('Error: ' + (e.message || '?'), 'error'); });
 }
 
 // Fades + disables the Review Bills card for scope key k = 'ir<i>' once that bill is
@@ -11645,13 +11694,18 @@ function renderQBPreview(p) {
     warns + already;
 }
 
-function confirmQBSend() {
+// CAP-036 #14: overridePendingInfo (true only when re-called from the "Send anyway" button
+// below) resends with override_pending_info:true so a bill flagged "Invoiced — Pending Info"
+// can still go out deliberately — soft block, never a permanent one.
+function confirmQBSend(overridePendingInfo) {
   if (!_qbCurrent) return;
   var id = _qbCurrent;
   var btn = document.getElementById('qb-send-confirm-btn');
   btn.disabled = true; btn.textContent = 'CREATING…';
   document.getElementById('qb-send-msg').innerHTML = '';
-  api('POST', '/qb/send-invoice', { id: id }).then(function(res){
+  var payload = { id: id };
+  if (overridePendingInfo) payload.override_pending_info = true;
+  api('POST', '/qb/send-invoice', payload).then(function(res){
     if (res.ok || res.already_sent) {
       // Combined sends (B-227 Phase 3) return bill_ids (array, one per vendor) instead of a
       // single bill_id — normalize to one flag/count so the rest of this stays unchanged.
@@ -11677,6 +11731,14 @@ function confirmQBSend() {
       _qbSendJustApproved = null; // it's actually in QuickBooks now — nothing left to undo
       // Hold the modal open longer when there's something to read.
       setTimeout(function(){ closeModal('modal-qb-send'); }, warnHtml ? 6000 : 1600);
+    } else if (res.pending_info && !overridePendingInfo) {
+      // CAP-036 #14: soft block, not a dead end — the server refused because the underlying
+      // bill is flagged, but Brett is the only approver here, so a deliberate way through
+      // has to exist. Resend with the override rather than leaving him stuck.
+      btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
+      document.getElementById('qb-send-msg').innerHTML =
+        '<div style="color:var(--warn);font-size:12px;margin-top:6px;line-height:1.5">⏳ ' + esc(res.error || 'This bill is flagged "Invoiced — Pending Info."') + '</div>' +
+        '<div style="margin-top:8px"><button onclick="confirmQBSend(true)" style="background:var(--danger);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 12px;cursor:pointer">Send anyway</button></div>';
     } else {
       btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
       var errs = (res.errors&&res.errors.length) ? res.errors.join('; ') : (res.error||'Error');

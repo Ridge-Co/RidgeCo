@@ -227,12 +227,19 @@ function load(){
         html+='<div style="margin-top:10px">';
         r.milestones.forEach(function(m){
           var billed=m.status==='billed';
+          // CAP-036 #14: "Invoiced — Pending Info" also covers Scope Proposal / milestone
+          // billing (Brett confirmed this explicitly). A pending milestone can be flagged
+          // here — soft-blocks billing it (see confirmMilestoneBill's pending_info branch)
+          // until cleared or deliberately overridden.
+          var flagged=!!m.pending_info;
           html+='<label class="row" style="gap:8px;padding:6px 0;border-bottom:1px dotted var(--line);'+(billed?'opacity:.6':'')+'">'
             +'<input type="checkbox"'+(billed?' disabled':(' onchange="toggleMilestone(\''+esc(r.id)+'\',\''+esc(m.id)+'\',this.checked)"'))+'>'
             +'<span style="flex:1">'+esc(m.label)+' <span class="muted">('+m.percent+'%'+(m.trigger==='upfront'?' · upfront':m.trigger==='completion'?' · completion':'')+')</span></span>'
             +'<span>'+money(m.customer_amount)+'</span>'
-            +'<span class="chip '+(billed?'booked':'signed')+'" style="margin-left:2px">'+(billed?'billed':'pending')+(billed&&m.qb_invoice_number?(' #'+esc(m.qb_invoice_number)):'')+'</span>'
-            +'</label>';
+            +'<span class="chip '+(billed?'booked':(flagged?'gap':'signed'))+'" style="margin-left:2px">'+(billed?('billed'+(m.qb_invoice_number?(' #'+esc(m.qb_invoice_number)):'')):(flagged?'⏳ pending info':'pending'))+'</span>'
+            +(!billed?('<a href="#" onclick="toggleMilestonePendingInfo(\''+esc(r.id)+'\',\''+esc(m.id)+'\','+(flagged?'true':'false')+');return false;" style="color:'+(flagged?'var(--red)':'var(--blue)')+';font-size:11px;font-weight:700;text-decoration:none;margin-left:6px">'+(flagged?'Clear':'Flag')+'</a>'):'')
+            +'</label>'
+            +(flagged?('<div class="sub" style="margin:-2px 0 6px 24px">⏳ '+esc(m.pending_info_note||'Needs info before billing.')+'</div>'):'');
         });
         html+='</div>';
         html+=materialsHtml(r);
@@ -430,6 +437,24 @@ function toggleMilestone(sigId,msId,checked){
   var btn=document.getElementById('msbtn-'+sigId);
   if(btn){ var n=msSelections[sigId].length; btn.disabled=(n===0); btn.textContent='Bill selected ('+n+')'; }
 }
+// CAP-036 #14: flag/clear a milestone's "Invoiced — Pending Info" status. Setting it requires
+// a note (what's missing); clearing does not. Reloads the list either way.
+function toggleMilestonePendingInfo(sigId,msId,currentlyFlagged){
+  if(currentlyFlagged){
+    if(!confirm('Clear the Pending Info flag on this milestone?'))return;
+    api('POST','/scope-proposal/milestone/set-pending-info',{signature_id:sigId,milestone_id:msId,pending_info:false}).then(function(r){
+      if(r&&r.success){toast('Cleared');load();} else toast('Could not clear: '+((r&&r.error)||'?'));
+    });
+    return;
+  }
+  var note=prompt('What\'s needed before this milestone can be billed? (e.g. "need photos", "need receipts")');
+  if(note===null)return;
+  note=note.trim();
+  if(!note){toast('A note is required');return;}
+  api('POST','/scope-proposal/milestone/set-pending-info',{signature_id:sigId,milestone_id:msId,pending_info:true,note:note}).then(function(r){
+    if(r&&r.success){toast('Flagged — needs info before billing');load();} else toast('Could not flag: '+((r&&r.error)||'?'));
+  });
+}
 function previewMilestoneBill(sigId){
   var ids=msSelections[sigId]||[];
   if(!ids.length) return;
@@ -453,10 +478,12 @@ function previewMilestoneBill(sigId){
     var b=document.getElementById('m-confirm');b.classList.remove('hide');b.textContent='Confirm — bill in QuickBooks';b.disabled=false;
   }).catch(function(e){document.getElementById('m-body').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
 }
-function confirmMilestoneBill(btn){
+function confirmMilestoneBill(btn,overridePendingInfo){
   if(!curMs)return;
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Creating…';
-  api('POST','/scope-proposal/bill-milestones',{signature_id:curMs.sigId,milestone_ids:curMs.ids}).then(function(r){
+  var payload={signature_id:curMs.sigId,milestone_ids:curMs.ids};
+  if(overridePendingInfo)payload.override_pending_info=true;
+  api('POST','/scope-proposal/bill-milestones',payload).then(function(r){
     if(r&&r.ok){
       var msg='Billed'+(r.invoice_number?(' invoice #'+r.invoice_number):' invoice')+(r.bill_number?(' + bill #'+r.bill_number):(r.bill_id?' + bill':''));
       document.getElementById('m-body').innerHTML='<p style="font-weight:700;color:var(--green)">✓ '+esc(msg)+'</p>'+((r.warnings&&r.warnings.length)?('<div class="warn">⚠ '+r.warnings.map(esc).join('<br>⚠ ')+'</div>'):'');
@@ -467,6 +494,12 @@ function confirmMilestoneBill(btn){
       toast('Billed in QuickBooks');
       if(curMs) msSelections[curMs.sigId]=[];
       load();
+    } else if(r&&r.pending_info&&!overridePendingInfo){
+      // CAP-036 #14: soft block, not a dead end — Brett is the only approver here, so a
+      // deliberate way through has to exist rather than leaving this permanently stuck.
+      btn.disabled=false;btn.textContent='Confirm — bill in QuickBooks';
+      document.getElementById('m-body').innerHTML+='<div class="warn">⏳ '+esc(r.error||'Selected milestone(s) are flagged Pending Info.')+'</div>'
+        +'<div style="margin-top:8px"><button class="btn" style="border-color:var(--red);color:var(--red)" onclick="confirmMilestoneBill(this,true)">Bill anyway</button></div>';
     } else {
       btn.disabled=false;btn.textContent='Confirm — bill in QuickBooks';
       document.getElementById('m-body').innerHTML+='<div class="warn">⚠ '+esc((r&&r.error)||'Failed')+'</div>';

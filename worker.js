@@ -689,6 +689,7 @@ export default {
         if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
         if (path === '/vendor-bill/update')       return await updateRow(env, 'Vendor_Bills', body.id, body.fields);
         if (path === '/vendor-bill/edit-receipts') return await editVendorBillReceipts(env, body);
+        if (path === '/vendor-bill/set-pending-info') return await setVendorBillPendingInfo(env, body);
         if (path === '/vendor-bill/move-to-new-wo') return await moveVendorBillToNewWO(env, body);
         if (path === '/wo/set-qbo-info')          return await updateRow(env, 'Work_Orders', body.id, body.fields);
         // Code (Aug 24, 2026): Master_Keys previously had only Name/Owner/Notes — no actual
@@ -810,6 +811,7 @@ export default {
         if (path === '/scope-proposal/book-final') return await scopeProposalBookFinal(env, body);
         if (path === '/scope-proposal/unbook-final') return await scopeProposalUnbookFinal(env, body);
         if (path === '/scope-proposal/bill-milestones') return await scopeProposalBillMilestones(env, body);
+        if (path === '/scope-proposal/milestone/set-pending-info') return await setMilestonePendingInfo(env, body);
         if (path === '/scope-proposal/adjust-bill') return await scopeProposalAdjustBill(env, body);
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
@@ -4369,6 +4371,10 @@ async function scopeProposalSignedList(env, url) {
         customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0, status: m.Status || 'pending',
         qb_invoice_id: m.QB_Invoice_ID || '', qb_invoice_number: m.QB_Invoice_Number || '',
         qb_bill_id: m.QB_Bill_ID || '', qb_bill_number: m.QB_Bill_Number || '', billed_date: m.Billed_Date || '',
+        // CAP-036 #14 — "Invoiced — Pending Info" flag, layered on top of Status (see
+        // setMilestonePendingInfo / scopeProposalBillMilestones).
+        pending_info: String(m.Pending_Info || '').toUpperCase() === 'TRUE',
+        pending_info_note: m.Pending_Info_Note || '',
       }));
     return {
       id: r.ID, scope_id: r.Scope_ID, wo_id: sc.WO_ID || '', property: p.Address || ('Property ' + sc.Property_ID),
@@ -4554,6 +4560,39 @@ async function scopeSigResolveParties(env, s, row) {
 // already-created invoice. Every milestone in the request must belong to the same signature and
 // still be 'pending' — mixing signatures or re-billing an already-billed milestone is rejected
 // outright rather than silently partial-processed.
+// POST /scope-proposal/milestone/set-pending-info { signature_id, milestone_id, pending_info, note?, set_by? }
+// CAP-036 #14's confirmed scope also covers Scope Proposal / milestone billing, not just plain
+// vendor invoices (Brett, answering the open question directly: "applies to Scope Proposal /
+// milestone billing too"). Payment_Milestones only ever has Status 'pending' → 'billed'
+// (scopeProposalBillMilestones is the only thing that flips it) — same flag-on-top pattern as
+// Vendor_Bills: a 'pending' milestone can ALSO be flagged Pending_Info, blocking it from being
+// billed (soft block, overridable — see scopeProposalBillMilestones below) until Brett clears it.
+async function setMilestonePendingInfo(env, body) {
+  const msId = String(body.milestone_id || '').trim();
+  const sigId = String(body.signature_id || '').trim();
+  if (!msId || !sigId) return json({ error: 'signature_id and milestone_id required' }, 400);
+  const pending = body.pending_info === true || String(body.pending_info).toUpperCase() === 'TRUE';
+  const note = String(body.note || '').trim();
+  if (pending && !note) return json({ error: 'A note is required when flagging Pending Info — say what\'s missing.' }, 400);
+
+  try {
+    await paymentMilestonesTab(env);
+    await ensureColumns(env, 'Payment_Milestones', ['Pending_Info', 'Pending_Info_Note', 'Pending_Info_Set_By', 'Pending_Info_Set_Date']);
+  } catch (e) { return json({ error: 'Could not prepare Payment_Milestones columns: ' + String(e && e.message || e) }, 500); }
+
+  const milestones = await fetchTab(env, 'Payment_Milestones');
+  const m = milestones.find(x => x.ID === msId && x.Signature_ID === sigId && String(x.Active || '').toUpperCase() !== 'FALSE');
+  if (!m) return json({ error: `Milestone ${msId} not found on signature ${sigId}` }, 404);
+
+  await updateRow(env, 'Payment_Milestones', msId, {
+    Pending_Info: pending ? 'TRUE' : 'FALSE',
+    Pending_Info_Note: pending ? note : '',
+    Pending_Info_Set_By: pending ? (body.set_by || 'Brett') : '',
+    Pending_Info_Set_Date: pending ? new Date().toISOString() : '',
+  });
+  return json({ success: true, id: msId, signature_id: sigId, pending_info: pending, note: pending ? note : '' });
+}
+
 async function scopeProposalBillMilestones(env, body) {
   const sigId = body && body.signature_id;
   const milestoneIds = Array.isArray(body && body.milestone_ids) ? body.milestone_ids.map(String) : [];
@@ -4570,6 +4609,20 @@ async function scopeProposalBillMilestones(env, body) {
   if (picked.length !== milestoneIds.length) return json({ error: 'One or more milestone_ids were not found on this signature.' }, 404);
   const notPending = picked.filter(m => (m.Status || 'pending') !== 'pending');
   if (notPending.length) return json({ error: 'Milestone(s) already billed: ' + notPending.map(m => m.Label).join(', ') }, 400);
+
+  // CAP-036 #14: soft block, not a hard one — a flagged milestone can still be billed with
+  // explicit override_pending_info:true (Brett's own words: "I can be blocked by me"), but never
+  // silently. previewOnly is allowed through either way so the checkbox/preview can show the
+  // flag; only the real write (below) is gated.
+  const flaggedPending = picked.filter(m => String(m.Pending_Info || '').toUpperCase() === 'TRUE');
+  if (flaggedPending.length && !body.preview_only && !body.override_pending_info) {
+    return json({
+      error: `${flaggedPending.length} selected milestone(s) are flagged "Invoiced — Pending Info": ` +
+        flaggedPending.map(m => `${m.Label}${m.Pending_Info_Note ? ' (' + m.Pending_Info_Note + ')' : ''}`).join(', ') +
+        '. Resolve them, or resend with override_pending_info to bill anyway.',
+      pending_info: true,
+    }, 409);
+  }
 
   const { tradeName, trade, prop, unit, owner, vendor, billTo, custDisplay, vendDisplay, vendorInHouse, addr } = await scopeSigResolveParties(env, s, row);
 
@@ -4590,7 +4643,8 @@ async function scopeProposalBillMilestones(env, body) {
 
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
-    milestones: picked.map(m => ({ id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0 })),
+    milestones: picked.map(m => ({ id: m.ID, label: m.Label, percent: +m.Percent || 0, customer_amount: +m.Customer_Amount || 0, vendor_amount: +m.Vendor_Amount || 0,
+      pending_info: String(m.Pending_Info || '').toUpperCase() === 'TRUE', pending_info_note: m.Pending_Info_Note || '' })),
     invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
     bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName } : null,
     warnings,
@@ -7772,6 +7826,49 @@ async function moveVendorBillToNewWO(env, body) {
 // Only ever before it reaches QuickBooks. Once an invoice or bill exists there, the Hub
 // row is the record of what was actually sent, and quietly retiring it would leave the two
 // systems disagreeing with nothing to reconcile against.
+// POST /vendor-bill/set-pending-info { id, pending_info: true/false, note?, set_by? }
+// CAP-036 #14 (Sep 24 2026, Brett): the "Invoiced — Pending Info" sub-status — a vendor has
+// invoiced a job and it's complete, but Brett needs something more (photos, receipts, a better
+// description) before he can pay it, and there was no way to flag that. Deliberately modeled as
+// a FLAG layered on top of the existing Status enum, not a new Status value: Vendor_Bills.Status
+// only ever means 'submitted' or 'reviewed' (see addVendorBill / approveInvoiceReview /
+// unapproveInvoiceReview) — a bill can be either AND ALSO flagged Pending_Info at the same time,
+// exactly as Brett described it. Setting the flag requires a note (what's missing); clearing it
+// does not. This function only ever sets/clears the flag — see qbSendInvoice for the actual
+// soft-block-with-override at the money-movement point, renderIRCard (index.html Review Bills)
+// and loadVendorBillSummary (vendor.html) for where it surfaces.
+async function setVendorBillPendingInfo(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'id required' }, 400);
+  const pending = body.pending_info === true || String(body.pending_info).toUpperCase() === 'TRUE';
+  const note = String(body.note || '').trim();
+  if (pending && !note) return json({ error: 'A note is required when flagging Pending Info — say what\'s missing (photos, receipts, description, etc.).' }, 400);
+
+  try {
+    await ensureColumns(env, 'Vendor_Bills', ['Pending_Info', 'Pending_Info_Note', 'Pending_Info_Set_By', 'Pending_Info_Set_Date']);
+  } catch (e) { return json({ error: 'Could not prepare Vendor_Bills columns: ' + String(e && e.message || e) }, 500); }
+
+  const bills = await fetchTab(env, 'Vendor_Bills');
+  const bill = bills.find(b => String(b.ID) === id);
+  if (!bill) return json({ error: `No vendor bill ${id}` }, 404);
+
+  const wasPending = String(bill.Pending_Info || '').toUpperCase() === 'TRUE';
+  const fields = {
+    Pending_Info: pending ? 'TRUE' : 'FALSE',
+    Pending_Info_Note: pending ? note : '',
+    Pending_Info_Set_By: pending ? (body.set_by || 'Brett') : '',
+    Pending_Info_Set_Date: pending ? new Date().toISOString() : '',
+  };
+  await updateRow(env, 'Vendor_Bills', id, fields);
+  try {
+    await logWOAudit(env, bill.WO_ID || '', body.set_by || 'Brett', 'admin', 'Vendor_Bill_Pending_Info',
+      wasPending ? ('Pending Info: ' + (bill.Pending_Info_Note || '')) : 'not flagged',
+      pending ? ('Pending Info: ' + note) : 'cleared',
+      pending ? ('Flagged bill ' + id + ' pending info: ' + note) : ('Cleared pending-info flag on bill ' + id + '.'));
+  } catch (e) { /* audit is best-effort — the flag itself already landed */ }
+  return json({ success: true, id, pending_info: pending, note: pending ? note : '' });
+}
+
 async function unapproveInvoiceReview(env, body) {
   const id = String(body.id || '').trim();
   if (!id) return json({ error: 'id required' }, 400);
@@ -15814,6 +15911,32 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/vendor-bill/set-pending-info') {
+    // Sets/clears a flag on an existing Vendor_Bills row by id. Resolve bill -> WO_ID ->
+    // Work_Orders -> Property_ID, same chain as /vendor-bill/edit-receipts above.
+    const bills = await fetchTab(env, 'Vendor_Bills');
+    const bill = bills.find(b => String(b.ID) === String(body && body.id));
+    if (!bill) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(bill.WO_ID));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/scope-proposal/milestone/set-pending-info') {
+    // Resolve milestone -> Signature_ID -> Scope_Signatures -> Scope_ID -> Scopes ->
+    // Property_ID, the same chain GET /scope-proposal/signed itself joins through, so this
+    // token can only ever touch a milestone sitting on a TEST- fixture property.
+    const milestones = await fetchTab(env, 'Payment_Milestones');
+    const m = milestones.find(x => String(x.ID) === String(body && body.milestone_id));
+    if (!m) return false;
+    const sigs = await fetchTab(env, 'Scope_Signatures');
+    const sig = sigs.find(s => String(s.ID) === String(m.Signature_ID));
+    if (!sig) return false;
+    const scopes = await fetchTab(env, 'Scopes');
+    const sc = scopes.find(x => String(x.ID) === String(sig.Scope_ID));
+    if (!sc) return false;
+    return await isTestRecord(env, 'Properties', sc.Property_ID);
+  }
   if (path === '/wo/bulk-void') {
     // Same shape as /wo/combine above: every id in the batch must itself resolve (via its
     // Property) to a TEST- record, or this token can never touch it -- a mixed batch with even
@@ -20098,6 +20221,10 @@ async function qbSendInvoice(env, body) {
     if (!owner) warnings.push('No owner found for this property — set the property owner before sending.');
     const billToNote = qbBillToNote(billTo, prop, unit);
     if (billToNote) warnings.push(billToNote);
+    // CAP-036 #14: "Invoiced — Pending Info" — surfaced as a warning in every preview; the
+    // real write is gated below (near CONFIRM) unless explicitly overridden.
+    const billPendingInfo = String(billRow.Pending_Info || '').toUpperCase() === 'TRUE';
+    if (billPendingInfo) warnings.push(`⏳ This vendor bill is flagged "Invoiced — Pending Info"${billRow.Pending_Info_Note ? ': ' + billRow.Pending_Info_Note : ''} — resolve it before sending, or override deliberately.`);
 
     // B-227 Phase 3: if other approved-but-not-yet-invoiced bills share this WO, combine
     // them into ONE customer invoice (still one QB Bill per vendor) instead of the old
@@ -20118,6 +20245,7 @@ async function qbSendInvoice(env, body) {
       return await qbSendCombinedInvoice(env, {
         groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName,
         warnings, previewOnly, batch: body.batch, timeEntries: woTimeEntries,
+        overridePendingInfo: !!body.override_pending_info,
       });
     }
 
@@ -20271,6 +20399,17 @@ async function qbSendInvoice(env, body) {
     // ---- CONFIRM (writes to QuickBooks) ----
     if (!owner) return json({ ok: false, error: 'No owner on this property — cannot create a QB customer.', warnings });
     if (custTotal <= 0) return json({ ok: false, error: 'Customer_Total is 0 — nothing to invoice.', warnings });
+    // CAP-036 #14: soft block on the actual write — Brett's own framing ("I can be blocked by
+    // me"), so this refuses by default but never permanently: override_pending_info:true sends
+    // anyway. previewOnly already showed the warning above; this is the one place money
+    // actually moves, so it's the one place that's actually gated.
+    if (billPendingInfo && !body.override_pending_info) {
+      return json({
+        ok: false,
+        error: `This vendor bill is flagged "Invoiced — Pending Info"${billRow.Pending_Info_Note ? ': ' + billRow.Pending_Info_Note : ''}. Resolve it, or resend with override_pending_info to send anyway.`,
+        pending_info: true, pending_info_note: billRow.Pending_Info_Note || '', warnings,
+      }, 409);
+    }
 
     const token = await qbAccessToken(env);
     const errors = [];
@@ -20531,6 +20670,8 @@ async function qbSendCombinedInvoice(env, ctx) {
       const vendorCost = Number(r.Vendor_Cost) || 0;
       if (custTotal <= 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: Customer_Total is 0 — nothing to invoice for this line.`);
       if (vendorCost <= 0) warnings.push(`Bill ${r.Bill_ID || r.ID} (${vendor.Name || r.Vendor_Name || 'vendor'}): Vendor_Cost is 0 — its vendor bill will be skipped.`);
+      // CAP-036 #14: same Pending_Info warning as the single-bill path, per row in the group.
+      if (String(r.Pending_Info || '').toUpperCase() === 'TRUE') warnings.push(`⏳ Bill ${r.Bill_ID || r.ID} (${vendor.Name || r.Vendor_Name || 'vendor'}) is flagged "Invoiced — Pending Info"${r.Pending_Info_Note ? ': ' + r.Pending_Info_Note : ''}.`);
 
       let ownReceipts = [];
       const ownIds = String(r.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
@@ -20621,6 +20762,16 @@ async function qbSendCombinedInvoice(env, ctx) {
     // ---- CONFIRM (writes to QuickBooks) ----
     if (!owner) return json({ ok: false, error: 'No owner on this property — cannot create a QB customer.', warnings });
     if (combinedTotal <= 0) return json({ ok: false, error: 'Combined Customer_Total is 0 — nothing to invoice.', warnings });
+    // CAP-036 #14: same soft block as the single-bill path — any flagged row in the group
+    // stops the real write unless explicitly overridden.
+    const pendingInfoRows = groupRows.filter(r => String(r.Pending_Info || '').toUpperCase() === 'TRUE');
+    if (pendingInfoRows.length && !ctx.overridePendingInfo) {
+      return json({
+        ok: false,
+        error: `${pendingInfoRows.length} bill(s) in this group are flagged "Invoiced — Pending Info" (${pendingInfoRows.map(r => r.Bill_ID || r.ID).join(', ')}). Resolve them, or resend with override_pending_info to send anyway.`,
+        pending_info: true, warnings,
+      }, 409);
+    }
 
     const token = await qbAccessToken(env);
     const errors = [];
