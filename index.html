@@ -11848,6 +11848,25 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- OWNER ONBOARDING LINK MODAL (Sep 26 2026) -->
+<div class="modal-overlay" id="modal-owner-invite">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header"><div class="modal-title">OWNER ONBOARDING LINK</div><button class="modal-close" onclick="closeModal('modal-owner-invite')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Send this link to a new owner. They enter their own billing info, properties, units, tenant/access info and PIN — it lands in Owners, Properties, Units, Tenants and Keys with no typing on your end. Each link works once. New properties and tenants start with SMS <b>off</b> until you turn it on.</p>
+    <div class="form-grid">
+      <div class="form-group"><label>Owner name <span style="font-weight:normal;color:var(--muted)">(optional — pre-fills)</span></label><input type="text" id="oi-name" placeholder="Pat Lee"></div>
+      <div class="form-group"><label>Phone <span style="font-weight:normal;color:var(--muted)">(optional)</span></label><input type="tel" id="oi-phone"></div>
+      <div class="form-group"><label>Email <span style="font-weight:normal;color:var(--muted)">(optional)</span></label><input type="email" id="oi-email"></div>
+      <div class="form-group"><label>Link good for</label><select id="oi-days"><option value="7">7 days</option><option value="14" selected>14 days</option><option value="30">30 days</option></select></div>
+      <div class="form-group full"><label>Note to self <span style="font-weight:normal;color:var(--muted)">(optional)</span></label><input type="text" id="oi-note" placeholder="Referred by Dana, 3 rowhomes in Hampden"></div>
+    </div>
+    <div id="oi-msg"></div>
+    <div id="oi-result"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-owner-invite')">Close</button><button class="btn" id="oi-create-btn" onclick="createOwnerInvite()">Create Link</button></div>
+    <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">RECENT LINKS</div><div id="oi-list"><div class="loading">Loading…</div></div></div>
+  </div>
+</div>
+
 <!-- EDIT OWNER MODAL (Aug 20, 2026 — replaces the old "edit via the Sheet" toast; real edit like Vendor/Tenant/Property) -->
 <div class="modal-overlay" id="modal-edit-owner">
   <div class="modal" style="max-width:480px">
