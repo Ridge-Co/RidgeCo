@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-26.1-owner-self-onboarding';
+const BUILD_VERSION = '2026-09-26.2-owner-set-pin';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -610,6 +610,8 @@ export default {
         if (path === '/set-pin')                  return await updateRow(env, 'Tenants', body.tenant_id, { PIN: body.pin });
         if (path === '/vendor/set-pin')           return await updateRow(env, 'Vendors', body.vendor_id, { PIN: body.pin });
         if (path === '/owner/set-pin')            return await updateRow(env, 'Owners', body.owner_id, { PIN: body.pin });
+        if (path === '/owner/pin-suggest')        return await ownerPinSuggest(env, body);
+        if (path === '/owner/set-pins')           return await ownerPinSet(env, body);
         // Contents (Aug 24, 2026): what a Lockbox key ACTUALLY holds — 'Front Door Only' |
         // 'Front Door + Unit Key' | 'Unit Key Only'. A Building-level lockbox entry is shown
         // to every unit's work order at that property (see getWOLockboxes below), which used
@@ -14150,6 +14152,89 @@ async function ownerOnboardSubmit(env, body, clientIP) {
   return json({ success: true, first_name: c.owner.first, properties: c.properties.length });
 }
 
+// ── OWNER PIN BACKFILL (Sep 26 2026) ─────────────────────────────────────────────────────
+// Owners who onboard themselves pick their own PIN; this covers the ones who don't (and older owners with none).
+// Two admin-only endpoints, deliberately separate so nothing is written until Brett has seen the PINs:
+//   POST /owner/pin-suggest {owner_ids, overwrite?}  -> proposes a PIN per owner, WRITES NOTHING
+//   POST /owner/set-pins    {assignments:[{owner_id,pin}]} -> validates every PIN, then saves the good ones
+// PIN rules are the platform's (3 letters + 5 digits, not a simple run — ownerOnboardPinCheck) and a PIN must
+// not be in use by ANY other active login (Owners / Owner_Users / Vendors / Tenants), same check the selftest runs.
+// (The older /owner/set-pin still exists but writes whatever it is given with no checks — these replace it for the UI.)
+const OWNER_PIN_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+// Pure: our normal PIN — 3 random letters + the last 5 digits of the phone; 5 random digits when there is no usable
+// phone (fewer than 5 digits, or a last-5 the PIN rules reject). Adds what it returns to takenSet so a batch never repeats.
+function ownerPinPropose(phone, takenSet, rnd) {
+  rnd = rnd || Math.random;
+  const last5 = String(phone == null ? '' : phone).replace(/\D/g, '').slice(-5);
+  const useLast5 = last5.length === 5 && ownerOnboardPinCheck('ABC' + last5).ok;
+  for (let i = 0; i < 200; i++) {
+    let pin = '';
+    for (let k = 0; k < 3; k++) pin += OWNER_PIN_ALPHA[Math.floor(rnd() * OWNER_PIN_ALPHA.length)];
+    if (useLast5) pin += last5; else for (let k = 0; k < 5; k++) pin += Math.floor(rnd() * 10);
+    if (ownerOnboardPinCheck(pin).ok && !takenSet.has(pin.toLowerCase())) { takenSet.add(pin.toLowerCase()); return { pin, from_phone: useLast5 }; }
+  }
+  return { pin: '', from_phone: false };
+}
+// pin(lowercase) -> ["Owners:12", "Tenants:40", ...] for every ACTIVE login that has one
+async function ooPinHolders(env) {
+  const tabs = ['Owners', 'Owner_Users', 'Vendors', 'Tenants'];
+  const data = await fetchTabs(env, tabs);
+  const map = new Map();
+  tabs.forEach((tab, i) => (data[i] || []).forEach(r => {
+    const pin = String(r.PIN || '').trim().toLowerCase();
+    if (!pin || r.Active === 'FALSE') return;
+    const list = map.get(pin) || []; list.push(tab + ':' + r.ID); map.set(pin, list);
+  }));
+  return map;
+}
+async function ownerPinSuggest(env, body) {
+  const ids = Array.isArray(body && body.owner_ids) ? body.owner_ids.map(x => String(x)).slice(0, 200) : [];
+  if (!ids.length) return json({ error: 'owner_ids required' }, 400);
+  const overwrite = !!(body && body.overwrite === true);
+  const owners = await fetchTab(env, 'Owners');
+  const taken = new Set((await ooPinHolders(env)).keys());
+  const rows = ids.map(id => {
+    const o = owners.find(x => String(x.ID) === id);
+    if (!o) return { owner_id: id, error: 'Owner not found' };
+    const current = String(o.PIN || '').trim();
+    const row = { owner_id: id, phone: o.Phone || '', current_pin: current, proposed_pin: '', note: '' };
+    if (!String(o.First_Name || '').trim()) row.note = 'No first name on file — owners sign in with first name + PIN, so add one too.';
+    if (current && !overwrite) { row.skipped = 'Already has a PIN'; return row; }
+    const pr = ownerPinPropose(o.Phone, taken);
+    row.proposed_pin = pr.pin;
+    row.from_phone = pr.from_phone;
+    return row;
+  });
+  return json({ success: true, rows });
+}
+async function ownerPinSet(env, body) {
+  const asg = Array.isArray(body && body.assignments) ? body.assignments.slice(0, 200) : [];
+  if (!asg.length) return json({ error: 'assignments required' }, 400);
+  const owners = await fetchTab(env, 'Owners');
+  const holders = await ooPinHolders(env);
+  const inBatch = new Map(); // pin(lowercase) -> owner_id
+  const results = [];
+  let saved = 0;
+  for (const a of asg) {
+    const id = String(a && a.owner_id != null ? a.owner_id : '');
+    const chk = ownerOnboardPinCheck(a && a.pin);
+    const o = owners.find(x => String(x.ID) === id);
+    if (!o) { results.push({ owner_id: id, ok: false, error: 'Owner not found' }); continue; }
+    if (!chk.ok) { results.push({ owner_id: id, ok: false, error: chk.reason }); continue; }
+    const key = chk.pin.toLowerCase();
+    if ((holders.get(key) || []).some(h => h !== 'Owners:' + id)) { results.push({ owner_id: id, ok: false, error: 'That PIN is already used by another login.' }); continue; }
+    if (inBatch.has(key) && inBatch.get(key) !== id) { results.push({ owner_id: id, ok: false, error: 'Two owners in this batch were given the same PIN.' }); continue; }
+    try {
+      await updateRow(env, 'Owners', id, { PIN: chk.pin });
+      inBatch.set(key, id); saved++;
+      results.push({ owner_id: id, ok: true, pin: chk.pin });
+    } catch (e) {
+      results.push({ owner_id: id, ok: false, error: 'Could not save (' + String((e && e.message) || e).slice(0, 80) + ')' });
+    }
+  }
+  return json({ success: true, saved, failed: results.length - saved, results });
+}
+
 // POST /vendor-bill/extract — vendor.html PIN-portal "Submit Bill" modal. Vendor-role-gated
 // (see ROLE_SCOPES) exactly like the other vendor-portal endpoints — no new auth scheme. Same
 // {image_b64, mime} input shape as /receipt-intake (no separate Drive upload-session round trip
@@ -15339,6 +15424,14 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
+  if (path === '/owner/pin-suggest') return true; // proposes PINs, writes nothing
+  if (path === '/owner/set-pins') {
+    // Writes Owners.PIN — only ever onto TEST- owners (same isTestRecord check as every other owner write here).
+    const _a = body && body.assignments;
+    if (!Array.isArray(_a) || !_a.length) return false;
+    for (const x of _a) { if (!(await isTestRecord(env, 'Owners', x && x.owner_id))) return false; }
+    return true;
   }
   if (path === '/owner-onboard/invite/create') {
     // Creates only an invite row (no owner/property data) — restricted to TEST- prefilled invites.
@@ -17947,7 +18040,10 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
 
   const payload = { DisplayName: dn };
   if (owner.Company) payload.CompanyName = owner.Company;
-  const email = owner.Billing_Email || '';
+  // Falls back to the plain Email column (Sep 26 2026): the lookup above already used Billing_Email || Email,
+  // but creation only used Billing_Email — so an owner added with just an Email got a QuickBooks customer
+  // with NO email, and their invoices couldn't be emailed (Nirnay Pradhan / Rei, live).
+  const email = String(owner.Billing_Email || owner.Email || '').trim();
   if (email) payload.PrimaryEmailAddr = { Address: email };
   const phone = owner.Billing_Phone || owner.Phone || '';
   if (phone) payload.PrimaryPhone = { FreeFormNumber: phone };

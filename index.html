@@ -514,6 +514,7 @@ window.addEventListener('pageshow', function(e){
     </div>
     <div id="owners-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
+      <button class="btn small" onclick="openSetOwnerPinModal()" title="Set (or backfill) the sign-in PIN for the selected owners">🔑 Set PIN for Selected</button>
       <button class="btn small" onclick="bulkSendPinFromTab('owners-list')">📱 Send PIN to Selected</button>
       <button class="btn small secondary" onclick="clearPinChecks('owners-list')">Deselect All</button>
     </div>
@@ -524,6 +525,7 @@ window.addEventListener('pageshow', function(e){
         <option value="active">Active Only</option>
         <option value="inactive">Inactive Only</option>
       </select>
+      <button class="btn small secondary" onclick="selectOwnersMissingPin()" title="Tick every listed owner who has no PIN yet, then tap Set PIN for Selected">☑ Select owners with no PIN</button>
     </div>
     <div id="owners-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
@@ -1427,6 +1429,34 @@ function populateTradeControls() {
 }
 
 function safeArray(v) { return Array.isArray(v) ? v : []; }
+
+// ── Owner labels for every owner dropdown (Sep 26 2026) ──────────────────────────────
+// Every picker used to build its own label from First_Name + Last_Name, which is blank for a
+// company-only owner (e.g. "Ridge Co") and unhelpful when the business is the recognizable name.
+// One rule now: business name first; the person's name when there is no business; and never blank
+// (falls back to the Bill-To name, then "Owner #ID"). withPerson appends the contact's name so two
+// owners under one business (e.g. two Goldszmidt Properties contacts) stay distinguishable.
+function ownerPersonName(o) { return (String((o && o.First_Name) || '') + ' ' + String((o && o.Last_Name) || '')).replace(/\s+/g, ' ').trim(); }
+function ownerLabel(o, withPerson) {
+  o = o || {};
+  var biz = String(o.Company || '').trim(), person = ownerPersonName(o);
+  var base = biz || person || String(o.Billing_Name || '').trim() || ('Owner #' + (o.ID || '?'));
+  if (withPerson && biz && person && biz.toLowerCase() !== person.toLowerCase()) base += ' — ' + person;
+  return base;
+}
+// <option> list for an owner picker: active owners only (plus the currently selected one even if
+// inactive), sorted by label, contact name added only where two owners would otherwise look identical.
+function ownerOptionsHtml(selectedId, firstOptionHtml) {
+  var sel = String(selectedId == null ? '' : selectedId);
+  var list = safeArray(state.owners).filter(function(o){ return o.Active !== 'FALSE' || String(o.ID) === sel; });
+  var counts = {};
+  list.forEach(function(o){ var k = ownerLabel(o).toLowerCase(); counts[k] = (counts[k] || 0) + 1; });
+  var rows = list.map(function(o){ return { id: o.ID, label: ownerLabel(o, counts[ownerLabel(o).toLowerCase()] > 1) }; })
+    .sort(function(a, b){ return a.label.toLowerCase().localeCompare(b.label.toLowerCase()); });
+  return (firstOptionHtml || '') + rows.map(function(r){
+    return '<option value="' + esc(String(r.id)) + '"' + (String(r.id) === sel ? ' selected' : '') + '>' + esc(r.label) + '</option>';
+  }).join('');
+}
 var assignWOId = null;
 var invoiceWOId = null;
 
@@ -1906,8 +1936,7 @@ function populateFilterDropdowns() {
   var ownerSel = document.getElementById('f-owner');
   if (ownerSel) {
     var cur = ownerSel.value;
-    ownerSel.innerHTML = '<option value="">All Owners</option>' +
-      safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'"'+(o.ID===cur?' selected':'')+'>'+o.First_Name+' '+(o.Last_Name||'')+'</option>'; }).join('');
+    ownerSel.innerHTML = ownerOptionsHtml(cur, '<option value="">All Owners</option>');
   }
   var propSel = document.getElementById('f-property');
   if (propSel) {
@@ -3589,11 +3618,7 @@ function renderTenantsPage() {
   var ownerSel = document.getElementById('tenant-filter-owner');
   // Populate once — rebuilding on every keystroke would reset whatever the person picked.
   if (ownerSel && ownerSel.options.length <= 1) {
-    var ownersForFilter = safeArray(state.owners).filter(function(o){return o.Active!=='FALSE';})
-      .sort(function(a,b){ return (a.Company||a.First_Name||'').localeCompare(b.Company||b.First_Name||''); });
-    ownerSel.innerHTML = '<option value="">All Owners</option>' + ownersForFilter.map(function(o){
-      return '<option value="'+o.ID+'">'+esc(o.Company || ((o.First_Name||'')+' '+(o.Last_Name||'')).trim())+'</option>';
-    }).join('');
+    ownerSel.innerHTML = ownerOptionsHtml('', '<option value="">All Owners</option>');
   }
   var ownerFilter = ownerSel ? ownerSel.value : '';
   var ownerExclude = !!((document.getElementById('tenant-filter-owner-exclude')||{}).checked);
@@ -3753,8 +3778,7 @@ function apValidate() {
 }
 function openAddPropertyModal() {
   apResetForm();
-  document.getElementById('p-owner').innerHTML = '<option value="">No owner assigned</option>' +
-    state.owners.map(function(o){return '<option value="'+o.ID+'">'+o.First_Name+' '+o.Last_Name+'</option>';}).join('');
+  document.getElementById('p-owner').innerHTML = ownerOptionsHtml('', '<option value="">No owner assigned</option>');
   document.getElementById('ap-dupe-warning').style.display = 'none';
   renderApUnlinkedList();
   openModal('modal-add-property');
@@ -4236,8 +4260,7 @@ function openEditPropertyModal(id){
   document.getElementById('ep-hvac').value=p.HVAC_Filter_Size||''; document.getElementById('ep-breaker').value=p.Breaker_Location||'';
   document.getElementById('ep-access').value=p.Access_Notes||'';
   var epOwnerId = String(p.Owner_ID||'');
-  document.getElementById('ep-owner').innerHTML = '<option value="">No owner assigned</option>' +
-    safeArray(state.owners).map(function(o){return '<option value="'+o.ID+'"'+(String(o.ID)===epOwnerId?' selected':'')+'>'+(o.First_Name+' '+(o.Last_Name||'')).trim()+(o.Company?' — '+o.Company:'')+'</option>';}).join('');
+  document.getElementById('ep-owner').innerHTML = ownerOptionsHtml(epOwnerId, '<option value="">No owner assigned</option>');
   epTypeChanged();
   renderEpUnitsSection(p.ID);
   document.getElementById('ep-two-toggle').value = p.Tenant_WO_Toggle==='ON'||p.Tenant_WO_Toggle==='OFF' ? p.Tenant_WO_Toggle : '';
@@ -4866,9 +4889,13 @@ function bulkSendPinFromTab(listId) {
   var scopeEl = (listId && document.getElementById(listId)) || document;
   var checked = Array.from(scopeEl.querySelectorAll('.pin-check:checked'));
   if (!checked.length) return;
-  _pinSendQueue = checked.map(function(cb) {
+  openBulkPinSendQueue(checked.map(function(cb) {
     return { type: cb.dataset.type, id: cb.dataset.id, name: cb.dataset.name, phone: cb.dataset.phone };
-  });
+  }));
+}
+// Opens the existing "send PINs by text" dialog for an explicit list (used by the checkbox flow above and by Set PIN).
+function openBulkPinSendQueue(queue) {
+  _pinSendQueue = queue;
   var listEl = document.getElementById('bulk-pin-list');
   listEl.innerHTML = _pinSendQueue.map(function(item) {
     return '<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface2);border-radius:4px;align-items:center">' +
@@ -5283,7 +5310,7 @@ function renderOwnersPage() {
     var badge = isInactive ? ' <span style="background:var(--danger);color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;letter-spacing:.05em;font-weight:bold;vertical-align:middle">INACTIVE</span>' : '';
     var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '');
     return '<tr'+(isInactive?' style="opacity:0.65"':'')+'>' +
-      '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
+      '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-haspin="'+(o.PIN?'1':'0')+'" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
       '<td>'+display+'</td>' +
       '<td>'+(o.Phone||'—')+'</td>' +
       '<td>'+propCount+' propert'+(propCount===1?'y':'ies')+'</td>' +
@@ -6313,8 +6340,7 @@ function openBulkAssignModal(keyId, keyName) {
   _bulkAssignKeyId = keyId;
   document.getElementById('bulk-assign-title').textContent = 'ASSIGN "' + keyName.toUpperCase() + '" TO ALL PROPERTIES OF:';
   var sel = document.getElementById('bulk-assign-owner');
-  sel.innerHTML = '<option value="">— select owner —</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Last_Name?' '+o.Last_Name:'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  sel.innerHTML = ownerOptionsHtml('', '<option value="">— select owner —</option>');
   document.getElementById('bulk-assign-msg').innerHTML = '';
   openModal('modal-bulk-assign');
 }
@@ -6334,8 +6360,7 @@ function submitBulkAssign() {
 function openAddMasterKeyModal() {
   ['mk-name','mk-code','mk-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('mk-owner');
-  if (sel) sel.innerHTML = '<option value="">No owner (global)</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">No owner (global)</option>');
   openModal('modal-add-masterkey');
 }
 
@@ -6391,8 +6416,7 @@ function renderTemplates() {
 function openAddTemplateModal() {
   ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('tmpl-owner');
-  if (sel) sel.innerHTML = '<option value="">Global (all owners)</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">Global (all owners)</option>');
   var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
   var pr = document.getElementById('tmpl-priority'); if (pr) pr.value = 'normal';
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'ADD WO TEMPLATE';
@@ -11893,6 +11917,26 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- SET OWNER PINS MODAL (Sep 26 2026) -->
+<div class="modal-overlay" id="modal-set-owner-pin">
+  <div class="modal" style="max-width:680px">
+    <div class="modal-header"><div class="modal-title">SET OWNER PINS</div><button class="modal-close" onclick="closeModal('modal-set-owner-pin')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Sets the sign-in PIN for the owners you selected. Owners who onboard themselves choose their own — this is for filling in the rest. Suggested PINs use our normal format (3 random letters + the last 5 digits of their phone). Tap a PIN to type your own: 3 letters then 5 numbers, not a simple run like 12345, and nobody else can already have it. <b>Nothing is saved until you tap Save.</b></p>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin-bottom:10px"><input type="checkbox" id="spn-overwrite" onchange="loadOwnerPinSuggestions()"> Also replace PINs that are already set</label>
+    <div id="spn-list"><div class="loading">Loading…</div></div>
+    <div id="spn-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-set-owner-pin')">Close</button>
+      <button class="btn secondary" onclick="loadOwnerPinSuggestions()" title="Throw away edits and suggest again">New suggestions</button>
+      <button class="btn" id="spn-save" onclick="saveOwnerPins()" disabled>Save PINs</button>
+    </div>
+    <div id="spn-after" style="display:none;border-top:1px solid var(--border);margin-top:12px;padding-top:10px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Saved. Want to text these owners their PIN now?</div>
+      <button class="btn small" id="spn-send" onclick="spnSendTexts()">📱 Text these PINs to the owners</button>
+    </div>
+  </div>
+</div>
+
 <!-- OWNER ONBOARDING LINK MODAL (Sep 26 2026) -->
 <div class="modal-overlay" id="modal-owner-invite">
   <div class="modal" style="max-width:560px">
@@ -12182,6 +12226,108 @@ function submitAddOwner() {
   });
 }
 
+// ── Set / backfill owner PINs (Sep 26 2026) ───────────────────────────────────────────
+// Rules mirror the server (ownerOnboardPinCheck): 3 letters + 5 digits, not a simple run. The server re-checks
+// everything, including that no other login already has the PIN, when Save is tapped.
+var _spnRows = [], _spnIds = [], _spnSaved = [];
+function spnRuleError(pin) {
+  var p = String(pin || '').toUpperCase();
+  if (!/^[A-Z]{3}\d{5}$/.test(p)) return '3 letters then 5 numbers (e.g. ABC12345)';
+  var d = p.slice(3);
+  if (/^(\d)\1{4}$/.test(d) || '0123456789'.indexOf(d) >= 0 || '9876543210'.indexOf(d) >= 0) return 'numbers can\'t be a simple run';
+  if (/^(.)\1\1$/.test(p.slice(0, 3))) return 'letters can\'t all match';
+  return '';
+}
+function selectOwnersMissingPin() {
+  var cbs = document.getElementById('owners-list').querySelectorAll('.pin-check'), n = 0;
+  cbs.forEach(function(cb){ var miss = cb.getAttribute('data-haspin') === '0'; cb.checked = miss; if (miss) n++; });
+  updatePinActionBar('owners-action-bar');
+  toast(n ? n + ' owner' + (n === 1 ? '' : 's') + ' with no PIN selected — tap Set PIN for Selected' : 'Every listed owner already has a PIN', 'success');
+}
+function openSetOwnerPinModal() {
+  var ids = Array.from(document.getElementById('owners-list').querySelectorAll('.pin-check:checked')).map(function(cb){ return cb.getAttribute('data-id'); });
+  if (!ids.length) { toast('Select one or more owners first', 'error'); return; }
+  _spnIds = ids; _spnSaved = [];
+  // One owner selected = an explicit "set this owner's PIN", so offer a replacement even if they already have one.
+  document.getElementById('spn-overwrite').checked = ids.length === 1;
+  document.getElementById('spn-after').style.display = 'none';
+  document.getElementById('spn-msg').innerHTML = '';
+  openModal('modal-set-owner-pin');
+  loadOwnerPinSuggestions();
+}
+function loadOwnerPinSuggestions() {
+  var el = document.getElementById('spn-list');
+  el.innerHTML = '<div class="loading">Loading…</div>';
+  document.getElementById('spn-save').disabled = true;
+  api('POST', '/owner/pin-suggest', { owner_ids: _spnIds, overwrite: document.getElementById('spn-overwrite').checked }).then(function(res){
+    if (!res || res.error) { el.innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc((res && res.error) || 'Could not suggest PINs') + '</div>'; return; }
+    _spnRows = safeArray(res.rows).map(function(r){
+      var o = safeArray(state.owners).find(function(x){ return String(x.ID) === String(r.owner_id); });
+      return { id: r.owner_id, label: o ? ownerLabel(o, true) : ('Owner #' + r.owner_id), phone: r.phone || '', current: r.current_pin || '', pin: r.proposed_pin || '',
+               skipped: r.skipped || '', error: r.error || '', note: r.note || '', fromPhone: !!r.from_phone, status: '' };
+    });
+    renderSpnRows();
+  }).catch(function(e){ el.innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(e.message || 'Error') + '</div>'; });
+}
+function renderSpnRows() {
+  var el = document.getElementById('spn-list');
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Owner</th><th>Phone</th><th>Current PIN</th><th>New PIN</th></tr></thead><tbody>' +
+    _spnRows.map(function(r, i){
+      var cell;
+      if (r.error) cell = '<span style="color:var(--danger)">' + esc(r.error) + '</span>';
+      else if (r.skipped) cell = '<span style="color:var(--muted)">' + esc(r.skipped) + ' — kept</span>';
+      else cell = '<input type="text" class="spn-pin" data-i="' + i + '" value="' + esc(r.pin) + '" maxlength="8" autocomplete="off" style="width:110px;text-transform:uppercase;font-weight:bold;letter-spacing:.08em" oninput="spnEdit(' + i + ',this)">' +
+                  '<div class="spn-st" id="spn-st-' + i + '" style="font-size:10px;min-height:12px"></div>';
+      return '<tr><td>' + esc(r.label) + (r.note ? '<div style="font-size:10px;color:#9a5b00">' + esc(r.note) + '</div>' : '') + '</td><td>' + esc(r.phone || '—') + (r.phone ? '' : '<div style="font-size:10px;color:var(--muted)">no phone — random digits</div>') + '</td>' +
+             '<td style="color:' + (r.current ? 'var(--accent2)' : 'var(--danger)') + ';font-weight:bold">' + esc(r.current || '—') + '</td><td>' + cell + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+  spnValidate();
+}
+function spnEdit(i, inp) {
+  var v = inp.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  if (inp.value !== v) inp.value = v;
+  _spnRows[i].pin = v; spnValidate();
+}
+function spnValidate() {
+  var seen = {}, okCount = 0, bad = 0;
+  _spnRows.forEach(function(r){ if (r.pin && !r.skipped && !r.error) seen[r.pin] = (seen[r.pin] || 0) + 1; });
+  _spnRows.forEach(function(r, i){
+    var st = document.getElementById('spn-st-' + i); if (r.skipped || r.error) return;
+    var msg = r.status === 'saved' ? '' : (r.pin ? (spnRuleError(r.pin) || (seen[r.pin] > 1 ? 'same PIN used twice here' : '')) : 'enter a PIN or leave blank to skip');
+    var ok = r.pin && !msg;
+    r.valid = !!ok;
+    if (st) { st.style.color = r.status === 'saved' ? 'var(--accent2)' : (ok ? 'var(--accent2)' : (r.pin ? 'var(--danger)' : 'var(--muted)')); st.textContent = r.status === 'saved' ? '✓ saved' : (r.status === 'failed' ? ('✗ ' + r.failMsg) : (ok ? '✓ ok' : msg)); }
+    if (r.status !== 'saved') { if (ok) okCount++; else if (r.pin) bad++; }
+  });
+  var btn = document.getElementById('spn-save');
+  btn.disabled = !(okCount > 0 && bad === 0);
+  btn.textContent = okCount ? 'Save ' + okCount + ' PIN' + (okCount === 1 ? '' : 's') : 'Save PINs';
+}
+function saveOwnerPins() {
+  var todo = _spnRows.filter(function(r){ return r.valid && r.status !== 'saved'; });
+  if (!todo.length) return;
+  var btn = document.getElementById('spn-save'); btn.disabled = true; btn.textContent = 'Saving…';
+  api('POST', '/owner/set-pins', { assignments: todo.map(function(r){ return { owner_id: r.id, pin: r.pin }; }) }).then(function(res){
+    if (!res || res.error) { document.getElementById('spn-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc((res && res.error) || 'Could not save') + '</div>'; spnValidate(); return; }
+    safeArray(res.results).forEach(function(x){
+      var r = _spnRows.find(function(q){ return String(q.id) === String(x.owner_id); }); if (!r) return;
+      if (x.ok) { r.status = 'saved'; r.current = x.pin; r.valid = false; if (!_spnSaved.some(function(q){ return String(q.id) === String(r.id); })) _spnSaved.push({ id: r.id, label: r.label, phone: r.phone }); }
+      else { r.status = 'failed'; r.failMsg = x.error || 'failed'; }
+    });
+    renderSpnRows();
+    var failed = _spnRows.filter(function(r){ return r.status === 'failed'; }).length;
+    document.getElementById('spn-msg').innerHTML = '<div style="font-size:12px;color:' + (failed ? '#9a5b00' : 'var(--accent2)') + ';margin-top:6px">Saved ' + res.saved + ' PIN' + (res.saved === 1 ? '' : 's') + (failed ? ' — ' + failed + ' need attention (fix the PIN and save again)' : '') + '.</div>';
+    if (_spnSaved.length) document.getElementById('spn-after').style.display = '';
+    loadAll(); 
+  }).catch(function(e){ document.getElementById('spn-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(e.message || 'Error') + '</div>'; spnValidate(); });
+}
+function spnSendTexts() {
+  var q = _spnSaved.filter(function(r){ return r.phone; }).map(function(r){ return { type: 'owner', id: r.id, name: r.label, phone: r.phone }; });
+  if (!q.length) { toast('None of the saved owners has a phone number to text', 'error'); return; }
+  closeModal('modal-set-owner-pin');
+  openBulkPinSendQueue(q);
+}
+
 // ── Owner onboarding links (Sep 26 2026) ─────────────────────────────────────────────
 function openOwnerInviteModal() {
   ['oi-name','oi-phone','oi-email','oi-note'].forEach(function(id){ document.getElementById(id).value=''; });
@@ -12250,7 +12396,7 @@ function openLinkPropertyModal(ownerId, ownerLabel) {
   sel.innerHTML = '<option value="">Select a property…</option>' +
     sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';})).map(function(p){
       var curOwner = p.Owner_ID ? safeArray(state.owners).find(function(o){return String(o.ID)===String(p.Owner_ID);}) : null;
-      var curLabel = curOwner ? ((curOwner.First_Name+' '+(curOwner.Last_Name||'')).trim() || curOwner.Company) : '';
+      var curLabel = curOwner ? ownerLabel(curOwner) : '';
       var already = String(p.Owner_ID||'')===String(ownerId);
       return '<option value="'+p.ID+'"'+(already?' disabled':'')+'>'+p.Address+(p.City?', '+p.City:'')+
         (already ? ' — already linked' : (curLabel ? ' — currently: '+curLabel : ' — no owner'))+'</option>';
@@ -12385,10 +12531,7 @@ function baKeyTypeToSimple(kt) {
 
 function openBulkAccessModal() {
   var sel = document.getElementById('ba-owner');
-  sel.innerHTML = '<option value="">— select owner —</option>' +
-    safeArray(state.owners).filter(function(o){return o.Active!=='FALSE';}).map(function(o){
-      return '<option value="'+o.ID+'">'+esc((o.First_Name||'')+(o.Last_Name?' '+o.Last_Name:'')+(o.Company?' / '+o.Company:''))+'</option>';
-    }).join('');
+  sel.innerHTML = ownerOptionsHtml('', '<option value="">— select owner —</option>');
   document.getElementById('ba-rows').innerHTML = '<div style="color:var(--muted);font-size:12px">Select an owner to load their properties.</div>';
   document.getElementById('ba-msg').innerHTML = '';
   document.getElementById('ba-submit-btn').disabled = true;
