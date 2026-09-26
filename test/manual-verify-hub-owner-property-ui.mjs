@@ -147,6 +147,35 @@ await page.fill('#eo-b-street', '99 New Rd'); delete posts['/owner/update'];
 await page.evaluate(() => window.submitEditOwner()); await page.waitForTimeout(400);
 ok(posts['/owner/update'] && posts['/owner/update'].fields.Billing_Address === '99 New Rd' && posts['/owner/update'].fields.Billing_City === 'Baltimore', 'Edit Owner saves the billing address');
 
+console.log('(6) Owner dropdowns: business first, else person, never blank');
+await page.evaluate(() => window.openAddPropertyModal());
+const optTexts = await page.locator('#p-owner option').allTextContents();
+const optVals = await page.locator('#p-owner option').evaluateAll(els => els.map(e => e.value));
+ok(optTexts[0] === 'No owner assigned', 'first option is the explicit "No owner assigned"');
+ok(optTexts.slice(1).every(x => x.trim().length > 0 && !/undefined|null/i.test(x)), 'no blank/undefined owner options: ' + JSON.stringify(optTexts));
+ok(optTexts.includes('Lee Holdings'), 'business name is the default label (Pat Lee → "Lee Holdings")');
+ok(optTexts.includes('Ridge Co'), 'company-only owner shows its business name');
+ok(optTexts.includes('Dan Glecker'), 'no business → the person\'s name is used');
+ok(optTexts.includes('Owner #30'), 'a nameless owner still gets a non-blank label');
+ok(optTexts.includes('Goldszmidt Properties — Adrian Goldszmidt') && optTexts.includes('Goldszmidt Properties — Jennifer Goldszmidt'), 'two contacts under one business are told apart by name');
+ok(!optTexts.some(x => x.includes('Zed Inactive')), 'inactive owners are not offered when adding a property');
+const sortedRest = optTexts.slice(1).map(x => x.toLowerCase());
+ok(JSON.stringify(sortedRest) === JSON.stringify([...sortedRest].sort((a, b) => a.localeCompare(b))), 'options are sorted alphabetically');
+ok(new Set(optTexts).size === optTexts.length, 'no two options look identical');
+ok(!optVals.slice(1).some(v => !v), 'every real option has an owner id');
+// other pickers use the same labels
+await page.evaluate(() => window.openAddMasterKeyModal && window.openAddMasterKeyModal());
+const mk = await page.locator('#mk-owner option').allTextContents();
+ok(mk.slice(1).every(x => x.trim()) && mk.includes('Ridge Co'), 'master-key owner picker uses the same labels');
+await page.evaluate(() => window.openBulkAccessModal && window.openBulkAccessModal());
+const ba = await page.locator('#ba-owner option').allTextContents();
+ok(ba.slice(1).every(x => x.trim()) && ba.includes('Dan Glecker'), 'bulk-access owner picker uses the same labels');
+// Edit Property keeps an INACTIVE current owner selectable
+PROPS.push({ ID: '52', Address: '5 Zed St', City: 'Baltimore', Type: 'house', Unit_Count: '1', Owner_ID: '18', Active: 'TRUE', Market: 'Baltimore' });
+await page.evaluate(() => { window.state.properties.push({ ID: '52', Address: '5 Zed St', City: 'Baltimore', Type: 'house', Unit_Count: '1', Owner_ID: '18', Active: 'TRUE', Market: 'Baltimore' }); window.openEditPropertyModal('52'); });
+ok(await page.locator('#ep-owner option:checked').textContent() === 'Zed Inactive Co', 'editing a property whose owner is inactive still shows that owner selected');
+await page.evaluate(() => ['modal-add-property','modal-add-masterkey','modal-bulk-access','modal-edit-property'].forEach(id => window.closeModal(id)));
+
 console.log('(5) Onboarding link modal');
 await page.evaluate(() => window.openOwnerInviteModal());
 await page.waitForSelector('#oi-list >> text=Lee Holdings');
