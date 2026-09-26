@@ -322,7 +322,7 @@ export default {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -714,6 +714,13 @@ export default {
         if (path === '/wishlist/delete')          return await updateRow(env, 'Wishlist', body.id, { Active: 'FALSE' });
         if (path === '/wishlist/status')          return await setWishlistStatus(env, body);
         if (path === '/config/set')               return await setConfigKey(env, body);
+        // Narrow, single-purpose alternative to /config/set (Sep 24 2026, Queue #14/#10 opt-in
+        // build): /config/set requires the full WORKER_SECRET, which no session or UI ever
+        // solicits (see CLAUDE.md's security note), so there was previously NO way for Brett to
+        // flip failure_alert_enabled / dead_man_switch_enabled himself. This endpoint writes
+        // ONLY those two named Config keys — never a generic key/value passthrough — so it can
+        // never become a backdoor generic config setter, whatever the caller sends.
+        if (path === '/admin/set-alert-flags')    return await setAlertFlags(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
         if (path === '/judge')                    return await judgeRun(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
@@ -15579,6 +15586,43 @@ async function setConfigKey(env, body) {
   return json({ success: true });
 }
 
+// POST /admin/set-alert-flags (Sep 24 2026, Queue #14/#10 opt-in build) — the narrow,
+// purpose-built alternative to /config/set for these two flags. Writes ONLY the two named
+// keys below (never an arbitrary key from the body), and coerces every value to the literal
+// 'TRUE'/'FALSE' strings the rest of the Worker already reads via
+// String(cfg.failure_alert_enabled||'').toUpperCase()!=='TRUE' (see callWithFailureAlert /
+// deadManSwitchCheck) — so this can never be pointed at any other Config row.
+const ALERT_FLAG_KEYS = ['failure_alert_enabled', 'dead_man_switch_enabled'];
+async function setAlertFlags(env, body) {
+  const updates = {};
+  for (const k of ALERT_FLAG_KEYS) {
+    if (body && Object.prototype.hasOwnProperty.call(body, k)) {
+      updates[k] = (body[k] === true || String(body[k]).toUpperCase() === 'TRUE') ? 'TRUE' : 'FALSE';
+    }
+  }
+  if (!Object.keys(updates).length) return json({ error: 'Provide at least one of: ' + ALERT_FLAG_KEYS.join(', ') }, 400);
+  const data = await sheetsRequest(env, 'GET', '/values/Config');
+  const rows = data.values || [];
+  const batchData = [];
+  const appends = [];
+  for (const key of Object.keys(updates)) {
+    const value = updates[key];
+    const rowIdx = rows.findIndex(r => (r[0] || '').trim() === key);
+    if (rowIdx >= 0) {
+      batchData.push({ range: `Config!B${rowIdx + 1}`, values: [[value]] });
+    } else {
+      appends.push([key, value]);
+    }
+  }
+  if (batchData.length) {
+    await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batchData });
+  }
+  for (const row of appends) {
+    await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: [row] });
+  }
+  return json({ success: true, updated: updates });
+}
+
 function nextSafeId(rows) {
   if(rows.length<=1) return 1;
   const ids=rows.slice(1).map(r=>parseInt(r[0]||'0')).filter(n=>Number.isFinite(n)&&n>0);
@@ -15952,6 +15996,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return true;
   }
   if (path === '/admin/seed-test-receipt') return true; // self-scoped to TEST-PROPERTY-001 internally, staging-only (see seedTestReceipt)
+  if (path === '/admin/set-alert-flags') return true; // Config is global (no per-record row to check), but setAlertFlags itself hard-codes the only two keys it will ever write (failure_alert_enabled, dead_man_switch_enabled) and coerces every value to 'TRUE'/'FALSE' — structurally cannot become a generic config write regardless of caller, same SAFE-class reasoning as the duplicate-audit paths above.
   if (path === '/receipt-recon/confirm') {
     // Confirm can create a fresh Receipts row without a WO (a company/BMore expense) or bill an
     // existing WO — gate on whichever applies, same isTestRecord pattern as /workorder above.
