@@ -182,7 +182,7 @@ Regina's Venmo notes often include "less $10 loan repayment" (and sometimes "plu
 ## 10. Backfill + first live run
 
 1. **K&C Cleaning #000040 — $160.00, invoice date Aug 31, due Sep 15, paid Sep 25 by card 2326** → create as a **paid** Bill (Cleaning, billable to 1864 Kerns School Road, LLC, paid from the …6287 account). This is the first run and the first acceptance test after the feature is built; it is **not** posted by hand or outside the feature (no existing Hub route posts a property-level, non-WO bill).
-2. **Regina Saville Venmo payments** (Aug 6 – Sep 25, roughly ten payments for 1864 Kerns School Rd cleaning) → produce a **dry-run list** for Brett's approval before anything posts (whether to backfill is Section 11 Q2). Also check QuickBooks for any already entered.
+2. **Regina Saville Venmo payments** (Aug 6 – Sep 25, roughly ten payments for 1864 Kerns School Rd cleaning) → **Brett approved backfilling anything missing, as paid bills at the Venmo amount** (loan repayments not posted, Section 9b). Search QuickBooks first for any already entered (vendor + date + amount), skip those, and produce a **dry-run list** (date, Venmo transaction id, amount, note, in-QB yes/no) for Brett to glance at before the batch posts. Post as one batch after that approval. The brett@ inbox holds the Venmo emails from Aug 6 on; anything earlier than that needs a wider Gmail search first.
 3. Backfill window and existing-in-QB check use the same duplicate guard as Section 9.
 
 ---
