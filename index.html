@@ -4844,9 +4844,13 @@ function bulkSendPinFromTab(listId) {
   var scopeEl = (listId && document.getElementById(listId)) || document;
   var checked = Array.from(scopeEl.querySelectorAll('.pin-check:checked'));
   if (!checked.length) return;
-  _pinSendQueue = checked.map(function(cb) {
+  openBulkPinSendQueue(checked.map(function(cb) {
     return { type: cb.dataset.type, id: cb.dataset.id, name: cb.dataset.name, phone: cb.dataset.phone };
-  });
+  }));
+}
+// Opens the existing "send PINs by text" dialog for an explicit list (used by the checkbox flow above and by Set PIN).
+function openBulkPinSendQueue(queue) {
+  _pinSendQueue = queue;
   var listEl = document.getElementById('bulk-pin-list');
   listEl.innerHTML = _pinSendQueue.map(function(item) {
     return '<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--surface2);border-radius:4px;align-items:center">' +
