@@ -243,7 +243,8 @@ Pure/offline (fixtures from real emails):
 
 UI (Playwright against staging):
 14. Badge count equals undecided cards; clears when each is decided; Who To Pay's existing sections unchanged.
-15. All four card actions work, including register-with-preview and record-as-expense; registering shows the exact QB entry first.
+15. All card actions work, including register-with-preview and record-as-expense; registering shows the exact QB entry first. Skip requires a reason and logs it.
+15b. Non-financial mail caught by a broad rule (e.g. Venmo "You were paid", Stripe/Square marketing or account notice, password reset) → no card, no badge count, no queue row, one Log-tab line. Fixtures from real examples in brett@.
 16. Pay button opens the vendor link; after a paid email is scanned the bill shows paid without a page reload issue.
 
 Live (Brett-supervised, first run only):
