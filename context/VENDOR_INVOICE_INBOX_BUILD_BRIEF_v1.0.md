@@ -35,6 +35,8 @@ Motivating cases:
 - **Venmo:** Venmo receipts feed the **same mark-paid path** and **also create the bill in QuickBooks**, same property, marked paid **through the 6287 account** (that's the funding account for his Venmo payments).
 - K&C invoice #000040 is **not in QuickBooks yet** — create it and bring the books up to date (Section 10).
 - Queue card options: **the card must offer "Record as expense"** so that a paid receipt with no vendor payable still gets into QuickBooks. Ignoring is only for non-financial mail (Section 5).
+- **Regina's loan repayments do NOT go into QuickBooks.** Brett only needs to *track* them, in his existing spreadsheet for now, and in the Hub once the vendor loan/advance ledger is built (CAP-036 item 13, Sep 24 2026 capture; also covers Alex, whose repayment is an automatic deduction from invoice payments). See Section 9b.
+- **Backfill Regina's past Venmo payments into QuickBooks as paid bills** (anything not already there). Brett approved the backfill; a dry-run list is still shown before posting (Section 10).
 - Notification: **badge only** on Who To Pay. No texts, no daily email (later).
 - Location: **Who To Pay** page.
 - Aliases/filters: **no per-vendor alias, no per-vendor filter.** One broad intake plus classification in the Hub (Section 4). Brett may still add aliases by hand.
