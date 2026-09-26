@@ -226,7 +226,7 @@ function renderStep1(){
     '<div class="row3"><div>'+field('owner.billing_address.city','City',{ac:'address-level2'})+'</div><div>'+field('owner.billing_address.state','State',{select:STATES,placeholder:'State',ac:'address-level1'})+'</div><div>'+field('owner.billing_address.zip','ZIP',{im:'numeric',ac:'postal-code'})+'</div></div>' +
   '</div>' +
   '<div class="card"><div class="sec">Your PIN</div>' +
-    '<div class="hint" style="margin-top:0">You\'ll use this PIN (with your first name) to sign in to your owner portal. Pick something you\'ll remember.</div>' +
+    '<div class="hint" style="margin-top:0">You\'ll use this PIN (with your first name) to sign in to your owner portal. Tap Suggest for one built from your phone number, or pick your own.</div>' +
     '<label class="f" for="owner.pin">Choose a PIN</label>' +
     '<div class="pinrow"><input id="owner.pin" data-p="owner.pin" type="text" autocomplete="off" autocapitalize="characters" maxlength="8" placeholder="ABC12345" value="'+esc(o.pin)+'" class="'+(errs['owner.pin']?'bad':'')+'"><button class="btn sec" type="button" id="sugg">Suggest</button></div>' +
     '<ul class="rules" id="rules"><li class="'+(r.letters?'ok':'')+'">3 letters to start</li><li class="'+(r.numbers?'ok':'')+'">followed by 5 numbers</li><li class="'+(r.simple?'ok':'')+'">not a simple run (like 12345 or 11111)</li></ul>' +
