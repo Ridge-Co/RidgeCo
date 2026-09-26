@@ -221,6 +221,8 @@ input[type=file]{display:none;}
     <div class="tab" id="tabDue" data-i18n="NEEDS INVOICE" onclick="switchTab('due')">NEEDS INVOICE</div>
   </div>
 
+  <div id="vtrBanner"></div>
+
   <div style="margin-bottom:10px;position:relative"><input type="text" id="woSearch" placeholder="Search by WO #, ref #, address, trade…" oninput="filterVendorWOs()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px 10px 10px 32px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none">⌕</span></div><div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"><select id="vFilterTrade" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Trades</option><option>Plumbing</option><option>Electrical</option><option>HVAC</option><option>Appliance</option><option>General</option><option>Carpentry</option><option>Painting</option><option>Flooring</option><option>Roofing</option><option>Windows</option><option>Locks</option><option>Landscaping</option><option>Cleaning</option><option>Pest Control</option></select><select id="vFilterPriority" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><select id="vSort" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="priority">Priority</option><option value="address">Address A-Z</option><option value="date-desc">Newest First</option><option value="date-asc">Oldest First</option></select></div>
 <div id="woList"><div class="spinner">Loading work orders…</div></div>
 </div>
@@ -331,6 +333,7 @@ function onLoginSuccess(data, persist) {
   var oneOffBtn = document.getElementById('btnLogOneOffJob');
   if (oneOffBtn) oneOffBtn.style.display = (data.can_create_own_wo === true || String(data.can_create_own_wo).toUpperCase() === 'TRUE') ? '' : 'none';
   loadWorkOrders();
+  loadVendorTaskAlerts();
   if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
 }
 
@@ -403,6 +406,48 @@ function doLogout() {
   show('screenDash', false);
   show('screenLogin', true);
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+}
+
+// Vendor Task Requests (CAP-036 #12, Sep 24 2026) -- "Needs Your Attention". A dedicated,
+// prominent section at the top of the portal (above the job list) for anything Brett has
+// explicitly flagged -- Request Photos, Request Description Update, or Other -- scoped to the
+// vendor's estimate or invoice on a WO. Marking one done does NOT resolve it here -- it moves
+// into Brett's own review queue; the vendor sees it disappear from this list once marked.
+var VTR_TYPE_LABELS_VENDOR = { photos: 'Upload photos', description: 'Update / clarify your description', other: 'Request' };
+function loadVendorTaskAlerts() {
+  if (!session) return;
+  api('/vendor-task-requests?status=open').then(function(rows) {
+    renderVendorTaskAlerts(rows || []);
+  }).catch(function(e) { console.error('[loadVendorTaskAlerts]', e); });
+}
+function renderVendorTaskAlerts(rows) {
+  var el = document.getElementById('vtrBanner');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = ''; return; }
+  var items = rows.map(function(r) {
+    var typeLabel = VTR_TYPE_LABELS_VENDOR[r.Request_Type] || 'Request';
+    var scopeLabel = r.Scope === 'invoice' ? 'invoice' : 'estimate';
+    return '<div style="background:var(--surface);border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:8px">' +
+      '<div style="font-size:12px;font-weight:bold;color:var(--warn);margin-bottom:2px">' + esc(r.WO_ID || '') + ' -- ' + esc(typeLabel) + ' (' + esc(scopeLabel) + ')</div>' +
+      '<div style="font-size:12px;color:var(--text);margin-bottom:8px;white-space:pre-wrap">' + esc(r.Message || '') + '</div>' +
+      '<button class="btn btn-sm" onclick="markVendorTaskRequestDone(\'' + esc(r.ID) + '\')" id="vtr-done-' + esc(r.ID) + '">Mark Done</button>' +
+      '</div>';
+  }).join('');
+  el.innerHTML = '<div style="background:#fdf2e2;border:2px solid var(--warn);border-radius:8px;padding:12px;margin-bottom:14px">' +
+    '<div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--warn);font-weight:bold;margin-bottom:8px">NEEDS YOUR ATTENTION (' + rows.length + ')</div>' +
+    items + '</div>';
+}
+function markVendorTaskRequestDone(id) {
+  var btn = document.getElementById('vtr-done-' + id);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  api('POST', '/vendor-task-request/mark-done', { id: id }).then(function(res) {
+    if (res.error) { toast(res.error, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Mark Done'; } return; }
+    toast('Marked done -- Brett will take a look', 'success');
+    loadVendorTaskAlerts();
+  }).catch(function(e) {
+    toast('Error: ' + (e.message || 'unknown'), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Mark Done'; }
+  });
 }
 
 // ══════════════════════════════════════════════════════════════

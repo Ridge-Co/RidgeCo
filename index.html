@@ -662,6 +662,15 @@ window.addEventListener('pageshow', function(e){
   </div>
 
   <div class="page" id="page-devlog">
+    <!-- VENDOR TASK REQUESTS -- NEEDS YOUR REVIEW (CAP-036 #12, Sep 24 2026). A vendor marking
+         a Flag-Vendor-Issue request "done" from their portal does NOT resolve it -- it lands
+         here until Brett does his own manual check and clicks Reviewed. -->
+    <div id="vtr-review-wrap" style="margin-bottom:22px">
+      <div class="section-title" style="margin-bottom:6px">🚩 VENDOR TASK REQUESTS — NEEDS YOUR REVIEW</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">A vendor marked these done from their portal. Nothing here is auto-resolved -- give each one a quick look, then mark it reviewed.</div>
+      <div id="vtr-review-list"><div style="font-size:12px;color:var(--muted)">Loading...</div></div>
+    </div>
+
     <!-- TOOLS — grouped so this page stays navigable as tools grow (FEATURE_LOG rule 57, extended
          Aug 10: one TOOLS area, sub-grouped by purpose). Launcher buttons window.open a standalone
          page which inherits the Hub admin token (mh_auth, same origin) so it opens already logged in;
@@ -966,6 +975,40 @@ window.addEventListener('pageshow', function(e){
       </div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-share-wo')">Close</button></div>
+  </div>
+</div>
+
+<!-- VENDOR TASK REQUEST MODAL (CAP-036 #12, Sep 24 2026) — "Flag Vendor Issue". Opened from
+     either the WO detail view or the Review Bills card. Photos/Description are canned-message
+     buttons; Other requires a free-typed message. Always scoped to estimate or invoice. -->
+<div class="modal-overlay" id="modal-vendor-task-request">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">🚩 FLAG VENDOR ISSUE</div><button class="modal-close" onclick="closeModal('modal-vendor-task-request')">✕</button></div>
+    <div id="vtr-context" style="color:var(--muted);font-size:12px;margin-bottom:12px"></div>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label>What do you need from the vendor?</label>
+        <select id="vtr-type" onchange="vtrOnTypeChange()">
+          <option value="photos">📷 Request Photos</option>
+          <option value="description">✎ Request Description Update / Clarification</option>
+          <option value="other">💬 Other (type your own)</option>
+        </select>
+      </div>
+      <div class="form-group full">
+        <label>Is this about their estimate or their invoice?</label>
+        <select id="vtr-scope">
+          <option value="estimate">Estimate</option>
+          <option value="invoice">Invoice</option>
+        </select>
+      </div>
+      <div class="form-group full" id="vtr-other-wrap" style="display:none">
+        <label>Message to the vendor</label>
+        <textarea id="vtr-other-msg" placeholder="What do you need from them?"></textarea>
+      </div>
+    </div>
+    <div style="color:var(--muted);font-size:11px;margin-top:2px">This sends the vendor a text and shows in a dedicated section of their portal. When they mark it done, it lands in your own "Needs Your Review" queue — it's never auto-resolved.</div>
+    <div id="vtr-error" style="color:#e55;font-size:12px;margin-top:8px;display:none"></div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-vendor-task-request')">Cancel</button><button class="btn" id="vtr-submit-btn" onclick="submitVendorTaskRequest()">Send Request</button></div>
   </div>
 </div>
 
@@ -1885,7 +1928,7 @@ function showPage(name, btn) {
   document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('page-'+name).classList.add('active');
   if (btn) btn.classList.add('active');
-  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); loadVendorAccessRequests(); }
+  if (name === 'devlog') { renderErrorLog(); loadWishlist(); loadTradeAccessDefaults(); loadVendorTaskReviewQueue(); loadVendorAccessRequests(); }
   if (name === 'invoice-review') { loadSendTrack(); loadInvoiceReview(); }
   if (name === 'qb-send') { loadQBQueue(); }
   if (name === 'qb-map')  { loadQBMapping(false); }
@@ -2469,6 +2512,17 @@ function openWODetail(woId) {
     '</div>';
 
   document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
+  // Vendor Task Requests (CAP-036 #12) -- its own section/insert, deliberately separate
+  // from the addBtn(...) action-buttons block above so it never collides with that code.
+  var vtrSection = wo.Vendor_ID ? (
+    '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">VENDOR TASK REQUESTS</div>' +
+    '<button class="btn secondary" onclick="openVendorTaskRequestModal(\'' + woId + '\',\'' + wo.Vendor_ID + '\')">🚩 Flag Vendor Issue (Photos / Description / Other)</button>' +
+    '<div id="vtr-wo-list-' + woId + '" style="margin-top:8px"></div>' +
+    '</div>'
+  ) : '';
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', vtrSection);
+  if (wo.Vendor_ID) loadVendorTaskRequestsForWO(woId);
 
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
@@ -2629,6 +2683,63 @@ function updateWOStatus(woId,status) {
 // Manual vendor request — "Request photos"/"Request invoice" buttons on the WO detail view
 // (Sep 14 2026). Confirms first since this sends immediately (no preview step, unlike PIN/
 // Welcome) — the message itself is short and standardized enough not to need per-send editing.
+// Vendor Task Requests (CAP-036 #12, Sep 24 2026) -- "Flag Vendor Issue". A DIFFERENT feature
+// from requestFromVendor()/Vendor_Requests below (the automatic chase-a-quiet-vendor clock).
+// This is Brett EXPLICITLY flagging something for a vendor to address (canned Photos/
+// Description or a free-typed Other), scoped to their estimate or invoice, opened from either
+// the WO detail view or a Review Bills card. Reused by both call sites.
+var _vtrCtx = null;
+var VTR_TYPE_LABELS = { photos: 'Photos', description: 'Description Update', other: 'Other' };
+function openVendorTaskRequestModal(woId, vendorId) {
+  if (!vendorId) { toast('This work order has no vendor assigned yet.', 'error'); return; }
+  _vtrCtx = { wo_id: woId, vendor_id: vendorId };
+  var vendor = safeArray(state.vendors).find(function(v){ return String(v.ID) === String(vendorId); });
+  document.getElementById('vtr-context').textContent = woId + (vendor ? ' -- ' + (vendor.Name || vendor.First_Name || 'vendor') : '');
+  document.getElementById('vtr-type').value = 'photos';
+  document.getElementById('vtr-scope').value = 'estimate';
+  document.getElementById('vtr-other-msg').value = '';
+  document.getElementById('vtr-other-wrap').style.display = 'none';
+  document.getElementById('vtr-error').style.display = 'none';
+  openModal('modal-vendor-task-request');
+}
+function vtrOnTypeChange() {
+  document.getElementById('vtr-other-wrap').style.display = document.getElementById('vtr-type').value === 'other' ? '' : 'none';
+}
+function submitVendorTaskRequest() {
+  if (!_vtrCtx) return;
+  var type = document.getElementById('vtr-type').value;
+  var scope = document.getElementById('vtr-scope').value;
+  var msg = document.getElementById('vtr-other-msg').value.trim();
+  var errEl = document.getElementById('vtr-error');
+  errEl.style.display = 'none';
+  if (type === 'other' && !msg) { errEl.textContent = 'Please type a message for "Other".'; errEl.style.display = ''; return; }
+  var btn = document.getElementById('vtr-submit-btn');
+  btn.disabled = true; btn.textContent = 'Sending...';
+  api('POST', '/vendor-task-request/create', { wo_id: _vtrCtx.wo_id, vendor_id: _vtrCtx.vendor_id, request_type: type, scope: scope, message: msg, created_by: 'brett' })
+    .then(function(res) {
+      btn.disabled = false; btn.textContent = 'Send Request';
+      if (res.error) { errEl.textContent = res.error; errEl.style.display = ''; return; }
+      closeModal('modal-vendor-task-request');
+      toast(res.sent ? 'Sent to vendor' : (res.no_phone ? 'Saved -- vendor has no phone on file, but it shows in their portal' : 'Saved'), 'success');
+      if (typeof loadVendorTaskRequestsForWO === 'function' && _vtrCtx) loadVendorTaskRequestsForWO(_vtrCtx.wo_id);
+    })
+    .catch(function(e) { btn.disabled = false; btn.textContent = 'Send Request'; errEl.textContent = e.message || 'Error'; errEl.style.display = ''; });
+}
+// Small read-only list of this WO's own task requests, shown right under the Flag button on
+// the WO detail view -- so Brett can see what's already open/pending without leaving the modal.
+function loadVendorTaskRequestsForWO(woId) {
+  var el = document.getElementById('vtr-wo-list-' + woId);
+  if (!el) return;
+  api('GET', '/vendor-task-requests?wo_id=' + encodeURIComponent(woId)).then(function(rows) {
+    if (!el || !rows || !rows.length) { if (el) el.innerHTML = ''; return; }
+    el.innerHTML = rows.map(function(r) {
+      var statusLabel = r.Status === 'open' ? 'Open' : r.Status === 'vendor_marked_done' ? 'Vendor says done -- needs your review' : 'Resolved';
+      return '<div style="font-size:11px;color:var(--muted);padding:4px 0;border-top:1px solid var(--border)">' +
+        esc(VTR_TYPE_LABELS[r.Request_Type] || r.Request_Type) + ' (' + esc(r.Scope || '') + ') -- ' + statusLabel + '</div>';
+    }).join('');
+  }).catch(function() { /* non-fatal -- this is a convenience view */ });
+}
+
 function requestFromVendor(woId, vendorId, requestType) {
   var label = requestType === 'photos' ? 'photos' : 'invoice';
   if (!confirm('Send a request for '+label+' to the vendor on '+woId+'? A follow-up reminder will repeat automatically until it\'s satisfied.')) return;
@@ -4702,6 +4813,45 @@ var WL_STATUSES=[
   {key:'Not applicable',label:'✗ N-A',       border:'var(--muted)',   badge:'var(--muted)'}
 ];
 function wlStatusOf(item){ var s=(item.Status||'').trim(); return s||'Active'; }
+// Vendor Task Requests -- admin "needs your review" queue (CAP-036 #12)
+function loadVendorTaskReviewQueue() {
+  var el = document.getElementById('vtr-review-list');
+  if (!el) return;
+  api('GET', '/vendor-task-requests/pending-review').then(function(rows) {
+    renderVendorTaskReviewQueue(rows || []);
+  }).catch(function(e) { el.innerHTML = '<div style="color:#e55;font-size:12px">Failed to load: ' + esc(e.message || '') + '</div>'; });
+}
+function renderVendorTaskReviewQueue(rows) {
+  var el = document.getElementById('vtr-review-list');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = '<div style="font-size:12px;color:var(--muted)">Nothing waiting on your review.</div>'; return; }
+  el.innerHTML = rows.map(function(r) {
+    var wo = safeArray(state.workorders).find(function(w){ return w.ID === r.WO_ID; });
+    var vendor = safeArray(state.vendors).find(function(v){ return String(v.ID) === String(r.Vendor_ID); });
+    var addr = wo ? (safeArray(state.properties).find(function(p){return String(p.ID)===String(wo.Property_ID);})||{}).Address : '';
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">' +
+      '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px">' +
+        '<div><a href="javascript:void(0)" onclick="openWODetail(\''+esc(r.WO_ID)+'\')" style="color:var(--info);font-weight:bold;font-size:13px">' + esc(r.WO_ID) + '</a>' +
+        (addr ? ' <span style="color:var(--muted);font-size:11px">-- ' + esc(addr) + '</span>' : '') + '</div>' +
+        '<div style="color:var(--muted);font-size:11px">' + esc((vendor && (vendor.Name || vendor.First_Name)) || r.Vendor_ID) + '</div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text);margin-bottom:4px"><b>' + esc(r.Request_Type||'') + '</b> (' + esc(r.Scope||'') + ')</div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-bottom:8px;white-space:pre-wrap">' + esc(r.Message||'') + '</div>' +
+      '<div style="font-size:10.5px;color:var(--muted);margin-bottom:8px">Vendor marked done: ' + esc((r.Vendor_Marked_Done_Date||'').split('T')[0]||'—') + '</div>' +
+      '<button class="btn btn-sm" onclick="markVendorTaskReviewed(\''+esc(r.ID)+'\')" id="vtr-review-btn-'+esc(r.ID)+'">Mark Reviewed</button>' +
+    '</div>';
+  }).join('');
+}
+function markVendorTaskReviewed(id) {
+  var btn = document.getElementById('vtr-review-btn-' + id);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  api('POST', '/vendor-task-request/mark-reviewed', { id: id }).then(function(res) {
+    if (res.error) { toast(res.error, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Mark Reviewed'; } return; }
+    toast('Marked reviewed', 'success');
+    loadVendorTaskReviewQueue();
+  }).catch(function(e) { toast('Error: ' + (e.message || 'unknown'), 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Mark Reviewed'; } });
+}
+
 function loadWishlist(){
   api('GET','/wishlist').then(function(items){
     wishlistItems=Array.isArray(items)?items.filter(function(i){return i.Active!=='FALSE';}):[]; renderWishlist();
@@ -9862,6 +10012,7 @@ function renderIRCard(b, i) {
 
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">' +
       '<button onclick="irSkip('+i+')" title="Hides this card until the next refresh \u2014 the bill stays in the queue" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:9px 14px;cursor:pointer">Hide for now</button>' +
+      (b.Vendor_ID ? '<button onclick="openVendorTaskRequestModal(\''+esc(woId)+'\',\''+esc(b.Vendor_ID)+'\')" style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:6px;font-family:var(--font);font-size:12px;padding:9px 14px;cursor:pointer">🚩 Flag Vendor Issue</button>' : '') +
     '</div>' +
 
     '<div id="ir-msg-'+i+'" style="margin-top:8px"></div>' +
