@@ -4094,6 +4094,8 @@ function epTypeChanged(){
   var type = document.getElementById('ep-type').value;
   var isMulti = EP_MULTI_TYPES.indexOf(type)!==-1;
   document.getElementById('ep-units-section').style.display = isMulti ? 'block' : 'none';
+  document.getElementById('ep-subtype-wrap').style.display = type === 'commercial' ? '' : 'none';
+  if (type !== 'commercial') document.getElementById('ep-subtype').value = '';
   document.getElementById('ep-two-units-scope').style.display = isMulti ? 'block' : 'none';
 }
 // Part B, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 — unit-scoping checkboxes for
