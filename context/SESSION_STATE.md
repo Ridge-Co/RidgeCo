@@ -2,7 +2,24 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Last checkpoint: Sep 24, 2026 — Allow-list simplification shipped (PR #55); property/unit linking discoverability + duplicate-check shipped (PR #57)
+## Last checkpoint: Sep 26, 2026 (~18:20 ET) — BrettOS Tasks Manager quick-link shipped (PR #76 → staging, PR #77 → main)
+
+**What happened:** Session's main work was on the separate `brett332/BrettOS` Apps Script project
+(Google Tasks ↔ BrettOS Tasks Sheet sync) — multi-list auto-categorization, a learned-rule review
+web page, and a `clasp` + GitHub Actions auto-deploy pipeline (same shape as this repo's own
+Cloudflare Workers Builds). Full detail lives in the claude.ai "Continuous Improvement" Project's
+`task-capture-tasks-sheet-sync.md`, not here, since it's bound to a different Sheet/Worker than
+this repo. The one piece that touches THIS repo: two "🗒️ Tasks Manager" buttons added to
+`index.html` (Dashboard/Command Center + Dev Log tools group), linking to the deployed web app so
+Brett can reach it without a bookmark. UI-only, no `worker.js` change — PR #76 (staging) and PR #77
+(main) both merged same session, no interim staging-only period needed. Live-verified by fetching
+`https://ridge-co.github.io/RidgeCo/` directly and confirming both button strings are present.
+FEATURE_LOG rule 198 (`[FL-20260926-2210-tm]`).
+
+**Next step:** Brett is going to organize/update his task list (existing + new items) in a
+new session next — likely BACKLOG.md and/or the BrettOS Tasks Sheet itself, not yet scoped.
+
+## Previous checkpoint: Sep 24, 2026 — Allow-list simplification shipped (PR #55); property/unit linking discoverability + duplicate-check shipped (PR #57)
 
 **What happened:** Closed out `ALLOWLIST_SIMPLIFICATION_BUILD_BRIEF_v1.0.md` (all 3 changes: gh-broker
 redundant arrays removed direct-to-main; `HUB_TEST_TOKEN` broadened on staging; `HUB_PROD_RO_TOKEN`
