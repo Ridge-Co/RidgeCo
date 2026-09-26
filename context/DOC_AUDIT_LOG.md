@@ -107,3 +107,65 @@ Checked commits: 278 (excluding merges/doc-audit itself)
 - `acbc1e7` (2026-09-22 20:20) wo-combine: add offline tests for resolveCombineFields() and woCombine() — best single-entry match: 40%
 - `5fa56b0` (2026-09-22 20:05) wo-combine: add woCombine() + resolveCombineFields() backend logic — best single-entry match: 40%
 - `64f9f4b` (2026-09-22 19:48) Reconciler: rowCard uses evidenceHtml wrapper — best single-entry match: 40%
+
+## Run: 2026-09-24 17:42 UTC
+Since: 2026-09-23 (source: this script's own last recorded run)
+Checked commits: 373 (excluding merges/doc-audit itself)
+**45 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `db4e1f7` (2026-09-24 17:11) TASK_LINKING_BUILD_BRIEF: mark step 2 staged, flag unverified Sheet-sharing open question — best single-entry match: 44%
+- `a50f9ea` (2026-09-24 17:06) Fix: statement importer re-processed the same first 100 rows on resume — add offset/next_offset — best single-entry match: 44%
+- `5d0126e` (2026-09-24 16:59) Add Task Linking + One-Off→System Surfacing build brief (design capture, doc-only) — best single-entry match: 33%
+- `c1ac6cd` (2026-09-24 15:14) Clarify Alex loan deduction floor: no deduction under $100 — best single-entry match: 29%
+- `b3c9353` (2026-09-24 15:12) Add Alex loan deduction formula to CAP-036 (final) — best single-entry match: 33%
+- `96654d0` (2026-09-24 15:07) Resolve Alex loan starting balance as an approximate placeholder — best single-entry match: 43%
+- `4a2b083` (2026-09-24 15:01) Update CAP-036 with Brett's answers: Alex loan source (unconfirmed amount), Pending-Info scope, notification-matrix priority — best single-entry match: 33%
+- `1ee700f` (2026-09-23 19:21) Remove temporary vendor-onboarding-diag debug endpoint (investigation complete) — best single-entry match: 43%
+- `60e1125` (2026-09-23 19:18) Temporary debug endpoint: diagnose vendor-onboarding 401 (Vendor Onboarding Phase 1 follow-up) — best single-entry match: 44%
+- `a0ffdaa` (2026-09-23 18:20) Vendor Onboarding Phase 1: register GET /vendor-onboarding-status and /vendor-onboarding-gaps — best single-entry match: 43%
+- `066a79a` (2026-09-23 17:40) reconcile: bulk-void UI from feat/wo-bulk-void (4/6) - per-row checkbox wiring — best single-entry match: 43%
+- `bc2f161` (2026-09-23 17:40) reconcile: bulk-void UI from feat/wo-bulk-void (2/6) - toolbar Void button — best single-entry match: 43%
+- `fe3721c` (2026-09-23 17:39) reconcile: add unit_id narrowing to property-notice broadcast (4/4) — best single-entry match: 20%
+- `dabec94` (2026-09-23 17:39) reconcile: add unit_id narrowing to property-notice broadcast (3/4) — best single-entry match: 20%
+- `c4c4469` (2026-09-23 17:39) reconcile: add unit_id narrowing to property-notice broadcast (2/4) — best single-entry match: 20%
+- `1ba9390` (2026-09-23 17:39) reconcile: add unit_id narrowing to property-notice broadcast (from feat/wo-bulk-void, unrelated additive) — best single-entry match: 44%
+- `8b2fead` (2026-09-23 16:30) Fix duplicate closing brace introduced in merge step 17 (hubTestWriteAllowed) — best single-entry match: 43%
+- `fff0a9d` (2026-09-23 16:30) Fix duplicate closing brace introduced in merge step 10 (seedTestReceipt) — best single-entry match: 43%
+- `f62d707` (2026-09-23 16:29) Conflict-resolution merge (17/17): bring in hubTestWriteAllowed cases for bulk-void/receipt-recon from staging — best single-entry match: 38%
+- `7a02eb2` (2026-09-23 16:29) Conflict-resolution merge (16/17): remove now-duplicate post-fetch cutoff line (moved earlier per staging's latency fix) — best single-entry match: 42%
+- `c72bab2` (2026-09-23 16:29) Conflict-resolution merge (15/17): bring in cutoff-before-fetch latency fix comment/code from staging — best single-entry match: 38%
+- `22facc3` (2026-09-23 16:28) Conflict-resolution merge (14/17): bring in woBulkVoid/woBulkVoidMoneyBlockReason from staging — best single-entry match: 33%
+- `89ad03d` (2026-09-23 16:28) Conflict-resolution merge (13/17): apply the claim/poll dupe-guard logic in createWorkOrder from staging — best single-entry match: 44%
+- `e096759` (2026-09-23 16:28) Conflict-resolution merge (12/17): bring in the WO-1213/WO-1214 dupe-race root-cause comment + _woSig setup from staging — best single-entry match: 45%
+- `985f3c4` (2026-09-23 16:28) Conflict-resolution merge (11/17): bring in claimWOSignature helper (dupe-guard fix) from staging — best single-entry match: 43%
+- `62ecb16` (2026-09-23 16:27) Conflict-resolution merge (10/17): bring in receipt-recon reassign/mark-refund/search + seedTestReceipt functions from staging (fix a placeholder accidentally committed in the previous step) — best single-entry match: 33%
+- `ddeec6d` (2026-09-23 16:25) Conflict-resolution merge (8/17): bring in Manual_Refund override rendering from staging — best single-entry match: 43%
+- `92100da` (2026-09-23 16:25) Conflict-resolution merge (2/17): bring in staging's HUB_TEST allow-list additions — best single-entry match: 43%
+- `bc8746b` (2026-09-23 16:03) Flag unresolved staging-deploy-lag question found while live-testing the new PAT-033 autonomy — best single-entry match: 44%
+- `95e890d` (2026-09-23 16:00) Add reassign/mark-refund/mark-refund-confirmed/search + seedTestReceipt functions — best single-entry match: 33%
+- `f9ccce0` (2026-09-23 15:58) Add Confirmed_Receipt_ID, Manual_Refund columns to Receipt_Recon_Queue schema — best single-entry match: 40%
+- `d93d499` (2026-09-23 14:11) Combine modal: expand BC_FIELDS (drop Description, add the previously-silent-defaulted fields), add BC_MERGE_FIELDS — best single-entry match: 44%
+- `61f4294` (2026-09-23 13:57) openUnitDetail: avoid double-prefixing Unit_Label, mirroring worker.js formatUnitLabel — best single-entry match: 43%
+- `bdfcdb0` (2026-09-23 13:56) Add formatUnitLabel helper (avoid double-prefixing Unit_Label) — best single-entry match: 40%
+- `5152445` (2026-09-23 13:53) Add claimWOSignature: same-isolate synchronous claim to close the WO-create TOCTOU race — best single-entry match: 38%
+- `f1e8a72` (2026-09-23 01:46) Part 3: pure-logic + wiring tests for refund detection, matching, and the Rung-3 reversal write — reconstructs the real Aug 24 2026 Home Depot return as a fixture and proves detection fires on it — best single-entry match: 42%
+- `9e5523e` (2026-09-23 01:42) Part 3: add receiptReconRefundCandidates (read-only match search) and receiptReconRefundReverse (Rung-3 money write — Brett's-tap-only, admin-gated, reuses addReceipt + appendReceiptToInvoiceReview, same convention as scopeProposalAdjustBill) — best single-entry match: 47%
+- `241b17d` (2026-09-23 01:41) Part 3 follow-up: keep the same receipt-id dedupe/tracking for a negative (refund-reversal) delta as for a positive one — no sign-conditional branch needed — best single-entry match: 40%
+- `a1127db` (2026-09-23 01:40) Part 3: add receiptRefundFindMatches — pure, unit-testable scorer for candidate original-purchase matches against a refund (store/date-window/amount/item-overlap) — best single-entry match: 43%
+- `ff67972` (2026-09-23 01:40) Part 3: refund detection in receiptExtract — code-level guard (receiptApplyRefundDetection) forces refund totals negative regardless of OCR sign, fixes the Aug 24 Home Depot return misread — best single-entry match: 47%
+- `277f1f2` (2026-09-23 01:32) Bulk actions: JS dispatch (bulkAction/bulkExpense/updateBulkBar) — Part 4 — best single-entry match: 43%
+- `256c709` (2026-09-23 01:19) receipt-recon: bump BUILD_VERSION for Parts 1+2 (image-attached indicator + attach-only) — best single-entry match: 43%
+- `81edbc6` (2026-09-23 01:12) Part 5: add woDatesLabel/woDateWindowWarning pure helpers + embed in woSelectHTML — best single-entry match: 43%
+- `54caac0` (2026-09-23 00:44) Add receipt-duplicate-audit/flags to HUB_PROD_RO_READ_PATHS — best single-entry match: 33%
+- `6385a8d` (2026-09-23 00:06) Add urgent Part 0: intake-time cross-check against already-processed receipts — best single-entry match: 43%
+
+## Run: 2026-09-25 17:44 UTC
+Since: 2026-09-24 (source: this script's own last recorded run)
+Checked commits: 123 (excluding merges/doc-audit itself)
+**7 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `db4e1f7` (2026-09-24 17:11) TASK_LINKING_BUILD_BRIEF: mark step 2 staged, flag unverified Sheet-sharing open question — best single-entry match: 44%
+- `a50f9ea` (2026-09-24 17:06) Fix: statement importer re-processed the same first 100 rows on resume — add offset/next_offset — best single-entry match: 44%
+- `5d0126e` (2026-09-24 16:59) Add Task Linking + One-Off→System Surfacing build brief (design capture, doc-only) — best single-entry match: 33%
+- `c1ac6cd` (2026-09-24 15:14) Clarify Alex loan deduction floor: no deduction under $100 — best single-entry match: 29%
+- `b3c9353` (2026-09-24 15:12) Add Alex loan deduction formula to CAP-036 (final) — best single-entry match: 33%
+- `96654d0` (2026-09-24 15:07) Resolve Alex loan starting balance as an approximate placeholder — best single-entry match: 43%
+- `4a2b083` (2026-09-24 15:01) Update CAP-036 with Brett's answers: Alex loan source (unconfirmed amount), Pending-Info scope, notification-matrix priority — best single-entry match: 33%

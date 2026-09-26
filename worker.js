@@ -420,6 +420,7 @@ export default {
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
+        if (path === '/vendor-access-requests') return await listVendorAccessRequests(env, url);
         if (path === '/estimates')              return await listEstimates(env, url);
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
         if (path === '/stale-wos')              return await staleWos(env, url);
@@ -656,6 +657,13 @@ export default {
         if (path === '/create-upload-session')    return await createUploadSession(env, body);
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
+        if (path === '/vendor-bill/add-standalone') return await addVendorBillStandalone(env, body);
+        if (path === '/vendor/request-property-access') return await vendorRequestPropertyAccess(env, body);
+        if (path === '/vendor-access-requests/approve') return await vendorAccessRequestApprove(env, body);
+        if (path === '/workorder/self-serve')     return await workorderSelfServe(env, body);
+        if (path === '/vendor/set-can-bill-no-wo') return await vendorSetCanBillNoWO(env, body);
+        if (path === '/vendor/set-can-create-own-wo') return await vendorSetCanCreateOwnWO(env, body);
+        if (path === '/vendor/set-billing-property-access') return await vendorSetBillingPropertyAccess(env, body);
         if (path === '/vendor/update-contact')    return await vendorUpdateContact(env, body);
         if (path === '/vendor-bill/extract')      return await vendorBillExtract(env, body);
         if (path === '/vendor-bill/reconcile-receipts') return await vendorBillReconcileReceipts(env, body);
@@ -1210,6 +1218,14 @@ async function vendorByPin(env, url) {
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
       vendor_trades: vendor.Trades||vendor.Trade||'', vendor_rate: vendor.Hourly_Rate||'', language: vendor.Language||'en',
       vendor_email: vendor.Email||'', vendor_company: vendor.Company||'',
+      // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §3a/§4a):
+      // carried on the session so vendor.html can show/hide the "Submit a Bill" / "Log a
+      // One-Off Job" home-screen buttons without a separate round trip. Every write these
+      // enable is still re-checked server-side against the live Vendors row — this is
+      // display-only, never itself a grant of access.
+      can_bill_no_wo: String(vendor.Can_Bill_No_WO || '').toUpperCase() === 'TRUE',
+      can_create_own_wo: String(vendor.Can_Create_Own_WO || '').toUpperCase() === 'TRUE',
+      billing_property_access: vendor.Billing_Property_Access || '',
       token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET),
     });
   });
@@ -4408,6 +4424,52 @@ function scopeSigVendorBillAmount(vendorCostTotal, deposit, subtotal) {
 // the deposit booking (scopeProposalBook) and the final-balance booking (scopeProposalBookFinal,
 // Sep 2 2026) so the two halves of a job can never resolve to a different customer/vendor/trade
 // due to duplicated logic drifting apart.
+// ── Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief) ───────────
+// PURE helpers — no I/O, unit-tested by test/vendor-standalone-billing-selfserve.test.mjs.
+
+// §4a/4b: a One-Off Job (self-serve WO) can never be created with no stated reason. 'other'
+// requires a real note; 'owner'/'brett' accept one but don't require it.
+function validateApprovalSource(source, note) {
+  const s = String(source || '').trim().toLowerCase();
+  if (!['owner', 'brett', 'other'].includes(s)) {
+    return { ok: false, error: 'Approval_Source must be owner, brett, or other' };
+  }
+  if (s === 'other' && !String(note || '').trim()) {
+    return { ok: false, error: 'Approval_Note is required when Approval_Source is "other"' };
+  }
+  return { ok: true, source: s, note: String(note || '').trim() };
+}
+
+// §3c: never trust the client — a standalone bill may only target a property the vendor's
+// own Billing_Property_Access allow-list already carries (or that an approved access-request
+// has since appended to it — see vendorAccessRequestApprove).
+function vendorHasBillingPropertyAccess(vendor, propertyId) {
+  const list = String((vendor && vendor.Billing_Property_Access) || '').split(',').map(s => s.trim()).filter(Boolean);
+  return list.includes(String(propertyId || '').trim());
+}
+
+// §3c: same Total/Receipts_Total/Receipts_Reimburse_Total shape addVendorBill's normal
+// hourly/flat + receipts flow already produces (and Review Bills' irCalc() already reads) —
+// Total is what's actually owed TO THE VENDOR (excludes items paid on Ridge Co's own card),
+// Receipts_Total is the full billable amount (both pay modes) that reaches the customer
+// invoice via buildInvoiceLines. Keeping this identical to the existing formula means no
+// downstream code (irCalc, buildInvoiceLines) needs to know a bill is standalone at all.
+function computeStandaloneBillTotals(lineItems) {
+  const items = Array.isArray(lineItems) ? lineItems : [];
+  let receiptsTotal = 0, reimburseTotal = 0;
+  for (const it of items) {
+    const amt = +(Number(it && it.amount) || 0);
+    if (amt <= 0) continue;
+    receiptsTotal += amt;
+    if (!it || it.pay !== 'account') reimburseTotal += amt;
+  }
+  return {
+    receipts_total: +receiptsTotal.toFixed(2),
+    receipts_reimburse_total: +reimburseTotal.toFixed(2),
+    total: +reimburseTotal.toFixed(2),
+  };
+}
+
 async function scopeSigResolveParties(env, s, row) {
   let selections = {}; try { selections = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
   const items = scopeParseItems(s);
@@ -5301,7 +5363,13 @@ async function createWorkOrder(env, body) {
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
   const woId = `WO-${nextWONum}`, now = new Date().toISOString();
-  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'' }[h] ?? ''));
+  const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'',
+    // Self-Serve Work Orders ("One-Off Job", Sep 24 2026 build brief §4b) — blank/no-op for
+    // every other caller (tenant submit.html, the Hub's New WO modal, etc.); only
+    // workorderSelfServe ever sends these three, and only after ensureColumns has already
+    // added them to Work_Orders.
+    Created_By_Vendor: body.created_by_vendor||'', Approval_Source: body.approval_source||'', Approval_Note: body.approval_note||''
+  }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   try {
     const tenants = await fetchTab(env, 'Tenants');
@@ -5351,6 +5419,58 @@ async function createWorkOrder(env, body) {
   } catch (e) { /* non-fatal */ }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){}
   return json({ success: true, id: woId });
+}
+
+// POST /workorder/self-serve { vendor_id, property_id, trade?, description, approval_source,
+//   approval_note? }
+// "Log a One-Off Job" (Sep 24 2026 build brief §4b) — a thin wrapper around createWorkOrder
+// for a vendor with Vendors.Can_Create_Own_WO='TRUE'. Deliberately NOT property-restricted
+// (§4a: "it's going to be a one-off system") — any active property is fair game, unlike the
+// billing flow's Billing_Property_Access allow-list. The one hard requirement is the
+// Approval_Source attestation: this is the ONLY substitute for Brett originating the WO
+// himself, so it is validated server-side and never trusted from the client alone.
+async function workorderSelfServe(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  const description = String(body.description || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+  if (!description) return json({ error: 'description required' }, 400);
+
+  const approval = validateApprovalSource(body.approval_source, body.approval_note);
+  if (!approval.ok) return json({ error: approval.error }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  if (String(vendor.Can_Create_Own_WO || '').toUpperCase() !== 'TRUE') {
+    return json({ error: 'This vendor is not enabled for self-serve work orders' }, 403);
+  }
+  const prop = properties.find(p => String(p.ID) === propertyId && p.Active !== 'FALSE');
+  if (!prop) return json({ error: 'Property not found or inactive' }, 404);
+
+  await ensureColumns(env, 'Work_Orders', ['Created_By_Vendor', 'Approval_Source', 'Approval_Note']);
+
+  // createWorkOrder itself always sets Vendor_ID to blank on create (assignment is a separate
+  // step everywhere in this app) — the vendor is assigned to themselves via the normal
+  // assignVendor() chokepoint right after, exactly like any other WO, so this never bypasses
+  // that pipeline's own SMS/notification/audit side effects.
+  const createRes = await createWorkOrder(env, {
+    property_id: propertyId, trade: vendor.Trade || '', description,
+    priority: 'normal', type: 'vendor_self_serve', created_by: 'vendor:' + vendorId,
+    created_by_vendor: 'TRUE', approval_source: approval.source, approval_note: approval.note,
+  });
+  let created = null;
+  try { created = await createRes.clone().json(); } catch (e) { return createRes; }
+  if (!created || created.error) return createRes;
+  if (created.duplicate) return json(created);
+
+  // Server-side, never a client-supplied vendor id (same class of hardening as the Sep 16
+  // 2026 tenant-submission fix) — the vendor is ALWAYS assigned to themselves, never anyone else.
+  try { await assignVendor(env, { wo_id: created.id, vendor_id: vendorId, notify: false }); }
+  catch (e) { /* WO exists even if the self-assign step fails; Brett can assign it manually */ }
+
+  return json({ success: true, id: created.id });
 }
 
 async function appendWONotes(env, body) {
@@ -6983,6 +7103,174 @@ async function addVendorBill(env, body) {
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
   try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
   return res;
+}
+
+// POST /vendor-bill/add-standalone { vendor_id, property_id, bill_to:'owner'|'ridgeco',
+//   line_items:[{description,amount,pay:'reimburse'|'account',url}], notes?, invoice_description? }
+// Vendor Standalone Billing (Sep 24 2026 build brief §3c) — lets a vendor with
+// Vendors.Can_Bill_No_WO='TRUE' submit a bill with NO Work_Orders row at all (Sierra Taylor's
+// tenant-treats/small-extras case). Writes a Vendor_Bills row with WO_ID left BLANK — already
+// tolerated everywhere downstream (addVendorBill's WO-auto-complete step is a no-op on a blank
+// WO_ID; addReceipt has supported a bare property_id with no wo_id since the one-tap-expense
+// build) — plus three new columns (Property_ID, Bill_To, Standalone) that qbSendInvoice's new
+// standalone branch (qbSendStandaloneInvoice) and Review Bills' renderIRCard use to resolve
+// Owner/QuickBooks straight from Property_ID, the same shape scopeSigResolveParties() already
+// uses for signed Scope Proposals. Every other field (Bill_Type/Hours/Truck_Stock/Receipts_JSON/
+// Receipts_Total/Receipts_Reimburse_Total/Total) matches the existing hourly/flat bill shape
+// EXACTLY, on purpose — Review Bills' irCalc()/renderIRCard money math and the QuickBooks send
+// path never need to know a bill is standalone; only the owner-resolution step does.
+async function addVendorBillStandalone(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  const billTo = String(body.bill_to || '').trim().toLowerCase();
+  const items = Array.isArray(body.line_items) ? body.line_items : [];
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+  if (!['owner', 'ridgeco'].includes(billTo)) return json({ error: "bill_to must be 'owner' or 'ridgeco'" }, 400);
+  const validItems = items.filter(it => it && (+it.amount || 0) > 0);
+  if (!validItems.length) return json({ error: 'At least one line item with an amount is required' }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  // Never trust the client — re-check the permission and the property allow-list server-side,
+  // same principle as the Sep 16 2026 tenant-submission hardening.
+  if (String(vendor.Can_Bill_No_WO || '').toUpperCase() !== 'TRUE') {
+    return json({ error: 'This vendor is not enabled for standalone billing' }, 403);
+  }
+  const prop = properties.find(p => String(p.ID) === propertyId);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+  if (!vendorHasBillingPropertyAccess(vendor, propertyId)) {
+    return json({ error: 'You do not have billing access to this property yet. Use "Request access to another property" first.' }, 403);
+  }
+
+  const receipts = validItems.map(it => ({
+    amount: +(+it.amount || 0).toFixed(2),
+    desc: String(it.description || it.desc || '').trim(),
+    url: String(it.url || '').trim(),
+    pay: it.pay === 'account' ? 'account' : 'reimburse',
+  }));
+  const totals = computeStandaloneBillTotals(receipts);
+  if (totals.receipts_total <= 0) return json({ error: 'Total must be greater than $0' }, 400);
+
+  await ensureColumns(env, 'Vendor_Bills', ['Property_ID', 'Bill_To', 'Standalone']);
+
+  // Same duplicate-guard shape addVendorBill already uses (vendor+property+total+day), scoped
+  // to Standalone rows only so it never collides with an ordinary WO-anchored bill.
+  const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
+    Vendor_ID: vendorId, Property_ID: propertyId, Total: totals.total.toFixed(2), Standalone: 'TRUE',
+  }, 86400);
+  if (dupe) return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
+
+  const vendorName = vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + vendorId);
+  const now = new Date();
+  const res = await addRow(env, 'Vendor_Bills', {
+    WO_ID: '', Vendor_ID: vendorId, Vendor_Name: vendorName,
+    Bill_Type: 'flat', Hours: '0', Rate: '0', Labor_Total: '0', Flat_Rate: '0',
+    Truck_Stock: '0', Truck_Desc: '',
+    Receipts_JSON: JSON.stringify(receipts),
+    Receipts_Total: totals.receipts_total.toFixed(2),
+    Receipts_Reimburse_Total: totals.receipts_reimburse_total.toFixed(2),
+    Total: totals.total.toFixed(2),
+    Notes: String(body.notes || ''),
+    Invoice_Description: String(body.invoice_description || '').trim() || (vendorName + ' — standalone bill'),
+    Property_ID: propertyId, Bill_To: billTo, Standalone: 'TRUE',
+    Status: 'submitted', Submitted_At: now.toISOString(), Created_Date: now.toISOString().split('T')[0],
+  });
+  return res;
+}
+
+// POST /vendor/request-property-access { vendor_id, property_id, note? }
+// Vendor Standalone Billing (§3b/§3d) — a vendor whose Billing_Property_Access allow-list
+// doesn't yet cover a property they need to bill against can ask for it here instead of being
+// stuck. Writes a Vendor_Access_Requests row (Brett approves/denies from Dev Log or the
+// Dashboard badge — see vendorAccessRequestApprove) and fires the same admin-alert SMS every
+// other "Brett, look at this" flow in this file uses (config.admin_phone + sendSMS).
+async function vendorRequestPropertyAccess(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const propertyId = String(body.property_id || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!propertyId) return json({ error: 'property_id required' }, 400);
+
+  const [vendors, properties] = await fetchTabs(env, ['Vendors', 'Properties']);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'Vendor not found' }, 404);
+  const prop = properties.find(p => String(p.ID) === propertyId);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+
+  await ensureColumns(env, 'Vendor_Access_Requests', [
+    'ID', 'Vendor_ID', 'Vendor_Name', 'Requested_Property_ID', 'Note', 'Status',
+    'Created_Date', 'Decided_Date', 'Active',
+  ]);
+  const vendorName = vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + vendorId);
+  const res = await addRow(env, 'Vendor_Access_Requests', {
+    Vendor_ID: vendorId, Vendor_Name: vendorName, Requested_Property_ID: propertyId,
+    Note: String(body.note || ''), Status: 'pending', Created_Date: new Date().toISOString(),
+  });
+  try {
+    const config = await getConfig(env);
+    if (config.admin_phone) {
+      await sendSMS(env, config.admin_phone,
+        `🔑 ${vendorName} requested billing access to ${prop.Address || ('property ' + propertyId)}. Review in Hub → Dev Log → Vendor Access Requests.`);
+    }
+  } catch (e) { /* non-fatal — the request row is already saved */ }
+  return res;
+}
+
+// GET /vendor-access-requests?status=pending  (or &count_only=1 for the dashboard/nav badges)
+// Vendor Standalone Billing (§3d) — one query backs BOTH the Dev Log section and the
+// Dashboard pending-count tile, deliberately, so the two badges can never drift apart.
+async function listVendorAccessRequests(env, url) {
+  const status = (url.searchParams.get('status') || '').trim().toLowerCase();
+  const countOnly = url.searchParams.get('count_only') === '1';
+  let rows = [];
+  try { rows = await fetchTab(env, 'Vendor_Access_Requests'); } catch (e) { rows = []; }
+  let results = rows.filter(r => r.Active !== 'FALSE');
+  if (status) results = results.filter(r => String(r.Status || 'pending').toLowerCase() === status);
+  if (countOnly) return json({ count: results.length });
+  return json(results);
+}
+
+// POST /vendor-access-requests/approve { id, scope:'once'|'ongoing', decision:'approve'|'deny' }
+// Vendor Standalone Billing (§3d). 'once' resolves the pending item without touching the
+// vendor's standing Billing_Property_Access list; 'ongoing' also appends the requested
+// property to it, so future bills against it clear the server-side allow-list check without
+// another request. A deny just closes the row out — no Vendors write at all.
+async function vendorAccessRequestApprove(env, body) {
+  const id = String(body.id || '').trim();
+  const decision = String(body.decision || '').trim().toLowerCase();
+  const scope = String(body.scope || 'once').trim().toLowerCase();
+  if (!id) return json({ error: 'id required' }, 400);
+  if (!['approve', 'deny'].includes(decision)) return json({ error: "decision must be 'approve' or 'deny'" }, 400);
+
+  const rows = await fetchTab(env, 'Vendor_Access_Requests');
+  const reqRow = rows.find(r => String(r.ID) === id);
+  if (!reqRow) return json({ error: 'Request not found' }, 404);
+
+  const today = new Date().toISOString();
+  if (decision === 'deny') {
+    await updateRow(env, 'Vendor_Access_Requests', id, { Status: 'denied', Decided_Date: today });
+    return json({ success: true, id, status: 'denied' });
+  }
+
+  const newStatus = scope === 'ongoing' ? 'approved_ongoing' : 'approved_once';
+  await updateRow(env, 'Vendor_Access_Requests', id, { Status: newStatus, Decided_Date: today });
+
+  if (scope === 'ongoing' && reqRow.Vendor_ID && reqRow.Requested_Property_ID) {
+    try {
+      const vendors = await fetchTab(env, 'Vendors');
+      const vendor = vendors.find(v => String(v.ID) === String(reqRow.Vendor_ID));
+      if (vendor) {
+        const list = String(vendor.Billing_Property_Access || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (!list.includes(String(reqRow.Requested_Property_ID))) {
+          list.push(String(reqRow.Requested_Property_ID));
+          await ensureColumns(env, 'Vendors', ['Billing_Property_Access']);
+          await updateRow(env, 'Vendors', reqRow.Vendor_ID, { Billing_Property_Access: list.join(',') });
+        }
+      }
+    } catch (e) { /* the request itself is already resolved; the vendor list append is best-effort */ }
+  }
+  return json({ success: true, id, status: newStatus });
 }
 
 // POST /vendor-bill/edit-receipts { bill_id, receipts:[{amount,desc,pay,url}], edited_by? }
@@ -13926,7 +14214,16 @@ async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 const ROLE_SCOPES = {
-  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact'],
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact',
+    // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2-4):
+    // gated per-vendor by Vendors.Can_Bill_No_WO / Can_Create_Own_WO, re-checked server-side
+    // inside each handler — being in this scope list only means a vendor SESSION may call the
+    // path at all, never that the specific vendor is allowed to (never trust the client).
+    // '/properties' (read-only) is added for the same build: the standalone-bill property
+    // picker, the "request access to another property" picker, and the One-Off Job property
+    // picker all need real addresses to show, not just IDs — same address-only data an owner
+    // session already sees via /owner-properties.
+    '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties'],
   tenant: ['/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
   owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view'],
 };
@@ -16148,6 +16445,38 @@ async function qbSetVendorInHouse(env, body) {
   await ensureColumns(env, 'Vendors', ['In_House']);
   await updateRow(env, 'Vendors', id, { In_House: on ? 'TRUE' : 'FALSE' });
   return json({ success: true, id, in_house: on });
+}
+
+// POST /vendor/set-can-bill-no-wo { id, value } — Vendors page inline checkbox, exact same
+// pattern as qbSetVendorInHouse above (Vendor Standalone Billing build brief §2).
+async function vendorSetCanBillNoWO(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const on = body.value === true || String(body.value).toUpperCase() === 'TRUE';
+  await ensureColumns(env, 'Vendors', ['Can_Bill_No_WO']);
+  await updateRow(env, 'Vendors', id, { Can_Bill_No_WO: on ? 'TRUE' : 'FALSE' });
+  return json({ success: true, id, value: on });
+}
+
+// POST /vendor/set-can-create-own-wo { id, value } — same pattern, the "One-Off Job" flag.
+async function vendorSetCanCreateOwnWO(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const on = body.value === true || String(body.value).toUpperCase() === 'TRUE';
+  await ensureColumns(env, 'Vendors', ['Can_Create_Own_WO']);
+  await updateRow(env, 'Vendors', id, { Can_Create_Own_WO: on ? 'TRUE' : 'FALSE' });
+  return json({ success: true, id, value: on });
+}
+
+// POST /vendor/set-billing-property-access { id, property_ids:[...] } — the Edit Vendor
+// modal's property multi-select (mirrors the existing Trades checkbox-grid pattern).
+async function vendorSetBillingPropertyAccess(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const ids = Array.isArray(body.property_ids) ? body.property_ids.map(String) : [];
+  await ensureColumns(env, 'Vendors', ['Billing_Property_Access']);
+  await updateRow(env, 'Vendors', id, { Billing_Property_Access: ids.join(',') });
+  return json({ success: true, id, property_ids: ids });
 }
 
 // POST /qb/create-subcustomer { kind: 'property'|'unit', id }
@@ -18744,6 +19073,138 @@ async function qbReadyQueue(env, url) {
 // Preview returns the resolved customer/vendor/trade + exact lines with ZERO writes.
 // Confirm creates the QB Invoice + Bill (find-or-create customer/vendor), writes the
 // ids + status back to the Invoice_Review row, and flips the WO to Invoiced.
+// Vendor Standalone Billing (Sep 24 2026 build brief §5) — a standalone Vendor_Bills row
+// (WO_ID blank, Standalone='TRUE') has no Work_Orders row to resolve Owner/QuickBooks through,
+// so it can't go down qbSendInvoice's normal wo→prop→owner chain (nor its WO-grouping/combine
+// path — qbGroupOpenRows groups by WO_ID, and every standalone bill shares a blank one, which
+// would otherwise lump UNRELATED standalone bills from different vendors/properties into a
+// single QuickBooks invoice). Isolated into its own function, deliberately NOT threaded into
+// the main WO-invoice code path below, so this new, less-tested branch can never change the
+// behavior of the ordinary WO-anchored send that every existing job already depends on.
+// Resolves Owner straight from Vendor_Bills.Property_ID, mirroring scopeSigResolveParties().
+async function qbSendStandaloneInvoice(env, body, ctx) {
+  const { ir, billRow, previewOnly } = ctx;
+  const [props, owners, vendors] = await fetchTabs(env, ['Properties', 'Owners', 'Vendors']);
+  const prop   = props.find(p => String(p.ID) === String(billRow.Property_ID)) || {};
+  const owner  = prop.Owner_ID ? (owners.find(o => String(o.ID) === String(prop.Owner_ID)) || null) : null;
+  const vendor = vendors.find(v => String(v.ID) === String(ir.Vendor_ID)) || {};
+  const billTo = qbResolveBillTo(owner, prop, null);
+  const billToRidgeco = String(billRow.Bill_To || '').toLowerCase() === 'ridgeco';
+
+  const resolved = resolveTrade(vendor.Trade);
+  const tradeName = resolved.name;
+  const trade = QB_TRADE_MAP[tradeName];
+
+  const warnings = ['Standalone bill — no work order.'];
+  if (!resolved.matched) warnings.push('Vendor trade "' + (vendor.Trade || 'blank') + '" is not in the QuickBooks map — booking to General.');
+  if (!billToRidgeco && !owner) warnings.push('No owner found for this property — set the property owner before sending, or bill it to Ridge Co instead.');
+
+  const custTotal  = Number(ir.Customer_Total) || 0;
+  const vendorCost = Number(ir.Vendor_Cost) || 0;
+  if (!billToRidgeco && custTotal <= 0) warnings.push('Customer_Total is 0 — nothing to invoice.');
+  if (vendorCost <= 0) warnings.push('Vendor_Cost is 0 — the vendor bill will be skipped.');
+
+  // One invoice/bill line per submitted line item, straight off the bill's own descriptions —
+  // there is no WO description to fall back to for a standalone bill (§5).
+  let receipts = [];
+  try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+  const itemRef = { value: trade.item };
+  const invLines = (Array.isArray(receipts) ? receipts : []).map(rc => {
+    const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
+    return amt > 0 ? {
+      DetailType: 'SalesItemLineDetail', Amount: amt,
+      Description: (String((rc && rc.desc) || 'Item')).slice(0, 4000),
+      SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: amt },
+    } : null;
+  }).filter(Boolean);
+  if (!invLines.length && custTotal > 0) {
+    invLines.push({ DetailType: 'SalesItemLineDetail', Amount: custTotal,
+      Description: (billRow.Invoice_Description || (ir.Vendor_Name + ' — standalone bill')).slice(0, 4000),
+      SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: custTotal } });
+  }
+
+  const vendDisplay = vendor.Name || ir.Vendor_Name || ('Vendor ' + (ir.Vendor_ID || ''));
+  const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
+  const txnDate = ir.Approved_Date || new Date().toISOString().split('T')[0];
+  const note = `RidgeCo IR ${ir.ID} · Standalone · Bill ${ir.Bill_ID}`;
+
+  const invoicePayload = { Line: invLines, TxnDate: txnDate, PrivateNote: note };
+  const billPayload = {
+    Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +vendorCost.toFixed(2),
+      Description: (vendDisplay + ' — ' + tradeName + ' — standalone').slice(0, 4000),
+      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+    TxnDate: txnDate, PrivateNote: note,
+  };
+  const termDays = vendorTermDays(vendor);
+  const dueDate = new Date(txnDate + 'T12:00:00');
+  dueDate.setDate(dueDate.getDate() + termDays);
+  billPayload.DueDate = termDays > 0 ? dueDate.toISOString().split('T')[0] : txnDate;
+
+  const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
+  const haveBill = !!(ir.QB_Bill_ID && ir.QB_Bill_ID.trim());
+
+  if (previewOnly) {
+    return json({ preview: {
+      ir_id: ir.ID, wo_id: '', standalone: true, trade: tradeName,
+      bill_to: { level: billToRidgeco ? 'ridgeco' : billTo.level, display: billToRidgeco ? 'Ridge Co (own cost)' : billTo.display,
+                 property: qbPropertyDisplayName(prop), property_id: prop.ID || '' },
+      customer: billToRidgeco ? null : { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', owner_id: (owner && owner.ID) || '' },
+      vendor: { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '', vendor_id: vendor.ID || '' },
+      invoice: billToRidgeco ? null : { total: +custTotal.toFixed(2), lines: invLines.map(l => ({ desc: l.Description, amount: l.Amount })) },
+      bill: { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0 },
+      already: { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
+      warnings,
+    }});
+  }
+
+  if (!billToRidgeco && !haveInv && (!owner || custTotal <= 0)) {
+    return json({ ok: false, error: billToRidgeco ? '' : (!owner ? 'No owner on this property — cannot create a QB customer.' : 'Customer_Total is 0 — nothing to invoice.'), warnings });
+  }
+
+  const token = await qbAccessToken(env);
+  const errors = [];
+  let invoiceId = ir.QB_Invoice_ID || '', billId = ir.QB_Bill_ID || '';
+
+  if (!billToRidgeco && !haveInv) {
+    let customerId = billTo.level !== 'owner' && billTo.qb_id ? billTo.qb_id : '';
+    if (!customerId) { try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); } catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); } }
+    invoicePayload.CustomerRef = { value: customerId };
+    const billEmail = (owner && (owner.Billing_Email || owner.Email) || '').trim();
+    if (billEmail && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail)) invoicePayload.BillEmail = { Address: billEmail };
+    let r = await qbApi(env, 'invoice?minorversion=73', 'POST', invoicePayload, token);
+    invoiceId = (r && r.Invoice && r.Invoice.Id) || '';
+    if (!invoiceId) errors.push('Invoice: ' + (qbFault(r) || 'unknown error'));
+  }
+
+  const vendorInHouse = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+  if (vendorInHouse && vendorCost > 0) warnings.push(`No vendor bill created — ${vendDisplay} is marked in-house, so there's no payable.`);
+  if (!haveBill && vendorCost > 0 && !vendorInHouse) {
+    let vendorId = '';
+    try { vendorId = await qbFindOrCreateVendor(env, vendor, vendDisplay, token); } catch (e) { errors.push('Vendor: ' + e.message); }
+    if (vendorId) {
+      billPayload.VendorRef = { value: vendorId };
+      const dueTermId = await qbTermForDays(env, token, termDays);
+      if (dueTermId) billPayload.SalesTermRef = { value: dueTermId };
+      const r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+      billId = (r && r.Bill && r.Bill.Id) || '';
+      if (!billId) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+    }
+  }
+
+  if (invoiceId || billId) { try { await qbAttachReceipts(env, token, invoiceId, billId, billRow, warnings); } catch (e) { warnings.push('Attachments error: ' + (e.message || '')); } }
+
+  const billNotOwed = vendorCost <= 0 || vendorInHouse;
+  const status = ((invoiceId || billToRidgeco) && (billId || billNotOwed)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
+  try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); } catch (e) {}
+  await updateRow(env, 'Invoice_Review', ir.ID, {
+    QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
+    QB_Bill_To: billToRidgeco ? 'ridgeco' : (billTo.level + (billTo.display ? ': ' + billTo.display : '')),
+    QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
+  });
+  if (errors.length) return json({ ok: false, error: errors.join('; '), warnings, invoice_id: invoiceId, bill_id: billId });
+  return json({ ok: true, invoice_id: invoiceId, bill_id: billId, status, warnings });
+}
+
 async function qbSendInvoice(env, body) {
   try {
     const previewOnly = !!body.preview_only;
@@ -18761,6 +19222,10 @@ async function qbSendInvoice(env, body) {
     const [wos, props, owners, vendors, bills, units, allTimeEntries] = await fetchTabs(env, [
       'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units','Time_Entries',
     ]);
+    const billRowEarly = bills.find(b => String(b.ID) === String(ir.Bill_ID)) || {};
+    if (String(billRowEarly.Standalone || '').toUpperCase() === 'TRUE') {
+      return await qbSendStandaloneInvoice(env, body, { ir, billRow: billRowEarly, previewOnly });
+    }
     const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
     const wo      = findWO(wos, ir.WO_ID) || {};
     const prop    = props.find(p => p.ID === wo.Property_ID) || {};
