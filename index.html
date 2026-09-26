@@ -12125,6 +12125,9 @@ function submitAddOwner() {
     Company: comp, Phone: document.getElementById('ao-phone').value.trim(),
     Email: document.getElementById('ao-email').value.trim(),
     PIN: document.getElementById('ao-pin').value.trim().toUpperCase(),
+    Billing_Name: document.getElementById('ao-b-name').value.trim(), Billing_Address: document.getElementById('ao-b-street').value.trim(),
+    Billing_City: document.getElementById('ao-b-city').value.trim(), Billing_State: document.getElementById('ao-b-state').value.trim().toUpperCase(),
+    Billing_Zip: document.getElementById('ao-b-zip').value.trim(), Billing_Phone: document.getElementById('ao-b-phone').value.trim(), Billing_Email: document.getElementById('ao-b-email').value.trim(),
     // Blank = follow the default ($85). Only a real number pins a per-customer rate.
     Hourly_Rate: (aoRate > 0 ? String(aoRate) : ''),
     Active: 'TRUE',
