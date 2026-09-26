@@ -4238,7 +4238,13 @@ function submitEditProperty(){
   if (EP_MULTI_TYPES.indexOf(fields.Type) !== -1) {
     var overrideVisible = document.getElementById('ep-unit-count-override-row').style.display !== 'none';
     var overrideVal = document.getElementById('ep-unit-count-override').value;
-    fields.Unit_Count = (overrideVisible && overrideVal !== '') ? overrideVal : String(epComputedUnitCount(id));
+    // Owner-onboarded properties only list the unit(s) the owner wants serviced, so the listed count is
+    // normally LOWER than the owner-reported Unit_Count. Never silently shrink that number; use "Set count manually" to change it.
+    var epProp = state.properties.find(function(x){return x.ID===id;}) || {};
+    var epComputed = epComputedUnitCount(id), epExisting = parseInt(epProp.Unit_Count, 10);
+    var epKeep = epProp.Onboarding_Source === 'self_serve_link' && isFinite(epExisting) && epExisting > epComputed;
+    fields.Unit_Count = (overrideVisible && overrideVal !== '') ? overrideVal : String(epKeep ? epExisting : epComputed);
+    if (epKeep && !(overrideVisible && overrideVal !== '')) toast('Unit count kept at ' + epExisting + ' (as reported by the owner). Use "Set count manually" to change it.', 'success');
   } else {
     fields.Unit_Count = '1';
   }
