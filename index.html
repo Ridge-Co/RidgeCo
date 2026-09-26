@@ -1916,8 +1916,7 @@ function populateFilterDropdowns() {
   var ownerSel = document.getElementById('f-owner');
   if (ownerSel) {
     var cur = ownerSel.value;
-    ownerSel.innerHTML = '<option value="">All Owners</option>' +
-      safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'"'+(o.ID===cur?' selected':'')+'>'+o.First_Name+' '+(o.Last_Name||'')+'</option>'; }).join('');
+    ownerSel.innerHTML = ownerOptionsHtml(cur, '<option value="">All Owners</option>');
   }
   var propSel = document.getElementById('f-property');
   if (propSel) {
