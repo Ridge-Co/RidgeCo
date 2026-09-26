@@ -12223,7 +12223,7 @@ function openLinkPropertyModal(ownerId, ownerLabel) {
   sel.innerHTML = '<option value="">Select a property…</option>' +
     sortPropsNumeric(safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';})).map(function(p){
       var curOwner = p.Owner_ID ? safeArray(state.owners).find(function(o){return String(o.ID)===String(p.Owner_ID);}) : null;
-      var curLabel = curOwner ? ((curOwner.First_Name+' '+(curOwner.Last_Name||'')).trim() || curOwner.Company) : '';
+      var curLabel = curOwner ? ownerLabel(curOwner) : '';
       var already = String(p.Owner_ID||'')===String(ownerId);
       return '<option value="'+p.ID+'"'+(already?' disabled':'')+'>'+p.Address+(p.City?', '+p.City:'')+
         (already ? ' — already linked' : (curLabel ? ' — currently: '+curLabel : ' — no owner'))+'</option>';
