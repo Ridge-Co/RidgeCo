@@ -16,7 +16,7 @@ const browser = await chromium.launch({ executablePath: process.env.PW_CHROMIUM 
 async function newPage(opts = {}) {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
   const page = await ctx.newPage();
-  const seen = { submit: null, pinChecks: [] };
+  const seen = { submit: null, pinChecks: [] }; let takenLeft = opts.takenCount || 0;
   const consoleErrors = []; page.on('pageerror', e => consoleErrors.push(String(e)));
   await page.route('**/owner-onboard/info**', r => r.fulfill({ json: opts.info || { valid: true, prefill: { first: 'Pat', last: 'Lee', phone: '4105550142', email: 'pat@example.com' } } }));
   await page.route('**/owner-onboard/check-pin', r => { const b = JSON.parse(r.request().postData()); seen.pinChecks.push(b.pin); r.fulfill({ json: b.pin === 'TAK12849' ? { ok: true, available: false, reason: 'That PIN is already taken — please try a different one.' } : { ok: true, available: true, reason: '' } }); });
