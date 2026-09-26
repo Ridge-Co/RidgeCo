@@ -6309,8 +6309,7 @@ function submitBulkAssign() {
 function openAddMasterKeyModal() {
   ['mk-name','mk-code','mk-notes'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('mk-owner');
-  if (sel) sel.innerHTML = '<option value="">No owner (global)</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">No owner (global)</option>');
   openModal('modal-add-masterkey');
 }
 
