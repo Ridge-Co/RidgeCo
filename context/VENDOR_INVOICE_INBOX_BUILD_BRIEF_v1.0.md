@@ -167,7 +167,15 @@ New tab **`Payment_Accounts`**: `ID, Match_Type (card_last4 | venmo | ach | othe
 
 ## 9b. Special case — Venmo notes with loan repayments
 
-Regina's Venmo notes often include "less $10 loan repayment" (and sometimes "plus $50 flat rate", "new balance $270"). The cash sent is net of the repayment, so booking only the cash understates cleaning expense and leaves the loan balance wrong. Proposed handling (**pending Brett's answer, Section 11 Q1**): parse the note; post **Cleaning expense at the gross amount** and a **reduction of the loan receivable** for the repayment, so cash out = gross − repayment. Until answered, Venmo items with "loan"/"less" in the note go to the queue rather than auto-post.
+Regina's Venmo notes often include "less $10 loan repayment" (and sometimes "plus $50 flat rate", "new balance $270"). The Venmo amount is the cash actually sent, already net of the repayment.
+
+**Decision (Brett, Sep 26 2026): the loan side stays out of QuickBooks.**
+
+- QuickBooks records **the Venmo amount actually paid**. The bill and payment match the M&T ...6287 bank activity, which is what makes reconciliation quick. **Consequence to be aware of:** Cleaning expense in QB is lower than the full value of the work by each repayment amount (e.g. $10 on a $120 job books as $110). The repayment lives only in the loan tracking, not in the books. Brett has accepted keeping the loan out of QB; if his accountant later wants gross expense plus a receivable, that is a change to this rule.
+- The Venmo parser still **extracts** the loan figures from the note and stores them on the Invoice_Inbox row (`Loan_Repayment_Amount`, `Loan_Note_Balance` if a "new balance" is stated, `Loan_Advance_Amount` for any "loan/advance" increase). Nothing is posted anywhere from these fields in this build.
+- **Venmo items with a loan note are NOT sent to the queue.** They auto-post the net amount like any other registered-vendor payment.
+- **Handoff to the ledger:** these stored fields are the feed for the vendor loan/advance ledger (CAP-036 item 13: a simple Hub ledger with manual entries of amount + date, both directions: repayments/deductions and new advances; generic per vendor, not hardcoded to Regina/Alex). That ledger is a separate build. Until it exists, Brett keeps using his spreadsheet, and the stored fields make it easy to backfill the ledger later.
+- Alex's repayment is a different mechanism (automatic deduction from each invoice payment, labor portion only, formula in CAP-036) and is **out of scope here**.
 
 ---
 
