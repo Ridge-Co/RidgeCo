@@ -4213,7 +4213,7 @@ function openEditPropertyModal(id){
   var p=state.properties.find(function(x){return x.ID===id;}); if(!p) return;
   document.getElementById('ep-id').value=p.ID; document.getElementById('ep-address').value=p.Address||'';
   document.getElementById('ep-city').value=p.City||''; document.getElementById('ep-market').value=p.Market||'Baltimore';
-  document.getElementById('ep-type').value=p.Type||'house'; document.getElementById('ep-lockbox').value=p.Lockbox_Code||'';
+  document.getElementById('ep-type').value=p.Type||'house'; document.getElementById('ep-subtype').value=p.Commercial_Subtype||''; document.getElementById('ep-lockbox').value=p.Lockbox_Code||'';
   document.getElementById('ep-lockcode').value=p.Lock_Code||''; document.getElementById('ep-shutoff').value=p.Water_Shutoff||'';
   document.getElementById('ep-hvac').value=p.HVAC_Filter_Size||''; document.getElementById('ep-breaker').value=p.Breaker_Location||'';
   document.getElementById('ep-access').value=p.Access_Notes||'';
