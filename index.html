@@ -12181,6 +12181,108 @@ function submitAddOwner() {
   });
 }
 
+// ── Set / backfill owner PINs (Sep 26 2026) ───────────────────────────────────────────
+// Rules mirror the server (ownerOnboardPinCheck): 3 letters + 5 digits, not a simple run. The server re-checks
+// everything, including that no other login already has the PIN, when Save is tapped.
+var _spnRows = [], _spnIds = [], _spnSaved = [];
+function spnRuleError(pin) {
+  var p = String(pin || '').toUpperCase();
+  if (!/^[A-Z]{3}\d{5}$/.test(p)) return '3 letters then 5 numbers (e.g. ABC12345)';
+  var d = p.slice(3);
+  if (/^(\d)\1{4}$/.test(d) || '0123456789'.indexOf(d) >= 0 || '9876543210'.indexOf(d) >= 0) return 'numbers can\'t be a simple run';
+  if (/^(.)\1\1$/.test(p.slice(0, 3))) return 'letters can\'t all match';
+  return '';
+}
+function selectOwnersMissingPin() {
+  var cbs = document.getElementById('owners-list').querySelectorAll('.pin-check'), n = 0;
+  cbs.forEach(function(cb){ var miss = cb.getAttribute('data-haspin') === '0'; cb.checked = miss; if (miss) n++; });
+  updatePinActionBar('owners-action-bar');
+  toast(n ? n + ' owner' + (n === 1 ? '' : 's') + ' with no PIN selected — tap Set PIN for Selected' : 'Every listed owner already has a PIN', 'success');
+}
+function openSetOwnerPinModal() {
+  var ids = Array.from(document.getElementById('owners-list').querySelectorAll('.pin-check:checked')).map(function(cb){ return cb.getAttribute('data-id'); });
+  if (!ids.length) { toast('Select one or more owners first', 'error'); return; }
+  _spnIds = ids; _spnSaved = [];
+  // One owner selected = an explicit "set this owner's PIN", so offer a replacement even if they already have one.
+  document.getElementById('spn-overwrite').checked = ids.length === 1;
+  document.getElementById('spn-after').style.display = 'none';
+  document.getElementById('spn-msg').innerHTML = '';
+  openModal('modal-set-owner-pin');
+  loadOwnerPinSuggestions();
+}
+function loadOwnerPinSuggestions() {
+  var el = document.getElementById('spn-list');
+  el.innerHTML = '<div class="loading">Loading…</div>';
+  document.getElementById('spn-save').disabled = true;
+  api('POST', '/owner/pin-suggest', { owner_ids: _spnIds, overwrite: document.getElementById('spn-overwrite').checked }).then(function(res){
+    if (!res || res.error) { el.innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc((res && res.error) || 'Could not suggest PINs') + '</div>'; return; }
+    _spnRows = safeArray(res.rows).map(function(r){
+      var o = safeArray(state.owners).find(function(x){ return String(x.ID) === String(r.owner_id); });
+      return { id: r.owner_id, label: o ? ownerLabel(o, true) : ('Owner #' + r.owner_id), phone: r.phone || '', current: r.current_pin || '', pin: r.proposed_pin || '',
+               skipped: r.skipped || '', error: r.error || '', note: r.note || '', fromPhone: !!r.from_phone, status: '' };
+    });
+    renderSpnRows();
+  }).catch(function(e){ el.innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(e.message || 'Error') + '</div>'; });
+}
+function renderSpnRows() {
+  var el = document.getElementById('spn-list');
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Owner</th><th>Phone</th><th>Current PIN</th><th>New PIN</th></tr></thead><tbody>' +
+    _spnRows.map(function(r, i){
+      var cell;
+      if (r.error) cell = '<span style="color:var(--danger)">' + esc(r.error) + '</span>';
+      else if (r.skipped) cell = '<span style="color:var(--muted)">' + esc(r.skipped) + ' — kept</span>';
+      else cell = '<input type="text" class="spn-pin" data-i="' + i + '" value="' + esc(r.pin) + '" maxlength="8" autocomplete="off" style="width:110px;text-transform:uppercase;font-weight:bold;letter-spacing:.08em" oninput="spnEdit(' + i + ',this)">' +
+                  '<div class="spn-st" id="spn-st-' + i + '" style="font-size:10px;min-height:12px"></div>';
+      return '<tr><td>' + esc(r.label) + (r.note ? '<div style="font-size:10px;color:#9a5b00">' + esc(r.note) + '</div>' : '') + '</td><td>' + esc(r.phone || '—') + (r.phone ? '' : '<div style="font-size:10px;color:var(--muted)">no phone — random digits</div>') + '</td>' +
+             '<td style="color:' + (r.current ? 'var(--accent2)' : 'var(--danger)') + ';font-weight:bold">' + esc(r.current || '—') + '</td><td>' + cell + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+  spnValidate();
+}
+function spnEdit(i, inp) {
+  var v = inp.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  if (inp.value !== v) inp.value = v;
+  _spnRows[i].pin = v; spnValidate();
+}
+function spnValidate() {
+  var seen = {}, okCount = 0, bad = 0;
+  _spnRows.forEach(function(r){ if (r.pin && !r.skipped && !r.error) seen[r.pin] = (seen[r.pin] || 0) + 1; });
+  _spnRows.forEach(function(r, i){
+    var st = document.getElementById('spn-st-' + i); if (r.skipped || r.error) return;
+    var msg = r.status === 'saved' ? '' : (r.pin ? (spnRuleError(r.pin) || (seen[r.pin] > 1 ? 'same PIN used twice here' : '')) : 'enter a PIN or leave blank to skip');
+    var ok = r.pin && !msg;
+    r.valid = !!ok;
+    if (st) { st.style.color = r.status === 'saved' ? 'var(--accent2)' : (ok ? 'var(--accent2)' : (r.pin ? 'var(--danger)' : 'var(--muted)')); st.textContent = r.status === 'saved' ? '✓ saved' : (r.status === 'failed' ? ('✗ ' + r.failMsg) : (ok ? '✓ ok' : msg)); }
+    if (r.status !== 'saved') { if (ok) okCount++; else if (r.pin) bad++; }
+  });
+  var btn = document.getElementById('spn-save');
+  btn.disabled = !(okCount > 0 && bad === 0);
+  btn.textContent = okCount ? 'Save ' + okCount + ' PIN' + (okCount === 1 ? '' : 's') : 'Save PINs';
+}
+function saveOwnerPins() {
+  var todo = _spnRows.filter(function(r){ return r.valid && r.status !== 'saved'; });
+  if (!todo.length) return;
+  var btn = document.getElementById('spn-save'); btn.disabled = true; btn.textContent = 'Saving…';
+  api('POST', '/owner/set-pins', { assignments: todo.map(function(r){ return { owner_id: r.id, pin: r.pin }; }) }).then(function(res){
+    if (!res || res.error) { document.getElementById('spn-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc((res && res.error) || 'Could not save') + '</div>'; spnValidate(); return; }
+    safeArray(res.results).forEach(function(x){
+      var r = _spnRows.find(function(q){ return String(q.id) === String(x.owner_id); }); if (!r) return;
+      if (x.ok) { r.status = 'saved'; r.current = x.pin; r.valid = false; if (!_spnSaved.some(function(q){ return String(q.id) === String(r.id); })) _spnSaved.push({ id: r.id, label: r.label, phone: r.phone }); }
+      else { r.status = 'failed'; r.failMsg = x.error || 'failed'; }
+    });
+    renderSpnRows();
+    var failed = _spnRows.filter(function(r){ return r.status === 'failed'; }).length;
+    document.getElementById('spn-msg').innerHTML = '<div style="font-size:12px;color:' + (failed ? '#9a5b00' : 'var(--accent2)') + ';margin-top:6px">Saved ' + res.saved + ' PIN' + (res.saved === 1 ? '' : 's') + (failed ? ' — ' + failed + ' need attention (fix the PIN and save again)' : '') + '.</div>';
+    if (_spnSaved.length) document.getElementById('spn-after').style.display = '';
+    loadAll(); 
+  }).catch(function(e){ document.getElementById('spn-msg').innerHTML = '<div style="color:var(--danger);font-size:12px">' + esc(e.message || 'Error') + '</div>'; spnValidate(); });
+}
+function spnSendTexts() {
+  var q = _spnSaved.filter(function(r){ return r.phone; }).map(function(r){ return { type: 'owner', id: r.id, name: r.label, phone: r.phone }; });
+  if (!q.length) { toast('None of the saved owners has a phone number to text', 'error'); return; }
+  closeModal('modal-set-owner-pin');
+  openBulkPinSendQueue(q);
+}
+
 // ── Owner onboarding links (Sep 26 2026) ─────────────────────────────────────────────
 function openOwnerInviteModal() {
   ['oi-name','oi-phone','oi-email','oi-note'].forEach(function(id){ document.getElementById(id).value=''; });
