@@ -3770,6 +3770,7 @@ function submitAddProperty(force) {
   var body={Address:document.getElementById('p-address').value,City:document.getElementById('p-city').value,Market:document.getElementById('p-market').value,Type:document.getElementById('p-type').value,Commercial_Subtype:(document.getElementById('p-type').value==='commercial'?document.getElementById('p-subtype').value:''),Unit_Count:apUnitCountValue(),Owner_ID:document.getElementById('p-owner').value,Lockbox_Code:document.getElementById('p-lockbox').value,Lock_Code:document.getElementById('p-lockcode').value,Water_Shutoff:document.getElementById('p-shutoff').value,HVAC_Filter_Size:document.getElementById('p-hvac').value,Breaker_Location:document.getElementById('p-breaker').value,Access_Notes:document.getElementById('p-access').value,Active:'TRUE'};
   if (force) body.force = true;
   if (!body.Address) { toast('Address required','error'); return; }
+  var apErr = apValidate(); if (apErr) { toast(apErr,'error'); return; }
   var warnBox = document.getElementById('ap-dupe-warning');
   warnBox.style.display = 'none';
   api('POST','/property/add',body).then(function(res){
