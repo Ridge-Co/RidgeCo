@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow">
+<title>Ridge Co — Owner Setup</title>
+<style>
+  :root{--bg:#eef1f5;--surface:#fff;--surface2:#f5f7fa;--border:#d7dde5;--text:#1b1f24;--muted:#5d6875;--accent:#1d4ed8;--accent-d:#1e40af;--ok:#166534;--okbg:#eaf6ee;--danger:#b42318;--dangerbg:#fdecea;--radius:10px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html{-webkit-text-size-adjust:100%;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:16px;line-height:1.4;padding:16px 16px 96px;max-width:600px;margin:0 auto;overflow-wrap:break-word;}
+  h1{font-size:1.35rem;margin-bottom:4px;}
+  h2{font-size:1.1rem;margin-bottom:4px;}
+  .brand{color:var(--accent);font-weight:700;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px;}
+  .sub{color:var(--muted);font-size:.92rem;margin-bottom:14px;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
+  .card.inner{background:var(--surface2);padding:12px;margin:10px 0 0;}
+  .sec{color:var(--muted);font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;font-weight:700;margin:2px 0 10px;}
+  label.f{display:block;font-size:.85rem;font-weight:600;margin:12px 0 4px;}
+  label.f .opt{font-weight:400;color:var(--muted);}
+  input[type=text],input[type=tel],input[type=email],input[type=number],input[type=password],select,textarea{width:100%;font:inherit;font-size:16px;padding:11px 12px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);min-height:46px;}
+  textarea{min-height:84px;resize:vertical;}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent);}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .row3{display:grid;grid-template-columns:1.4fr .8fr 1fr;gap:10px;}
+  @media (max-width:420px){.row3{grid-template-columns:1fr 1fr;}.row3>:first-child{grid-column:1/-1;}}
+  .choice{display:flex;gap:10px;align-items:flex-start;padding:12px;border:1.5px solid var(--border);border-radius:8px;margin-top:8px;cursor:pointer;background:#fff;}
+  .choice input{width:20px;height:20px;margin-top:2px;flex:none;}
+  .choice.sel{border-color:var(--accent);background:#eff4ff;}
+  .choice b{display:block;font-size:.95rem;}
+  .choice span{color:var(--muted);font-size:.85rem;}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:13px 18px;font:inherit;font-size:1rem;font-weight:700;cursor:pointer;min-height:48px;}
+  .btn:hover{background:var(--accent-d);}
+  .btn[disabled]{opacity:.55;cursor:default;}
+  .btn.sec{background:#fff;color:var(--accent);border:1.5px solid var(--accent);}
+  .btn.ghost{background:transparent;color:var(--muted);border:0;font-weight:600;padding:8px 10px;min-height:40px;}
+  .btn.danger{color:var(--danger);}
+  .btn.full{width:100%;}
+  .err{color:var(--danger);font-size:.83rem;margin-top:4px;display:none;}
+  .err.show{display:block;}
+  .bad{border-color:var(--danger)!important;background:var(--dangerbg);}
+  .banner{border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:.92rem;}
+  .banner.err2{background:var(--dangerbg);color:var(--danger);border:1px solid #f3b8b1;}
+  .banner.info{background:#eff4ff;color:#1e3a8a;border:1px solid #c7d7fb;}
+  .steps{display:flex;gap:6px;margin:10px 0 16px;}
+  .steps i{flex:1;height:6px;border-radius:4px;background:var(--border);}
+  .steps i.on{background:var(--accent);}
+  .steplbl{color:var(--muted);font-size:.85rem;font-weight:600;margin-bottom:2px;}
+  .rules{list-style:none;margin-top:8px;font-size:.85rem;color:var(--muted);}
+  .rules li:before{content:"○ ";}
+  .rules li.ok{color:var(--ok);}
+  .rules li.ok:before{content:"✓ ";}
+  .pinrow{display:flex;gap:8px;}
+  .pinrow input{flex:1;letter-spacing:.12em;text-transform:uppercase;font-weight:700;}
+  .pinstat{font-size:.85rem;margin-top:6px;min-height:1.2em;}
+  .pinstat.ok{color:var(--ok);}
+  .pinstat.no{color:var(--danger);}
+  .hint{color:var(--muted);font-size:.85rem;margin-top:4px;}
+  .propname{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px;}
+  .tag{display:inline-block;background:var(--okbg);color:var(--ok);font-size:.75rem;font-weight:700;padding:2px 8px;border-radius:10px;}
+  .foot{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--border);padding:10px 16px;display:flex;gap:10px;justify-content:center;}
+  .foot .in{width:100%;max-width:600px;display:flex;gap:10px;}
+  .foot .btn{flex:1;}
+  .foot .btn.sec{flex:0 0 auto;}
+  .consent{display:flex;gap:12px;align-items:flex-start;padding:14px;border:1.5px solid var(--border);border-radius:8px;background:#fff;}
+  .consent input{width:22px;height:22px;flex:none;margin-top:2px;}
+  .consent div{font-size:.86rem;color:#2b323a;}
+  .sum{font-size:.92rem;}
+  .sum li{margin:4px 0 4px 18px;}
+  a{color:var(--accent);}
+  .center{text-align:center;padding:36px 8px;}
+  .bigcheck{font-size:3rem;color:var(--ok);}
+  [hidden]{display:none!important;}
+</style>
+</head>
+<body>
+<div class="brand">Ridge Co Property Maintenance</div>
+<div id="app"><div class="center"><div class="sub">Loading…</div></div></div>
+
+<script>
+(function(){
+var qs = new URLSearchParams(location.search);
+var TOKEN = (qs.get('t') || '').trim();
+var WORKER = qs.get('api') === 'staging' ? 'https://maintenance-hub-staging.brett-2f8.workers.dev' : 'https://maintenance-hub.brett-2f8.workers.dev';
+var CONSENT_VERSION = 'onboard-2026-09-26';
+var STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'];
+var TYPES = [['house','House (single family)'],['rowhome','Rowhome'],['multi','Multi-unit building'],['condo','Condo'],['commercial','Commercial']];
+var SUBTYPES = [['retail','Retail'],['mixed_use','Mixed use'],['industrial','Industrial'],['office','Office']];
+
+var S = { step:1, consent:false, owner:{ first:'', last:'', business_choice:'', business_name:'', phone:'', billing_email:'', billing_address:{street:'',city:'',state:'',zip:''}, pin:'' }, properties:[ newProperty() ] };
+var errs = {};           // field path -> message
+var pinState = { pin:'', ok:null, msg:'' };
+var pinTimer = null;
+var submitting = false;
+var topMsg = '';
+
+function newUnit(){ return { label:'', status:'', tenant:{first:'',last:'',phone:'',email:''}, access:{method:'',code:'',location:'',note:''} }; }
+function newProperty(){ return { address:'', city:'', type:'', subtype:'', unit_count:'', units:[ newUnit() ] }; }
+function isSingle(p){ return p.type === 'house' || p.type === 'rowhome'; }
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function get(path){ var v = S; parsePath(path).forEach(function(k){ v = v == null ? v : v[k]; }); return v; }
+function set(path, val){ var ks = parsePath(path), o = S; for (var i=0;i<ks.length-1;i++) o = o[ks[i]]; o[ks[ks.length-1]] = val; }
+function parsePath(p){ return String(p).replace(/\[(\d+)\]/g, '.$1').split('.'); }
+
+// ── draft autosave (never includes the PIN) ─────────────────────────────
+var DKEY = 'oo_draft_' + TOKEN.slice(0,10);
+function saveDraft(){ try { var c = JSON.parse(JSON.stringify(S)); c.owner.pin = ''; c.step = S.step; localStorage.setItem(DKEY, JSON.stringify(c)); } catch(e){} }
+function loadDraft(){ try { var d = JSON.parse(localStorage.getItem(DKEY) || 'null'); if (d && d.owner && d.properties && d.properties.length) { S = d; S.consent = false; return true; } } catch(e){} return false; }
+function clearDraft(){ try { localStorage.removeItem(DKEY); } catch(e){} }
+
+// ── validation (mirrors the server; the server is still the source of truth) ──
+function digits(v){ return String(v||'').replace(/\D/g,''); }
+function phoneOk(v){ var d = digits(v); return d.length===10 ? /^[2-9]\d{9}$/.test(d) : (d.length===11 && d[0]==='1' && /^[2-9]\d{9}$/.test(d.slice(1))); }
+function emailOk(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v||'').trim()); }
+function pinRules(pin){
+  var p = String(pin||'').toUpperCase(), d = p.slice(3);
+  return {
+    letters: /^[A-Z]{3}/.test(p),
+    numbers: /^[A-Z]{3}\d{5}$/.test(p),
+    simple: /^[A-Z]{3}\d{5}$/.test(p) && !(/^(\d)\1{4}$/.test(d) || '0123456789'.indexOf(d) >= 0 || '9876543210'.indexOf(d) >= 0 || /^(.)\1\1$/.test(p.slice(0,3)))
+  };
+}
+function validate(scope){
+  var e = {}, o = S.owner, a = o.billing_address;
+  function need(cond, path, msg){ if (!cond && !e[path]) e[path] = msg; }
+  if (scope === 1 || scope === 'all') {
+    need(o.first.trim(), 'owner.first', 'Enter your first name.');
+    need(o.last.trim(), 'owner.last', 'Enter your last name.');
+    need(o.business_choice, 'owner.business_choice', 'Please choose one.');
+    if (o.business_choice === 'business') need(o.business_name.trim().length >= 2, 'owner.business_name', 'Enter the business name.');
+    need(phoneOk(o.phone), 'owner.phone', 'Enter a valid 10-digit phone number.');
+    need(emailOk(o.billing_email), 'owner.billing_email', 'Enter a valid email address.');
+    need(a.street.trim().length >= 3, 'owner.billing_address.street', 'Enter the street address.');
+    need(a.city.trim().length >= 2, 'owner.billing_address.city', 'Enter the city.');
+    need(STATES.indexOf(a.state) >= 0, 'owner.billing_address.state', 'Choose the state.');
+    need(/^\d{5}(-\d{4})?$/.test(a.zip.trim()), 'owner.billing_address.zip', 'Enter a valid ZIP code.');
+    var r = pinRules(o.pin);
+    need(r.numbers && r.simple, 'owner.pin', 'Choose a PIN with 3 letters then 5 numbers (not a simple run like 12345).');
+    if (r.numbers && r.simple && pinState.pin === o.pin.toUpperCase() && pinState.ok === false) e['owner.pin'] = pinState.msg || 'That PIN is already taken.';
+  }
+  if (scope === 2 || scope === 'all') {
+    var resolved = 0;
+    S.properties.forEach(function(p, i){
+      var pf = 'properties['+i+']';
+      need(p.address.trim().length >= 3, pf+'.address', 'Enter the property address.');
+      need(p.city.trim().length >= 2, pf+'.city', 'Enter the city.');
+      need(p.type, pf+'.type', 'Choose the property type.');
+      if (p.type === 'commercial') need(p.subtype, pf+'.subtype', 'Choose retail, mixed use, industrial or office.');
+      var cnt = 1;
+      if (p.type && !isSingle(p)) {
+        cnt = parseInt(p.unit_count, 10);
+        var min = p.type === 'multi' ? 2 : 1;
+        need(isFinite(cnt) && cnt >= min && cnt <= 500, pf+'.unit_count', p.type === 'multi' ? 'Enter how many units are at this address (2 or more).' : 'Enter how many units are at this address.');
+        if (!isFinite(cnt)) cnt = 0;
+      }
+      var seen = {};
+      p.units.forEach(function(u, j){
+        var uf = pf+'.units['+j+']';
+        if (!isSingle(p) && p.type) {
+          need(u.label.trim(), uf+'.label', 'Enter the unit name or number (like Apt 2 or Suite 100).');
+          var k = u.label.trim().toLowerCase();
+          if (k) { if (seen[k]) e[uf+'.label'] = 'Two units have the same name.'; seen[k] = 1; }
+        }
+        need(u.status, uf+'.status', 'Choose one of the options below.');
+        if (u.status === 'tenant') {
+          need(u.tenant.first.trim(), uf+'.tenant.first', 'Enter the tenant\'s first name.');
+          need(phoneOk(u.tenant.phone), uf+'.tenant.phone', 'Enter the tenant\'s 10-digit phone number.');
+          if (u.tenant.email.trim()) need(emailOk(u.tenant.email), uf+'.tenant.email', 'That email doesn\'t look right.');
+          resolved++;
+        } else if (u.status === 'vacant') {
+          need(u.access.method, uf+'.access.method', 'Choose a lockbox, or "No lockbox".');
+          if (u.access.method === 'lockbox') need(u.access.code.trim().length >= 2, uf+'.access.code', 'Enter the lockbox code.');
+          if (u.access.method === 'none') need(u.access.note.trim().length >= 5, uf+'.access.note', 'Tell us how we get in (who has a key, a door code, who to call).');
+          resolved++;
+        }
+      });
+      if (!isSingle(p) && p.type && cnt && p.units.length > cnt) e[pf+'.units'] = 'You listed more units than the unit count.';
+    });
+    if (!resolved && !Object.keys(e).length) e['properties'] = 'We need at least one unit that is occupied (with tenant contact info) or vacant (with access info). "I\'ll provide this later" on its own isn\'t enough.';
+  }
+  return e;
+}
+
+// ── rendering ───────────────────────────────────────────────────────────
+function field(path, label, opts){
+  opts = opts || {};
+  var v = get(path), er = errs[path];
+  var type = opts.type || 'text';
+  var h = '<label class="f" for="'+esc(path)+'">'+esc(label)+(opts.optional?' <span class="opt">(optional)</span>':'')+'</label>';
+  if (opts.select) {
+    h += '<select id="'+esc(path)+'" data-p="'+esc(path)+'" class="'+(er?'bad':'')+'"><option value="">'+esc(opts.placeholder||'Choose…')+'</option>' +
+      opts.select.map(function(o){ var val = Array.isArray(o)?o[0]:o, lb = Array.isArray(o)?o[1]:o; return '<option value="'+esc(val)+'"'+(v===val?' selected':'')+'>'+esc(lb)+'</option>'; }).join('') + '</select>';
+  } else if (opts.textarea) {
+    h += '<textarea id="'+esc(path)+'" data-p="'+esc(path)+'" class="'+(er?'bad':'')+'" placeholder="'+esc(opts.placeholder||'')+'">'+esc(v)+'</textarea>';
+  } else {
+    h += '<input id="'+esc(path)+'" data-p="'+esc(path)+'" class="'+(er?'bad':'')+'" type="'+type+'" value="'+esc(v)+'"' +
+      (opts.placeholder?' placeholder="'+esc(opts.placeholder)+'"':'') + (opts.ac?' autocomplete="'+opts.ac+'"':' autocomplete="off"') +
+      (opts.im?' inputmode="'+opts.im+'"':'') + (opts.min?' min="'+opts.min+'"':'') + '>';
+  }
+  if (opts.hint) h += '<div class="hint">'+esc(opts.hint)+'</div>';
+  h += '<div class="err'+(er?' show':'')+'" data-e="'+esc(path)+'">'+esc(er||'')+'</div>';
+  return h;
+}
+function choice(path, val, title, desc){
+  var sel = get(path) === val;
+  return '<label class="choice'+(sel?' sel':'')+'"><input type="radio" name="'+esc(path)+'" data-p="'+esc(path)+'" data-struct="1" value="'+esc(val)+'"'+(sel?' checked':'')+'><div><b>'+esc(title)+'</b>'+(desc?'<span>'+esc(desc)+'</span>':'')+'</div></label>';
+}
+function errLine(path){ return '<div class="err'+(errs[path]?' show':'')+'" data-e="'+esc(path)+'">'+esc(errs[path]||'')+'</div>'; }
+
+function renderStep1(){
+  var o = S.owner, r = pinRules(o.pin);
+  return '<div class="card"><div class="sec">About you</div>' +
+    '<div class="row2"><div>'+field('owner.first','First name',{ac:'given-name'})+'</div><div>'+field('owner.last','Last name',{ac:'family-name'})+'</div></div>' +
+    '<label class="f">How should we bill you?</label>' +
+    choice('owner.business_choice','name','Use my name','Invoices will be addressed to '+((o.first+' '+o.last).trim()||'you')) +
+    choice('owner.business_choice','business','I have a business name','Invoices will be addressed to your business') +
+    errLine('owner.business_choice') +
+    (o.business_choice==='business' ? field('owner.business_name','Business name',{ac:'organization',placeholder:'Example Holdings LLC'}) : '') +
+    field('owner.phone','Contact phone',{type:'tel',im:'tel',ac:'tel',placeholder:'(410) 555-0123'}) +
+  '</div>' +
+  '<div class="card"><div class="sec">Billing</div>' +
+    field('owner.billing_email','Billing email',{type:'email',im:'email',ac:'email',placeholder:'you@example.com',hint:'Invoices are sent here.'}) +
+    field('owner.billing_address.street','Billing street address',{ac:'street-address'}) +
+    '<div class="row3"><div>'+field('owner.billing_address.city','City',{ac:'address-level2'})+'</div><div>'+field('owner.billing_address.state','State',{select:STATES,placeholder:'State',ac:'address-level1'})+'</div><div>'+field('owner.billing_address.zip','ZIP',{im:'numeric',ac:'postal-code'})+'</div></div>' +
+  '</div>' +
+  '<div class="card"><div class="sec">Your PIN</div>' +
+    '<div class="hint" style="margin-top:0">You\'ll use this PIN (with your first name) to sign in to your owner portal. Tap Suggest for one built from your phone number, or pick your own.</div>' +
+    '<label class="f" for="owner.pin">Choose a PIN</label>' +
+    '<div class="pinrow"><input id="owner.pin" data-p="owner.pin" type="text" autocomplete="off" autocapitalize="characters" maxlength="8" placeholder="ABC12345" value="'+esc(o.pin)+'" class="'+(errs['owner.pin']?'bad':'')+'"><button class="btn sec" type="button" id="sugg">Suggest</button></div>' +
+    '<ul class="rules" id="rules"><li class="'+(r.letters?'ok':'')+'">3 letters to start</li><li class="'+(r.numbers?'ok':'')+'">followed by 5 numbers</li><li class="'+(r.simple?'ok':'')+'">not a simple run (like 12345 or 11111)</li></ul>' +
+    '<div class="pinstat" id="pinstat"></div>' + errLine('owner.pin') +
+  '</div>';
+}
+
+function renderUnit(p, pi, u, j){
+  var pf = 'properties['+pi+']', uf = pf+'.units['+j+']', single = isSingle(p);
+  var h = '<div class="card inner">';
+  if (!single) {
+    h += '<div class="propname"><b>Unit '+(j+1)+'</b>'+(p.units.length>1?'<button class="btn ghost danger" type="button" data-act="rmunit" data-pi="'+pi+'" data-j="'+j+'">Remove</button>':'')+'</div>';
+    h += field(uf+'.label','Unit name or number',{placeholder:p.type==='commercial'?'Suite 100':'Apt 2'});
+  }
+  h += '<label class="f">'+(single?'Is this property occupied?':'Is this unit occupied?')+'</label>' +
+    choice(uf+'.status','tenant','Yes — a tenant lives here','Tenant name and phone required') +
+    choice(uf+'.status','vacant','No — it\'s vacant','We\'ll need to know how to get in') +
+    choice(uf+'.status','later','I will provide this later','You can add it after setup') +
+    errLine(uf+'.status');
+  if (u.status === 'tenant') {
+    h += '<div class="row2"><div>'+field(uf+'.tenant.first','Tenant first name',{ac:'off'})+'</div><div>'+field(uf+'.tenant.last','Tenant last name',{optional:true})+'</div></div>' +
+      field(uf+'.tenant.phone','Tenant phone',{type:'tel',im:'tel',placeholder:'(410) 555-0123'}) +
+      field(uf+'.tenant.email','Tenant email',{type:'email',im:'email',optional:true});
+  } else if (u.status === 'vacant') {
+    h += '<label class="f">How do we get in?</label>' +
+      choice(uf+'.access.method','lockbox','There\'s a lockbox') +
+      choice(uf+'.access.method','none','No lockbox','We\'ll ask for a note about access') +
+      errLine(uf+'.access.method');
+    if (u.access.method === 'lockbox') {
+      h += '<div class="row2"><div>'+field(uf+'.access.code','Lockbox code',{im:'numeric'})+'</div><div>'+field(uf+'.access.location','Where is it?',{optional:true,placeholder:'Left of front door'})+'</div></div>';
+    } else if (u.access.method === 'none') {
+      h += field(uf+'.access.note','How do we get access?',{textarea:true,placeholder:'e.g. Key with the listing agent — call Dana at 410-555-0100'});
+    }
+  }
+  return h + '</div>';
+}
+
+function renderProperty(p, i){
+  var pf = 'properties['+i+']', single = isSingle(p);
+  var h = '<div class="card"><div class="propname"><div class="sec" style="margin:0">Property '+(i+1)+'</div>'+(S.properties.length>1?'<button class="btn ghost danger" type="button" data-act="rmprop" data-pi="'+i+'">Remove</button>':'')+'</div>' +
+    field(pf+'.address','Property address',{ac:'off',placeholder:'123 Main St'}) +
+    field(pf+'.city','City') +
+    field(pf+'.type','Property type',{select:TYPES,placeholder:'Choose type'});
+  if (p.type === 'commercial') h += field(pf+'.subtype','Commercial type',{select:SUBTYPES,placeholder:'Choose commercial type'});
+  if (p.type && !single) h += field(pf+'.unit_count','How many units are at this address?',{type:'number',im:'numeric',min:p.type==='multi'?2:1,hint:'The total number at this address — you don\'t need to list them all below.'});
+  if (p.type && single) h += '<div class="hint" style="margin-top:10px"><span class="tag">1 unit</span> Single-family and rowhomes count as one unit.</div>';
+  if (p.type) {
+    h += '<div style="margin-top:14px"><div class="sec" style="margin-bottom:2px">'+(single?'Occupancy':'Unit you need service at')+'</div>' +
+      (single ? '' : '<div class="hint" style="margin-top:0">Just add the unit(s) you\'re asking us to service. You don\'t have to enter every unit in the building.</div>') + errLine(pf+'.units');
+    p.units.forEach(function(u, j){ h += renderUnit(p, i, u, j); });
+    if (!single && p.units.length < 50) h += '<button class="btn sec full" type="button" style="margin-top:10px" data-act="addunit" data-pi="'+i+'">+ Add another unit</button>';
+    h += '</div>';
+  }
+  return h + '</div>';
+}
+
+function renderStep2(){
+  var h = '<div class="sub">Tell us about the properties you want us to look after. You can add more than one.</div>' + (errs['properties'] ? '<div class="banner err2">'+esc(errs['properties'])+'</div>' : '');
+  S.properties.forEach(function(p, i){ h += renderProperty(p, i); });
+  if (S.properties.length < 25) h += '<button class="btn sec full" type="button" data-act="addprop">+ Add another property</button>';
+  return h;
+}
+
+function unitSummary(p, u){
+  var lbl = isSingle(p) ? 'the property' : ('Unit '+esc(u.label));
+  if (u.status === 'tenant') return lbl+': tenant '+esc((u.tenant.first+' '+u.tenant.last).trim());
+  if (u.status === 'vacant') return lbl+': vacant, '+(u.access.method==='lockbox'?'lockbox':'no lockbox');
+  return lbl+': details to come later';
+}
+function renderStep3(){
+  var o = S.owner;
+  var h = '<div class="card"><div class="sec">Please review</div><div class="sum">' +
+    '<b>'+esc((o.business_choice==='business'?o.business_name:(o.first+' '+o.last)).trim())+'</b><br>' +
+    esc(o.phone)+' · '+esc(o.billing_email)+'<br>'+esc(o.billing_address.street)+', '+esc(o.billing_address.city)+', '+esc(o.billing_address.state)+' '+esc(o.billing_address.zip) +
+    '<ul style="margin-top:10px">' +
+    S.properties.map(function(p){
+      var t = (TYPES.filter(function(x){return x[0]===p.type;})[0]||['',''])[1] + (p.type==='commercial' ? ' — '+((SUBTYPES.filter(function(x){return x[0]===p.subtype;})[0]||['',''])[1]) : '');
+      return '<li><b>'+esc(p.address)+'</b>, '+esc(p.city)+' <span style="color:var(--muted)">('+esc(t)+(isSingle(p)?'':', '+esc(p.unit_count)+' units')+')</span><ul>' +
+        p.units.map(function(u){ return '<li>'+unitSummary(p,u)+'</li>'; }).join('') + '</ul></li>';
+    }).join('') + '</ul></div></div>' +
+    '<div class="card"><div class="sec">Text message permission</div>' +
+    '<label class="consent"><input type="checkbox" id="consent"'+(S.consent?' checked':'')+'><div>Yes, Ridge Co Property Maintenance may text me at the phone number above about my properties and service requests — like work order updates, scheduling and invoices. Message frequency varies. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent isn\'t required to use our service. See our <a href="https://bmoremanagement.com/sms-terms" target="_blank" rel="noopener">SMS Terms</a> and <a href="https://bmoremanagement.com/sms-privacy" target="_blank" rel="noopener">Privacy Policy</a>.</div></label>' +
+    '</div>';
+  return h;
+}
+
+function renderDone(first){
+  return '<div class="card center"><div class="bigcheck">✓</div><h1>You\'re all set, '+esc(first)+'!</h1>' +
+    '<p class="sub" style="margin-top:8px">We have your billing details and property information. We\'ll review everything and follow up if we need anything else.</p>' +
+    '<p class="sub">Your owner portal PIN is the one you just chose. Sign in with your first name and that PIN:</p>' +
+    '<a class="btn full" href="owner.html">Go to the owner portal</a></div>';
+}
+
+function renderBad(msg){
+  return '<div class="card center"><h1>This link can\'t be used</h1><p class="sub" style="margin-top:8px">'+esc(msg)+'</p></div>';
+}
+
+function render(){
+  var app = document.getElementById('app');
+  var h = '';
+  if (S.step < 4) {
+    h += '<h1>'+(S.step===1?'Let\'s get you set up':S.step===2?'Your properties':'Almost done')+'</h1>' +
+      '<div class="steps"><i class="on"></i><i class="'+(S.step>=2?'on':'')+'"></i><i class="'+(S.step>=3?'on':'')+'"></i></div>' +
+      '<div class="steplbl">Step '+S.step+' of 3 · takes about 3 minutes</div><div style="height:8px"></div>';
+    if (topMsg) h += '<div class="banner err2">'+esc(topMsg)+'</div>';
+    h += S.step===1 ? renderStep1() : S.step===2 ? renderStep2() : renderStep3();
+    h += '<div class="foot"><div class="in">' + (S.step>1?'<button class="btn sec" type="button" data-act="back">Back</button>':'') +
+      '<button class="btn" type="button" id="next" data-act="next"'+(submitting?' disabled':'')+'>'+(S.step===3?(submitting?'Submitting…':'Submit'):'Continue')+'</button></div></div>';
+  }
+  app.innerHTML = h;
+  updatePinUI();
+}
+
+function updatePinUI(){
+  var el = document.getElementById('pinstat'); if (!el) return;
+  var r = pinRules(S.owner.pin), pin = S.owner.pin.toUpperCase();
+  var rl = document.querySelectorAll('#rules li');
+  if (rl.length === 3) { rl[0].className = r.letters?'ok':''; rl[1].className = r.numbers?'ok':''; rl[2].className = r.simple?'ok':''; }
+  if (pinState.pin === pin && pinState.ok === true) { el.className = 'pinstat ok'; el.textContent = '✓ That PIN is available'; }
+  else if (pinState.pin === pin && pinState.ok === false) { el.className = 'pinstat no'; el.textContent = pinState.msg; }
+  else { el.className = 'pinstat'; el.textContent = ''; }
+}
+
+function api(path, opts){ return fetch(WORKER + path, opts).then(function(r){ return r.json().then(function(j){ j._status = r.status; return j; }); }); }
+function checkPin(){
+  var pin = S.owner.pin.toUpperCase(); var r = pinRules(pin);
+  if (!(r.numbers && r.simple)) return;
+  if (pinState.pin === pin && pinState.ok !== null) return;
+  api('/owner-onboard/check-pin', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token: TOKEN, pin: pin }) }).then(function(j){
+    if (S.owner.pin.toUpperCase() !== pin) return;
+    pinState = { pin: pin, ok: !!j.available, msg: j.reason || '' };
+    if (!j.available && !errs['owner.pin']) { errs['owner.pin'] = j.reason || 'That PIN is not available.'; }
+    if (j.available) delete errs['owner.pin'];
+    updatePinUI(); showErrs();
+  }).catch(function(){ /* the server re-checks on submit */ });
+}
+function showErrs(){
+  document.querySelectorAll('[data-e]').forEach(function(el){ var m = errs[el.getAttribute('data-e')]; el.textContent = m || ''; el.className = 'err' + (m ? ' show' : ''); });
+  document.querySelectorAll('[data-p]').forEach(function(el){ if (el.type !== 'radio') el.classList[errs[el.getAttribute('data-p')] ? 'add' : 'remove']('bad'); });
+}
+function scrollToFirstError(){
+  var first = document.querySelector('.err.show'); if (first) first.scrollIntoView({ behavior:'smooth', block:'center' });
+}
+
+function goNext(){
+  topMsg = '';
+  if (S.step === 1 || S.step === 2) {
+    errs = validate(S.step);
+    if (Object.keys(errs).length) { render(); scrollToFirstError(); return; }
+    S.step++; saveDraft(); render(); window.scrollTo(0,0); return;
+  }
+  errs = validate('all');
+  if (Object.keys(errs).length) { S.step = /^owner\./.test(Object.keys(errs)[0]) ? 1 : 2; render(); scrollToFirstError(); return; }
+  submit();
+}
+function fieldStep(path){ return /^owner\./.test(path) ? 1 : 2; }
+function submit(){
+  if (submitting) return; submitting = true; render();
+  var body = { token: TOKEN, owner: S.owner, properties: S.properties.map(function(p){ var c = JSON.parse(JSON.stringify(p)); if (isSingle(p)) { c.unit_count = 1; } return c; }), sms_consent: S.consent === true, consent_version: CONSENT_VERSION };
+  api('/owner-onboard/submit', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(function(j){
+    submitting = false;
+    if (j.success) { clearDraft(); S.step = 4; document.getElementById('app').innerHTML = renderDone(j.first_name || S.owner.first); window.scrollTo(0,0); return; }
+    if (j.errors && j.errors.length) {
+      errs = {}; j.errors.forEach(function(e){ if (!errs[e.field]) errs[e.field] = e.message; });
+      var firstF = j.errors[0].field; S.step = fieldStep(firstF); topMsg = 'Please fix the highlighted items.';
+      if (firstF === 'owner.pin') pinState = { pin: S.owner.pin.toUpperCase(), ok: false, msg: errs['owner.pin'] };
+      render(); scrollToFirstError(); return;
+    }
+    topMsg = j.error || 'Something went wrong. Please try again.'; render(); window.scrollTo(0,0);
+  }).catch(function(){ submitting = false; topMsg = 'We couldn\'t reach the server. Check your connection and try again — nothing was submitted.'; render(); window.scrollTo(0,0); });
+}
+
+// ── events (delegated) ──────────────────────────────────────────────────
+document.addEventListener('input', function(ev){
+  var el = ev.target, p = el.getAttribute && el.getAttribute('data-p'); if (!p || el.type === 'radio' || el.getAttribute('data-struct')) return;
+  var val = el.value;
+  if (p === 'owner.pin') { val = val.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); if (el.value !== val) el.value = val; }
+  set(p, val);
+  if (errs[p]) { delete errs[p]; showErrs(); }
+  if (p === 'owner.pin') { updatePinUI(); clearTimeout(pinTimer); pinTimer = setTimeout(checkPin, 500); }
+  saveDraft();
+});
+document.addEventListener('change', function(ev){
+  var el = ev.target, p = el.getAttribute && el.getAttribute('data-p');
+  if (el.id === 'consent') { S.consent = el.checked; return; }
+  if (!p) return;
+  if (el.tagName === 'SELECT' || el.type === 'radio') {
+    set(p, el.value);
+    if (errs[p]) delete errs[p];
+    var structural = el.type === 'radio' || /\.type$/.test(p);
+    if (/\.type$/.test(p)) {
+      var m = p.match(/^properties\[(\d+)\]/); if (m) { var pr = S.properties[+m[1]]; if (!isSingle(pr) || pr.units.length < 1) { /* keep units */ } if (isSingle(pr)) { pr.units = [ pr.units[0] || newUnit() ]; pr.units[0].label = ''; pr.unit_count = ''; } if (pr.type !== 'commercial') pr.subtype = ''; }
+    }
+    saveDraft();
+    if (structural) render();
+  }
+});
+document.addEventListener('click', function(ev){
+  var b = ev.target.closest && ev.target.closest('[data-act],#sugg'); if (!b) return;
+  var act = b.getAttribute('data-act'), pi = +b.getAttribute('data-pi'), j = +b.getAttribute('data-j');
+  if (b.id === 'sugg') { suggestAndCheck(0); return; }
+  if (act === 'next') goNext();
+  else if (act === 'back') { S.step--; errs = {}; topMsg = ''; render(); window.scrollTo(0,0); }
+  else if (act === 'addprop') { S.properties.push(newProperty()); render(); }
+  else if (act === 'rmprop') { S.properties.splice(pi, 1); errs = {}; render(); }
+  else if (act === 'addunit') { S.properties[pi].units.push(newUnit()); render(); }
+  else if (act === 'rmunit') { S.properties[pi].units.splice(j, 1); errs = {}; render(); }
+  saveDraft();
+});
+// Our normal PIN: 3 random letters + the last 5 digits of the owner's phone. Falls back to 5 random digits
+// only when there's no phone yet or the phone's last 5 would be a trivial run (which the PIN rules reject).
+function suggestPin(){
+  var A = 'ABCDEFGHJKLMNPQRSTUVWXYZ', p, tries = 0, last5 = digits(S.owner.phone).slice(-5);
+  var useLast5 = last5.length === 5 && pinRules('ABC' + last5).simple;
+  do {
+    p = ''; for (var i=0;i<3;i++) p += A[Math.floor(Math.random()*A.length)];
+    if (useLast5) p += last5; else for (var k=0;k<5;k++) p += Math.floor(Math.random()*10);
+    var r = pinRules(p); tries++;
+  } while (!(r.numbers && r.simple) && tries < 50);
+  return p;
+}
+// Suggest, check availability, and quietly try fresh letters if that PIN is already taken (up to 5 tries).
+function suggestAndCheck(attempt){
+  S.owner.pin = suggestPin(); pinState = { pin:'', ok:null, msg:'' }; delete errs['owner.pin']; render(); saveDraft();
+  var pin = S.owner.pin.toUpperCase();
+  api('/owner-onboard/check-pin', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token: TOKEN, pin: pin }) }).then(function(j){
+    if (S.owner.pin.toUpperCase() !== pin) return;
+    if (j.available) { pinState = { pin: pin, ok: true, msg: '' }; updatePinUI(); return; }
+    if ((attempt || 0) < 4 && j.ok) { suggestAndCheck((attempt || 0) + 1); return; }
+    pinState = { pin: pin, ok: false, msg: j.reason || 'That PIN is not available.' }; updatePinUI();
+  }).catch(function(){ /* the server re-checks on submit */ });
+}
+
+// ── boot ────────────────────────────────────────────────────────────────
+if (!TOKEN) { document.getElementById('app').innerHTML = renderBad('This page needs the personal link we sent you. Please use that link, or ask us for a new one.'); return; }
+api('/owner-onboard/info?token=' + encodeURIComponent(TOKEN)).then(function(j){
+  if (!j.valid) { document.getElementById('app').innerHTML = renderBad(j.message || j.error || 'This link isn\'t valid.'); return; }
+  var restored = loadDraft();
+  if (!restored && j.prefill) {
+    S.owner.first = j.prefill.first || ''; S.owner.last = j.prefill.last || ''; S.owner.phone = j.prefill.phone || ''; S.owner.billing_email = j.prefill.email || '';
+  }
+  if (S.step >= 4) S.step = 1;
+  render();
+  if (restored) { var d = document.createElement('div'); d.className = 'banner info'; d.textContent = 'Welcome back — we saved what you\'d already filled in. (For your security, please re-enter your PIN.)'; document.getElementById('app').insertBefore(d, document.getElementById('app').firstChild); }
+}).catch(function(){ document.getElementById('app').innerHTML = renderBad('We couldn\'t load this page. Please check your connection and try again.'); });
+})();
+</script>
+</body>
+</html>

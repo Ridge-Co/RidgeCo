@@ -1,9 +1,20 @@
 # Allow-List Simplification — Build Brief v1.0
 
-**Status:** Scoped, ready to build. Not yet started — a prior session's autonomous build attempt
-was correctly blocked by the safety classifier (auth-gate changes can't ship on autopilot). This
-brief exists so a new session can execute directly, with Brett approving each step interactively
-rather than trying to push it through as one unattended background build.
+**Status:** ✅ Shipped Sep 24, 2026 — all three changes below complete, verified live, and merged.
+
+**Completion summary:**
+- **Change 1** (gh-broker redundant path arrays removed) — direct-committed to `brett332/gh-broker`
+  `main`. Verified live: `hub_test_get`/`hub_prod_get` on previously-blocked paths now return the
+  Hub's own real response instead of a client-side "not allow-listed" rejection.
+- **Changes 2 & 3** (HUB_TEST_TOKEN broadened on staging; HUB_PROD_RO_TOKEN inverted to an 8-path
+  deny-list — see Change 3 below for the exact excluded paths) — shipped as PR #55
+  (`Ridge-Co/RidgeCo`, sha `f1e23456bbab060d28e827e85a9af207f99ae835`), left open for Brett's own
+  review and merge per PAT-033/`AUTONOMY_GUARDRAILS_v1.0` (never auto-merged); Brett merged it
+  himself ("go with pr 54 and pr 55"). `node --check` clean; verified live against both staging and
+  production post-merge.
+
+Full detail also logged in `FEATURE_LOG.md` ([FL-20260924-1815-as]). The original scoping brief
+below remains accurate as historical context for how these changes were investigated and decided.
 
 **Origin:** Brett's ask, verbatim (Sep 23, 2026): "I need a comprehensive list of all the allow
 list items you need. I'm tired of running into this and creating a limited scope token for each

@@ -2,7 +2,39 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Last checkpoint: Sep 16, 2026 — 1109 Battery Ave unit/tenant fix closed out; FEATURE_LOG/CURRENT.md too large to update from a chat session
+## Last checkpoint: Sep 24, 2026 — Allow-list simplification shipped (PR #55); property/unit linking discoverability + duplicate-check shipped (PR #57)
+
+**What happened:** Closed out `ALLOWLIST_SIMPLIFICATION_BUILD_BRIEF_v1.0.md` (all 3 changes: gh-broker
+redundant arrays removed direct-to-main; `HUB_TEST_TOKEN` broadened on staging; `HUB_PROD_RO_TOKEN`
+inverted to an 8-path deny-list) — PR #55 merged by Brett ("go with pr 54 and pr 55"), verified live
+on staging and prod. Then built and shipped `PROPERTY_UNIT_LINK_AND_DUPE_CHECK_BUILD_BRIEF_v1.0.md`
+(new brief, no prior scoping doc) from a fresh ask: QB Mapping discoverability (Dev Log link + Owner
+row 🔗 button + filter box), a link-vs-create stopgap on Add Property (lists unlinked properties),
+and a `findSimilarProperties`/`findSimilarUnits` duplicate check with a 409+`force:true` soft-block
+on `/property/add` and `/unit/add` — PR #57 merged by Brett ("MERGE PR 57"). Full detail in both
+build briefs and `FEATURE_LOG.md` ([FL-20260924-1815-as], [FL-20260924-1900-pu]).
+
+**Also this session:** discovered the Claude Project "Continuous Improvement" (claude.ai) had been
+running a parallel, drifting copy of some of these same docs (e.g. its own
+`ridgeco-allowlist-simplification-build-brief.md`) — the repo's `context/` + `brett332/data/
+business-context/` system here is the long-standing authoritative one (predates Claude Projects).
+Brett wants the two kept in exact sync going forward; a full reconciliation pass across all ~30
+Claude Project docs against this repo is in progress (see Next step).
+
+**Next step:** Continue reconciling the Claude Project docs against `context/` and
+`brett332/data/business-context/`. Known concrete gaps found so far, not yet fixed:
+- `business-context/cabin-str.md` is stale — missing the RemoteLock "Edgestate" finding and the
+  Airbnb-phone-masking root cause/fix work.
+- `business-context/cleaning-vendor-push-RESUME.md` is marked "✅ COMPLETED... do NOT re-run" but a
+  Sep 4 follow-up found a real unresolved $110 false-paid bill, an unresolved $1,131.34 entry, and
+  $810 never pushed to QuickBooks — needs updating so it isn't read as fully closed.
+- Several project-only design docs were never promoted to a repo build brief: owner-portal PM-lite,
+  landlord-managed-WO/SaaS monetization, material returns policy, vendor expedited-pay. Candidates
+  for new `context/*_BUILD_BRIEF_v1.0.md` files if Brett wants them formalized here.
+- `zapier-make-automation-audit.md` (Project doc) has no repo home yet; candidate:
+  `business-context/zapier-make-inventory.md` once the audit itself is finalized.
+
+## Prior checkpoint: Sep 16, 2026 — 1109 Battery Ave unit/tenant fix closed out; FEATURE_LOG/CURRENT.md too large to update from a chat session
 
 **What happened:** Brett asked (chat session, not Cowork) to pull up the 1109 Battery Ave fix from
 FEATURE_LOG rule 171 (Sep 14 — Property Structure management feature built, but the actual Battery

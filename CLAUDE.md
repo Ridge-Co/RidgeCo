@@ -25,6 +25,27 @@ action — no cheerleading. When corrected, change approach; never restate a ref
    solicited, and rotate it afterward. On a normal day this path should never be needed.
 3. Do not write code or make changes until context is loaded and confirmed.
 
+## MANDATORY: "update context" means BOTH stores, every time (Sep 24, 2026)
+
+When Brett says "update context" (or anything equivalent — end of session, wrapping up, log this),
+that means updating **both** of the following, not just one:
+1. **This repo's `context/` files** (and `brett332/data/business-context/` for cross-venture
+   topics) — `FEATURE_LOG.md` (numbered/tagged rule entry), `CURRENT.md` (status section), the
+   relevant `*_BUILD_BRIEF_v1.0.md` if one exists or is warranted, `SESSION_STATE.md` checkpoint.
+   Use `commit_patch` (old_str/new_str) for the large files (`FEATURE_LOG.md`, `CURRENT.md`) —
+   never try to round-trip their full content through `commit_file`.
+2. **The claude.ai Project "Continuous Improvement"** (`Projects` tool, `project_write`) — the
+   matching doc there, if one exists for this topic.
+
+This repo's `context/`/`business-context/` system is the long-standing, authoritative one (predates
+Claude Projects, per Brett). The Claude Project is a second surface Brett also reads/works from —
+he wants the two kept in exact sync, not one deprecated in favor of the other. Don't update one and
+skip the other because it seems redundant; that's exactly the drift Brett flagged and had corrected
+on Sep 24, 2026 (a Claude Project doc had gone stale relative to this repo's real state). If a topic
+only has a home in one of the two stores, create the missing counterpart rather than leaving it
+one-sided — see `context/SESSION_STATE.md`'s Sep 24 checkpoint for a concrete backlog of docs still
+needing this treatment.
+
 ## Workflow: PLAN first, then implement
 - Scope and design BEFORE editing. Get to the root of what Brett actually wants — surface the
   real goal, constraints, and the smallest change that achieves it — then confirm the plan.

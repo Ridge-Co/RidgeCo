@@ -179,11 +179,39 @@ async function load(){
   const optP=loadOptimizer();   // best-effort, runs concurrently; never throws, never gates first paint
   const arP=loadAR();           // best-effort AR aging (QuickBooks)
   const staleP=loadStale();     // best-effort stuck-WO alert (greenlit #2)
+  const tasksP=loadTasks();     // best-effort BrettOS Tasks Sheet summary (TASK_LINKING_BUILD_BRIEF #2)
   try{
     const [wos,inv,bills,vendors,props,units]=await Promise.all(
       ['/workorders','/invoices','/vendor-bills?status=submitted','/vendors','/properties','/units'].map(getJSON));
-    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP,ar:await arP,stale:await staleP});
-  }catch(e){ sampleMode('DIAGNOSTIC → '+e.message, await optP, null); }
+    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP,ar:await arP,stale:await staleP,tasks:await tasksP});
+  }catch(e){ sampleMode('DIAGNOSTIC → '+e.message, await optP, null, await tasksP); }
+}
+// BrettOS Tasks Sheet summary (read-only) — see TASK_LINKING_BUILD_BRIEF_v1.0.md decision #1.
+// The Sheet stays canonical; this is a glance card only. Best-effort: any failure (including the
+// endpoint 500ing because the sheet isn't shared with the runtime service account yet — see the
+// PR description) just omits the card, never trips sample mode.
+async function loadTasks(){ try{ return await getJSON('/brettos-tasks-summary?limit=6'); }catch(e){ return null; } }
+const BRETTOS_TASKS_SHEET_FALLBACK_URL='https://docs.google.com/spreadsheets/d/1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA/edit';
+function tasksCard(t){
+  if(!t||!t.ok) return '';
+  var sheetUrl=t.sheet_url||BRETTOS_TASKS_SHEET_FALLBACK_URL;
+  var statusRows=Object.entries(t.by_status||{}).sort(function(a,b){return b[1]-a[1];}).slice(0,4);
+  var html='<div class="card"><h2>📋 BrettOS Tasks <small style="font-weight:600;color:var(--muted)">· '+h(t.open_total||0)+' open of '+h(t.total||0)+'</small></h2>';
+  if(statusRows.length){
+    html+='<div class="counts">'+statusRows.map(function(r){return '<div class="count"><b>'+h(r[1])+'</b><small>'+h(r[0])+'</small></div>';}).join('')+'</div>';
+  }
+  var top=t.top_open||[];
+  if(top.length){
+    html+='<p class="note" style="margin-top:8px">Top open, by priority:</p>';
+    top.forEach(function(x){
+      var pl=String(x.priority||'').toLowerCase();
+      var dotc=pl==='urgent'?'r':(pl==='high'?'a':'y');
+      html+='<div class="row2"><span class="pdot '+dotc+'"></span><div class="t">'+h(x.title||x.task_id||'(untitled)')
+        +'<small>'+h(x.venture||'—')+(x.due_date?' · due '+h(x.due_date):'')+'</small></div><span class="vtag">'+h((x.venture||'TASK').toUpperCase())+'</span></div>';
+    });
+  } else { html+='<p class="note">Nothing open. 🎉</p>'; }
+  html+='<a href="'+sheetUrl+'" target="_blank" rel="noopener" style="display:inline-block;margin-top:8px;color:var(--blue);font-weight:800;font-size:13px;text-decoration:none">Open the full Tasks sheet →</a></div>';
+  return html;
 }
 // Optimizer / Ops feed — the autonomous loop's output (weekly review + live telemetry),
 // pulled READ-ONLY. Best-effort: any failure just omits the card, never trips sample mode.
@@ -343,7 +371,7 @@ function arCard(ar){
   return html;
 }
 
-function sampleMode(reason,opt,ar){
+function sampleMode(reason,opt,ar,tasks){
   const wos=[
     {ID:'WO-1061',Status:'New',Priority:'urgent',Property_ID:'P1',Unit_ID:'U1',Vendor_ID:'',Trade:'Plumbing',Description:'No hot water',Created_Date:'2026-07-16'},
     {ID:'WO-1058',Status:'Complete',Priority:'high',Property_ID:'P2',Unit_ID:'U2',Vendor_ID:'V1',Trade:'HVAC',Description:'Mini-split leak',Created_Date:'2026-07-11'},
@@ -357,7 +385,7 @@ function sampleMode(reason,opt,ar){
   const vendors=[{ID:'V1',Name:'Cesar'},{ID:'V2',Name:'Oscar'}];
   const props=[{ID:'P1',Address:'56 S Culver St'},{ID:'P2',Address:'807 N Calvert St'},{ID:'P3',Address:'153 Ashburton'}];
   const units=[{ID:'U1',Unit_Label:'Apt 2'},{ID:'U2',Unit_Label:'Apt 1'},{ID:'U3',Unit_Label:'Unit B'}];
-  render({wos,inv,bills,vendors,props,units,live:false,reason,opt,ar});
+  render({wos,inv,bills,vendors,props,units,live:false,reason,opt,ar,tasks});
 }
 
 function render(d){
@@ -411,6 +439,7 @@ function render(d){
 
   html+=staleCard(d.stale);
   html+=optCard(d.opt);
+  html+=tasksCard(d.tasks);
 
   // vendor bills to review
   if(bills.length){

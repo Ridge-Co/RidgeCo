@@ -1,0 +1,207 @@
+// Offline test for the Statement Importer's pure matcher (Phase 1, Sep 24 2026 —
+// STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0). Extracts the REAL statementLineMatch (and
+// _rcNorm, which it reuses directly) from worker.js so this can't drift from what ships.
+// Run: node test/statement-import.test.mjs
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const src = readFileSync(join(here, '..', 'worker.js'), 'utf8');
+let pass = 0, fail = 0;
+const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ FAIL: ' + m); } };
+
+function extractSync(name) {
+  const start = src.indexOf(`function ${name}(`);
+  if (start === -1) throw new Error(name + ' not found');
+  let i = src.indexOf('{', start), d = 0;
+  for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
+  return src.slice(start, i);
+}
+
+const pure = new Function(`
+  ${extractSync('_rcNorm')}
+  ${extractSync('statementLineMatch')}
+  return { _rcNorm, statementLineMatch };
+`)();
+const { statementLineMatch } = pure;
+
+// ── 1) Confirmed via exact match (amount + date + normalized vendor) ───────────────────────────
+{
+  const receipts = [{ ID: 'R1', Active: 'TRUE', Amount: '56.04', Date: '2026-09-20', Store: 'Home Depot', WO_ID: '4021' }];
+  // Layer 1 requires _rcNorm EQUALITY (same discipline as receiptReconFindRescanMatches) —
+  // case/spacing-insensitive, but not a substring/rough match; that's Layer 3 ("possible") only.
+  const line = { amount: 56.04, date: '2026-09-20', vendor: 'HOME   DEPOT', ref: '' };
+  const m = statementLineMatch(line, receipts, []);
+  ok(m.confidence === 'confirmed' && m.type === 'exact_receipt' && m.receipt_id === 'R1', 'exact amount+date+normalized-vendor match against a live Receipts row -> confirmed');
+}
+{
+  // Same, but the match is a non-pending Receipt_Recon_Queue row instead of a Receipts row —
+  // still-pending rows must never count as a prior disposition.
+  const queue = [
+    { ID: 'Q1', Active: 'TRUE', Status: 'confirmed', Total: '12.50', Receipt_Date: '2026-08-01', Vendor: 'Lowes' },
+    { ID: 'Q2', Active: 'TRUE', Status: 'pending', Total: '12.50', Receipt_Date: '2026-08-01', Vendor: 'Lowes' },
+  ];
+  const m = statementLineMatch({ amount: 12.50, date: '2026-08-01', vendor: 'Lowes', ref: '' }, [], queue);
+  ok(m.confidence === 'confirmed' && m.type === 'exact_queue' && m.queue_id === 'Q1', 'exact match against a dispositioned queue row (not the still-pending one) -> confirmed');
+}
+
+// ── 2) Confirmed via ref match with a date gap ──────────────────────────────────────────────────
+{
+  const queue = [{ ID: 'Q3', Active: 'TRUE', Status: 'pending', Total: '212.17', Receipt_Date: '2026-09-01', Vendor: 'Home Depot', PO_Reference: 'HD-INV-88213' }];
+  // Statement line dated 4 days later than the queue row's Receipt_Date — well outside the ±3-day
+  // window Layer 3 uses — but the reference number matches exactly, so this is still confirmed.
+  const line = { amount: 212.17, date: '2026-09-05', vendor: 'Home Depot', ref: 'HD-INV-88213' };
+  const m = statementLineMatch(line, [], queue);
+  ok(m.confidence === 'confirmed' && m.type === 'ref_queue' && m.queue_id === 'Q3', 'PO/invoice reference exact match overrides the date gap -> confirmed even though dates differ by more than 3 days');
+}
+{
+  // A ref match at the WRONG amount must never confirm — the reference alone isn't enough, it's
+  // "ref + same amount" per the spec.
+  const queue = [{ ID: 'Q4', Active: 'TRUE', Status: 'pending', Total: '212.17', Receipt_Date: '2026-09-01', Vendor: 'Home Depot', Invoice_Number: 'INV-999' }];
+  const m = statementLineMatch({ amount: 50.00, date: '2026-09-01', vendor: 'Home Depot', ref: 'INV-999' }, [], queue);
+  ok(m.confidence === null, 'reference matches but amount does not -> no confirmed match');
+}
+
+// ── 3) Possible via ±3-day window ───────────────────────────────────────────────────────────────
+{
+  const receipts = [{ ID: 'R5', Active: 'TRUE', Amount: '89.99', Date: '2026-09-10', Store: 'Ace Hardware' }];
+  const line = { amount: 89.99, date: '2026-09-12', vendor: 'Ace Hardware', ref: '' }; // 2 days later
+  const m = statementLineMatch(line, receipts, []);
+  ok(m.confidence === 'possible' && m.type === 'window_receipt' && m.receipt_id === 'R5', 'same amount, date 2 days off, vendor matches -> possible (not confirmed)');
+}
+{
+  // Exactly at the ±3-day boundary must still count.
+  const receipts = [{ ID: 'R6', Active: 'TRUE', Amount: '40.00', Date: '2026-09-10', Store: 'Lowes' }];
+  const line = { amount: 40.00, date: '2026-09-13', vendor: 'Lowes', ref: '' }; // exactly 3 days later
+  ok(statementLineMatch(line, receipts, []).confidence === 'possible', 'exactly 3 days off is still inside the window -> possible');
+}
+{
+  // Outside the window (4 days) must not match at all.
+  const receipts = [{ ID: 'R7', Active: 'TRUE', Amount: '40.00', Date: '2026-09-10', Store: 'Lowes' }];
+  const line = { amount: 40.00, date: '2026-09-14', vendor: 'Lowes', ref: '' }; // 4 days later
+  ok(statementLineMatch(line, receipts, []).confidence === null, '4 days off is outside the ±3-day window -> no match');
+}
+
+// ── 4) Null when nothing matches ────────────────────────────────────────────────────────────────
+{
+  const receipts = [{ ID: 'R8', Active: 'TRUE', Amount: '15.00', Date: '2026-09-01', Store: 'Home Depot' }];
+  const queue = [{ ID: 'Q5', Active: 'TRUE', Status: 'confirmed', Total: '15.00', Receipt_Date: '2026-09-01', Vendor: 'Home Depot' }];
+  const line = { amount: 999.00, date: '2026-01-01', vendor: 'A Vendor Nobody Has Heard Of', ref: '' };
+  ok(statementLineMatch(line, receipts, queue).confidence === null, 'wildly different amount/date/vendor -> null');
+}
+{
+  ok(statementLineMatch({ amount: 0, date: '', vendor: '', ref: '' }, [], []).confidence === null, 'blank/zero line never false-positives');
+}
+
+// ── 5) Amount must match exactly to the cent — the boundary case ───────────────────────────────
+{
+  const receipts = [{ ID: 'R9', Active: 'TRUE', Amount: '56.04', Date: '2026-09-20', Store: 'Home Depot' }];
+  const oneCentOff = statementLineMatch({ amount: 56.05, date: '2026-09-20', vendor: 'Home Depot', ref: '' }, receipts, []);
+  ok(oneCentOff.confidence === null, 'one cent off on an otherwise-exact same-day match -> no confirmed match (fails Layer 1)');
+  // The ±3-day "possible" layer also requires the amount to match EXACTLY (to the cent) — a
+  // near-amount within the date window must still not flag as possible.
+  const nearAmountInWindow = statementLineMatch({ amount: 56.05, date: '2026-09-21', vendor: 'Home Depot', ref: '' }, receipts, []);
+  ok(nearAmountInWindow.confidence === null, 'one cent off, even within the ±3-day window -> still no match (amount is exact-only at every layer)');
+  // Exactly matching to the cent (56.04 vs 56.040000001 float noise) still confirms via .toFixed(2).
+  const floatNoise = statementLineMatch({ amount: 56.040000001, date: '2026-09-20', vendor: 'Home Depot', ref: '' }, receipts, []);
+  ok(floatNoise.confidence === 'confirmed', '.toFixed(2) string comparison absorbs harmless float noise at the same cent value');
+}
+
+// ── 6) Inactive/soft-deleted rows never match (mirrors receiptReconFindRescanMatches discipline) ─
+{
+  const receipts = [{ ID: 'R10', Active: 'FALSE', Amount: '10.00', Date: '2026-09-10', Store: 'Amazon' }];
+  ok(statementLineMatch({ amount: 10.00, date: '2026-09-10', vendor: 'Amazon', ref: '' }, receipts, []).confidence === null, 'Active=FALSE Receipts row is ignored');
+  const queue = [{ ID: 'Q6', Active: 'FALSE', Status: 'confirmed', Total: '10.00', Receipt_Date: '2026-09-10', Vendor: 'Amazon' }];
+  ok(statementLineMatch({ amount: 10.00, date: '2026-09-10', vendor: 'Amazon', ref: '' }, [], queue).confidence === null, 'Active=FALSE queue row is ignored');
+}
+
+// ── CSV column auto-detection heuristic (index.html/receipt-reconciler.html client JS) ─────────
+// stmtParseCsv/stmtRowsFromCsv are pure (no DOM dependency) despite living in the HTML file's
+// inline <script>, so they ARE testable here — extracted the same way as the worker.js functions
+// above, just from receipt-reconciler.html instead.
+{
+  const htmlSrc = readFileSync(join(here, '..', 'receipt-reconciler.html'), 'utf8');
+  function extractFromHtml(name) {
+    const start = htmlSrc.indexOf(`function ${name}(`);
+    if (start === -1) throw new Error(name + ' not found in receipt-reconciler.html');
+    let i = htmlSrc.indexOf('{', start), d = 0;
+    for (; i < htmlSrc.length; i++) { if (htmlSrc[i] === '{') d++; else if (htmlSrc[i] === '}') { d--; if (d === 0) { i++; break; } } }
+    return htmlSrc.slice(start, i);
+  }
+  const csvPure = new Function(`
+    ${extractFromHtml('stmtParseCsvLine')}
+    ${extractFromHtml('stmtParseCsv')}
+    ${extractFromHtml('stmtDetectColumns')}
+    ${extractFromHtml('stmtRowsFromCsv')}
+    return { stmtParseCsv, stmtRowsFromCsv };
+  `)();
+  const { stmtParseCsv, stmtRowsFromCsv } = csvPure;
+
+  const csv = 'Date,Amount,Description,Reference\n2026-09-01,"1,234.56","Paint, brushes",PO-100\n2026-09-02,45.00,Lumber,';
+  const rows = stmtParseCsv(csv);
+  ok(rows.length === 3, 'CSV parser: header + 2 data rows');
+  ok(rows[1][1] === '1,234.56', 'CSV parser: quoted comma-containing amount field preserved verbatim');
+  const { cols, out } = stmtRowsFromCsv(rows);
+  ok(cols.date === 0 && cols.amount === 1 && cols.description === 2 && cols.ref === 3, 'header auto-detect finds Date/Amount/Description/Reference by case-insensitive contains');
+  ok(out[0].amount === 1234.56, 'amount with embedded comma+quotes parses to a real number (1234.56)');
+  ok(out[0].description === 'Paint, brushes', 'description with an embedded comma is preserved, not split');
+  ok(out[1].amount === 45, 'second row parses cleanly with a blank reference column');
+
+  // Header variants the spec calls out: "Total" instead of "Amount", "Memo"/"Desc" instead of
+  // "Description", "PO"/"Invoice" instead of "Reference" — all case-insensitive contains matches.
+  const rows2 = stmtParseCsv('TxnDate,Total,Memo,PO#\n2026-08-01,10.00,Widgets,PO-5');
+  const d2 = stmtRowsFromCsv(rows2);
+  ok(d2.cols.date === 0 && d2.cols.amount === 1 && d2.cols.description === 2 && d2.cols.ref === 3, 'alternate header names (TxnDate/Total/Memo/PO#) still auto-detect correctly');
+}
+
+// ── Offset-based batching (Sep 24 2026 review fix) ─────────────────────────────────────────────
+// Regression test for the real bug: re-submitting without an offset re-took rows.slice(0,100)
+// every time, and since a just-inserted row is Status:'pending' (statementLineMatch correctly
+// treats 'pending' as NOT a prior disposition), the first 100 lines got duplicate-inserted on every
+// follow-up call instead of being skipped. Exercises the REAL async receiptReconImportStatement
+// end to end (mocked I/O) across 3 calls (offset 0, 100, 200) on a 250-row batch and asserts every
+// row is processed exactly once with no overlap.
+{
+  function extractAsyncFn(name) {
+    const start = src.indexOf(`async function ${name}(`);
+    if (start === -1) throw new Error(name + ' not found');
+    let i = src.indexOf('{', start), d = 0;
+    for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
+    return src.slice(start, i);
+  }
+
+  const inserted = [];
+  const deps = {
+    ensureTab: async () => {}, ensureColumns: async () => {},
+    fetchTabs: async () => [[], []], // no existing Receipts/Receipt_Recon_Queue rows to match against
+    addRow: async (env, tab, row) => { inserted.push(row); },
+    getAccessToken: async () => 'tok',
+    driveDownload: async () => ({ bytes: new ArrayBuffer(1), mime: 'application/pdf' }),
+    statementExtract: async () => ({ vendor_detected: '', lines: [] }),
+    statementLineMatch, // the REAL pure function extracted above — never a second implementation
+    RECEIPT_RECON_QUEUE_HEADERS: [],
+    json: (o) => o,
+  };
+  const names = Object.keys(deps);
+  const fn = new Function(...names, `return (${extractAsyncFn('receiptReconImportStatement')});`)(...names.map(n => deps[n]));
+
+  // 250 rows, each with a distinct amount so none can ever match one another or anything else.
+  const rows = Array.from({ length: 250 }, (_, i) => ({
+    date: '2026-09-01', amount: (1 + i * 0.01).toFixed(2), description: 'line ' + i, ref: '',
+  }));
+
+  const r1 = await fn({}, { vendor: 'Batch Test Co', rows, offset: 0 });
+  const r2 = await fn({}, { vendor: 'Batch Test Co', rows, offset: r1.next_offset });
+  const r3 = await fn({}, { vendor: 'Batch Test Co', rows, offset: r2.next_offset });
+
+  ok(r1.next_offset === 100 && r2.next_offset === 200 && r3.next_offset === 250, 'next_offset advances 0->100->200->250 across the 3 calls (got ' + r1.next_offset + ',' + r2.next_offset + ',' + r3.next_offset + ')');
+  ok(r1.remaining === 150 && r2.remaining === 50 && r3.remaining === 0, 'remaining counts down correctly (150, 50, 0) so the caller knows exactly when to stop');
+  ok(inserted.length === 250, 'exactly 250 rows inserted total across all 3 calls (got ' + inserted.length + ') — the old bug would have produced 350 (100+100+150 worth of first-100 overlap)');
+  const totals = new Set(inserted.map(r => r.Total));
+  ok(totals.size === 250, 'all 250 inserted rows have distinct Total values — no row was processed twice (got ' + totals.size + ' distinct)');
+  ok(r1.inserted === 100 && r2.inserted === 100 && r3.inserted === 50, 'each call inserts only its own slice (100, 100, 50), never re-inserting an earlier slice');
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
