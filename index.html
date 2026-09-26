@@ -6365,8 +6365,7 @@ function renderTemplates() {
 function openAddTemplateModal() {
   ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('tmpl-owner');
-  if (sel) sel.innerHTML = '<option value="">Global (all owners)</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">Global (all owners)</option>');
   var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
   var pr = document.getElementById('tmpl-priority'); if (pr) pr.value = 'normal';
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'ADD WO TEMPLATE';
