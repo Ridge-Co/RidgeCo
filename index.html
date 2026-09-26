@@ -3758,8 +3758,7 @@ function apValidate() {
 }
 function openAddPropertyModal() {
   apResetForm();
-  document.getElementById('p-owner').innerHTML = '<option value="">No owner assigned</option>' +
-    state.owners.map(function(o){return '<option value="'+o.ID+'">'+o.First_Name+' '+o.Last_Name+'</option>';}).join('');
+  document.getElementById('p-owner').innerHTML = ownerOptionsHtml('', '<option value="">No owner assigned</option>');
   document.getElementById('ap-dupe-warning').style.display = 'none';
   renderApUnlinkedList();
   openModal('modal-add-property');
