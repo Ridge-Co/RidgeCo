@@ -11872,6 +11872,26 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- SET OWNER PINS MODAL (Sep 26 2026) -->
+<div class="modal-overlay" id="modal-set-owner-pin">
+  <div class="modal" style="max-width:680px">
+    <div class="modal-header"><div class="modal-title">SET OWNER PINS</div><button class="modal-close" onclick="closeModal('modal-set-owner-pin')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Sets the sign-in PIN for the owners you selected. Owners who onboard themselves choose their own — this is for filling in the rest. Suggested PINs use our normal format (3 random letters + the last 5 digits of their phone). Tap a PIN to type your own: 3 letters then 5 numbers, not a simple run like 12345, and nobody else can already have it. <b>Nothing is saved until you tap Save.</b></p>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin-bottom:10px"><input type="checkbox" id="spn-overwrite" onchange="loadOwnerPinSuggestions()"> Also replace PINs that are already set</label>
+    <div id="spn-list"><div class="loading">Loading…</div></div>
+    <div id="spn-msg"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-set-owner-pin')">Close</button>
+      <button class="btn secondary" onclick="loadOwnerPinSuggestions()" title="Throw away edits and suggest again">New suggestions</button>
+      <button class="btn" id="spn-save" onclick="saveOwnerPins()" disabled>Save PINs</button>
+    </div>
+    <div id="spn-after" style="display:none;border-top:1px solid var(--border);margin-top:12px;padding-top:10px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Saved. Want to text these owners their PIN now?</div>
+      <button class="btn small" id="spn-send" onclick="spnSendTexts()">📱 Text these PINs to the owners</button>
+    </div>
+  </div>
+</div>
+
 <!-- OWNER ONBOARDING LINK MODAL (Sep 26 2026) -->
 <div class="modal-overlay" id="modal-owner-invite">
   <div class="modal" style="max-width:560px">
