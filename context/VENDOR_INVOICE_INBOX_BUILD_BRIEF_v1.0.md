@@ -1,6 +1,6 @@
 # Vendor Invoice Inbox — Build Brief v1.0
 
-**Status:** DESIGN ONLY (Sep 26 2026). Nothing built. Brett's answers to all design questions are in Section 2; three small items are still open (Section 11).
+**Status:** DESIGN ONLY (Sep 26 2026). Nothing built. Brett's answers to all design questions are in Section 2 (updated Sep 26 2026, 3pm: Regina loan handling and backfill decided); one small item is still open (Section 11).
 **GATED (Rung 3):** posts to QuickBooks (bills, bill payments, expenses) and touches payment status. Never autonomous. Needs an interactive session, full `test-verified-builds` loop, `ridgeco-validate`, preview-first, and Brett's own review/merge of the PR (AUTONOMY_GUARDRAILS_v1.0 / PAT-033).
 **Do not start until:** PR #44 (receipt-recon reassign/refund/search + expense routing) and PR #60 (statement importer) are merged or consciously sequenced. This build reuses the receipt-recon expense-to-QB path and the Receipt_Recon_Queue conventions, and will conflict otherwise.
 **Related:** `RECEIPT_MAIL_TO_HUB_v1.0.md` (the mail pipeline this extends), `HYBRID_VENDOR_PAYMENTS_BUILD_BRIEF_v1.0.md` (Vendor_Type, `/qb/pay-bills`), `STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0.md` (vendor upload portal / per-vendor inbound email ideas — this supersedes the per-vendor email idea, see Section 4).
