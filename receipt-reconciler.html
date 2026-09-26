@@ -458,8 +458,12 @@ async function loadQueue(){
     allProperties = props || [];
     allUnits = units || [];
     rebuildWoDatalist();
-    render(rows || []);
-    status.textContent = '✅ '+(rows||[]).length+' '+curStatus;
+    lastQueueRows = rows || [];
+    const filterInput = document.getElementById('rc-filter-input');
+    if (filterInput) filterInput.value = queueFilterText;
+    toggleFilterBar(true);
+    renderFiltered();
+    status.textContent = '✅ '+(rows||[]).length+' '+curStatus+(queueFilterText?' ('+filterQueueRows(queueFilterText).length+' shown, filtered)':'');
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
 }
 
