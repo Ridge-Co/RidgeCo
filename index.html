@@ -11885,6 +11885,16 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       </div>
     </div>
     <div class="form-grid" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+      <div class="form-group full"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase">BILLING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— used on invoices and for the QuickBooks customer</span></div></div>
+      <div class="form-group full"><label>Bill To Name <span style="font-weight:normal;color:var(--muted)">(blank = company, else owner name)</span></label><input type="text" id="eo-b-name"></div>
+      <div class="form-group full"><label>Billing Street Address</label><input type="text" id="eo-b-street" autocomplete="off"></div>
+      <div class="form-group"><label>City</label><input type="text" id="eo-b-city"></div>
+      <div class="form-group"><label>State</label><input type="text" id="eo-b-state" maxlength="2" style="text-transform:uppercase" placeholder="MD"></div>
+      <div class="form-group"><label>ZIP</label><input type="text" id="eo-b-zip" maxlength="10"></div>
+      <div class="form-group"><label>Billing Phone</label><input type="tel" id="eo-b-phone"></div>
+      <div class="form-group full"><label>Billing Email</label><input type="email" id="eo-b-email"></div>
+    </div>
+    <div class="form-grid" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
       <div class="form-group full"><label>Tenant Work Order Submission <span id="eo-two-effective" style="font-weight:normal"></span></label>
         <select id="eo-two-toggle"><option value="">— Not set (falls through to each property's own setting)</option><option value="ON">ON — tenants can submit requests</option><option value="OFF">OFF — tenants cannot submit requests</option></select>
       </div>
