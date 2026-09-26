@@ -6289,8 +6289,7 @@ function openBulkAssignModal(keyId, keyName) {
   _bulkAssignKeyId = keyId;
   document.getElementById('bulk-assign-title').textContent = 'ASSIGN "' + keyName.toUpperCase() + '" TO ALL PROPERTIES OF:';
   var sel = document.getElementById('bulk-assign-owner');
-  sel.innerHTML = '<option value="">— select owner —</option>' +
-    safeArray(state.owners).map(function(o){ return '<option value="'+o.ID+'">'+(o.First_Name||'')+(o.Last_Name?' '+o.Last_Name:'')+(o.Company?' / '+o.Company:'')+'</option>'; }).join('');
+  sel.innerHTML = ownerOptionsHtml('', '<option value="">— select owner —</option>');
   document.getElementById('bulk-assign-msg').innerHTML = '';
   openModal('modal-bulk-assign');
 }
