@@ -3694,7 +3694,47 @@ function markInvoicePaid(woId){
 }
 
 // ── Add Property ─────────────────────────────────────────────
+// Add Property form state (fixed Sep 26 2026): the modal used to reopen with the LAST property's
+// values still in every field, because nothing ever cleared them. Every field is reset to its
+// default each time the modal opens.
+function apResetForm() {
+  ['p-address','p-city','p-lockbox','p-lockcode','p-shutoff','p-hvac','p-breaker','p-access'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  document.getElementById('p-market').value = 'Baltimore';
+  document.getElementById('p-type').value = 'house';
+  document.getElementById('p-subtype').value = '';
+  document.getElementById('p-units').value = '1';
+  apTypeChanged();
+}
+// house/rowhome are always 1 unit (locked); multi/condo/commercial must be entered (multi needs 2+).
+function apTypeChanged() {
+  var type = document.getElementById('p-type').value;
+  var units = document.getElementById('p-units'), hint = document.getElementById('p-units-hint');
+  document.getElementById('p-subtype-wrap').style.display = type === 'commercial' ? '' : 'none';
+  if (type !== 'commercial') document.getElementById('p-subtype').value = '';
+  if (type === 'house' || type === 'rowhome') {
+    units.value = '1'; units.readOnly = true; units.min = '1'; hint.textContent = '— always 1';
+  } else {
+    if (units.readOnly) units.value = '';
+    units.readOnly = false; units.min = type === 'multi' ? '2' : '1';
+    units.placeholder = type === 'multi' ? '2 or more' : 'How many?';
+    hint.textContent = '— required';
+  }
+}
+function apUnitCountValue() {
+  var type = document.getElementById('p-type').value;
+  return (type === 'house' || type === 'rowhome') ? '1' : String(document.getElementById('p-units').value || '').trim();
+}
+function apValidate() {
+  var type = document.getElementById('p-type').value;
+  if (type === 'commercial' && !document.getElementById('p-subtype').value) return 'Choose the commercial type (retail, mixed use, industrial or office).';
+  if (type === 'multi' || type === 'condo' || type === 'commercial') {
+    var n = parseInt(document.getElementById('p-units').value, 10);
+    if (!isFinite(n) || n < (type === 'multi' ? 2 : 1)) return type === 'multi' ? 'Enter how many units are in this building (2 or more).' : 'Enter the unit count.';
+  }
+  return '';
+}
 function openAddPropertyModal() {
+  apResetForm();
   document.getElementById('p-owner').innerHTML = '<option value="">No owner assigned</option>' +
     state.owners.map(function(o){return '<option value="'+o.ID+'">'+o.First_Name+' '+o.Last_Name+'</option>';}).join('');
   document.getElementById('ap-dupe-warning').style.display = 'none';
