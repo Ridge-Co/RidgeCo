@@ -4240,8 +4240,7 @@ function openEditPropertyModal(id){
   document.getElementById('ep-hvac').value=p.HVAC_Filter_Size||''; document.getElementById('ep-breaker').value=p.Breaker_Location||'';
   document.getElementById('ep-access').value=p.Access_Notes||'';
   var epOwnerId = String(p.Owner_ID||'');
-  document.getElementById('ep-owner').innerHTML = '<option value="">No owner assigned</option>' +
-    safeArray(state.owners).map(function(o){return '<option value="'+o.ID+'"'+(String(o.ID)===epOwnerId?' selected':'')+'>'+(o.First_Name+' '+(o.Last_Name||'')).trim()+(o.Company?' — '+o.Company:'')+'</option>';}).join('');
+  document.getElementById('ep-owner').innerHTML = ownerOptionsHtml(epOwnerId, '<option value="">No owner assigned</option>');
   epTypeChanged();
   renderEpUnitsSection(p.ID);
   document.getElementById('ep-two-toggle').value = p.Tenant_WO_Toggle==='ON'||p.Tenant_WO_Toggle==='OFF' ? p.Tenant_WO_Toggle : '';
