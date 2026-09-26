@@ -4088,7 +4088,7 @@ function submitEditTenant() {
 // entered. Overriding never silently drifts unnoticed — epRenderUnitCountWarning() flags it
 // live if the manual number stops matching the real unit list, which is the exact failure mode
 // that motivated this build (Unit_Count typed into the sheet with zero matching Units rows).
-var EP_MULTI_TYPES = ['multi','condo'];
+var EP_MULTI_TYPES = ['multi','condo','commercial'];
 
 function epTypeChanged(){
   var type = document.getElementById('ep-type').value;
