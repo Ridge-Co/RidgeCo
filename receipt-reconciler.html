@@ -467,6 +467,52 @@ async function loadQueue(){
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
 }
 
+// Brett, Sep 23 2026: "let me manually check whether I already processed this receipt" — a
+// read-only search of the canonical Receipts ledger (not just this session's own queue), so an
+// amount like 101.28 can be looked up directly instead of eyeballing the All tab. Never writes
+// anything.
+let lastSearchQuery = '';
+function searchTabHtml(){
+  return '<div class="section" style="margin-bottom:10px;padding:12px">'
+    + '<div class="row"><input id="rc-search-q" placeholder="amount, store, or description…" style="flex:1" value="'+esc(lastSearchQuery)+'" onkeydown="if(event.key===\'Enter\')runReceiptSearch()">'
+    + '<button class="btn small" onclick="runReceiptSearch()">Search</button></div>'
+    + '<div style="font-size:11px;color:var(--muted)">Searches every receipt ever recorded (billed, expensed, refunded, attached-only) — not just what\'s in this queue.</div>'
+    + '</div><div id="rc-search-results"></div>';
+}
+async function loadSearchTab(statusEl, list){
+  list.innerHTML = searchTabHtml();
+  statusEl.textContent = '';
+  if (lastSearchQuery) runReceiptSearch();
+}
+async function runReceiptSearch(){
+  const qEl = document.getElementById('rc-search-q');
+  const q = qEl ? qEl.value.trim() : '';
+  lastSearchQuery = q;
+  const box = document.getElementById('rc-search-results');
+  if (!box) return;
+  if (!q) { box.innerHTML = '<div class="empty">Type an amount, store, or description above.</div>'; return; }
+  box.innerHTML = '<div class="empty">Searching…</div>';
+  try {
+    const res = await get('/receipt-recon/search?q=' + encodeURIComponent(q));
+    if (res.error) throw new Error(res.error);
+    const results = res.results || [];
+    if (!results.length) { box.innerHTML = '<div class="empty">No matching receipts found.</div>'; return; }
+    box.innerHTML = results.map(searchResultCard).join('');
+  } catch(e){ box.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
+}
+function searchResultCard(r){
+  const where = r.wo_id ? ('WO '+esc(r.wo_id)+(r.wo_description?' — '+esc(r.wo_description.slice(0,50)):'')) : (r.property_address ? esc(r.property_address) : (r.category==='company' ? 'Ridge Co / general expense' : '(no property or WO)'));
+  const qb = r.qb_email_sent ? '<span class="pill suggest">✅ Sent to QuickBooks '+esc((r.qb_email_sent_date||'').slice(0,10))+'</span>' : '<span class="pill warn">Not yet sent to QuickBooks</span>';
+  const active = r.active ? '' : ' <span class="pill danger">Voided</span>';
+  return '<div class="rcard">'
+    + '<div class="rc-top"><div><div class="rc-title">'+esc(r.store||'(store unknown)')+' — $'+money(r.amount)+active+'</div>'
+    + '<div class="rc-sub">'+esc((r.date||'').slice(0,10))+' · '+where+' · '+esc(r.category||'')+(r.added_by?' · added by '+esc(r.added_by):'')+'</div></div>'
+    + '<div>'+qb+'</div></div>'
+    + (r.description ? '<div class="rc-items">'+esc(r.description)+'</div>' : '')
+    + (r.source_file_url ? '<div class="rc-foot"><a href="'+esc(r.source_file_url)+'" target="_blank">View receipt →</a><span></span></div>' : '')
+    + '</div>';
+}
+
 // Truck stock isn't a Receipt_Recon_Queue status — it's a different tab (Sep 2026, Brett's ask)
 // pulling every Vendor_Bill that used truck stock, any status, so it's reviewable in one place
 // alongside the receipts themselves rather than buried one-bill-at-a-time on Invoice Review.
