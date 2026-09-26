@@ -603,6 +603,10 @@ export default {
         if (path === '/contact-card/extract')     return await contactCardExtractFromBody(env, body);
         if (path === '/vendor-setup/contact-extract') return await contactCardExtractFromBody(env, body);
         if (path === '/vendor-setup/submit')      return await vendorSetupSubmit(env, body);
+        if (path === '/owner-onboard/check-pin')  return await ownerOnboardCheckPin(env, body);
+        if (path === '/owner-onboard/submit')     return await ownerOnboardSubmit(env, body, _clientIP);
+        if (path === '/owner-onboard/invite/create') return await ownerOnboardInviteCreate(env, body);
+        if (path === '/owner-onboard/invite/revoke') return await ownerOnboardInviteRevoke(env, body);
         if (path === '/set-pin')                  return await updateRow(env, 'Tenants', body.tenant_id, { PIN: body.pin });
         if (path === '/vendor/set-pin')           return await updateRow(env, 'Vendors', body.vendor_id, { PIN: body.pin });
         if (path === '/owner/set-pin')            return await updateRow(env, 'Owners', body.owner_id, { PIN: body.pin });
