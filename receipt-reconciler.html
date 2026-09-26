@@ -1243,6 +1243,12 @@ function rowCard(r){
     // attach to is the same interaction Confirm already uses.
     if (!excluded && !isCompany && !isRefund && isDuplicateFlagged) html += '<button class="btn secondary small" onclick="attachOnlyRow(\''+r.ID+'\', this)">📎 Attach image only, don\'t bill</button>';
     html += '<button class="btn secondary small" onclick="checkDuplicatesOne(\''+r.ID+'\', this)">🔍 Check duplicates</button>';
+    // Sep 23 2026 build: manual refund override for a row the automatic OCR-based refund
+    // detection missed. sug.manual_refund only appears when Brett himself flipped it (see
+    // listReceiptReconQueue in worker.js) — an auto-detected refund doesn't get an "undo" here,
+    // since that's a real scanner finding, not a manual guess.
+    if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', true, this)">🔄 Mark as refund</button>';
+    if (isRefund && sug.manual_refund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', false, this)">↩ Not a refund</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
     if (r.Status === 'skipped') html += '<button class="btn secondary small" onclick="unskipRow(\''+r.ID+'\', this)">↩ Move back to Pending</button>';
