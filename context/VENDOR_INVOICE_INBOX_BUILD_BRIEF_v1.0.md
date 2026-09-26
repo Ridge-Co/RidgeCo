@@ -189,9 +189,9 @@ Regina's Venmo notes often include "less $10 loan repayment" (and sometimes "plu
 
 ## 11. Still open (Brett)
 
-1. **Loan repayments on Regina's Venmo notes** — book gross Cleaning expense + reduction of a loan-receivable account? Is there an existing QB account for the loan to Regina, and what is its name?
-2. **Backfill Regina's past Venmo payments** (Aug 6 onward)? Default proposed: dry-run list first, post only what Brett approves.
-3. **Dismiss is kept for non-financial mail only** — confirm that's what you meant by wanting the expense option instead of ignoring.
+1. ~~Loan repayments on Regina's Venmo notes~~ — RESOLVED Sep 26: not in QuickBooks, tracked separately (Section 9b).
+2. ~~Backfill Regina's past Venmo payments~~ — RESOLVED Sep 26: yes, missing ones into QB as paid (Section 10).
+3. **Dismiss is kept for non-financial mail only** — still unconfirmed by Brett. Default stands unless he says otherwise.
 
 ---
 
