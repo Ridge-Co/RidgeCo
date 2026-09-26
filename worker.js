@@ -15371,6 +15371,14 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  if (path === '/owner/pin-suggest') return true; // proposes PINs, writes nothing
+  if (path === '/owner/set-pins') {
+    // Writes Owners.PIN — only ever onto TEST- owners (same isTestRecord check as every other owner write here).
+    const _a = body && body.assignments;
+    if (!Array.isArray(_a) || !_a.length) return false;
+    for (const x of _a) { if (!(await isTestRecord(env, 'Owners', x && x.owner_id))) return false; }
+    return true;
+  }
   if (path === '/owner-onboard/invite/create') {
     // Creates only an invite row (no owner/property data) — restricted to TEST- prefilled invites.
     return String((body && body.name) || '').startsWith('TEST-');
