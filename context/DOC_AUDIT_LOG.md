@@ -174,3 +174,9 @@ Checked commits: 123 (excluding merges/doc-audit itself)
 Since: 2026-09-25 (source: this script's own last recorded run)
 Checked commits: 1 (excluding merges/doc-audit itself)
 No gaps flagged.
+
+## Run: 2026-09-27 17:24 UTC
+Since: 2026-09-26 (source: this script's own last recorded run)
+Checked commits: 105 (excluding merges/doc-audit itself)
+**1 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `d430625` (2026-09-26 19:01) docs: invoice inbox brief - rewrite loan-note handling (9b) — best single-entry match: 43%
