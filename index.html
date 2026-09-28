@@ -243,6 +243,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary small" id="filterToggleBtn" onclick="toggleFilterPanel()">FILTERS <span id="filterBadge" style="display:none;background:var(--accent);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span> ▾</button>
       <button class="btn secondary small" onclick="clearWOFilters()" id="clearFiltersBtn" style="display:none">CLEAR ALL</button>
       <button class="btn secondary small" onclick="filterUnassignedWOs()" id="unassignedWOsBtn">🚫 Not Assigned</button>
+      <button class="btn secondary small" onclick="filterEstimatedWOs()" id="estimatedWOsBtn" title="Estimates waiting on my approve / push-to-proposal decision">📝 Estimated <span id="estimatedWOsCount" style="opacity:.7"></span></button>
       <div style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0">
         <label style="margin:0;font-size:11px;color:var(--muted)">SORT</label>
         <select id="wo-sort" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:11px">
@@ -340,6 +341,15 @@ window.addEventListener('pageshow', function(e){
             <option value="">All Priorities</option>
             <option value="urgent">Urgent</option><option value="high">High</option>
             <option value="normal">Normal</option><option value="low">Low</option>
+          </select></div>
+        <div><label>APPROVAL STAGE</label>
+          <select id="f-stage" onchange="updateFilterBadge();renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
+            <option value="">All Stages</option>
+            <option value="__needs__">Needs approval step (not yet Approved)</option>
+            <option value="Estimated">Estimated — waiting on me</option>
+            <option value="Proposed">Proposed — with owner</option>
+            <option value="Pre-approved">Pre-approved — signed, deposit unpaid</option>
+            <option value="Approved">Approved</option>
           </select></div>
         <div><label>SEARCH</label>
           <input type="text" id="wo-search" placeholder="WO#, address, ref#, desc…" oninput="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%"></div>
@@ -2004,6 +2014,7 @@ function woCard(w) {
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+(w.Turnover_Group_ID?' <span style="background:#e8f0fb;color:var(--accent);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">🔄 '+esc(w.Turnover_Group_ID)+' · '+esc(w.Turnover_Role||'')+'</span>':'')+'</div></div>' +
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
+    stageBadgeHTML(w) +
     agingBadge +
     (vendor?'<span style="font-size:11px;color:var(--muted)">'+vendor.Name+'</span>':'')+'</div></div>';
 }
@@ -2069,9 +2080,29 @@ function filterUnassignedWOs() {
   renderWOPage();
 }
 
+// Approval-stage badge (FEATURE_LOG rule 200). Approved is calm; the three "needs a step" stages stand out.
+// Estimate_Revised means the vendor revised the estimate AFTER approval/proposal — needs Brett's review.
+function stageBadgeHTML(w) {
+  var st = w && w.Approval_Stage; if (!st) return '';
+  var colors = { 'Estimated':['#fdf2e2','var(--warn)'], 'Proposed':['#e8f0fb','var(--accent)'], 'Pre-approved':['#f3ecfb','#6b3fa0'], 'Approved':['#e6f4ec','#1a8f4c'] };
+  var c = colors[st] || ['#eee','#666'];
+  var out = '<span class="badge" style="background:'+c[0]+';border:1px solid '+c[1]+';color:'+c[1]+';margin-left:4px">'+esc(st)+'</span>';
+  if (w.Estimate_Revised) out += '<span class="badge" title="'+esc(w.Estimate_Revised)+'" style="background:#fdecea;border:1px solid var(--danger);color:var(--danger);margin-left:4px">REVISED</span>';
+  return out;
+}
+
+function filterEstimatedWOs() {
+  var f = document.getElementById('wo-filter'); if (f) f.value = 'open';
+  ['f-owner','f-property','f-unit','f-vendor','f-trade','f-priority'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+  var s = document.getElementById('wo-search'); if (s) s.value = '';
+  var st = document.getElementById('f-stage'); if (st) st.value = 'Estimated';
+  updateFilterBadge();
+  renderWOPage();
+}
+
 function clearWOFilters() {
   var f = document.getElementById('wo-filter'); if(f) f.value='open';
-  ['f-owner','f-property','f-unit','f-vendor','f-trade','f-priority'].forEach(function(id){
+  ['f-owner','f-property','f-unit','f-vendor','f-trade','f-priority','f-stage'].forEach(function(id){
     var el=document.getElementById(id); if(el) el.value='';
   });
   var s = document.getElementById('wo-search'); if(s) s.value='';
@@ -2084,7 +2115,7 @@ function clearWOFilters() {
 function updateFilterBadge() {
   var count = 0;
   var f = document.getElementById('wo-filter'); if(f && f.value!=='open' && f.value!=='') count++;
-  ['f-owner','f-property','f-unit','f-vendor','f-trade','f-priority'].forEach(function(id){
+  ['f-owner','f-property','f-unit','f-vendor','f-trade','f-priority','f-stage'].forEach(function(id){
     var el=document.getElementById(id); if(el&&el.value) count++;
   });
   var s=document.getElementById('wo-search'); if(s&&s.value.trim()) count++;
@@ -2103,6 +2134,7 @@ function renderWOPage() {
   var vendId   = (document.getElementById('f-vendor')||{}).value||'';
   var trade    = (document.getElementById('f-trade')||{}).value||'';
   var priority = (document.getElementById('f-priority')||{}).value||'';
+  var stage    = (document.getElementById('f-stage')||{}).value||'';
   var sort     = (document.getElementById('wo-sort')||{}).value||'date-desc';
   var OPEN     = ['New','Assigned','Accepted','Scheduled','In Progress','On Hold'];
 
@@ -2128,6 +2160,9 @@ function renderWOPage() {
   else if (vendId) wos = wos.filter(function(w){ return w.Vendor_ID===vendId; });
   if (trade)    wos = wos.filter(function(w){ return (w.Trade||'').toLowerCase()===trade.toLowerCase(); });
   if (priority) wos = wos.filter(function(w){ return (w.Priority||'normal').toLowerCase()===priority.toLowerCase(); });
+  if (stage === '__needs__') wos = wos.filter(function(w){ return !!w.Approval_Stage && w.Approval_Stage !== 'Approved'; });
+  else if (stage) wos = wos.filter(function(w){ return (w.Approval_Stage||'') === stage; });
+  try { var _ec = document.getElementById('estimatedWOsCount'); if (_ec) { var _n = safeArray(state.workorders).filter(function(w){ return w.Voided!=='TRUE' && w.Approval_Stage==='Estimated' && OPEN.includes(w.Status); }).length; _ec.textContent = _n ? '('+_n+')' : ''; } } catch(_) {}
   if (search) wos = wos.filter(function(w){
     var prop = state.properties.find(function(p){return p.ID===w.Property_ID;});
     var vendor = state.vendors.find(function(v){return v.ID===w.Vendor_ID;});
@@ -15162,7 +15197,7 @@ function goToPropertyWOs(propId) {
   showPage('workorders', null);
   setTimeout(function() {
     // Clear all other filters first
-    ['f-owner','f-unit','f-vendor','f-trade','f-priority'].forEach(function(id){
+    ['f-owner','f-unit','f-vendor','f-trade','f-priority','f-stage'].forEach(function(id){
       var el = document.getElementById(id); if (el) el.value = '';
     });
     var wf = document.getElementById('wo-filter'); if (wf) wf.value = 'open';
