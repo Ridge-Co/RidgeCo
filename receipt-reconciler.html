@@ -1259,6 +1259,13 @@ function rowCard(r){
     // Undo a wrongly confirmed/expensed receipt into the refund flow — reuses the exact Pending
     // refund UI once it drops back to Pending (see markRefundConfirmed).
     if (['confirmed','attached_only'].includes(r.Status) && sug.category !== 'refund') html += '<button class="btn secondary small" onclick="markRefundConfirmed(\''+r.ID+'\', this)">↩ Mark as refund</button>';
+    // Sep 28 2026 build, Brett: "make it reversible... reverse the amount added to the invoice/
+    // work order plus reverse the attachment" — a plain undo for a mistake or a missed duplicate,
+    // distinct from Mark-as-refund above (which assumes money is coming back). Voids the Receipts
+    // row, pulls the amount back out of Invoice_Review, voids the gallery attachment, and drops
+    // the row back to a plain Pending — no refund flag. Confirms before firing since it reverses
+    // real money/attachments.
+    if (['confirmed','attached_only'].includes(r.Status)) html += '<button class="btn secondary small" onclick="undoConfirmation(\''+r.ID+'\', this)">↩️ Undo confirmation</button>';
     html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+(r.Duplicate_Confirmed_Date?(' · purges '+esc(purgeDateLabel(r.Duplicate_Confirmed_Date))):'')+'</span>';
   }
   html += '</div></div>';
