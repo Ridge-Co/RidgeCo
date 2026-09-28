@@ -105,6 +105,11 @@
 <div class="wrap">
   <header><div class="title">🧭 Optimizer Proposals <small id="asof"></small></div>
     <a class="back" href="command-center.html">← Command Center</a></header>
+  <div class="card"><b>🔎 Find an item</b>
+    <div class="sub">Search by its # ID (e.g. 14) or title — this covers every status, including items already done or dropped.</div>
+    <input id="qsearch" oninput="searchQueue(this.value)" placeholder="# ID or title…" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-size:14px;margin-top:6px;box-sizing:border-box">
+    <div id="qsearchResults"></div>
+  </div>
   <div id="body"><div class="spin">Loading…</div></div>
 </div>
 <div class="bar" id="bar" style="display:none"><div class="wrap" style="display:flex;gap:8px">
