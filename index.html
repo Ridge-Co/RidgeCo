@@ -8786,13 +8786,20 @@ function renderHubEstimateView(woId, estimates, holder) {
 
     var current = estimates[estimates.length - 1];
     var isApproved = current.Status === 'Approved';
+    // Vendor text is shown exactly as written; when the worker stored an English copy (desc_en /
+    // Change_Reason_EN — Sep 28 2026) it is shown beneath, only when it differs.
     var rows = current.Line_Items.map(function(li) {
+      var en = (li.desc_en && String(li.desc_en).trim() !== String(li.desc || '').trim())
+        ? '<div class="est-en" style="font-size:11px;color:var(--accent2);margin-top:1px"><b>English:</b> ' + esc(li.desc_en) + '</div>' : '';
       return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0">' +
-        '<span style="white-space:pre-wrap">' + esc(li.desc) + '</span><span style="white-space:nowrap">$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
+        '<span style="white-space:pre-wrap;min-width:0">' + esc(li.desc) + en + '</span><span style="white-space:nowrap">$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
     }).join('');
+    var reasonBlock = (current.Change_Reason && parseInt(current.Version || '1', 10) > 1)
+      ? '<div style="font-size:11px;color:var(--muted);margin-top:4px">Reason: ' + esc(current.Change_Reason) +
+        (current.Change_Reason_EN ? '<div class="est-en" style="color:var(--accent2)"><b>English:</b> ' + esc(current.Change_Reason_EN) + '</div>' : '') + '</div>' : '';
     var histRows = estimates.length > 1 ? estimates.slice(0, -1).reverse().map(function(e) {
       return '<div style="font-size:10px;color:var(--muted);margin-top:4px;border-top:1px dashed var(--border);padding-top:4px">' +
-        'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) : '') + ' — ' + esc(e.Created_By || '') + '</div>';
+        'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) + (e.Change_Reason_EN ? ' (English: ' + esc(e.Change_Reason_EN) + ')' : '') : '') + ' — ' + esc(e.Created_By || '') + '</div>';
     }).join('') : '';
 
     var approvalBlock = isApproved
