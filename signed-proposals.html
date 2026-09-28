@@ -437,6 +437,24 @@ function toggleMilestone(sigId,msId,checked){
   var btn=document.getElementById('msbtn-'+sigId);
   if(btn){ var n=msSelections[sigId].length; btn.disabled=(n===0); btn.textContent='Bill selected ('+n+')'; }
 }
+// CAP-036 #14: flag/clear a milestone's "Invoiced — Pending Info" status. Setting it requires
+// a note (what's missing); clearing does not. Reloads the list either way.
+function toggleMilestonePendingInfo(sigId,msId,currentlyFlagged){
+  if(currentlyFlagged){
+    if(!confirm('Clear the Pending Info flag on this milestone?'))return;
+    api('POST','/scope-proposal/milestone/set-pending-info',{signature_id:sigId,milestone_id:msId,pending_info:false}).then(function(r){
+      if(r&&r.success){toast('Cleared');load();} else toast('Could not clear: '+((r&&r.error)||'?'));
+    });
+    return;
+  }
+  var note=prompt('What\'s needed before this milestone can be billed? (e.g. "need photos", "need receipts")');
+  if(note===null)return;
+  note=note.trim();
+  if(!note){toast('A note is required');return;}
+  api('POST','/scope-proposal/milestone/set-pending-info',{signature_id:sigId,milestone_id:msId,pending_info:true,note:note}).then(function(r){
+    if(r&&r.success){toast('Flagged — needs info before billing');load();} else toast('Could not flag: '+((r&&r.error)||'?'));
+  });
+}
 function previewMilestoneBill(sigId){
   var ids=msSelections[sigId]||[];
   if(!ids.length) return;
