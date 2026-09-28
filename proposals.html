@@ -215,8 +215,8 @@ function render(rev,q){
       html+='<div class="qcard" id="pq'+pi+'" style="display:flex;gap:10px;align-items:flex-start">'
         +'<span style="font-size:18px;line-height:1;margin-top:2px">🆕</span>'
         +'<div style="flex:1;min-width:0">'
-        +'<div class="prow"><span class="rank">#'+h(x.Rank||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-        +'<div class="prow" style="margin-top:4px">'+lensChip+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+spendChip+'</div>'
+        +'<div class="prow"><span class="rank">#'+h(x.ID||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
+        +'<div class="prow" style="margin-top:4px">'+lensChip+chip(x.Tag)+(x.Rank?'<span class="chip eff">rank '+h(x.Rank)+'</span>':'')+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+spendChip+'</div>'
         +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
         +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
         +(x.Impact?'<div class="pimp">Impact: '+h(x.Impact)+'</div>':'')
