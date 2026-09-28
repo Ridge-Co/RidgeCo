@@ -7302,7 +7302,7 @@ async function regeneratePIN(env, body) {
 async function sendPinMessage(env, body) {
   const { type, id } = body;
   if (!type || !id) return json({ error: 'Missing type or id' }, 400);
-  let firstName, phone, pin, owner = null, address = '';
+  let firstName, phone, pin, owner = null, address = '', vendorRec = null;
   if (type === 'tenant') {
     const [tenants, units, properties, owners] = await fetchTabs(env, ['Tenants', 'Units', 'Properties', 'Owners']);
     const t = tenants.find(r => r.ID === id);
