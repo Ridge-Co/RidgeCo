@@ -17222,6 +17222,25 @@ async function hubTestWriteAllowed(env, path, body) {
   // all key off a wo_id; the payment-schedule write keys off a scope_id. Same gate as /status —
   // the target WO (or the Scope's own Property) must resolve to a TEST- Property, so this token
   // can never create/approve an estimate, push to a Scope, or edit a schedule on a real record.
+  if (path === '/estimate/retranslate') {
+    // Rewrites only derived English fields on one Estimates row — resolve estimate -> WO -> TEST- Property.
+    const ests = await fetchTab(env, 'Estimates');
+    const est = ests.find(e => (body && body.estimate_id) ? String(e.ID) === String(body.estimate_id) : (e.WO_ID === String(body && body.wo_id) && String(e.Version) === String(body && body.version)));
+    if (!est) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(est.WO_ID));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/wo/share-send') {
+    // Sends a real SMS to the WO's assigned vendor — only ever to a vendor that is itself a TEST- record
+    // on a TEST- Property's WO (staging additionally stubs Twilio).
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && (body.wo_id || body.wo)));
+    if (!wo) return false;
+    if (!(await isTestRecord(env, 'Properties', wo.Property_ID))) return false;
+    return await isTestRecord(env, 'Vendors', wo.Vendor_ID);
+  }
   if (path === '/estimate' || path === '/estimate/approve' || path === '/estimate/needs-info' || path === '/estimate/decline' || path === '/wo/push-to-scope') {
     const wos = await fetchTab(env, 'Work_Orders');
     const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
