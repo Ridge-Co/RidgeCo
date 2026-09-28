@@ -2422,7 +2422,7 @@ async function receiptReconImportStatement(env, body) {
   const nextOffset = offset + toProcess.length;
   const remaining = Math.max(0, workingRows.length - nextOffset);
 
-  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0;
+  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0, judge_confirmed = 0;
   const errors = [];
   const today = new Date().toISOString().split('T')[0];
 
@@ -2437,7 +2437,31 @@ async function receiptReconImportStatement(env, body) {
     catch (e) { errors.push('match failed: ' + (e && e.message || e)); match = { confidence: null }; }
 
     if (match.confidence === 'confirmed') { matched_confirmed++; continue; }
-    if (match.confidence === 'possible') flagged_possible++;
+    if (match.confidence === 'possible') {
+      flagged_possible++;
+      // B-211: judge()'s first real call site. A 'possible' match is a heuristic guess
+      // (exact amount, date within 3 days, vendor "roughly matches") — ask the verifier
+      // before trusting it. Any non-approve outcome, including a thrown error, falls straight
+      // through to the existing pending-insert path below, unchanged — fails closed to the
+      // manual queue like every other judge() caller.
+      try {
+        const verdict = await judge(env, {
+          action: 'statement_possible_match_autoconfirm',
+          intent: 'Confirm this statement line is the same transaction as an existing receipt/queue entry, so it can be auto-matched instead of sitting in the manual review queue.',
+          proposedChange: { line: normLine, match },
+          acceptanceCriteria: 'Same vendor, same amount, date within a few days, and no plausible alternate explanation (e.g. a different job, a refund, a duplicate/split charge).',
+          riskClass: 'SAFE',
+          source: 'receiptReconImportStatement',
+        });
+        if (verdict && verdict.verdict === 'approve') {
+          matched_confirmed++;
+          judge_confirmed++;
+          continue;
+        }
+      } catch (e) {
+        errors.push('judge() failed on possible match, filed to manual queue: ' + (e && e.message || e));
+      }
+    }
 
     const noteBase = `From ${vendor} statement upload (${sourceFileName || 'uploaded ' + today}).`;
     const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '');
