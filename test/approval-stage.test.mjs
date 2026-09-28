@@ -62,7 +62,7 @@ ok(has('async function approveEstimate(', "stage: 'Approved'"), 'approveEstimate
 ok(has('async function unapproveEstimate(', "stage: 'Estimated'"), 'unapproveEstimate -> Estimated');
 ok(has('async function woPushToScope(', "stage: 'Proposed'"), 'push-to-scope apply -> Proposed');
 ok(has('async function scopeProposalSign(', "stage: 'Pre-approved'"), 'owner signs -> Pre-approved');
-ok(has('async function qbSyncPayments(', "stage: 'Approved'") && has('async function qbSyncPayments(', "r.phase === 'deposit' && r.customer_paid === true"), 'deposit invoice positively paid -> Approved');
+ok(has('async function qbSyncPayments(', 'scopeDepositPaidTransition') && has('async function qbSyncPayments(', "r.phase === 'deposit' && r.customer_paid === true") && has('async function scopeDepositPaidTransition(', "stage: 'Approved'"), 'deposit invoice positively paid -> Approved (shared, idempotent transition)');
 const aev = grab('async function addEstimateVersion(');
 ok(aev.includes("stage: 'Estimated'") && aev.includes('Estimate_Revised') && aev.includes("['Approved', 'Proposed', 'Pre-approved'].includes(cur)"), 'a revision after approval flags instead of silently resetting the stage');
 ok(grab('async function scopeList(').includes('approval_stage'), '/scopes exposes approval_stage');

@@ -8765,7 +8765,11 @@ function renderHubEstimateView(woId, estimates, holder) {
         '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
         '<input type="checkbox" id="est-deposit-' + woId + '"> Request deposit from customer (skip for small/known-customer jobs — owner approval alone is enough)' +
         '</label>' +
-        '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve Estimate</button>' +
+        '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve Estimate</button> ' +
+        '<button class="btn small secondary" title="Texts the vendor a short request for more info. Daily reminders pause for 3 days, then resume." onclick="estimateNeedsInfoUI(\'' + woId + '\')">❓ Needs more info</button> ' +
+        '<button class="btn small secondary" style="color:var(--danger)" title="Texts the vendor that you are not moving forward. Stops reminders." onclick="estimateDeclineUI(\'' + woId + '\')">✕ Decline</button>' +
+        (current.Status === 'Needs Info' ? '<div style="margin-top:8px;font-size:11px;color:var(--warn)">❓ Flagged needs-more-info' + (current.Needs_Info_Date ? ' on ' + esc(String(current.Needs_Info_Date).slice(0,10)) : '') + ' — reminders resume 3 days after that if still undecided.</div>' : '') +
+        (current.Status === 'Declined' ? '<div style="margin-top:8px;font-size:11px;color:var(--danger)">✕ Declined' + (current.Decline_Reason ? ' — ' + esc(current.Decline_Reason) : '') + '. You can still approve it if you change your mind.</div>' : '') +
         '</div>';
 
     var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
@@ -8875,6 +8879,26 @@ function submitHubEstimate(woId) {
   }).then(function(res) {
     if (res.success) { refreshHubEstimateView(woId); toast('Estimate saved', 'success'); }
     else toast(res.error || 'Failed to save', 'error');
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+
+// Flag an estimate needs-more-info / declined (rule 201). Both text the vendor a short, neutral,
+// amount-free message through the gated SMS path and stop the daily 8am reminder for that estimate
+// (needs-info resumes after 3 days).
+function estimateNeedsInfoUI(woId) {
+  api('POST', '/estimate/needs-info', { wo_id: woId }).then(function(res) {
+    if (!res || res.error) { toast((res && res.error) || 'Could not flag', 'error'); return; }
+    toast('Flagged needs-more-info' + (res.vendor_notified ? ' — vendor texted' : ' (vendor not texted: ' + (res.vendor_sms || 'no phone') + ')'), 'success');
+    refreshHubEstimateView(woId); loadAll();
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+function estimateDeclineUI(woId) {
+  var reason = prompt('Decline the estimate on ' + woId + '?\n\nThe vendor gets a short "not moving forward" text (no reason is sent). Optional note for your own records:');
+  if (reason === null) return;
+  api('POST', '/estimate/decline', { wo_id: woId, reason: reason.trim() }).then(function(res) {
+    if (!res || res.error) { toast((res && res.error) || 'Could not decline', 'error'); return; }
+    toast('Estimate declined' + (res.vendor_notified ? ' — vendor texted' : ' (vendor not texted: ' + (res.vendor_sms || 'no phone') + ')'), 'success');
+    refreshHubEstimateView(woId); loadAll();
   }).catch(function(e) { toast(e.message, 'error'); });
 }
 
