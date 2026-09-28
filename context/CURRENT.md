@@ -1,3 +1,33 @@
+# WHERE THINGS STAND — Sep 28, 2026 (WO → Scope Proposal conversion REBUILT on current main + milestone editor UI — POST /wo/push-to-scope; branch claude/wo-to-scope-v2, going to staging, NOT yet on main)
+
+**Sep 28 update:** the original PR #6 sat unmerged for 10 days and went `dirty` (conflicts with `main`), which is why it never went live. Rebuilt off current `main`; also added the clickable per-milestone "Pay vendor at this milestone" / "Customer: flat $" controls in scope-creator.html's Payment Schedule editor. All-vendor-unpaid fallback confirmed as-is by Brett. Brett is holding WO-1227 (Caesar's estimate) until this ships. Old PR #6 to be closed as superseded. SMS notification work (estimate posted / daily reminder / proposal signed / deposit paid) is a separate follow-up PR.
+
+(Original Sep 18 entry below.)
+
+## 🟡 Open: PR for WO → Scope Proposal conversion awaiting Brett's review/merge
+Built the forward direction of WO/Scope conversion (the reverse, `POST /scope/to-wo`, already
+existed and is untouched): `POST /wo/push-to-scope {wo_id, estimate_id, apply?}` takes a WO's
+single `Approved` `Estimates` row and converts/appends it into a `Scope`, reusing
+`Work_Orders.Scope_ID` if already set (append, never clobber hand-added items) or creating a new
+Scope and linking it. Also shipped: per-milestone `Vendor_Paid_At_This_Milestone` (default TRUE,
+rolls a skipped vendor share forward onto the next paid milestone), per-milestone `Calc_Mode`
+(`percent`/`flat`) + `Flat_Customer_Amount`, a WO writeback on every milestone bill
+(`Work_Orders.Customer_Charge` running total + timestamped `Notes` line, final-milestone status
+logic extended from rule 143's existing pattern rather than duplicated), and real `?scope_id=`/
+`?wo_id=` deep-link handling in `scope-creator.html`. Admin-only (zero `ROLE_SCOPES` entries).
+Full detail in `context/WO_TO_SCOPE_CONVERSION_BUILD_BRIEF_v1.0.md` and FEATURE_LOG rule 199.
+**Delivered as a branch + PR, not committed to main and not merged** — per explicit instruction,
+this task never touched live Sheet data or the deployed Worker. WO-1186 (1429 E Federal St) has
+two real pending *unapproved* Estimates (v1/v2, both $500) — neither was approved or touched;
+that decision is Brett's. `node --check` clean on worker.js/index.html/scope-creator.html, full
+suite 83/83 (`node --test test/*.test.mjs`) including two new files
+(`test/wo-push-to-scope.test.mjs`, `test/vendor-pay-rollover.test.mjs`). `BUILD_VERSION` →
+`2026-09-18.5` (on the branch only — not live until the PR merges and redeploys; main was already
+at `2026-09-18.4` from concurrent work — selftest + Signed-Proposal vendor-bill fix, below — by
+the time this branch was built).
+
+# WHERE THINGS STAND — Sep 18, 2026 (Selftest auto-verification pass added — POST /selftest + daily 7am ET cron digest, closing the "built, not yet live-verified" gap, but not yet live-verified itself; Signed-Proposal vendor bills fixed — were invisible to Who To Pay, now tied to the work order, plus a reusable adjust-bill tool; Optimizer v1.1 product/UX lens + Ops_Build_Queue integrity self-check; a full greenlit Ops_Build_Queue pass — telemetry latency, escalation diagnosability, per-job cost, receipt-intake infinite-retry fix, digest system-health section; weekly Optimizer review delivery turned ON, Monday 8:30am ET; editable Message Templates system + property-wide notice broadcast shipped and live; legacy/duplicate tenant PIN bug fixed portfolio-wide; tenant portal billing-jargon fix; Owner filter + cross-page checkbox-bleed fix on bulk sends; bulk-welcome template/token-substitution fix; real SMS rollout underway — Goldszmidt tenants first, rest of portfolio staggered over following days; owner-scoped receipt viewer + vendor invoice confirmation email + vendor self-service contact update also shipped this window)
+
 # Sep 26, 2026, ~18:10 ET — 🟢 LIVE: BrettOS Tasks Manager quick-link on Dashboard + Dev Log (PR #76 → staging, PR #77 → main, both merged)
 
 FEATURE_LOG rule 198 (`[FL-20260926-2210-tm]`). Added a "🗒️ Tasks Manager" button to the Dashboard (Command Center) and the Dev Log tools group, linking straight to the deployed BrettOS Tasks Manager Apps Script web app — Brett can now reach it in one tap from the Hub, no bookmark needed. UI-only, no `worker.js` change, so this shipped straight to `main` same session (no interim staging-only period needed). Live-verified by fetching `https://ridge-co.github.io/RidgeCo/` directly and confirming both button strings are present in the served HTML.
