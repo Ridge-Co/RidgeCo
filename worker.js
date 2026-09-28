@@ -11840,7 +11840,7 @@ async function smsGatedSend(env, opts) {
     try {
       await logMessageAudit(env, {
         woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind,
-        messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome,
+        messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome,
         notes: outcome === 'blocked' ? gateSnapshot : '',
       });
     } catch (e) {}
