@@ -1077,6 +1077,12 @@ function renderEstimateWidget(woId, idx) {
       '</div>';
   }
 
+  if (current.Status === 'Needs Info') {
+    approvalBanner = '<div style="margin-top:8px;background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px;font-size:12px;color:#7a4b00">❓ Ridge Co needs a bit more information on this estimate. Please revise it below or call us.</div>';
+  } else if (current.Status === 'Declined') {
+    approvalBanner = '<div style="margin-top:8px;background:#fdecea;border:1px solid var(--danger);border-radius:6px;padding:10px;font-size:12px;color:#8a1c14">Ridge Co is not moving forward with this estimate. Thank you for sending it.</div>';
+  }
+
   // If approved, hide the "Revise" button — revision during an active approved estimate should go through hub
   var reviseBtn = isApproved
     ? '<div style="font-size:10px;color:var(--muted);margin-top:8px">Contact Ridge Co to request changes to an approved estimate.</div>'
