@@ -9545,7 +9545,7 @@ async function logWOAudit(env, woId, changedBy, changedByRole, field, oldValue, 
 // WO logs recipient/channel/full-text/outcome alongside the existing field-edit history, not
 // just a 100-char truncated Notes string (see the old Tenant_Manual_SMS precedent). Additive
 // only — self-provisioned lazily below, existing field-edit-only callers never touch these.
-const WO_AUDIT_MSG_COLS = ['Channel', 'Recipient_Name', 'Recipient_Type', 'Message_Type', 'Message_Body', 'Outcome'];
+const WO_AUDIT_MSG_COLS = ['Channel', 'Recipient_Name', 'Recipient_Type', 'Message_Type', 'Message_Body', 'Outcome', 'Original_Body', 'Translated_To'];
 
 async function logWOAuditMany(env, entries) {
   if (!entries || !entries.length) return;
