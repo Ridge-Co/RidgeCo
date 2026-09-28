@@ -322,7 +322,7 @@ export default {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -659,6 +659,7 @@ export default {
         if (path === '/admin/share-attachments')  return await adminShareAttachments(env, body);
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
+        if (path === '/admin/backfill-receipt-attachments') return await backfillReceiptAttachments(env, body);
         if (path === '/admin/gemini-context-update') return await adminGeminiContextUpdate(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
@@ -1860,6 +1861,35 @@ async function addReceipt(env, body) {
     Created_Date: new Date().toISOString(), Active: 'TRUE',
   });
   let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) {}
+
+  // Sep 28 2026 fix (Brett — WO-1229/Amanda's garbage disposal): a receipt confirmed through the
+  // Receipt Reconciler correctly writes Source_File_ID/Source_File_URL onto this new Receipts
+  // row, and that's what the invoice line and Invoice_Review pull from — so the AMOUNT always
+  // made it onto the customer invoice. But the WO detail page's unified "Attachments" gallery
+  // (index.html's loadPortalAttachments, owner.html's matching photo/receipt view) never reads
+  // Receipts at all — it reads the separate Attachments tab, which until now only ever got a row
+  // from a direct photo/file upload (POST /attachment/add), never from a receipt confirm/attach/
+  // reassign/refund-reverse flow. So the receipt's own image silently never showed up in
+  // Attachments even though it was fully on file and fully billed. Every addReceipt() caller that
+  // has both a WO and an actual scanned file (receiptReconConfirm, receiptAttachOnly, reassign,
+  // refund-reverse, the vendor-submitted path) is fixed here in one place: write a matching
+  // Attachments row, File_Type 'receipt', linked back to this Receipts row via Receipt_ID (new
+  // column, additive) so a backfill or a retry can never create a duplicate. Deliberately skipped
+  // when there's no wo_id (a no-WO company/1864-Kerns expense has nowhere to gallery it) or no
+  // file (a manual receipt entry with no image). This never touches Receipts/Invoice_Review/
+  // billing — additive-only, Attachments write failure never fails the receipt add itself.
+  if (wo_id && newId && (source_file_id || source_file_url)) {
+    try {
+      await ensureColumns(env, 'Attachments', ['Receipt_ID']);
+      await addRow(env, 'Attachments', {
+        WO_ID: wo_id, File_Name: ((store || 'Receipt') + (date ? ' ' + date : '')).trim(),
+        File_Type: 'receipt', Drive_File_ID: source_file_id || '', Drive_URL: source_file_url || '',
+        Mime_Type: '', Receipt_ID: String(newId),
+        Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
+      });
+    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {} }
+  }
+
   return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource });
 }
 
@@ -3813,6 +3843,60 @@ async function backfillScopeWOVendor(env) {
     details.push({ wo_id: wo.ID, scope_id: s.ID, vendor_id: s.Vendor_ID });
   }
   return json({ success: true, scopes_checked: scopesChecked, wo_vendor_backfilled: updated, details });
+}
+
+// POST /admin/backfill-receipt-attachments { apply?: true } — one-time (idempotent, safe to
+// re-run) backfill for the Sep 28 2026 fix in addReceipt() above: every past Receipts row that
+// has a WO_ID and a scanned image (Source_File_ID/Source_File_URL) but was written before that
+// fix never got a matching Attachments row, so its image is invisible on the WO detail gallery
+// and the owner portal even though it's fully billed and fully on file (Brett — WO-1229/Amanda's
+// garbage disposal was the case that surfaced this; this sweeps every WO, not just that one, per
+// his "past, future" instruction). Read-mostly by default: with no body or apply:false/omitted it
+// only PREVIEWS what it would create (counts + a details list), so the actual write is a second,
+// explicit call — matches Brett's verify-before-build habit for anything touching ~90+ rows at
+// once. Idempotent via the same Receipt_ID link the live fix writes: a Receipts row already
+// linked to an Attachments row (by ID, not by guessing from WO_ID/date/store) is never touched
+// again, so re-running this after new receipts come in only picks up the new ones.
+async function backfillReceiptAttachments(env, body) {
+  const apply = !!(body && body.apply === true);
+  const [receipts, attachments] = await Promise.all([
+    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTab(env, 'Attachments').catch(() => []),
+  ]);
+  const alreadyLinked = new Set(
+    attachments.filter(a => String(a.File_Type || '').toLowerCase() === 'receipt' && a.Receipt_ID)
+      .map(a => String(a.Receipt_ID))
+  );
+  let scanned = 0, eligible = 0, created = 0; const details = [];
+  for (const r of receipts) {
+    if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+    scanned++;
+    if (!r.WO_ID) continue;
+    const hasFile = r.Source_File_ID || r.Source_File_URL;
+    if (!hasFile) continue;
+    if (alreadyLinked.has(String(r.ID))) continue;
+    eligible++;
+    details.push({ receipt_id: r.ID, wo_id: r.WO_ID, store: r.Store || '', date: r.Date || '', amount: r.Amount || '' });
+    if (apply) {
+      try {
+        await ensureColumns(env, 'Attachments', ['Receipt_ID']);
+        await addRow(env, 'Attachments', {
+          WO_ID: r.WO_ID, File_Name: ((r.Store || 'Receipt') + (r.Date ? ' ' + r.Date : '')).trim(),
+          File_Type: 'receipt', Drive_File_ID: r.Source_File_ID || '', Drive_URL: r.Source_File_URL || '',
+          Mime_Type: '', Receipt_ID: String(r.ID),
+          Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
+        });
+        created++;
+      } catch (e) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_backfill', Skill_Or_Endpoint: '/admin/backfill-receipt-attachments', Success: 'FALSE', Notes: `receipt_id=${r.ID} wo_id=${r.WO_ID} err=${String(e && e.message || e)}` }); } catch (_) {}
+      }
+    }
+  }
+  return json({
+    success: true, applied: apply, receipts_scanned: scanned,
+    eligible_missing_gallery_attachment: eligible, attachments_created: apply ? created : 0,
+    details: details.slice(0, 500),
+  });
 }
 
 // Marks up every item's variant(s) SERVER-SIDE (calcTieredEstimate, per item — each option is
