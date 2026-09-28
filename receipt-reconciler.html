@@ -1508,6 +1508,28 @@ async function markRefundConfirmed(id, btn){
   } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// Sep 28 2026 build, Brett: "make it reversible... need to be able to reverse the amount added to
+// the invoice/work order plus reverse the attachment of the image/pdf/file." A plain undo for a
+// mistake or a missed duplicate — distinct from "Mark as refund" above, which assumes money is
+// genuinely coming back and routes the row into the refund-posting flow. Undo just cleanly
+// unwinds everything: voids the Receipts row, pulls its dollar amount back out of whatever
+// Invoice_Review row it was folded into, voids its WO Attachments gallery row, and drops the
+// queue row back to a plain unflagged Pending, ready to be re-confirmed correctly or marked a
+// duplicate. Same server-side guard as Reassign/Mark-as-refund: refuses if the original receipt
+// was already emailed to QuickBooks.
+async function undoConfirmation(id, btn){
+  const statusEl = document.getElementById('rc'+id+'-status');
+  if (!confirm('Undo this confirmation? This reverses the amount out of the invoice/work order and removes the attached image, then drops it back into Pending. Only works if it hasn\'t already been emailed to QuickBooks.')) return;
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.innerHTML = '<span class="info">Undoing…</span>';
+  try {
+    const res = await post('/receipt-recon/undo', { id });
+    if (res.error) throw new Error(res.error);
+    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Undone — back in Pending, invoice and attachment reversed.</span>';
+    finishCard(id);
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 // 1864 Kerns School Rd (Milam Ridge, Property 85 — Brett's own STR, no owner to bill). Found by
 // address rather than a hardcoded ID so a renumbered Properties tab can't silently point this
 // button at someone else's building.
