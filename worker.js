@@ -9156,9 +9156,10 @@ async function unapproveEstimate(env, body) {
       const vendors = await fetchTab(env, 'Vendors');
       const vendor = vendors.find(v => v.ID === latest.Vendor_ID);
       if (vendor?.Phone) {
-        const msg = `Hold on WO ${woId} — the approved estimate ($${latest.Subtotal}) has been put back on hold${body.reason ? ': ' + body.reason : ''}. Please don't proceed until we confirm the revised number.`;
+        const msgEn = `Hold on WO ${woId} — the approved estimate ($${latest.Subtotal}) has been put back on hold${body.reason ? ': ' + body.reason : ''}. Please don't proceed until we confirm the revised number.`;
+        const tv = await translateForVendorDetailed(env, vendor, msgEn), msg = tv.text; // Spanish for a Spanish vendor (Sep 28 2026)
         await sendSMS(env, vendor.Phone, msg);
-        await logSMS(env, woId, 'estimate_unapproved', vendor.ID, vendor.Phone, msg);
+        await logSMS(env, woId, 'estimate_unapproved', vendor.ID, vendor.Phone, tv.translated ? msg + ' || EN: ' + msgEn : msg);
         vendorTold = true;
       }
     } catch (e) { /* status is already back to Pending; the SMS is best-effort */ }
