@@ -8837,7 +8837,6 @@ async function approveInvoiceReviewBulk(env, body) {
 
 // ── ESTIMATES ────────────────────────────────────────────────
 
-
 // Stored Line_Items JSON with the derived desc_en removed — what the vendor actually submitted.
 function estimateLineItemsCanonical(json) {
   try { return JSON.stringify((JSON.parse(json || '[]') || []).map(li => { const c = Object.assign({}, li); delete c.desc_en; return c; })); } catch (_) { return String(json || ''); }
