@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-28.6-estimate-sms';
+const BUILD_VERSION = '2026-09-28.7-estimate-sms-batch-seed';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -8851,7 +8851,10 @@ async function sendTemplatedSms(env, o) {
     const opts = { wo_id: o.wo_id || '', message_type: o.type, recipient_type: o.kind, message_body: body, property: o.property, bypassQuietHours: !!o.bypassQuietHours };
     if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else opts.vendor = o.vendor;
     return await smsGatedSend(env, opts);
-  } catch (e) { return { sent: false, error: String((e && e.message) || e) }; }
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+    return { sent: false, error: String((e && e.message) || e) };
+  }
 }
 const fmtMoney = n => (parseFloat(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const vendorFirstName = v => (v && (v.First_Name || (v.Name || '').split(' ')[0])) || 'there';
@@ -11445,26 +11448,31 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
 let _msgTemplatesToppedUp = false;
+// ONE batched append for every missing default (a per-row addRow loop burned the Sheets write quota
+// on first use — staging Sep 28 2026 dropped the first text because of it). Never touches an
+// existing row, so an edit Brett made is never overwritten. Also covers the empty-tab first seed.
+async function appendMissingTemplates(env, existingRows) {
+  const missing = DEFAULT_MESSAGE_TEMPLATES.filter(t => !existingRows.some(r => r.Message_Type === t.Message_Type && r.Channel === t.Channel));
+  if (!missing.length) return 0;
+  const hdrResp = await sheetsRequest(env, 'GET', `/values/${MSG_TEMPLATES_TAB}!1:1`);
+  const headers = (hdrResp.values && hdrResp.values[0]) || MSG_TEMPLATES_COLS;
+  let nextId = existingRows.reduce((m, r) => Math.max(m, parseInt(r.ID, 10) || 0), 0);
+  const now = new Date().toISOString();
+  const values = missing.map(t => {
+    const row = { ID: String(++nextId), Message_Type: t.Message_Type, Channel: t.Channel, Subject: t.Subject, Body: t.Body, Active: 'TRUE', Updated_Date: now, Updated_By: 'system_default' };
+    return headers.map(h => row[h] ?? '');
+  });
+  await sheetsRequest(env, 'POST', `/values/${MSG_TEMPLATES_TAB}:append?valueInputOption=RAW`, { values });
+  __tabCache.delete(MSG_TEMPLATES_TAB);
+  return values.length;
+}
 async function ensureMessageTemplates(env) {
   if (!_msgTemplatesReady) { await ensureTab(env, MSG_TEMPLATES_TAB, MSG_TEMPLATES_COLS); _msgTemplatesReady = true; }
   await ensureColumns(env, MSG_TEMPLATES_TAB, MSG_TEMPLATES_COLS);
   const rows = await fetchTab(env, MSG_TEMPLATES_TAB);
-  // Top-up (Sep 28 2026): the seed below only runs on an EMPTY tab, so templates added by later
-  // releases would never appear on a live Sheet. Insert any default whose Message_Type+Channel is
-  // missing — never touches an existing row, so an edit Brett made is never overwritten.
-  if (rows.length && !_msgTemplatesToppedUp) {
+  if (!_msgTemplatesToppedUp || !rows.length) {
+    await appendMissingTemplates(env, rows);
     _msgTemplatesToppedUp = true;
-    const now = new Date().toISOString();
-    for (const t of DEFAULT_MESSAGE_TEMPLATES) {
-      if (rows.some(r => r.Message_Type === t.Message_Type && r.Channel === t.Channel)) continue;
-      try { await addRow(env, MSG_TEMPLATES_TAB, { Message_Type: t.Message_Type, Channel: t.Channel, Subject: t.Subject, Body: t.Body, Active: 'TRUE', Updated_Date: now, Updated_By: 'system_default' }); } catch (_) {}
-    }
-  }
-  if (!rows.length) {
-    const now = new Date().toISOString();
-    for (const t of DEFAULT_MESSAGE_TEMPLATES) {
-      await addRow(env, MSG_TEMPLATES_TAB, { Message_Type: t.Message_Type, Channel: t.Channel, Subject: t.Subject, Body: t.Body, Active: 'TRUE', Updated_Date: now, Updated_By: 'system_default' });
-    }
   }
 }
 function renderTemplate(body, tokens) {

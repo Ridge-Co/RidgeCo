@@ -71,7 +71,19 @@ ok(DEFS.filter(d => d.Message_Type.startsWith('vendor_') && need.includes(d.Mess
 const vd = DEFS.find(d => d.Message_Type === 'vendor_deposit_paid').Body, vs = DEFS.find(d => d.Message_Type === 'vendor_proposal_signed').Body;
 ok(/DEPOSIT/.test(vd) && /deposit/i.test(vd) && !/invoice for/i.test(vd), 'deposit-paid wording says it is the DEPOSIT (distinct from the regular invoice-paid text)');
 ok(/Pending deposit payment/i.test(vs), 'signed text says "pending deposit payment"');
-ok(grab('async function ensureMessageTemplates(').includes('_msgTemplatesToppedUp') && grab('async function ensureMessageTemplates(').includes('never touches an existing row'), 'a live Sheet gets the new templates without overwriting Brett\'s edits');
+{
+  const calls = []; const __tabCache = new Map();
+  const sheetsRequest = async (_e, method, path, body) => { calls.push({ method, path, body }); return method === 'GET' ? { values: [['ID', 'Message_Type', 'Channel', 'Subject', 'Body', 'Active', 'Updated_Date', 'Updated_By']] } : {}; };
+  const MSG_TEMPLATES_TAB = 'Message_Templates', MSG_TEMPLATES_COLS = ['ID', 'Message_Type', 'Channel', 'Subject', 'Body', 'Active', 'Updated_Date', 'Updated_By'];
+  const fn = new Function('DEFAULT_MESSAGE_TEMPLATES', 'sheetsRequest', '__tabCache', 'MSG_TEMPLATES_TAB', 'MSG_TEMPLATES_COLS', grab('async function appendMissingTemplates(') + '\nreturn appendMissingTemplates;')(DEFS, sheetsRequest, __tabCache, MSG_TEMPLATES_TAB, MSG_TEMPLATES_COLS);
+  const existing = DEFS.filter(d => !need.includes(d.Message_Type)).map((d, i) => ({ ID: String(i + 1), Message_Type: d.Message_Type, Channel: d.Channel, Body: 'BRETT EDITED' }));
+  const added = await fn({}, existing);
+  const posts = calls.filter(c => c.method === 'POST');
+  ok(added === need.length && posts.length === 1 && posts[0].body.values.length === need.length, 'missing templates go in with ONE batched append (per-row writes burned the Sheets quota)');
+  ok(posts[0].body.values.every(v => !v.includes('BRETT EDITED')) && Number(posts[0].body.values[0][0]) === existing.length + 1, 'existing rows are never touched and new IDs continue after the highest one');
+  calls.length = 0; ok(await fn({}, DEFS.map((d, i) => ({ ID: String(i + 1), Message_Type: d.Message_Type, Channel: d.Channel }))) === 0 && !calls.length, 'nothing missing -> no writes at all');
+}
+ok(grab('async function ensureMessageTemplates(').includes('appendMissingTemplates') && grab('async function sendTemplatedSms(').includes('estimate_sms_failed'), 'seeding is batched and a failed text is logged, not silent');
 
 // ---------- wiring ----------
 const has = (fn, s) => grab(fn).includes(s);
