@@ -17840,7 +17840,8 @@ async function qbRepairInvoice(env, body) {
     const trade = QB_TRADE_MAP[resolved.name];
     const origRef = qbOriginalItemRef(existing);
     const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
-    const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir), woTimeEntries);
+    const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
+    const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries);
     // Without the original item we'd fall back to the freshly-resolved trade, which could
     // move posted revenue to a different income account. Say so rather than doing it.
     const itemWarning = origRef ? '' : 'Could not read the income account this invoice posted to, so it would be re-derived from the trade. Check it in QuickBooks afterwards.';
