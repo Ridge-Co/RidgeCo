@@ -11624,12 +11624,12 @@ async function smsGatedSend(env, opts) {
     try {
       await logMessageAudit(env, {
         woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind,
-        messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome,
+        messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome,
         notes: outcome === 'blocked' ? gateSnapshot : '',
       });
     } catch (e) {}
   }
-  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot };
+  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
 }
 
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
