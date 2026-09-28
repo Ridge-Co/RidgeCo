@@ -9337,7 +9337,7 @@ async function generateEstimateText(env, body) {
   const pricing = calcTieredEstimate(rawCost, _pc);
   let includeIntegrityClause=false;
   if (wo_id) { try { const all=await fetchTab(env,'Estimates'); const versions=all.filter(e=>e.WO_ID===wo_id).sort((a,b)=>parseInt(a.Version||'1')-parseInt(b.Version||'1')); if(versions.length){const firstItems=JSON.parse(versions[0].Line_Items||'[]'); if(firstItems.length>1&&line_items.length<firstItems.length) includeIntegrityClause=true;} } catch(e){} }
-  const itemsList=line_items.map(li=>`- ${li.desc}`).join('\n');
+  const itemsList=line_items.map(li=>`- ${englishOnly(li.desc_en || li.desc)}`).join('\n');   // owner-facing text is English (Sep 28 2026): desc_en when the vendor wrote Spanish
   const integrityClauseText=includeIntegrityClause?'\n- Estimate Integrity Clause: This estimate is priced as a single, unified project based on current mobilization efficiencies. If individual line items are selectively removed or declined by the client, any remaining approved items are subject to a 15% price adjustment plus a $150 travel/mobilization fee.':'';
   // Standing policy (Aug 21 2026, Brett) — same boilerplate as scopeProposal()'s doc: standalone/
   // partial-scope pricing is best-efforts, not fixed, since the combined price absorbs unknowns a
