@@ -141,6 +141,7 @@
 <div id="view-list">
   <div class="section">
     <div class="section-title">Your scopes <button class="btn small" onclick="startNew()">+ New scope</button></div>
+    <div id="stage-chips" style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px"></div>
     <div id="scope-list"><div class="empty">Loading…</div></div>
   </div>
 </div>
@@ -329,9 +330,27 @@ function applySchedulePreset(which){
   else if(which==='custom' && !scheduleState.milestones.length) scheduleState.milestones=scheduleDefault();
   renderSchedule();
 }
-function addScheduleRow(){ scheduleState.milestones.push({label:'Milestone', percent:0, trigger:'manual'}); renderSchedule(); }
+function addScheduleRow(){ scheduleState.milestones.push({label:'Milestone', percent:0, trigger:'manual', vendor_paid:true, calc_mode:'percent', flat_customer_amount:null}); renderSchedule(); }
 function removeScheduleRow(i){ scheduleState.milestones.splice(i,1); renderSchedule(); }
-function updateScheduleField(i,field,val){ scheduleState.milestones[i][field] = field==='percent' ? (parseFloat(val)||0) : val; renderScheduleTotal(); }
+// Per-milestone vendor-pay + calc mode (Sep 28 2026, WO→Scope conversion, FEATURE_LOG rule 199).
+// vendor_paid (default true): unchecked = nothing is billed to the vendor for THIS milestone; its
+// vendor share rolls forward onto the next vendor-paid milestone (or the last one if none), never
+// lost. calc_mode 'percent' (default) = customer amount is percent-of-total; 'flat' = a typed
+// customer-facing dollar amount for this milestone (vendor proration stays percent-based).
+function updateScheduleField(i,field,val){
+  var m = scheduleState.milestones[i];
+  if(field==='percent') m.percent = parseFloat(val)||0;
+  else if(field==='vendor_paid') m.vendor_paid = !!val;
+  else if(field==='flat_customer_amount'){ var n=parseFloat(val); m.flat_customer_amount = isFinite(n)&&n>=0 ? n : null; }
+  else if(field==='calc_mode'){
+    m.calc_mode = (val==='flat') ? 'flat' : 'percent';
+    if(m.calc_mode==='percent') m.flat_customer_amount = null;
+    else if(m.flat_customer_amount==null) m.flat_customer_amount = 0;
+    renderSchedule(); return;   // re-render so the $ box appears / disappears
+  }
+  else m[field] = val;
+  renderScheduleTotal();
+}
 function renderSchedule(){
   var html = scheduleState.milestones.map(function(m,i){
     return '<div class="row" style="gap:6px;margin:4px 0;align-items:center;">'
@@ -344,6 +363,18 @@ function renderSchedule(){
         +'<option value="completion"'+(m.trigger==='completion'?' selected':'')+'>Completion</option>'
       +'</select>'
       +'<button class="btn small secondary" onclick="removeScheduleRow('+i+')" style="padding:5px 9px;" title="Remove">×</button>'
+    +'</div>'
+    +'<div class="row" style="gap:10px;margin:0 0 8px 8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted);">'
+      +'<label style="display:flex;align-items:center;gap:4px;cursor:pointer;">'
+        +'<input type="checkbox" '+(m.vendor_paid===false?'':'checked ')+'onchange="updateScheduleField('+i+',\'vendor_paid\',this.checked)"> Pay vendor at this milestone</label>'
+      +'<select onchange="updateScheduleField('+i+',\'calc_mode\',this.value)" style="min-width:120px;">'
+        +'<option value="percent"'+(m.calc_mode==='flat'?'':' selected')+'>Customer: % of total</option>'
+        +'<option value="flat"'+(m.calc_mode==='flat'?' selected':'')+'>Customer: flat $</option>'
+      +'</select>'
+      +(m.calc_mode==='flat'
+        ? '<span>$</span><input type="number" step="0.01" min="0" value="'+(m.flat_customer_amount==null?'':m.flat_customer_amount)+'" oninput="updateScheduleField('+i+',\'flat_customer_amount\',this.value)" style="width:96px;" placeholder="Amount">'
+        : '')
+      +(m.vendor_paid===false?'<span style="color:var(--warn,#b45309);">vendor share rolls to the next vendor-paid milestone</span>':'')
     +'</div>';
   }).join('');
   document.getElementById('schedule-rows').innerHTML = html || '<p class="sub">No milestones — pick a preset or add one.</p>';
@@ -405,7 +436,27 @@ async function boot(){
     setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok');
     populateOwners(); populateVendors();
     await loadScopes();
+    await handleDeepLink();
   }catch(e){ setStatus('conn-status','⚠ '+e.message,'err'); }
+}
+
+// Deep link (Sep 18 2026) — ?scope_id=N opens that scope directly; ?wo_id=N resolves to the
+// scope linked to that Work Order (via GET /scopes' own wo_id field on each row) and opens that.
+// Lets index.html's "📋 Push estimate to Scope Proposal" flow (and anything else) hand Brett
+// straight into the right scope instead of the manual property/scope picker. Best-effort and
+// silent on failure — a bad/stale link should never block the normal picker underneath it.
+async function handleDeepLink(){
+  try{
+    var params = new URLSearchParams(window.location.search);
+    var scopeId = params.get('scope_id');
+    var woId = params.get('wo_id');
+    if(scopeId){ await openScope(scopeId); return; }
+    if(woId){
+      var match = (state.scopes||[]).find(function(s){ return String(s.wo_id)===String(woId); });
+      if(match){ await openScope(match.id); }
+      else{ setStatus('conn-status','No scope is linked to WO '+esc(woId)+' yet — push its approved estimate to a scope first (Work Order → 📋 Push estimate to Scope Proposal).','warn'); }
+    }
+  }catch(e){ /* deep link is a convenience — never blocks the normal picker on failure */ }
 }
 
 /* ---------- scope list ---------- */
@@ -428,12 +479,27 @@ function statusPill(s){
 }
 function scopeCardHtml(s){
   var loc = propLabel(s.property_id) + (s.unit_id?(' · Unit '+unitLabel(s.unit_id)):'') ;
+  var stg = s.approval_stage ? ' <span class="stage-pill" style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:var(--surface2,#eef);border:1px solid var(--border,#ccd)">'+esc(s.approval_stage)+'</span>' : '';
   return '<div class="scard" onclick="openScope(\''+s.id+'\')"><div><div class="t">#'+esc(s.id)+' · '+esc(s.title||'Untitled')+'</div>'+
     '<div class="m">'+esc(loc)+' · '+s.item_count+' item(s)'+(s.wo_id?(' · '+esc(s.wo_id)):'')+'</div></div>'+
-    '<div>'+statusPill(s.status)+'</div></div>';
+    '<div>'+statusPill(s.status)+stg+'</div></div>';
 }
-async function loadScopes(){
-  try{ state.scopes = await get('/scopes'); }catch(e){ document.getElementById('scope-list').innerHTML='<div class="empty err">'+esc(e.message)+'</div>'; return; }
+// Approval-stage filter (FEATURE_LOG rule 200). '' = all, '__needs__' = anything with a stage that isn't Approved yet.
+var STAGE_CHIPS=[['','All'],['__needs__','Needs approval step'],['Estimated','Estimated'],['Proposed','Proposed'],['Pre-approved','Pre-approved'],['Approved','Approved']];
+function stageMatches(s, f){ if(!f) return true; if(f==='__needs__') return !!s.approval_stage && s.approval_stage!=='Approved'; return (s.approval_stage||'')===f; }
+function setStageFilter(f){ state.stageFilter=f||''; loadScopes(true); }
+function renderStageChips(){
+  var el=document.getElementById('stage-chips'); if(!el) return;
+  var cur=state.stageFilter||'';
+  el.innerHTML=STAGE_CHIPS.map(function(c){
+    var n=(state.scopes||[]).filter(function(s){ return stageMatches(s,c[0]); }).length;
+    var on=(cur===c[0]);
+    return '<button class="btn small'+(on?'':' secondary')+'" onclick="setStageFilter(\''+c[0]+'\')">'+esc(c[1])+(c[0]?' ('+n+')':'')+'</button>';
+  }).join('');
+}
+async function loadScopes(noFetch){
+  if(!noFetch || !state.scopes){ try{ state.scopes = await get('/scopes'); }catch(e){ document.getElementById('scope-list').innerHTML='<div class="empty err">'+esc(e.message)+'</div>'; return; } }
+  renderStageChips();
   var el = document.getElementById('scope-list');
   if(!state.scopes.length){ el.innerHTML='<div class="empty">No scopes yet. Tap “+ New scope”.</div>'; return; }
   // Four buckets. 'ready-to-bill' (deposit booked + the linked Work Order shows the job physically
@@ -445,7 +511,7 @@ async function loadScopes(){
   // Work Order's own status or on generating the final bill from Signed Proposals — those keep
   // working exactly as before, from their own pages, regardless of what's collapsed here.
   var readyToBill=[], active=[], inProgress=[], completed=[];
-  state.scopes.forEach(function(s){
+  state.scopes.filter(function(s){ return stageMatches(s, state.stageFilter||''); }).forEach(function(s){
     if(s.status==='ready-to-bill') readyToBill.push(s);
     else if(s.status==='fully-invoiced') completed.push(s);
     else if(s.status==='invoiced') inProgress.push(s);
