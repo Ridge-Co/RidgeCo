@@ -8853,6 +8853,24 @@ function renderHubEstimateView(woId, estimates, holder) {
     }
 }
 
+// 🌐 Re-translate (Sep 28 2026): POST /estimate/retranslate re-runs the English copy of the
+// vendor's estimate (line descriptions + change reason). The vendor's own wording is never touched.
+function retranslateEstimateUI(woId, estimateId, btn) {
+  if (btn && btn.disabled) return;
+  if (!estimateId) { toast('This estimate has no id to translate', 'error'); return; }
+  var old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Translating…'; }
+  function done() { if (btn) { btn.disabled = false; btn.textContent = old; } }
+  api('POST', '/estimate/retranslate', { estimate_id: estimateId }).then(function(r) {
+    done();
+    if (r && r.success) {
+      delete _estimateCache[woId];
+      toast(r.changed ? 'English copy updated' : 'Already in English — nothing to add', 'success');
+      refreshHubEstimateView(woId);
+    } else toast('Could not translate: ' + ((r && r.error) || 'unknown error'), 'error');
+  }).catch(function(e) { done(); toast('Could not translate: ' + (e && e.message ? e.message : 'network error'), 'error'); });
+}
+
 function refreshHubEstimateView(woId) {
   var holder = document.getElementById('est-view-' + woId);
   if (!holder) return;
