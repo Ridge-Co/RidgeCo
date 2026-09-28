@@ -322,7 +322,7 @@ export default {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -730,6 +730,7 @@ export default {
         if (path === '/ar-report/pay-link')       return await arReportPayLink(env, body);
         if (path === '/ops-approve')              return await opsApprove(env, body);
         if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
+        if (path === '/agent-write')              return await agentWrite(env, body);
         if (path === '/ops-queue-prepare')        return await opsQueuePrepare(env, body);
         if (path === '/ops-queue-status')         return await opsQueueStatus(env, body);
         if (path === '/ops-queue/start-build')    return await opsQueueStartBuild(env, body);
@@ -11904,6 +11905,79 @@ async function opsQueueUpdate(env, body) {
     fields.Risk_Class = String(body.risk_class).toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
   }
   return await updateRow(env, OPS_QUEUE_TAB, id, fields);
+}
+
+// POST /agent-write {tab, id, fields, action, reason} — a generic, field-classified, judge()-
+// gated writer (Sep 28 2026). See the commit message this shipped with for the full rationale;
+// short version: instead of a new bespoke narrow endpoint+token every time an agent session
+// needs a new kind of production write, one field is classified SAFE once (here) and every
+// future task that touches it can use it, with judge() verifying each individual write live
+// rather than a human having to pre-approve every possible value up front.
+//
+// Fail-closed at three layers, in order: (1) the tab must be in the policy table at all; (2)
+// EVERY field in the request must be individually listed SAFE for that tab — one unlisted or
+// GATED field anywhere in the request refuses the whole call, nothing partially applies; (3)
+// even a fully SAFE-classified request still needs judge()'s live approval before it's written.
+// judge() itself already refuses outright if ever handed anything but riskClass 'SAFE' (see its
+// own structural backstop) — so this can never be the accidental path to a GATED change.
+const AGENT_WRITE_FIELD_POLICY = {
+  Ops_Build_Queue: { Status: 'SAFE', Drop_Reason: 'SAFE', Superseded_By: 'SAFE' },
+};
+// Even within a SAFE-classified field, Status is further restricted: this endpoint can only
+// ever CLOSE an item out (done|dropped), never move it into greenlit/prepared/building/held or
+// touch Risk_Class/Approved_By/new-row creation — those stay on opsQueueUpdate/opsApprove/
+// opsQueuePrepare, reached only with the full admin secret, same as today.
+const AGENT_WRITE_CLOSE_STATUSES = new Set(['done', 'dropped']);
+
+async function agentWrite(env, body) {
+  const tab = body && body.tab;
+  const id = body && body.id;
+  const fields = (body && body.fields) || {};
+  const reason = String((body && body.reason) || '').trim();
+  const action = String((body && body.action) || '').trim();
+  if (!tab || id === undefined || id === null || id === '') return json({ error: 'tab and id required' }, 400);
+  const policy = AGENT_WRITE_FIELD_POLICY[tab];
+  if (!policy) return json({ error: `tab '${tab}' is not enabled for agent-write` }, 403);
+  const fieldNames = Object.keys(fields);
+  if (!fieldNames.length) return json({ error: 'fields required' }, 400);
+  for (const f of fieldNames) {
+    if (policy[f] !== 'SAFE') return json({ error: `field '${f}' on '${tab}' is not agent-writable (GATED or unclassified)` }, 403);
+  }
+  if (tab === 'Ops_Build_Queue') {
+    if (fields.Status !== undefined && !AGENT_WRITE_CLOSE_STATUSES.has(String(fields.Status).toLowerCase())) {
+      return json({ error: `agent-write can only close an item out (done|dropped), not set Status to '${fields.Status}'` }, 403);
+    }
+    if ((fields.Drop_Reason !== undefined || fields.Superseded_By !== undefined) && String(fields.Status || '').toLowerCase() !== 'dropped') {
+      return json({ error: 'Drop_Reason/Superseded_By can only be written alongside Status: dropped' }, 403);
+    }
+  }
+  if (!reason) return json({ error: 'reason required — judge() needs a factual basis to verify this write' }, 400);
+
+  const verdict = await judge(env, {
+    action: action || `agent_write_${tab}`,
+    intent: `Apply this field-scoped write, already classified SAFE by AGENT_WRITE_FIELD_POLICY, to ${tab} row ${id}.`,
+    proposedChange: { tab, id, fields, reason },
+    acceptanceCriteria: 'The change is a factual close-out (marking something done or dropped) backed by a concrete, checkable reason — a cited shipped feature/commit, a named duplicate row ID, or a specific superseding item. Reject anything that reads like a priority or scope judgment call rather than a factual status correction, and reject if the reason is vague, generic, or unverifiable.',
+    riskClass: 'SAFE',
+    source: 'agentWrite',
+  });
+  if (!verdict || verdict.verdict !== 'approve') {
+    return json({ ok: false, applied: false, judge: verdict || null, error: 'judge() did not approve this write' }, 403);
+  }
+
+  const writeFields = Object.assign({}, fields);
+  const targetTab = tab === 'Ops_Build_Queue' ? OPS_QUEUE_TAB : tab;
+  if (tab === 'Ops_Build_Queue') {
+    await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+    await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+    // 'done' rows already use Drop_Reason as their general closure note (see existing rows) —
+    // mirror that convention here rather than adding a parallel field.
+    if (writeFields.Drop_Reason === undefined && String(fields.Status || '').toLowerCase() === 'done') {
+      writeFields.Drop_Reason = reason.slice(0, 500);
+    }
+  }
+  const result = await updateRow(env, targetTab, id, writeFields);
+  return json({ ok: true, applied: true, judge: verdict, result });
 }
 
 // POST /ops-queue-prepare {id, brief} — the Rung-1 Prepare agent's ONLY write path (B-240,
