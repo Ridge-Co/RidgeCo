@@ -1859,3 +1859,7 @@ Human-gate required: yes — money-adjacent write path into `Receipt_Recon_Queue
 
 Human-gate required: no — link-only change, no write path, no money/PII/auth surface touched.
 
+
+
+## RECURRING / SCHEDULED WORK ORDERS `[FL-20260928-recur]` (Sep 28, 2026, Worker `2026-09-28.1`, worker.js + index.html)
+Rule: scheduled WOs never text owners (always `Owner_Notify_Override='off'`) and never text tenants unless the template's `Notify_Tenant` override is TRUE; vendor dispatch may go out 8:00-8:59am ET (`allowEarlyMorning`, opt-in per send), all other quiet-hours rules unchanged. If the prior auto-posted WO for a template+target is still open at the next due date, that occurrence is skipped and recorded (`Last_Skips`), not retried. Posting happens in `cronSweep` -> `processRecurringWorkOrders` only between 8:00am and 7:00pm ET; a sweep outage up to 3 days is caught up, older occurrences dropped. Idempotency key = `Work_Orders.Recurring_Template_ID` + `Recurring_Due` + property/unit. New columns are self-provisioned via `ensureColumns`. Test-token writes to the new routes are TEST-template-only (`hubTestWriteAllowed`).

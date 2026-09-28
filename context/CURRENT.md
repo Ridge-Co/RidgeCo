@@ -1,3 +1,9 @@
+# Sep 28, 2026 — BUILT + STAGING-VERIFIED (PR to `main` open, NOT merged): Recurring / scheduled work orders
+
+FEATURE_LOG `[FL-20260928-recur]`. WO templates can now carry a schedule (weekly/biweekly/every-N-weeks/monthly/quarterly/Nth-weekday/every-N-days, start/end dates, optional yearly seasonal window, lead days, default vendor, linked properties/units). A 15-min cron sweep (`processRecurringWorkOrders`) posts a real WO per linked target at/after 8:00am ET (never after 7pm). Rules Brett set: previous auto-posted WO still open -> SKIP; vendor-only texts (8:00-8:59am ET allowed via `allowEarlyMorning`), owner never texted (`Owner_Notify_Override='off'`), tenant only if the template's "Notify tenant" override is on. Also: Post Now (edit one instance or fold back into template), Copy template, snippet library (`WO_Snippets`), unit/property detail "Recurring work orders" link/unlink. Build `2026-09-28.1-recurring-wo-scheduler`. Tests: `test/recurring-wo.test.mjs`, `test/recurring-wo-ui.test.mjs`. Staging-verified on TEST data (post-now -> only a vendor message queued, skip-if-open confirm, preview, copy, link). **Needs Brett:** merge PR to `main`, then create a template with a schedule, link one property, and click Post Now.
+
+---
+
 # Sep 26, 2026, ~18:10 ET — 🟢 LIVE: BrettOS Tasks Manager quick-link on Dashboard + Dev Log (PR #76 → staging, PR #77 → main, both merged)
 
 FEATURE_LOG rule 198 (`[FL-20260926-2210-tm]`). Added a "🗒️ Tasks Manager" button to the Dashboard (Command Center) and the Dev Log tools group, linking straight to the deployed BrettOS Tasks Manager Apps Script web app — Brett can now reach it in one tap from the Hub, no bookmark needed. UI-only, no `worker.js` change, so this shipped straight to `main` same session (no interim staging-only period needed). Live-verified by fetching `https://ridge-co.github.io/RidgeCo/` directly and confirming both button strings are present in the served HTML.
