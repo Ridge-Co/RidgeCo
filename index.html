@@ -2111,7 +2111,8 @@ function renderWOPage() {
   }
   if (propId)   wos = wos.filter(function(w){ return String(w.Property_ID)===String(propId); });
   if (unitId)   wos = wos.filter(function(w){ return w.Unit_ID===unitId; });
-  if (vendId)   wos = wos.filter(function(w){ return w.Vendor_ID===vendId; });
+  if (vendId === '__unassigned__') wos = wos.filter(function(w){ return !w.Vendor_ID; });
+  else if (vendId) wos = wos.filter(function(w){ return w.Vendor_ID===vendId; });
   if (trade)    wos = wos.filter(function(w){ return (w.Trade||'').toLowerCase()===trade.toLowerCase(); });
   if (priority) wos = wos.filter(function(w){ return (w.Priority||'normal').toLowerCase()===priority.toLowerCase(); });
   if (search) wos = wos.filter(function(w){
