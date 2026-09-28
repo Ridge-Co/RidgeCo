@@ -4304,6 +4304,7 @@ function openEditVendorModal(id) {
   evTrade.value = v.Trade || 'General';
   document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
   document.getElementById('ev-type').value=v.Vendor_Type||'labor'; document.getElementById('ev-payaddr').value=v.Payment_Address||'';
+  document.getElementById('ev-language').value=(String(v.Language||'').toLowerCase()==='es')?'es':'en';
   document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
   document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
   document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
