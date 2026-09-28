@@ -1,5 +1,23 @@
 # BrettOS Feature Log — What Works, Don't Break It
 
+## [FL-20260928-1755-rp] Sep 28, 2026 — FIX: vendor.html receipt attach-photo regression + new attach button
+Two changes in `vendor.html`, same PR. (1) Vendor-reported bug: the per-WO photo section's
+RECEIPT upload button was missing — `buildPhotoSection(...)` was called with `canReceipt: false`
+(overriding the function's own `canReceipt: true` default), and no FEATURE_LOG/PR entry showed
+this was intentional, so it's treated as a regression and flipped back to `canReceipt: true`.
+Viewing past receipts still worked the whole time (`viewAll: true`), only the upload button was
+gone. (2) Brett's ask: the separate text-entry "add receipt" panel (`renderVendorReceipts` —
+Amount/Date/Store/Description fields) had no way to attach a photo of the physical receipt. Added
+a "📎 Attach Photo" button + hidden sibling file input (never a `<label>`-wrapped input, per
+`context/UI_QA_CHECKLIST.md`) wired to the exact same `portalUploadFiles(...)` pipeline the WO
+photo buttons already use (`create-upload-session` → `PUT` → `log-attachment`, `file_type:
+'receipt'`) — no new backend endpoint or fields needed. Property address for that call is read
+from `window._wos[idx]` (already populated by `renderVendorWOs`) and escaped via `esc()` before
+interpolation into the `onclick` string, matching `buildPhotoSection`'s own convention.
+**Not live-tested** against `maintenance-hub-staging`'s browser UI (no Playwright/browser tool
+available this pass) — verified by re-reading the committed diff for syntax correctness only.
+PR opened against `main`, not merged — Brett to click through both flows before merging.
+
 ## [FL-20260928-1720-uv] Sep 28, 2026 — SHIPPED: WO "Not Assigned" vendor filter + quick-access button
 UI-only, no worker.js change. Work Orders → VENDOR filter select got a "— Not Assigned —" option
 (sentinel `__unassigned__`, both in the static `<option>` markup and `populateFilterDropdowns()`'s
