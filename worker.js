@@ -16122,7 +16122,7 @@ async function woShareBuild(env, woId, pageBase){
   const vendor = vendors.find(v=>v.ID===wo.Vendor_ID)||{};
   const last4 = _last4(vendor.Phone);
   const token = await makeSessionToken({ scope:'wo-share-link', wo:woId, rev }, env.WORKER_SECRET, WO_SHARE_LINK_TTL);
-  const base = (body.page_base || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/,'');
+  const base = (pageBase || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/,'');
   const link = `${base}/wo.html?wo=${encodeURIComponent(woId)}&t=${encodeURIComponent(token)}`;
   const addr = (prop.Address||'the property') + (unit.Unit_Label?(' '+formatUnitLabel(unit.Unit_Label)):'');
   const lang = (vendor.Language==='es') ? 'es' : 'en';
