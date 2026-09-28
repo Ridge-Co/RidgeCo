@@ -16139,6 +16139,56 @@ async function woShareBuild(env, woId, pageBase){
     language: lang,
     message: lang==='es' ? msgEs : msgEn,
     message_en: msgEn, message_es: msgEs,
+  } };
+}
+
+// ADMIN (secret-gated): mint a share link + a ready-to-send message for one WO. Nothing is sent.
+async function woShareLink(env, body){
+  const woId = String((body && (body.wo_id||body.wo))||'').trim();
+  if(!woId) return json({ error:'wo_id required' }, 400);
+  const b = await woShareBuild(env, woId, body && body.page_base);
+  if(b.error) return json({ error:b.error }, b.status||400);
+  return json(b.res);
+}
+
+// POST /wo/share-send { wo_id, lang?:'en'|'es', message?, page_base? } — ADMIN-ONLY (no ROLE_SCOPES
+// entry, same as /wo/share-link). Actually TEXTS the assigned vendor the no-login work-order link
+// (Sep 28 2026 — "Send to Vendor" used to only produce a draft to copy). Goes through smsGatedSend
+// (Global / Vendor toggles, Test Mode redirect, quiet-hours hold, Message_Queue + WO_Audit), with
+// message_type 'vendor_wo_shared'. The message is already in the chosen language, so the hook's own
+// auto-translate is skipped; if Brett edited English text but chose Spanish, the edited text is
+// translated here (link / last-4 wording / amounts verified intact, else English goes out).
+async function woShareSend(env, body){
+  const woId = String((body && (body.wo_id||body.wo))||'').trim();
+  if(!woId) return json({ success:false, error:'wo_id required' }, 400);
+  const b = await woShareBuild(env, woId, body && body.page_base);
+  if(b.error) return json({ success:false, error:b.error }, b.status||400);
+  const res = b.res, vendor = b.vendor;
+  if(!res.assigned) return json({ success:false, error:'No vendor is assigned to this work order yet — assign one first (or use Copy message).', code:'no_vendor' }, 400);
+  if(!res.vendor_has_phone) return json({ success:false, error:`${res.vendor_name||'This vendor'} has no phone number on file — add one, or use Copy message and send it yourself.`, code:'no_phone' }, 400);
+  const lang = (body && body.lang==='es') ? 'es' : (body && body.lang==='en') ? 'en' : res.language;
+  const stock = lang==='es' ? res.message_es : res.message_en;
+  let text = String((body && body.message)||'').trim() || stock;
+  const _norm = s => String(s).replace(/https?:\/\/\S+/g, '<L>');   // the UI's copy carries the token minted when the modal opened
+  const edited = _norm(text) !== _norm(stock);
+  let originalBody = '', translatedTo = '';
+  if(lang==='es' && edited && !plausiblyNonEnglish(text)){
+    const t = await translateForVendorDetailed(env, Object.assign({}, vendor, { Language:'es' }), text);
+    if(t.translated){ originalBody = t.original; translatedTo = 'es'; text = t.text; }
+  }
+  let linkAppended = false;
+  if(!/\/wo\.html\?wo=/.test(text)){ text = text + '\n' + res.link; linkAppended = true; }   // never send a message with no way in
+  const r = await smsGatedSend(env, { wo_id: woId, message_type: 'vendor_wo_shared', recipient_type: 'vendor', vendor, message_body: text, already_localized: true, original_body: originalBody, translated_to: translatedTo });
+  const ok = !!(r.sent || r.held_for_quiet_hours);
+  let reason = '';
+  if(!ok) reason = !r.send_ok ? ('Blocked by SMS settings: ' + r.gate_snapshot) : 'Send failed — the text did not go through (Twilio). Use Copy message.';
+  else if(r.held_for_quiet_hours) reason = 'Held for quiet hours — will send after ' + r.send_after;
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_share_send', Skill_Or_Endpoint:'/wo/share-send', Success: ok ? 'TRUE' : 'FALSE', Notes:`wo=${woId} lang=${lang} sent=${!!r.sent} held=${!!r.held_for_quiet_hours}` }); } catch(_) {}
+  return json({
+    success: ok, sent: !!r.sent, held_for_quiet_hours: !!r.held_for_quiet_hours, send_after: r.send_after||'',
+    send_ok: !!r.send_ok, gate_snapshot: r.gate_snapshot, test_mode: !!r.test_mode, reason, error: ok ? '' : reason,
+    sent_to: res.vendor_phone, delivered_to: r.delivered_to||'', vendor_name: res.vendor_name, language: lang,
+    message: r.message_body || text, original_body: r.original_body || originalBody, link: res.link, link_appended: linkAppended, queued_id: r.queued_id, wo_id: woId,
   });
 }
 
