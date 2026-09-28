@@ -242,6 +242,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary small" id="btn-bulk-mode" onclick="toggleBulkMode()">☑ Bulk Edit</button>
       <button class="btn secondary small" id="filterToggleBtn" onclick="toggleFilterPanel()">FILTERS <span id="filterBadge" style="display:none;background:var(--accent);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span> ▾</button>
       <button class="btn secondary small" onclick="clearWOFilters()" id="clearFiltersBtn" style="display:none">CLEAR ALL</button>
+      <button class="btn secondary small" onclick="filterUnassignedWOs()" id="unassignedWOsBtn">🚫 Not Assigned</button>
       <div style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0">
         <label style="margin:0;font-size:11px;color:var(--muted)">SORT</label>
         <select id="wo-sort" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:11px">
