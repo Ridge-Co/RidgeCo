@@ -1,3 +1,16 @@
+# WHERE THINGS STAND — Sep 28, 2026 late (vendor translation + real "Send to Vendor" — PR open on `feat/vendor-translation-send-to-vendor`, NOT merged, NOT on staging)
+
+**What it does:** vendors with `Language=es` get every Hub text in Spanish (English kept in Message_Queue/WO_Audit
+`Original_Body`); vendor-written estimates keep their words plus a stored English copy (`desc_en`,
+`Change_Reason_EN`) that the admin panel, owner proposal and invoice read; Send to Vendor now actually texts the
+vendor (`POST /wo/share-send`, gated). **Brett must:** set Language=Español on the Spanish-speaking vendors
+(Vendors page -> Edit), and hard-reload the Hub (the "type the number of the recipient" prompt he still sees does
+not exist in the current code — it is a stale cached page). **Open/not done:** `translateVendorEmail` is written
+but not wired into vendor emails; verification was local only (staging lacks the code). Detail: FEATURE_LOG
+FL-20260928-2330-vt.
+
+---
+
 # WHERE THINGS STAND — Sep 28, 2026 (WO → Scope Proposal conversion REBUILT on current main + milestone editor UI — POST /wo/push-to-scope; branch claude/wo-to-scope-v2, going to staging, NOT yet on main)
 
 **Sep 28 update:** the original PR #6 sat unmerged for 10 days and went `dirty` (conflicts with `main`), which is why it never went live. Rebuilt off current `main`; also added the clickable per-milestone "Pay vendor at this milestone" / "Customer: flat $" controls in scope-creator.html's Payment Schedule editor. All-vendor-unpaid fallback confirmed as-is by Brett. Brett is holding WO-1227 (Caesar's estimate) until this ships. Old PR #6 to be closed as superseded. SMS notification work (estimate posted / daily reminder / proposal signed / deposit paid) is a separate follow-up PR.
