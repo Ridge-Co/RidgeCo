@@ -11768,6 +11768,20 @@ async function smsGatedSend(env, opts) {
 
   const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : kind === 'admin' ? opts.admin : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
+
+  // Vendor language (Sep 28 2026): a vendor whose Language is 'es' gets the message in Spanish —
+  // this ONE hook covers every templated, hardcoded and one-off vendor SMS. Skipped for messages
+  // already hand-built in the vendor's language (opts.already_localized). The English original is
+  // kept in Message_Queue.Original_Body / WO_Audit.Original_Body. Fails open: any translation miss
+  // sends the English text. Runs before the queue write so quiet-hours holds and later releases
+  // send exactly the text that was queued.
+  let messageBody = opts.message_body || '', originalBody = opts.original_body || '', translatedTo = opts.translated_to || '';
+  if (kind === 'vendor' && !opts.already_localized) {
+    try {
+      const t = await translateForVendorDetailed(env, opts.vendor, messageBody);
+      if (t.translated) { originalBody = t.original; translatedTo = 'es'; messageBody = t.text; }
+    } catch (e) { /* fail open: English goes out */ }
+  }
   const recipientName = recipient ? (recipient.Name || `${recipient.First_Name || ''} ${recipient.Last_Name || ''}`.trim()) : '';
 
   const now = new Date().toISOString();
