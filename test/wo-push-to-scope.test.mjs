@@ -147,6 +147,8 @@ function build(db) {
     cacheSrc, srSrc, ensureColumnsSrc, ensureColumnsInnerSrc, ensureTabSrc, idcSrc, colSrc, jsonSrc,
     isMissingTabErrorSrc, missingTabResponseSrc, fetchTabSrc, findWOSrc, addRowSrc, updateRowSrc,
     updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, scopeItemsFromEstimateSrc, scopesTabSrc,
+    "const APPROVAL_STAGES = ['Estimated', 'Proposed', 'Pre-approved', 'Approved'];",
+    grabRange('async function setApprovalStage(', '// POST /admin/backfill-approval-stage'),
     woPushToScopeSrc,
     'return { woPushToScope };',
   ].join('\n');
