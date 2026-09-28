@@ -151,6 +151,7 @@ function render(rev,q){
   const isInactive=s=>{s=(s||'').toLowerCase();return s==='done'||s==='dropped';};
   const activeQ=allQ.filter(x=>!isInactive(x.Status));
   window.__queue=activeQ;
+  window.__allQ=allQ;
   const normT=t=>(t==null?'':(''+t)).toLowerCase().replace(/\s+/g,' ').trim();
   const qStatusByTitle={}; allQ.forEach(x=>{const k=normT(x.Title); if(k&&!qStatusByTitle[k]) qStatusByTitle[k]=(x.Status||'greenlit').toLowerCase();});
   let dupCount=0;
