@@ -15676,7 +15676,7 @@ async function setConfigKey(env, body) {
 // 'TRUE'/'FALSE' strings the rest of the Worker already reads via
 // String(cfg.failure_alert_enabled||'').toUpperCase()!=='TRUE' (see callWithFailureAlert /
 // deadManSwitchCheck) — so this can never be pointed at any other Config row.
-const ALERT_FLAG_KEYS = ['failure_alert_enabled', 'dead_man_switch_enabled']; // nudge-deploy Sep24
+const ALERT_FLAG_KEYS = ['failure_alert_enabled', 'dead_man_switch_enabled'];
 async function setAlertFlags(env, body) {
   const updates = {};
   for (const k of ALERT_FLAG_KEYS) {
