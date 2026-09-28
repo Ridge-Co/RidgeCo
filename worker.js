@@ -9327,12 +9327,26 @@ async function addEstimateVersion(env, body) {
   // twins look like a legitimate revision until you compare the line items. Re-submitting
   // the exact same numbers is never a real revision, so hand back the row that already
   // exists instead of appending a second one.
+  // Sep 28 2026: stored Line_Items may now carry desc_en (English copy), so the stored JSON is
+  // compared with desc_en stripped — the double-tap guard still matches a re-submit exactly.
   const dupe = await findRecentDuplicate(env, 'Estimates', {
-    WO_ID: woId, Line_Items: lineItemsJson, Vendor_ID: body.vendor_id || '',
-  }, 120);
+    WO_ID: woId, Vendor_ID: body.vendor_id || '',
+  }, 120, r => estimateLineItemsCanonical(r.Line_Items) === estimateLineItemsCanonical(lineItemsJson));
   if (dupe) return json({ success: true, duplicate: true, version: parseInt(dupe.Version || '1'), subtotal: dupe.Subtotal || subtotal.toFixed(2) });
 
-  await addRow(env, 'Estimates', { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: lineItemsJson, Subtotal: subtotal.toFixed(2), Change_Reason: nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised'), Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' });
+  // Vendor text is kept exactly as written; an English copy is stored beside it (per-line desc_en
+  // inside Line_Items + Change_Reason_EN) so the admin panel, owner proposal and invoice can read
+  // English. Fails open — a translation miss just means no English copy (Re-translate can retry).
+  const changeReason = nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised');
+  let storedLineItems = body.line_items, changeReasonEn = '';
+  try {
+    const vendorRow = body.vendor_id ? (await fetchTab(env, 'Vendors').catch(() => [])).find(v => String(v.ID) === String(body.vendor_id)) : null;
+    const en = await estimateEnglishFields(env, body.line_items, nextVersion === 1 ? '' : changeReason, { force: vendorWantsSpanish(vendorRow) });
+    if (en.ok) { storedLineItems = en.line_items; changeReasonEn = en.change_reason_en; }
+  } catch (_) {}
+  const row = { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(storedLineItems), Subtotal: subtotal.toFixed(2), Change_Reason: changeReason, Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' };
+  if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) {} }
+  await addRow(env, 'Estimates', row);
   try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
   // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
   // the job was approved/proposed/signed means something changed — do NOT silently reset the stage
