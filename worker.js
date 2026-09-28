@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-28.5-wo-push-and-approval-stage-main';
+const BUILD_VERSION = '2026-09-28.7-estimate-sms-batch-seed';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -669,6 +669,8 @@ export default {
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
         if (path === '/estimate/unapprove')       return await unapproveEstimate(env, body);
+        if (path === '/estimate/needs-info')      return await estimateNeedsInfo(env, body);
+        if (path === '/estimate/decline')         return await estimateDecline(env, body);
         if (path === '/wo/deposit-approve')       return await depositApprove(env, body);
         if (path === '/wo/deposit-clear')         return await depositClear(env, body);
         if (path === '/geocode-property')         return await geocodeProperty(env, body);
@@ -4737,6 +4739,13 @@ async function scopeProposalSign(env, body, ip, ua) {
 
   await updateRow(env, 'Scopes', s.ID, { Status: 'signed', Updated_Date: now.toISOString() });
   await setApprovalStage(env, { woId: s.WO_ID || '', scopeId: s.ID, stage: 'Pre-approved' });
+  // Texts (rule 201): Brett + the vendor learn the owner signed and the deposit is pending. Best-effort.
+  try {
+    const c = await estimateSmsContext(env, s.WO_ID || '', s.Vendor_ID);
+    const job = s.WO_ID ? ('work order ' + s.WO_ID) : ('proposal #' + s.ID);
+    await sendTemplatedSms(env, { type: 'admin_proposal_signed', kind: 'admin', wo_id: s.WO_ID || '', property: c.property, tokens: { Signer: signer, Job: job, Address: c.address } });
+    if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_proposal_signed', kind: 'vendor', vendor: c.vendor, wo_id: s.WO_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
+  } catch (_) {}
   return json({ ok: true, subtotal, deposit, schedule: milestones });
 }
 
@@ -8816,6 +8825,167 @@ async function listEstimates(env, url) {
 // An approved estimate is a commitment the vendor has been told to proceed on, so taking
 // it back has to tell them — otherwise they carry on working to a number that no longer
 // stands.
+// ── ESTIMATE / PROPOSAL SMS (Sep 28 2026, FEATURE_LOG rule 201) ───────────────────────────────
+// Everything goes through smsGatedSend, so the existing gates apply unchanged: Config
+// TWILIO_ENABLED (global), TWILIO_TEST_MODE (redirects to the test recipient), Vendors.SMS_Enabled /
+// SMS_OptOut for vendors, quiet hours (7pm-9am ET hold, except the 8am reminder). 'admin' is a new
+// recipient kind = Brett himself: only the Global switch applies (his own number, Config
+// ADMIN_SMS_PHONE, falling back to TWILIO_TEST_RECIPIENT). Bodies come from Message_Templates so
+// Brett can reword them; vendor bodies never carry dollar amounts.
+const HUB_URL = 'https://ridge-co.github.io/RidgeCo/index.html';
+// Only estimates/signings created AFTER this instant ever trigger reminders or deposit texts, so the
+// 14 old backfilled "Estimated" jobs can't text him. Override with Config estimate_sms_since.
+const ESTIMATE_SMS_DEFAULT_SINCE = '2026-09-29T00:00:00.000Z';
+const NEEDS_INFO_RESUME_DAYS = 3;
+const REMINDER_MIN_AGE_HOURS = 12; // an estimate posted this morning already got its own text
+async function getAdminSmsRecipient(env) {
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  return { Name: 'Brett', Phone: cfg.ADMIN_SMS_PHONE || cfg.TWILIO_TEST_RECIPIENT || '+14439617927' };
+}
+async function sendTemplatedSms(env, o) {
+  try {
+    let tpl = null; try { tpl = await getMessageTemplate(env, o.type, 'sms'); } catch (_) {}
+    const def = DEFAULT_MESSAGE_TEMPLATES.find(t => t.Message_Type === o.type && t.Channel === 'sms');
+    const body = renderTemplate(tpl ? tpl.Body : (def ? def.Body : ''), Object.assign({ HubUrl: HUB_URL }, o.tokens || {})).replace(/\s+/g, ' ').trim();
+    if (!body) return { sent: false, reason: 'no template for ' + o.type };
+    const opts = { wo_id: o.wo_id || '', message_type: o.type, recipient_type: o.kind, message_body: body, property: o.property, bypassQuietHours: !!o.bypassQuietHours };
+    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else opts.vendor = o.vendor;
+    return await smsGatedSend(env, opts);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+    return { sent: false, error: String((e && e.message) || e) };
+  }
+}
+const fmtMoney = n => (parseFloat(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const vendorFirstName = v => (v && (v.First_Name || (v.Name || '').split(' ')[0])) || 'there';
+async function estimateSmsContext(env, woId, vendorIdHint) {
+  const [wos, props, vendors] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'), fetchTab(env, 'Vendors')]);
+  const wo = findWO(wos, woId) || null;
+  const property = wo ? props.find(p => p.ID === wo.Property_ID) : null;
+  const vendor = vendors.find(v => v.ID === (vendorIdHint || (wo && wo.Vendor_ID))) || null;
+  return { wo, property, vendor, address: (property && property.Address) || (wo && wo.Address) || '' };
+}
+async function notifyVendorTemplated(env, type, woId, vendorIdHint, extraTokens, job) {
+  const c = await estimateSmsContext(env, woId, vendorIdHint);
+  if (!c.vendor || !c.vendor.Phone) return { sent: false, reason: 'no vendor phone' };
+  return sendTemplatedSms(env, { type, kind: 'vendor', vendor: c.vendor, wo_id: woId, property: c.property,
+    tokens: Object.assign({ FirstName: vendorFirstName(c.vendor), WO: woId, Job: job || ('work order ' + woId) }, extraTokens || {}) });
+}
+// PURE — which estimates are "awaiting Brett's decision" for the daily reminder. Latest active
+// version per WO; Pending (or blank) counts; 'Needs Info' pauses and resumes NEEDS_INFO_RESUME_DAYS
+// after it was flagged; Approved / Declined / Converted never count. Voided/closed WOs never count.
+function estimatesAwaitingDecision(estimates, workorders, now, sinceISO) {
+  const CLOSED = ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void', 'Complete', 'Invoiced'];
+  const latest = {};
+  for (const e of estimates || []) {
+    if (e.Active === 'FALSE' || !e.WO_ID) continue;
+    const cur = latest[e.WO_ID];
+    if (!cur || (parseInt(e.Version) || 0) > (parseInt(cur.Version) || 0)) latest[e.WO_ID] = e;
+  }
+  const since = Date.parse(sinceISO) || 0, nowMs = now.getTime(), out = [];
+  for (const woId of Object.keys(latest)) {
+    const e = latest[woId], st = String(e.Status || 'Pending');
+    const created = Date.parse(e.Created_Date || '') || 0;
+    if (created < since) continue;
+    if (nowMs - created < REMINDER_MIN_AGE_HOURS * 3600000) continue;
+    if (st === 'Needs Info') {
+      const flagged = Date.parse(e.Needs_Info_Date || '') || 0;
+      if (!flagged || nowMs - flagged < NEEDS_INFO_RESUME_DAYS * 86400000) continue;
+    } else if (st !== 'Pending' && st !== '') continue;
+    const wo = (workorders || []).find(w => w.ID === woId);
+    if (!wo || wo.Voided === 'TRUE' || CLOSED.includes(String(wo.Status || ''))) continue;
+    out.push({ wo_id: woId, estimate: e, wo });
+  }
+  return out.sort((a, b) => String(a.estimate.Created_Date).localeCompare(String(b.estimate.Created_Date)));
+}
+function etDateString(date) { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(date); }
+// Runs from cronSweep (every 15 min). Sends ONE digest text per day, in the 8am ET hour, only when
+// something is awaiting a decision. Claims the day BEFORE sending, so a double-firing sweep (the
+// GitHub Actions path and the Cloudflare cron both call cronSweep) can never text twice.
+async function processEstimateReminders(env, nowArg) {
+  const now = nowArg || new Date();
+  if (etHour(now) !== 8) return { skipped: 'not the 8am ET hour' };
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  const today = etDateString(now);
+  if (cfg.estimate_reminder_last_date === today) return { skipped: 'already sent today' };
+  const [ests, wos, vendors] = await Promise.all([fetchTab(env, 'Estimates'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors')]);
+  const pending = estimatesAwaitingDecision(ests, wos, now, cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
+  if (!pending.length) return { count: 0 };
+  try { await setConfigKey(env, { key: 'estimate_reminder_last_date', value: today }); } catch (_) { return { skipped: 'could not claim the day' }; }
+  const list = pending.slice(0, 5).map(p => {
+    const v = vendors.find(x => x.ID === (p.estimate.Vendor_ID || p.wo.Vendor_ID));
+    return p.wo_id + (v ? ' ' + (v.First_Name || v.Name || '') : '') + ' $' + fmtMoney(p.estimate.Subtotal);
+  }).join(', ') + (pending.length > 5 ? ' +' + (pending.length - 5) + ' more' : '');
+  const r = await sendTemplatedSms(env, { type: 'admin_estimate_reminder', kind: 'admin', bypassQuietHours: true, tokens: { Count: pending.length, List: list } });
+  return { count: pending.length, sent: !!(r && r.sent), gate: r && r.gate_snapshot };
+}
+// Deposit invoice for a signed scope: the legacy signature invoice, else the earliest billed milestone.
+async function scopeDepositInvoiceId(env, scopeId) {
+  const sigs = (await fetchTab(env, 'Scope_Signatures')).filter(x => x.Scope_ID === String(scopeId) && String(x.Active || '').toUpperCase() !== 'FALSE');
+  if (!sigs.length) return { sig: null, invoiceId: '' };
+  const sig = sigs[sigs.length - 1];
+  if ((sig.QB_Invoice_ID || '').trim()) return { sig, invoiceId: sig.QB_Invoice_ID.trim() };
+  let ms = []; try { ms = (await fetchTab(env, 'Payment_Milestones')).filter(m => m.Signature_ID === String(sig.ID) && m.Active !== 'FALSE' && (m.QB_Invoice_ID || '').trim()); } catch (_) {}
+  ms.sort((a, b) => (parseInt(a.Sequence) || 0) - (parseInt(b.Sequence) || 0));
+  return { sig, invoiceId: ms.length ? ms[0].QB_Invoice_ID.trim() : '' };
+}
+// Pre-approved -> Approved + the two "deposit paid" texts. The stage check makes it idempotent, so
+// the 15-minute sweep and the daily QuickBooks sync can both call it. Texts are skipped for
+// signings older than the SMS cut-over so backfilled history never fires.
+async function scopeDepositPaidTransition(env, scopeId, sinceISO) {
+  const scope = (await fetchTab(env, 'Scopes')).find(x => x.ID === String(scopeId));
+  if (!scope || String(scope.Approval_Stage || '') !== 'Pre-approved') return { changed: false };
+  const { sig } = await scopeDepositInvoiceId(env, scopeId);
+  await setApprovalStage(env, { woId: scope.WO_ID || '', scopeId: scope.ID, stage: 'Approved' });
+  const recent = sig && (Date.parse(sig.Signed_TS || sig.Signed_Date || '') || 0) >= (Date.parse(sinceISO) || 0);
+  if (!recent) return { changed: true, texted: false };
+  const c = await estimateSmsContext(env, scope.WO_ID || '', scope.Vendor_ID);
+  const job = scope.WO_ID ? ('work order ' + scope.WO_ID) : ('proposal #' + scope.ID);
+  await sendTemplatedSms(env, { type: 'admin_deposit_paid', kind: 'admin', wo_id: scope.WO_ID || '', property: c.property, tokens: { Job: job, Address: c.address } });
+  if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_deposit_paid', kind: 'vendor', vendor: c.vendor, wo_id: scope.WO_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
+  return { changed: true, texted: true };
+}
+// Fast sweep (cronSweep, every 15 min): only touches QuickBooks when a Pre-approved scope exists.
+async function processDepositPaidSweep(env) {
+  const scopes = (await fetchTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved' && x.Active !== 'FALSE');
+  if (!scopes.length) return { checked: 0 };
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  const since = cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE;
+  const token = await qbAccessToken(env);
+  const res = [];
+  for (const sc of scopes) {
+    try {
+      const { invoiceId } = await scopeDepositInvoiceId(env, sc.ID);
+      if (!invoiceId) continue;
+      const r = await qbApi(env, 'invoice/' + encodeURIComponent(invoiceId) + '?minorversion=73', 'GET', null, token);
+      const inv = r && r.Invoice; if (!inv) continue;
+      if ((Number(inv.TotalAmt) || 0) > 0 && (Number(inv.Balance) || 0) <= 0.005) res.push({ scope: sc.ID, ...(await scopeDepositPaidTransition(env, sc.ID, since)) });
+    } catch (e) { res.push({ scope: sc.ID, error: String((e && e.message) || e).slice(0, 120) }); }
+  }
+  return { checked: scopes.length, results: res };
+}
+// POST /estimate/needs-info { wo_id } and POST /estimate/decline { wo_id, reason? } — admin-only.
+async function flagEstimate(env, body, kind) {
+  const woId = body && body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
+  const all = await fetchTab(env, 'Estimates');
+  const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
+  if (!versions.length) return json({ error: 'No estimate found for this WO' }, 404);
+  const latest = versions.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  const st = String(latest.Status || 'Pending');
+  if (!['Pending', 'Needs Info'].includes(st)) return json({ error: `That estimate is "${st}" — only a pending estimate can be flagged ${kind === 'decline' ? 'declined' : 'needs-info'}.` }, 409);
+  try { await ensureColumns(env, 'Estimates', ['Needs_Info_Date', 'Declined_Date', 'Decline_Reason']); } catch (_) {}
+  const now = new Date().toISOString();
+  await updateRow(env, 'Estimates', latest.ID, kind === 'decline'
+    ? { Status: 'Declined', Declined_Date: now, Decline_Reason: String(body.reason || '').slice(0, 300) }
+    : { Status: 'Needs Info', Needs_Info_Date: now });
+  if (kind === 'decline') await setApprovalStage(env, { woId, stage: '' });
+  const r = await notifyVendorTemplated(env, kind === 'decline' ? 'vendor_estimate_declined' : 'vendor_estimate_needs_info', woId, latest.Vendor_ID);
+  return json({ success: true, wo_id: woId, status: kind === 'decline' ? 'Declined' : 'Needs Info', vendor_notified: !!(r && r.sent), vendor_sms: r && (r.sent ? 'sent' : (r.gate_snapshot || r.reason || 'not sent')),
+    resumes_reminders_after_days: kind === 'decline' ? null : NEEDS_INFO_RESUME_DAYS });
+}
+const estimateNeedsInfo = (env, body) => flagEstimate(env, body, 'needs-info');
+const estimateDecline = (env, body) => flagEstimate(env, body, 'decline');
+
 // ── APPROVAL STAGE (Sep 28 2026, FEATURE_LOG rule 200) ─────────────────────────────────────────
 // One field — Approval_Stage — on Work_Orders AND Scopes, so Brett can filter jobs/proposals that
 // still need an approval step without opening each one. Stages: Estimated (vendor submitted, waiting
@@ -8825,7 +8995,7 @@ async function listEstimates(env, url) {
 // Best-effort: a stage write must never fail the real action (approve / sign / push).
 const APPROVAL_STAGES = ['Estimated', 'Proposed', 'Pre-approved', 'Approved'];
 async function setApprovalStage(env, { woId, scopeId, stage, onlyFrom }) {
-  if (!APPROVAL_STAGES.includes(stage)) return false;
+  if (stage !== '' && !APPROVAL_STAGES.includes(stage)) return false; // '' clears (declined)
   let ok = false;
   try {
     if (woId) {
@@ -8957,10 +9127,10 @@ async function approveEstimate(env, body) {
   Object.entries(optionalCols).forEach(([colName, val]) => { const idx = headers.indexOf(colName); if (idx > -1) batch.push({ range: `Estimates!${colLetter(idx)}${sheetRow}`, values: [[val]] }); });
   await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batch });
   await setApprovalStage(env, { woId, stage: 'Approved' });
-  if (latest.Vendor_ID) {
-    try { const vendors = await fetchTab(env, 'Vendors'); const vendor = vendors.find(v => v.ID === latest.Vendor_ID); if (vendor?.Phone) { const msg = requestDeposit ? `Estimate approved for WO ${woId} ($${latest.Subtotal}). Deposit being requested from customer — we'll confirm once received.` : `Estimate approved for WO ${woId} ($${latest.Subtotal}). You're clear to proceed — no deposit required for this job.`; await sendSMS(env, vendor.Phone, msg); } } catch(e) {}
-  }
-  return json({ success: true, requestDeposit });
+  // Vendor text via the gated, editable template path (no dollar amounts — FEATURE_LOG rule 201).
+  let vendorSms = null;
+  if (latest.Vendor_ID) { try { vendorSms = await notifyVendorTemplated(env, requestDeposit ? 'vendor_estimate_approved_deposit' : 'vendor_estimate_approved', woId, latest.Vendor_ID); } catch (e) {} }
+  return json({ success: true, requestDeposit, vendor_sms: vendorSms ? (vendorSms.sent ? 'sent' : (vendorSms.gate_snapshot || vendorSms.reason || 'not sent')) : 'no vendor' });
 }
 
 // POST /wo/deposit-approve { wo_id, vendor_id?, amount, notes? }
@@ -9117,6 +9287,14 @@ async function addEstimateVersion(env, body) {
       await setApprovalStage(env, { woId, stage: 'Estimated' });
     }
   } catch (_) {}
+  // Text Brett about a vendor-posted estimate (not one he typed himself in the Hub). Best-effort.
+  if (!/^(admin|hub|brett)$/i.test(String(body.created_by || ''))) {
+    try {
+      const c = await estimateSmsContext(env, woId, body.vendor_id);
+      await sendTemplatedSms(env, { type: 'admin_estimate_new', kind: 'admin', wo_id: woId, property: c.property,
+        tokens: { Kind: nextVersion > 1 ? 'Revised estimate' : 'New estimate', WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
+    } catch (_) {}
+  }
   return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
 }
 
@@ -11244,18 +11422,57 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal ({PortalUrl}) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)" },
   { Message_Type: 'property_notice', Channel: 'sms', Subject: '', Body:
     "This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}, with an update about {Address}: [describe the issue here] (This line is outbound-only for now - a reply won't reach us.)" },
+  // Estimate / proposal notifications (Sep 28 2026, FEATURE_LOG rule 201). Editable in Message_Templates.
+  // Vendor texts deliberately contain NO dollar amounts. {Job} is "work order WO-1234" or "proposal #7".
+  { Message_Type: 'admin_estimate_new', Channel: 'sms', Subject: '', Body:
+    "{Kind} on {WO} ({Address}) from {Vendor}: ${Amount}. Approve, decline, ask for more info, or push to proposal: {HubUrl}" },
+  { Message_Type: 'admin_estimate_reminder', Channel: 'sms', Subject: '', Body:
+    "{Count} estimate(s) waiting on your decision: {List}. Approve, decline, mark needs-info, or push to proposal: {HubUrl}" },
+  { Message_Type: 'admin_proposal_signed', Channel: 'sms', Subject: '', Body:
+    "Proposal signed by {Signer} for {Job} ({Address}). Waiting on the deposit payment." },
+  { Message_Type: 'admin_deposit_paid', Channel: 'sms', Subject: '', Body:
+    "Deposit paid for {Job} ({Address}). Proposal is now Approved." },
+  { Message_Type: 'vendor_estimate_approved', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, your estimate for work order {WO} has been approved. You're clear to proceed." },
+  { Message_Type: 'vendor_estimate_approved_deposit', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, your estimate for work order {WO} has been approved. A deposit is being requested from the customer - we'll confirm once it's received." },
+  { Message_Type: 'vendor_estimate_declined', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, Ridge Co won't be moving forward with your estimate for work order {WO}. Thank you for sending it." },
+  { Message_Type: 'vendor_estimate_needs_info', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, Ridge Co needs a bit more information on your estimate for work order {WO}. Please check your vendor portal or call us." },
+  { Message_Type: 'vendor_proposal_signed', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, the owner has signed the proposal for {Job}. Pending deposit payment - we'll text you when it's paid." },
+  { Message_Type: 'vendor_deposit_paid', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, proposal approved for {Job}: the DEPOSIT for {Job} has been paid to RidgeCo. (This is the deposit only - not your final invoice payment.)" },
   { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
+let _msgTemplatesToppedUp = false;
+// ONE batched append for every missing default (a per-row addRow loop burned the Sheets write quota
+// on first use — staging Sep 28 2026 dropped the first text because of it). Never touches an
+// existing row, so an edit Brett made is never overwritten. Also covers the empty-tab first seed.
+async function appendMissingTemplates(env, existingRows) {
+  const missing = DEFAULT_MESSAGE_TEMPLATES.filter(t => !existingRows.some(r => r.Message_Type === t.Message_Type && r.Channel === t.Channel));
+  if (!missing.length) return 0;
+  const hdrResp = await sheetsRequest(env, 'GET', `/values/${MSG_TEMPLATES_TAB}!1:1`);
+  const headers = (hdrResp.values && hdrResp.values[0]) || MSG_TEMPLATES_COLS;
+  let nextId = existingRows.reduce((m, r) => Math.max(m, parseInt(r.ID, 10) || 0), 0);
+  const now = new Date().toISOString();
+  const values = missing.map(t => {
+    const row = { ID: String(++nextId), Message_Type: t.Message_Type, Channel: t.Channel, Subject: t.Subject, Body: t.Body, Active: 'TRUE', Updated_Date: now, Updated_By: 'system_default' };
+    return headers.map(h => row[h] ?? '');
+  });
+  await sheetsRequest(env, 'POST', `/values/${MSG_TEMPLATES_TAB}:append?valueInputOption=RAW`, { values });
+  __tabCache.delete(MSG_TEMPLATES_TAB);
+  return values.length;
+}
 async function ensureMessageTemplates(env) {
   if (!_msgTemplatesReady) { await ensureTab(env, MSG_TEMPLATES_TAB, MSG_TEMPLATES_COLS); _msgTemplatesReady = true; }
   await ensureColumns(env, MSG_TEMPLATES_TAB, MSG_TEMPLATES_COLS);
   const rows = await fetchTab(env, MSG_TEMPLATES_TAB);
-  if (!rows.length) {
-    const now = new Date().toISOString();
-    for (const t of DEFAULT_MESSAGE_TEMPLATES) {
-      await addRow(env, MSG_TEMPLATES_TAB, { Message_Type: t.Message_Type, Channel: t.Channel, Subject: t.Subject, Body: t.Body, Active: 'TRUE', Updated_Date: now, Updated_By: 'system_default' });
-    }
+  if (!_msgTemplatesToppedUp || !rows.length) {
+    await appendMissingTemplates(env, rows);
+    _msgTemplatesToppedUp = true;
   }
 }
 function renderTemplate(body, tokens) {
@@ -11338,7 +11555,7 @@ async function smsGatedSend(env, opts) {
   const vendorOptOut = String((opts.vendor && opts.vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
   const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
 
-  const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : opts.vendor;
+  const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : kind === 'admin' ? opts.admin : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
   const recipientName = recipient ? (recipient.Name || `${recipient.First_Name || ''} ${recipient.Last_Name || ''}`.trim()) : '';
 
@@ -11657,6 +11874,8 @@ async function cronSweep(env) {
   const out = { ok: true, ts: now.toISOString() };
   try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
+  try { out.estimate_reminders = await processEstimateReminders(env); } catch (e) { out.estimate_reminders = { error: String((e && e.message) || e) }; }
+  try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; }
   try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
   try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
   try { out.dead_man_switch = await checkDeadManSwitch(env); } catch (e) { out.dead_man_switch = { error: String((e && e.message) || e) }; }
@@ -16727,7 +16946,7 @@ async function hubTestWriteAllowed(env, path, body) {
   // all key off a wo_id; the payment-schedule write keys off a scope_id. Same gate as /status —
   // the target WO (or the Scope's own Property) must resolve to a TEST- Property, so this token
   // can never create/approve an estimate, push to a Scope, or edit a schedule on a real record.
-  if (path === '/estimate' || path === '/estimate/approve' || path === '/wo/push-to-scope') {
+  if (path === '/estimate' || path === '/estimate/approve' || path === '/estimate/needs-info' || path === '/estimate/decline' || path === '/wo/push-to-scope') {
     const wos = await fetchTab(env, 'Work_Orders');
     const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
     if (!wo) return false;
@@ -17686,10 +17905,9 @@ async function qbSyncPayments(env, body) {
       try {
         const sigs = await fetchTab(env, 'Scope_Signatures');
         const sig = sigs.find(x => x.ID === r.signature_id);
-        const scId = sig && sig.Scope_ID;
-        if (scId) {
-          const sc = (await fetchTab(env, 'Scopes')).find(x => x.ID === scId);
-          if (sc && String(sc.Approval_Stage || '') === 'Pre-approved') await setApprovalStage(env, { woId: sc.WO_ID || '', scopeId: scId, stage: 'Approved' });
+        if (sig && sig.Scope_ID) {
+          let cfgS = {}; try { cfgS = await fetchConfig(env); } catch (_) {}
+          await scopeDepositPaidTransition(env, sig.Scope_ID, cfgS.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
         }
       } catch (e) { /* non-fatal */ }
     }
