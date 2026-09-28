@@ -1868,7 +1868,13 @@ async function addReceipt(env, body) {
 // the PO, rank that property's OPEN work orders by keyword overlap, and raise duplicate /
 // already-invoiced guards. READ-ONLY; suggests, never writes. The only AI in the whole pipeline is
 // the one cheap per-image OCR (receiptExtract) that produces this input.
-function _rcNorm(s){ return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
+// Strip apostrophes to NOTHING before the general non-alnum-to-space pass, not just fold them
+// into a space — "Lowe's" and "Lowes" must normalize identically. Sep 28 2026 fix: an apostrophe
+// falling into the generic [^a-z0-9] class turned "Lowe's" into "lowe s" (two tokens), which
+// then no longer contained "lowes" as a substring — "lowes" and "lowe's" returned different
+// receipt-recon search results for the same store. See matching fix in receipt-reconciler.html's
+// _clientNorm (same bug, client-side queue filter).
+function _rcNorm(s){ return String(s==null?'':s).toLowerCase().replace(/'/g, '').replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
 
 // PURE — resolve the property a receipt's PO/handwritten note points to, by token overlap on the
 // street address. A matched house-number is weighted double (it disambiguates same-street units).

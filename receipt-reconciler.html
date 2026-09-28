@@ -424,7 +424,10 @@ function toggleFilterBar(show){
   const bar = document.getElementById('rc-filter-bar');
   if (bar) bar.style.display = show ? 'flex' : 'none';
 }
-function _clientNorm(s){ return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
+// Strip apostrophes to NOTHING first — same fix as worker.js's _rcNorm (Sep 28 2026): folding
+// an apostrophe into a space turned "Lowe's" into "lowe s", so filtering the Pending queue for
+// "lowes" no longer matched a "Lowe's" row (and vice versa).
+function _clientNorm(s){ return String(s==null?'':s).toLowerCase().replace(/'/g, '').replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
 function filterQueueRows(text){
   const t = _clientNorm(text);
   if (!t) return lastQueueRows;
