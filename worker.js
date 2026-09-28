@@ -16209,7 +16209,7 @@ async function hubTestWriteAllowed(env, path, body) {
     // reasoning as the duplicate-audit paths above, no protected record to gate on.
     return true;
   }
-  if (path === '/receipt-recon/mark-refund-confirmed') {
+  if (path === '/receipt-recon/mark-refund-confirmed' || path === '/receipt-recon/undo') {
     // Can void a real Receipts row for a 'confirmed' queue row — resolve it the same way
     // findReceiptForQueueRow does and require that Receipts row's own Property to be TEST-.
     const rows = await fetchTab(env, 'Receipt_Recon_Queue');
