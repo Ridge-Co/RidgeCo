@@ -34,7 +34,7 @@ let pass = 0, fail = 0;
 const t = (n, c) => { if (c) { pass++; } else { fail++; console.log('  ✗ FAIL:', n); } };
 
 // ── Pure mapping helper, tested in isolation first (no Sheets involved) ─────────────────────
-const scopeItemsFromEstimate = new Function(grab('function scopeItemsFromEstimate(') + '\nreturn scopeItemsFromEstimate;')();
+const scopeItemsFromEstimate = new Function(grab('function englishOnly(') + '\n' + grab('function estimateLinesEnglish(') + '\n' + grab('function scopeItemsFromEstimate(') + '\nreturn scopeItemsFromEstimate;')();
 
 console.log('scopeItemsFromEstimate — pure mapping tests\n');
 {
