@@ -3177,9 +3177,13 @@ async function receiptReconMarkRefund(env, body) {
 // or expensed and route it into the refund flow instead. Reuses the exact Pending refund UI
 // (find matching purchase / post as a negative expense) rather than a second parallel posting
 // path: if it was actually billed (Status 'confirmed'), the original Receipts row is voided
-// (same not-yet-sent-to-QuickBooks guard as reassign above) and the queue row drops back to
-// Pending with Manual_Refund set. An 'attached_only' row never billed anything in the first
-// place (see receiptAttachOnly) — nothing to void, it just goes back to Pending flagged.
+// (same not-yet-sent-to-QuickBooks guard as reassign above), its dollar amount is pulled back OUT
+// of whatever Invoice_Review row it was folded into, and its WO-gallery Attachments row is voided
+// too (Sep 28 2026 fix — voidConfirmedReceiptForQueueRow — this used to only void the Receipts
+// row itself and silently leave the amount sitting on the customer invoice and the image sitting
+// in the gallery). The queue row drops back to Pending with Manual_Refund set. An 'attached_only'
+// row never billed anything in the first place (see receiptAttachOnly) — voidConfirmedReceiptForQueueRow
+// still runs for it (harmless no-op on the Invoice_Review side) so its gallery attachment is voided too.
 async function receiptReconMarkRefundConfirmed(env, body) {
   const id = body.id; if (!id) return json({ error: 'id required' }, 400);
   const rows = await fetchTab(env, 'Receipt_Recon_Queue');
@@ -3187,27 +3191,46 @@ async function receiptReconMarkRefundConfirmed(env, body) {
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (!['confirmed', 'attached_only'].includes(row.Status)) return json({ error: `only a confirmed or attached-only receipt can be marked as a refund this way (this one is ${row.Status || 'pending'})` }, 409);
 
-  await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
-  let voidedId = null;
-  if (row.Status === 'confirmed') {
-    const original = await findReceiptForQueueRow(env, row);
-    if (!original) return json({ error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.' }, 404);
-    if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
-      return json({ error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here.` }, 409);
-    }
-    await updateRow(env, 'Receipts', original.ID, {
-      Active: 'FALSE',
-      Description: (original.Description || '') + ` [marked refund ${new Date().toISOString().slice(0, 10)} — pulled back into Receipt Reconciler for reversal]`,
-    });
-    voidedId = original.ID;
-  }
+  const result = await voidConfirmedReceiptForQueueRow(env, row, 'marked refund');
+  if (result.error) return json({ error: result.error }, result.status);
 
   await updateRow(env, 'Receipt_Recon_Queue', id, {
     Status: 'pending', Manual_Refund: 'TRUE',
     Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
     Notes: `Marked as a refund ${new Date().toISOString().slice(0, 10)} — was ${row.Status}.`,
   });
-  return json({ ok: true, id, voided_receipt_id: voidedId });
+  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid });
+}
+
+// POST /receipt-recon/undo { id } — Sep 28 2026, Brett: "need to make it reversible... need to be
+// able to reverse the amount added to the invoice/work order plus reverse the attachment of the
+// image/pdf/file. this can live in the receipts reconciler." Two named use cases: a mistaken
+// confirm, or a duplicate that slipped through unnoticed. Deliberately distinct from Mark-as-
+// refund above — that one assumes money is genuinely coming back and routes the row into the
+// refund-posting flow (Manual_Refund: TRUE). Undo makes no assumption about why: it cleanly
+// unwinds everything the confirm/attach-only wrote (voids the Receipts row, pulls its amount back
+// out of Invoice_Review, voids its Attachments gallery row) and drops the queue row back to a
+// plain, unflagged Pending — ready to be re-confirmed correctly, or marked a duplicate via the
+// existing /receipt-recon/confirm-duplicate flow. Same not-yet-emailed-to-QuickBooks guard as
+// Reassign/Mark-refund-confirmed — once QuickBooks already has it, this refuses and points at
+// QuickBooks directly rather than silently leaving it out of sync.
+async function receiptReconUndo(env, body) {
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (!['confirmed', 'attached_only'].includes(row.Status)) return json({ error: `only a confirmed or attached-only receipt can be undone (this one is ${row.Status || 'pending'})` }, 409);
+
+  const result = await voidConfirmedReceiptForQueueRow(env, row, 'undone');
+  if (result.error) return json({ error: result.error }, result.status);
+
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Manual_Refund']);
+  await updateRow(env, 'Receipt_Recon_Queue', id, {
+    Status: 'pending', Manual_Refund: 'FALSE',
+    Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
+    Notes: `Undone ${new Date().toISOString().slice(0, 10)} — was ${row.Status}. Re-confirm it correctly, or use "Confirm duplicate" if it turns out to be one.`,
+  });
+  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid });
 }
 
 // GET /receipt-recon/search?q=<amount|store|description text>&date=<yyyy-mm-dd> — Brett, Sep 23
