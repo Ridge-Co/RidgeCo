@@ -9397,11 +9397,11 @@ async function logWOAuditMany(env, entries) {
 
 // Thin wrapper matching logWOAudit's shape, for the message-send call sites (smsGatedSend,
 // sendVendorInvoiceConfirmationEmail) instead of the field-edit shape.
-async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, recipientName, recipientType, messageType, messageBody, outcome, notes }) {
+async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, recipientName, recipientType, messageType, messageBody, outcome, notes, originalBody, translatedTo }) {
   return logWOAuditMany(env, [{
     woId, changedBy: changedBy || 'System', changedByRole: changedByRole || 'system',
     field: channel === 'email' ? 'Email' : 'SMS', oldValue: '', newValue: '',
-    notes: notes || '', channel, recipientName, recipientType, messageType, messageBody, outcome,
+    notes: notes || '', channel, recipientName, recipientType, messageType, messageBody, outcome, originalBody, translatedTo,
   }]);
 }
 
