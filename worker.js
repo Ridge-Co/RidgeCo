@@ -3845,6 +3845,60 @@ async function backfillScopeWOVendor(env) {
   return json({ success: true, scopes_checked: scopesChecked, wo_vendor_backfilled: updated, details });
 }
 
+// POST /admin/backfill-receipt-attachments { apply?: true } — one-time (idempotent, safe to
+// re-run) backfill for the Sep 28 2026 fix in addReceipt() above: every past Receipts row that
+// has a WO_ID and a scanned image (Source_File_ID/Source_File_URL) but was written before that
+// fix never got a matching Attachments row, so its image is invisible on the WO detail gallery
+// and the owner portal even though it's fully billed and fully on file (Brett — WO-1229/Amanda's
+// garbage disposal was the case that surfaced this; this sweeps every WO, not just that one, per
+// his "past, future" instruction). Read-mostly by default: with no body or apply:false/omitted it
+// only PREVIEWS what it would create (counts + a details list), so the actual write is a second,
+// explicit call — matches Brett's verify-before-build habit for anything touching ~90+ rows at
+// once. Idempotent via the same Receipt_ID link the live fix writes: a Receipts row already
+// linked to an Attachments row (by ID, not by guessing from WO_ID/date/store) is never touched
+// again, so re-running this after new receipts come in only picks up the new ones.
+async function backfillReceiptAttachments(env, body) {
+  const apply = !!(body && body.apply === true);
+  const [receipts, attachments] = await Promise.all([
+    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTab(env, 'Attachments').catch(() => []),
+  ]);
+  const alreadyLinked = new Set(
+    attachments.filter(a => String(a.File_Type || '').toLowerCase() === 'receipt' && a.Receipt_ID)
+      .map(a => String(a.Receipt_ID))
+  );
+  let scanned = 0, eligible = 0, created = 0; const details = [];
+  for (const r of receipts) {
+    if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+    scanned++;
+    if (!r.WO_ID) continue;
+    const hasFile = r.Source_File_ID || r.Source_File_URL;
+    if (!hasFile) continue;
+    if (alreadyLinked.has(String(r.ID))) continue;
+    eligible++;
+    details.push({ receipt_id: r.ID, wo_id: r.WO_ID, store: r.Store || '', date: r.Date || '', amount: r.Amount || '' });
+    if (apply) {
+      try {
+        await ensureColumns(env, 'Attachments', ['Receipt_ID']);
+        await addRow(env, 'Attachments', {
+          WO_ID: r.WO_ID, File_Name: ((r.Store || 'Receipt') + (r.Date ? ' ' + r.Date : '')).trim(),
+          File_Type: 'receipt', Drive_File_ID: r.Source_File_ID || '', Drive_URL: r.Source_File_URL || '',
+          Mime_Type: '', Receipt_ID: String(r.ID),
+          Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
+        });
+        created++;
+      } catch (e) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_backfill', Skill_Or_Endpoint: '/admin/backfill-receipt-attachments', Success: 'FALSE', Notes: `receipt_id=${r.ID} wo_id=${r.WO_ID} err=${String(e && e.message || e)}` }); } catch (_) {}
+      }
+    }
+  }
+  return json({
+    success: true, applied: apply, receipts_scanned: scanned,
+    eligible_missing_gallery_attachment: eligible, attachments_created: apply ? created : 0,
+    details: details.slice(0, 500),
+  });
+}
+
 // Marks up every item's variant(s) SERVER-SIDE (calcTieredEstimate, per item — each option is
 // priced on its own merits, e.g. a small item doesn't inherit a big job's tier) and picks the
 // default-selected variant per item to compute a subtotal/deposit. Returns vendor_cost alongside
