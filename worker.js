@@ -3476,6 +3476,7 @@ function scopeItemsFromEstimate(lineItems, existingItems) {
       id, area: '', trade: '', description, qty: '', note: '',
       variants: [{ key: 'v1', label: '', vendor_cost: +amount.toFixed(2), price_override: null }],
       selected_key: 'v1',
+      ...(li.desc_orig ? { description_orig: String(li.desc_orig) } : {}),
     });
   }
   return out;
