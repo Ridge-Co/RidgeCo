@@ -1254,6 +1254,7 @@ function renderVendorReceipts(woId, idx, receipts) {
   var wrap = document.getElementById('receipt-wrap-' + idx);
   if (!wrap) return;
   var today = new Date().toISOString().split('T')[0];
+  var propAddr = (window._wos && window._wos[idx]) ? (window._wos[idx].property_address || '') : '';
   var total = receipts.reduce(function(s,r){ return s+(parseFloat(r.Amount)||0); }, 0);
   // Defaults to Ridge Co card per Brett's standing rule — every receipt is assumed to be a
   // company-card purchase unless the vendor explicitly flags it as their own money.
