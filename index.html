@@ -4165,7 +4165,7 @@ var onOwnerCardUpload = bindContactCardFields({first:'ao-first', last:'ao-last',
 var onTenantCardUpload = bindContactCardFields({first:'mi-first', last:'mi-last', phone:'mi-phone', email:'mi-email', status:'mi-card-status'});
 
 // ── Add Vendor ───────────────────────────────────────────────
-function openAddVendorModal(){openModal('modal-add-vendor');}
+function openAddVendorModal(){var l=document.getElementById('v-language');if(l)l.value='en';openModal('modal-add-vendor');}
 function submitAddVendor(){
   var trades = Array.from(document.querySelectorAll('.v-trade-check:checked')).map(function(c){return c.value;}).join(',');
   var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Vendor_Type:document.getElementById('v-type').value||'labor',Payment_Address:document.getElementById('v-payaddr').value.trim(),Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE',Billing_Email:document.getElementById('v-billing-email').value.trim(),Billing_Address:document.getElementById('v-billing-address').value.trim(),Tax_ID:document.getElementById('v-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('v-tax-doc-url').value.trim()};
