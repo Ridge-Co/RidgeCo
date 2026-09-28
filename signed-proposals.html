@@ -494,6 +494,12 @@ function confirmMilestoneBill(btn,overridePendingInfo){
       toast('Billed in QuickBooks');
       if(curMs) msSelections[curMs.sigId]=[];
       load();
+    } else if(r&&r.pending_info&&!overridePendingInfo){
+      // CAP-036 #14: soft block, not a dead end — Brett is the only approver here, so a
+      // deliberate way through has to exist rather than leaving this permanently stuck.
+      btn.disabled=false;btn.textContent='Confirm — bill in QuickBooks';
+      document.getElementById('m-body').innerHTML+='<div class="warn">⏳ '+esc(r.error||'Selected milestone(s) are flagged Pending Info.')+'</div>'
+        +'<div style="margin-top:8px"><button class="btn" style="border-color:var(--red);color:var(--red)" onclick="confirmMilestoneBill(this,true)">Bill anyway</button></div>';
     } else {
       btn.disabled=false;btn.textContent='Confirm — bill in QuickBooks';
       document.getElementById('m-body').innerHTML+='<div class="warn">⚠ '+esc((r&&r.error)||'Failed')+'</div>';
