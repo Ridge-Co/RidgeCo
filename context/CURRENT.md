@@ -1,3 +1,11 @@
+# Sep 26, 2026, ~18:10 ET — 🟢 LIVE: BrettOS Tasks Manager quick-link on Dashboard + Dev Log (PR #76 → staging, PR #77 → main, both merged)
+
+FEATURE_LOG rule 198 (`[FL-20260926-2210-tm]`). Added a "🗒️ Tasks Manager" button to the Dashboard (Command Center) and the Dev Log tools group, linking straight to the deployed BrettOS Tasks Manager Apps Script web app — Brett can now reach it in one tap from the Hub, no bookmark needed. UI-only, no `worker.js` change, so this shipped straight to `main` same session (no interim staging-only period needed). Live-verified by fetching `https://ridge-co.github.io/RidgeCo/` directly and confirming both button strings are present in the served HTML.
+
+This session's real work was mostly on the Tasks Manager itself (`brett332/BrettOS` repo, separate Apps Script project) — multi-list auto-categorization, a learned-rule review web page, and a `clasp` + GitHub Actions auto-deploy pipeline (mirroring this repo's own Cloudflare Workers Builds pattern) — full detail in the claude.ai "Continuous Improvement" Project's `task-capture-tasks-sheet-sync.md`, not this repo, since that system is bound to the BrettOS Tasks Sheet, not this Hub's Sheet/Worker.
+
+---
+
 # Sep 26, 2026, ~12:50 ET — BUILT + STAGING-VERIFIED (PR to `main` open, NOT merged): Owner self-serve onboarding link, owner billing address, commercial property type, Add Property "fields persist" fix
 
 Full brief: `context/OWNER_SELF_ONBOARDING_BUILD_BRIEF_v1.0.md`; FEATURE_LOG `[FL-20260926-1245-oo]`. Brett sends a single-use link (Hub → Owners → 📨 Owner Onboarding Link); the owner enters name / business-or-name (required choice) / contact phone / billing email / billing address / PIN (3 letters + 5 digits — the platform's existing owner PIN format) / properties (address, city, type, unit count; commercial + retail/mixed use/industrial/office) / units (occupied → tenant name+phone, vacant → lockbox+code or no-lockbox+note, or "provide later" — at least one resolved unit overall) / optional unchecked SMS-permission box, and it lands in Owners, Properties, Units, Tenants, Keys with SMS off on new properties/tenants. Admin gets an SMS summary; the invite list shows a Needs-review flag with reasons. Add Property now resets every field on open (it never did before). Owners have billing-address fields in Add/Edit Owner.
