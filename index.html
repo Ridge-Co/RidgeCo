@@ -14104,6 +14104,19 @@ function saveEditedReceipts(billId, woId) {
 
 
 
+// Vendor free text stored as "[ES] original [EN] english" (multi-line or inline) → English first,
+// original beneath (Sep 28 2026). Untagged text is just escaped. enOnly() is the plain-string half
+// for anything that feeds a customer-facing memo.
+function enOnly(s) {
+  var t = String(s == null ? '' : s), m = t.match(/\[EN\]\s*([\s\S]*)$/);
+  return (m && m[1].trim()) ? m[1].trim() : t.replace(/^\[ES\]\s*/, '');
+}
+function renderVendorText(s) {
+  var t = String(s == null ? '' : s), m = t.match(/^([\s\S]*?)\[ES\]\s*([\s\S]*?)\s*\[EN\]\s*([\s\S]*)$/);
+  if (!m) return esc(t);
+  return (m[1].trim() ? esc(m[1].trim()) + '<br>' : '') + '<span class="vt-en">' + esc(m[3].trim()) + '</span><div class="vt-es" style="color:var(--muted);font-size:10.5px;margin-top:2px">Original (ES): ' + esc(m[2].trim()) + '</div>';
+}
+
 // ── Render notes with [ES]/[EN] translation tags ──────────────
 function renderNoteLines(notesText) {
   if (!notesText) return '';
