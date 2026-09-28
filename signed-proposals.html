@@ -227,12 +227,19 @@ function load(){
         html+='<div style="margin-top:10px">';
         r.milestones.forEach(function(m){
           var billed=m.status==='billed';
+          // CAP-036 #14: "Invoiced — Pending Info" also covers Scope Proposal / milestone
+          // billing (Brett confirmed this explicitly). A pending milestone can be flagged
+          // here — soft-blocks billing it (see confirmMilestoneBill's pending_info branch)
+          // until cleared or deliberately overridden.
+          var flagged=!!m.pending_info;
           html+='<label class="row" style="gap:8px;padding:6px 0;border-bottom:1px dotted var(--line);'+(billed?'opacity:.6':'')+'">'
             +'<input type="checkbox"'+(billed?' disabled':(' onchange="toggleMilestone(\''+esc(r.id)+'\',\''+esc(m.id)+'\',this.checked)"'))+'>'
             +'<span style="flex:1">'+esc(m.label)+' <span class="muted">('+m.percent+'%'+(m.trigger==='upfront'?' · upfront':m.trigger==='completion'?' · completion':'')+')</span></span>'
             +'<span>'+money(m.customer_amount)+'</span>'
-            +'<span class="chip '+(billed?'booked':'signed')+'" style="margin-left:2px">'+(billed?'billed':'pending')+(billed&&m.qb_invoice_number?(' #'+esc(m.qb_invoice_number)):'')+'</span>'
-            +'</label>';
+            +'<span class="chip '+(billed?'booked':(flagged?'gap':'signed'))+'" style="margin-left:2px">'+(billed?('billed'+(m.qb_invoice_number?(' #'+esc(m.qb_invoice_number)):'')):(flagged?'⏳ pending info':'pending'))+'</span>'
+            +(!billed?('<a href="#" onclick="toggleMilestonePendingInfo(\''+esc(r.id)+'\',\''+esc(m.id)+'\','+(flagged?'true':'false')+');return false;" style="color:'+(flagged?'var(--red)':'var(--blue)')+';font-size:11px;font-weight:700;text-decoration:none;margin-left:6px">'+(flagged?'Clear':'Flag')+'</a>'):'')
+            +'</label>'
+            +(flagged?('<div class="sub" style="margin:-2px 0 6px 24px">⏳ '+esc(m.pending_info_note||'Needs info before billing.')+'</div>'):'');
         });
         html+='</div>';
         html+=materialsHtml(r);
