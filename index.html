@@ -8326,16 +8326,23 @@ function invQBRows() {
 function invLoadStatus(k) {
   var woId = _invWO[k] || k;
   var bill = _invBill[k];
+  // Bill-less job (materials/time invoiced straight off the WO, no Vendor_Bills row) with
+  // nothing currently ticked/logged: this used to mean "stay disabled" outright, but a
+  // materials/time-only send CONSUMES its line items — so a job that was already invoiced (or
+  // even undone back off QuickBooks) looks identical to one nothing has ever been billed for.
+  // Don't assume; fall through to the QuickBooks check below and only go blank if THAT also
+  // finds nothing (Sep 28 2026, undo-send follow-up — this was the actual reason the Undo
+  // button never appeared for a bill-less job: invPricing()<=0 short-circuited before the
+  // queue was ever consulted).
+  var nothingTicked = false;
   if (!bill) {
-    // No vendor bill — but ticked materials / logged time may still be invoiceable. If there
-    // is nothing priceable, stay disabled; otherwise fall through and read the queue keyed on
-    // the work order (a bill-less review row is anchored to the WO, not a bill id).
-    if (!invPricing(k)) { invRenderStatus(k, null); return; }
+    if (!invPricing(k)) { nothingTicked = true; }
   } else if ((bill.Status || '').toLowerCase() !== 'reviewed') {
     invRenderStatus(k, { state: 'unapproved' }); return;
   }
 
-  // Approved (or a bill-less job with something to bill). Ask for EVERY Invoice_Review row on
+  // Approved (or a bill-less job with something to bill, or a bill-less job that may have
+  // already been billed and consumed its line items). Ask for EVERY Invoice_Review row on
   // this work order, at any status. `all=1` matters: the default queue hides sent rows, so an
   // absent row would have to be read as "already sent" — inferring success from an empty read
   // is exactly the mistake FEATURE_LOG rule 16 exists to prevent.
@@ -8344,16 +8351,18 @@ function invLoadStatus(k) {
     // Two quick taps on the bill picker can land these out of order. Bail if the panel has
     // moved on, so bill A's QuickBooks status never gets painted over bill B's numbers.
     if (_invBill[k] !== bill) return;
-    if (!Array.isArray(rows)) { invRenderStatus(k, bill ? { state: 'unknown' } : { state: 'unapproved' }); return; }
+    if (!Array.isArray(rows)) { invRenderStatus(k, bill ? { state: 'unknown' } : (nothingTicked ? null : { state: 'unapproved' })); return; }
     var row = (bill && rows.find(function(r) { return String(r.bill_id) === String(bill.ID); }))
            || rows.find(function(r) { return String(r.wo_id) === String(woId) && !String(r.bill_id || ''); })
            || rows.find(function(r) { return String(r.wo_id) === String(woId); });
     _invIRRow[k] = row || null;
 
     if (!row) {
-      // With a bill: reviewed but nothing was ever queued for QuickBooks. Without one: nothing
-      // has been approved yet, so the button should APPROVE rather than report a broken state.
-      invRenderStatus(k, bill ? { state: 'reviewed_no_row' } : { state: 'unapproved' });
+      // With a bill: reviewed but nothing was ever queued for QuickBooks. Without one and
+      // something still ticked: nothing has been approved yet, so the button should APPROVE
+      // rather than report a broken state. Without one and nothing ticked either: genuinely
+      // nothing to show.
+      invRenderStatus(k, bill ? { state: 'reviewed_no_row' } : (nothingTicked ? null : { state: 'unapproved' }));
       return;
     }
     // A materials/time-only invoice never has a vendor bill, so a missing QB bill id is
@@ -8362,8 +8371,12 @@ function invLoadStatus(k) {
     var noVendorBill = !String(row.bill_id || '');
     if (row.qb_invoice_id && (row.qb_bill_id || noVendorBill)) { invRenderStatus(k, { state: 'sent', row: row }); return; }
     if (row.qb_invoice_id && !row.qb_bill_id) { invRenderStatus(k, { state: 'partial', row: row }); return; }
+    // An approved-but-never-sent row with nothing currently ticked (e.g. after an undo cleared
+    // the ticks) would otherwise show a stale "approved at $X" band for money no longer on the
+    // page — go blank instead, same as if it had never been approved.
+    if (nothingTicked) { invRenderStatus(k, null); return; }
     invRenderStatus(k, { state: 'approved', row: row });
-  }).catch(function() { invRenderStatus(k, bill ? { state: 'unknown' } : { state: 'unapproved' }); });
+  }).catch(function() { invRenderStatus(k, bill ? { state: 'unknown' } : (nothingTicked ? null : { state: 'unapproved' })); });
 }
 
 // The other half of "Withdraw approval" (above, in the QB queue) — that one only works
