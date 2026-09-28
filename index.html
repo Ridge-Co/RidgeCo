@@ -242,6 +242,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary small" id="btn-bulk-mode" onclick="toggleBulkMode()">☑ Bulk Edit</button>
       <button class="btn secondary small" id="filterToggleBtn" onclick="toggleFilterPanel()">FILTERS <span id="filterBadge" style="display:none;background:var(--accent);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span> ▾</button>
       <button class="btn secondary small" onclick="clearWOFilters()" id="clearFiltersBtn" style="display:none">CLEAR ALL</button>
+      <button class="btn secondary small" onclick="filterUnassignedWOs()" id="unassignedWOsBtn">🚫 Not Assigned</button>
       <div style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0">
         <label style="margin:0;font-size:11px;color:var(--muted)">SORT</label>
         <select id="wo-sort" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:var(--radius);font-family:var(--font);font-size:11px">
@@ -329,7 +330,8 @@ window.addEventListener('pageshow', function(e){
             <option value="">All Units</option></select></div>
         <div><label>VENDOR</label>
           <select id="f-vendor" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
-            <option value="">All Vendors</option></select></div>
+            <option value="">All Vendors</option>
+            <option value="__unassigned__">— Not Assigned —</option></select></div>
         <div><label>TRADE</label>
           <select id="f-trade" onchange="renderWOPage()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:var(--radius);font-family:var(--font);font-size:12px;width:100%">
             <option value="">All Trades</option></select></div>
@@ -2024,6 +2026,7 @@ function populateFilterDropdowns() {
   if (vendSel) {
     var cur3 = vendSel.value;
     vendSel.innerHTML = '<option value="">All Vendors</option>' +
+      '<option value="__unassigned__"'+(cur3==='__unassigned__'?' selected':'')+'>— Not Assigned —</option>' +
       safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){ return '<option value="'+v.ID+'"'+(v.ID===cur3?' selected':'')+'>'+v.Name+'</option>'; }).join('');
   }
   var bulkVendSel = document.getElementById('bulk-vendor-sel');
@@ -2052,6 +2055,18 @@ function toggleFilterPanel() {
   if (!isOpen) populateFilterDropdowns();
   document.getElementById('filterToggleBtn').textContent = (isOpen ? 'FILTERS ▾' : 'FILTERS ▴');
   updateFilterBadge();
+}
+
+function filterUnassignedWOs() {
+  var panel = document.getElementById('filterPanel');
+  if (panel && panel.style.display === 'none') {
+    toggleFilterPanel();
+  } else {
+    populateFilterDropdowns();
+  }
+  var v = document.getElementById('f-vendor'); if (v) v.value = '__unassigned__';
+  updateFilterBadge();
+  renderWOPage();
 }
 
 function clearWOFilters() {
@@ -2109,7 +2124,8 @@ function renderWOPage() {
   }
   if (propId)   wos = wos.filter(function(w){ return String(w.Property_ID)===String(propId); });
   if (unitId)   wos = wos.filter(function(w){ return w.Unit_ID===unitId; });
-  if (vendId)   wos = wos.filter(function(w){ return w.Vendor_ID===vendId; });
+  if (vendId === '__unassigned__') wos = wos.filter(function(w){ return !w.Vendor_ID; });
+  else if (vendId) wos = wos.filter(function(w){ return w.Vendor_ID===vendId; });
   if (trade)    wos = wos.filter(function(w){ return (w.Trade||'').toLowerCase()===trade.toLowerCase(); });
   if (priority) wos = wos.filter(function(w){ return (w.Priority||'normal').toLowerCase()===priority.toLowerCase(); });
   if (search) wos = wos.filter(function(w){
