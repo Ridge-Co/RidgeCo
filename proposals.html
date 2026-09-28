@@ -193,7 +193,8 @@ function render(rev,q){
         +(it.impact?'<div class="pimp">Impact: '+h(it.impact)+'</div>':'')
         +'</div></label>';
     });
-    if(dupCount) html+='<div class="sub" style="margin:2px 2px 6px">'+dupCount+' proposal'+(dupCount>1?'s':'')+' already queued or built — dimmed, not selectable.</div>';
+    if(dupCount && selectableCount>0) html+='<div class="sub" style="margin:2px 2px 6px">'+dupCount+' proposal'+(dupCount>1?'s':'')+' already queued or built — dimmed, not selectable.</div>';
+    if(selectableCount===0) html+='<div class="sub" style="margin:2px 2px 6px">✓ Every proposal from this review is already queued or built — nothing left to approve here.</div>';
     document.getElementById('bar').style.display='block';
   } else {
     // older review or parse fallback — show the full text
