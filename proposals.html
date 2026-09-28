@@ -156,11 +156,22 @@ function render(rev,q){
   const isInactive=s=>{s=(s||'').toLowerCase();return s==='done'||s==='dropped';};
   const activeQ=allQ.filter(x=>!isInactive(x.Status));
   window.__queue=activeQ;
+  window.__allQ=allQ;
   const normT=t=>(t==null?'':(''+t)).toLowerCase().replace(/\s+/g,' ').trim();
   const qStatusByTitle={}; allQ.forEach(x=>{const k=normT(x.Title); if(k&&!qStatusByTitle[k]) qStatusByTitle[k]=(x.Status||'greenlit').toLowerCase();});
   let dupCount=0;
   if(items.length){
-    html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
+    // Count how many are still selectable BEFORE deciding whether to render the bulk
+    // controls — a title already queued/built gets no checkbox at all (see below), so
+    // Top3/Top5/All/Clear have nothing to act on once every item's been actioned. Showing
+    // those buttons anyway just looks broken; show a plain status note instead.
+    const selectableCount=items.filter(it=>{
+      const d=qStatusByTitle[normT(it.title)];
+      return !(d==='done'||d==='greenlit'||d==='building');
+    }).length;
+    if(selectableCount>0){
+      html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
+    }
     items.forEach((it,i)=>{
       const dup=qStatusByTitle[normT(it.title)];
       if(dup==='done'||dup==='greenlit'||dup==='building'){
