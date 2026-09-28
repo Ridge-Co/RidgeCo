@@ -2057,6 +2057,18 @@ function toggleFilterPanel() {
   updateFilterBadge();
 }
 
+function filterUnassignedWOs() {
+  var panel = document.getElementById('filterPanel');
+  if (panel && panel.style.display === 'none') {
+    toggleFilterPanel();
+  } else {
+    populateFilterDropdowns();
+  }
+  var v = document.getElementById('f-vendor'); if (v) v.value = '__unassigned__';
+  updateFilterBadge();
+  renderWOPage();
+}
+
 function clearWOFilters() {
   var f = document.getElementById('wo-filter'); if(f) f.value='open';
   ['f-owner','f-property','f-unit','f-vendor','f-trade','f-priority'].forEach(function(id){
