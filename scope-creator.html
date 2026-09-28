@@ -413,7 +413,12 @@ async function get(path){
   var r = await fetch(worker()+path, { headers:{'X-Auth-Token':token()} });
   var text = await r.text(); var data; try{ data=JSON.parse(text); }catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
   if (r.status===401) throw new Error('Unauthorized — check the admin token.');
+  if (!r.ok || (data && !Array.isArray(data) && typeof data.error==='string' && Object.keys(data).length<=3)) throw new Error(String((data&&data.error)||('HTTP '+r.status)).slice(0,200));
   return data;
+}
+async function getRetry(path){
+  try{ return await get(path); }
+  catch(e){ await new Promise(function(ok){ setTimeout(ok,4000); }); return await get(path); }   // one retry: Sheets per-minute quota errors clear in seconds
 }
 async function post(path, body){
   var r = await fetch(worker()+path, { method:'POST', headers:{'X-Auth-Token':token(),'Content-Type':'application/json'}, body:JSON.stringify(body||{}) });
@@ -430,7 +435,8 @@ function showList(){ show('list'); loadScopes(); }
 async function boot(){
   setStatus('conn-status','Loading…');
   try{
-    var res = await Promise.all([get('/properties'),get('/units'),get('/owners'),get('/vendors'),get('/config').catch(function(){return {};})]);
+    var res = await Promise.all([getRetry('/properties'),getRetry('/units'),getRetry('/owners'),getRetry('/vendors'),get('/config').catch(function(){return {};})]);
+    [0,1,2,3].forEach(function(i){ if(!Array.isArray(res[i])) throw new Error('Could not load data (unexpected response) — reload in a minute.'); });
     state.properties=res[0]||[]; state.units=res[1]||[]; state.owners=res[2]||[]; state.vendors=res[3]||[];
     var cfgVal=parseFloat((res[4]||{}).MAX_UPFRONT_DEPOSIT_PCT); if(isFinite(cfgVal)&&cfgVal>0&&cfgVal<=100) scheduleState.maxUpfrontPct=cfgVal;
     setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok');
