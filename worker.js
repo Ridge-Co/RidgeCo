@@ -16129,7 +16129,7 @@ async function woShareBuild(env, woId, pageBase){
   const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || '').trim();
   const msgEn = `Hi${vname?' '+vname:''}, here's the work order for ${addr}. Everything you need — job details, access, photos, and billing — is here:\n${link}\nTo open it, enter the last 4 digits of your phone (one time per day).`;
   const msgEs = `Hola${vname?' '+vname:''}, aquí está la orden de trabajo para ${addr}. Todo lo que necesita — detalles del trabajo, acceso, fotos y facturación — está aquí:\n${link}\nPara abrirla, ingrese los últimos 4 dígitos de su teléfono (una vez por día).`;
-  return json({
+  return { vendor, res: {
     success:true, link, wo_id:woId, rev,
     assigned: !!wo.Vendor_ID,
     vendor_id: wo.Vendor_ID||'',
