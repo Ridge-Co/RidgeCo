@@ -3986,7 +3986,20 @@ async function scopeEstimate(env, body) {
   if (body.vendor_id !== undefined) fields.Vendor_ID = body.vendor_id;
   if (body.estimate_number !== undefined) fields.Estimate_Number = body.estimate_number;
   if (body.estimate_amount !== undefined) fields.Estimate_Amount = String(body.estimate_amount);
-  if (body.estimate_notes !== undefined) fields.Estimate_Notes = body.estimate_notes;
+  if (body.estimate_notes !== undefined) {
+    // Sep 28 2026: notes copied from a Spanish vendor estimate are stored in English (what the owner
+    // proposal side reads); the original is kept in Estimate_Notes_Orig. Fails open to the original.
+    fields.Estimate_Notes = body.estimate_notes;
+    const _n = String(body.estimate_notes || '');
+    if (_n.trim() && plausiblyNonEnglish(_n)) {
+      try {
+        const tr = await translateBatchToEnglish(env, [_n]);
+        if (tr.ok && tr.out[0] && tr.out[0].trim().toLowerCase() !== _n.trim().toLowerCase()) {
+          try { await ensureColumns(env, 'Scopes', ['Estimate_Notes_Orig']); fields.Estimate_Notes_Orig = _n; fields.Estimate_Notes = tr.out[0]; } catch (_) {}
+        }
+      } catch (_) {}
+    } else if (s.Estimate_Notes_Orig !== undefined) { fields.Estimate_Notes_Orig = ''; }
+  }
   if (['draft', 'approved', 'wo-created'].includes(s.Status)) fields.Status = 'estimated';
   await updateRow(env, 'Scopes', id, fields);
   // Approval stage: a vendor estimate recorded on a scope that has no stage yet → Estimated.
