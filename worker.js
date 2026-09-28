@@ -531,6 +531,7 @@ export default {
         if (path === '/wo/shared/receipt')        return await woSharedReceipt(env, body);
         if (path === '/wo/shared/note')           return await woSharedNote(env, body);
         if (path === '/wo/share-link')            return await woShareLink(env, body);
+        if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
         if (path === '/workorder') {
           // Tenant-work-order-submission toggle (Aug 20, 2026): only gates a TENANT's own
