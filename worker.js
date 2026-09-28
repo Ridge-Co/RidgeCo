@@ -2958,6 +2958,82 @@ async function findReceiptForQueueRow(env, row) {
     && String(rc.Date || '').slice(0, 10) === String(row.Receipt_Date || '').slice(0, 10)) || null;
 }
 
+// Symmetric with appendReceiptToInvoiceReview (which folds a receipt's dollar amount INTO the
+// most-recent pending Invoice_Review row at confirm time) — this pulls it back OUT, wherever it
+// actually landed. Sep 28 2026, Brett: "need to be able to reverse the amount added to the
+// invoice/work order." Searches every Invoice_Review row for the one that actually holds this
+// receipt_id (not just the most-recent-for-this-WO row appendReceiptToInvoiceReview would pick
+// today — a later receipt or invoice cycle may have moved on since this one was confirmed), and
+// strips the ID out of Own_Material_IDs rather than just subtracting the dollar amount: that
+// function's own `ids.includes(receipt_id)` dedupe guard would otherwise treat a later correct
+// re-confirm of the same receipt_id as "already: true" and silently skip re-adding it. Mirrors
+// appendReceiptToInvoiceReview's own already-sent-to-QuickBooks handling (flag + note rather than
+// blocking) rather than reinventing it.
+async function removeReceiptFromInvoiceReview(env, { receipt_id, amount }) {
+  if (!receipt_id) return { unlinked: false };
+  try {
+    await ensureColumns(env, 'Invoice_Review', ['Repair_Flagged', 'Repair_Reason']);
+    const irs = await fetchTab(env, 'Invoice_Review');
+    const ir = irs.find(r => String(r.Own_Material_IDs || '').split(',').map(x => x.trim()).includes(String(receipt_id)));
+    if (!ir) return { unlinked: false, reason: 'not_found_in_invoice_review' };
+    const ids = String(ir.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean).filter(x => x !== String(receipt_id));
+    const amt = +(Number(amount) || 0).toFixed(2);
+    const newOwnMaterials = Math.max(0, +((Number(ir.Own_Materials) || 0) - amt).toFixed(2));
+    const newCustomerTotal = Math.max(0, +((Number(ir.Customer_Total) || 0) - amt).toFixed(2));
+    const alreadySent = !!(ir.QB_Invoice_ID || '').trim();
+    const fields = { Own_Material_IDs: ids.join(','), Own_Materials: String(newOwnMaterials), Customer_Total: String(newCustomerTotal) };
+    if (alreadySent) {
+      fields.Repair_Flagged = 'TRUE';
+      fields.Repair_Reason = `Receipt #${receipt_id} ($${amt.toFixed(2)}) removed ${new Date().toISOString().split('T')[0]} (reconciler undo) after the invoice was already sent — run Repairable Invoices to reconcile the QuickBooks total.`;
+    }
+    await updateRow(env, 'Invoice_Review', ir.ID, fields);
+    return { unlinked: true, ir_id: ir.ID, already_sent: alreadySent, new_customer_total: newCustomerTotal };
+  } catch (e) {
+    return { unlinked: false, error: String(e && e.message || e) };
+  }
+}
+
+// Voids the WO-gallery Attachments row Fix #2's addReceipt() wrote for a given Receipts row (via
+// the Receipt_ID link column), so an undone/reversed receipt's image also disappears from the WO
+// Attachments view (index.html + owner.html) — not just the invoice amount. Soft-delete, same
+// Active:'FALSE' convention as everywhere else. A receipt with no gallery row (no WO, no scanned
+// file, or confirmed before Fix #2 shipped) is a harmless no-op.
+async function voidAttachmentForReceipt(env, receipt_id) {
+  if (!receipt_id) return { voided: false };
+  try {
+    await ensureColumns(env, 'Attachments', ['Receipt_ID']);
+    const atts = await fetchTab(env, 'Attachments');
+    const hit = atts.find(a => String(a.Receipt_ID || '') === String(receipt_id) && String(a.Active || '').toUpperCase() !== 'FALSE');
+    if (!hit) return { voided: false, reason: 'not_found' };
+    await updateRow(env, 'Attachments', hit.ID, { Active: 'FALSE' });
+    return { voided: true, attachment_id: hit.ID };
+  } catch (e) {
+    return { voided: false, error: String(e && e.message || e) };
+  }
+}
+
+// Shared reversal core for /receipt-recon/mark-refund-confirmed AND the new /receipt-recon/undo
+// below — voids the original Receipts row (same not-yet-emailed-to-QuickBooks guard Reassign
+// uses), reverses its dollar contribution out of Invoice_Review, and voids the matching
+// Attachments gallery row. Works unchanged for an 'attached_only' row too: removeReceiptFromInvoiceReview
+// simply finds nothing to unlink (attach-only never calls appendReceiptToInvoiceReview in the
+// first place), so it's a safe no-op rather than a special case.
+async function voidConfirmedReceiptForQueueRow(env, row, noteTag) {
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
+  const original = await findReceiptForQueueRow(env, row);
+  if (!original) return { error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.', status: 404 };
+  if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
+    return { error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here (${noteTag === 'undone' ? 'undoing' : 'reversing'} it here would leave QuickBooks out of sync).`, status: 409 };
+  }
+  await updateRow(env, 'Receipts', original.ID, {
+    Active: 'FALSE',
+    Description: (original.Description || '') + ` [${noteTag} ${new Date().toISOString().slice(0, 10)} — pulled back into Receipt Reconciler for reversal]`,
+  });
+  const invoiceUnlink = await removeReceiptFromInvoiceReview(env, { receipt_id: original.ID, amount: Number(original.Amount || row.Confirmed_Amount || 0) });
+  const attachmentVoid = await voidAttachmentForReceipt(env, original.ID);
+  return { voidedId: original.ID, invoiceUnlink, attachmentVoid };
+}
+
 // POST /receipt-recon/reassign { id, wo_id?, property_id, amount?, description?, store?, date? }
 // property_id is always required (even a "no work order, just fix the property" reassign needs
 // one — that's still an expense, just a corrected one). wo_id is optional — omit it to leave this
