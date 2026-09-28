@@ -20976,7 +20976,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
       lines.push({
         DetailType: 'SalesItemLineDetail',
         Amount: amt,
-        Description: ('Materials — ' + ((rc && (rc.Description || rc.Store)) || 'receipt')).slice(0, 4000),
+        Description: ('Materials — ' + englishOnly((rc && (rc.Description || rc.Store)) || 'receipt')).slice(0, 4000),
         SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: amt },
       });
     }
