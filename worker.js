@@ -3436,6 +3436,8 @@ function scopeCleanItems(arr) {
       id: (it && it.id) || ('li' + (i + 1)), area: (it && it.area) || '', trade: (it && it.trade) || '',
       description: (it && it.description) || '', qty: (it && it.qty) || '', note: (it && it.note) || '',
       variants, selected_key,
+      // vendor's own wording when `description` is the English rendering of it (Sep 28 2026) — kept, never shown to the owner
+      ...((it && it.description_orig) ? { description_orig: String(it.description_orig) } : {}),
     };
   }).filter(it => it.description);
 }
@@ -3458,7 +3460,9 @@ function scopeItemsFromEstimate(lineItems, existingItems) {
   const usedIds = new Set(existing.map(it => it && it.id).filter(Boolean));
   let n = existing.length;
   const out = [];
-  for (const li of (Array.isArray(lineItems) ? lineItems : [])) {
+  // Sep 28 2026: everything the OWNER reads is English — desc_en (or the English half of an [ES]/[EN]
+  // tag) when the vendor wrote Spanish; the vendor's own wording rides along as description_orig.
+  for (const li of estimateLinesEnglish(lineItems)) {
     const description = String((li && li.desc) || '').trim();
     if (!description) continue; // mirrors scopeCleanItems: an item with no description is dropped
     const amount = Math.max(0, parseFloat(li && li.amount) || 0);
@@ -3470,6 +3474,7 @@ function scopeItemsFromEstimate(lineItems, existingItems) {
       id, area: '', trade: '', description, qty: '', note: '',
       variants: [{ key: 'v1', label: '', vendor_cost: +amount.toFixed(2), price_override: null }],
       selected_key: 'v1',
+      ...(li.desc_orig ? { description_orig: String(li.desc_orig) } : {}),
     });
   }
   return out;
