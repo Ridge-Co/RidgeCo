@@ -21689,7 +21689,8 @@ async function qbSendInvoice(env, body) {
       } catch (e) { warnings.push('Could not read the Receipts tab — materials you bought are not itemised on this invoice.'); }
     }
 
-    const inv = buildInvoiceLines(ir, billRow, trade, tradeName, wo, null, ownReceipts, woTimeEntries);
+    const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
+    const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
