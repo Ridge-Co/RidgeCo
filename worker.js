@@ -9020,7 +9020,7 @@ async function approveEstimate(env, body) {
   await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batch });
   await setApprovalStage(env, { woId, stage: 'Approved' });
   if (latest.Vendor_ID) {
-    try { const vendors = await fetchTab(env, 'Vendors'); const vendor = vendors.find(v => v.ID === latest.Vendor_ID); if (vendor?.Phone) { const msg = requestDeposit ? `Estimate approved for WO ${woId} ($${latest.Subtotal}). Deposit being requested from customer — we'll confirm once received.` : `Estimate approved for WO ${woId} ($${latest.Subtotal}). You're clear to proceed — no deposit required for this job.`; await sendSMS(env, vendor.Phone, msg); } } catch(e) {}
+    try { const vendors = await fetchTab(env, 'Vendors'); const vendor = vendors.find(v => v.ID === latest.Vendor_ID); if (vendor?.Phone) { const msgEn = requestDeposit ? `Estimate approved for WO ${woId} ($${latest.Subtotal}). Deposit being requested from customer — we'll confirm once received.` : `Estimate approved for WO ${woId} ($${latest.Subtotal}). You're clear to proceed — no deposit required for this job.`; const msg = await translateForVendor(env, vendor, msgEn); await sendSMS(env, vendor.Phone, msg); try { await logSMS(env, woId, 'estimate_approved', vendor.ID, vendor.Phone, msg !== msgEn ? msg + ' || EN: ' + msgEn : msg); } catch (_) {} } } catch(e) {}
   }
   return json({ success: true, requestDeposit });
 }
