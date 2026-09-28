@@ -8423,12 +8423,14 @@ function invRenderStatus(k, s) {
   } else if (s.state === 'partial') {
     el.innerHTML = band('var(--warn)', '#fdf2e2',
       '⚠ Partly sent — customer invoice <b>' + esc(s.row.qb_invoice_id || '?') + '</b> is in QuickBooks, the vendor bill is not. ' +
-      'Sending again creates only the missing vendor bill; it will not duplicate the invoice.');
+      'Sending again creates only the missing vendor bill; it will not duplicate the invoice.') +
+      '<button onclick="undoQBSend(\'' + k + '\')" style="width:100%;margin-top:6px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:11px;padding:6px;cursor:pointer">↩ Undo send — delete from QuickBooks, back to Review Bills</button>';
     if (btn) btn.textContent = '📤 Finish sending — vendor bill only';
   } else if (s.state === 'sent') {
     // Only ever claimed with the QuickBooks ids in hand.
     el.innerHTML = band('var(--accent2)', '#eaf6ee',
-      '✓ In QuickBooks — invoice <b>' + esc(s.row.qb_invoice_id) + '</b>, vendor bill <b>' + esc(s.row.qb_bill_id) + '</b>.');
+      '✓ In QuickBooks — invoice <b>' + esc(s.row.qb_invoice_id) + '</b>, vendor bill <b>' + esc(s.row.qb_bill_id) + '</b>.') +
+      '<button onclick="undoQBSend(\'' + k + '\')" style="width:100%;margin-top:6px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:11px;padding:6px;cursor:pointer">↩ Undo send — delete from QuickBooks, back to Review Bills</button>';
     if (btn) { btn.textContent = '✓ Already in QuickBooks'; btn.disabled = true; btn.style.opacity = '.5'; }
   } else if (s.state === 'reviewed_no_row') {
     el.innerHTML = band('var(--warn)', '#fdf2e2',
