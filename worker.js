@@ -9550,7 +9550,7 @@ const WO_AUDIT_MSG_COLS = ['Channel', 'Recipient_Name', 'Recipient_Type', 'Messa
 async function logWOAuditMany(env, entries) {
   if (!entries || !entries.length) return;
   try {
-    if (entries.some(e => e.channel || e.messageType || e.messageBody)) {
+    if (entries.some(e => e.channel || e.messageType || e.messageBody || e.originalBody)) {
       try { await ensureColumns(env, 'WO_Audit', WO_AUDIT_MSG_COLS); } catch (e) {}
     }
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
