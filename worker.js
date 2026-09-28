@@ -16109,14 +16109,13 @@ async function woShareAuth(env, tok, woWanted){
   return payload;
 }
 
-// ADMIN (secret-gated): mint a share link + a ready-to-send message for one WO.
-async function woShareLink(env, body){
-  const woId = String((body && (body.wo_id||body.wo))||'').trim();
-  if(!woId) return json({ error:'wo_id required' }, 400);
+// Shared by woShareLink (copy-draft) and woShareSend (real SMS): mints the link token (format and
+// TTL unchanged) and builds the ready-to-send EN/ES message. Returns {error,status} or {res, vendor}.
+async function woShareBuild(env, woId, pageBase){
   try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){}
   const [wos, props, units, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Vendors']);
   const wo = findWO(wos, woId);
-  if(!wo) return json({ error:'WO not found' }, 404);
+  if(!wo) return { error:'WO not found', status:404 };
   const rev = String(wo.Share_Rev||'0');
   const prop = props.find(p=>p.ID===wo.Property_ID)||{};
   const unit = units.find(u=>u.ID===wo.Unit_ID)||{};
