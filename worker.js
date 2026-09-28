@@ -741,6 +741,7 @@ export default {
         if (path === '/invoice-review/approve-bulk') return await approveInvoiceReviewBulk(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
+        if (path === '/qb/undo-send')             return await qbUndoSend(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
