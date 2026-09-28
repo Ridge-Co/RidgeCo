@@ -16977,7 +16977,7 @@ function missingTabResponse(tab) {
 // (Vendor_Bills) get a same-day window because that is the finest resolution available.
 // A failure in this check must never block a legitimate write — it returns null and the
 // caller proceeds to append.
-async function findRecentDuplicate(env, tab, signature, windowSeconds) {
+async function findRecentDuplicate(env, tab, signature, windowSeconds, match) {
   try {
     // Root-caused Sep 23 2026 (WO-1213/WO-1214, Lance Serafica, 30s apart, rule 162's guard
     // never fired): cutoff used to be computed AFTER `await fetchTab`. That await is a real
