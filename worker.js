@@ -730,6 +730,7 @@ export default {
         if (path === '/ar-report/pay-link')       return await arReportPayLink(env, body);
         if (path === '/ops-approve')              return await opsApprove(env, body);
         if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
+        if (path === '/agent-write')              return await agentWrite(env, body);
         if (path === '/ops-queue-prepare')        return await opsQueuePrepare(env, body);
         if (path === '/ops-queue-status')         return await opsQueueStatus(env, body);
         if (path === '/ops-queue/start-build')    return await opsQueueStartBuild(env, body);
