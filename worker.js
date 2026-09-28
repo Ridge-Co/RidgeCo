@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-28.1-wo-push-to-scope';
+const BUILD_VERSION = '2026-09-28.3-wo-push-test-hook';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -16623,6 +16623,21 @@ async function hubTestWriteAllowed(env, path, body) {
     const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  // WO → Scope push (Sep 28 2026, FEATURE_LOG rule 199): estimate entry/approval and the push itself
+  // all key off a wo_id; the payment-schedule write keys off a scope_id. Same gate as /status —
+  // the target WO (or the Scope's own Property) must resolve to a TEST- Property, so this token
+  // can never create/approve an estimate, push to a Scope, or edit a schedule on a real record.
+  if (path === '/estimate' || path === '/estimate/approve' || path === '/wo/push-to-scope') {
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/scope/payment-schedule') {
+    const _sc = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
+    if (!_sc) return false;
+    return await isTestRecord(env, 'Properties', _sc.Property_ID);
   }
   if (path === '/wo/combine') {
     // /wo/combine touches the survivor AND every combined WO — every one of them must
