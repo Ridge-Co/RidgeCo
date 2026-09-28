@@ -269,6 +269,28 @@ function render(rev,q){
   syncSel();
   syncBuildSel();
 }
+function searchQueue(q){
+  q=(q||'').trim().toLowerCase();
+  const box=document.getElementById('qsearchResults');
+  if(!box)return;
+  if(!q){ box.innerHTML=''; return; }
+  const all=window.__allQ||[];
+  const hits=all.filter(x=>String(x.ID||'').toLowerCase()===q || String(x.Title||'').toLowerCase().indexOf(q)>=0).slice(0,15);
+  if(!hits.length){ box.innerHTML='<div class="sub" style="margin-top:6px">No matches for “'+h(q)+'”.</div>'; return; }
+  box.innerHTML=hits.map(function(x){
+    const st=(x.Status||'greenlit').toLowerCase();
+    const stCls=(st==='building')?'building':(st==='held')?'held':(st==='dropped')?'held':(st==='prepared')?'prepared':'';
+    const stStyle=(st==='dropped')?'background:var(--redbg);color:var(--red)':(st==='done')?'background:var(--greenbg);color:var(--green)':'';
+    const stChip='<span class="qs'+(stCls?' '+stCls:'')+'" style="'+stStyle+'">'+h(st)+'</span>';
+    return '<div class="qcard" style="padding:10px;margin:8px 0">'
+      +'<div class="prow"><span class="rank">#'+h(x.ID||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
+      +'<div class="prow" style="margin-top:4px">'+stChip+(x.Rank?'<span class="chip eff">rank '+h(x.Rank)+'</span>':'')+chip(x.Tag)+'</div>'
+      +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
+      +(x.Drop_Reason?'<div class="pimp">Drop reason: '+h(x.Drop_Reason)+'</div>':'')
+      +(x.Superseded_By?'<div class="pimp">Superseded by #'+h(x.Superseded_By)+'</div>':'')
+      +'</div>';
+  }).join('');
+}
 function pct(x){const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';}
 function pick(n){document.querySelectorAll('#body input[type=checkbox]:not(.qsel)').forEach(cb=>{const i=+cb.getAttribute('data-i');cb.checked=(n>=99)?true:(n===0?false:(PROPOSALS[i]&&(PROPOSALS[i].rank||i+1)<=n));});syncSel();}
 function syncSel(){let n=0;document.querySelectorAll('#body input[type=checkbox]:not(.qsel)').forEach(cb=>{const card=document.getElementById('pc'+cb.getAttribute('data-i'));if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const g=document.getElementById('go');g.disabled=!n;g.style.display=n?'block':'none';g.textContent=n?('Approve '+n+' → queue for build'):'Approve selected';updateBar();}
