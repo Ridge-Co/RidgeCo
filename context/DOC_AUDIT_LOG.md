@@ -180,3 +180,9 @@ Since: 2026-09-26 (source: this script's own last recorded run)
 Checked commits: 105 (excluding merges/doc-audit itself)
 **1 possible gap(s) — needs a human/Claude look, not auto-filed:**
 - `d430625` (2026-09-26 19:01) docs: invoice inbox brief - rewrite loan-note handling (9b) — best single-entry match: 43%
+
+## Run: 2026-09-28 19:57 UTC
+Since: 2026-09-27 (source: this script's own last recorded run)
+Checked commits: 37 (excluding merges/doc-audit itself)
+**1 possible gap(s) — needs a human/Claude look, not auto-filed:**
+- `f6bcce4` (2026-09-28 16:45) Add reversal helpers (Invoice_Review unlink + Attachments void) ahead of the new Undo endpoint — best single-entry match: 44%
