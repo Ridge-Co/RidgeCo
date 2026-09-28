@@ -322,7 +322,7 @@ export default {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -659,6 +659,7 @@ export default {
         if (path === '/admin/share-attachments')  return await adminShareAttachments(env, body);
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
+        if (path === '/admin/backfill-receipt-attachments') return await backfillReceiptAttachments(env, body);
         if (path === '/admin/gemini-context-update') return await adminGeminiContextUpdate(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
@@ -741,6 +742,7 @@ export default {
         if (path === '/invoice-review/approve-bulk') return await approveInvoiceReviewBulk(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
+        if (path === '/qb/undo-send')             return await qbUndoSend(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
@@ -1859,6 +1861,35 @@ async function addReceipt(env, body) {
     Created_Date: new Date().toISOString(), Active: 'TRUE',
   });
   let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) {}
+
+  // Sep 28 2026 fix (Brett — WO-1229/Amanda's garbage disposal): a receipt confirmed through the
+  // Receipt Reconciler correctly writes Source_File_ID/Source_File_URL onto this new Receipts
+  // row, and that's what the invoice line and Invoice_Review pull from — so the AMOUNT always
+  // made it onto the customer invoice. But the WO detail page's unified "Attachments" gallery
+  // (index.html's loadPortalAttachments, owner.html's matching photo/receipt view) never reads
+  // Receipts at all — it reads the separate Attachments tab, which until now only ever got a row
+  // from a direct photo/file upload (POST /attachment/add), never from a receipt confirm/attach/
+  // reassign/refund-reverse flow. So the receipt's own image silently never showed up in
+  // Attachments even though it was fully on file and fully billed. Every addReceipt() caller that
+  // has both a WO and an actual scanned file (receiptReconConfirm, receiptAttachOnly, reassign,
+  // refund-reverse, the vendor-submitted path) is fixed here in one place: write a matching
+  // Attachments row, File_Type 'receipt', linked back to this Receipts row via Receipt_ID (new
+  // column, additive) so a backfill or a retry can never create a duplicate. Deliberately skipped
+  // when there's no wo_id (a no-WO company/1864-Kerns expense has nowhere to gallery it) or no
+  // file (a manual receipt entry with no image). This never touches Receipts/Invoice_Review/
+  // billing — additive-only, Attachments write failure never fails the receipt add itself.
+  if (wo_id && newId && (source_file_id || source_file_url)) {
+    try {
+      await ensureColumns(env, 'Attachments', ['Receipt_ID']);
+      await addRow(env, 'Attachments', {
+        WO_ID: wo_id, File_Name: ((store || 'Receipt') + (date ? ' ' + date : '')).trim(),
+        File_Type: 'receipt', Drive_File_ID: source_file_id || '', Drive_URL: source_file_url || '',
+        Mime_Type: '', Receipt_ID: String(newId),
+        Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
+      });
+    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {} }
+  }
+
   return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource });
 }
 
@@ -3812,6 +3843,60 @@ async function backfillScopeWOVendor(env) {
     details.push({ wo_id: wo.ID, scope_id: s.ID, vendor_id: s.Vendor_ID });
   }
   return json({ success: true, scopes_checked: scopesChecked, wo_vendor_backfilled: updated, details });
+}
+
+// POST /admin/backfill-receipt-attachments { apply?: true } — one-time (idempotent, safe to
+// re-run) backfill for the Sep 28 2026 fix in addReceipt() above: every past Receipts row that
+// has a WO_ID and a scanned image (Source_File_ID/Source_File_URL) but was written before that
+// fix never got a matching Attachments row, so its image is invisible on the WO detail gallery
+// and the owner portal even though it's fully billed and fully on file (Brett — WO-1229/Amanda's
+// garbage disposal was the case that surfaced this; this sweeps every WO, not just that one, per
+// his "past, future" instruction). Read-mostly by default: with no body or apply:false/omitted it
+// only PREVIEWS what it would create (counts + a details list), so the actual write is a second,
+// explicit call — matches Brett's verify-before-build habit for anything touching ~90+ rows at
+// once. Idempotent via the same Receipt_ID link the live fix writes: a Receipts row already
+// linked to an Attachments row (by ID, not by guessing from WO_ID/date/store) is never touched
+// again, so re-running this after new receipts come in only picks up the new ones.
+async function backfillReceiptAttachments(env, body) {
+  const apply = !!(body && body.apply === true);
+  const [receipts, attachments] = await Promise.all([
+    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTab(env, 'Attachments').catch(() => []),
+  ]);
+  const alreadyLinked = new Set(
+    attachments.filter(a => String(a.File_Type || '').toLowerCase() === 'receipt' && a.Receipt_ID)
+      .map(a => String(a.Receipt_ID))
+  );
+  let scanned = 0, eligible = 0, created = 0; const details = [];
+  for (const r of receipts) {
+    if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+    scanned++;
+    if (!r.WO_ID) continue;
+    const hasFile = r.Source_File_ID || r.Source_File_URL;
+    if (!hasFile) continue;
+    if (alreadyLinked.has(String(r.ID))) continue;
+    eligible++;
+    details.push({ receipt_id: r.ID, wo_id: r.WO_ID, store: r.Store || '', date: r.Date || '', amount: r.Amount || '' });
+    if (apply) {
+      try {
+        await ensureColumns(env, 'Attachments', ['Receipt_ID']);
+        await addRow(env, 'Attachments', {
+          WO_ID: r.WO_ID, File_Name: ((r.Store || 'Receipt') + (r.Date ? ' ' + r.Date : '')).trim(),
+          File_Type: 'receipt', Drive_File_ID: r.Source_File_ID || '', Drive_URL: r.Source_File_URL || '',
+          Mime_Type: '', Receipt_ID: String(r.ID),
+          Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
+        });
+        created++;
+      } catch (e) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_backfill', Skill_Or_Endpoint: '/admin/backfill-receipt-attachments', Success: 'FALSE', Notes: `receipt_id=${r.ID} wo_id=${r.WO_ID} err=${String(e && e.message || e)}` }); } catch (_) {}
+      }
+    }
+  }
+  return json({
+    success: true, applied: apply, receipts_scanned: scanned,
+    eligible_missing_gallery_attachment: eligible, attachments_created: apply ? created : 0,
+    details: details.slice(0, 500),
+  });
 }
 
 // Marks up every item's variant(s) SERVER-SIDE (calcTieredEstimate, per item — each option is
@@ -8023,6 +8108,129 @@ async function unapproveInvoiceReview(env, body) {
     bill_restored: billRestored,
     warning: billRestored ? '' : 'The approval is withdrawn, but the vendor bill could not be set back to submitted — it may not reappear in Review Bills. Check the Vendor_Bills row.',
   });
+}
+
+// POST /qb/undo-send { id, reason? }
+// The other half of the fix started by /invoice-review/unapprove: that endpoint refuses the
+// moment QB_Invoice_ID or QB_Bill_ID is set (on purpose — pulling the Hub row back without
+// touching QuickBooks would leave the two systems disagreeing about a real invoice/bill that
+// still exists there), and its error message has always just said "void it in QuickBooks
+// directly." This endpoint IS that direct route, from the Hub: it actually voids the
+// QuickBooks Invoice and/or Bill first (reusing qbDeleteInvoiceSafe/qbDeleteBillSafe, which
+// already refuse — safely, writing nothing — if either transaction has a payment applied),
+// and only once QuickBooks is clean does it do exactly what /invoice-review/unapprove does:
+// flip the Invoice_Review row inactive and put the Vendor_Bills row back to 'submitted' so it
+// reappears in Review Bills to be fixed (receipts re-attached, priced again, etc.) and resent.
+//
+// Real case this closes (Brett, Sep 28 2026): a bill sent to QuickBooks before the
+// receipt-upload-during-billing bug was fixed, so the QB invoice/bill exist at the right
+// total but with no receipt image attached (qbAttachReceipts silently skips any
+// Receipts_JSON entry with no .url — there was never a URL to attach). There was no way
+// back short of fixing it by hand in QuickBooks.
+//
+// Both sides are checked SAFE before either is deleted — never delete one half and then
+// discover the other can't be undone, which would leave QuickBooks and the Hub each missing
+// half of a real transaction.
+async function qbUndoSend(env, body) {
+  try {
+    const id = String(body.id || '').trim();
+    const billIdParam = String(body.bill_id || '').trim();
+    if (!id && !billIdParam) return json({ error: 'id or bill_id required' }, 400);
+
+    const irRows = await fetchTab(env, 'Invoice_Review');
+    const ir = id
+      ? irRows.find(r => String(r.ID) === id)
+      : irRows.find(r => r.Active !== 'FALSE' && String(r.Bill_ID) === billIdParam);
+    if (!ir) return json({ error: `No Invoice_Review row found${id ? ' for id ' + id : ' for bill ' + billIdParam}` }, 404);
+    if (ir.Active === 'FALSE') return json({ error: 'This review row is already withdrawn.' }, 400);
+
+    const invoiceId = (ir.QB_Invoice_ID || '').trim();
+    const billId    = (ir.QB_Bill_ID || '').trim();
+    if (!invoiceId && !billId) {
+      // Nothing was ever sent — the ordinary unapprove path already handles this cleanly.
+      return await unapproveInvoiceReview(env, { id: ir.ID });
+    }
+
+    const token = await qbAccessToken(env);
+
+    // Dry-run both first (read + qbTxnSafeToDelete, no writes) before deleting either.
+    if (invoiceId) {
+      const got = await qbApi(env, `invoice/${encodeURIComponent(invoiceId)}?minorversion=73`, 'GET', null, token);
+      const inv = got && got.Invoice;
+      if (!inv) return json({ error: `Could not read QuickBooks invoice ${invoiceId}: ${qbFault(got) || 'not found'}` }, 502);
+      const safe = qbTxnSafeToDelete('Invoice', invoiceId, inv.Balance, inv.TotalAmt);
+      if (!safe.ok) return json({ error: safe.error, invoice_id: invoiceId, bill_id: billId }, 409);
+    }
+    if (billId) {
+      const got = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
+      const bill = got && got.Bill;
+      if (!bill) return json({ error: `Could not read QuickBooks bill ${billId}: ${qbFault(got) || 'not found'}` }, 502);
+      const safe = qbTxnSafeToDelete('Bill', billId, bill.Balance, bill.TotalAmt);
+      if (!safe.ok) return json({ error: safe.error, invoice_id: invoiceId, bill_id: billId }, 409);
+    }
+
+    // Both sides confirmed safe (or absent) — now actually delete.
+    const invRes = await qbDeleteInvoiceSafe(env, invoiceId, token);
+    if (!invRes.ok) return json({ error: 'Invoice: ' + invRes.error, invoice_id: invoiceId, bill_id: billId }, 502);
+    const billRes = await qbDeleteBillSafe(env, billId, token);
+    if (!billRes.ok) {
+      // The invoice is already gone and there's no undoing THAT from here — say so plainly
+      // rather than pretending nothing happened. The bill still needs clearing by hand or a
+      // retry of this same call once the reason resolves.
+      return json({
+        ok: false, partial: true,
+        error: 'QuickBooks invoice ' + invoiceId + ' was deleted, but the bill could not be: ' + billRes.error,
+        invoice_id: invoiceId, bill_id: billId,
+      }, 502);
+    }
+
+    // Undo any loan-ledger deduction this send applied — otherwise Brett would owe the
+    // vendor money that was already docked against a bill that no longer exists.
+    let loanReversed = 0;
+    try {
+      const ledger = await fetchTab(env, LOAN_LEDGER_TAB);
+      const entry = ledger.find(r => r.Active !== 'FALSE' && r.Entry_Type === 'auto-deduction' && String(r.Bill_ID) === String(ir.Bill_ID));
+      if (entry) {
+        await updateRow(env, LOAN_LEDGER_TAB, entry.ID, { Active: 'FALSE' });
+        loanReversed = Math.abs(parseFloat(entry.Amount) || 0);
+      }
+    } catch (e) { /* no ledger tab / nothing to reverse — not fatal */ }
+
+    // Mirror /invoice-review/unapprove exactly from here.
+    await updateRow(env, 'Invoice_Review', ir.ID, { Active: 'FALSE', QB_Invoice_Status: 'undone' });
+    let billRestored = false;
+    if (ir.Bill_ID) {
+      try {
+        const res = await updateRow(env, 'Vendor_Bills', ir.Bill_ID, { Status: 'submitted' });
+        const parsed = await res.clone().json();
+        billRestored = !!(parsed && parsed.success);
+      } catch (e) { billRestored = false; }
+    }
+
+    // The send flipped the WO to Invoiced — undo that too, back to Complete (where
+    // addVendorBill leaves a WO once its bill is submitted, which is where this is headed).
+    let woReverted = false;
+    if (ir.WO_ID) {
+      try { await updateWOFields(env, ir.WO_ID, { Status: 'Complete', QBO_Invoice_Number: '' }); woReverted = true; }
+      catch (e) { woReverted = false; }
+    }
+
+    try {
+      await logWOAudit(env, ir.WO_ID || '', body.undone_by || 'Brett', 'admin', 'QB_Send_Undone',
+        `Invoice ${invoiceId || '—'} / Bill ${billId || '—'}`, 'voided',
+        `Undid the QuickBooks send for bill ${ir.Bill_ID || ir.ID} (invoice ${invoiceId || 'none'}, bill ${billId || 'none'} deleted in QuickBooks).` +
+        (loanReversed ? ` Reversed a $${loanReversed.toFixed(2)} loan-ledger deduction.` : '') +
+        (body.reason ? ` Reason: ${body.reason}` : ''));
+    } catch (e) { /* audit is best-effort */ }
+
+    return json({
+      success: true, ok: true, id: ir.ID, wo_id: ir.WO_ID || '', bill_id: ir.Bill_ID || '',
+      invoice_deleted: invRes.doc || invoiceId || '', bill_deleted: billRes.doc || billId || '',
+      loan_reversed: loanReversed,
+      bill_restored: billRestored, wo_reverted: woReverted,
+      warning: billRestored ? '' : 'QuickBooks was undone, but the vendor bill could not be set back to submitted — check the Vendor_Bills row.',
+    });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 async function approveInvoiceReview(env, body) {
