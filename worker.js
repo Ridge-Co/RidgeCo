@@ -12376,6 +12376,7 @@ const SELFTEST_ENDPOINT_CHECKS = [
   { name: 'returns', path: '/returns' },
   { name: 'master_keys', path: '/master-keys' },
   { name: 'vendor_requests', path: '/vendor-requests' },
+  { name: 'vendor_task_requests', path: '/vendor-task-requests' },
   { name: 'notification_queue', path: '/notification-queue' },
   { name: 'message_queue', path: '/message-queue' },
   { name: 'message_templates', path: '/message-templates' },
