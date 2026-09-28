@@ -20922,6 +20922,27 @@ function buildLaborDescription(billRow, timeEntries, wo) {
   return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
 }
 
+// Async pre-pass for the invoice builders (Sep 28 2026): returns COPIES of the bill row and time
+// entries in which any customer-facing free text that is still Spanish (a vendor-portal bill or
+// time entry is not translated at write time) is replaced by its English translation, in memory
+// only — nothing is written back. [ES]/[EN]-tagged text is resolved by englishOnly() inside the
+// builders themselves. Fails open: a translation miss leaves the original.
+async function invoiceInputsEnglish(env, billRow, timeEntries) {
+  const bill = Object.assign({}, billRow || {});
+  const entries = (Array.isArray(timeEntries) ? timeEntries : []).map(e => Object.assign({}, e));
+  const slots = [];
+  const consider = (obj, key) => { const t = englishOnly(obj[key] || ''); if (t.trim() && plausiblyNonEnglish(t)) slots.push({ obj, key, text: t }); };
+  consider(bill, 'Invoice_Description'); consider(bill, 'Truck_Desc');
+  entries.forEach(e => { if (e && e.Active !== 'FALSE') consider(e, 'Invoice_Description'); });
+  if (slots.length) {
+    try {
+      const r = await translateBatchToEnglish(env, slots.map(s => s.text));
+      if (r.ok) slots.forEach((s, i) => { if (r.out[i] && r.out[i].trim()) s.obj[s.key] = r.out[i]; });
+    } catch (_) {}
+  }
+  return { billRow: bill, timeEntries: entries };
+}
+
 function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries) {
   // An override is used when REPAIRING an existing invoice: the wording changes, the
   // account it posted to must not. Trade resolution has changed since some invoices were
