@@ -3462,7 +3462,9 @@ function scopeItemsFromEstimate(lineItems, existingItems) {
   const usedIds = new Set(existing.map(it => it && it.id).filter(Boolean));
   let n = existing.length;
   const out = [];
-  for (const li of (Array.isArray(lineItems) ? lineItems : [])) {
+  // Sep 28 2026: everything the OWNER reads is English — desc_en (or the English half of an [ES]/[EN]
+  // tag) when the vendor wrote Spanish; the vendor's own wording rides along as description_orig.
+  for (const li of estimateLinesEnglish(lineItems)) {
     const description = String((li && li.desc) || '').trim();
     if (!description) continue; // mirrors scopeCleanItems: an item with no description is dropped
     const amount = Math.max(0, parseFloat(li && li.amount) || 0);
