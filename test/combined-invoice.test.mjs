@@ -82,7 +82,7 @@ t('a voided sibling is excluded', (() => {
 // ── buildInvoiceLines: combine arithmetic — sum-of-parts must equal the whole ──────────
 // buildInvoiceLines now calls buildLaborDescription — grab it too so the isolated eval has
 // the dependency in scope (same pattern as grabbing buildInvoiceLines itself).
-const { buildInvoiceLines } = new Function(grab('buildLaborDescription') + '\n' + grab('buildInvoiceLines') + '\nreturn { buildInvoiceLines };')();
+const { buildInvoiceLines } = new Function(grab('englishOnly') + '\n' + grab('buildLaborDescription') + '\n' + grab('buildInvoiceLines') + '\nreturn { buildInvoiceLines };')();
 const trade = { item: 'ITEM-1', expense: '55' };
 const wo = { Description: 'Rekey locks', ID: 'WO-100' };
 
