@@ -865,6 +865,7 @@ function switchTab(tab) {
   document.getElementById('tabOpen').className = 'tab' + (tab === 'open' ? ' active' : '');
   document.getElementById('tabAll').className = 'tab' + (tab === 'all' ? ' active' : '');
   document.getElementById('tabDue').className = 'tab' + (tab === 'due' ? ' active' : '');
+  document.getElementById('tabInvoiced').className = 'tab' + (tab === 'invoiced' ? ' active' : '');
   loadWorkOrders();
 }
 
