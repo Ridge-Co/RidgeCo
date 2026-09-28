@@ -244,6 +244,23 @@ const env = { SHEET_ID: 'S' };
   t('nothing was actually written to Scopes on preview', db.Scopes.rows.length === 0);
 }
 
+// ── English into the owner proposal (Sep 28 2026): desc_en wins; older Spanish lines get translated ──
+{
+  const db = makeDb(
+    [{ ID: 'WO-7', Property_ID: '58', Unit_ID: '', Vendor_ID: '6' }],
+    [{ ID: '70', WO_ID: 'WO-7', Vendor_ID: '6', Version: '1', Line_Items: JSON.stringify([{ desc: 'Pintar la sala', desc_en: 'Paint the living room', amount: 300 }, { desc: 'Cambiar el lavabo', amount: 200 }, { desc: 'Replace outlet', amount: 50 }]), Subtotal: '550', Status: 'Approved', Active: 'TRUE' }],
+    []);
+  globalThis.__anthropicStub = async (u, init) => { const c = JSON.parse(init.body).messages[0].content; const arr = JSON.parse(c.slice(c.indexOf('['))); return { json: async () => ({ content: [{ text: JSON.stringify(arr.map(x => x === 'Cambiar el lavabo' ? 'Replace the sink' : x)) }] }) }; };
+  const { woPushToScope } = build(db);
+  const res = await woPushToScope({ ANTHROPIC_API_KEY: 'k' }, { wo_id: 'WO-7', estimate_id: '70' });
+  const body = await res.json();
+  globalThis.__anthropicStub = null;
+  const d = body.mapped_items.map(i => i.description);
+  t('proposal items use desc_en, the on-the-fly translation of an old Spanish line, and leave English alone', d[0] === 'Paint the living room' && d[1] === 'Replace the sink' && d[2] === 'Replace outlet');
+  t('the vendor\'s own wording is kept beside the English (description_orig) and never shown as the description', body.mapped_items[0].description_orig === 'Pintar la sala' && body.mapped_items[1].description_orig === 'Cambiar el lavabo' && !('description_orig' in body.mapped_items[2]));
+  t('nothing Spanish reaches the proposal description text', !d.some(x => /Pintar|Cambiar/.test(x)));
+}
+
 // ── apply: creates a new scope, links it back onto the WO, converts the estimate ────────────
 {
   const db = makeDb(
