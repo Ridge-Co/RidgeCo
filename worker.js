@@ -9386,6 +9386,7 @@ async function logWOAuditMany(env, entries) {
         Field:e.field||'', Old_Value:String(e.oldValue??''), New_Value:String(e.newValue??''), Timestamp:now, Notes:e.notes||'',
         Channel:e.channel||'', Recipient_Name:e.recipientName||'', Recipient_Type:e.recipientType||'',
         Message_Type:e.messageType||'', Message_Body:e.messageBody||'', Outcome:e.outcome||'',
+        Original_Body:e.originalBody||'', Translated_To:e.translatedTo||'',
       }[h]??''));
       nextId += 1;
       return row;
