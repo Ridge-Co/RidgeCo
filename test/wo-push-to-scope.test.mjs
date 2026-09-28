@@ -147,7 +147,7 @@ function build(db) {
     'const CORS = {};',
     cacheSrc, srSrc, ensureColumnsSrc, ensureColumnsInnerSrc, ensureTabSrc, idcSrc, colSrc, jsonSrc,
     isMissingTabErrorSrc, missingTabResponseSrc, fetchTabSrc, findWOSrc, addRowSrc, updateRowSrc,
-    updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, scopeItemsFromEstimateSrc, scopesTabSrc,
+    updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, grab('function englishOnly('), grab('function estimateLinesEnglish('), grab('function plausiblyNonEnglish('), grab('async function translateBatchToEnglish('), scopeItemsFromEstimateSrc, scopesTabSrc,
     "const APPROVAL_STAGES = ['Estimated', 'Proposed', 'Pre-approved', 'Approved'];",
     grabRange('async function setApprovalStage(', '// POST /admin/backfill-approval-stage'),
     woPushToScopeSrc,
