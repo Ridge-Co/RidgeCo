@@ -8183,7 +8183,7 @@ function invComposeMemo(billId, timeEntries, billObj, wo) {
     return new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0);
   }).forEach(function(e) {
     var d = (e.Start_DateTime || e.Created_Date || '').split('T')[0];
-    var desc = String(e.Invoice_Description || '').trim();
+    var desc = enOnly(e.Invoice_Description || '').trim();
     parts.push(d ? (d + ' — ' + desc) : desc);
   });
   if (parts.length) return parts.join('; ');
