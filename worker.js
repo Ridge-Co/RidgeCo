@@ -22107,7 +22107,8 @@ async function qbSendCombinedInvoice(env, ctx) {
         } catch (e) { warnings.push('Could not read the Receipts tab for bill ' + (r.Bill_ID || r.ID) + '.'); }
       }
 
-      const inv = buildInvoiceLines(r, billRow, trade, tradeName, wo, null, ownReceipts, timeEntries);
+      const _inEn = await invoiceInputsEnglish(env, billRow, timeEntries);
+      const inv = buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
       if (inv.laborAmt < 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: materials exceed its customer total — labor line is negative, check the bill.`);
 
       const vendDisplay = vendor.Name || r.Vendor_Name || ('Vendor ' + (r.Vendor_ID || ''));
