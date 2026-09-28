@@ -741,6 +741,7 @@ export default {
         if (path === '/invoice-review/approve-bulk') return await approveInvoiceReviewBulk(env, body);
         if (path === '/qb/send-invoice')          return await qbSendInvoice(env, body);
         if (path === '/invoice-review/unapprove') return await unapproveInvoiceReview(env, body);
+        if (path === '/qb/undo-send')             return await qbUndoSend(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
@@ -8023,6 +8024,129 @@ async function unapproveInvoiceReview(env, body) {
     bill_restored: billRestored,
     warning: billRestored ? '' : 'The approval is withdrawn, but the vendor bill could not be set back to submitted — it may not reappear in Review Bills. Check the Vendor_Bills row.',
   });
+}
+
+// POST /qb/undo-send { id, reason? }
+// The other half of the fix started by /invoice-review/unapprove: that endpoint refuses the
+// moment QB_Invoice_ID or QB_Bill_ID is set (on purpose — pulling the Hub row back without
+// touching QuickBooks would leave the two systems disagreeing about a real invoice/bill that
+// still exists there), and its error message has always just said "void it in QuickBooks
+// directly." This endpoint IS that direct route, from the Hub: it actually voids the
+// QuickBooks Invoice and/or Bill first (reusing qbDeleteInvoiceSafe/qbDeleteBillSafe, which
+// already refuse — safely, writing nothing — if either transaction has a payment applied),
+// and only once QuickBooks is clean does it do exactly what /invoice-review/unapprove does:
+// flip the Invoice_Review row inactive and put the Vendor_Bills row back to 'submitted' so it
+// reappears in Review Bills to be fixed (receipts re-attached, priced again, etc.) and resent.
+//
+// Real case this closes (Brett, Sep 28 2026): a bill sent to QuickBooks before the
+// receipt-upload-during-billing bug was fixed, so the QB invoice/bill exist at the right
+// total but with no receipt image attached (qbAttachReceipts silently skips any
+// Receipts_JSON entry with no .url — there was never a URL to attach). There was no way
+// back short of fixing it by hand in QuickBooks.
+//
+// Both sides are checked SAFE before either is deleted — never delete one half and then
+// discover the other can't be undone, which would leave QuickBooks and the Hub each missing
+// half of a real transaction.
+async function qbUndoSend(env, body) {
+  try {
+    const id = String(body.id || '').trim();
+    const billIdParam = String(body.bill_id || '').trim();
+    if (!id && !billIdParam) return json({ error: 'id or bill_id required' }, 400);
+
+    const irRows = await fetchTab(env, 'Invoice_Review');
+    const ir = id
+      ? irRows.find(r => String(r.ID) === id)
+      : irRows.find(r => r.Active !== 'FALSE' && String(r.Bill_ID) === billIdParam);
+    if (!ir) return json({ error: `No Invoice_Review row found${id ? ' for id ' + id : ' for bill ' + billIdParam}` }, 404);
+    if (ir.Active === 'FALSE') return json({ error: 'This review row is already withdrawn.' }, 400);
+
+    const invoiceId = (ir.QB_Invoice_ID || '').trim();
+    const billId    = (ir.QB_Bill_ID || '').trim();
+    if (!invoiceId && !billId) {
+      // Nothing was ever sent — the ordinary unapprove path already handles this cleanly.
+      return await unapproveInvoiceReview(env, { id: ir.ID });
+    }
+
+    const token = await qbAccessToken(env);
+
+    // Dry-run both first (read + qbTxnSafeToDelete, no writes) before deleting either.
+    if (invoiceId) {
+      const got = await qbApi(env, `invoice/${encodeURIComponent(invoiceId)}?minorversion=73`, 'GET', null, token);
+      const inv = got && got.Invoice;
+      if (!inv) return json({ error: `Could not read QuickBooks invoice ${invoiceId}: ${qbFault(got) || 'not found'}` }, 502);
+      const safe = qbTxnSafeToDelete('Invoice', invoiceId, inv.Balance, inv.TotalAmt);
+      if (!safe.ok) return json({ error: safe.error, invoice_id: invoiceId, bill_id: billId }, 409);
+    }
+    if (billId) {
+      const got = await qbApi(env, `bill/${encodeURIComponent(billId)}?minorversion=73`, 'GET', null, token);
+      const bill = got && got.Bill;
+      if (!bill) return json({ error: `Could not read QuickBooks bill ${billId}: ${qbFault(got) || 'not found'}` }, 502);
+      const safe = qbTxnSafeToDelete('Bill', billId, bill.Balance, bill.TotalAmt);
+      if (!safe.ok) return json({ error: safe.error, invoice_id: invoiceId, bill_id: billId }, 409);
+    }
+
+    // Both sides confirmed safe (or absent) — now actually delete.
+    const invRes = await qbDeleteInvoiceSafe(env, invoiceId, token);
+    if (!invRes.ok) return json({ error: 'Invoice: ' + invRes.error, invoice_id: invoiceId, bill_id: billId }, 502);
+    const billRes = await qbDeleteBillSafe(env, billId, token);
+    if (!billRes.ok) {
+      // The invoice is already gone and there's no undoing THAT from here — say so plainly
+      // rather than pretending nothing happened. The bill still needs clearing by hand or a
+      // retry of this same call once the reason resolves.
+      return json({
+        ok: false, partial: true,
+        error: 'QuickBooks invoice ' + invoiceId + ' was deleted, but the bill could not be: ' + billRes.error,
+        invoice_id: invoiceId, bill_id: billId,
+      }, 502);
+    }
+
+    // Undo any loan-ledger deduction this send applied — otherwise Brett would owe the
+    // vendor money that was already docked against a bill that no longer exists.
+    let loanReversed = 0;
+    try {
+      const ledger = await fetchTab(env, LOAN_LEDGER_TAB);
+      const entry = ledger.find(r => r.Active !== 'FALSE' && r.Entry_Type === 'auto-deduction' && String(r.Bill_ID) === String(ir.Bill_ID));
+      if (entry) {
+        await updateRow(env, LOAN_LEDGER_TAB, entry.ID, { Active: 'FALSE' });
+        loanReversed = Math.abs(parseFloat(entry.Amount) || 0);
+      }
+    } catch (e) { /* no ledger tab / nothing to reverse — not fatal */ }
+
+    // Mirror /invoice-review/unapprove exactly from here.
+    await updateRow(env, 'Invoice_Review', ir.ID, { Active: 'FALSE', QB_Invoice_Status: 'undone' });
+    let billRestored = false;
+    if (ir.Bill_ID) {
+      try {
+        const res = await updateRow(env, 'Vendor_Bills', ir.Bill_ID, { Status: 'submitted' });
+        const parsed = await res.clone().json();
+        billRestored = !!(parsed && parsed.success);
+      } catch (e) { billRestored = false; }
+    }
+
+    // The send flipped the WO to Invoiced — undo that too, back to Complete (where
+    // addVendorBill leaves a WO once its bill is submitted, which is where this is headed).
+    let woReverted = false;
+    if (ir.WO_ID) {
+      try { await updateWOFields(env, ir.WO_ID, { Status: 'Complete', QBO_Invoice_Number: '' }); woReverted = true; }
+      catch (e) { woReverted = false; }
+    }
+
+    try {
+      await logWOAudit(env, ir.WO_ID || '', body.undone_by || 'Brett', 'admin', 'QB_Send_Undone',
+        `Invoice ${invoiceId || '—'} / Bill ${billId || '—'}`, 'voided',
+        `Undid the QuickBooks send for bill ${ir.Bill_ID || ir.ID} (invoice ${invoiceId || 'none'}, bill ${billId || 'none'} deleted in QuickBooks).` +
+        (loanReversed ? ` Reversed a $${loanReversed.toFixed(2)} loan-ledger deduction.` : '') +
+        (body.reason ? ` Reason: ${body.reason}` : ''));
+    } catch (e) { /* audit is best-effort */ }
+
+    return json({
+      success: true, ok: true, id: ir.ID, wo_id: ir.WO_ID || '', bill_id: ir.Bill_ID || '',
+      invoice_deleted: invRes.doc || invoiceId || '', bill_deleted: billRes.doc || billId || '',
+      loan_reversed: loanReversed,
+      bill_restored: billRestored, wo_reverted: woReverted,
+      warning: billRestored ? '' : 'QuickBooks was undone, but the vendor bill could not be set back to submitted — check the Vendor_Bills row.',
+    });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 async function approveInvoiceReview(env, body) {

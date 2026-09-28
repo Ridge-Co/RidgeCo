@@ -8366,6 +8366,42 @@ function invLoadStatus(k) {
   }).catch(function() { invRenderStatus(k, bill ? { state: 'unknown' } : { state: 'unapproved' }); });
 }
 
+// The other half of "Withdraw approval" (above, in the QB queue) — that one only works
+// BEFORE anything reaches QuickBooks. This is for after: it deletes the real QuickBooks
+// invoice/bill (refused automatically, server-side, if either has a payment applied — nothing
+// here bypasses that) and puts the bill back in Review Bills to be fixed and resent. Reads
+// _invIRRow[k], which invLoadStatus already populated with this job's live QB ids.
+function undoQBSend(k) {
+  var row = _invIRRow[k];
+  if (!row || !row.id) { toast('Could not find the QuickBooks review row for this job.', 'error'); return; }
+  var label = (row.qb_invoice_id ? 'invoice ' + row.qb_invoice_id : '') +
+    (row.qb_invoice_id && row.qb_bill_id ? ' and ' : '') +
+    (row.qb_bill_id ? 'bill ' + row.qb_bill_id : '');
+  var reason = prompt('Undo the QuickBooks send for this job — DELETES ' + (label || 'the QuickBooks record') +
+    ' in QuickBooks (refused automatically if either has a payment applied) and puts the bill back in ' +
+    'Review Bills to be fixed and resent.\n\nWhy? (kept on the job\'s audit trail; leave blank if you just want it undone)');
+  if (reason === null) return;
+
+  var el = document.getElementById('inv-status-' + k);
+  if (el) el.innerHTML = '<div style="color:var(--muted);font-size:11.5px">Undoing in QuickBooks…</div>';
+
+  api('POST', '/qb/undo-send', { id: row.id, reason: reason.trim() }).then(function(res) {
+    if (!res || res.error || res.ok === false) {
+      toast((res && res.error) || 'Could not undo the send', 'error');
+      invLoadStatus(k);
+      return;
+    }
+    toast('QuickBooks send undone — back in Review Bills' +
+      (res.loan_reversed ? ' (loan deduction $' + parseFloat(res.loan_reversed).toFixed(2) + ' reversed)' : ''), 'success');
+    if (res.warning) toast(res.warning, 'error');
+    _invIRRow[k] = null;
+    loadVendorBillForInvoice(k);
+  }).catch(function(e) {
+    toast(e.message, 'error');
+    invLoadStatus(k);
+  });
+}
+
 function invRenderStatus(k, s) {
   var el  = document.getElementById('inv-status-' + k);
   var btn = document.getElementById('inv-bill-btn-' + k);
@@ -8387,12 +8423,14 @@ function invRenderStatus(k, s) {
   } else if (s.state === 'partial') {
     el.innerHTML = band('var(--warn)', '#fdf2e2',
       '⚠ Partly sent — customer invoice <b>' + esc(s.row.qb_invoice_id || '?') + '</b> is in QuickBooks, the vendor bill is not. ' +
-      'Sending again creates only the missing vendor bill; it will not duplicate the invoice.');
+      'Sending again creates only the missing vendor bill; it will not duplicate the invoice.') +
+      '<button onclick="undoQBSend(\'' + k + '\')" style="width:100%;margin-top:6px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:11px;padding:6px;cursor:pointer">↩ Undo send — delete from QuickBooks, back to Review Bills</button>';
     if (btn) btn.textContent = '📤 Finish sending — vendor bill only';
   } else if (s.state === 'sent') {
     // Only ever claimed with the QuickBooks ids in hand.
     el.innerHTML = band('var(--accent2)', '#eaf6ee',
-      '✓ In QuickBooks — invoice <b>' + esc(s.row.qb_invoice_id) + '</b>, vendor bill <b>' + esc(s.row.qb_bill_id) + '</b>.');
+      '✓ In QuickBooks — invoice <b>' + esc(s.row.qb_invoice_id) + '</b>, vendor bill <b>' + esc(s.row.qb_bill_id) + '</b>.') +
+      '<button onclick="undoQBSend(\'' + k + '\')" style="width:100%;margin-top:6px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:11px;padding:6px;cursor:pointer">↩ Undo send — delete from QuickBooks, back to Review Bills</button>';
     if (btn) { btn.textContent = '✓ Already in QuickBooks'; btn.disabled = true; btn.style.opacity = '.5'; }
   } else if (s.state === 'reviewed_no_row') {
     el.innerHTML = band('var(--warn)', '#fdf2e2',
