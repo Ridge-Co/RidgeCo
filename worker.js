@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-28.3-wo-push-test-hook';
+const BUILD_VERSION = '2026-09-28.4-approval-stage';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -322,7 +322,7 @@ export default {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -660,6 +660,7 @@ export default {
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
         if (path === '/admin/backfill-receipt-attachments') return await backfillReceiptAttachments(env, body);
+        if (path === '/admin/backfill-approval-stage') return await backfillApprovalStage(env, body);
         if (path === '/admin/gemini-context-update') return await adminGeminiContextUpdate(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
@@ -3546,7 +3547,7 @@ async function scopeList(env, url) {
     return r.Status;
   }
 
-  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: displayStatus(r), wo_id: r.WO_ID, parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
+  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: displayStatus(r), wo_id: r.WO_ID, approval_stage: r.Approval_Stage || '', parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
 }
 
 // Builds a customer-facing "<Address> Unit <Label>" string for a scope — looks up the real
@@ -3947,6 +3948,7 @@ async function woPushToScope(env, body) {
     convertedMarked = true;
   } catch (e) {}
 
+  await setApprovalStage(env, { woId, scopeId, stage: 'Proposed' });
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) {}
 
   return json({
@@ -3969,6 +3971,8 @@ async function scopeEstimate(env, body) {
   if (body.estimate_notes !== undefined) fields.Estimate_Notes = body.estimate_notes;
   if (['draft', 'approved', 'wo-created'].includes(s.Status)) fields.Status = 'estimated';
   await updateRow(env, 'Scopes', id, fields);
+  // Approval stage: a vendor estimate recorded on a scope that has no stage yet → Estimated.
+  if (body.estimate_amount !== undefined && String(body.estimate_amount) !== '' && !String(s.Approval_Stage || '')) await setApprovalStage(env, { scopeId: id, stage: 'Estimated' });
   // Keep the linked Work Order's own Vendor_ID in sync (Sep 22 2026 fix). A WO created via
   // /scope/to-wo starts fully unassigned (createWorkOrder is called with no vendor_id), and
   // nothing else in the Scope Proposal pipeline — /scope/proposal/sign, scopeProposalBook,
@@ -4732,6 +4736,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   }
 
   await updateRow(env, 'Scopes', s.ID, { Status: 'signed', Updated_Date: now.toISOString() });
+  await setApprovalStage(env, { woId: s.WO_ID || '', scopeId: s.ID, stage: 'Pre-approved' });
   return json({ ok: true, subtotal, deposit, schedule: milestones });
 }
 
@@ -8811,6 +8816,84 @@ async function listEstimates(env, url) {
 // An approved estimate is a commitment the vendor has been told to proceed on, so taking
 // it back has to tell them — otherwise they carry on working to a number that no longer
 // stands.
+// ── APPROVAL STAGE (Sep 28 2026, FEATURE_LOG rule 200) ─────────────────────────────────────────
+// One field — Approval_Stage — on Work_Orders AND Scopes, so Brett can filter jobs/proposals that
+// still need an approval step without opening each one. Stages: Estimated (vendor submitted, waiting
+// on Brett) → Approved (Brett approved on the WO, no owner involved) OR Proposed (pushed to the
+// owner as a proposal) → Pre-approved (owner signed, deposit not yet paid) → Approved (deposit paid).
+// Every transition goes through setApprovalStage so the labels live in exactly one place.
+// Best-effort: a stage write must never fail the real action (approve / sign / push).
+const APPROVAL_STAGES = ['Estimated', 'Proposed', 'Pre-approved', 'Approved'];
+async function setApprovalStage(env, { woId, scopeId, stage, onlyFrom }) {
+  if (!APPROVAL_STAGES.includes(stage)) return false;
+  let ok = false;
+  try {
+    if (woId) {
+      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
+      if (onlyFrom) {
+        const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
+        if (!wo || !onlyFrom.includes(String(wo.Approval_Stage || ''))) return false;
+      }
+      await updateWOFields(env, woId, { Approval_Stage: stage, Estimate_Revised: '' }); ok = true;
+    }
+    if (scopeId) {
+      try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {}
+      await updateRow(env, 'Scopes', scopeId, { Approval_Stage: stage }); ok = true;
+    }
+  } catch (_) { /* best-effort */ }
+  return ok;
+}
+
+// POST /admin/backfill-approval-stage { apply?: true } — idempotent one-time fill of Approval_Stage
+// on existing Work_Orders and Scopes (rule 200). Preview by default. Derivation: signed scope →
+// Pre-approved (the deposit-paid sweep in qbSyncPayments lifts it to Approved); scope-linked WO with a
+// Converted estimate → Proposed; latest estimate Approved → Approved; any other estimate → Estimated.
+// Never overwrites a stage that is already set.
+async function backfillApprovalStage(env, body) {
+  const apply = !!(body && body.apply === true);
+  const [wos, ests, scopes] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Estimates'), fetchTab(env, 'Scopes')]);
+  const latestByWO = {};
+  for (const e of ests) {
+    if (e.Active === 'FALSE' || !e.WO_ID) continue;
+    const cur = latestByWO[e.WO_ID];
+    if (!cur || (parseInt(e.Version) || 0) > (parseInt(cur.Version) || 0)) latestByWO[e.WO_ID] = e;
+  }
+  const scopeStage = sc => (String(sc.Status || '').toLowerCase() === 'signed' ? 'Pre-approved' : '');
+  const scopeByWO = {}; for (const sc of scopes) if (sc.WO_ID && sc.Active !== 'FALSE') scopeByWO[sc.WO_ID] = sc;
+  const plan = [];
+  for (const wo of wos) {
+    if (String(wo.Approval_Stage || '')) continue;
+    const e = latestByWO[wo.ID]; if (!e) continue;
+    const sc = scopeByWO[wo.ID];
+    let stage = '';
+    if (sc && scopeStage(sc)) stage = scopeStage(sc);
+    else if (String(e.Status) === 'Converted' || sc) stage = 'Proposed';
+    else if (String(e.Status) === 'Approved') stage = 'Approved';
+    else stage = 'Estimated';
+    plan.push({ type: 'wo', id: wo.ID, stage });
+  }
+  for (const sc of scopes) {
+    if (String(sc.Approval_Stage || '') || sc.Active === 'FALSE') continue;
+    const wo = sc.WO_ID ? wos.find(w => w.ID === sc.WO_ID) : null;
+    const stage = scopeStage(sc) || (wo && wo.Approval_Stage) || (sc.WO_ID && latestByWO[sc.WO_ID] ? 'Proposed' : '');
+    if (stage) plan.push({ type: 'scope', id: sc.ID, stage });
+  }
+  let written = 0;
+  if (apply && plan.length) {
+    try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
+    try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {}
+    for (const p of plan) {
+      try {
+        if (p.type === 'wo') await updateWOFields(env, p.id, { Approval_Stage: p.stage });
+        else await updateRow(env, 'Scopes', p.id, { Approval_Stage: p.stage });
+        written++;
+      } catch (_) {}
+    }
+  }
+  const counts = {}; plan.forEach(p => { const k = p.type + ':' + p.stage; counts[k] = (counts[k] || 0) + 1; });
+  return json({ success: true, applied: apply, planned: plan.length, written, counts, sample: plan.slice(0, 15) });
+}
+
 async function unapproveEstimate(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   const all = await fetchTab(env, 'Estimates');
@@ -8834,6 +8917,7 @@ async function unapproveEstimate(env, body) {
   const noteCol = headers.indexOf('Approval_Note');
   if (noteCol > -1) batch.push({ range: `Estimates!${col(noteCol)}${sheetRow}`, values: [[note]] });
   await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batch });
+  await setApprovalStage(env, { woId, stage: 'Estimated' });
 
   // Tell the vendor. They were told to proceed; they need to know that's paused.
   let vendorTold = false;
@@ -8872,6 +8956,7 @@ async function approveEstimate(env, body) {
   const optionalCols = { Approved_By: approvedBy, Approved_Date: new Date().toISOString(), Approval_Note: approvalNote };
   Object.entries(optionalCols).forEach(([colName, val]) => { const idx = headers.indexOf(colName); if (idx > -1) batch.push({ range: `Estimates!${colLetter(idx)}${sheetRow}`, values: [[val]] }); });
   await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batch });
+  await setApprovalStage(env, { woId, stage: 'Approved' });
   if (latest.Vendor_ID) {
     try { const vendors = await fetchTab(env, 'Vendors'); const vendor = vendors.find(v => v.ID === latest.Vendor_ID); if (vendor?.Phone) { const msg = requestDeposit ? `Estimate approved for WO ${woId} ($${latest.Subtotal}). Deposit being requested from customer — we'll confirm once received.` : `Estimate approved for WO ${woId} ($${latest.Subtotal}). You're clear to proceed — no deposit required for this job.`; await sendSMS(env, vendor.Phone, msg); } } catch(e) {}
   }
@@ -9018,6 +9103,20 @@ async function addEstimateVersion(env, body) {
 
   await addRow(env, 'Estimates', { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: lineItemsJson, Subtotal: subtotal.toFixed(2), Change_Reason: nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised'), Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' });
   try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
+  // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
+  // the job was approved/proposed/signed means something changed — do NOT silently reset the stage
+  // (that hides a signed job's change); flag it "revised" so Brett reviews it (change order vs
+  // re-approval is his call, see FEATURE_LOG rule 200).
+  try {
+    const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    const cur = String((wo && wo.Approval_Stage) || '');
+    if (['Approved', 'Proposed', 'Pre-approved'].includes(cur) && nextVersion > 1) {
+      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
+      await updateWOFields(env, woId, { Estimate_Revised: 'v' + nextVersion + ' $' + subtotal.toFixed(2) + ' (' + new Date().toISOString().slice(0, 10) + ')' });
+    } else {
+      await setApprovalStage(env, { woId, stage: 'Estimated' });
+    }
+  } catch (_) {}
   return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
 }
 
@@ -17581,6 +17680,19 @@ async function qbSyncPayments(env, body) {
       } catch (e) { failed++; }
     }
 
+    // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
+    // Pre-approved). Strictly customer_paid === true; only lifts Pre-approved, never downgrades.
+    if (r.source === 'scope_signature' && r.phase === 'deposit' && r.customer_paid === true && r.signature_id) {
+      try {
+        const sigs = await fetchTab(env, 'Scope_Signatures');
+        const sig = sigs.find(x => x.ID === r.signature_id);
+        const scId = sig && sig.Scope_ID;
+        if (scId) {
+          const sc = (await fetchTab(env, 'Scopes')).find(x => x.ID === scId);
+          if (sc && String(sc.Approval_Stage || '') === 'Pre-approved') await setApprovalStage(env, { woId: sc.WO_ID || '', scopeId: scId, stage: 'Approved' });
+        }
+      } catch (e) { /* non-fatal */ }
+    }
     // When QuickBooks POSITIVELY reports the vendor bill paid, mark the work order Paid so it
     // drops off the active work list. Strictly === true (never on an unknown/null read), and
     // never over a WO already in a done state — so re-running is a safe no-op. For a Signed-
