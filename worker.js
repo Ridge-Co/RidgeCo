@@ -9601,12 +9601,147 @@ async function translateToEnglish(env, text) {
 // Generic one-shot translation used by the Shareable WO (B-117) to show the vendor the job
 // details in Spanish. Keeps proper nouns / addresses / codes intact; returns the source
 // text unchanged on any miss so a translation outage never blanks the work order.
-async function translateText(env, text, fromLabel, toLabel) {
+// opts (optional, Sep 28 2026): { preserve:true } appends the link/PIN/amount-preservation rules,
+// { html:true } tells the model the input is HTML, { max_tokens } raises the default 600.
+async function translateText(env, text, fromLabel, toLabel, opts) {
   if (!env.ANTHROPIC_API_KEY || !text || !String(text).trim()) return text;
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written. Return only the translation, nothing else:\n\n${text}`}] }) });
+    const extra = (opts && opts.preserve ? ' ' + VENDOR_TRANSLATE_PRESERVE : '') + (opts && opts.html ? ' The input is HTML: keep every tag, attribute and link exactly as-is and translate only the visible text.' : '');
+    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:(opts && opts.max_tokens) || 600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written.${extra} Return only the translation, nothing else:\n\n${text}`}] }) });
     const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
   } catch(e) { return text; }
+}
+
+// ── VENDOR TRANSLATION (Sep 28 2026, feat/vendor-translation-send-to-vendor) ────────────────────
+// Outbound: everything the Hub sends a vendor whose Vendors.Language is 'es' goes out in Spanish
+// (English original kept in Message_Queue / WO_Audit). Inbound: vendor-written estimate text is
+// kept as written and an English copy is stored beside it (desc_en / Change_Reason_EN), so Brett,
+// the owner proposal and the invoice all read English. Every helper here FAILS OPEN — on any miss
+// (no API key, timeout, bad model output, a link/PIN/amount that did not survive) the ORIGINAL
+// text is used and the send/save is never blocked.
+const VENDOR_TRANSLATE_PRESERVE = 'Keep every URL, link, phone number, PIN, door/lock code, work order id (like WO-1234, [1234] or 1234), "Ref:" reference, dollar amount, date, time, address and proper name EXACTLY as written — never translate, reformat, drop or add them. Keep line breaks. Add no commentary.';
+
+function vendorWantsSpanish(vendor) { return !!vendor && String(vendor.Language || '').trim().toLowerCase() === 'es'; }
+
+// Tokens that must appear, byte-for-byte, in a translation of `text` (links, $ amounts, 4+ digit
+// runs such as phone numbers / PINs / ids). If the model dropped or altered one, the translation
+// is discarded and the English original is sent instead.
+function extractPreservedTokens(text) {
+  const s = String(text || ''), toks = new Set();
+  (s.match(/https?:\/\/[^\s<>"')\]]+/gi) || []).forEach(u => toks.add(u.replace(/[.,;:!?]+$/, '')));
+  (s.match(/\$\s?\d[\d,]*(?:\.\d+)?/g) || []).forEach(d => toks.add(d.replace(/\s+/g, '')));
+  (s.match(/\b\d{4,}\b/g) || []).forEach(n => toks.add(n));
+  (s.match(/\bPIN:?\s*([A-Za-z0-9]{4,})/gi) || []).forEach(m => toks.add(m.replace(/^PIN:?\s*/i, '')));
+  return Array.from(toks);
+}
+function preservedTokensIntact(original, translated) {
+  const out = String(translated || ''), flat = out.replace(/\s+/g, '');
+  return extractPreservedTokens(original).every(t => out.includes(t) || flat.includes(t.replace(/\s+/g, '')));
+}
+function htmlTagSkeleton(html) { return (String(html || '').match(/<\/?[a-zA-Z][^>]*>/g) || []).map(t => t.replace(/\s+/g, ' ')).join('|'); }
+
+// Cheap "is this probably Spanish?" test so English-only estimates never cost a model call.
+function plausiblyNonEnglish(text) {
+  const s = String(text || '');
+  if (!s.trim()) return false;
+  if (/[áéíóúñüÁÉÍÓÚÑÜ¿¡]/.test(s)) return true;
+  const stop = new Set(['el','la','los','las','de','del','para','con','por','una','un','y','se','que','en','es','hay','muy','pero','como','hacer','trabajo','materiales','instalacion','reparacion','cambiar','pintura','mano','obra','bano','cocina','puerta','ventana','tuberia','agua','luz','piso','pared','techo','lavabo','inodoro','llave','arreglar','limpieza','servicio','cotizacion','incluye','pintar','reemplazar','colocar','poner','quitar','tubo','fuga','falta']);
+  const words = s.toLowerCase().match(/[a-z]+/g) || [];
+  let hits = 0; for (const w of words) if (stop.has(w)) hits++;
+  return hits >= 2 || (words.length <= 3 && hits >= 1);
+}
+
+// "[ES] original [EN] english" (the tag pattern vendor notes / bills / receipts are stored in) →
+// the English part. Untagged text is returned unchanged. Used everywhere text is customer-facing.
+function englishOnly(text) {
+  const s = String(text == null ? '' : text);
+  const m = s.match(/\[EN\]\s*([\s\S]*)$/);
+  if (m && m[1].trim()) return m[1].trim();
+  return s.replace(/^\[ES\]\s*/, '');
+}
+
+// Direct-Anthropic translation. Batch of short strings → same-length array; ok:false on any miss.
+async function translateBatchToEnglish(env, strings) {
+  const arr = (strings || []).map(s => String(s == null ? '' : s));
+  const idx = arr.map((s, i) => s.trim() ? i : -1).filter(i => i >= 0);
+  if (!idx.length) return { ok: true, out: arr, called: false };
+  if (!env.ANTHROPIC_API_KEY) return { ok: false, out: arr, error: 'no_api_key' };
+  let timer;
+  try {
+    const ctrl = new AbortController(); timer = setTimeout(() => ctrl.abort(), 20000);
+    const prompt = 'Below is a JSON array of short texts a property-maintenance contractor wrote for an estimate. Translate every item that is in Spanish (or any non-English language) into natural, plain English; return items that are already English EXACTLY unchanged. Keep dollar amounts, numbers, addresses, names and units exactly as written. Return ONLY a JSON array of strings, same length and same order, no commentary.\n\n' + JSON.stringify(idx.map(i => arr[i]));
+    const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }) });
+    const data = await resp.json();
+    const txt = (data && data.content && data.content[0] && data.content[0].text) || '';
+    const m = txt.match(/\[[\s\S]*\]/);
+    const parsed = m ? JSON.parse(m[0]) : null;
+    if (!Array.isArray(parsed) || parsed.length !== idx.length) return { ok: false, out: arr, error: 'bad_response' };
+    const out = arr.slice();
+    idx.forEach((i, k) => { if (typeof parsed[k] === 'string' && parsed[k].trim()) out[i] = parsed[k].trim(); });
+    return { ok: true, out, called: true };
+  } catch (e) { return { ok: false, out: arr, error: String((e && e.message) || e) }; }
+  finally { if (timer) clearTimeout(timer); }
+}
+
+// Estimate → English. Each line keeps its original `desc`; `desc_en` is added only when the
+// English differs. `force` (the Re-translate button) sends every non-blank text to the model;
+// otherwise only text that looks non-English is sent (no cost for English estimates).
+async function estimateEnglishFields(env, lineItems, changeReason, opts) {
+  const force = !!(opts && opts.force);
+  const items = (Array.isArray(lineItems) ? lineItems : []).map(li => Object.assign({}, li));
+  const texts = items.map(li => String((li && li.desc) || '')).concat([String(changeReason || '')]);
+  const pick = texts.map((t, i) => (t.trim() && (force || plausiblyNonEnglish(t))) ? i : -1).filter(i => i >= 0);
+  if (!pick.length) return { line_items: items, change_reason_en: '', ok: true, called: false };
+  const r = await translateBatchToEnglish(env, pick.map(i => texts[i]));
+  const en = texts.slice(); pick.forEach((i, k) => { en[i] = r.out[k]; });
+  const norm = s => String(s || '').trim().toLowerCase();
+  items.forEach((li, i) => {
+    if (pick.indexOf(i) === -1) return;
+    if (r.ok && en[i] && norm(en[i]) !== norm(texts[i])) li.desc_en = en[i]; else if (force && r.ok) delete li.desc_en;
+  });
+  const last = texts.length - 1;
+  const crEn = (pick.indexOf(last) !== -1 && r.ok && norm(en[last]) !== norm(texts[last])) ? en[last] : '';
+  return { line_items: items, change_reason_en: crEn, ok: r.ok, called: true, error: r.error };
+}
+
+// Pure helper any downstream consumer (owner proposal, invoice, push-to-scope) calls to get the
+// English view of an estimate's lines — desc_en when present, else desc (with any [ES]/[EN] tags
+// resolved). `desc_orig` carries the vendor's own wording when it differs.
+function estimateLinesEnglish(estimateOrLines) {
+  let lines = estimateOrLines;
+  if (estimateOrLines && !Array.isArray(estimateOrLines)) { try { lines = JSON.parse(estimateOrLines.Line_Items || '[]'); } catch (_) { lines = []; } }
+  return (Array.isArray(lines) ? lines : []).map(li => {
+    const orig = String((li && li.desc) || '');
+    const en = englishOnly((li && li.desc_en) || orig);
+    return Object.assign({}, li, { desc: en, desc_orig: en !== orig ? orig : undefined });
+  });
+}
+
+// English → Spanish for a vendor recipient. Returns {text, original, translated, lang, skipped_reason}.
+// Only vendors with Language==='es' are ever translated. opts: {already_localized, html, max_tokens}.
+async function translateForVendorDetailed(env, vendor, text, opts) {
+  const original = String(text == null ? '' : text);
+  const wantsEs = vendorWantsSpanish(vendor);
+  const lang = wantsEs ? 'es' : 'en';
+  if (!wantsEs || !original.trim() || (opts && opts.already_localized)) return { text: original, original, translated: false, lang };
+  try {
+    const out = await translateText(env, original, 'English', 'Spanish', { preserve: true, html: !!(opts && opts.html), max_tokens: (opts && opts.max_tokens) || 1200 });
+    if (!out || !String(out).trim() || out === original) return { text: original, original, translated: false, lang, skipped_reason: 'unchanged_or_unavailable' };
+    if (!preservedTokensIntact(original, out)) return { text: original, original, translated: false, lang, skipped_reason: 'preservation_check_failed' };
+    if (opts && opts.html && htmlTagSkeleton(original) !== htmlTagSkeleton(out)) return { text: original, original, translated: false, lang, skipped_reason: 'html_structure_changed' };
+    return { text: String(out), original, translated: true, lang };
+  } catch (e) { return { text: original, original, translated: false, lang, skipped_reason: 'error' }; }
+}
+async function translateForVendor(env, vendor, text, opts) { return (await translateForVendorDetailed(env, vendor, text, opts)).text; }
+
+// Vendor EMAIL (subject + HTML body). Subject and body are translated separately; either falls back
+// to English independently. Use at every gmailSendEmail call whose recipient is a vendor unless the
+// body is already hand-built bilingual (pass already_localized:true).
+async function translateVendorEmail(env, vendor, { subject, html, already_localized }) {
+  if (already_localized || !vendorWantsSpanish(vendor)) return { subject, html, translated: false, original_subject: subject, original_html: html };
+  const s = await translateForVendorDetailed(env, vendor, subject, { max_tokens: 200 });
+  const h = await translateForVendorDetailed(env, vendor, html, { html: true, max_tokens: 3000 });
+  return { subject: s.text, html: h.text, translated: s.translated || h.translated, original_subject: subject, original_html: html };
 }
 
 // ── WO NOTES ─────────────────────────────────────────────────
