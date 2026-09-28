@@ -2025,6 +2025,7 @@ function populateFilterDropdowns() {
   if (vendSel) {
     var cur3 = vendSel.value;
     vendSel.innerHTML = '<option value="">All Vendors</option>' +
+      '<option value="__unassigned__"'+(cur3==='__unassigned__'?' selected':'')+'>— Not Assigned —</option>' +
       safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){ return '<option value="'+v.ID+'"'+(v.ID===cur3?' selected':'')+'>'+v.Name+'</option>'; }).join('');
   }
   var bulkVendSel = document.getElementById('bulk-vendor-sel');
