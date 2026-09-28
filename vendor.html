@@ -1299,6 +1299,14 @@ function renderVendorReceipts(woId, idx, receipts) {
         '<button class="btn btn-sm btn-green" id="vr-add-'+idx+'" onclick="submitVendorReceipt(\''+woId+'\','+idx+')">Add</button>' +
       '</div>' +
       '<textarea id="vr-desc-'+idx+'" rows="2" placeholder="Description: what was purchased" style="width:100%;margin-top:6px;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px"></textarea>' +
+      // Same upload pipeline as the WO photo section's RECEIPT button (portalUploadFiles) —
+      // real <button> + a hidden sibling <input>, never a <label>-wrapped file input (see
+      // context/UI_QA_CHECKLIST.md and buildPhotoSection above).
+      '<div style="margin-top:6px">' +
+        '<button type="button" onclick="document.getElementById(\'vr-photo-input-'+idx+'\').click()" style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:9px 12px;min-height:38px;font-size:11px;font-family:inherit;cursor:pointer;color:var(--text)">📎 Attach Photo</button>' +
+        '<input type="file" accept="image/*,application/pdf" id="vr-photo-input-'+idx+'" onchange="portalUploadFiles(this,\''+woId+'\',\''+esc(propAddr)+'\',\'receipt\',\'vr-uploads-'+idx+'\')" style="display:none">' +
+        '<div id="vr-uploads-'+idx+'" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px"></div>' +
+      '</div>' +
       payToggle +
       '<div id="vr-msg-'+idx+'"></div>' +
     '</div>';
