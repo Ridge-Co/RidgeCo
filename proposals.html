@@ -155,7 +155,17 @@ function render(rev,q){
   const qStatusByTitle={}; allQ.forEach(x=>{const k=normT(x.Title); if(k&&!qStatusByTitle[k]) qStatusByTitle[k]=(x.Status||'greenlit').toLowerCase();});
   let dupCount=0;
   if(items.length){
-    html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
+    // Count how many are still selectable BEFORE deciding whether to render the bulk
+    // controls — a title already queued/built gets no checkbox at all (see below), so
+    // Top3/Top5/All/Clear have nothing to act on once every item's been actioned. Showing
+    // those buttons anyway just looks broken; show a plain status note instead.
+    const selectableCount=items.filter(it=>{
+      const d=qStatusByTitle[normT(it.title)];
+      return !(d==='done'||d==='greenlit'||d==='building');
+    }).length;
+    if(selectableCount>0){
+      html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
+    }
     items.forEach((it,i)=>{
       const dup=qStatusByTitle[normT(it.title)];
       if(dup==='done'||dup==='greenlit'||dup==='building'){
@@ -177,7 +187,8 @@ function render(rev,q){
         +(it.impact?'<div class="pimp">Impact: '+h(it.impact)+'</div>':'')
         +'</div></label>';
     });
-    if(dupCount) html+='<div class="sub" style="margin:2px 2px 6px">'+dupCount+' proposal'+(dupCount>1?'s':'')+' already queued or built — dimmed, not selectable.</div>';
+    if(dupCount && selectableCount>0) html+='<div class="sub" style="margin:2px 2px 6px">'+dupCount+' proposal'+(dupCount>1?'s':'')+' already queued or built — dimmed, not selectable.</div>';
+    if(selectableCount===0) html+='<div class="sub" style="margin:2px 2px 6px">✓ Every proposal from this review is already queued or built — nothing left to approve here.</div>';
     document.getElementById('bar').style.display='block';
   } else {
     // older review or parse fallback — show the full text
