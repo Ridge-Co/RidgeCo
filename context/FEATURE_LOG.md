@@ -1,5 +1,35 @@
 # BrettOS Feature Log — What Works, Don't Break It
 
+## [FL-20260928-2330-vt] Sep 28, 2026 — SHIPPED (PR, not merged): vendor translation + real "Send to Vendor" (BUILD_VERSION 2026-09-28.9)
+Branch `feat/vendor-translation-send-to-vendor-v3` (re-applied on main 6f270b5 after v2 (PR #109) went dirty; supersedes #108/#109). (1) **Outbound vendor text is Spanish for Spanish vendors.**
+New `Vendors.Language` (`en`/`es`, dropdown on Add + Edit Vendor; blank = English). One hook in
+`smsGatedSend` (`kind==='vendor' && !already_localized`) translates via `translateForVendorDetailed`
+(URLs / $ amounts / 4+ digit runs / PIN verified byte-intact or the English original goes out; any miss
+fails open). `Message_Queue` and `WO_Audit` gain `Original_Body` + `Translated_To`; the queued body IS the
+sent (Spanish) text so quiet-hours releases send Spanish. Also wired: `sendPinMessage`, estimate
+unapprove vendor text; the approve/needs-info/decline/deposit-paid vendor texts (rule 201 templated path) are translated by the same smsGatedSend hook. `assignVendor` is hand-bilingual -> `already_localized`. `translateVendorEmail`
+exists but is NOT wired into any vendor email (existing vendor emails are hand-bilingual) — known gap.
+(2) **Estimates keep the vendor's words + an English copy:** per-line `desc_en` in the `Line_Items` JSON and
+`Estimates.Change_Reason_EN` (ensureColumns first). Admin Estimates panel shows an `English:` line only when
+it differs; `POST /estimate/retranslate` (admin-only, writes ONLY desc_en/Change_Reason_EN) + "🌐 Re-translate"
+button. Duplicate-submit guard compares Line_Items with `desc_en` stripped. Review Bills renders `[ES]..[EN]..`
+notes English-first via `renderVendorText`. (3) **English into owner proposal + invoice:** `estimateLinesEnglish()`,
+`scopeItemsFromEstimate` (description = English, `description_orig` = vendor wording), `woPushToScope` translates
+legacy Spanish lines in memory, `scopeEstimate` stores English `Estimate_Notes` (+`Estimate_Notes_Orig`),
+`generateEstimateText`, and all 4 `buildInvoiceLines` sites via `invoiceInputsEnglish` (in-memory only).
+`findVendorPricingLeak` guard untouched. (4) **`POST /wo/share-send`** (admin-only; `hubTestWriteAllowed` case for
+TEST Property + TEST Vendor only): real SMS of the no-login WO link through `smsGatedSend`
+(`vendor_wo_shared`, `already_localized`); the modal has a Send button, language radios, editable text, Copy
+message, Turn off old links; handles no vendor / no phone / quiet-hours hold / gate refusal / test mode.
+(5) Sweep: NO numbered recipient `prompt()` exists in any root page or worker.js (Brett was on a stale cached page;
+index.html already polls `/version` and shows "Update ready — tap to refresh", so no new stale check). (6) The two
+top-bar `prompt()` drafts (📱 Send update, 📸 Request photos) now use `#modal-tenant-update`; ✉️ Message untouched.
+**Regression rules:** never send a vendor translation that lost a link/PIN/amount; never block a send/save on a
+translation failure; never overwrite a vendor's original text (English is derived, additive); `/wo/share-send`
+must stay out of ROLE_SCOPES and PUBLIC_PATHS. Tests: `vendor-translation` 55, `wo-share-send` 47,
+`estimate-translation` 67, `no-numbered-recipient-prompt` 41. Sep 28 rebuild off main: 4 new suites + adjusted suites pass; full-suite failures identical to main's
+baseline (6 pre-existing). Live staging read-backs are recorded in the PR description.
+
 ## [FL-20260928-2100-bp] Sep 28, 2026 — SHIPPED (PR into main, not merged): permanent branch policy + automatic staging sync
 `main` is the single source of truth; `staging` is a disposable copy force-reset to `main` after every push to `main`.
 New: `.github/workflows/sync-staging.yml`, `staging-guard.yml`, `drift-check.yml` (+ `.github/scripts/staging-reset.sh`,

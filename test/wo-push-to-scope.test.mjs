@@ -34,7 +34,7 @@ let pass = 0, fail = 0;
 const t = (n, c) => { if (c) { pass++; } else { fail++; console.log('  ✗ FAIL:', n); } };
 
 // ── Pure mapping helper, tested in isolation first (no Sheets involved) ─────────────────────
-const scopeItemsFromEstimate = new Function(grab('function scopeItemsFromEstimate(') + '\nreturn scopeItemsFromEstimate;')();
+const scopeItemsFromEstimate = new Function(grab('function englishOnly(') + '\n' + grab('function estimateLinesEnglish(') + '\n' + grab('function scopeItemsFromEstimate(') + '\nreturn scopeItemsFromEstimate;')();
 
 console.log('scopeItemsFromEstimate — pure mapping tests\n');
 {
@@ -103,6 +103,7 @@ function makeDb(woRows, estRows, scopeRows) {
 
 function makeFetch(db) {
   return async (url, opts) => {
+    if (String(url).includes('api.anthropic.com') && globalThis.__anthropicStub) return globalThis.__anthropicStub(url, opts);   // translator calls share the same injected fetch
     const full = url.replace(/^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/[^/]+/, '');
     const path = full.split('?')[0];
     const method = opts.method;
@@ -146,7 +147,7 @@ function build(db) {
     'const CORS = {};',
     cacheSrc, srSrc, ensureColumnsSrc, ensureColumnsInnerSrc, ensureTabSrc, idcSrc, colSrc, jsonSrc,
     isMissingTabErrorSrc, missingTabResponseSrc, fetchTabSrc, findWOSrc, addRowSrc, updateRowSrc,
-    updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, scopeItemsFromEstimateSrc, scopesTabSrc,
+    updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, grab('function englishOnly('), grab('function estimateLinesEnglish('), grab('function plausiblyNonEnglish('), grab('async function translateBatchToEnglish('), scopeItemsFromEstimateSrc, scopesTabSrc,
     "const APPROVAL_STAGES = ['Estimated', 'Proposed', 'Pre-approved', 'Approved'];",
     grabRange('async function setApprovalStage(', '// POST /admin/backfill-approval-stage'),
     woPushToScopeSrc,
@@ -241,6 +242,23 @@ const env = { SHEET_ID: 'S' };
   t('preview maps both line items', body.mapped_items.length === 2 && body.mapped_items[0].description === 'Dirt removal');
   t('nothing was actually written to Estimates on preview', estField('Status', estRow(db, '20')) === 'Approved');
   t('nothing was actually written to Scopes on preview', db.Scopes.rows.length === 0);
+}
+
+// ── English into the owner proposal (Sep 28 2026): desc_en wins; older Spanish lines get translated ──
+{
+  const db = makeDb(
+    [{ ID: 'WO-7', Property_ID: '58', Unit_ID: '', Vendor_ID: '6' }],
+    [{ ID: '70', WO_ID: 'WO-7', Vendor_ID: '6', Version: '1', Line_Items: JSON.stringify([{ desc: 'Pintar la sala', desc_en: 'Paint the living room', amount: 300 }, { desc: 'Cambiar el lavabo', amount: 200 }, { desc: 'Replace outlet', amount: 50 }]), Subtotal: '550', Status: 'Approved', Active: 'TRUE' }],
+    []);
+  globalThis.__anthropicStub = async (u, init) => { const c = JSON.parse(init.body).messages[0].content; const arr = JSON.parse(c.slice(c.indexOf('['))); return { json: async () => ({ content: [{ text: JSON.stringify(arr.map(x => x === 'Cambiar el lavabo' ? 'Replace the sink' : x)) }] }) }; };
+  const { woPushToScope } = build(db);
+  const res = await woPushToScope({ ANTHROPIC_API_KEY: 'k' }, { wo_id: 'WO-7', estimate_id: '70' });
+  const body = await res.json();
+  globalThis.__anthropicStub = null;
+  const d = body.mapped_items.map(i => i.description);
+  t('proposal items use desc_en, the on-the-fly translation of an old Spanish line, and leave English alone', d[0] === 'Paint the living room' && d[1] === 'Replace the sink' && d[2] === 'Replace outlet');
+  t('the vendor\'s own wording is kept beside the English (description_orig) and never shown as the description', body.mapped_items[0].description_orig === 'Pintar la sala' && body.mapped_items[1].description_orig === 'Cambiar el lavabo' && !('description_orig' in body.mapped_items[2]));
+  t('nothing Spanish reaches the proposal description text', !d.some(x => /Pintar|Cambiar/.test(x)));
 }
 
 // ── apply: creates a new scope, links it back onto the WO, converts the estimate ────────────
