@@ -3445,6 +3445,8 @@ function scopeCleanItems(arr) {
       id: (it && it.id) || ('li' + (i + 1)), area: (it && it.area) || '', trade: (it && it.trade) || '',
       description: (it && it.description) || '', qty: (it && it.qty) || '', note: (it && it.note) || '',
       variants, selected_key,
+      // vendor's own wording when `description` is the English rendering of it (Sep 28 2026) — kept, never shown to the owner
+      ...((it && it.description_orig) ? { description_orig: String(it.description_orig) } : {}),
     };
   }).filter(it => it.description);
 }
