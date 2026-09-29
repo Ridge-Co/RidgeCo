@@ -17291,6 +17291,7 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds, match) {
       const r = rows[i];
       if (!r || r.Active === 'FALSE') continue;
       if (!keys.every(k => String(r[k] === undefined || r[k] === null ? '' : r[k]) === String(signature[k] === undefined || signature[k] === null ? '' : signature[k]))) continue;
+      if (typeof match === 'function' && !match(r)) continue;   // optional extra predicate (Sep 28 2026: estimates compare Line_Items minus desc_en)
       const ts = Date.parse(r.Created_Date || '');
       // An undateable row must NOT count as a duplicate. Getting this backwards meant any
       // signature-matching row with a blank or hand-typed Created_Date — a bill entered
