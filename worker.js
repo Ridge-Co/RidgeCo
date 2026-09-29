@@ -950,6 +950,15 @@ const _hubWorkerCore = {
   }
 };
 
+// Thin wrapper (Sep 29 2026): every response to the read-only PRODUCTION token is scrubbed of
+// login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
+export default {
+  async fetch(request, env, ctx) {
+    return await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx));
+  },
+  async scheduled(event, env, ctx) { return await _hubWorkerCore.scheduled(event, env, ctx); },
+};
+
 // -- CROSS-HUB ENTITY FEED (BrettOS integration) -----------------------------
 // GET /public/entities-feed
 // Deliberate, versioned, external-facing contract -- this is what BrettOS reads
