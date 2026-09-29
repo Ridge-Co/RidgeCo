@@ -1,5 +1,20 @@
 # BrettOS Feature Log — What Works, Don't Break It
 
+## [FL-20260928-2100-bp] Sep 28, 2026 — SHIPPED (PR into main, not merged): permanent branch policy + automatic staging sync
+`main` is the single source of truth; `staging` is a disposable copy force-reset to `main` after every push to `main`.
+New: `.github/workflows/sync-staging.yml`, `staging-guard.yml`, `drift-check.yml` (+ `.github/scripts/staging-reset.sh`,
+`guard-check.sh`), `context/BRANCH_POLICY_v1.0.md`, and a Branch-policy block at the top of `context/CURRENT.md`.
+**Regression rules (do not break):** (1) never open a feature PR with base `staging`; staging-only PRs need
+`staging-test-only: true` and a `feat/*|fix/*|hotfix/*` head; (2) never commit directly to `staging` or merge
+main<->staging by hand; (3) sync-staging on schedule is CHECK-ONLY, only push-to-main / manual runs rewrite staging;
+(4) the reset must print dropped commits and keep a `staging-before-reset-*` backup tag; (5) if main changes
+`.github/workflows/*` the default token cannot push it to staging, so the run must fail loudly and open the
+"staging reset blocked: workflow files changed" issue; (6) guard message regex is `\bTEMP\b|Nudge staging|stg-sync|Resync`
+(word boundary so "Template" commits pass).
+Root cause fixed: staging-based PRs (#86/#88/#90/#93/#97) never reached main, #107 skipped staging, temp commits on staging,
+manual sync merges (#71/#72), CURRENT.md claiming "PR to main" for a staging-based PR.
+Verified locally only (scratch bare-repo simulation + guard cases); workflows can only run after merge.
+
 ## [FL-20260928-1755-rp] Sep 28, 2026 — FIX: vendor.html receipt attach-photo regression + new attach button
 Two changes in `vendor.html`, same PR. (1) Vendor-reported bug: the per-WO photo section's
 RECEIPT upload button was missing — `buildPhotoSection(...)` was called with `canReceipt: false`
