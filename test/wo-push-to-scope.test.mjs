@@ -103,6 +103,7 @@ function makeDb(woRows, estRows, scopeRows) {
 
 function makeFetch(db) {
   return async (url, opts) => {
+    if (String(url).includes('api.anthropic.com') && globalThis.__anthropicStub) return globalThis.__anthropicStub(url, opts);   // translator calls share the same injected fetch
     const full = url.replace(/^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/[^/]+/, '');
     const path = full.split('?')[0];
     const method = opts.method;
