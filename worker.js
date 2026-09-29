@@ -6002,7 +6002,9 @@ async function createWorkOrder(env, body) {
     // every other caller (tenant submit.html, the Hub's New WO modal, etc.); only
     // workorderSelfServe ever sends these three, and only after ensureColumns has already
     // added them to Work_Orders.
-    Created_By_Vendor: body.created_by_vendor||'', Approval_Source: body.approval_source||'', Approval_Note: body.approval_note||''
+    Created_By_Vendor: body.created_by_vendor||'', Approval_Source: body.approval_source||'', Approval_Note: body.approval_note||'',
+    // Recurring WOs (Sep 28 2026) — only processRecurringWorkOrders/recurPostWO send these, after ensureColumns.
+    Recurring_Template_ID: body.recurring_template_id||'', Recurring_Due: body.recurring_due||'', Owner_Notify_Override: body.owner_notify_override||''
   }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   try {
