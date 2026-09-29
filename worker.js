@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-28.7-estimate-sms-batch-seed';
+const BUILD_VERSION = '2026-09-28.8-recurring-scheduler';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -424,6 +424,7 @@ export default {
         // creation landing.
         if (path === '/master-key/holders')     return await getSheet(env, 'Master_Key_Holders');
         if (path === '/wo-templates')           return await listWOTemplates(env, url);
+        if (path === '/wo-snippets')            return await listWOSnippets(env);
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
@@ -705,8 +706,14 @@ export default {
         if (path === '/master-key/update')        { await ensureColumns(env, 'Master_Keys', ['Code']); return await updateRow(env, 'Master_Keys', body.id, body.fields); }
         if (path === '/master-key/bulk-assign')   return await bulkAssignMasterKey(env, body);
         if (path === '/master-key/set-holder')    return await setMasterKeyHolder(env, body);
-        if (path === '/wo-template/add')          return await addRow(env, 'WO_Templates', body);
-        if (path === '/wo-template/update')       return await updateRow(env, 'WO_Templates', body.id, body.fields);
+        if (path === '/wo-template/add')          { await ensureColumns(env, 'WO_Templates', RECUR_TEMPLATE_COLS); return await addRow(env, 'WO_Templates', recurSanitizeTemplateFields(body)); }
+        if (path === '/wo-template/update')       { await ensureColumns(env, 'WO_Templates', RECUR_TEMPLATE_COLS); return await updateRow(env, 'WO_Templates', body.id, recurSanitizeTemplateFields(body.fields)); }
+        if (path === '/wo-template/post-now')     return await recurPostNow(env, body);
+        if (path === '/wo-template/copy')         return await recurCopyTemplate(env, body);
+        if (path === '/wo-template/link')         return await recurLinkTemplate(env, body);
+        if (path === '/wo-template/preview')      return await recurPreview(env, body);
+        if (path === '/wo-snippet/add')           { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await addRow(env, WO_SNIPPETS_TAB, body); }
+        if (path === '/wo-snippet/update')        { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await updateRow(env, WO_SNIPPETS_TAB, body.id, body.fields); }
         if (path === '/material/add')             return await addRow(env, 'Materials', body);
         if (path === '/material/update')          return await updateRow(env, 'Materials', body.id, body.fields);
         if (path === '/return/add')               return await addRow(env, 'Returns', body);
@@ -6001,7 +6008,9 @@ async function createWorkOrder(env, body) {
     // every other caller (tenant submit.html, the Hub's New WO modal, etc.); only
     // workorderSelfServe ever sends these three, and only after ensureColumns has already
     // added them to Work_Orders.
-    Created_By_Vendor: body.created_by_vendor||'', Approval_Source: body.approval_source||'', Approval_Note: body.approval_note||''
+    Created_By_Vendor: body.created_by_vendor||'', Approval_Source: body.approval_source||'', Approval_Note: body.approval_note||'',
+    // Recurring WOs (Sep 28 2026) — only processRecurringWorkOrders/recurPostWO send these, after ensureColumns.
+    Recurring_Template_ID: body.recurring_template_id||'', Recurring_Due: body.recurring_due||'', Owner_Notify_Override: body.owner_notify_override||''
   }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   try {
@@ -6796,6 +6805,9 @@ async function assignVendor(env, body) {
   // ago — the vendor is assigned (Vendor_ID/Status still update normally) but no message is
   // composed or queued at all, since none was ever meant to exist for that case.
   const notify = body.notify !== false;
+  // Sep 28 2026 (recurring WOs): notify_tenant:false = vendor-only dispatch, no tenant text.
+  // Defaults TRUE so every existing caller behaves exactly as before.
+  const notifyTenantOnAssign = body.notify_tenant !== false;
   const [workorders, vendors, tenants, units, properties, owners] = await fetchTabs(env, [
     'Work_Orders','Vendors','Tenants','Units','Properties','Owners',
   ]);
@@ -6841,10 +6853,10 @@ async function assignVendor(env, body) {
     // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
     // (Sep 14 2026) — deep-links into the portal (vendorPortalLink), not the no-login
     // shareable-link mechanism, specifically to avoid bypassing this same accept-gate.
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg });
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true });
     vendorSMSSent = r.sent;
   }
-  if (notify) {
+  if (notify && notifyTenantOnAssign) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface),
     // and a short job label (woJobLabel) so two same-trade/same-address jobs never read
@@ -11585,7 +11597,11 @@ async function smsGatedSend(env, opts) {
     // bypassQuietHours (Sep 16 2026): property-wide urgent notices — water shutoffs, power
     // outages — can't wait for a 9am release like a routine status update can. Only
     // sendPropertyNotice sets this; every other call site is unaffected and still holds.
-    if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours) {
+    // allowEarlyMorning (Sep 28 2026, Brett): recurring/auto-posted WOs go out at 8:00am ET, an
+    // hour before quiet hours normally end. Only those vendor dispatch texts may set this, and
+    // it only opens the 8:00-8:59am ET hour — 7pm-8am stays held exactly as before.
+    const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
+    if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours && !_earlyMorningOk) {
       const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
@@ -11874,12 +11890,291 @@ async function cronSweep(env) {
   const out = { ok: true, ts: now.toISOString() };
   try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
+  try { out.recurring_wos = await processRecurringWorkOrders(env); } catch (e) { out.recurring_wos = { error: String((e && e.message) || e) }; }
   try { out.estimate_reminders = await processEstimateReminders(env); } catch (e) { out.estimate_reminders = { error: String((e && e.message) || e) }; }
   try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; }
   try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
   try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
   try { out.dead_man_switch = await checkDeadManSwitch(env); } catch (e) { out.dead_man_switch = { error: String((e && e.message) || e) }; }
   return json(out);
+}
+
+// ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
+// A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
+// property/unit when an occurrence comes due — no approval step. Decisions locked with Brett:
+//   • If the previous auto-posted WO for that template+target is still OPEN when the next one is
+//     due → SKIP (record it, do not post, do not retry later).
+//   • Posts at/after 8:00am ET (never after 7pm ET). Vendor dispatch text may go out 8:00-8:59am
+//     ET (allowEarlyMorning); every other quiet-hours rule is unchanged.
+//   • NEVER text the tenant or owner about these — vendor only. Per-template Notify_Tenant=TRUE
+//     is the explicit override (default off). Owners are always suppressed (Owner_Notify_Override='off').
+// The date math below is pure (ISO 'YYYY-MM-DD' strings in, out) so test/recurring-wo.test.mjs
+// exercises it directly.
+const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date'];
+const RECUR_WO_COLS = ['Recurring_Template_ID','Recurring_Due','Owner_Notify_Override'];
+const RECUR_CLOSED_STATUSES = ['Complete','Pending Invoice','Invoiced','Paid','Cancelled','Canceled','Closed','Void','Declined'];
+const RECUR_LOOKBACK_DAYS = 3; // a sweep outage of up to 3 days still catches up an occurrence; older ones are dropped, not posted late
+const RECUR_POST_START_HOUR_ET = 8;
+const WO_SNIPPETS_TAB = 'WO_Snippets';
+const WO_SNIPPETS_COLS = ['ID','Name','Text','Active'];
+
+function recurParseISO(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return { y, m: mo, d };
+}
+function recurDayNum(iso) { const p = recurParseISO(iso); return p ? Date.UTC(p.y, p.m - 1, p.d) / 86400000 : NaN; }
+function recurISOFromDayNum(n) { return new Date(n * 86400000).toISOString().slice(0, 10); }
+function recurAddDays(iso, n) { return recurISOFromDayNum(recurDayNum(iso) + n); }
+function recurWeekday(iso) { return new Date(recurDayNum(iso) * 86400000).getUTCDay(); }
+function recurDaysInMonth(y, m) { return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
+function recurInSeason(iso, seasonStart, seasonEnd) {
+  const s = String(seasonStart || '').trim(), e = String(seasonEnd || '').trim();
+  if (!/^\d{2}-\d{2}$/.test(s) || !/^\d{2}-\d{2}$/.test(e)) return true;
+  const md = iso.slice(5);
+  return s <= e ? (md >= s && md <= e) : (md >= s || md <= e); // wrap-around window (e.g. Nov 1 -> Mar 15) works
+}
+function recurInt(v, dflt) { const n = parseInt(String(v == null ? '' : v), 10); return Number.isFinite(n) ? n : dflt; }
+// Is `iso` a scheduled occurrence date for this template? Ignores Recurrence_Enabled/Active
+// (the caller decides that) but honors start/end dates, frequency and the seasonal window.
+function recurIsOccurrence(tpl, iso) {
+  const start = recurParseISO(tpl.Start_Date), cur = recurParseISO(iso);
+  if (!start || !cur) return false;
+  const dn = recurDayNum(iso), sdn = recurDayNum(tpl.Start_Date);
+  if (dn < sdn) return false;
+  if (tpl.End_Date && recurParseISO(tpl.End_Date) && dn > recurDayNum(tpl.End_Date)) return false;
+  if (String(tpl.Season_Enabled).toUpperCase() === 'TRUE' && !recurInSeason(iso, tpl.Season_Start, tpl.Season_End)) return false;
+  const n = Math.max(1, recurInt(tpl.Freq_Interval, 1));
+  const type = String(tpl.Freq_Type || '');
+  const startWd = recurWeekday(tpl.Start_Date);
+  const monthsDiff = (cur.y * 12 + cur.m) - (start.y * 12 + start.m);
+  if (type === 'days') return (dn - sdn) % n === 0;
+  if (type === 'weekly') {
+    const wd = recurInt(tpl.Freq_Weekday, startWd);
+    const first = sdn + ((wd - startWd + 7) % 7);
+    return dn >= first && recurWeekday(iso) === wd && ((dn - first) / 7) % n === 0;
+  }
+  if (type === 'monthly_date') {
+    const want = Math.min(recurInt(tpl.Freq_Day_Of_Month, start.d), recurDaysInMonth(cur.y, cur.m));
+    return cur.d === want && monthsDiff >= 0 && monthsDiff % n === 0;
+  }
+  if (type === 'monthly_nth') { // "3rd Tuesday", "last Friday"; interval 3 = quarterly
+    const wd = recurInt(tpl.Freq_Weekday, startWd);
+    const nth = recurInt(tpl.Freq_Nth, Math.ceil(start.d / 7));
+    if (recurWeekday(iso) !== wd) return false;
+    const isNth = nth >= 5 ? (cur.d + 7 > recurDaysInMonth(cur.y, cur.m)) : Math.ceil(cur.d / 7) === nth;
+    return isNth && monthsDiff >= 0 && monthsDiff % n === 0;
+  }
+  return false;
+}
+// Most recent occurrence D such that (D - leadDays) is within [today-lookback, today]. '' if none.
+function recurLatestDue(tpl, todayISO, lookbackDays) {
+  const lead = Math.max(0, recurInt(tpl.Lead_Days, 0));
+  const look = lookbackDays == null ? RECUR_LOOKBACK_DAYS : lookbackDays;
+  for (let k = 0; k <= look; k++) {
+    const cand = recurAddDays(todayISO, lead - k);
+    if (recurIsOccurrence(tpl, cand)) return cand;
+  }
+  return '';
+}
+// Next `count` occurrence dates on/after fromISO (for the UI's "next dates" preview). Capped scan.
+function recurNextOccurrences(tpl, fromISO, count) {
+  const out = []; let d = fromISO;
+  for (let i = 0; i < 3700 && out.length < (count || 5); i++) { if (recurIsOccurrence(tpl, d)) out.push(d); d = recurAddDays(d, 1); }
+  return out;
+}
+function recurTargets(tpl) {
+  try {
+    const a = JSON.parse(String((tpl && tpl.Targets) || '[]') || '[]');
+    if (!Array.isArray(a)) return [];
+    const seen = new Set(), out = [];
+    for (const x of a) { if (!x || !x.p) continue; const t = { p: String(x.p), u: x.u ? String(x.u) : '' }; const k = t.p + '|' + t.u; if (!seen.has(k)) { seen.add(k); out.push(t); } }
+    return out;
+  } catch (_) { return []; }
+}
+function recurTargetKey(t) { return t.p + '|' + (t.u || ''); }
+function recurWOIsOpen(wo) { return !RECUR_CLOSED_STATUSES.includes(wo.Status) && String(wo.Active || '').toUpperCase() !== 'FALSE'; }
+function recurEtDateISO(date) { return (date || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
+function recurIsTrue(v) { return String(v == null ? '' : v).toUpperCase() === 'TRUE'; }
+
+// Normalizes/validates schedule fields on the way into the sheet. Unknown keys pass through
+// untouched (Name, Trade, ...). Bad values are dropped/clamped rather than stored.
+function recurSanitizeTemplateFields(f) {
+  if (!f || typeof f !== 'object') return f;
+  const o = { ...f };
+  const TYPES = ['days', 'weekly', 'monthly_date', 'monthly_nth'];
+  if (o.Freq_Type !== undefined && o.Freq_Type !== '' && !TYPES.includes(o.Freq_Type)) delete o.Freq_Type;
+  if (o.Freq_Interval !== undefined) o.Freq_Interval = String(Math.min(365, Math.max(1, recurInt(o.Freq_Interval, 1))));
+  if (o.Freq_Weekday !== undefined && o.Freq_Weekday !== '') o.Freq_Weekday = String(Math.min(6, Math.max(0, recurInt(o.Freq_Weekday, 0))));
+  if (o.Freq_Nth !== undefined && o.Freq_Nth !== '') o.Freq_Nth = String(Math.min(5, Math.max(1, recurInt(o.Freq_Nth, 1))));
+  if (o.Freq_Day_Of_Month !== undefined && o.Freq_Day_Of_Month !== '') o.Freq_Day_Of_Month = String(Math.min(31, Math.max(1, recurInt(o.Freq_Day_Of_Month, 1))));
+  if (o.Lead_Days !== undefined) o.Lead_Days = String(Math.min(60, Math.max(0, recurInt(o.Lead_Days, 0))));
+  for (const k of ['Start_Date', 'End_Date']) if (o[k] && !recurParseISO(o[k])) o[k] = '';
+  for (const k of ['Season_Start', 'Season_End']) if (o[k] && !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(String(o[k]))) o[k] = '';
+  for (const k of ['Recurrence_Enabled', 'Season_Enabled', 'Notify_Tenant']) if (o[k] !== undefined) o[k] = (o[k] === true || recurIsTrue(o[k])) ? 'TRUE' : 'FALSE';
+  if (o.Targets !== undefined && typeof o.Targets !== 'string') o.Targets = JSON.stringify(o.Targets);
+  return o;
+}
+
+let _recurColsReady = false;
+async function recurEnsureCols(env) {
+  if (_recurColsReady) return;
+  await ensureColumns(env, 'WO_Templates', RECUR_TEMPLATE_COLS);
+  await ensureColumns(env, 'Work_Orders', RECUR_WO_COLS);
+  _recurColsReady = true;
+}
+
+// Creates one real WO for (template, target, due). Shared by the sweep and Post Now.
+// opts: { manual, overrides:{description,priority,trade,notes}, now }
+async function recurPostWO(env, tpl, target, due, opts) {
+  opts = opts || {};
+  await recurEnsureCols(env);
+  const notifyTenant = recurIsTrue(tpl.Notify_Tenant);
+  const ov = opts.overrides || {};
+  const baseDesc = ov.description != null ? String(ov.description) : String(tpl.Description || '');
+  const description = [baseDesc, tpl.Link_URL ? `${tpl.Link_Label || 'Link'}: ${tpl.Link_URL}` : ''].filter(Boolean).join('\n\n') || String(tpl.Name || 'Recurring work order');
+  const res = await createWorkOrder(env, {
+    property_id: target.p, unit_id: target.u || '', trade: ov.trade || tpl.Trade || '', description,
+    priority: ov.priority || tpl.Priority || 'normal', type: 'recurring',
+    created_by: opts.manual ? 'admin-recurring-manual' : 'recurring-scheduler',
+    notes: (ov.notes ? ov.notes + ' — ' : '') + `Recurring template #${tpl.ID} "${tpl.Name || ''}"${due ? ' — due ' + due : ''}${opts.manual ? ' (posted manually)' : ''}`,
+    tenant_visible: notifyTenant, tenant_notify_created: notifyTenant, tenant_notify_updates: notifyTenant,
+    recurring_template_id: tpl.ID, recurring_due: due || '', owner_notify_override: 'off',
+  });
+  const created = await res.json();
+  if (!created || !created.id) return { error: (created && created.error) || 'create failed' };
+  if (created.duplicate) return { duplicate: true, wo_id: created.id };
+  let vendor = { assigned: false };
+  if (tpl.Default_Vendor_ID) {
+    try {
+      const ar = await assignVendor(env, { wo_id: created.id, vendor_id: tpl.Default_Vendor_ID, notify: true, notify_tenant: notifyTenant, allow_early_morning_sms: true });
+      const aj = await ar.json();
+      vendor = ar.status >= 400 ? { assigned: false, error: aj.error } : { assigned: true, vendor_sms: !!aj.vendor_sms };
+    } catch (e) { vendor = { assigned: false, error: String((e && e.message) || e) }; }
+  }
+  return { wo_id: created.id, vendor };
+}
+
+async function processRecurringWorkOrders(env, opts) {
+  opts = opts || {};
+  const now = opts.now || new Date();
+  const h = etHour(now);
+  if (h < RECUR_POST_START_HOUR_ET || h >= QUIET_HOURS_START_ET) return { skipped: 'outside posting window (8:00am-7:00pm ET)' };
+  let templates;
+  try { templates = await fetchTab(env, 'WO_Templates'); } catch (e) { return { skipped: 'no WO_Templates tab' }; }
+  templates = templates.filter(t => t.Active !== 'FALSE' && recurIsTrue(t.Recurrence_Enabled));
+  if (!templates.length) return { templates: 0, posted: 0 };
+  await recurEnsureCols(env);
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const today = recurEtDateISO(now);
+  const result = { templates: templates.length, posted: [], skipped_open: [], errors: [] };
+  for (const tpl of templates) {
+    const due = recurLatestDue(tpl, today);
+    if (!due) continue;
+    let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (_) {}
+    let skipsChanged = false, postedAny = false;
+    for (const target of recurTargets(tpl)) {
+      const key = recurTargetKey(target);
+      const mine = workorders.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === target.p && (w.Unit_ID || '') === target.u);
+      if (mine.some(w => w.Recurring_Due === due)) continue;      // already posted for this occurrence
+      if (skips[key] && skips[key] >= due) continue;               // already decided to skip this occurrence
+      const open = mine.find(recurWOIsOpen);
+      if (open) { skips[key] = due; skipsChanged = true; result.skipped_open.push({ template: tpl.ID, target: key, due, open_wo: open.ID }); continue; }
+      try {
+        const r = await recurPostWO(env, tpl, target, due, { now });
+        if (r.error) { result.errors.push({ template: tpl.ID, target: key, error: r.error }); continue; }
+        if (r.wo_id) { workorders.push({ ID: r.wo_id, Recurring_Template_ID: String(tpl.ID), Property_ID: target.p, Unit_ID: target.u, Recurring_Due: due, Status: r.vendor && r.vendor.assigned ? 'Assigned' : 'New' }); postedAny = true; }
+        result.posted.push({ template: tpl.ID, target: key, due, wo_id: r.wo_id, duplicate: !!r.duplicate, vendor: r.vendor });
+      } catch (e) { result.errors.push({ template: tpl.ID, target: key, error: String((e && e.message) || e) }); }
+    }
+    if (skipsChanged || postedAny) {
+      try { await updateRow(env, 'WO_Templates', tpl.ID, { ...(skipsChanged ? { Last_Skips: JSON.stringify(skips) } : {}), ...(postedAny ? { Last_Posted_Date: today } : {}) }); } catch (_) {}
+    }
+  }
+  return result;
+}
+
+// POST /wo-template/post-now { template_id, property_id?, unit_id?, overrides?, save_to_template?, force? }
+// Manual trigger. With no property_id, posts to every linked target. A target whose previous
+// recurring WO is still open returns needs_confirm (nothing posted) unless force:true.
+// overrides edits THIS instance only; save_to_template:true also folds the same edit back
+// into the template.
+async function recurPostNow(env, body) {
+  if (!body.template_id) return json({ error: 'template_id required' }, 400);
+  await recurEnsureCols(env);
+  const tpl = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
+  if (!tpl) return json({ error: 'Template not found' }, 404);
+  let targets = recurTargets(tpl);
+  if (body.property_id) targets = [{ p: String(body.property_id), u: body.unit_id ? String(body.unit_id) : '' }];
+  if (!targets.length) return json({ error: 'This template is not linked to any property/unit yet' }, 400);
+  const ov = body.overrides && typeof body.overrides === 'object' ? body.overrides : {};
+  const workorders = await fetchTab(env, 'Work_Orders');
+  if (!body.force) {
+    const conflicts = [];
+    for (const t of targets) {
+      const open = workorders.find(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === t.p && (w.Unit_ID || '') === t.u && recurWOIsOpen(w));
+      if (open) conflicts.push({ target: recurTargetKey(t), open_wo: open.ID });
+    }
+    if (conflicts.length) return json({ needs_confirm: true, message: 'A previous work order from this template is still open for: ' + conflicts.map(c => c.open_wo).join(', ') + '. Post another anyway?', conflicts });
+  }
+  const results = [];
+  for (const t of targets) {
+    try { results.push({ target: recurTargetKey(t), ...(await recurPostWO(env, tpl, t, '', { manual: true, overrides: ov })) }); }
+    catch (e) { results.push({ target: recurTargetKey(t), error: String((e && e.message) || e) }); }
+  }
+  if (body.save_to_template) {
+    const f = {};
+    if (ov.description != null) f.Description = ov.description;
+    if (ov.priority) f.Priority = ov.priority;
+    if (ov.trade) f.Trade = ov.trade;
+    if (Object.keys(f).length) await updateRow(env, 'WO_Templates', tpl.ID, f);
+  }
+  return json({ success: true, results });
+}
+
+// POST /wo-template/copy { template_id, name?, targets? } — duplicates a template (schedule
+// included) so it can be pointed at another property. Copy starts with NO linked targets unless
+// `targets` is passed, so it can never double-post onto the original's properties.
+async function recurCopyTemplate(env, body) {
+  await recurEnsureCols(env);
+  const src = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
+  if (!src) return json({ error: 'Template not found' }, 404);
+  const copy = { ...src };
+  delete copy.ID;
+  copy.Name = body.name || ((src.Name || 'Template') + ' (copy)');
+  copy.Active = 'TRUE';
+  copy.Targets = Array.isArray(body.targets) ? JSON.stringify(body.targets) : '[]';
+  copy.Last_Skips = ''; copy.Last_Posted_Date = '';
+  return await addRow(env, 'WO_Templates', copy);
+}
+
+// POST /wo-template/link { template_id, property_id, unit_id?, action:'add'|'remove' } — the one
+// write path the Templates page, Property page and Unit page all use, so links stay in sync.
+async function recurLinkTemplate(env, body) {
+  if (!body.template_id || !body.property_id) return json({ error: 'template_id and property_id required' }, 400);
+  await recurEnsureCols(env);
+  const tpl = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
+  if (!tpl) return json({ error: 'Template not found' }, 404);
+  const t = { p: String(body.property_id), u: body.unit_id ? String(body.unit_id) : '' };
+  let list = recurTargets(tpl).filter(x => recurTargetKey(x) !== recurTargetKey(t));
+  if (body.action !== 'remove') list.push(t);
+  await updateRow(env, 'WO_Templates', tpl.ID, { Targets: JSON.stringify(list) });
+  return json({ success: true, targets: list });
+}
+
+// POST /wo-template/preview { fields } — next 6 occurrence dates for a schedule as edited in the
+// UI (not yet saved), using the same engine the sweep uses.
+async function recurPreview(env, body) {
+  const f = recurSanitizeTemplateFields(body.fields || {});
+  const today = recurEtDateISO();
+  return json({ dates: recurNextOccurrences(f, today, 6) });
+}
+
+async function listWOSnippets(env) {
+  try { return json((await fetchTab(env, WO_SNIPPETS_TAB)).filter(s => s.Active !== 'FALSE')); } catch (e) { return json([]); }
 }
 
 // POST /message-queue/skip { ids:[...] } — never deletes (Active stays TRUE); matches the
@@ -16896,6 +17191,34 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   if (path === '/assign') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
+  // Recurring WO templates (Sep 28 2026). Templates hold no PII, but every one of these paths can
+  // eventually create real WOs / vendor SMS, so the token may only touch templates whose Name is
+  // TEST- prefixed, and post-now additionally requires every target property to be a TEST- fixture
+  // and the default vendor (if any) to be a TEST- vendor.
+  if (path === '/wo-template/add') return String((body && body.Name) || '').startsWith('TEST-');
+  if (path === '/wo-template/copy') {
+    const _s = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body && body.template_id));
+    return !!_s && String(_s.Name || '').startsWith('TEST-') && (!body.name || String(body.name).startsWith('TEST-'));
+  }
+  if (path === '/wo-template/update' || path === '/wo-template/link' || path === '/wo-template/post-now') {
+    const _id = path === '/wo-template/update' ? (body && body.id) : (body && body.template_id);
+    const _t = (await fetchTab(env, 'WO_Templates')).find(x => String(x.ID) === String(_id));
+    if (!_t || !String(_t.Name || '').startsWith('TEST-')) return false;
+    if (path === '/wo-template/link') return await isTestRecord(env, 'Properties', body && body.property_id);
+    if (path === '/wo-template/post-now') {
+      const _tg = body && body.property_id ? [{ p: body.property_id }] : recurTargets(_t);
+      if (!_tg.length) return false;
+      for (const x of _tg) { if (!(await isTestRecord(env, 'Properties', x.p))) return false; }
+      if (_t.Default_Vendor_ID && !(await isTestRecord(env, 'Vendors', _t.Default_Vendor_ID))) return false;
+    }
+    return true;
+  }
+  if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
+  if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
+  if (path === '/wo-snippet/update') {
+    const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    return !!_sn && String(_sn.Name || '').startsWith('TEST-');
   }
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);

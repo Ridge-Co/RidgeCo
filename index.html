@@ -3576,6 +3576,7 @@ function openUnitDetail(propId, unitId) {
   var buildingHasExtras     = buildingKeys.length > buildingKeysDeduped.length;
   var unitHasExtras         = unitSpecificKeys.length > unitKeysDeduped.length;
 
+  html += '<div id="unit-rec-section" style="margin-bottom:14px"></div>';
   html += '<div>' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
       '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">🔒 ACCESS</div>' +
@@ -3624,6 +3625,7 @@ function openUnitDetail(propId, unitId) {
   window._unitDetailContext = { propId: propId, unitId: unitId };
 
   openModal('modal-unit-detail');
+  loadUnitRecurring(propId, unitId);
 }
 
 
@@ -6798,20 +6800,219 @@ function renderTemplates() {
   var el = document.getElementById('templates-list');
   if (!el) return;
   if (!_woTemplates.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No custom templates yet. Built-in templates (HVAC filter, pest control, etc.) are always available from "📋 From Template" when creating a WO. Add one here to make it show up there too.</div>'; return; }
-  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Link</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Schedule</th><th></th></tr></thead><tbody>' +
     _woTemplates.filter(function(t){ return t.Active!=='FALSE'; }).map(function(t) {
       var owner = safeArray(state.owners).find(function(o){ return o.ID===t.Owner_ID; });
       return '<tr>' +
         '<td style="font-weight:bold">' + esc(t.Name||'—') + '</td>' +
         '<td>' + esc(t.Trade||'—') + '</td>' +
         '<td style="color:var(--muted);font-size:11px">' + (owner?esc(owner.First_Name+(owner.Company?' / '+owner.Company:'')):'Global') + '</td>' +
-        '<td>' + (t.Link_URL?'<a href="'+esc(t.Link_URL)+'" target="_blank" style="color:var(--info)">'+esc(t.Link_Label||'View')+'</a>':'—') + '</td>' +
+        '<td style="font-size:11px">' + recurSummaryHtml(t) + (t.Link_URL?'<div><a href="'+esc(t.Link_URL)+'" target="_blank" style="color:var(--info)">'+esc(t.Link_Label||'View')+'</a></div>':'') + '</td>' +
         '<td style="white-space:nowrap">' +
           '<button class="btn small" style="margin-right:6px;min-height:32px" onclick="openEditTemplateModal(\''+t.ID+'\')">Edit</button>' +
+          '<button class="btn small secondary" style="margin-right:6px;min-height:32px" onclick="openPostNowModal(\''+t.ID+'\')">Post Now</button>' +
+          '<button class="btn small secondary" style="margin-right:6px;min-height:32px" onclick="copyTemplate(\''+t.ID+'\')">Copy</button>' +
           '<button class="btn small secondary" style="margin-right:6px;min-height:32px" onclick="createWOFromTemplate(\''+t.ID+'\')">Create WO</button>' +
           '<button class="btn small danger" style="min-height:32px" onclick="if(confirm(\'Delete?\')) api(\'POST\',\'/wo-template/update\',{id:\''+t.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshTemplates)">Del</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
+}
+
+// ── Recurring / scheduled work orders (Sep 28 2026) ─────────────────────────────────────────
+var _tmplTargets = [];   // [{p:propertyId,u:unitId|''}] being edited in the template modal
+var _woSnippets = [];
+var _RECUR_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+var _RECUR_NTH = {1:'1st',2:'2nd',3:'3rd',4:'4th',5:'last'};
+function recurIsOn(v) { return String(v||'').toUpperCase()==='TRUE'; }
+function recurTargetsOf(t) { try { var a = JSON.parse(t.Targets||'[]'); return Array.isArray(a)?a.filter(function(x){return x&&x.p;}):[]; } catch(e) { return []; } }
+function recurTargetLabel(x) {
+  var p = safeArray(state.properties).find(function(q){ return String(q.ID)===String(x.p); });
+  var u = x.u ? safeArray(state.units).find(function(q){ return String(q.ID)===String(x.u); }) : null;
+  return (p ? p.Address : 'Property '+x.p) + (u ? ' — ' + (u.Unit_Label||'Unit') : '');
+}
+function recurDescribe(t) {
+  var n = parseInt(t.Freq_Interval,10)||1, type = t.Freq_Type, s = '';
+  if (type==='days') s = n===1 ? 'Every day' : 'Every '+n+' days';
+  else if (type==='weekly') s = (n===1?'Weekly':n===2?'Every 2 weeks':'Every '+n+' weeks') + ' on ' + (_RECUR_DAYS[parseInt(t.Freq_Weekday,10)]||'start weekday');
+  else if (type==='monthly_date') s = (n===1?'Monthly':n===3?'Quarterly':'Every '+n+' months') + ' on the ' + (t.Freq_Day_Of_Month||'start') + (t.Freq_Day_Of_Month?'th':' date');
+  else if (type==='monthly_nth') s = (n===1?'Monthly':n===3?'Quarterly':'Every '+n+' months') + ' — ' + (_RECUR_NTH[parseInt(t.Freq_Nth,10)]||'') + ' ' + (_RECUR_DAYS[parseInt(t.Freq_Weekday,10)]||'');
+  else s = 'Schedule incomplete';
+  if (recurIsOn(t.Season_Enabled) && t.Season_Start && t.Season_End) s += ', ' + t.Season_Start + ' → ' + t.Season_End + ' each year';
+  if (t.End_Date) s += ', until ' + t.End_Date;
+  return s;
+}
+function recurSummaryHtml(t) {
+  if (!recurIsOn(t.Recurrence_Enabled)) return '<span style="color:var(--muted)">Manual only</span>';
+  var tg = recurTargetsOf(t), v = safeArray(state.vendors).find(function(x){ return x.ID===t.Default_Vendor_ID; });
+  return '<div><b>🔁 ' + esc(recurDescribe(t)) + '</b></div>' +
+    '<div style="color:var(--muted)">' + (tg.length ? tg.length+' linked location'+(tg.length>1?'s':'') : '<span style="color:#b42318">not linked to any property yet</span>') +
+    (v ? ' · vendor: '+esc(v.Name) : ' · no default vendor') + (recurIsOn(t.Notify_Tenant) ? ' · tenant notified' : '') + '</div>';
+}
+function toggleRecurrenceBox() {
+  var on = document.getElementById('tmpl-rec-on').checked;
+  document.getElementById('tmpl-rec-box').style.display = on ? '' : 'none';
+  document.getElementById('tmpl-season-box').style.display = (on && document.getElementById('tmpl-season-on').checked) ? 'flex' : 'none';
+  if (on) syncRecurrenceFields();
+}
+function syncRecurrenceFields() {
+  var type = document.getElementById('tmpl-ftype').value;
+  document.getElementById('tmpl-fweekday-g').style.display = (type==='weekly'||type==='monthly_nth') ? '' : 'none';
+  document.getElementById('tmpl-fnth-g').style.display = type==='monthly_nth' ? '' : 'none';
+  document.getElementById('tmpl-fdom-g').style.display = type==='monthly_date' ? '' : 'none';
+}
+function applyRecurrencePreset() {
+  var v = document.getElementById('tmpl-preset').value; if (!v || v==='custom') return;
+  var P = { weekly1:['weekly',1], weekly2:['weekly',2], weekly4:['weekly',4], monthly1:['monthly_date',1], quarterly:['monthly_date',3], nth3tue:['monthly_nth',1] }[v];
+  document.getElementById('tmpl-ftype').value = P[0]; document.getElementById('tmpl-finterval').value = P[1];
+  if (v==='nth3tue') { document.getElementById('tmpl-fnth').value = '3'; document.getElementById('tmpl-fweekday').value = '2'; }
+  var st = document.getElementById('tmpl-start').value;
+  if (!st) { st = new Date().toLocaleDateString('en-CA'); document.getElementById('tmpl-start').value = st; }
+  var d = new Date(st + 'T12:00:00');
+  if (P[0]==='weekly') document.getElementById('tmpl-fweekday').value = String(d.getDay());
+  if (P[0]==='monthly_date') document.getElementById('tmpl-fdom').value = String(d.getDate());
+  syncRecurrenceFields();
+}
+function recurFillForm(t) {
+  var $ = function(id){ return document.getElementById(id); };
+  $('tmpl-rec-on').checked = recurIsOn(t.Recurrence_Enabled);
+  $('tmpl-preset').value = '';
+  $('tmpl-ftype').value = t.Freq_Type || 'weekly';
+  $('tmpl-finterval').value = t.Freq_Interval || 1;
+  $('tmpl-fweekday').value = (t.Freq_Weekday!==undefined && t.Freq_Weekday!=='') ? t.Freq_Weekday : '1';
+  $('tmpl-fnth').value = t.Freq_Nth || '1';
+  $('tmpl-fdom').value = t.Freq_Day_Of_Month || '';
+  $('tmpl-start').value = t.Start_Date || ''; $('tmpl-end').value = t.End_Date || '';
+  $('tmpl-lead').value = t.Lead_Days || 0;
+  $('tmpl-season-on').checked = recurIsOn(t.Season_Enabled);
+  $('tmpl-season-start').value = t.Season_Start ? '2000-'+t.Season_Start : ''; $('tmpl-season-end').value = t.Season_End ? '2000-'+t.Season_End : '';
+  $('tmpl-notify-tenant').checked = recurIsOn(t.Notify_Tenant);
+  $('tmpl-preview').textContent = '';
+  var vs = $('tmpl-vendor');
+  vs.innerHTML = '<option value="">None — post unassigned</option>' + safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';}).map(function(v){ return '<option value="'+v.ID+'">'+esc(v.Name)+(v.Trade?' — '+esc(v.Trade):'')+'</option>'; }).join('');
+  vs.value = t.Default_Vendor_ID || '';
+  _tmplTargets = recurTargetsOf(t).map(function(x){ return {p:String(x.p), u:x.u?String(x.u):''}; });
+  var ps = $('tmpl-tgt-prop');
+  ps.innerHTML = '<option value="">Add a property…</option>' + safeArray(state.properties).filter(function(p){return p.Active!=='FALSE';}).map(function(p){ return '<option value="'+p.ID+'">'+esc(p.Address)+'</option>'; }).join('');
+  fillTemplateTargetUnits(); renderTemplateTargets(); toggleRecurrenceBox();
+  loadSnippets();
+}
+function fillTemplateTargetUnits() {
+  var pid = document.getElementById('tmpl-tgt-prop').value, us = document.getElementById('tmpl-tgt-unit');
+  var units = safeArray(state.units).filter(function(u){ return String(u.Property_ID)===String(pid) && u.Active!=='FALSE'; });
+  us.innerHTML = '<option value="">Whole property / single family</option>' + units.map(function(u){ return '<option value="'+u.ID+'">'+esc(u.Unit_Label||('Unit '+u.ID))+'</option>'; }).join('');
+}
+function addTemplateTarget() {
+  var pid = document.getElementById('tmpl-tgt-prop').value, uid = document.getElementById('tmpl-tgt-unit').value;
+  if (!pid) { toast('Pick a property first','error'); return; }
+  if (!_tmplTargets.some(function(x){ return x.p===pid && x.u===uid; })) _tmplTargets.push({p:pid,u:uid});
+  renderTemplateTargets();
+}
+function removeTemplateTarget(i) { _tmplTargets.splice(i,1); renderTemplateTargets(); }
+function renderTemplateTargets() {
+  var el = document.getElementById('tmpl-targets');
+  el.innerHTML = _tmplTargets.length ? _tmplTargets.map(function(x,i){
+    return '<span style="display:inline-flex;align-items:center;gap:6px;background:#e8f0fb;border-radius:12px;padding:3px 10px;margin:0 6px 6px 0;font-size:12px">'+esc(recurTargetLabel(x))+' <a href="#" onclick="removeTemplateTarget('+i+');return false" style="color:#b42318;text-decoration:none">✕</a></span>';
+  }).join('') : '<span style="color:var(--muted);font-size:12px">Not linked to anything yet — it won\'t post until you add a property or unit.</span>';
+}
+function recurReadForm(noValidate) {
+  var $ = function(id){ return document.getElementById(id); };
+  var on = $('tmpl-rec-on').checked;
+  var f = { Recurrence_Enabled: on?'TRUE':'FALSE', Targets: JSON.stringify(_tmplTargets), Default_Vendor_ID: $('tmpl-vendor').value, Notify_Tenant: $('tmpl-notify-tenant').checked?'TRUE':'FALSE',
+    Freq_Type: $('tmpl-ftype').value, Freq_Interval: $('tmpl-finterval').value||'1', Freq_Weekday: $('tmpl-fweekday').value, Freq_Nth: $('tmpl-fnth').value, Freq_Day_Of_Month: $('tmpl-fdom').value,
+    Start_Date: $('tmpl-start').value, End_Date: $('tmpl-end').value, Lead_Days: $('tmpl-lead').value||'0',
+    Season_Enabled: $('tmpl-season-on').checked?'TRUE':'FALSE', Season_Start: $('tmpl-season-start').value.slice(5), Season_End: $('tmpl-season-end').value.slice(5) };
+  if (on && !noValidate) {
+    if (!f.Start_Date) return { error: 'Pick a start date for the schedule' };
+    if (f.End_Date && f.End_Date < f.Start_Date) return { error: 'End date is before the start date' };
+    if (f.Freq_Type==='monthly_date' && !f.Freq_Day_Of_Month) return { error: 'Enter the day of the month' };
+    if (f.Season_Enabled==='TRUE' && (!f.Season_Start || !f.Season_End)) return { error: 'Set both ends of the yearly window (or untick it)' };
+    if (!_tmplTargets.length && !confirm('This schedule is not linked to any property or unit, so it will not post anything yet. Save anyway?')) return { error: 'Add a property/unit to the schedule' };
+  }
+  return { fields: f };
+}
+function previewRecurrence() {
+  var f = recurReadForm(true).fields;
+  if (!f.Start_Date) { toast('Pick a start date first','error'); return; }
+  api('POST','/wo-template/preview',{fields:f}).then(function(r){
+    document.getElementById('tmpl-preview').textContent = (r && r.dates && r.dates.length) ? r.dates.join(' · ') : 'No upcoming dates with these settings';
+  });
+}
+function loadSnippets() {
+  return api('GET','/wo-snippets').then(function(items){
+    _woSnippets = Array.isArray(items)?items:[];
+    var sel = document.getElementById('tmpl-snippet'); if (!sel) return;
+    sel.innerHTML = '<option value="">📎 Insert saved text snippet…</option>' + _woSnippets.map(function(x){ return '<option value="'+x.ID+'">'+esc(x.Name)+'</option>'; }).join('');
+  }).catch(function(){});
+}
+function insertTemplateSnippet() {
+  var id = document.getElementById('tmpl-snippet').value; if (!id) return;
+  var sn = _woSnippets.find(function(x){ return x.ID===id; }); if (!sn) return;
+  var ta = document.getElementById('tmpl-desc');
+  ta.value = (ta.value ? ta.value + '\n\n' : '') + (sn.Text||'');
+}
+function saveDescAsSnippet() {
+  var ta = document.getElementById('tmpl-desc'), txt = ta.value.substring(ta.selectionStart||0, ta.selectionEnd||0).trim() || ta.value.trim();
+  if (!txt) { toast('Nothing in the description to save','error'); return; }
+  var name = prompt('Name this snippet (uses the highlighted text, or the whole description):'); if (!name) return;
+  api('POST','/wo-snippet/add',{Name:name.trim(),Text:txt,Active:'TRUE'}).then(function(r){ if (r && r.id) { toast('Snippet saved','success'); loadSnippets(); } else toast('Could not save snippet','error'); });
+}
+function copyTemplate(id) {
+  var t = _woTemplates.find(function(x){ return x.ID===id; }); if (!t) return;
+  var name = prompt('Name for the copy:', (t.Name||'Template')+' (copy)'); if (!name) return;
+  api('POST','/wo-template/copy',{template_id:id,name:name}).then(function(r){
+    if (r && r.id) { toast('Copied — link it to a property, then edit','success'); refreshTemplates().then(function(){ openEditTemplateModal(r.id); }); }
+    else toast((r&&r.error)||'Copy failed','error');
+  });
+}
+function openPostNowModal(id) {
+  var t = _woTemplates.find(function(x){ return x.ID===id; }); if (!t) return;
+  var tg = recurTargetsOf(t);
+  document.getElementById('pn-id').value = id;
+  document.getElementById('pn-info').textContent = 'Creates a real work order from "'+(t.Name||'')+'" right now'+(t.Default_Vendor_ID?' and texts the default vendor.':' (no default vendor — it will be unassigned).');
+  var sel = document.getElementById('pn-target');
+  sel.innerHTML = (tg.length>1 ? '<option value="">All '+tg.length+' linked locations</option>' : '') + tg.map(function(x,i){ return '<option value="'+i+'">'+esc(recurTargetLabel(x))+'</option>'; }).join('');
+  if (!tg.length) sel.innerHTML = '<option value="">— not linked to any property —</option>';
+  document.getElementById('pn-desc').value = t.Description || '';
+  document.getElementById('pn-priority').value = t.Priority || 'normal';
+  document.getElementById('pn-save').checked = false;
+  window._pnTargets = tg;
+  openModal('modal-post-now');
+}
+function submitPostNow(force) {
+  var id = document.getElementById('pn-id').value, t = _woTemplates.find(function(x){ return x.ID===id; });
+  var tg = window._pnTargets || [], idx = document.getElementById('pn-target').value;
+  if (!tg.length) { toast('Link this template to a property first','error'); return; }
+  var body = { template_id:id, force:!!force, save_to_template:document.getElementById('pn-save').checked,
+    overrides:{ description:document.getElementById('pn-desc').value, priority:document.getElementById('pn-priority').value } };
+  if (idx !== '' && tg[parseInt(idx,10)]) { body.property_id = tg[parseInt(idx,10)].p; body.unit_id = tg[parseInt(idx,10)].u; }
+  var btn = document.getElementById('pn-btn'); btn.disabled = true;
+  api('POST','/wo-template/post-now',body).then(function(r){
+    btn.disabled = false;
+    if (r && r.needs_confirm) { if (confirm(r.message)) submitPostNow(true); return; }
+    if (r && r.success) {
+      var ids = (r.results||[]).map(function(x){ return x.wo_id || ('error: '+(x.error||'?')); }).join(', ');
+      toast('Posted: '+ids,'success'); closeModal('modal-post-now'); refreshTemplates(); if (typeof loadAll==='function') loadAll();
+    } else toast((r&&r.error)||'Post failed','error');
+  }).catch(function(){ btn.disabled = false; toast('Post failed','error'); });
+}
+// Unit / property detail → "Recurring work orders" section (same Targets data as the Templates page).
+function loadUnitRecurring(propId, unitId) {
+  var el = document.getElementById('unit-rec-section'); if (!el) return;
+  api('GET','/wo-templates').then(function(items){
+    var all = Array.isArray(items)?items:[];
+    var here = all.filter(function(t){ return recurTargetsOf(t).some(function(x){ return String(x.p)===String(propId) && (x.u||'')===(unitId?String(unitId):''); }); });
+    var others = all.filter(function(t){ return here.indexOf(t)<0; });
+    el.innerHTML = '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">🔁 RECURRING WORK ORDERS</div>' +
+      (here.length ? here.map(function(t){ return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="flex:1"><b>'+esc(t.Name)+'</b><div style="color:var(--muted);font-size:11px">'+(recurIsOn(t.Recurrence_Enabled)?esc(recurDescribe(t)):'Manual only')+'</div></div><button class="btn small secondary" onclick="closeModal(\'modal-unit-detail\');openManageTemplatesModal();setTimeout(function(){openEditTemplateModal(\''+t.ID+'\')},400)">Edit</button><button class="btn small danger" onclick="unitLinkTemplate(\''+t.ID+'\',\''+propId+'\',\''+(unitId||'')+'\',\'remove\')">Unlink</button></div>'; }).join('') : '<div style="color:var(--muted);font-size:12px;font-style:italic;margin-bottom:6px">None linked</div>') +
+      (others.length ? '<div style="display:flex;gap:6px;margin-top:6px"><select id="unit-rec-add" style="flex:1"><option value="">Link a template…</option>'+others.map(function(t){ return '<option value="'+t.ID+'">'+esc(t.Name)+'</option>'; }).join('')+'</select><button class="btn small secondary" onclick="unitLinkTemplate(document.getElementById(\'unit-rec-add\').value,\''+propId+'\',\''+(unitId||'')+'\',\'add\')">Link</button></div>' : '');
+  }).catch(function(){});
+}
+function unitLinkTemplate(tid, propId, unitId, action) {
+  if (!tid) return;
+  api('POST','/wo-template/link',{template_id:tid,property_id:propId,unit_id:unitId,action:action}).then(function(r){
+    if (r && r.success) { toast(action==='add'?'Linked':'Unlinked','success'); loadUnitRecurring(propId, unitId); refreshTemplates && refreshTemplates(); }
+    else toast((r&&r.error)||'Failed','error');
+  });
 }
 
 // Resets the Add/Edit Template modal to ADD mode (blank form, no tmpl-id).
@@ -6821,6 +7022,7 @@ function openAddTemplateModal() {
   if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">Global (all owners)</option>');
   var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
   var pr = document.getElementById('tmpl-priority'); if (pr) pr.value = 'normal';
+  _tmplTargets = []; recurFillForm({});
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'ADD WO TEMPLATE';
   var saveBtn = document.getElementById('tmpl-save-btn'); if (saveBtn) saveBtn.textContent = 'SAVE TEMPLATE';
   openModal('modal-add-template');
@@ -6840,6 +7042,7 @@ function openEditTemplateModal(id) {
   document.getElementById('tmpl-desc').value = t.Description || '';
   document.getElementById('tmpl-link-url').value = t.Link_URL || '';
   document.getElementById('tmpl-link-label').value = t.Link_Label || '';
+  recurFillForm(t);
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'EDIT WO TEMPLATE';
   var saveBtn = document.getElementById('tmpl-save-btn'); if (saveBtn) saveBtn.textContent = 'SAVE CHANGES';
 }
@@ -6856,6 +7059,9 @@ function submitAddTemplate() {
     Link_URL: document.getElementById('tmpl-link-url').value.trim(),
     Link_Label: document.getElementById('tmpl-link-label').value.trim()||'View',
   };
+  var rec = recurReadForm();
+  if (rec.error) { toast(rec.error,'error'); return; }
+  Object.keys(rec.fields).forEach(function(k){ fields[k] = rec.fields[k]; });
   if (id) {
     api('POST','/wo-template/update',{id:id, fields:fields}).then(function(res){
       if (res && !res.error) { toast('Template updated','success'); closeModal('modal-add-template'); refreshTemplates(); }
@@ -12465,7 +12671,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
 <!-- ADD/EDIT TEMPLATE MODAL — same form serves both; tmpl-id set = editing (see
      openEditTemplateModal / submitAddTemplate) -->
 <div class="modal-overlay" id="modal-add-template">
-  <div class="modal" style="max-width:500px">
+  <div class="modal" style="max-width:640px;max-height:92vh;overflow-y:auto">
     <div class="modal-header"><div class="modal-title" id="tmpl-modal-title">ADD WO TEMPLATE</div><button class="modal-close" onclick="closeModal('modal-add-template')">✕</button></div>
     <input type="hidden" id="tmpl-id" value="">
     <div class="form-grid">
@@ -12480,11 +12686,87 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div class="form-group full"><label>Description Template</label><textarea id="tmpl-desc" placeholder="Text to insert into WO description. The link will be appended below this." style="min-height:80px;resize:vertical"></textarea></div>
       <div class="form-group"><label>Link URL <span style="font-weight:normal;color:var(--muted)">(Google Sheet, doc, checklist)</span></label><input type="url" id="tmpl-link-url" placeholder="https://docs.google.com/…"></div>
       <div class="form-group"><label>Link Label</label><input type="text" id="tmpl-link-label" placeholder="Inspection Checklist"></div>
+      <div class="form-group full" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <select id="tmpl-snippet" style="flex:1;min-width:150px"><option value="">📎 Insert saved text snippet…</option></select>
+        <button class="btn small secondary" type="button" onclick="insertTemplateSnippet()">Insert</button>
+        <button class="btn small secondary" type="button" onclick="saveDescAsSnippet()">Save description as snippet</button>
+      </div>
+      <div class="form-group full" style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="tmpl-rec-on" onchange="toggleRecurrenceBox()"> <b>🔁 Auto-post this work order on a schedule</b></label>
+      </div>
+      <div class="form-group full" id="tmpl-rec-box" style="display:none">
+        <div class="form-grid" style="margin:0">
+          <div class="form-group full"><label>Quick pick</label>
+            <select id="tmpl-preset" onchange="applyRecurrencePreset()">
+              <option value="">Choose a common schedule…</option>
+              <option value="weekly1">Weekly</option>
+              <option value="weekly2">Every 2 weeks</option>
+              <option value="weekly4">Every 4 weeks</option>
+              <option value="monthly1">Monthly (same date each month)</option>
+              <option value="quarterly">Quarterly (every 3 months, same date)</option>
+              <option value="nth3tue">Monthly — 3rd Tuesday</option>
+              <option value="custom">Custom (use the boxes below)</option>
+            </select></div>
+          <div class="form-group"><label>Repeats</label>
+            <select id="tmpl-ftype" onchange="syncRecurrenceFields()">
+              <option value="days">Every N days</option>
+              <option value="weekly">Every N weeks on a weekday</option>
+              <option value="monthly_date">Every N months on a date</option>
+              <option value="monthly_nth">Every N months on the Nth weekday</option>
+            </select></div>
+          <div class="form-group"><label>Every N</label><input type="number" min="1" max="365" id="tmpl-finterval" value="1" oninput="syncRecurrenceFields()"></div>
+          <div class="form-group" id="tmpl-fweekday-g"><label>Weekday</label>
+            <select id="tmpl-fweekday"><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></div>
+          <div class="form-group" id="tmpl-fnth-g"><label>Which one</label>
+            <select id="tmpl-fnth"><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option><option value="5">Last</option></select></div>
+          <div class="form-group" id="tmpl-fdom-g"><label>Day of month</label><input type="number" min="1" max="31" id="tmpl-fdom" placeholder="15"></div>
+          <div class="form-group"><label>Start date <span style="font-weight:normal;color:var(--muted)">(anchors the cycle)</span></label><input type="date" id="tmpl-start"></div>
+          <div class="form-group"><label>End date <span style="font-weight:normal;color:var(--muted)">(blank = never)</span></label><input type="date" id="tmpl-end"></div>
+          <div class="form-group"><label>Post ___ days before it's due</label><input type="number" min="0" max="60" id="tmpl-lead" value="0"></div>
+          <div class="form-group"><label>Default vendor <span style="font-weight:normal;color:var(--muted)">(gets the text)</span></label><select id="tmpl-vendor"><option value="">None — post unassigned</option></select></div>
+          <div class="form-group full">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="tmpl-season-on" onchange="toggleRecurrenceBox()"> Only active during a yearly window</label>
+            <div id="tmpl-season-box" style="display:none;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
+              from <input type="date" id="tmpl-season-start" style="max-width:150px"> to <input type="date" id="tmpl-season-end" style="max-width:150px">
+              <span style="color:var(--muted);font-size:11px">(only month + day matter; repeats every year, e.g. Mar 15 → Nov 1)</span>
+            </div>
+          </div>
+          <div class="form-group full"><label>Applies to <span style="font-weight:normal;color:var(--muted)">(one work order per property/unit each time)</span></label>
+            <div id="tmpl-targets" style="margin-bottom:6px"></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <select id="tmpl-tgt-prop" onchange="fillTemplateTargetUnits()" style="flex:1;min-width:160px"></select>
+              <select id="tmpl-tgt-unit" style="flex:1;min-width:120px"></select>
+              <button class="btn small secondary" type="button" onclick="addTemplateTarget()">+ Add</button>
+            </div>
+          </div>
+          <div class="form-group full" style="background:#fdf2e2;border:1px solid #fdba74;border-radius:6px;padding:8px 10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="tmpl-notify-tenant"> Also notify the tenant (override)</label>
+            <div style="color:var(--muted);font-size:11px;margin-top:4px">Off by default. Scheduled work orders only ever text the <b>vendor</b> — owners are never texted, and tenants only if you turn this on for this template.</div>
+          </div>
+          <div class="form-group full"><button class="btn small secondary" type="button" onclick="previewRecurrence()">Show next 6 dates</button> <span id="tmpl-preview" style="color:var(--muted);font-size:12px;margin-left:6px"></span></div>
+          <div class="form-group full" style="color:var(--muted);font-size:11px">Posts automatically at 8:00am ET. If the last work order from this template is still open when the next one comes due, that one is skipped.</div>
+        </div>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-add-template')">Cancel</button>
       <button class="btn" id="tmpl-save-btn" onclick="submitAddTemplate()">SAVE TEMPLATE</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-post-now">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header"><div class="modal-title">POST WORK ORDER NOW</div><button class="modal-close" onclick="closeModal('modal-post-now')">✕</button></div>
+    <input type="hidden" id="pn-id">
+    <div id="pn-info" style="color:var(--muted);font-size:12px;margin-bottom:8px"></div>
+    <div class="form-grid">
+      <div class="form-group full"><label>Post to</label><select id="pn-target"></select></div>
+      <div class="form-group full"><label>Description <span style="font-weight:normal;color:var(--muted)">(edit for this one only)</span></label><textarea id="pn-desc" style="min-height:90px;resize:vertical"></textarea></div>
+      <div class="form-group"><label>Priority</label><select id="pn-priority"><option value="normal">Normal</option><option value="low">Low</option><option value="urgent">Urgent</option></select></div>
+      <div class="form-group full"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="pn-save"> Also save these edits back into the template</label></div>
+    </div>
+    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-post-now')">Cancel</button><button class="btn" id="pn-btn" onclick="submitPostNow(false)">POST NOW</button></div>
   </div>
 </div>
 
