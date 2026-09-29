@@ -7059,6 +7059,9 @@ function submitAddTemplate() {
     Link_URL: document.getElementById('tmpl-link-url').value.trim(),
     Link_Label: document.getElementById('tmpl-link-label').value.trim()||'View',
   };
+  var rec = recurReadForm();
+  if (rec.error) { toast(rec.error,'error'); return; }
+  Object.keys(rec.fields).forEach(function(k){ fields[k] = rec.fields[k]; });
   if (id) {
     api('POST','/wo-template/update',{id:id, fields:fields}).then(function(res){
       if (res && !res.error) { toast('Template updated','success'); closeModal('modal-add-template'); refreshTemplates(); }
