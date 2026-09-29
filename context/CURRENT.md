@@ -13,6 +13,13 @@
 
 ---
 
+# WHERE THINGS STAND — Sep 29, 2026 (SECURITY: GET /config secret leak fix — PR #116 -> main, NOT merged)
+
+**PR #116 -> main** (verified with `get_pull_request`), head `fix/config-secret-redaction`, cut from main tip d173f1d. A staging test-only PR (`fix/config-secret-redaction-staging-test` -> staging, body `staging-test-only: true`) exists separately: test-only, not the path to main. Not merged; BUILD_VERSION `2026-09-29.1-config-secret-redaction`.
+`GET /config` now hides admin_password / Twilio_Recovery_Code / QB_REFRESH_TOKEN / GMAIL_REFRESH_TOKEN and any credential-shaped key for every caller; `/config/set` refuses the placeholder; the read-only prod token also never sees login PINs. **Brett must rotate** admin_password, the Twilio recovery code and the QuickBooks refresh token (reconnect QuickBooks) — they were exposed. Detail: FEATURE_LOG FL-20260929-1300-cfg.
+
+---
+
 # WHERE THINGS STAND — Sep 28, 2026 late (vendor translation + real "Send to Vendor" — PR #113 -> main, NOT merged)
 
 **PR #113 -> main** (verified with `get_pull_request`), head `feat/vendor-translation-send-to-vendor-v3`, cut from main tip 6f270b5. Supersedes #109 (closed, went dirty) and #108. A staging test-only PR (`feat/vendor-translation-staging-test` -> staging, body `staging-test-only: true`) exists separately: test-only, not the path to main. Not merged; staging verification at BUILD_VERSION `2026-09-28.9-vendor-translation-send-to-vendor` is recorded in PR #113.
