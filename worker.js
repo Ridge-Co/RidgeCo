@@ -6805,6 +6805,9 @@ async function assignVendor(env, body) {
   // ago — the vendor is assigned (Vendor_ID/Status still update normally) but no message is
   // composed or queued at all, since none was ever meant to exist for that case.
   const notify = body.notify !== false;
+  // Sep 28 2026 (recurring WOs): notify_tenant:false = vendor-only dispatch, no tenant text.
+  // Defaults TRUE so every existing caller behaves exactly as before.
+  const notifyTenantOnAssign = body.notify_tenant !== false;
   const [workorders, vendors, tenants, units, properties, owners] = await fetchTabs(env, [
     'Work_Orders','Vendors','Tenants','Units','Properties','Owners',
   ]);
