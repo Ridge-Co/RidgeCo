@@ -12686,6 +12686,67 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div class="form-group full"><label>Description Template</label><textarea id="tmpl-desc" placeholder="Text to insert into WO description. The link will be appended below this." style="min-height:80px;resize:vertical"></textarea></div>
       <div class="form-group"><label>Link URL <span style="font-weight:normal;color:var(--muted)">(Google Sheet, doc, checklist)</span></label><input type="url" id="tmpl-link-url" placeholder="https://docs.google.com/…"></div>
       <div class="form-group"><label>Link Label</label><input type="text" id="tmpl-link-label" placeholder="Inspection Checklist"></div>
+      <div class="form-group full" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <select id="tmpl-snippet" style="flex:1;min-width:150px"><option value="">📎 Insert saved text snippet…</option></select>
+        <button class="btn small secondary" type="button" onclick="insertTemplateSnippet()">Insert</button>
+        <button class="btn small secondary" type="button" onclick="saveDescAsSnippet()">Save description as snippet</button>
+      </div>
+      <div class="form-group full" style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="tmpl-rec-on" onchange="toggleRecurrenceBox()"> <b>🔁 Auto-post this work order on a schedule</b></label>
+      </div>
+      <div class="form-group full" id="tmpl-rec-box" style="display:none">
+        <div class="form-grid" style="margin:0">
+          <div class="form-group full"><label>Quick pick</label>
+            <select id="tmpl-preset" onchange="applyRecurrencePreset()">
+              <option value="">Choose a common schedule…</option>
+              <option value="weekly1">Weekly</option>
+              <option value="weekly2">Every 2 weeks</option>
+              <option value="weekly4">Every 4 weeks</option>
+              <option value="monthly1">Monthly (same date each month)</option>
+              <option value="quarterly">Quarterly (every 3 months, same date)</option>
+              <option value="nth3tue">Monthly — 3rd Tuesday</option>
+              <option value="custom">Custom (use the boxes below)</option>
+            </select></div>
+          <div class="form-group"><label>Repeats</label>
+            <select id="tmpl-ftype" onchange="syncRecurrenceFields()">
+              <option value="days">Every N days</option>
+              <option value="weekly">Every N weeks on a weekday</option>
+              <option value="monthly_date">Every N months on a date</option>
+              <option value="monthly_nth">Every N months on the Nth weekday</option>
+            </select></div>
+          <div class="form-group"><label>Every N</label><input type="number" min="1" max="365" id="tmpl-finterval" value="1" oninput="syncRecurrenceFields()"></div>
+          <div class="form-group" id="tmpl-fweekday-g"><label>Weekday</label>
+            <select id="tmpl-fweekday"><option value="0">Sunday</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option></select></div>
+          <div class="form-group" id="tmpl-fnth-g"><label>Which one</label>
+            <select id="tmpl-fnth"><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option><option value="5">Last</option></select></div>
+          <div class="form-group" id="tmpl-fdom-g"><label>Day of month</label><input type="number" min="1" max="31" id="tmpl-fdom" placeholder="15"></div>
+          <div class="form-group"><label>Start date <span style="font-weight:normal;color:var(--muted)">(anchors the cycle)</span></label><input type="date" id="tmpl-start"></div>
+          <div class="form-group"><label>End date <span style="font-weight:normal;color:var(--muted)">(blank = never)</span></label><input type="date" id="tmpl-end"></div>
+          <div class="form-group"><label>Post ___ days before it's due</label><input type="number" min="0" max="60" id="tmpl-lead" value="0"></div>
+          <div class="form-group"><label>Default vendor <span style="font-weight:normal;color:var(--muted)">(gets the text)</span></label><select id="tmpl-vendor"><option value="">None — post unassigned</option></select></div>
+          <div class="form-group full">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="tmpl-season-on" onchange="toggleRecurrenceBox()"> Only active during a yearly window</label>
+            <div id="tmpl-season-box" style="display:none;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap">
+              from <input type="date" id="tmpl-season-start" style="max-width:150px"> to <input type="date" id="tmpl-season-end" style="max-width:150px">
+              <span style="color:var(--muted);font-size:11px">(only month + day matter; repeats every year, e.g. Mar 15 → Nov 1)</span>
+            </div>
+          </div>
+          <div class="form-group full"><label>Applies to <span style="font-weight:normal;color:var(--muted)">(one work order per property/unit each time)</span></label>
+            <div id="tmpl-targets" style="margin-bottom:6px"></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <select id="tmpl-tgt-prop" onchange="fillTemplateTargetUnits()" style="flex:1;min-width:160px"></select>
+              <select id="tmpl-tgt-unit" style="flex:1;min-width:120px"></select>
+              <button class="btn small secondary" type="button" onclick="addTemplateTarget()">+ Add</button>
+            </div>
+          </div>
+          <div class="form-group full" style="background:#fdf2e2;border:1px solid #fdba74;border-radius:6px;padding:8px 10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="tmpl-notify-tenant"> Also notify the tenant (override)</label>
+            <div style="color:var(--muted);font-size:11px;margin-top:4px">Off by default. Scheduled work orders only ever text the <b>vendor</b> — owners are never texted, and tenants only if you turn this on for this template.</div>
+          </div>
+          <div class="form-group full"><button class="btn small secondary" type="button" onclick="previewRecurrence()">Show next 6 dates</button> <span id="tmpl-preview" style="color:var(--muted);font-size:12px;margin-left:6px"></span></div>
+          <div class="form-group full" style="color:var(--muted);font-size:11px">Posts automatically at 8:00am ET. If the last work order from this template is still open when the next one comes due, that one is skipped.</div>
+        </div>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal('modal-add-template')">Cancel</button>
