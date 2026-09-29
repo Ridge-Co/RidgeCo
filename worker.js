@@ -11830,11 +11830,11 @@ async function smsGatedSend(env, opts) {
     if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours && !_earlyMorningOk) {
       const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
-      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
-      return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot };
+      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
+      return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
     deliveredTo = testMode ? testRecipient : recipientPhone;
-    const result = await sendSMSRaw(env, deliveredTo, opts.message_body);
+    const result = await sendSMSRaw(env, deliveredTo, messageBody);
     sent = !!(result && result.sid);
     outcome = sent ? 'sent' : 'failed';
     await updateMessageQueueRow(env, id, {
@@ -11856,12 +11856,12 @@ async function smsGatedSend(env, opts) {
     try {
       await logMessageAudit(env, {
         woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind,
-        messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome,
+        messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome,
         notes: outcome === 'blocked' ? gateSnapshot : '',
       });
     } catch (e) {}
   }
-  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot };
+  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
 }
 
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
