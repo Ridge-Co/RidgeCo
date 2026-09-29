@@ -3109,6 +3109,41 @@ function renderShareMsg(){
   var lang = (document.querySelector('input[name="share-lang"]:checked')||{}).value || 'en';
   document.getElementById('share-msg').value = lang==='es' ? _shareData.message_es : _shareData.message_en;
 }
+function _shareStatus(kind, html){
+  var el = document.getElementById('share-status'); if(!el) return;
+  var color = kind==='ok' ? 'var(--accent2)' : kind==='warn' ? 'var(--warn)' : 'var(--danger)';
+  el.innerHTML = '<div style="color:'+color+';line-height:1.4">'+html+'</div>';
+}
+// REAL send (Sep 28 2026): POST /wo/share-send texts the assigned vendor through the gated SMS
+// path. Distinguishes sent / held for quiet hours / blocked by SMS settings / failed, and keeps
+// Copy available on every failure.
+function sendShareWO(){
+  var btn = document.getElementById('share-send-btn');
+  if(!btn || btn.disabled || !_shareWOId || !_shareData) return;
+  if(!_shareData.assigned){ _shareStatus('err','No vendor is assigned to this work order yet. Assign one first, or use Copy message.'); return; }
+  if(!_shareData.vendor_has_phone){ _shareStatus('err',esc(_shareData.vendor_name||'This vendor')+' has no phone on file. Add one on the Vendors page, or use Copy message.'); return; }
+  var lang = (document.querySelector('input[name="share-lang"]:checked')||{}).value || 'en';
+  var msg = document.getElementById('share-msg').value.trim();
+  if(!msg){ _shareStatus('err','Type a message first.'); return; }
+  var base = (location.origin + location.pathname.replace(/\/[^\/]*$/,'')).replace(/\/+$/,'');
+  btn.disabled = true; var oldLabel = btn.textContent; btn.textContent = 'SENDING…';
+  document.getElementById('share-status').textContent = '';
+  function done(){ btn.disabled = false; btn.textContent = oldLabel; }
+  api('POST','/wo/share-send',{wo_id:_shareWOId, lang:lang, message:msg, page_base:base}).then(function(r){
+    done();
+    if(r && r.sent){
+      var who = esc(r.vendor_name||'the vendor') + (r.sent_to?(' ('+esc(r.sent_to)+')'):'');
+      _shareStatus('ok','✓ Text sent to '+who+' in '+(r.language==='es'?'Español':'English')+'.'+(r.test_mode?' <b>TEST MODE is on</b> — it was delivered to the test number ('+esc(r.delivered_to||'')+'), not the vendor.':''));
+      toast('Sent to vendor','success');
+    } else if(r && r.held_for_quiet_hours){
+      _shareStatus('warn','⏳ Held for quiet hours (7pm–9am ET). It will send after '+esc(r.send_after||'9am')+'. You can also Copy message and send it yourself.');
+      toast('Held for quiet hours','warn');
+    } else {
+      _shareStatus('err','Not sent: '+esc((r && (r.reason||r.error))||'unknown problem')+' — use Copy message to send it yourself.');
+      toast('Not sent — see the message in the dialog','error');
+    }
+  }).catch(function(e){ done(); _shareStatus('err','Not sent: '+esc(e&&e.message?e.message:'network error')+' — use Copy message to send it yourself.'); });
+}
 function copyShare(which){
   var text = which==='link' ? document.getElementById('share-link').value : document.getElementById('share-msg').value;
   navigator.clipboard.writeText(text).then(function(){ toast('Copied','success'); }).catch(function(){ toast('Copy failed — select manually','warn'); });
