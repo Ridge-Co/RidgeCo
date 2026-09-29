@@ -12439,6 +12439,21 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- TENANT TEXT UPDATE / PHOTO REQUEST MODAL (Sep 28 2026) — replaces the two prompt() drafts behind the
+     WO top-bar "📱 Send update" and "📸 Request photos" buttons; same POST /wo/tenant-update-manual path. -->
+<div class="modal-overlay" id="modal-tenant-update">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title" id="tu-title">📱 TEXT THE TENANT</div>
+    <div id="tu-hint" style="color:var(--muted);font-size:11.5px;margin-bottom:8px;line-height:1.4"></div>
+    <textarea id="tu-message" style="width:100%;min-height:90px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;color:var(--text);font-family:var(--font);resize:vertical" placeholder="Type what goes in the middle…"></textarea>
+    <div id="tu-msg" style="margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-tenant-update')">Cancel</button>
+      <button class="btn" id="tu-send-btn" onclick="confirmTenantUpdate()">SEND SMS</button>
+    </div>
+  </div>
+</div>
+
 <!-- PROPERTY NOTICE MODAL — shared by the property-card "📢 Notice" button and the
      Messaging page's "New Property Notice" button -->
 <div class="modal-overlay" id="modal-property-notice">
