@@ -21528,7 +21528,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: truck,
-      Description: ('Materials — ' + ((billRow && billRow.Truck_Desc) || 'shop/truck stock')).slice(0, 4000),
+      Description: ('Materials — ' + englishOnly((billRow && billRow.Truck_Desc) || 'shop/truck stock')).slice(0, 4000),
       SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: truck },
     });
   }
