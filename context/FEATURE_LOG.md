@@ -1,5 +1,17 @@
 # BrettOS Feature Log — What Works, Don't Break It
 
+## [FL-20260929-1300-cfg] Sep 29, 2026 — SHIPPED (PR into main, not merged): GET /config no longer leaks Config secrets (BUILD_VERSION 2026-09-29.1)
+`GET /config` returned every Config key in plaintext (admin_password, Twilio_Recovery_Code, QB_REFRESH_TOKEN, ...) to the
+read-only prod token (HUB_PROD_RO_TOKEN) and the staging test token. Now `getConfig` returns `redactConfigForToken(config)` for
+EVERY caller (no page needs secret values): known secret keys + a conservative name pattern (`pass|secret|token|refresh|api_key|
+recovery|auth|credential|private|signing|_code$|pin$`) show `(set — hidden)` (key kept, `""` if empty); a secret's value pasted
+inside another key's text is masked; `*_updated` timestamps exempt. `setConfigKey` refuses `(hidden)` / `(set — hidden)` so a
+masked value can never overwrite a real one. A thin `export default` wrapper additionally scrubs login `PIN` fields (and named
+Config secrets) from JSON GET responses to HUB_PROD_RO_TOKEN only (`/vendors`, `/tenants`, `/owners`, `/hub-bootstrap`, ...).
+**Regression rules:** never return raw Config from an HTTP route; internal `fetchConfig()` must stay unredacted; never let
+`/config/set` store a placeholder; new secret-shaped Config keys are covered by the name pattern. Tests: `config-redaction` 71.
+Known remaining: HUB_TEST_TOKEN / admin still see plaintext PINs on sheet lists (staging data / admin UI needs them).
+
 ## [FL-20260928-2330-vt] Sep 28, 2026 — SHIPPED (PR, not merged): vendor translation + real "Send to Vendor" (BUILD_VERSION 2026-09-28.9)
 Branch `feat/vendor-translation-send-to-vendor-v3` (re-applied on main 6f270b5 after v2 (PR #109) went dirty; supersedes #108/#109). (1) **Outbound vendor text is Spanish for Spanish vendors.**
 New `Vendors.Language` (`en`/`es`, dropdown on Add + Edit Vendor; blank = English). One hook in
