@@ -7022,6 +7022,7 @@ function openAddTemplateModal() {
   if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">Global (all owners)</option>');
   var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
   var pr = document.getElementById('tmpl-priority'); if (pr) pr.value = 'normal';
+  _tmplTargets = []; recurFillForm({});
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'ADD WO TEMPLATE';
   var saveBtn = document.getElementById('tmpl-save-btn'); if (saveBtn) saveBtn.textContent = 'SAVE TEMPLATE';
   openModal('modal-add-template');
