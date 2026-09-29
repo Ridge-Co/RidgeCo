@@ -706,8 +706,14 @@ export default {
         if (path === '/master-key/update')        { await ensureColumns(env, 'Master_Keys', ['Code']); return await updateRow(env, 'Master_Keys', body.id, body.fields); }
         if (path === '/master-key/bulk-assign')   return await bulkAssignMasterKey(env, body);
         if (path === '/master-key/set-holder')    return await setMasterKeyHolder(env, body);
-        if (path === '/wo-template/add')          return await addRow(env, 'WO_Templates', body);
-        if (path === '/wo-template/update')       return await updateRow(env, 'WO_Templates', body.id, body.fields);
+        if (path === '/wo-template/add')          { await ensureColumns(env, 'WO_Templates', RECUR_TEMPLATE_COLS); return await addRow(env, 'WO_Templates', recurSanitizeTemplateFields(body)); }
+        if (path === '/wo-template/update')       { await ensureColumns(env, 'WO_Templates', RECUR_TEMPLATE_COLS); return await updateRow(env, 'WO_Templates', body.id, recurSanitizeTemplateFields(body.fields)); }
+        if (path === '/wo-template/post-now')     return await recurPostNow(env, body);
+        if (path === '/wo-template/copy')         return await recurCopyTemplate(env, body);
+        if (path === '/wo-template/link')         return await recurLinkTemplate(env, body);
+        if (path === '/wo-template/preview')      return await recurPreview(env, body);
+        if (path === '/wo-snippet/add')           { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await addRow(env, WO_SNIPPETS_TAB, body); }
+        if (path === '/wo-snippet/update')        { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await updateRow(env, WO_SNIPPETS_TAB, body.id, body.fields); }
         if (path === '/material/add')             return await addRow(env, 'Materials', body);
         if (path === '/material/update')          return await updateRow(env, 'Materials', body.id, body.fields);
         if (path === '/return/add')               return await addRow(env, 'Returns', body);
