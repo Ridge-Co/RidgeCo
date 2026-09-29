@@ -1930,7 +1930,7 @@ async function addReceipt(env, body) {
 // then no longer contained "lowes" as a substring — "lowes" and "lowe's" returned different
 // receipt-recon search results for the same store. See matching fix in receipt-reconciler.html's
 // _clientNorm (same bug, client-side queue filter).
-function _rcNorm(s){ return String(s==null?'':s).toLowerCase().replace(/'/g, '').replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
+function _rcNorm(s){ return String(s==null?'':s).toLowerCase().replace(/['‘’ʼ`´]/g, '').replace(/[^a-z0-9]/g,' ').replace(/\s+/g,' ').trim(); }
 
 // PURE — resolve the property a receipt's PO/handwritten note points to, by token overlap on the
 // street address. A matched house-number is weighted double (it disambiguates same-street units).
