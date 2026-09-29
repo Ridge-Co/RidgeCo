@@ -2367,6 +2367,15 @@ async function receiptReconScan(env, body) {
   // scan, and a permanent error line. Same fix receiptScan got for its folder: 3 attempts,
   // tracked in Config (no schema change), then skipped and reported under `stuck`.
   let failures = {}; try { failures = JSON.parse(cfg.receipt_recon_failures || '{}'); } catch (e) { failures = {}; }
+  // Sep 29 2026: a missing/rotated API key ("ANTHROPIC_API_KEY not configured") is a Worker
+  // config problem, NOT a bad file — it must never burn a file's 3 attempts. Self-heal: drop any
+  // tracker entry whose recorded error was a config error, so files stranded by an earlier key
+  // outage are retried automatically the next scan.
+  let healed = false;
+  for (const id of Object.keys(failures)) {
+    if (receiptReconIsConfigError(failures[id] && failures[id].error)) { delete failures[id]; healed = true; }
+  }
+  if (healed) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const allNew = files.filter(f => !seen.has(f.id) && !(failures[f.id] && failures[f.id].attempts >= 3));
   const stuck = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
   if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length, stuck });
