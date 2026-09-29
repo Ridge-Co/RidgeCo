@@ -424,6 +424,7 @@ export default {
         // creation landing.
         if (path === '/master-key/holders')     return await getSheet(env, 'Master_Key_Holders');
         if (path === '/wo-templates')           return await listWOTemplates(env, url);
+        if (path === '/wo-snippets')            return await listWOSnippets(env);
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
