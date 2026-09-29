@@ -11597,7 +11597,11 @@ async function smsGatedSend(env, opts) {
     // bypassQuietHours (Sep 16 2026): property-wide urgent notices — water shutoffs, power
     // outages — can't wait for a 9am release like a routine status update can. Only
     // sendPropertyNotice sets this; every other call site is unaffected and still holds.
-    if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours) {
+    // allowEarlyMorning (Sep 28 2026, Brett): recurring/auto-posted WOs go out at 8:00am ET, an
+    // hour before quiet hours normally end. Only those vendor dispatch texts may set this, and
+    // it only opens the 8:00-8:59am ET hour — 7pm-8am stays held exactly as before.
+    const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
+    if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours && !_earlyMorningOk) {
       const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
