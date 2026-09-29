@@ -6800,7 +6800,7 @@ function renderTemplates() {
   var el = document.getElementById('templates-list');
   if (!el) return;
   if (!_woTemplates.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No custom templates yet. Built-in templates (HVAC filter, pest control, etc.) are always available from "📋 From Template" when creating a WO. Add one here to make it show up there too.</div>'; return; }
-  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Link</th><th></th></tr></thead><tbody>' +
+  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Schedule</th><th></th></tr></thead><tbody>' +
     _woTemplates.filter(function(t){ return t.Active!=='FALSE'; }).map(function(t) {
       var owner = safeArray(state.owners).find(function(o){ return o.ID===t.Owner_ID; });
       return '<tr>' +
