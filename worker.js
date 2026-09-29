@@ -670,6 +670,7 @@ export default {
         if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
+        if (path === '/estimate/retranslate')     return await retranslateEstimate(env, body);
         if (path === '/estimate/unapprove')       return await unapproveEstimate(env, body);
         if (path === '/estimate/needs-info')      return await estimateNeedsInfo(env, body);
         if (path === '/estimate/decline')         return await estimateDecline(env, body);
