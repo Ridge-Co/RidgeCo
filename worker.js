@@ -2419,6 +2419,7 @@ async function receiptReconScan(env, body) {
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
     } catch (e) {
       errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
+      if (receiptReconIsConfigError(e && e.message)) { configError = String(e.message).slice(0, 200); break; }
       const prior = failures[f.id];
       failures[f.id] = { name: f.name || f.id, error: String(e && e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
       failuresChanged = true;
