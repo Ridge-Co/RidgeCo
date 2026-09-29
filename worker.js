@@ -17262,6 +17262,9 @@ async function fetchConfig(env) {
 async function setConfigKey(env, body) {
   const { key, value } = body;
   if (!key) return json({ error: 'key required' }, 400);
+  // GET /config shows secrets as a placeholder; refuse to ever store that placeholder back over the
+  // real value (e.g. an editor that round-trips a masked field).
+  if (isConfigRedactionPlaceholder(value)) return json({ error: 'refusing to write the redaction placeholder as a Config value' }, 400);
   const data = await sheetsRequest(env, 'GET', '/values/Config');
   const rows = data.values || [];
   const rowIdx = rows.findIndex(r => (r[0]||'').trim() === key);
