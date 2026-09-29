@@ -13,7 +13,18 @@
 
 ---
 
-# WHERE THINGS STAND — Sep 29, 2026 (SECURITY: GET /config secret leak fix — PR #116 -> main, NOT merged)
+# WHERE THINGS STAND — Sep 29, 2026 afternoon (audit of Sep 28 builds — nothing left unmerged)
+
+Audit result: every designed Sep 28 build is on `main`; the PR #113 and #116 entries below that say "NOT merged" are STALE — both are merged (prod and staging both report 2026-09-29.1-config-secret-redaction before today's fixes). Merged today, base `main`:
+- **PR #124** — receipt search treats curly apostrophes (U+2018/2019/02BC, backtick, U+00B4) like the straight one (`_rcNorm` in worker.js + `_clientNorm` in receipt-reconciler.html). Test: test/receipt-norm-curly-apostrophe.test.mjs.
+- **PR #126** — `receiptReconScan`: a Worker config error (e.g. "ANTHROPIC_API_KEY not configured") no longer counts toward a file's 3-attempt limit; the scan stops and reports `config_error`; stale config-error entries in Config `receipt_recon_failures` are dropped automatically on the next scan (self-heals the stuck list). Test: test/recon-scan-config-error.test.mjs.
+Known: test/receipt-recon-reassign-refund-search.test.mjs fails on main independent of these changes.
+Staging test data left behind: WO-1120, WO-1121, scope 2, estimate 17, receipt 8.
+Brett still must rotate admin_password, the Twilio recovery code and the QuickBooks refresh token.
+
+---
+
+# WHERE THINGS STAND — Sep 29, 2026 (SECURITY: GET /config secret leak fix — PR #116 -> main; MERGED — see afternoon entry above)
 
 **PR #116 -> main** (verified with `get_pull_request`), head `fix/config-secret-redaction`, cut from main tip d173f1d. A staging test-only PR (`fix/config-secret-redaction-staging-test` -> staging, body `staging-test-only: true`) exists separately: test-only, not the path to main. Not merged; BUILD_VERSION `2026-09-29.1-config-secret-redaction`.
 `GET /config` now hides admin_password / Twilio_Recovery_Code / QB_REFRESH_TOKEN / GMAIL_REFRESH_TOKEN and any credential-shaped key for every caller; `/config/set` refuses the placeholder; the read-only prod token also never sees login PINs. **Brett must rotate** admin_password, the Twilio recovery code and the QuickBooks refresh token (reconnect QuickBooks) — they were exposed. Detail: FEATURE_LOG FL-20260929-1300-cfg.
