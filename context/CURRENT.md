@@ -1,3 +1,18 @@
+## ⚡ STANDING RULE — BRANCH POLICY (Sep 28, 2026): `main` is the truth, `staging` is a disposable copy — read `context/BRANCH_POLICY_v1.0.md`
+
+**Branch policy (every session, every build):**
+1. Cut every feature branch (`feat/*`, `fix/*`, `hotfix/*`) from the CURRENT `main` tip.
+2. Every feature PR targets `main`. NEVER base a PR on `staging`.
+3. To verify on staging: open a second PR from the same branch into `staging` with `staging-test-only: true` in the body. It is test-only, never the path to main.
+4. Never commit directly to `staging` (no TEMP / "Nudge staging" commits). Never merge main into staging by hand.
+5. After every push to `main`, the `Sync staging to main` workflow force-resets staging to main (lists what it drops).
+6. `staging-guard` fails bad PRs; `drift-check` opens an issue if staging differs from main.
+7. Branch went dirty? Cut a FRESH branch off main and re-apply — do not content-patch the old one.
+8. Parallel sessions are fine: one branch each, all cut from main. Check staging == main before starting.
+9. Your CURRENT.md entry must state the PR number AND base branch explicitly (verify with `get_pull_request`).
+
+---
+
 # WHERE THINGS STAND — Sep 28, 2026 (WO → Scope Proposal conversion REBUILT on current main + milestone editor UI — POST /wo/push-to-scope; branch claude/wo-to-scope-v2, going to staging, NOT yet on main)
 
 **Sep 28 update:** the original PR #6 sat unmerged for 10 days and went `dirty` (conflicts with `main`), which is why it never went live. Rebuilt off current `main`; also added the clickable per-milestone "Pay vendor at this milestone" / "Customer: flat $" controls in scope-creator.html's Payment Schedule editor. All-vendor-unpaid fallback confirmed as-is by Brett. Brett is holding WO-1227 (Caesar's estimate) until this ships. Old PR #6 to be closed as superseded. SMS notification work (estimate posted / daily reminder / proposal signed / deposit paid) is a separate follow-up PR.

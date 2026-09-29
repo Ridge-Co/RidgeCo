@@ -1,0 +1,81 @@
+name: Sync staging to main
+
+# `main` is the single source of truth. `staging` is a disposable copy of main.
+# - push to main / manual run: force-reset staging to main (lists anything it drops).
+# - schedule: CHECK ONLY. Never rewrites staging (so an in-flight verification is not clobbered by a timer).
+# See context/BRANCH_POLICY_v1.0.md
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+  schedule:
+    - cron: '17 * * * *'   # hourly drift check (report only)
+
+concurrency:
+  group: sync-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SUMMARY_FILE: ${{ github.workspace }}/../staging-sync-summary.md
+    steps:
+      - name: Checkout main (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # Optional: add a repo secret STAGING_SYNC_TOKEN (fine-grained PAT, contents+workflows write)
+          # if you want resets to work even when main changes .github/workflows/*.
+          token: ${{ secrets.STAGING_SYNC_TOKEN || github.token }}
+
+      - name: Reset (or check) staging
+        id: reset
+        env:
+          MODE: ${{ github.event_name == 'schedule' && 'check' || 'reset' }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/staging-reset.sh
+
+      - name: Close stale "blocked" issue after a good reset
+        if: success() && steps.reset.outputs.result == 'reset'
+        run: |
+          set -euo pipefail
+          title='staging reset blocked: workflow files changed'
+          for n in $(gh issue list --state open --search "in:title \"${title}\"" --json number,title --jq ".[] | select(.title==\"${title}\") | .number"); do
+            gh issue close "$n" --comment "staging was reset to main successfully in run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}."
+          done
+
+      - name: Open issue if reset failed or was blocked (never fail silently)
+        if: failure()
+        run: |
+          set -euo pipefail
+          result="${{ steps.reset.outputs.result }}"
+          if [ "$result" = "blocked-workflows" ]; then
+            title='staging reset blocked: workflow files changed'
+            action='main changed `.github/workflows/*` and the default GITHUB_TOKEN may not push those. One-time fix: ask a Claude session to commit the current main versions of the changed workflow files to `staging` through GH Broker (it has the workflows permission), or add a `STAGING_SYNC_TOKEN` repo secret (fine-grained PAT with Contents + Workflows write) and re-run "Sync staging to main". After that, every later push to main resets staging automatically.'
+          else
+            title='staging reset failed'
+            action='Open the run log below, then re-run "Sync staging to main" (workflow_dispatch). If it keeps failing, check whether staging has branch protection blocking force-push.'
+          fi
+          body_file="$(mktemp)"
+          {
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "$action"
+            echo
+            cat "$SUMMARY_FILE" 2>/dev/null || echo "(no summary captured)"
+          } > "$body_file"
+          existing="$(gh issue list --state open --search "in:title \"${title}\"" --json number,title --jq ".[] | select(.title==\"${title}\") | .number" | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body_file"
+          else
+            gh issue create --title "$title" --body-file "$body_file"
+          fi
