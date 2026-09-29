@@ -1,0 +1,87 @@
+name: Staging drift check
+
+# Daily: staging should equal main. If its content differs and no staging-test-only PR explains it, open/update an issue.
+on:
+  schedule:
+    - cron: '43 11 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: drift-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compare origin/main and origin/staging
+        run: |
+          set -euo pipefail
+          title='staging drift detected'
+          find_issue() {
+            gh issue list --state open --search "in:title \"${title}\"" --json number,title \
+              --jq ".[] | select(.title==\"${title}\") | .number" | head -1
+          }
+          git fetch --no-tags --quiet origin '+refs/heads/main:refs/remotes/origin/main'
+          if ! git ls-remote --exit-code --heads origin staging >/dev/null 2>&1; then
+            echo "::warning::staging branch does not exist."
+            exit 0
+          fi
+          git fetch --no-tags --quiet origin '+refs/heads/staging:refs/remotes/origin/staging'
+
+          if git diff --quiet origin/main origin/staging; then
+            echo "staging content is identical to main."
+            n="$(find_issue)"
+            if [ -n "$n" ]; then
+              gh issue close "$n" --comment "staging matches main again (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            fi
+            exit 0
+          fi
+
+          # Explained drift: an OPEN staging-base PR marked test-only, or one merged into staging in the last 72h.
+          since="$(date -u -d '72 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+          open_test="$(gh pr list --state open --base staging --json number,body \
+            --jq '[.[] | select((.body // "") | test("(?im)^\\s*staging-test-only:\\s*true\\s*$"))] | length')"
+          merged_test="$(gh pr list --state merged --base staging --limit 50 --json number,body,mergedAt \
+            --jq "[.[] | select(.mergedAt >= \"${since}\") | select((.body // \"\") | test(\"(?im)^\\\\s*staging-test-only:\\\\s*true\\\\s*\$\"))] | length")"
+          if [ "${open_test:-0}" -gt 0 ] || [ "${merged_test:-0}" -gt 0 ]; then
+            echo "staging differs from main but is explained by a staging-test-only PR (open: ${open_test}, merged <72h: ${merged_test})."
+            exit 0
+          fi
+
+          body_file="$(mktemp)"
+          {
+            echo "staging content differs from main and no staging-test-only PR explains it."
+            echo
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "Fix: run the \"Sync staging to main\" workflow (workflow_dispatch). It force-resets staging to main and lists anything dropped."
+            echo
+            echo '```'
+            git diff --stat origin/main origin/staging | tail -60
+            echo '```'
+            echo
+            echo "Commits on staging with a patch not on main:"
+            echo '```'
+            git log --cherry-pick --right-only --no-merges --format='%h %an: %s' origin/main...origin/staging | head -100 || true
+            echo '```'
+          } > "$body_file"
+          n="$(find_issue)"
+          if [ -n "$n" ]; then
+            gh issue edit "$n" --body-file "$body_file"
+          else
+            gh issue create --title "$title" --body-file "$body_file"
+          fi
+          echo "::warning::staging drift detected; issue opened/updated."
