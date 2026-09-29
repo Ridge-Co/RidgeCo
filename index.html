@@ -992,18 +992,19 @@ window.addEventListener('pageshow', function(e){
           <button class="btn btn-sm" onclick="copyShare('link')">Copy</button>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 4px">
-          <span style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase">Ready-to-send message</span>
-          <span style="font-size:11px"><label style="cursor:pointer"><input type="radio" name="share-lang" value="en" checked onchange="renderShareMsg()"> EN</label>
-          &nbsp;<label style="cursor:pointer"><input type="radio" name="share-lang" value="es" onchange="renderShareMsg()"> ES</label></span>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 4px;flex-wrap:wrap;gap:6px">
+          <span style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase">Message (edit before sending)</span>
+          <span style="font-size:12px"><label style="cursor:pointer;display:inline-block;padding:6px 4px"><input type="radio" name="share-lang" value="en" checked onchange="renderShareMsg()"> English</label>
+          &nbsp;<label style="cursor:pointer;display:inline-block;padding:6px 4px"><input type="radio" name="share-lang" value="es" onchange="renderShareMsg()"> Español</label></span>
         </div>
         <textarea id="share-msg" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:110px;resize:vertical"></textarea>
-        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="copyShare('msg')">Copy message</button>
-          <button class="btn btn-sm danger" onclick="revokeShare()">🚫 Turn off old links</button>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn" id="share-send-btn" style="min-height:40px" onclick="sendShareWO()">📱 Send text to vendor</button>
+          <button class="btn btn-sm secondary" style="min-height:40px" onclick="copyShare('msg')">Copy message</button>
+          <button class="btn btn-sm danger" style="min-height:40px" onclick="revokeShare()">🚫 Turn off old links</button>
         </div>
         <div id="share-status" style="font-size:12px;margin-top:10px"></div>
-        <div style="font-size:11px;color:var(--muted);margin-top:10px">Copy the message and send it to the vendor however you normally reach them (text, email, WhatsApp). They open it, enter the last 4 digits of their phone once, and it stays open on their device for 24 hours. The link works until you turn it off.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px">Send text texts the vendor this message from the Ridge Co number (it respects the SMS on/off settings, test mode and quiet hours, and is logged on the work order). If you edit the English text and pick Español, it is translated for you. They open the link, enter the last 4 digits of their phone once, and it stays open on their device for 24 hours. The link works until you turn it off. Can't text them? Use Copy message.</div>
       </div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-share-wo')">Close</button></div>
@@ -1087,6 +1088,7 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Hourly Rate ($)</label><input type="number" id="v-rate" placeholder="40" min="0" step="0.01"></div>
       <div class="form-group"><label>Markets</label><input type="text" id="v-markets" placeholder="Baltimore, Waynesboro"></div>
       <div class="form-group"><label>Vendor Type</label><select id="v-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
+      <div class="form-group"><label>Language <span style="font-weight:normal;color:var(--muted);font-size:10px">— texts to this vendor go out in this language</span></label><select id="v-language"><option value="en">English</option><option value="es">Español</option></select></div>
       <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="v-payaddr" placeholder="123 Main St, City, ST 00000"></div>
       <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">ONBOARDING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— required before this vendor's first bill can be paid. Banking is handled separately, not here.</span></div></div>
       <div class="form-group"><label>Billing Email</label><input type="email" id="v-billing-email" placeholder="billing@vendorcompany.com"></div>
@@ -1208,6 +1210,7 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Trade</label><select id="ev-trade"></select></div>
       <div class="form-group"><label>Markets</label><input type="text" id="ev-markets"></div>
       <div class="form-group"><label>Vendor Type</label><select id="ev-type"><option value="labor">Labor</option><option value="materials_hybrid">Materials + Service (e.g. locksmith)</option><option value="materials_store">Materials — Store (e.g. Home Depot)</option></select></div>
+      <div class="form-group"><label>Language <span style="font-weight:normal;color:var(--muted);font-size:10px">— texts to this vendor go out in this language</span></label><select id="ev-language"><option value="en">English</option><option value="es">Español</option></select></div>
       <div class="form-group"><label>Status</label><select id="ev-active"><option value="TRUE">Active</option><option value="FALSE">Inactive / Deactivated</option></select></div>
       <div class="form-group"><label>Payment / Remit-To Address <span style="font-weight:normal;color:var(--muted)">— for QuickBooks Bill only</span></label><input type="text" id="ev-payaddr"></div>
       <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">ONBOARDING <span style="font-weight:normal;text-transform:none;letter-spacing:0">— required before this vendor's first bill can be paid. Banking is handled separately, not here.</span></div></div>
@@ -2380,7 +2383,7 @@ function openWODetail(woId) {
           (parseFloat(bill.Receipts_Total||0)>0 ? '<div>🧾 Receipts subtotal: <span style="color:var(--text)">$' + parseFloat(bill.Receipts_Total).toFixed(2) + '</span></div>' : '') +
           items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.pay==='account' ? ' <span style="color:var(--muted)">(Ridge Co card)</span>' : ' <span style="color:var(--muted)">(reimburse vendor)</span>') + (r.url?'<a href="'+esc(internalReceiptUrl(woId,r.url))+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
           '</div>' +
-          (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + esc(bill.Notes) + '</div>' : '') +
+          (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + renderVendorText(bill.Notes) + '</div>' : '') +
         '</div>' +
         '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">' +
         '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
@@ -3105,6 +3108,41 @@ function renderShareMsg(){
   if(!_shareData) return;
   var lang = (document.querySelector('input[name="share-lang"]:checked')||{}).value || 'en';
   document.getElementById('share-msg').value = lang==='es' ? _shareData.message_es : _shareData.message_en;
+}
+function _shareStatus(kind, html){
+  var el = document.getElementById('share-status'); if(!el) return;
+  var color = kind==='ok' ? 'var(--accent2)' : kind==='warn' ? 'var(--warn)' : 'var(--danger)';
+  el.innerHTML = '<div style="color:'+color+';line-height:1.4">'+html+'</div>';
+}
+// REAL send (Sep 28 2026): POST /wo/share-send texts the assigned vendor through the gated SMS
+// path. Distinguishes sent / held for quiet hours / blocked by SMS settings / failed, and keeps
+// Copy available on every failure.
+function sendShareWO(){
+  var btn = document.getElementById('share-send-btn');
+  if(!btn || btn.disabled || !_shareWOId || !_shareData) return;
+  if(!_shareData.assigned){ _shareStatus('err','No vendor is assigned to this work order yet. Assign one first, or use Copy message.'); return; }
+  if(!_shareData.vendor_has_phone){ _shareStatus('err',esc(_shareData.vendor_name||'This vendor')+' has no phone on file. Add one on the Vendors page, or use Copy message.'); return; }
+  var lang = (document.querySelector('input[name="share-lang"]:checked')||{}).value || 'en';
+  var msg = document.getElementById('share-msg').value.trim();
+  if(!msg){ _shareStatus('err','Type a message first.'); return; }
+  var base = (location.origin + location.pathname.replace(/\/[^\/]*$/,'')).replace(/\/+$/,'');
+  btn.disabled = true; var oldLabel = btn.textContent; btn.textContent = 'SENDING…';
+  document.getElementById('share-status').textContent = '';
+  function done(){ btn.disabled = false; btn.textContent = oldLabel; }
+  api('POST','/wo/share-send',{wo_id:_shareWOId, lang:lang, message:msg, page_base:base}).then(function(r){
+    done();
+    if(r && r.sent){
+      var who = esc(r.vendor_name||'the vendor') + (r.sent_to?(' ('+esc(r.sent_to)+')'):'');
+      _shareStatus('ok','✓ Text sent to '+who+' in '+(r.language==='es'?'Español':'English')+'.'+(r.test_mode?' <b>TEST MODE is on</b> — it was delivered to the test number ('+esc(r.delivered_to||'')+'), not the vendor.':''));
+      toast('Sent to vendor','success');
+    } else if(r && r.held_for_quiet_hours){
+      _shareStatus('warn','⏳ Held for quiet hours (7pm–9am ET). It will send after '+esc(r.send_after||'9am')+'. You can also Copy message and send it yourself.');
+      toast('Held for quiet hours','warn');
+    } else {
+      _shareStatus('err','Not sent: '+esc((r && (r.reason||r.error))||'unknown problem')+' — use Copy message to send it yourself.');
+      toast('Not sent — see the message in the dialog','error');
+    }
+  }).catch(function(e){ done(); _shareStatus('err','Not sent: '+esc(e&&e.message?e.message:'network error')+' — use Copy message to send it yourself.'); });
 }
 function copyShare(which){
   var text = which==='link' ? document.getElementById('share-link').value : document.getElementById('share-msg').value;
@@ -4129,10 +4167,10 @@ var onOwnerCardUpload = bindContactCardFields({first:'ao-first', last:'ao-last',
 var onTenantCardUpload = bindContactCardFields({first:'mi-first', last:'mi-last', phone:'mi-phone', email:'mi-email', status:'mi-card-status'});
 
 // ── Add Vendor ───────────────────────────────────────────────
-function openAddVendorModal(){openModal('modal-add-vendor');}
+function openAddVendorModal(){var l=document.getElementById('v-language');if(l)l.value='en';openModal('modal-add-vendor');}
 function submitAddVendor(){
   var trades = Array.from(document.querySelectorAll('.v-trade-check:checked')).map(function(c){return c.value;}).join(',');
-  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Vendor_Type:document.getElementById('v-type').value||'labor',Payment_Address:document.getElementById('v-payaddr').value.trim(),Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE',Billing_Email:document.getElementById('v-billing-email').value.trim(),Billing_Address:document.getElementById('v-billing-address').value.trim(),Tax_ID:document.getElementById('v-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('v-tax-doc-url').value.trim()};
+  var body={Name:document.getElementById('v-name').value,First_Name:document.getElementById('v-first-name').value.trim(),Company:document.getElementById('v-company').value,Phone:document.getElementById('v-phone').value,Email:document.getElementById('v-email').value,Trade:trades.split(',')[0]||'General',Trades:trades,Hourly_Rate:document.getElementById('v-rate').value,Markets:document.getElementById('v-markets').value,Vendor_Type:document.getElementById('v-type').value||'labor',Language:document.getElementById('v-language').value==='es'?'es':'en',Payment_Address:document.getElementById('v-payaddr').value.trim(),Rate_Notes:document.getElementById('v-rates').value,Active:'TRUE',Billing_Email:document.getElementById('v-billing-email').value.trim(),Billing_Address:document.getElementById('v-billing-address').value.trim(),Tax_ID:document.getElementById('v-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('v-tax-doc-url').value.trim()};
   if(!body.Name){toast('Name required','error');return;}
   if(!body.Phone){toast('Phone required','error');return;}
   api('POST','/vendor/add',body).then(function(res){
@@ -4268,6 +4306,7 @@ function openEditVendorModal(id) {
   evTrade.value = v.Trade || 'General';
   document.getElementById('ev-markets').value=v.Markets||''; document.getElementById('ev-rates').value=v.Rate_Notes||'';
   document.getElementById('ev-type').value=v.Vendor_Type||'labor'; document.getElementById('ev-payaddr').value=v.Payment_Address||'';
+  document.getElementById('ev-language').value=(String(v.Language||'').toLowerCase()==='es')?'es':'en';
   document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
   document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
   document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
@@ -4405,7 +4444,7 @@ function submitVendorLoanEntry() {
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
   var billingProps = Array.from(document.querySelectorAll('.ev-billprop-check:checked')).map(function(c){return c.value;});
-  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim(),Active:document.getElementById('ev-active').value==='FALSE'?'FALSE':'TRUE'};
+  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Language:document.getElementById('ev-language').value==='es'?'es':'en',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim(),Active:document.getElementById('ev-active').value==='FALSE'?'FALSE':'TRUE'};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
     return api('POST','/vendor/set-billing-property-access',{id:id,property_ids:billingProps});
@@ -4657,40 +4696,39 @@ function linkify(text) {
 // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_manual, the one on-demand tenant SMS trigger. The
 // Worker prefixes "Hi {First_Name}, " and appends " Ref: {wo_id}." automatically (POST
 // /wo/tenant-update-manual) so every tenant text stays in the same voice — Brett just types
-// what goes in between. Uses prompt(), same lightweight single-field pattern already used
-// elsewhere in this file (pay-authorization passphrase, PIN entry, key-code edits).
-function sendTenantManualUpdate(woId) {
-  var msg = prompt('Text update to send the tenant on ' + woId + ':\n\n' +
-    '(Sent as: "Hi [tenant\'s first name], " + what you type here + " Ref: ' + woId + '." — just type the middle part.)');
-  if (msg === null) return;
-  msg = msg.trim();
-  if (!msg) { alert('Nothing sent — message was empty.'); return; }
-  api('POST', '/wo/tenant-update-manual', { wo_id: woId, message: msg, updated_by: 'Admin', updated_by_role: 'admin' }).then(function(r) {
-    if (r && r.error) { alert('Could not send: ' + r.error); return; }
-    if (r && r.sent) { alert('Sent.'); return; }
-    if (r && r.send_ok === false) { alert('Queued, not sent — SMS is currently gated off (' + (r.gate_snapshot || 'Global OFF') + '). It\'ll show in the Message Queue review screen once Global/Property/Tenant SMS are turned on.'); return; }
-    alert('Queued but the send itself failed — check the Message Queue review screen.');
-  }).catch(function(e) { alert('Could not send: ' + (e && e.message ? e.message : 'unknown error')); });
+// what goes in between. Sep 28 2026: the two browser prompt() drafts (📱 Send update and
+// 📸 Request photos) now share one small send modal (#modal-tenant-update) instead.
+var _tenantUpdateWO = null;
+var PHOTO_REQUEST_DEFAULT = 'could you send us a few photos of the issue when you get a chance? It helps us line up the right parts/vendor faster.';
+function openTenantUpdateModal(woId, kind) {
+  _tenantUpdateWO = woId;
+  var photos = kind === 'photos';
+  document.getElementById('tu-title').textContent = photos ? '📸 REQUEST PHOTOS FROM TENANT' : '📱 TEXT UPDATE TO TENANT';
+  document.getElementById('tu-hint').textContent = 'Sent as: "Hi [tenant\'s first name], " + what you type here + " Ref: ' + woId + '." — just type the middle part.' + (photos ? ' Edit the ask if you want, or send as-is.' : '');
+  document.getElementById('tu-message').value = photos ? PHOTO_REQUEST_DEFAULT : '';
+  document.getElementById('tu-msg').innerHTML = '';
+  var btn = document.getElementById('tu-send-btn'); btn.disabled = false; btn.textContent = 'SEND SMS';
+  openModal('modal-tenant-update');
 }
-
-// CAP-036 #1 (Sep 24 2026) — canned "request photos" template, same send path as
-// sendTenantManualUpdate above (POST /wo/tenant-update-manual — same gating, audit log, and
-// Hi-{First_Name}/Ref-{wo_id} framing). Pre-fills the prompt with the canned ask instead of
-// starting blank; Brett can still edit it before it goes out.
-function sendPhotoRequestSMS(woId) {
-  var defaultMsg = 'could you send us a few photos of the issue when you get a chance? It helps us line up the right parts/vendor faster.';
-  var msg = prompt('Photo request to send the tenant on ' + woId + ':\n\n' +
-    '(Sent as: "Hi [tenant\'s first name], " + what you type here + " Ref: ' + woId + '." — edit if you want, or just send as-is.)', defaultMsg);
-  if (msg === null) return;
-  msg = msg.trim();
-  if (!msg) { alert('Nothing sent — message was empty.'); return; }
-  api('POST', '/wo/tenant-update-manual', { wo_id: woId, message: msg, updated_by: 'Admin', updated_by_role: 'admin' }).then(function(r) {
-    if (r && r.error) { alert('Could not send: ' + r.error); return; }
-    if (r && r.sent) { alert('Sent.'); return; }
-    if (r && r.send_ok === false) { alert('Queued, not sent — SMS is currently gated off (' + (r.gate_snapshot || 'Global OFF') + '). It\'ll show in the Message Queue review screen once Global/Property/Tenant SMS are turned on.'); return; }
-    alert('Queued but the send itself failed — check the Message Queue review screen.');
-  }).catch(function(e) { alert('Could not send: ' + (e && e.message ? e.message : 'unknown error')); });
+function confirmTenantUpdate() {
+  var btn = document.getElementById('tu-send-btn'), out = document.getElementById('tu-msg');
+  if (!btn || btn.disabled || !_tenantUpdateWO) return;
+  var msg = document.getElementById('tu-message').value.trim();
+  function say(color, text) { out.innerHTML = '<div style="color:' + color + ';font-size:12px">' + esc(text) + '</div>'; }
+  if (!msg) { say('var(--danger)', 'Type a message first.'); return; }
+  btn.disabled = true; btn.textContent = 'SENDING…'; out.innerHTML = '';
+  function done() { btn.disabled = false; btn.textContent = 'SEND SMS'; }
+  api('POST', '/wo/tenant-update-manual', { wo_id: _tenantUpdateWO, message: msg, updated_by: 'Admin', updated_by_role: 'admin' }).then(function(r) {
+    done();
+    if (r && r.error) { say('var(--danger)', 'Could not send: ' + r.error); return; }
+    if (r && r.sent) { toast('Message sent', 'success'); closeModal('modal-tenant-update'); return; }
+    if (r && r.send_ok === false) { say('var(--warn,#c8992a)', 'Queued, not sent — SMS is currently gated off (' + (r.gate_snapshot || 'Global OFF') + "). It'll show in the Message Queue review screen once Global/Property/Tenant SMS are turned on."); return; }
+    say('var(--danger)', 'Queued but the send itself failed — check the Message Queue review screen.');
+  }).catch(function(e) { done(); say('var(--danger)', 'Could not send: ' + (e && e.message ? e.message : 'unknown error')); });
 }
+function sendTenantManualUpdate(woId) { openTenantUpdateModal(woId, 'update'); }
+// CAP-036 #1 (Sep 24 2026) — canned "request photos" template, same send path as above.
+function sendPhotoRequestSMS(woId) { openTenantUpdateModal(woId, 'photos'); }
 
 function tenantToggle(field, currentVal, label, woId) {
   var isOn = currentVal !== "FALSE";
@@ -8342,7 +8380,7 @@ var _invAutoMemo = {}; // scope key → last auto-composed memo text, so a manua
 function invComposeMemo(billId, timeEntries, billObj, wo) {
   var billIdStr = String(billId || '').trim();
   var parts = [];
-  var billDesc = String((billObj && billObj.Invoice_Description) || '').trim();
+  var billDesc = enOnly((billObj && billObj.Invoice_Description) || '').trim();   // customer-facing memo = English half of any [ES]/[EN] text
   if (billDesc) parts.push(billDesc);
   safeArray(timeEntries).filter(function(e) {
     return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && String(e.Invoice_Description || '').trim();
@@ -8350,7 +8388,7 @@ function invComposeMemo(billId, timeEntries, billObj, wo) {
     return new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0);
   }).forEach(function(e) {
     var d = (e.Start_DateTime || e.Created_Date || '').split('T')[0];
-    var desc = String(e.Invoice_Description || '').trim();
+    var desc = enOnly(e.Invoice_Description || '').trim();
     parts.push(d ? (d + ' — ' + desc) : desc);
   });
   if (parts.length) return parts.join('; ');
@@ -8953,13 +8991,20 @@ function renderHubEstimateView(woId, estimates, holder) {
 
     var current = estimates[estimates.length - 1];
     var isApproved = current.Status === 'Approved';
+    // Vendor text is shown exactly as written; when the worker stored an English copy (desc_en /
+    // Change_Reason_EN — Sep 28 2026) it is shown beneath, only when it differs.
     var rows = current.Line_Items.map(function(li) {
+      var en = (li.desc_en && String(li.desc_en).trim() !== String(li.desc || '').trim())
+        ? '<div class="est-en" style="font-size:11px;color:var(--accent2);margin-top:1px"><b>English:</b> ' + esc(li.desc_en) + '</div>' : '';
       return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0">' +
-        '<span style="white-space:pre-wrap">' + esc(li.desc) + '</span><span style="white-space:nowrap">$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
+        '<span style="white-space:pre-wrap;min-width:0">' + esc(li.desc) + en + '</span><span style="white-space:nowrap">$' + parseFloat(li.amount || 0).toFixed(2) + '</span></div>';
     }).join('');
+    var reasonBlock = (current.Change_Reason && parseInt(current.Version || '1', 10) > 1)
+      ? '<div style="font-size:11px;color:var(--muted);margin-top:4px">Reason: ' + esc(current.Change_Reason) +
+        (current.Change_Reason_EN ? '<div class="est-en" style="color:var(--accent2)"><b>English:</b> ' + esc(current.Change_Reason_EN) + '</div>' : '') + '</div>' : '';
     var histRows = estimates.length > 1 ? estimates.slice(0, -1).reverse().map(function(e) {
       return '<div style="font-size:10px;color:var(--muted);margin-top:4px;border-top:1px dashed var(--border);padding-top:4px">' +
-        'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) : '') + ' — ' + esc(e.Created_By || '') + '</div>';
+        'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) + (e.Change_Reason_EN ? ' (English: ' + esc(e.Change_Reason_EN) + ')' : '') : '') + ' — ' + esc(e.Created_By || '') + '</div>';
     }).join('') : '';
 
     var approvalBlock = isApproved
@@ -8994,8 +9039,10 @@ function renderHubEstimateView(woId, estimates, holder) {
       '<div style="display:flex;gap:6px">' +
       '<button class="btn small secondary" onclick="openHubEstimateEditor(\'' + woId + '\')">✎ Edit / Revise</button>' +
       '<button class="btn small secondary" onclick="generateEstimateDoc(\'' + woId + '\')">✨ Generate Text</button>' +
+      '<button class="btn small secondary" title="Re-run the English translation of this estimate" onclick="retranslateEstimateUI(\'' + woId + '\',\'' + esc(String(current.ID || '')) + '\',this)">🌐 Re-translate</button>' +
       '</div></div>' +
       rows +
+      reasonBlock +
       '<div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
       '<span>Total</span><span style="color:var(--accent2)">$' + parseFloat(current.Subtotal).toFixed(2) + '</span></div>' +
       approvalBlock +
@@ -9009,6 +9056,24 @@ function renderHubEstimateView(woId, estimates, holder) {
       chargeEl.value = calcTieredEstimate(parseFloat(current.Subtotal)).finalPrice.toFixed(2);
       if (typeof calcInvoiceMarkup === 'function') calcInvoiceMarkup(woId);
     }
+}
+
+// 🌐 Re-translate (Sep 28 2026): POST /estimate/retranslate re-runs the English copy of the
+// vendor's estimate (line descriptions + change reason). The vendor's own wording is never touched.
+function retranslateEstimateUI(woId, estimateId, btn) {
+  if (btn && btn.disabled) return;
+  if (!estimateId) { toast('This estimate has no id to translate', 'error'); return; }
+  var old = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Translating…'; }
+  function done() { if (btn) { btn.disabled = false; btn.textContent = old; } }
+  api('POST', '/estimate/retranslate', { estimate_id: estimateId }).then(function(r) {
+    done();
+    if (r && r.success) {
+      delete _estimateCache[woId];
+      toast(r.changed ? 'English copy updated' : 'Already in English — nothing to add', 'success');
+      refreshHubEstimateView(woId);
+    } else toast('Could not translate: ' + ((r && r.error) || 'unknown error'), 'error');
+  }).catch(function(e) { done(); toast('Could not translate: ' + (e && e.message ? e.message : 'network error'), 'error'); });
 }
 
 function refreshHubEstimateView(woId) {
@@ -10388,7 +10453,7 @@ function renderIRCard(b, i) {
     jobHtml =
       '<div style="background:#e8f0fb;border:1px solid var(--info);border-radius:6px;padding:12px;margin-bottom:12px;font-size:12.5px;color:var(--text)">' +
         '🧾 Standalone bill — no Work Order was ever created for this. Property: ' + esc(addr) + '.' +
-        (b.Notes ? '<div style="color:var(--muted);font-size:11.5px;margin-top:6px;font-style:italic">"' + esc(b.Notes) + '"</div>' : '') +
+        (b.Notes ? '<div style="color:var(--muted);font-size:11.5px;margin-top:6px;font-style:italic">"' + renderVendorText(b.Notes) + '"</div>' : '') +
       '</div>';
   } else {
     jobHtml =
@@ -12374,6 +12439,21 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- TENANT TEXT UPDATE / PHOTO REQUEST MODAL (Sep 28 2026) — replaces the two prompt() drafts behind the
+     WO top-bar "📱 Send update" and "📸 Request photos" buttons; same POST /wo/tenant-update-manual path. -->
+<div class="modal-overlay" id="modal-tenant-update">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title" id="tu-title">📱 TEXT THE TENANT</div>
+    <div id="tu-hint" style="color:var(--muted);font-size:11.5px;margin-bottom:8px;line-height:1.4"></div>
+    <textarea id="tu-message" style="width:100%;min-height:90px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;color:var(--text);font-family:var(--font);resize:vertical" placeholder="Type what goes in the middle…"></textarea>
+    <div id="tu-msg" style="margin-top:8px"></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-tenant-update')">Cancel</button>
+      <button class="btn" id="tu-send-btn" onclick="confirmTenantUpdate()">SEND SMS</button>
+    </div>
+  </div>
+</div>
+
 <!-- PROPERTY NOTICE MODAL — shared by the property-card "📢 Notice" button and the
      Messaging page's "New Property Notice" button -->
 <div class="modal-overlay" id="modal-property-notice">
@@ -14209,7 +14289,7 @@ function voidVendorBill(billId, woId) {
               (parseFloat(bill.Truck_Stock||0)>0 ? '<div>🚚 Truck stock' + (bill.Truck_Desc?' ('+esc(bill.Truck_Desc)+')':'') + ': <span style="color:var(--text)">$' + parseFloat(bill.Truck_Stock).toFixed(2) + '</span></div>' : '') +
               (parseFloat(bill.Receipts_Total||0)>0 ? '<div>🧾 Receipts subtotal: <span style="color:var(--text)">$' + parseFloat(bill.Receipts_Total).toFixed(2) + '</span></div>' : '') +
               items.map(function(r){ return '<div style="padding-left:16px">• ' + esc(r.desc||'Receipt') + ': <span style="color:var(--text)">$' + parseFloat(r.amount||0).toFixed(2) + '</span>' + (r.url?'<a href="'+esc(r.url)+'" target="_blank" style="color:var(--info);margin-left:8px;font-size:11px">View</a>':'') + '</div>'; }).join('') +
-              (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + esc(bill.Notes) + '</div>' : '') +
+              (bill.Notes ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text)">' + renderVendorText(bill.Notes) + '</div>' : '') +
             '</div>' +
             '<div style="display:flex;gap:8px;margin-top:10px">' +
             '<button onclick="markBillReviewed(\''+bill.ID+'\')" style="background:var(--accent);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✓ Mark Reviewed</button>' +
@@ -14329,6 +14409,19 @@ function saveEditedReceipts(billId, woId) {
 // ══════════════════════════════════════════════════════════════
 
 
+
+// Vendor free text stored as "[ES] original [EN] english" (multi-line or inline) → English first,
+// original beneath (Sep 28 2026). Untagged text is just escaped. enOnly() is the plain-string half
+// for anything that feeds a customer-facing memo.
+function enOnly(s) {
+  var t = String(s == null ? '' : s), m = t.match(/\[EN\]\s*([\s\S]*)$/);
+  return (m && m[1].trim()) ? m[1].trim() : t.replace(/^\[ES\]\s*/, '');
+}
+function renderVendorText(s) {
+  var t = String(s == null ? '' : s), m = t.match(/^([\s\S]*?)\[ES\]\s*([\s\S]*?)\s*\[EN\]\s*([\s\S]*)$/);
+  if (!m) return esc(t);
+  return (m[1].trim() ? esc(m[1].trim()) + '<br>' : '') + '<span class="vt-en">' + esc(m[3].trim()) + '</span><div class="vt-es" style="color:var(--muted);font-size:10.5px;margin-top:2px">Original (ES): ' + esc(m[2].trim()) + '</div>';
+}
 
 // ── Render notes with [ES]/[EN] translation tags ──────────────
 function renderNoteLines(notesText) {

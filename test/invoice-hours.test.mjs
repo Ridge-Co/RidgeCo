@@ -18,7 +18,7 @@ function grab(name){
 }
 // buildInvoiceLines now calls buildLaborDescription — grab it too so the isolated eval has
 // the dependency in scope (same pattern as grabbing buildInvoiceLines itself).
-const buildInvoiceLines = new Function(grab('buildLaborDescription') + '\n' + grab('buildInvoiceLines') + '\nreturn buildInvoiceLines;')();
+const buildInvoiceLines = new Function(grab('englishOnly') + '\n' + grab('buildLaborDescription') + '\n' + grab('buildInvoiceLines') + '\nreturn buildInvoiceLines;')();
 
 let pass = 0, fail = 0;
 const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? ('got ' + JSON.stringify(got)) : ''); } };

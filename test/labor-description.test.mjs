@@ -16,7 +16,7 @@ function grab(name) {
   for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } }
   return src.slice(i, j + 1);
 }
-const buildLaborDescription = new Function(grab('buildLaborDescription') + '\nreturn buildLaborDescription;')();
+const buildLaborDescription = new Function(grab('englishOnly') + '\n' + grab('buildLaborDescription') + '\nreturn buildLaborDescription;')();
 
 const wo = { Invoice_Memo: '', Description: 'Tenant reported leak under sink' };
 

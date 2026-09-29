@@ -56,9 +56,11 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 {
   ok(html.includes('sendPhotoRequestSMS'), 'a dedicated photo-request function exists, distinct from the free-typed sendTenantManualUpdate');
   ok(html.includes('📸 Request photos'), 'a button for it is wired into the WO detail sticky action bar');
+  // Sep 28 2026: the browser prompt() drafts were replaced by a real send modal (#modal-tenant-update).
   const fn = grabFn('sendPhotoRequestSMS');
-  ok(fn.includes("api('POST', '/wo/tenant-update-manual'"), 'reuses the existing tenant-update-manual endpoint — no new send infrastructure for a canned template');
-  ok(fn.includes('defaultMsg'), 'the prompt is pre-filled with a canned default rather than starting blank, distinguishing it from the free-typed "Send update" button');
+  ok(fn.includes("openTenantUpdateModal(woId, 'photos')") && !fn.includes('prompt('), 'sendPhotoRequestSMS opens the send modal in photo-request mode (no prompt())');
+  ok(html.includes("var PHOTO_REQUEST_DEFAULT = 'could you send us a few photos") && grabFn('openTenantUpdateModal').includes('PHOTO_REQUEST_DEFAULT'), 'the modal is pre-filled with the canned photo-request default, unlike the blank "Send update" mode');
+  ok(grabFn('confirmTenantUpdate').includes("api('POST', '/wo/tenant-update-manual'"), 'the modal still reuses the existing tenant-update-manual endpoint — no new send infrastructure');
 }
 
 console.log(`cap-036-batch2-ui: ${n}/${n} passing`);

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-28.8-recurring-scheduler';
+const BUILD_VERSION = '2026-09-28.9-vendor-translation-send-to-vendor';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -532,6 +532,7 @@ export default {
         if (path === '/wo/shared/receipt')        return await woSharedReceipt(env, body);
         if (path === '/wo/shared/note')           return await woSharedNote(env, body);
         if (path === '/wo/share-link')            return await woShareLink(env, body);
+        if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
         if (path === '/workorder') {
           // Tenant-work-order-submission toggle (Aug 20, 2026): only gates a TENANT's own
@@ -600,8 +601,8 @@ export default {
         // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
         // VENDOR_ONBOARDING_COLS (Sep 23 2026, Phase 1) folded into the same ensureColumns call
         // every vendor add/update already makes — additive, no-op once the headers exist.
-        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; return await addRow(env, 'Vendors', body); }
-        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address'].concat(VENDOR_ONBOARDING_COLS)); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; return await addRow(env, 'Vendors', body); }
+        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); return await updateRow(env, 'Vendors', body.id, body.fields); }
         if (path === '/vendor/complete-onboarding') return await vendorCompleteOnboarding(env, body);
         // Contact-card upload (Sept 2 2026) — business-card/contact-photo OCR shared by the
         // Add Tenant / Add Owner / Add Vendor contact-card buttons in index.html. Admin-gated
@@ -669,6 +670,7 @@ export default {
         if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
+        if (path === '/estimate/retranslate')     return await retranslateEstimate(env, body);
         if (path === '/estimate/unapprove')       return await unapproveEstimate(env, body);
         if (path === '/estimate/needs-info')      return await estimateNeedsInfo(env, body);
         if (path === '/estimate/decline')         return await estimateDecline(env, body);
@@ -3443,6 +3445,8 @@ function scopeCleanItems(arr) {
       id: (it && it.id) || ('li' + (i + 1)), area: (it && it.area) || '', trade: (it && it.trade) || '',
       description: (it && it.description) || '', qty: (it && it.qty) || '', note: (it && it.note) || '',
       variants, selected_key,
+      // vendor's own wording when `description` is the English rendering of it (Sep 28 2026) — kept, never shown to the owner
+      ...((it && it.description_orig) ? { description_orig: String(it.description_orig) } : {}),
     };
   }).filter(it => it.description);
 }
@@ -3465,7 +3469,9 @@ function scopeItemsFromEstimate(lineItems, existingItems) {
   const usedIds = new Set(existing.map(it => it && it.id).filter(Boolean));
   let n = existing.length;
   const out = [];
-  for (const li of (Array.isArray(lineItems) ? lineItems : [])) {
+  // Sep 28 2026: everything the OWNER reads is English — desc_en (or the English half of an [ES]/[EN]
+  // tag) when the vendor wrote Spanish; the vendor's own wording rides along as description_orig.
+  for (const li of estimateLinesEnglish(lineItems)) {
     const description = String((li && li.desc) || '').trim();
     if (!description) continue; // mirrors scopeCleanItems: an item with no description is dropped
     const amount = Math.max(0, parseFloat(li && li.amount) || 0);
@@ -3477,6 +3483,7 @@ function scopeItemsFromEstimate(lineItems, existingItems) {
       id, area: '', trade: '', description, qty: '', note: '',
       variants: [{ key: 'v1', label: '', vendor_cost: +amount.toFixed(2), price_override: null }],
       selected_key: 'v1',
+      ...(li.desc_orig ? { description_orig: String(li.desc_orig) } : {}),
     });
   }
   return out;
@@ -3883,6 +3890,15 @@ async function woPushToScope(env, body) {
 
   let lineItems = []; try { lineItems = JSON.parse(estimate.Line_Items || '[]'); } catch (_) {}
   if (!Array.isArray(lineItems) || !lineItems.length) return json({ error: `Estimate ${estimate.ID} has no line items to convert.` }, 400);
+  // Older estimates (pre desc_en) written in Spanish: translate the lines that lack an English copy
+  // in memory only, so the proposal is English regardless. A translation miss keeps the original.
+  if (lineItems.some(li => li && li.desc && !li.desc_en && plausiblyNonEnglish(li.desc))) {
+    try {
+      const need = lineItems.map((li, i) => (li && li.desc && !li.desc_en && plausiblyNonEnglish(li.desc)) ? i : -1).filter(i => i >= 0);
+      const tr = await translateBatchToEnglish(env, need.map(i => lineItems[i].desc));
+      if (tr.ok) need.forEach((i, k) => { if (String(tr.out[k]).trim().toLowerCase() !== String(lineItems[i].desc).trim().toLowerCase()) lineItems[i] = Object.assign({}, lineItems[i], { desc_en: tr.out[k] }); });
+    } catch (_) {}
+  }
 
   // ---- Resolve target scope: reuse Work_Orders.Scope_ID if already set, else preview a new one.
   const scopes = await fetchTab(env, 'Scopes');
@@ -3977,7 +3993,20 @@ async function scopeEstimate(env, body) {
   if (body.vendor_id !== undefined) fields.Vendor_ID = body.vendor_id;
   if (body.estimate_number !== undefined) fields.Estimate_Number = body.estimate_number;
   if (body.estimate_amount !== undefined) fields.Estimate_Amount = String(body.estimate_amount);
-  if (body.estimate_notes !== undefined) fields.Estimate_Notes = body.estimate_notes;
+  if (body.estimate_notes !== undefined) {
+    // Sep 28 2026: notes copied from a Spanish vendor estimate are stored in English (what the owner
+    // proposal side reads); the original is kept in Estimate_Notes_Orig. Fails open to the original.
+    fields.Estimate_Notes = body.estimate_notes;
+    const _n = String(body.estimate_notes || '');
+    if (_n.trim() && plausiblyNonEnglish(_n)) {
+      try {
+        const tr = await translateBatchToEnglish(env, [_n]);
+        if (tr.ok && tr.out[0] && tr.out[0].trim().toLowerCase() !== _n.trim().toLowerCase()) {
+          try { await ensureColumns(env, 'Scopes', ['Estimate_Notes_Orig']); fields.Estimate_Notes_Orig = _n; fields.Estimate_Notes = tr.out[0]; } catch (_) {}
+        }
+      } catch (_) {}
+    } else if (s.Estimate_Notes_Orig !== undefined) { fields.Estimate_Notes_Orig = ''; }
+  }
   if (['draft', 'approved', 'wo-created'].includes(s.Status)) fields.Status = 'estimated';
   await updateRow(env, 'Scopes', id, fields);
   // Approval stage: a vendor estimate recorded on a scope that has no stage yet → Estimated.
@@ -6853,7 +6882,7 @@ async function assignVendor(env, body) {
     // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
     // (Sep 14 2026) — deep-links into the portal (vendorPortalLink), not the no-login
     // shareable-link mechanism, specifically to avoid bypassing this same accept-gate.
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true });
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true });
     vendorSMSSent = r.sent;
   }
   if (notify && notifyTenantOnAssign) {
@@ -7285,7 +7314,7 @@ async function regeneratePIN(env, body) {
 async function sendPinMessage(env, body) {
   const { type, id } = body;
   if (!type || !id) return json({ error: 'Missing type or id' }, 400);
-  let firstName, phone, pin, owner = null, address = '';
+  let firstName, phone, pin, owner = null, address = '', vendorRec = null;
   if (type === 'tenant') {
     const [tenants, units, properties, owners] = await fetchTabs(env, ['Tenants', 'Units', 'Properties', 'Owners']);
     const t = tenants.find(r => r.ID === id);
@@ -7305,7 +7334,7 @@ async function sendPinMessage(env, body) {
     if (!v) return json({ error: 'Vendor not found' }, 404);
     if (!v.Phone) return json({ error: 'No phone number on file', name: v.Name||'' }, 400);
     if (!v.PIN)   return json({ error: 'No PIN set — set a PIN first', name: v.Name||'' }, 400);
-    firstName = (v.Name||'').split(' ')[0]; phone = v.Phone; pin = v.PIN;
+    firstName = (v.Name||'').split(' ')[0]; phone = v.Phone; pin = v.PIN; vendorRec = v;
   } else if (type === 'owner') {
     const owners = await fetchTab(env, 'Owners'); const o = owners.find(r => r.ID === id);
     if (!o) return json({ error: 'Owner not found' }, 404);
@@ -7339,10 +7368,14 @@ async function sendPinMessage(env, body) {
     owner_user: `Hi ${firstName}! This is ${assistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: ${portalUrl} PIN: ${pin}. Log in to check on your work orders, submit requests, and manage your notification settings.`,
   };
   const message = tpl ? renderTemplate(tpl.Body, tokens) : fallback[type];
-  if (body.preview_only) return json({ preview: message, phone, name: firstName, pin });
-  await sendSMS(env, phone, message);
+  if (body.preview_only) return json({ preview: message, phone, name: firstName, pin, will_translate_to: vendorRec && vendorWantsSpanish(vendorRec) ? 'es' : '' });
+  // Vendor language (Sep 28 2026): the PIN text goes out in Spanish for a Spanish vendor. The
+  // PIN, portal link and amounts are verified intact or the English original is sent.
+  let outMessage = message, translatedTo = '';
+  if (vendorRec) { const t = await translateForVendorDetailed(env, vendorRec, message); if (t.translated) { outMessage = t.text; translatedTo = 'es'; } }
+  await sendSMS(env, phone, outMessage);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
-  return json({ success: true, sent_to: phone, name: firstName });
+  return json({ success: true, sent_to: phone, name: firstName, translated_to: translatedTo });
 }
 
 // POST /welcome/send { type: 'tenant'|'vendor', id, preview_only?, message? } — Sep 14 2026,
@@ -8825,6 +8858,33 @@ async function approveInvoiceReviewBulk(env, body) {
 
 // ── ESTIMATES ────────────────────────────────────────────────
 
+// Stored Line_Items JSON with the derived desc_en removed — what the vendor actually submitted.
+function estimateLineItemsCanonical(json) {
+  try { return JSON.stringify((JSON.parse(json || '[]') || []).map(li => { const c = Object.assign({}, li); delete c.desc_en; return c; })); } catch (_) { return String(json || ''); }
+}
+
+// POST /estimate/retranslate { estimate_id | wo_id + version } — ADMIN-ONLY (no ROLE_SCOPES entry).
+// Re-runs the English translation of a stored estimate (every non-blank line + the change reason,
+// no heuristic) and rewrites ONLY the derived English fields: per-line desc_en inside Line_Items and
+// Change_Reason_EN. The vendor's original desc / Change_Reason / amounts are never touched.
+async function retranslateEstimate(env, body) {
+  const all = await fetchTab(env, 'Estimates');
+  let est = null;
+  if (body && body.estimate_id) est = all.find(e => String(e.ID) === String(body.estimate_id));
+  else if (body && body.wo_id && body.version != null) est = all.find(e => e.WO_ID === String(body.wo_id) && String(e.Version) === String(body.version) && e.Active !== 'FALSE');
+  else return json({ error: 'estimate_id, or wo_id + version, required' }, 400);
+  if (!est) return json({ error: 'Estimate not found' }, 404);
+  let lines = []; try { lines = JSON.parse(est.Line_Items || '[]'); } catch (_) {}
+  if (!Array.isArray(lines) || !lines.length) return json({ error: 'Estimate has no line items' }, 400);
+  const en = await estimateEnglishFields(env, lines, est.Change_Reason || '', { force: true });
+  if (!en.ok) return json({ ok: false, success: false, error: 'Translation is unavailable right now (' + (en.error || 'unknown') + ') — nothing was changed. Try again in a minute.' }, 502);
+  try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); } catch (_) {}
+  await updateRow(env, 'Estimates', est.ID, { Line_Items: JSON.stringify(en.line_items), Change_Reason_EN: en.change_reason_en || '' });
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_retranslate', Skill_Or_Endpoint: '/estimate/retranslate', Success: 'TRUE', Notes: `estimate=${est.ID} wo=${est.WO_ID} v${est.Version}` }); } catch (_) {}
+  return json({ success: true, ok: true, estimate_id: est.ID, wo_id: est.WO_ID, version: est.Version, line_items: en.line_items, change_reason_en: en.change_reason_en || '',
+    changed: en.line_items.some(li => li.desc_en) || !!en.change_reason_en });
+}
+
 async function listEstimates(env, url) {
   const woId = url.searchParams.get('wo_id') || '';
   if (!woId) return json({ error: 'wo_id required' }, 400);
@@ -9108,9 +9168,10 @@ async function unapproveEstimate(env, body) {
       const vendors = await fetchTab(env, 'Vendors');
       const vendor = vendors.find(v => v.ID === latest.Vendor_ID);
       if (vendor?.Phone) {
-        const msg = `Hold on WO ${woId} — the approved estimate ($${latest.Subtotal}) has been put back on hold${body.reason ? ': ' + body.reason : ''}. Please don't proceed until we confirm the revised number.`;
+        const msgEn = `Hold on WO ${woId} — the approved estimate ($${latest.Subtotal}) has been put back on hold${body.reason ? ': ' + body.reason : ''}. Please don't proceed until we confirm the revised number.`;
+        const tv = await translateForVendorDetailed(env, vendor, msgEn), msg = tv.text; // Spanish for a Spanish vendor (Sep 28 2026)
         await sendSMS(env, vendor.Phone, msg);
-        await logSMS(env, woId, 'estimate_unapproved', vendor.ID, vendor.Phone, msg);
+        await logSMS(env, woId, 'estimate_unapproved', vendor.ID, vendor.Phone, tv.translated ? msg + ' || EN: ' + msgEn : msg);
         vendorTold = true;
       }
     } catch (e) { /* status is already back to Pending; the SMS is best-effort */ }
@@ -9278,12 +9339,26 @@ async function addEstimateVersion(env, body) {
   // twins look like a legitimate revision until you compare the line items. Re-submitting
   // the exact same numbers is never a real revision, so hand back the row that already
   // exists instead of appending a second one.
+  // Sep 28 2026: stored Line_Items may now carry desc_en (English copy), so the stored JSON is
+  // compared with desc_en stripped — the double-tap guard still matches a re-submit exactly.
   const dupe = await findRecentDuplicate(env, 'Estimates', {
-    WO_ID: woId, Line_Items: lineItemsJson, Vendor_ID: body.vendor_id || '',
-  }, 120);
+    WO_ID: woId, Vendor_ID: body.vendor_id || '',
+  }, 120, r => estimateLineItemsCanonical(r.Line_Items) === estimateLineItemsCanonical(lineItemsJson));
   if (dupe) return json({ success: true, duplicate: true, version: parseInt(dupe.Version || '1'), subtotal: dupe.Subtotal || subtotal.toFixed(2) });
 
-  await addRow(env, 'Estimates', { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: lineItemsJson, Subtotal: subtotal.toFixed(2), Change_Reason: nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised'), Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' });
+  // Vendor text is kept exactly as written; an English copy is stored beside it (per-line desc_en
+  // inside Line_Items + Change_Reason_EN) so the admin panel, owner proposal and invoice can read
+  // English. Fails open — a translation miss just means no English copy (Re-translate can retry).
+  const changeReason = nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised');
+  let storedLineItems = body.line_items, changeReasonEn = '';
+  try {
+    const vendorRow = body.vendor_id ? (await fetchTab(env, 'Vendors').catch(() => [])).find(v => String(v.ID) === String(body.vendor_id)) : null;
+    const en = await estimateEnglishFields(env, body.line_items, nextVersion === 1 ? '' : changeReason, { force: vendorWantsSpanish(vendorRow) });
+    if (en.ok) { storedLineItems = en.line_items; changeReasonEn = en.change_reason_en; }
+  } catch (_) {}
+  const row = { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(storedLineItems), Subtotal: subtotal.toFixed(2), Change_Reason: changeReason, Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' };
+  if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) {} }
+  await addRow(env, 'Estimates', row);
   try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
   // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
   // the job was approved/proposed/signed means something changed — do NOT silently reset the stage
@@ -9451,14 +9526,14 @@ async function generateEstimateText(env, body) {
   const pricing = calcTieredEstimate(rawCost, _pc);
   let includeIntegrityClause=false;
   if (wo_id) { try { const all=await fetchTab(env,'Estimates'); const versions=all.filter(e=>e.WO_ID===wo_id).sort((a,b)=>parseInt(a.Version||'1')-parseInt(b.Version||'1')); if(versions.length){const firstItems=JSON.parse(versions[0].Line_Items||'[]'); if(firstItems.length>1&&line_items.length<firstItems.length) includeIntegrityClause=true;} } catch(e){} }
-  const itemsList=line_items.map(li=>`- ${li.desc}`).join('\n');
+  const itemsList=line_items.map(li=>`- ${englishOnly(li.desc_en || li.desc)}`).join('\n');   // owner-facing text is English (Sep 28 2026): desc_en when the vendor wrote Spanish
   const integrityClauseText=includeIntegrityClause?'\n- Estimate Integrity Clause: This estimate is priced as a single, unified project based on current mobilization efficiencies. If individual line items are selectively removed or declined by the client, any remaining approved items are subject to a 15% price adjustment plus a $150 travel/mobilization fee.':'';
   // Standing policy (Aug 21 2026, Brett) — same boilerplate as scopeProposal()'s doc: standalone/
   // partial-scope pricing is best-efforts, not fixed, since the combined price absorbs unknowns a
   // lone item doesn't share. Distinct from the punitive Integrity Clause above (which only fires
   // when items are dropped from an already-multi-versioned estimate) — this applies universally.
   const partialScopeClauseText='\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn\'t get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.';
-  const prompt=`You are a property maintenance estimate writer. Rewrite the following raw, messy scope-of-work items into a polished, professional, scannable bulleted list. Correct all typos, slang, and grammar. Group related items under bold category headers where it makes sense.\n\nProperty: ${property_address}\nRaw issue description: ${issues}\nRaw line items:\n${itemsList}\n\nReturn ONLY the rewritten "Scope of Work:" bulleted section — clean Markdown, no emojis, no preamble, no other sections. Do not include any dollar amounts or pricing.`;
+  const prompt=`You are a property maintenance estimate writer. Rewrite the following raw, messy scope-of-work items into a polished, professional, scannable bulleted list. Correct all typos, slang, and grammar. The output is for an English-speaking property owner: if any item or the issue description is in Spanish, write it in English. Group related items under bold category headers where it makes sense.\n\nProperty: ${property_address}\nRaw issue description: ${issues}\nRaw line items:\n${itemsList}\n\nReturn ONLY the rewritten "Scope of Work:" bulleted section — clean Markdown, no emojis, no preamble, no other sections. Do not include any dollar amounts or pricing.`;
   try {
     const resp=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:800, messages:[{role:'user',content:prompt}] }) });
     const data=await resp.json(); const scopeText=data.content?.[0]?.text?.trim()||''; if (!scopeText) return json({ error:'Claude returned empty response',detail:data }, 500);
@@ -9482,12 +9557,12 @@ async function logWOAudit(env, woId, changedBy, changedByRole, field, oldValue, 
 // WO logs recipient/channel/full-text/outcome alongside the existing field-edit history, not
 // just a 100-char truncated Notes string (see the old Tenant_Manual_SMS precedent). Additive
 // only — self-provisioned lazily below, existing field-edit-only callers never touch these.
-const WO_AUDIT_MSG_COLS = ['Channel', 'Recipient_Name', 'Recipient_Type', 'Message_Type', 'Message_Body', 'Outcome'];
+const WO_AUDIT_MSG_COLS = ['Channel', 'Recipient_Name', 'Recipient_Type', 'Message_Type', 'Message_Body', 'Outcome', 'Original_Body', 'Translated_To'];
 
 async function logWOAuditMany(env, entries) {
   if (!entries || !entries.length) return;
   try {
-    if (entries.some(e => e.channel || e.messageType || e.messageBody)) {
+    if (entries.some(e => e.channel || e.messageType || e.messageBody || e.originalBody)) {
       try { await ensureColumns(env, 'WO_Audit', WO_AUDIT_MSG_COLS); } catch (e) {}
     }
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
@@ -9500,6 +9575,7 @@ async function logWOAuditMany(env, entries) {
         Field:e.field||'', Old_Value:String(e.oldValue??''), New_Value:String(e.newValue??''), Timestamp:now, Notes:e.notes||'',
         Channel:e.channel||'', Recipient_Name:e.recipientName||'', Recipient_Type:e.recipientType||'',
         Message_Type:e.messageType||'', Message_Body:e.messageBody||'', Outcome:e.outcome||'',
+        Original_Body:e.originalBody||'', Translated_To:e.translatedTo||'',
       }[h]??''));
       nextId += 1;
       return row;
@@ -9510,11 +9586,11 @@ async function logWOAuditMany(env, entries) {
 
 // Thin wrapper matching logWOAudit's shape, for the message-send call sites (smsGatedSend,
 // sendVendorInvoiceConfirmationEmail) instead of the field-edit shape.
-async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, recipientName, recipientType, messageType, messageBody, outcome, notes }) {
+async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, recipientName, recipientType, messageType, messageBody, outcome, notes, originalBody, translatedTo }) {
   return logWOAuditMany(env, [{
     woId, changedBy: changedBy || 'System', changedByRole: changedByRole || 'system',
     field: channel === 'email' ? 'Email' : 'SMS', oldValue: '', newValue: '',
-    notes: notes || '', channel, recipientName, recipientType, messageType, messageBody, outcome,
+    notes: notes || '', channel, recipientName, recipientType, messageType, messageBody, outcome, originalBody, translatedTo,
   }]);
 }
 
@@ -9537,12 +9613,147 @@ async function translateToEnglish(env, text) {
 // Generic one-shot translation used by the Shareable WO (B-117) to show the vendor the job
 // details in Spanish. Keeps proper nouns / addresses / codes intact; returns the source
 // text unchanged on any miss so a translation outage never blanks the work order.
-async function translateText(env, text, fromLabel, toLabel) {
+// opts (optional, Sep 28 2026): { preserve:true } appends the link/PIN/amount-preservation rules,
+// { html:true } tells the model the input is HTML, { max_tokens } raises the default 600.
+async function translateText(env, text, fromLabel, toLabel, opts) {
   if (!env.ANTHROPIC_API_KEY || !text || !String(text).trim()) return text;
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written. Return only the translation, nothing else:\n\n${text}`}] }) });
+    const extra = (opts && opts.preserve ? ' ' + VENDOR_TRANSLATE_PRESERVE : '') + (opts && opts.html ? ' The input is HTML: keep every tag, attribute and link exactly as-is and translate only the visible text.' : '');
+    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:(opts && opts.max_tokens) || 600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written.${extra} Return only the translation, nothing else:\n\n${text}`}] }) });
     const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
   } catch(e) { return text; }
+}
+
+// ── VENDOR TRANSLATION (Sep 28 2026, feat/vendor-translation-send-to-vendor) ────────────────────
+// Outbound: everything the Hub sends a vendor whose Vendors.Language is 'es' goes out in Spanish
+// (English original kept in Message_Queue / WO_Audit). Inbound: vendor-written estimate text is
+// kept as written and an English copy is stored beside it (desc_en / Change_Reason_EN), so Brett,
+// the owner proposal and the invoice all read English. Every helper here FAILS OPEN — on any miss
+// (no API key, timeout, bad model output, a link/PIN/amount that did not survive) the ORIGINAL
+// text is used and the send/save is never blocked.
+const VENDOR_TRANSLATE_PRESERVE = 'Keep every URL, link, phone number, PIN, door/lock code, work order id (like WO-1234, [1234] or 1234), "Ref:" reference, dollar amount, date, time, address and proper name EXACTLY as written — never translate, reformat, drop or add them. Keep line breaks. Add no commentary.';
+
+function vendorWantsSpanish(vendor) { return !!vendor && String(vendor.Language || '').trim().toLowerCase() === 'es'; }
+
+// Tokens that must appear, byte-for-byte, in a translation of `text` (links, $ amounts, 4+ digit
+// runs such as phone numbers / PINs / ids). If the model dropped or altered one, the translation
+// is discarded and the English original is sent instead.
+function extractPreservedTokens(text) {
+  const s = String(text || ''), toks = new Set();
+  (s.match(/https?:\/\/[^\s<>"')\]]+/gi) || []).forEach(u => toks.add(u.replace(/[.,;:!?]+$/, '')));
+  (s.match(/\$\s?\d[\d,]*(?:\.\d+)?/g) || []).forEach(d => toks.add(d.replace(/\s+/g, '')));
+  (s.match(/\b\d{4,}\b/g) || []).forEach(n => toks.add(n));
+  (s.match(/\bPIN:?\s*([A-Za-z0-9]{4,})/gi) || []).forEach(m => toks.add(m.replace(/^PIN:?\s*/i, '')));
+  return Array.from(toks);
+}
+function preservedTokensIntact(original, translated) {
+  const out = String(translated || ''), flat = out.replace(/\s+/g, '');
+  return extractPreservedTokens(original).every(t => out.includes(t) || flat.includes(t.replace(/\s+/g, '')));
+}
+function htmlTagSkeleton(html) { return (String(html || '').match(/<\/?[a-zA-Z][^>]*>/g) || []).map(t => t.replace(/\s+/g, ' ')).join('|'); }
+
+// Cheap "is this probably Spanish?" test so English-only estimates never cost a model call.
+function plausiblyNonEnglish(text) {
+  const s = String(text || '');
+  if (!s.trim()) return false;
+  if (/[áéíóúñüÁÉÍÓÚÑÜ¿¡]/.test(s)) return true;
+  const stop = new Set(['el','la','los','las','de','del','para','con','por','una','un','y','se','que','en','es','hay','muy','pero','como','hacer','trabajo','materiales','instalacion','reparacion','cambiar','pintura','mano','obra','bano','cocina','puerta','ventana','tuberia','agua','luz','piso','pared','techo','lavabo','inodoro','llave','arreglar','limpieza','servicio','cotizacion','incluye','pintar','reemplazar','colocar','poner','quitar','tubo','fuga','falta']);
+  const words = s.toLowerCase().match(/[a-z]+/g) || [];
+  let hits = 0; for (const w of words) if (stop.has(w)) hits++;
+  return hits >= 2 || (words.length <= 3 && hits >= 1);
+}
+
+// "[ES] original [EN] english" (the tag pattern vendor notes / bills / receipts are stored in) →
+// the English part. Untagged text is returned unchanged. Used everywhere text is customer-facing.
+function englishOnly(text) {
+  const s = String(text == null ? '' : text);
+  const m = s.match(/\[EN\]\s*([\s\S]*)$/);
+  if (m && m[1].trim()) return m[1].trim();
+  return s.replace(/^\[ES\]\s*/, '');
+}
+
+// Direct-Anthropic translation. Batch of short strings → same-length array; ok:false on any miss.
+async function translateBatchToEnglish(env, strings) {
+  const arr = (strings || []).map(s => String(s == null ? '' : s));
+  const idx = arr.map((s, i) => s.trim() ? i : -1).filter(i => i >= 0);
+  if (!idx.length) return { ok: true, out: arr, called: false };
+  if (!env.ANTHROPIC_API_KEY) return { ok: false, out: arr, error: 'no_api_key' };
+  let timer;
+  try {
+    const ctrl = new AbortController(); timer = setTimeout(() => ctrl.abort(), 20000);
+    const prompt = 'Below is a JSON array of short texts a property-maintenance contractor wrote for an estimate. Translate every item that is in Spanish (or any non-English language) into natural, plain English; return items that are already English EXACTLY unchanged. Keep dollar amounts, numbers, addresses, names and units exactly as written. Return ONLY a JSON array of strings, same length and same order, no commentary.\n\n' + JSON.stringify(idx.map(i => arr[i]));
+    const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }) });
+    const data = await resp.json();
+    const txt = (data && data.content && data.content[0] && data.content[0].text) || '';
+    const m = txt.match(/\[[\s\S]*\]/);
+    const parsed = m ? JSON.parse(m[0]) : null;
+    if (!Array.isArray(parsed) || parsed.length !== idx.length) return { ok: false, out: arr, error: 'bad_response' };
+    const out = arr.slice();
+    idx.forEach((i, k) => { if (typeof parsed[k] === 'string' && parsed[k].trim()) out[i] = parsed[k].trim(); });
+    return { ok: true, out, called: true };
+  } catch (e) { return { ok: false, out: arr, error: String((e && e.message) || e) }; }
+  finally { if (timer) clearTimeout(timer); }
+}
+
+// Estimate → English. Each line keeps its original `desc`; `desc_en` is added only when the
+// English differs. `force` (the Re-translate button) sends every non-blank text to the model;
+// otherwise only text that looks non-English is sent (no cost for English estimates).
+async function estimateEnglishFields(env, lineItems, changeReason, opts) {
+  const force = !!(opts && opts.force);
+  const items = (Array.isArray(lineItems) ? lineItems : []).map(li => Object.assign({}, li));
+  const texts = items.map(li => String((li && li.desc) || '')).concat([String(changeReason || '')]);
+  const pick = texts.map((t, i) => (t.trim() && (force || plausiblyNonEnglish(t))) ? i : -1).filter(i => i >= 0);
+  if (!pick.length) return { line_items: items, change_reason_en: '', ok: true, called: false };
+  const r = await translateBatchToEnglish(env, pick.map(i => texts[i]));
+  const en = texts.slice(); pick.forEach((i, k) => { en[i] = r.out[k]; });
+  const norm = s => String(s || '').trim().toLowerCase();
+  items.forEach((li, i) => {
+    if (pick.indexOf(i) === -1) return;
+    if (r.ok && en[i] && norm(en[i]) !== norm(texts[i])) li.desc_en = en[i]; else if (force && r.ok) delete li.desc_en;
+  });
+  const last = texts.length - 1;
+  const crEn = (pick.indexOf(last) !== -1 && r.ok && norm(en[last]) !== norm(texts[last])) ? en[last] : '';
+  return { line_items: items, change_reason_en: crEn, ok: r.ok, called: true, error: r.error };
+}
+
+// Pure helper any downstream consumer (owner proposal, invoice, push-to-scope) calls to get the
+// English view of an estimate's lines — desc_en when present, else desc (with any [ES]/[EN] tags
+// resolved). `desc_orig` carries the vendor's own wording when it differs.
+function estimateLinesEnglish(estimateOrLines) {
+  let lines = estimateOrLines;
+  if (estimateOrLines && !Array.isArray(estimateOrLines)) { try { lines = JSON.parse(estimateOrLines.Line_Items || '[]'); } catch (_) { lines = []; } }
+  return (Array.isArray(lines) ? lines : []).map(li => {
+    const orig = String((li && li.desc) || '');
+    const en = englishOnly((li && li.desc_en) || orig);
+    return Object.assign({}, li, { desc: en, desc_orig: en !== orig ? orig : undefined });
+  });
+}
+
+// English → Spanish for a vendor recipient. Returns {text, original, translated, lang, skipped_reason}.
+// Only vendors with Language==='es' are ever translated. opts: {already_localized, html, max_tokens}.
+async function translateForVendorDetailed(env, vendor, text, opts) {
+  const original = String(text == null ? '' : text);
+  const wantsEs = vendorWantsSpanish(vendor);
+  const lang = wantsEs ? 'es' : 'en';
+  if (!wantsEs || !original.trim() || (opts && opts.already_localized)) return { text: original, original, translated: false, lang };
+  try {
+    const out = await translateText(env, original, 'English', 'Spanish', { preserve: true, html: !!(opts && opts.html), max_tokens: (opts && opts.max_tokens) || 1200 });
+    if (!out || !String(out).trim() || out === original) return { text: original, original, translated: false, lang, skipped_reason: 'unchanged_or_unavailable' };
+    if (!preservedTokensIntact(original, out)) return { text: original, original, translated: false, lang, skipped_reason: 'preservation_check_failed' };
+    if (opts && opts.html && htmlTagSkeleton(original) !== htmlTagSkeleton(out)) return { text: original, original, translated: false, lang, skipped_reason: 'html_structure_changed' };
+    return { text: String(out), original, translated: true, lang };
+  } catch (e) { return { text: original, original, translated: false, lang, skipped_reason: 'error' }; }
+}
+async function translateForVendor(env, vendor, text, opts) { return (await translateForVendorDetailed(env, vendor, text, opts)).text; }
+
+// Vendor EMAIL (subject + HTML body). Subject and body are translated separately; either falls back
+// to English independently. Use at every gmailSendEmail call whose recipient is a vendor unless the
+// body is already hand-built bilingual (pass already_localized:true).
+async function translateVendorEmail(env, vendor, { subject, html, already_localized }) {
+  if (already_localized || !vendorWantsSpanish(vendor)) return { subject, html, translated: false, original_subject: subject, original_html: html };
+  const s = await translateForVendorDetailed(env, vendor, subject, { max_tokens: 200 });
+  const h = await translateForVendorDetailed(env, vendor, html, { html: true, max_tokens: 3000 });
+  return { subject: s.text, html: h.text, translated: s.translated || h.translated, original_subject: subject, original_html: html };
 }
 
 // ── WO NOTES ─────────────────────────────────────────────────
@@ -11394,7 +11605,7 @@ async function sendSMS(env, to, message) {
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
 // Ops_Telemetry (ensureTab once per isolate + ensureColumns on every write, FL rule 37).
 const MSG_QUEUE_TAB = 'Message_Queue';
-const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After'];
+const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To'];
 const SMS_TOGGLE_TABS = ['Properties','Owners','Tenants','Vendors'];
 let _msgQueueTabReady = false, _smsTogglesReady = false;
 
@@ -11569,6 +11780,20 @@ async function smsGatedSend(env, opts) {
 
   const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : kind === 'admin' ? opts.admin : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
+
+  // Vendor language (Sep 28 2026): a vendor whose Language is 'es' gets the message in Spanish —
+  // this ONE hook covers every templated, hardcoded and one-off vendor SMS. Skipped for messages
+  // already hand-built in the vendor's language (opts.already_localized). The English original is
+  // kept in Message_Queue.Original_Body / WO_Audit.Original_Body. Fails open: any translation miss
+  // sends the English text. Runs before the queue write so quiet-hours holds and later releases
+  // send exactly the text that was queued.
+  let messageBody = opts.message_body || '', originalBody = opts.original_body || '', translatedTo = opts.translated_to || '';
+  if (kind === 'vendor' && !opts.already_localized) {
+    try {
+      const t = await translateForVendorDetailed(env, opts.vendor, messageBody);
+      if (t.translated) { originalBody = t.original; translatedTo = 'es'; messageBody = t.text; }
+    } catch (e) { /* fail open: English goes out */ }
+  }
   const recipientName = recipient ? (recipient.Name || `${recipient.First_Name || ''} ${recipient.Last_Name || ''}`.trim()) : '';
 
   const now = new Date().toISOString();
@@ -11581,8 +11806,9 @@ async function smsGatedSend(env, opts) {
     Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
     Property_ID: (opts.property && opts.property.ID) || '',
     Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
-    Message_Body: opts.message_body || '', Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
+    Message_Body: messageBody, Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
     Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
+    Original_Body: originalBody, Translated_To: translatedTo,
   };
   const newRow = headers.map(h => rowObj[h] ?? '');
   await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
@@ -11604,11 +11830,11 @@ async function smsGatedSend(env, opts) {
     if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours && !_earlyMorningOk) {
       const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
-      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
-      return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot };
+      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
+      return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
     deliveredTo = testMode ? testRecipient : recipientPhone;
-    const result = await sendSMSRaw(env, deliveredTo, opts.message_body);
+    const result = await sendSMSRaw(env, deliveredTo, messageBody);
     sent = !!(result && result.sid);
     outcome = sent ? 'sent' : 'failed';
     await updateMessageQueueRow(env, id, {
@@ -11630,12 +11856,12 @@ async function smsGatedSend(env, opts) {
     try {
       await logMessageAudit(env, {
         woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind,
-        messageType: opts.message_type || '', messageBody: opts.message_body || '', outcome,
+        messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome,
         notes: outcome === 'blocked' ? gateSnapshot : '',
       });
     } catch (e) {}
   }
-  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot };
+  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
 }
 
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
@@ -16178,28 +16404,27 @@ async function woShareAuth(env, tok, woWanted){
   return payload;
 }
 
-// ADMIN (secret-gated): mint a share link + a ready-to-send message for one WO.
-async function woShareLink(env, body){
-  const woId = String((body && (body.wo_id||body.wo))||'').trim();
-  if(!woId) return json({ error:'wo_id required' }, 400);
+// Shared by woShareLink (copy-draft) and woShareSend (real SMS): mints the link token (format and
+// TTL unchanged) and builds the ready-to-send EN/ES message. Returns {error,status} or {res, vendor}.
+async function woShareBuild(env, woId, pageBase){
   try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){}
   const [wos, props, units, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Vendors']);
   const wo = findWO(wos, woId);
-  if(!wo) return json({ error:'WO not found' }, 404);
+  if(!wo) return { error:'WO not found', status:404 };
   const rev = String(wo.Share_Rev||'0');
   const prop = props.find(p=>p.ID===wo.Property_ID)||{};
   const unit = units.find(u=>u.ID===wo.Unit_ID)||{};
   const vendor = vendors.find(v=>v.ID===wo.Vendor_ID)||{};
   const last4 = _last4(vendor.Phone);
   const token = await makeSessionToken({ scope:'wo-share-link', wo:woId, rev }, env.WORKER_SECRET, WO_SHARE_LINK_TTL);
-  const base = (body.page_base || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/,'');
+  const base = (pageBase || 'https://ridge-co.github.io/RidgeCo').replace(/\/+$/,'');
   const link = `${base}/wo.html?wo=${encodeURIComponent(woId)}&t=${encodeURIComponent(token)}`;
   const addr = (prop.Address||'the property') + (unit.Unit_Label?(' '+formatUnitLabel(unit.Unit_Label)):'');
   const lang = (vendor.Language==='es') ? 'es' : 'en';
   const vname = (vendor.First_Name || (vendor.Name||'').split(' ')[0] || '').trim();
   const msgEn = `Hi${vname?' '+vname:''}, here's the work order for ${addr}. Everything you need — job details, access, photos, and billing — is here:\n${link}\nTo open it, enter the last 4 digits of your phone (one time per day).`;
   const msgEs = `Hola${vname?' '+vname:''}, aquí está la orden de trabajo para ${addr}. Todo lo que necesita — detalles del trabajo, acceso, fotos y facturación — está aquí:\n${link}\nPara abrirla, ingrese los últimos 4 dígitos de su teléfono (una vez por día).`;
-  return json({
+  return { vendor, res: {
     success:true, link, wo_id:woId, rev,
     assigned: !!wo.Vendor_ID,
     vendor_id: wo.Vendor_ID||'',
@@ -16209,6 +16434,56 @@ async function woShareLink(env, body){
     language: lang,
     message: lang==='es' ? msgEs : msgEn,
     message_en: msgEn, message_es: msgEs,
+  } };
+}
+
+// ADMIN (secret-gated): mint a share link + a ready-to-send message for one WO. Nothing is sent.
+async function woShareLink(env, body){
+  const woId = String((body && (body.wo_id||body.wo))||'').trim();
+  if(!woId) return json({ error:'wo_id required' }, 400);
+  const b = await woShareBuild(env, woId, body && body.page_base);
+  if(b.error) return json({ error:b.error }, b.status||400);
+  return json(b.res);
+}
+
+// POST /wo/share-send { wo_id, lang?:'en'|'es', message?, page_base? } — ADMIN-ONLY (no ROLE_SCOPES
+// entry, same as /wo/share-link). Actually TEXTS the assigned vendor the no-login work-order link
+// (Sep 28 2026 — "Send to Vendor" used to only produce a draft to copy). Goes through smsGatedSend
+// (Global / Vendor toggles, Test Mode redirect, quiet-hours hold, Message_Queue + WO_Audit), with
+// message_type 'vendor_wo_shared'. The message is already in the chosen language, so the hook's own
+// auto-translate is skipped; if Brett edited English text but chose Spanish, the edited text is
+// translated here (link / last-4 wording / amounts verified intact, else English goes out).
+async function woShareSend(env, body){
+  const woId = String((body && (body.wo_id||body.wo))||'').trim();
+  if(!woId) return json({ success:false, error:'wo_id required' }, 400);
+  const b = await woShareBuild(env, woId, body && body.page_base);
+  if(b.error) return json({ success:false, error:b.error }, b.status||400);
+  const res = b.res, vendor = b.vendor;
+  if(!res.assigned) return json({ success:false, error:'No vendor is assigned to this work order yet — assign one first (or use Copy message).', code:'no_vendor' }, 400);
+  if(!res.vendor_has_phone) return json({ success:false, error:`${res.vendor_name||'This vendor'} has no phone number on file — add one, or use Copy message and send it yourself.`, code:'no_phone' }, 400);
+  const lang = (body && body.lang==='es') ? 'es' : (body && body.lang==='en') ? 'en' : res.language;
+  const stock = lang==='es' ? res.message_es : res.message_en;
+  let text = String((body && body.message)||'').trim() || stock;
+  const _norm = s => String(s).replace(/https?:\/\/\S+/g, '<L>');   // the UI's copy carries the token minted when the modal opened
+  const edited = _norm(text) !== _norm(stock);
+  let originalBody = '', translatedTo = '';
+  if(lang==='es' && edited && !plausiblyNonEnglish(text)){
+    const t = await translateForVendorDetailed(env, Object.assign({}, vendor, { Language:'es' }), text);
+    if(t.translated){ originalBody = t.original; translatedTo = 'es'; text = t.text; }
+  }
+  let linkAppended = false;
+  if(!/\/wo\.html\?wo=/.test(text)){ text = text + '\n' + res.link; linkAppended = true; }   // never send a message with no way in
+  const r = await smsGatedSend(env, { wo_id: woId, message_type: 'vendor_wo_shared', recipient_type: 'vendor', vendor, message_body: text, already_localized: true, original_body: originalBody, translated_to: translatedTo });
+  const ok = !!(r.sent || r.held_for_quiet_hours);
+  let reason = '';
+  if(!ok) reason = !r.send_ok ? ('Blocked by SMS settings: ' + r.gate_snapshot) : 'Send failed — the text did not go through (Twilio). Use Copy message.';
+  else if(r.held_for_quiet_hours) reason = 'Held for quiet hours — will send after ' + r.send_after;
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_share_send', Skill_Or_Endpoint:'/wo/share-send', Success: ok ? 'TRUE' : 'FALSE', Notes:`wo=${woId} lang=${lang} sent=${!!r.sent} held=${!!r.held_for_quiet_hours}` }); } catch(_) {}
+  return json({
+    success: ok, sent: !!r.sent, held_for_quiet_hours: !!r.held_for_quiet_hours, send_after: r.send_after||'',
+    send_ok: !!r.send_ok, gate_snapshot: r.gate_snapshot, test_mode: !!r.test_mode, reason, error: ok ? '' : reason,
+    sent_to: res.vendor_phone, delivered_to: r.delivered_to||'', vendor_name: res.vendor_name, language: lang,
+    message: r.message_body || text, original_body: r.original_body || originalBody, link: res.link, link_appended: linkAppended, queued_id: r.queued_id, wo_id: woId,
   });
 }
 
@@ -16997,7 +17272,7 @@ function missingTabResponse(tab) {
 // (Vendor_Bills) get a same-day window because that is the finest resolution available.
 // A failure in this check must never block a legitimate write — it returns null and the
 // caller proceeds to append.
-async function findRecentDuplicate(env, tab, signature, windowSeconds) {
+async function findRecentDuplicate(env, tab, signature, windowSeconds, match) {
   try {
     // Root-caused Sep 23 2026 (WO-1213/WO-1214, Lance Serafica, 30s apart, rule 162's guard
     // never fired): cutoff used to be computed AFTER `await fetchTab`. That await is a real
@@ -17016,6 +17291,7 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds) {
       const r = rows[i];
       if (!r || r.Active === 'FALSE') continue;
       if (!keys.every(k => String(r[k] === undefined || r[k] === null ? '' : r[k]) === String(signature[k] === undefined || signature[k] === null ? '' : signature[k]))) continue;
+      if (typeof match === 'function' && !match(r)) continue;   // optional extra predicate (Sep 28 2026: estimates compare Line_Items minus desc_en)
       const ts = Date.parse(r.Created_Date || '');
       // An undateable row must NOT count as a duplicate. Getting this backwards meant any
       // signature-matching row with a blank or hand-typed Created_Date — a bill entered
@@ -17269,6 +17545,25 @@ async function hubTestWriteAllowed(env, path, body) {
   // all key off a wo_id; the payment-schedule write keys off a scope_id. Same gate as /status —
   // the target WO (or the Scope's own Property) must resolve to a TEST- Property, so this token
   // can never create/approve an estimate, push to a Scope, or edit a schedule on a real record.
+  if (path === '/estimate/retranslate') {
+    // Rewrites only derived English fields on one Estimates row — resolve estimate -> WO -> TEST- Property.
+    const ests = await fetchTab(env, 'Estimates');
+    const est = ests.find(e => (body && body.estimate_id) ? String(e.ID) === String(body.estimate_id) : (e.WO_ID === String(body && body.wo_id) && String(e.Version) === String(body && body.version)));
+    if (!est) return false;
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(est.WO_ID));
+    if (!wo) return false;
+    return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/wo/share-send') {
+    // Sends a real SMS to the WO's assigned vendor — only ever to a vendor that is itself a TEST- record
+    // on a TEST- Property's WO (staging additionally stubs Twilio).
+    const wos = await fetchTab(env, 'Work_Orders');
+    const wo = wos.find(w => String(w.ID) === String(body && (body.wo_id || body.wo)));
+    if (!wo) return false;
+    if (!(await isTestRecord(env, 'Properties', wo.Property_ID))) return false;
+    return await isTestRecord(env, 'Vendors', wo.Vendor_ID);
+  }
   if (path === '/estimate' || path === '/estimate/approve' || path === '/estimate/needs-info' || path === '/estimate/decline' || path === '/wo/push-to-scope') {
     const wos = await fetchTab(env, 'Work_Orders');
     const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
@@ -17811,7 +18106,8 @@ async function qbRepairable(env, url) {
       const trade = QB_TRADE_MAP[resolved.name];
       const origItemRef = qbOriginalItemRef(q);
       const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
-      const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir), woTimeEntries);
+      const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
+      const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries);
 
       const folderId  = wo.Drive_Folder_ID || '';
       const folderUrl = wo.Drive_Folder_URL || (folderId ? ('https://drive.google.com/drive/folders/' + folderId) : '');
@@ -17867,7 +18163,8 @@ async function qbRepairInvoice(env, body) {
     const trade = QB_TRADE_MAP[resolved.name];
     const origRef = qbOriginalItemRef(existing);
     const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
-    const rebuilt = buildInvoiceLines(ir, billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir), woTimeEntries);
+    const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
+    const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries);
     // Without the original item we'd fall back to the freshly-resolved trade, which could
     // move posted revenue to a different income account. Say so rather than doing it.
     const itemWarning = origRef ? '' : 'Could not read the income account this invoice posted to, so it would be re-derived from the trade. Check it in QuickBooks afterwards.';
@@ -21151,18 +21448,39 @@ function qbGroupOpenRows(irRows, ir) {
 function buildLaborDescription(billRow, timeEntries, wo) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
-  const billDesc = String((billRow && billRow.Invoice_Description) || '').trim();
+  const billDesc = englishOnly((billRow && billRow.Invoice_Description) || '').trim();   // customer-facing = English (Sep 28 2026): [ES]/[EN] tags resolve to the EN half
   if (billDesc) parts.push(billDesc);
   (Array.isArray(timeEntries) ? timeEntries : [])
     .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && String(e.Invoice_Description || '').trim())
     .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
     .forEach(e => {
       const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
-      const desc = String(e.Invoice_Description || '').trim();
+      const desc = englishOnly(e.Invoice_Description || '').trim();
       parts.push(d ? (d + ' — ' + desc) : desc);
     });
   if (parts.length) return parts.join('; ');
   return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
+}
+
+// Async pre-pass for the invoice builders (Sep 28 2026): returns COPIES of the bill row and time
+// entries in which any customer-facing free text that is still Spanish (a vendor-portal bill or
+// time entry is not translated at write time) is replaced by its English translation, in memory
+// only — nothing is written back. [ES]/[EN]-tagged text is resolved by englishOnly() inside the
+// builders themselves. Fails open: a translation miss leaves the original.
+async function invoiceInputsEnglish(env, billRow, timeEntries) {
+  const bill = Object.assign({}, billRow || {});
+  const entries = (Array.isArray(timeEntries) ? timeEntries : []).map(e => Object.assign({}, e));
+  const slots = [];
+  const consider = (obj, key) => { const t = englishOnly(obj[key] || ''); if (t.trim() && plausiblyNonEnglish(t)) slots.push({ obj, key, text: t }); };
+  consider(bill, 'Invoice_Description'); consider(bill, 'Truck_Desc');
+  entries.forEach(e => { if (e && e.Active !== 'FALSE') consider(e, 'Invoice_Description'); });
+  if (slots.length) {
+    try {
+      const r = await translateBatchToEnglish(env, slots.map(s => s.text));
+      if (r.ok) slots.forEach((s, i) => { if (r.out[i] && r.out[i].trim()) s.obj[s.key] = r.out[i]; });
+    } catch (_) {}
+  }
+  return { billRow: bill, timeEntries: entries };
 }
 
 function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries) {
@@ -21182,7 +21500,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
       lines.push({
         DetailType: 'SalesItemLineDetail',
         Amount: amt,
-        Description: ('Materials — ' + ((rc && rc.desc) || 'receipt')).slice(0, 4000),
+        Description: ('Materials — ' + englishOnly((rc && rc.desc) || 'receipt')).slice(0, 4000),
         SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: amt },
       });
     }
@@ -21198,7 +21516,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
       lines.push({
         DetailType: 'SalesItemLineDetail',
         Amount: amt,
-        Description: ('Materials — ' + ((rc && (rc.Description || rc.Store)) || 'receipt')).slice(0, 4000),
+        Description: ('Materials — ' + englishOnly((rc && (rc.Description || rc.Store)) || 'receipt')).slice(0, 4000),
         SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: amt },
       });
     }
@@ -21210,7 +21528,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
     lines.push({
       DetailType: 'SalesItemLineDetail',
       Amount: truck,
-      Description: ('Materials — ' + ((billRow && billRow.Truck_Desc) || 'shop/truck stock')).slice(0, 4000),
+      Description: ('Materials — ' + englishOnly((billRow && billRow.Truck_Desc) || 'shop/truck stock')).slice(0, 4000),
       SalesItemLineDetail: { ItemRef: itemRef, Qty: 1, UnitPrice: truck },
     });
   }
@@ -21694,7 +22012,8 @@ async function qbSendInvoice(env, body) {
       } catch (e) { warnings.push('Could not read the Receipts tab — materials you bought are not itemised on this invoice.'); }
     }
 
-    const inv = buildInvoiceLines(ir, billRow, trade, tradeName, wo, null, ownReceipts, woTimeEntries);
+    const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
+    const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
@@ -22111,7 +22430,8 @@ async function qbSendCombinedInvoice(env, ctx) {
         } catch (e) { warnings.push('Could not read the Receipts tab for bill ' + (r.Bill_ID || r.ID) + '.'); }
       }
 
-      const inv = buildInvoiceLines(r, billRow, trade, tradeName, wo, null, ownReceipts, timeEntries);
+      const _inEn = await invoiceInputsEnglish(env, billRow, timeEntries);
+      const inv = buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
       if (inv.laborAmt < 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: materials exceed its customer total — labor line is negative, check the bill.`);
 
       const vendDisplay = vendor.Name || r.Vendor_Name || ('Vendor ' + (r.Vendor_ID || ''));
