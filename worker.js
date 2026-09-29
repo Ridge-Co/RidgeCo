@@ -2367,6 +2367,15 @@ async function receiptReconScan(env, body) {
   // scan, and a permanent error line. Same fix receiptScan got for its folder: 3 attempts,
   // tracked in Config (no schema change), then skipped and reported under `stuck`.
   let failures = {}; try { failures = JSON.parse(cfg.receipt_recon_failures || '{}'); } catch (e) { failures = {}; }
+  // Sep 29 2026: a missing/rotated API key ("ANTHROPIC_API_KEY not configured") is a Worker
+  // config problem, NOT a bad file — it must never burn a file's 3 attempts. Self-heal: drop any
+  // tracker entry whose recorded error was a config error, so files stranded by an earlier key
+  // outage are retried automatically the next scan.
+  let healed = false;
+  for (const id of Object.keys(failures)) {
+    if (receiptReconIsConfigError(failures[id] && failures[id].error)) { delete failures[id]; healed = true; }
+  }
+  if (healed) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const allNew = files.filter(f => !seen.has(f.id) && !(failures[f.id] && failures[f.id].attempts >= 3));
   const stuck = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
   if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length, stuck });
@@ -2374,7 +2383,7 @@ async function receiptReconScan(env, body) {
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
-  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0;
+  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0; let configError = '';
   const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
@@ -2410,6 +2419,7 @@ async function receiptReconScan(env, body) {
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
     } catch (e) {
       errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
+      if (receiptReconIsConfigError(e && e.message)) { configError = String(e.message).slice(0, 200); break; }
       const prior = failures[f.id];
       failures[f.id] = { name: f.name || f.id, error: String(e && e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
       failuresChanged = true;
@@ -2417,7 +2427,13 @@ async function receiptReconScan(env, body) {
   }
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
-  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
+  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
+}
+
+// A Worker-side configuration problem (missing/rotated API key), as opposed to a problem with one
+// specific file. Used so a key outage never counts against a file's 3-attempt limit.
+function receiptReconIsConfigError(msg) {
+  return /not configured|api[_ ]?key|missing .*(key|secret|token)|unauthori[sz]ed|invalid x-api-key|authentication_error/i.test(String(msg == null ? '' : msg));
 }
 
 // POST /receipt-recon/import-statement { vendor, rows:[{date,amount,description,ref}], source_file_id?,
