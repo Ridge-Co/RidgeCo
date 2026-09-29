@@ -7314,7 +7314,7 @@ async function regeneratePIN(env, body) {
 async function sendPinMessage(env, body) {
   const { type, id } = body;
   if (!type || !id) return json({ error: 'Missing type or id' }, 400);
-  let firstName, phone, pin, owner = null, address = '';
+  let firstName, phone, pin, owner = null, address = '', vendorRec = null;
   if (type === 'tenant') {
     const [tenants, units, properties, owners] = await fetchTabs(env, ['Tenants', 'Units', 'Properties', 'Owners']);
     const t = tenants.find(r => r.ID === id);
@@ -7334,7 +7334,7 @@ async function sendPinMessage(env, body) {
     if (!v) return json({ error: 'Vendor not found' }, 404);
     if (!v.Phone) return json({ error: 'No phone number on file', name: v.Name||'' }, 400);
     if (!v.PIN)   return json({ error: 'No PIN set — set a PIN first', name: v.Name||'' }, 400);
-    firstName = (v.Name||'').split(' ')[0]; phone = v.Phone; pin = v.PIN;
+    firstName = (v.Name||'').split(' ')[0]; phone = v.Phone; pin = v.PIN; vendorRec = v;
   } else if (type === 'owner') {
     const owners = await fetchTab(env, 'Owners'); const o = owners.find(r => r.ID === id);
     if (!o) return json({ error: 'Owner not found' }, 404);
