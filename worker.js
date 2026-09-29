@@ -15172,8 +15172,90 @@ async function gmailTokenCheck(env) {
   try { await gmailAccessToken(env); return json({ ok: true, source: _gmailTokenCache.source || '' }); }
   catch (e) { return json({ ok: false, error: String((e && e.message) || e) }, 200); }
 }
-// GET /config redaction: these keys hold live credentials and are never needed by a page.
-const CONFIG_REDACTED_KEYS = ['GMAIL_REFRESH_TOKEN'];
+// GET /config redaction (Sep 29 2026 hardening): Config holds live credentials (admin_password,
+// Twilio_Recovery_Code, QB_REFRESH_TOKEN, GMAIL_REFRESH_TOKEN, ...). No page or script needs their
+// VALUES over HTTP (verified: index.html + the other admin pages only read Access_Trade_Defaults,
+// failure_alert_enabled, dead_man_switch_enabled; the Worker itself reads secrets via fetchConfig,
+// which is untouched), so GET /config redacts them for EVERY caller -- the read-only prod token,
+// the staging test token, and the full admin secret alike. Redaction is at the HTTP response layer
+// only. Secrets are still SET through POST /config/set (write path unchanged), which now refuses to
+// store the redaction placeholder so a masked value can never overwrite a real one.
+const CONFIG_SECRET_KEYS = ['admin_password', 'Twilio_Recovery_Code', 'QB_REFRESH_TOKEN', 'GMAIL_REFRESH_TOKEN'];
+const CONFIG_REDACTED_KEYS = CONFIG_SECRET_KEYS; // legacy name
+// Conservative pattern: anything that even looks like a credential is treated as one.
+const CONFIG_SECRET_KEY_RE = /pass(word)?|secret|token|refresh|api[_-]?key|recovery|auth|credential|private|signing|_code$|pin$/i;
+const CONFIG_SECRET_PLACEHOLDER = '(set — hidden)';
+const CONFIG_REDACTION_PLACEHOLDERS = ['(hidden)', CONFIG_SECRET_PLACEHOLDER, '(set - hidden)'];
+function isSecretConfigKey(key) {
+  const k = String(key == null ? '' : key).trim();
+  if (!k) return false;
+  if (CONFIG_SECRET_KEYS.some(s => s.toLowerCase() === k.toLowerCase())) return true;
+  if (/_updated(_at)?$/i.test(k)) return false; // e.g. GMAIL_TOKEN_UPDATED: a timestamp, not a credential
+  return CONFIG_SECRET_KEY_RE.test(k);
+}
+function isConfigRedactionPlaceholder(value) {
+  return typeof value === 'string' && CONFIG_REDACTION_PLACEHOLDERS.includes(value.trim());
+}
+// Pure. Returns a NEW object: secret keys keep their key but show "(set — hidden)" when they hold a
+// value ("" when empty); non-secret keys pass through, except that any occurrence of a secret's
+// actual value inside another string (e.g. pasted into a snapshot blob) is masked too. `ctx` is
+// reserved for future per-caller policy; no caller currently gets secrets back.
+function redactConfigForToken(obj, ctx) { // eslint-disable-line no-unused-vars
+  const out = {};
+  if (!obj || typeof obj !== 'object') return out;
+  const secretVals = [];
+  for (const k of Object.keys(obj)) {
+    if (!isSecretConfigKey(k)) continue;
+    const v = obj[k];
+    const s = typeof v === 'string' ? v.trim() : '';
+    if (s.length >= 6 && !isConfigRedactionPlaceholder(s)) secretVals.push(s);
+  }
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (isSecretConfigKey(k)) {
+      const has = typeof v === 'string' ? v.trim() !== '' : (v != null && v !== '' && v !== false);
+      out[k] = has ? CONFIG_SECRET_PLACEHOLDER : '';
+    } else if (typeof v === 'string' && secretVals.length) {
+      let s = v;
+      for (const sv of secretVals) if (s.includes(sv)) s = s.split(sv).join('(hidden)');
+      out[k] = s;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+// Defense in depth for the READ-ONLY PRODUCTION token (HUB_PROD_RO_TOKEN): its GETs also reach
+// every sheet-backed list (/vendors, /tenants, /owners, /owner-users, /hub-bootstrap, ...), whose
+// rows carry the plaintext login PIN. Deep-scrub those and any named Config secret from JSON
+// responses to that token only. Session, admin-secret and staging-test callers are unaffected.
+function scrubSecretsDeep(node, depth) {
+  if (depth > 12 || node == null) return node;
+  if (Array.isArray(node)) return node.map(n => scrubSecretsDeep(n, depth + 1));
+  if (typeof node === 'object') {
+    const o = {};
+    for (const k of Object.keys(node)) {
+      const v = node[k];
+      const named = /^pin$/i.test(k) || CONFIG_SECRET_KEYS.some(s => s.toLowerCase() === k.toLowerCase());
+      if (named && (typeof v === 'string' || typeof v === 'number')) o[k] = String(v).trim() === '' ? '' : CONFIG_SECRET_PLACEHOLDER;
+      else o[k] = scrubSecretsDeep(v, depth + 1);
+    }
+    return o;
+  }
+  return node;
+}
+async function scrubResponseForProdReadToken(request, env, res) {
+  const tok = request.headers.get('X-Auth-Token') || '';
+  if (request.method !== 'GET' || !tok || !env.HUB_PROD_RO_TOKEN || tok !== env.HUB_PROD_RO_TOKEN || tok === env.WORKER_SECRET) return res;
+  if (!/json/i.test(res.headers.get('Content-Type') || '')) return res;
+  try {
+    const data = JSON.parse(await res.clone().text());
+    const headers = new Headers(res.headers); headers.delete('Content-Length');
+    return new Response(JSON.stringify(scrubSecretsDeep(data, 0)), { status: res.status, statusText: res.statusText, headers });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: 'response redaction failed' }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  }
+}
 
 function _utf8B64url(str) {
   const bytes = new TextEncoder().encode(str);
