@@ -59,7 +59,7 @@ function isStaging(env, url) {
   return false;
 }
 
-export default {
+const _hubWorkerCore = {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
