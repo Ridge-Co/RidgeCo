@@ -9039,8 +9039,10 @@ function renderHubEstimateView(woId, estimates, holder) {
       '<div style="display:flex;gap:6px">' +
       '<button class="btn small secondary" onclick="openHubEstimateEditor(\'' + woId + '\')">✎ Edit / Revise</button>' +
       '<button class="btn small secondary" onclick="generateEstimateDoc(\'' + woId + '\')">✨ Generate Text</button>' +
+      '<button class="btn small secondary" title="Re-run the English translation of this estimate" onclick="retranslateEstimateUI(\'' + woId + '\',\'' + esc(String(current.ID || '')) + '\',this)">🌐 Re-translate</button>' +
       '</div></div>' +
       rows +
+      reasonBlock +
       '<div style="display:flex;justify-content:space-between;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
       '<span>Total</span><span style="color:var(--accent2)">$' + parseFloat(current.Subtotal).toFixed(2) + '</span></div>' +
       approvalBlock +
