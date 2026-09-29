@@ -3576,6 +3576,7 @@ function openUnitDetail(propId, unitId) {
   var buildingHasExtras     = buildingKeys.length > buildingKeysDeduped.length;
   var unitHasExtras         = unitSpecificKeys.length > unitKeysDeduped.length;
 
+  html += '<div id="unit-rec-section" style="margin-bottom:14px"></div>';
   html += '<div>' +
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">' +
       '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">🔒 ACCESS</div>' +
