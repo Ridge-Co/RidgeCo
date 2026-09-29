@@ -992,18 +992,19 @@ window.addEventListener('pageshow', function(e){
           <button class="btn btn-sm" onclick="copyShare('link')">Copy</button>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 4px">
-          <span style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase">Ready-to-send message</span>
-          <span style="font-size:11px"><label style="cursor:pointer"><input type="radio" name="share-lang" value="en" checked onchange="renderShareMsg()"> EN</label>
-          &nbsp;<label style="cursor:pointer"><input type="radio" name="share-lang" value="es" onchange="renderShareMsg()"> ES</label></span>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 4px;flex-wrap:wrap;gap:6px">
+          <span style="color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase">Message (edit before sending)</span>
+          <span style="font-size:12px"><label style="cursor:pointer;display:inline-block;padding:6px 4px"><input type="radio" name="share-lang" value="en" checked onchange="renderShareMsg()"> English</label>
+          &nbsp;<label style="cursor:pointer;display:inline-block;padding:6px 4px"><input type="radio" name="share-lang" value="es" onchange="renderShareMsg()"> Español</label></span>
         </div>
         <textarea id="share-msg" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;min-height:110px;resize:vertical"></textarea>
-        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="copyShare('msg')">Copy message</button>
-          <button class="btn btn-sm danger" onclick="revokeShare()">🚫 Turn off old links</button>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn" id="share-send-btn" style="min-height:40px" onclick="sendShareWO()">📱 Send text to vendor</button>
+          <button class="btn btn-sm secondary" style="min-height:40px" onclick="copyShare('msg')">Copy message</button>
+          <button class="btn btn-sm danger" style="min-height:40px" onclick="revokeShare()">🚫 Turn off old links</button>
         </div>
         <div id="share-status" style="font-size:12px;margin-top:10px"></div>
-        <div style="font-size:11px;color:var(--muted);margin-top:10px">Copy the message and send it to the vendor however you normally reach them (text, email, WhatsApp). They open it, enter the last 4 digits of their phone once, and it stays open on their device for 24 hours. The link works until you turn it off.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px">Send text texts the vendor this message from the Ridge Co number (it respects the SMS on/off settings, test mode and quiet hours, and is logged on the work order). If you edit the English text and pick Español, it is translated for you. They open the link, enter the last 4 digits of their phone once, and it stays open on their device for 24 hours. The link works until you turn it off. Can't text them? Use Copy message.</div>
       </div>
     </div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-share-wo')">Close</button></div>
