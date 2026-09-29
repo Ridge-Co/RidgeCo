@@ -21455,7 +21455,7 @@ function buildLaborDescription(billRow, timeEntries, wo) {
     .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
     .forEach(e => {
       const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
-      const desc = String(e.Invoice_Description || '').trim();
+      const desc = englishOnly(e.Invoice_Description || '').trim();
       parts.push(d ? (d + ' — ' + desc) : desc);
     });
   if (parts.length) return parts.join('; ');
