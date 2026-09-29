@@ -7368,10 +7368,14 @@ async function sendPinMessage(env, body) {
     owner_user: `Hi ${firstName}! This is ${assistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: ${portalUrl} PIN: ${pin}. Log in to check on your work orders, submit requests, and manage your notification settings.`,
   };
   const message = tpl ? renderTemplate(tpl.Body, tokens) : fallback[type];
-  if (body.preview_only) return json({ preview: message, phone, name: firstName, pin });
-  await sendSMS(env, phone, message);
+  if (body.preview_only) return json({ preview: message, phone, name: firstName, pin, will_translate_to: vendorRec && vendorWantsSpanish(vendorRec) ? 'es' : '' });
+  // Vendor language (Sep 28 2026): the PIN text goes out in Spanish for a Spanish vendor. The
+  // PIN, portal link and amounts are verified intact or the English original is sent.
+  let outMessage = message, translatedTo = '';
+  if (vendorRec) { const t = await translateForVendorDetailed(env, vendorRec, message); if (t.translated) { outMessage = t.text; translatedTo = 'es'; } }
+  await sendSMS(env, phone, outMessage);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
-  return json({ success: true, sent_to: phone, name: firstName });
+  return json({ success: true, sent_to: phone, name: firstName, translated_to: translatedTo });
 }
 
 // POST /welcome/send { type: 'tenant'|'vendor', id, preview_only?, message? } — Sep 14 2026,
