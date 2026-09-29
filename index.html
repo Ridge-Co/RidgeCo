@@ -3625,6 +3625,7 @@ function openUnitDetail(propId, unitId) {
   window._unitDetailContext = { propId: propId, unitId: unitId };
 
   openModal('modal-unit-detail');
+  loadUnitRecurring(propId, unitId);
 }
 
 
