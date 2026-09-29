@@ -11899,6 +11899,284 @@ async function cronSweep(env) {
   return json(out);
 }
 
+// ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
+// A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
+// property/unit when an occurrence comes due — no approval step. Decisions locked with Brett:
+//   • If the previous auto-posted WO for that template+target is still OPEN when the next one is
+//     due → SKIP (record it, do not post, do not retry later).
+//   • Posts at/after 8:00am ET (never after 7pm ET). Vendor dispatch text may go out 8:00-8:59am
+//     ET (allowEarlyMorning); every other quiet-hours rule is unchanged.
+//   • NEVER text the tenant or owner about these — vendor only. Per-template Notify_Tenant=TRUE
+//     is the explicit override (default off). Owners are always suppressed (Owner_Notify_Override='off').
+// The date math below is pure (ISO 'YYYY-MM-DD' strings in, out) so test/recurring-wo.test.mjs
+// exercises it directly.
+const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date'];
+const RECUR_WO_COLS = ['Recurring_Template_ID','Recurring_Due','Owner_Notify_Override'];
+const RECUR_CLOSED_STATUSES = ['Complete','Pending Invoice','Invoiced','Paid','Cancelled','Canceled','Closed','Void','Declined'];
+const RECUR_LOOKBACK_DAYS = 3; // a sweep outage of up to 3 days still catches up an occurrence; older ones are dropped, not posted late
+const RECUR_POST_START_HOUR_ET = 8;
+const WO_SNIPPETS_TAB = 'WO_Snippets';
+const WO_SNIPPETS_COLS = ['ID','Name','Text','Active'];
+
+function recurParseISO(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim());
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return { y, m: mo, d };
+}
+function recurDayNum(iso) { const p = recurParseISO(iso); return p ? Date.UTC(p.y, p.m - 1, p.d) / 86400000 : NaN; }
+function recurISOFromDayNum(n) { return new Date(n * 86400000).toISOString().slice(0, 10); }
+function recurAddDays(iso, n) { return recurISOFromDayNum(recurDayNum(iso) + n); }
+function recurWeekday(iso) { return new Date(recurDayNum(iso) * 86400000).getUTCDay(); }
+function recurDaysInMonth(y, m) { return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
+function recurInSeason(iso, seasonStart, seasonEnd) {
+  const s = String(seasonStart || '').trim(), e = String(seasonEnd || '').trim();
+  if (!/^\d{2}-\d{2}$/.test(s) || !/^\d{2}-\d{2}$/.test(e)) return true;
+  const md = iso.slice(5);
+  return s <= e ? (md >= s && md <= e) : (md >= s || md <= e); // wrap-around window (e.g. Nov 1 -> Mar 15) works
+}
+function recurInt(v, dflt) { const n = parseInt(String(v == null ? '' : v), 10); return Number.isFinite(n) ? n : dflt; }
+// Is `iso` a scheduled occurrence date for this template? Ignores Recurrence_Enabled/Active
+// (the caller decides that) but honors start/end dates, frequency and the seasonal window.
+function recurIsOccurrence(tpl, iso) {
+  const start = recurParseISO(tpl.Start_Date), cur = recurParseISO(iso);
+  if (!start || !cur) return false;
+  const dn = recurDayNum(iso), sdn = recurDayNum(tpl.Start_Date);
+  if (dn < sdn) return false;
+  if (tpl.End_Date && recurParseISO(tpl.End_Date) && dn > recurDayNum(tpl.End_Date)) return false;
+  if (String(tpl.Season_Enabled).toUpperCase() === 'TRUE' && !recurInSeason(iso, tpl.Season_Start, tpl.Season_End)) return false;
+  const n = Math.max(1, recurInt(tpl.Freq_Interval, 1));
+  const type = String(tpl.Freq_Type || '');
+  const startWd = recurWeekday(tpl.Start_Date);
+  const monthsDiff = (cur.y * 12 + cur.m) - (start.y * 12 + start.m);
+  if (type === 'days') return (dn - sdn) % n === 0;
+  if (type === 'weekly') {
+    const wd = recurInt(tpl.Freq_Weekday, startWd);
+    const first = sdn + ((wd - startWd + 7) % 7);
+    return dn >= first && recurWeekday(iso) === wd && ((dn - first) / 7) % n === 0;
+  }
+  if (type === 'monthly_date') {
+    const want = Math.min(recurInt(tpl.Freq_Day_Of_Month, start.d), recurDaysInMonth(cur.y, cur.m));
+    return cur.d === want && monthsDiff >= 0 && monthsDiff % n === 0;
+  }
+  if (type === 'monthly_nth') { // "3rd Tuesday", "last Friday"; interval 3 = quarterly
+    const wd = recurInt(tpl.Freq_Weekday, startWd);
+    const nth = recurInt(tpl.Freq_Nth, Math.ceil(start.d / 7));
+    if (recurWeekday(iso) !== wd) return false;
+    const isNth = nth >= 5 ? (cur.d + 7 > recurDaysInMonth(cur.y, cur.m)) : Math.ceil(cur.d / 7) === nth;
+    return isNth && monthsDiff >= 0 && monthsDiff % n === 0;
+  }
+  return false;
+}
+// Most recent occurrence D such that (D - leadDays) is within [today-lookback, today]. '' if none.
+function recurLatestDue(tpl, todayISO, lookbackDays) {
+  const lead = Math.max(0, recurInt(tpl.Lead_Days, 0));
+  const look = lookbackDays == null ? RECUR_LOOKBACK_DAYS : lookbackDays;
+  for (let k = 0; k <= look; k++) {
+    const cand = recurAddDays(todayISO, lead - k);
+    if (recurIsOccurrence(tpl, cand)) return cand;
+  }
+  return '';
+}
+// Next `count` occurrence dates on/after fromISO (for the UI's "next dates" preview). Capped scan.
+function recurNextOccurrences(tpl, fromISO, count) {
+  const out = []; let d = fromISO;
+  for (let i = 0; i < 3700 && out.length < (count || 5); i++) { if (recurIsOccurrence(tpl, d)) out.push(d); d = recurAddDays(d, 1); }
+  return out;
+}
+function recurTargets(tpl) {
+  try {
+    const a = JSON.parse(String((tpl && tpl.Targets) || '[]') || '[]');
+    if (!Array.isArray(a)) return [];
+    const seen = new Set(), out = [];
+    for (const x of a) { if (!x || !x.p) continue; const t = { p: String(x.p), u: x.u ? String(x.u) : '' }; const k = t.p + '|' + t.u; if (!seen.has(k)) { seen.add(k); out.push(t); } }
+    return out;
+  } catch (_) { return []; }
+}
+function recurTargetKey(t) { return t.p + '|' + (t.u || ''); }
+function recurWOIsOpen(wo) { return !RECUR_CLOSED_STATUSES.includes(wo.Status) && String(wo.Active || '').toUpperCase() !== 'FALSE'; }
+function recurEtDateISO(date) { return (date || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
+function recurIsTrue(v) { return String(v == null ? '' : v).toUpperCase() === 'TRUE'; }
+
+// Normalizes/validates schedule fields on the way into the sheet. Unknown keys pass through
+// untouched (Name, Trade, ...). Bad values are dropped/clamped rather than stored.
+function recurSanitizeTemplateFields(f) {
+  if (!f || typeof f !== 'object') return f;
+  const o = { ...f };
+  const TYPES = ['days', 'weekly', 'monthly_date', 'monthly_nth'];
+  if (o.Freq_Type !== undefined && o.Freq_Type !== '' && !TYPES.includes(o.Freq_Type)) delete o.Freq_Type;
+  if (o.Freq_Interval !== undefined) o.Freq_Interval = String(Math.min(365, Math.max(1, recurInt(o.Freq_Interval, 1))));
+  if (o.Freq_Weekday !== undefined && o.Freq_Weekday !== '') o.Freq_Weekday = String(Math.min(6, Math.max(0, recurInt(o.Freq_Weekday, 0))));
+  if (o.Freq_Nth !== undefined && o.Freq_Nth !== '') o.Freq_Nth = String(Math.min(5, Math.max(1, recurInt(o.Freq_Nth, 1))));
+  if (o.Freq_Day_Of_Month !== undefined && o.Freq_Day_Of_Month !== '') o.Freq_Day_Of_Month = String(Math.min(31, Math.max(1, recurInt(o.Freq_Day_Of_Month, 1))));
+  if (o.Lead_Days !== undefined) o.Lead_Days = String(Math.min(60, Math.max(0, recurInt(o.Lead_Days, 0))));
+  for (const k of ['Start_Date', 'End_Date']) if (o[k] && !recurParseISO(o[k])) o[k] = '';
+  for (const k of ['Season_Start', 'Season_End']) if (o[k] && !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(String(o[k]))) o[k] = '';
+  for (const k of ['Recurrence_Enabled', 'Season_Enabled', 'Notify_Tenant']) if (o[k] !== undefined) o[k] = (o[k] === true || recurIsTrue(o[k])) ? 'TRUE' : 'FALSE';
+  if (o.Targets !== undefined && typeof o.Targets !== 'string') o.Targets = JSON.stringify(o.Targets);
+  return o;
+}
+
+let _recurColsReady = false;
+async function recurEnsureCols(env) {
+  if (_recurColsReady) return;
+  await ensureColumns(env, 'WO_Templates', RECUR_TEMPLATE_COLS);
+  await ensureColumns(env, 'Work_Orders', RECUR_WO_COLS);
+  _recurColsReady = true;
+}
+
+// Creates one real WO for (template, target, due). Shared by the sweep and Post Now.
+// opts: { manual, overrides:{description,priority,trade,notes}, now }
+async function recurPostWO(env, tpl, target, due, opts) {
+  opts = opts || {};
+  await recurEnsureCols(env);
+  const notifyTenant = recurIsTrue(tpl.Notify_Tenant);
+  const ov = opts.overrides || {};
+  const baseDesc = ov.description != null ? String(ov.description) : String(tpl.Description || '');
+  const description = [baseDesc, tpl.Link_URL ? `${tpl.Link_Label || 'Link'}: ${tpl.Link_URL}` : ''].filter(Boolean).join('\n\n') || String(tpl.Name || 'Recurring work order');
+  const res = await createWorkOrder(env, {
+    property_id: target.p, unit_id: target.u || '', trade: ov.trade || tpl.Trade || '', description,
+    priority: ov.priority || tpl.Priority || 'normal', type: 'recurring',
+    created_by: opts.manual ? 'admin-recurring-manual' : 'recurring-scheduler',
+    notes: (ov.notes ? ov.notes + ' — ' : '') + `Recurring template #${tpl.ID} "${tpl.Name || ''}"${due ? ' — due ' + due : ''}${opts.manual ? ' (posted manually)' : ''}`,
+    tenant_visible: notifyTenant, tenant_notify_created: notifyTenant, tenant_notify_updates: notifyTenant,
+    recurring_template_id: tpl.ID, recurring_due: due || '', owner_notify_override: 'off',
+  });
+  const created = await res.json();
+  if (!created || !created.id) return { error: (created && created.error) || 'create failed' };
+  if (created.duplicate) return { duplicate: true, wo_id: created.id };
+  let vendor = { assigned: false };
+  if (tpl.Default_Vendor_ID) {
+    try {
+      const ar = await assignVendor(env, { wo_id: created.id, vendor_id: tpl.Default_Vendor_ID, notify: true, notify_tenant: notifyTenant, allow_early_morning_sms: true });
+      const aj = await ar.json();
+      vendor = ar.status >= 400 ? { assigned: false, error: aj.error } : { assigned: true, vendor_sms: !!aj.vendor_sms };
+    } catch (e) { vendor = { assigned: false, error: String((e && e.message) || e) }; }
+  }
+  return { wo_id: created.id, vendor };
+}
+
+async function processRecurringWorkOrders(env, opts) {
+  opts = opts || {};
+  const now = opts.now || new Date();
+  const h = etHour(now);
+  if (h < RECUR_POST_START_HOUR_ET || h >= QUIET_HOURS_START_ET) return { skipped: 'outside posting window (8:00am-7:00pm ET)' };
+  let templates;
+  try { templates = await fetchTab(env, 'WO_Templates'); } catch (e) { return { skipped: 'no WO_Templates tab' }; }
+  templates = templates.filter(t => t.Active !== 'FALSE' && recurIsTrue(t.Recurrence_Enabled));
+  if (!templates.length) return { templates: 0, posted: 0 };
+  await recurEnsureCols(env);
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const today = recurEtDateISO(now);
+  const result = { templates: templates.length, posted: [], skipped_open: [], errors: [] };
+  for (const tpl of templates) {
+    const due = recurLatestDue(tpl, today);
+    if (!due) continue;
+    let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (_) {}
+    let skipsChanged = false, postedAny = false;
+    for (const target of recurTargets(tpl)) {
+      const key = recurTargetKey(target);
+      const mine = workorders.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === target.p && (w.Unit_ID || '') === target.u);
+      if (mine.some(w => w.Recurring_Due === due)) continue;      // already posted for this occurrence
+      if (skips[key] && skips[key] >= due) continue;               // already decided to skip this occurrence
+      const open = mine.find(recurWOIsOpen);
+      if (open) { skips[key] = due; skipsChanged = true; result.skipped_open.push({ template: tpl.ID, target: key, due, open_wo: open.ID }); continue; }
+      try {
+        const r = await recurPostWO(env, tpl, target, due, { now });
+        if (r.error) { result.errors.push({ template: tpl.ID, target: key, error: r.error }); continue; }
+        if (r.wo_id) { workorders.push({ ID: r.wo_id, Recurring_Template_ID: String(tpl.ID), Property_ID: target.p, Unit_ID: target.u, Recurring_Due: due, Status: r.vendor && r.vendor.assigned ? 'Assigned' : 'New' }); postedAny = true; }
+        result.posted.push({ template: tpl.ID, target: key, due, wo_id: r.wo_id, duplicate: !!r.duplicate, vendor: r.vendor });
+      } catch (e) { result.errors.push({ template: tpl.ID, target: key, error: String((e && e.message) || e) }); }
+    }
+    if (skipsChanged || postedAny) {
+      try { await updateRow(env, 'WO_Templates', tpl.ID, { ...(skipsChanged ? { Last_Skips: JSON.stringify(skips) } : {}), ...(postedAny ? { Last_Posted_Date: today } : {}) }); } catch (_) {}
+    }
+  }
+  return result;
+}
+
+// POST /wo-template/post-now { template_id, property_id?, unit_id?, overrides?, save_to_template?, force? }
+// Manual trigger. With no property_id, posts to every linked target. A target whose previous
+// recurring WO is still open returns needs_confirm (nothing posted) unless force:true.
+// overrides edits THIS instance only; save_to_template:true also folds the same edit back
+// into the template.
+async function recurPostNow(env, body) {
+  if (!body.template_id) return json({ error: 'template_id required' }, 400);
+  await recurEnsureCols(env);
+  const tpl = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
+  if (!tpl) return json({ error: 'Template not found' }, 404);
+  let targets = recurTargets(tpl);
+  if (body.property_id) targets = [{ p: String(body.property_id), u: body.unit_id ? String(body.unit_id) : '' }];
+  if (!targets.length) return json({ error: 'This template is not linked to any property/unit yet' }, 400);
+  const ov = body.overrides && typeof body.overrides === 'object' ? body.overrides : {};
+  const workorders = await fetchTab(env, 'Work_Orders');
+  if (!body.force) {
+    const conflicts = [];
+    for (const t of targets) {
+      const open = workorders.find(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === t.p && (w.Unit_ID || '') === t.u && recurWOIsOpen(w));
+      if (open) conflicts.push({ target: recurTargetKey(t), open_wo: open.ID });
+    }
+    if (conflicts.length) return json({ needs_confirm: true, message: 'A previous work order from this template is still open for: ' + conflicts.map(c => c.open_wo).join(', ') + '. Post another anyway?', conflicts });
+  }
+  const results = [];
+  for (const t of targets) {
+    try { results.push({ target: recurTargetKey(t), ...(await recurPostWO(env, tpl, t, '', { manual: true, overrides: ov })) }); }
+    catch (e) { results.push({ target: recurTargetKey(t), error: String((e && e.message) || e) }); }
+  }
+  if (body.save_to_template) {
+    const f = {};
+    if (ov.description != null) f.Description = ov.description;
+    if (ov.priority) f.Priority = ov.priority;
+    if (ov.trade) f.Trade = ov.trade;
+    if (Object.keys(f).length) await updateRow(env, 'WO_Templates', tpl.ID, f);
+  }
+  return json({ success: true, results });
+}
+
+// POST /wo-template/copy { template_id, name?, targets? } — duplicates a template (schedule
+// included) so it can be pointed at another property. Copy starts with NO linked targets unless
+// `targets` is passed, so it can never double-post onto the original's properties.
+async function recurCopyTemplate(env, body) {
+  await recurEnsureCols(env);
+  const src = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
+  if (!src) return json({ error: 'Template not found' }, 404);
+  const copy = { ...src };
+  delete copy.ID;
+  copy.Name = body.name || ((src.Name || 'Template') + ' (copy)');
+  copy.Active = 'TRUE';
+  copy.Targets = Array.isArray(body.targets) ? JSON.stringify(body.targets) : '[]';
+  copy.Last_Skips = ''; copy.Last_Posted_Date = '';
+  return await addRow(env, 'WO_Templates', copy);
+}
+
+// POST /wo-template/link { template_id, property_id, unit_id?, action:'add'|'remove' } — the one
+// write path the Templates page, Property page and Unit page all use, so links stay in sync.
+async function recurLinkTemplate(env, body) {
+  if (!body.template_id || !body.property_id) return json({ error: 'template_id and property_id required' }, 400);
+  await recurEnsureCols(env);
+  const tpl = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
+  if (!tpl) return json({ error: 'Template not found' }, 404);
+  const t = { p: String(body.property_id), u: body.unit_id ? String(body.unit_id) : '' };
+  let list = recurTargets(tpl).filter(x => recurTargetKey(x) !== recurTargetKey(t));
+  if (body.action !== 'remove') list.push(t);
+  await updateRow(env, 'WO_Templates', tpl.ID, { Targets: JSON.stringify(list) });
+  return json({ success: true, targets: list });
+}
+
+// POST /wo-template/preview { fields } — next 6 occurrence dates for a schedule as edited in the
+// UI (not yet saved), using the same engine the sweep uses.
+async function recurPreview(env, body) {
+  const f = recurSanitizeTemplateFields(body.fields || {});
+  const today = recurEtDateISO();
+  return json({ dates: recurNextOccurrences(f, today, 6) });
+}
+
+async function listWOSnippets(env) {
+  try { return json((await fetchTab(env, WO_SNIPPETS_TAB)).filter(s => s.Active !== 'FALSE')); } catch (e) { return json([]); }
+}
+
 // POST /message-queue/skip { ids:[...] } — never deletes (Active stays TRUE); matches the
 // Hub's standing "keep forever" pattern for reviewed rows (e.g. the receipt-reconciler
 // duplicate checker's confirmed-duplicate rows).
