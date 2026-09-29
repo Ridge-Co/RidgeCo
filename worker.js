@@ -2427,7 +2427,13 @@ async function receiptReconScan(env, body) {
   }
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
-  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow });
+  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
+}
+
+// A Worker-side configuration problem (missing/rotated API key), as opposed to a problem with one
+// specific file. Used so a key outage never counts against a file's 3-attempt limit.
+function receiptReconIsConfigError(msg) {
+  return /not configured|api[_ ]?key|missing .*(key|secret|token)|unauthori[sz]ed|invalid x-api-key|authentication_error/i.test(String(msg == null ? '' : msg));
 }
 
 // POST /receipt-recon/import-statement { vendor, rows:[{date,amount,description,ref}], source_file_id?,
