@@ -17192,6 +17192,34 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/assign') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  // Recurring WO templates (Sep 28 2026). Templates hold no PII, but every one of these paths can
+  // eventually create real WOs / vendor SMS, so the token may only touch templates whose Name is
+  // TEST- prefixed, and post-now additionally requires every target property to be a TEST- fixture
+  // and the default vendor (if any) to be a TEST- vendor.
+  if (path === '/wo-template/add') return String((body && body.Name) || '').startsWith('TEST-');
+  if (path === '/wo-template/copy') {
+    const _s = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body && body.template_id));
+    return !!_s && String(_s.Name || '').startsWith('TEST-') && (!body.name || String(body.name).startsWith('TEST-'));
+  }
+  if (path === '/wo-template/update' || path === '/wo-template/link' || path === '/wo-template/post-now') {
+    const _id = path === '/wo-template/update' ? (body && body.id) : (body && body.template_id);
+    const _t = (await fetchTab(env, 'WO_Templates')).find(x => String(x.ID) === String(_id));
+    if (!_t || !String(_t.Name || '').startsWith('TEST-')) return false;
+    if (path === '/wo-template/link') return await isTestRecord(env, 'Properties', body && body.property_id);
+    if (path === '/wo-template/post-now') {
+      const _tg = body && body.property_id ? [{ p: body.property_id }] : recurTargets(_t);
+      if (!_tg.length) return false;
+      for (const x of _tg) { if (!(await isTestRecord(env, 'Properties', x.p))) return false; }
+      if (_t.Default_Vendor_ID && !(await isTestRecord(env, 'Vendors', _t.Default_Vendor_ID))) return false;
+    }
+    return true;
+  }
+  if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
+  if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
+  if (path === '/wo-snippet/update') {
+    const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    return !!_sn && String(_sn.Name || '').startsWith('TEST-');
+  }
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
