@@ -46,7 +46,7 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(grabFn(vendor, 'awUpdateSubmit').includes('btn.disabled = _aw.busy || !v.ok'), 'submit disabled until valid');
   ok(vendor.includes('accept="image/*" capture="environment"') && vendor.includes('accept="image/*" multiple'), 'camera + gallery pickers');
   ok(vendor.includes('The tenant told me about this') && vendor.includes('Total for all of this extra work') && vendor.includes('Add another item'), 'modal strings present');
-  ok(vendor.includes("'/wo/additional-work/withdraw'") && vendor.includes("'/wo/additional-work?parent_wo_id='"), 'withdraw + list endpoints used');
+  ok(vendor.includes("'/wo/additional-work/withdraw'") && vendor.includes("api('GET', '/wo/additional-work')"), 'withdraw + list endpoints used');
   ok(grabFn(vendor, 'awStatusInfo').includes('canWithdraw: true') && grabFn(vendor, 'awStatusInfo').includes("s === 'approved'"), 'status chips map approved / needs info / declined / pending; withdraw allowed only while open');
 }
 // ── vendor.html: addon_item passed ONLY when present ──
