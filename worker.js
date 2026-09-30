@@ -21131,7 +21131,7 @@ async function qbAttachToBill(env, body) {
     const fd = new FormData();
     fd.append('file_metadata_01', new Blob([JSON.stringify(meta)], { type: 'application/json' }), 'metadata.json');
     fd.append('file_content_01', new Blob([bytes], { type: 'application/pdf' }), fileName);
-    const up = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/upload?minorversion=73`, {
+    const up = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/upload?minorversion=73`, {
       method: 'POST', headers: { Authorization: `Bearer ${qtok}`, Accept: 'application/json' }, body: fd });
     const jr = await up.json();
     const resp = jr && jr.AttachableResponse && jr.AttachableResponse[0];
