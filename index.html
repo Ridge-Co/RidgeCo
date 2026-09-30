@@ -9265,19 +9265,25 @@ function depositClearUI(woId) {
 // worker.js's woPushToScope) so it can go through e-sign + materials markup + milestone billing.
 // Mirrors the preview → confirm → apply weight of the WO-void flow, without a full modal since
 // there's no user input to collect — the preview call itself supplies everything to confirm.
-function openPushToScopeUI(woId) {
+function openPushToScopeUI(woId, approveFirst) {
   var estimates = window._hubEstimates[woId] || [];
   var approved = estimates.filter(function(e) { return e.Status === 'Approved'; });
-  if (approved.length !== 1) {
+  // approveFirst = the "Approve & send to proposal" button: the server approves the latest open
+  // estimate silently as part of the push (no vendor text). Only an already-approved estimate
+  // (or 2+ approved versions) needs the checks below.
+  if (!approveFirst && approved.length !== 1) {
     toast(approved.length === 0
-      ? 'Approve an estimate first (✓ Approve Estimate, above), then push it to a Scope Proposal.'
+      ? 'This estimate is not approved yet. Use "Approve & send to proposal" to approve it and move it into a proposal in one step.'
       : (approved.length + ' estimate versions are marked Approved on this WO — resolve to exactly one first.'), 'error');
     return;
   }
-  var estimateId = approved[0].ID;
-  api('POST', '/wo/push-to-scope', { wo_id: woId, estimate_id: estimateId, apply: false })
+  var req = { wo_id: woId, apply: false };
+  if (approveFirst) { req.approve_first = true; } else { req.estimate_id = approved[0].ID; }
+  var estimateId = approveFirst ? '' : approved[0].ID;
+  api('POST', '/wo/push-to-scope', req)
     .then(function(preview) {
       if (!preview || preview.error) { toast((preview && preview.error) || 'Preview failed', 'error'); return; }
+      estimateId = preview.estimate_id;
       var t = preview.target || {};
       var itemLines = (preview.mapped_items || []).map(function(it) {
         var cost = (it.variants && it.variants[0] && it.variants[0].vendor_cost) || 0;
