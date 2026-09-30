@@ -7213,7 +7213,7 @@ async function getWorkOrdersList(env, url) {
   const filtered = voidedOnly ? rows.filter(r => r.Voided === 'TRUE')
     : includeVoided ? rows
     : rows.filter(r => r.Voided !== 'TRUE');
-  return json(filtered);
+  return json(filtered.filter(r => String(r.Addon_Status || '') !== 'Draft'));   // additional-work drafts are never listed
 }
 async function assignVendor(env, body) {
   const _t0 = Date.now();
