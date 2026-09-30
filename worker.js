@@ -7362,6 +7362,11 @@ async function updateStatus(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
+  // Orphan guard (additional work): cancelling a parent with live add-ons would strand them.
+  if ((body.status === 'Cancelled' || body.status === 'Canceled') && workorders.some(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === String(body.wo_id))) {
+    const _live = addonLiveChildren(workorders, await fetchTab(env, 'Estimates'), body.wo_id);
+    if (_live.length) return json({ error: addonLiveChildrenMessage(_live, body.wo_id, 'cancel'), open_additional_work: _live }, 409);
+  }
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
   const fields = { Status: body.status };
   if (body.notes) {
