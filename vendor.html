@@ -1839,7 +1839,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
     if (attempt < MAX_UPLOAD_ATTEMPTS) {
       card.style.borderColor = 'var(--warn)'; card.style.color = 'var(--muted)';
       card.textContent = '\u21bb Retrying\u2026 (' + (attempt+1) + '/' + MAX_UPLOAD_ATTEMPTS + ')';
-      setTimeout(function() { _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, attempt+1); }, attempt * 1200);
+      setTimeout(function() { _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, attempt+1, opts); }, attempt * 1200);
       return;
     }
     _activeUploads--; // terminal failure -- no longer actively transmitting until the vendor taps Retry
