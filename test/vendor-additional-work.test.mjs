@@ -18,6 +18,7 @@ const grabAsync = n => grabAny('async function ', n);
 let pass = 0, fail = 0;
 const t = (n, c) => { if (c) pass++; else { fail++; console.log('FAIL:', n); } };
 
+const grab0 = n => new Function(grab(n) + '\nreturn ' + n + ';')();
 const constLine = n => { const m = new RegExp('const ' + n + ' = [^;]+;').exec(src); if (!m) throw new Error('missing const ' + n); return m[0]; };
 
 // ── pure helpers ──────────────────────────────────────────────────────────────
