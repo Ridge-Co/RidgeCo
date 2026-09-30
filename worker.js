@@ -20393,6 +20393,38 @@ const QB_TRADE_MAP = {
   'Pest Control':{ item: '40', income: '198', expense: '68' },
 };
 
+// STAGING ONLY (never runs on production): QB_TRADE_MAP above holds PRODUCTION QuickBooks ids. The sandbox
+// company has different ids, so on staging we rewrite the map in place from what /qb/setup-trades created
+// there (items by name; income account from the item; expense account = the sandbox's 'Job Expenses:Permits',
+// the closest stand-in for production's per-trade expense accounts). Per-isolate, retried at most every 5 min.
+let _stgQbTradeApplied = false, _stgQbTradeAt = 0, _stgQbTradeRunning = false;
+async function applyStagingQbTradeMap(env) {
+  if (_stgQbTradeApplied || _stgQbTradeRunning) return;
+  if (!(env.__STAGING__ ?? isStaging(env))) return;
+  if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REALM_ID) return;
+  if (Date.now() - _stgQbTradeAt < 5 * 60 * 1000) return;
+  _stgQbTradeAt = Date.now(); _stgQbTradeRunning = true;
+  try {
+    const token = await qbAccessToken(env);
+    const q = async (sql) => qbApi(env, `query?query=${encodeURIComponent(sql)}&minorversion=73`, 'GET', null, token);
+    const itemData = await q("select Id,Name,IncomeAccountRef from Item where Active=true maxresults 1000");
+    const acctData = await q("select Id,FullyQualifiedName from Account where Active=true maxresults 1000");
+    const exp = (acctData?.QueryResponse?.Account || []).find(a => a.FullyQualifiedName === 'Job Expenses:Permits');
+    const items = {}; for (const it of (itemData?.QueryResponse?.Item || [])) items[String(it.Name).toLowerCase()] = it;
+    let n = 0;
+    for (const t of QB_TRADES) {
+      const it = items[String(t.itemName || t.trade).toLowerCase()];
+      if (!it || !it.IncomeAccountRef || !QB_TRADE_MAP[t.trade]) continue;
+      QB_TRADE_MAP[t.trade] = { item: String(it.Id), income: String(it.IncomeAccountRef.value), expense: exp ? String(exp.Id) : QB_TRADE_MAP[t.trade].expense };
+      n++;
+    }
+    const g = items['general'] || null; // fall back for trades that book to General (Locks, Pest Control, General)
+    if (n) _stgQbTradeApplied = true;
+    console.log(`🧪 STAGING — QB trade map re-pointed at sandbox ids for ${n} trades`);
+  } catch (e) { console.log('staging QB trade map apply failed: ' + (e && e.message)); }
+  finally { _stgQbTradeRunning = false; }
+}
+
 // Extract an existing entity Id from a QBO "Duplicate Name Exists" (6240) error.
 function qbDupId(r) {
   try { const e = r?.Fault?.Error?.[0]; if (e?.code === '6240' && e?.Detail) { const m = e.Detail.match(/Id=(\d+)/); if (m) return m[1]; } } catch (x) {}
