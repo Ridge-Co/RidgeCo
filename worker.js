@@ -6453,6 +6453,7 @@ async function addonList(env, url, callerRole, callerSessionId) {
       items, amount: est ? (est.Subtotal || '') : (c.Current_Estimate || ''),
       tenant_mentioned: String(c.Addon_Tenant_Mentioned || '') === 'TRUE',
       estimate: est ? { id: est.ID, version: parseInt(est.Version) || 1, status: est.Status || 'Pending' } : null,
+      estimate_status: est ? (est.Status || 'Pending') : 'Pending',
     };
     if (isAdmin) { row.owner_notified = !!String(c.Addon_Owner_Notified_Date || '').trim(); row.owner_notified_date = c.Addon_Owner_Notified_Date || ''; }
     return row;
