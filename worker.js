@@ -452,6 +452,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
         if (path === '/vendor-access-requests') return await listVendorAccessRequests(env, url);
         if (path === '/estimates')              return await listEstimates(env, url);
+        if (path === '/wo/additional-work')     return await addonList(env, url, callerRole, callerSessionId);   // vendor (own parent) + admin
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
         if (path === '/stale-wos')              return await staleWos(env, url);
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
