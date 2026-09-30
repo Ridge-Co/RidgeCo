@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.2-staging-test-login-all-pages';
+const BUILD_VERSION = '2026-09-30.3-staging-config-mirror';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -17917,6 +17917,15 @@ async function hubTestWriteAllowed(env, path, body) {
   // Property is (isTestWO); every other referenced entity must itself be TEST- (isTestRecord).
   const _b = body || {};
   if (path === '/staging/ui-test-session' || path === '/telemetry/log') return true; // handler is staging-only / telemetry is non-PII
+  // Sep 30 2026: lets a session mirror PRODUCTION business-rule Config rows onto staging (read from prod via
+  // hub_prod_get /config, written here) so staging tests produce the same prices. Non-secret keys only;
+  // anything else (passwords, tokens, phone/email routing, QB keys) stays denied.
+  if (path === '/config/set') {
+    const _k = String(_b.key || '');
+    if (!['pricing_config', 'Access_Trade_Defaults', 'US_HOLIDAYS'].includes(_k)) return false;
+    if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { return false; } }
+    return typeof _b.value === 'string' && _b.value.length < 5000;
+  }
   const _WO_KEYED = ['/wo/share-link', '/wo/share-revoke', '/wo/add-note', '/wo/append-description', '/wo/checklist', '/wo/void', '/wo/unvoid',
     '/wo/owner-update', '/wo/set-tenant-visibility', '/wo/admin-update', '/wo/tenant-update-manual', '/workorder/notes', '/log-attachment',
     '/create-upload-session', '/receipt/add', '/time-entry/add', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
