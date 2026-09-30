@@ -9031,7 +9031,8 @@ function renderHubEstimateView(woId, estimates, holder) {
         '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
         '<input type="checkbox" id="est-deposit-' + woId + '"> Request deposit from customer (skip for small/known-customer jobs — owner approval alone is enough)' +
         '</label>' +
-        '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve Estimate</button> ' +
+        '<button class="btn small" style="background:var(--accent2);color:#fff" title="Approves the estimate and texts the vendor that they are clear to proceed. No proposal, no owner contact." onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve (no proposal)</button> ' +
+        '<button class="btn small" style="background:var(--accent);color:#fff" title="Approves the estimate silently and moves it into a Scope Proposal. The vendor is NOT texted until the owner signs." onclick="openPushToScopeUI(\'' + woId + '\', true)">📋 Approve &amp; send to proposal</button> ' +
         '<button class="btn small secondary" title="Texts the vendor a short request for more info. Daily reminders pause for 3 days, then resume." onclick="estimateNeedsInfoUI(\'' + woId + '\')">❓ Needs more info</button> ' +
         '<button class="btn small secondary" style="color:var(--danger)" title="Texts the vendor that you are not moving forward. Stops reminders." onclick="estimateDeclineUI(\'' + woId + '\')">✕ Decline</button>' +
         (current.Status === 'Needs Info' ? '<div style="margin-top:8px;font-size:11px;color:var(--warn)">❓ Flagged needs-more-info' + (current.Needs_Info_Date ? ' on ' + esc(String(current.Needs_Info_Date).slice(0,10)) : '') + ' — reminders resume 3 days after that if still undecided.</div>' : '') +
@@ -9042,10 +9043,17 @@ function renderHubEstimateView(woId, estimates, holder) {
     var notVoided = !wo || wo.Voided !== 'TRUE';
     var pushToScopeBlock = '';
     if (notVoided) {
-      pushToScopeBlock = wo && wo.Scope_ID
-        ? '<div style="margin-top:8px"><button class="btn small secondary" onclick="openPushToScopeUI(\'' + woId + '\')">📋 Push estimate to Scope Proposal</button> ' +
-          '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="window.open(\'scope-creator.html?scope_id=' + esc(wo.Scope_ID) + '\',\'_blank\')">🔗 Open Scope #' + esc(wo.Scope_ID) + ' →</button></div>'
-        : '<div style="margin-top:8px"><button class="btn small secondary" onclick="openPushToScopeUI(\'' + woId + '\')">📋 Push estimate to Scope Proposal</button></div>';
+      // The standalone push button is gone for pending estimates: a proposal now starts from
+      // "Approve & send to proposal" above, so approval can never text the vendor by accident.
+      // It stays ONLY for an estimate that was already approved (no-proposal path) and is later
+      // moved into a proposal — there is no other route for that case.
+      var pushBtn = isApproved
+        ? '<button class="btn small secondary" title="Already approved, so this only moves the estimate into a Scope Proposal." onclick="openPushToScopeUI(\'' + woId + '\')">📋 Send approved estimate to Scope Proposal</button> '
+        : '';
+      var openScopeBtn = wo && wo.Scope_ID
+        ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="window.open(\'scope-creator.html?scope_id=' + esc(wo.Scope_ID) + '\',\'_blank\')">🔗 Open Scope #' + esc(wo.Scope_ID) + ' →</button>'
+        : '';
+      if (pushBtn || openScopeBtn) pushToScopeBlock = '<div style="margin-top:8px">' + pushBtn + openScopeBtn + '</div>';
     }
 
     holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
@@ -9272,19 +9280,25 @@ function depositClearUI(woId) {
 // worker.js's woPushToScope) so it can go through e-sign + materials markup + milestone billing.
 // Mirrors the preview → confirm → apply weight of the WO-void flow, without a full modal since
 // there's no user input to collect — the preview call itself supplies everything to confirm.
-function openPushToScopeUI(woId) {
+function openPushToScopeUI(woId, approveFirst) {
   var estimates = window._hubEstimates[woId] || [];
   var approved = estimates.filter(function(e) { return e.Status === 'Approved'; });
-  if (approved.length !== 1) {
+  // approveFirst = the "Approve & send to proposal" button: the server approves the latest open
+  // estimate silently as part of the push (no vendor text). Only an already-approved estimate
+  // (or 2+ approved versions) needs the checks below.
+  if (!approveFirst && approved.length !== 1) {
     toast(approved.length === 0
-      ? 'Approve an estimate first (✓ Approve Estimate, above), then push it to a Scope Proposal.'
+      ? 'This estimate is not approved yet. Use "Approve & send to proposal" to approve it and move it into a proposal in one step.'
       : (approved.length + ' estimate versions are marked Approved on this WO — resolve to exactly one first.'), 'error');
     return;
   }
-  var estimateId = approved[0].ID;
-  api('POST', '/wo/push-to-scope', { wo_id: woId, estimate_id: estimateId, apply: false })
+  var req = { wo_id: woId, apply: false };
+  if (approveFirst) { req.approve_first = true; } else { req.estimate_id = approved[0].ID; }
+  var estimateId = approveFirst ? '' : approved[0].ID;
+  api('POST', '/wo/push-to-scope', req)
     .then(function(preview) {
       if (!preview || preview.error) { toast((preview && preview.error) || 'Preview failed', 'error'); return; }
+      estimateId = preview.estimate_id;
       var t = preview.target || {};
       var itemLines = (preview.mapped_items || []).map(function(it) {
         var cost = (it.variants && it.variants[0] && it.variants[0].vendor_cost) || 0;
@@ -9293,8 +9307,11 @@ function openPushToScopeUI(woId) {
       var msg = t.will_create
         ? ('Create a NEW Scope Proposal for WO ' + woId + ' from estimate v' + preview.estimate_version + ' (' + (preview.mapped_items || []).length + ' item(s)):\n' + itemLines)
         : ('Append ' + (preview.mapped_items || []).length + ' item(s) from estimate v' + preview.estimate_version + ' onto EXISTING Scope #' + t.scope_id + ' (' + (t.title || 'Untitled') + ', currently ' + t.existing_item_count + ' item(s)):\n' + itemLines);
-      if (!confirm(msg + '\n\nThis does not send anything to the customer yet — it moves the estimate into the Scope Proposal system so it can be priced, e-signed, and billed there. Continue?')) return;
-      api('POST', '/wo/push-to-scope', { wo_id: woId, estimate_id: estimateId, apply: true })
+      var approveNote = preview.will_approve_silently
+        ? '\n\nThis approves estimate v' + preview.estimate_version + ' WITHOUT texting the vendor. They hear nothing until the owner signs the proposal.'
+        : '';
+      if (!confirm(msg + approveNote + '\n\nThis does not send anything to the customer yet — it moves the estimate into the Scope Proposal system so it can be priced, e-signed, and billed there. Continue?')) return;
+      api('POST', '/wo/push-to-scope', { wo_id: woId, estimate_id: estimateId, apply: true, approve_first: !!approveFirst })
         .then(function(res) {
           if (!res.success) { toast(res.error || 'Push failed', 'error'); return; }
           toast(res.already_converted ? res.message : ('✅ Pushed to Scope #' + res.scope_id + (res.created_new_scope ? ' (new)' : ' (existing)')), 'success');

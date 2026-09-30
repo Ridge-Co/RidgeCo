@@ -13,6 +13,14 @@
 
 ---
 
+# WHERE THINGS STAND — Sep 30, 2026 (two-button estimate approval — PR #132, base `main`, NOT merged)
+
+- **PR #132** (base `main`, head `fix/approve-and-send-to-proposal`, awaiting Brett's merge): the WO estimate panel now has "Approve (no proposal)" (unchanged: approves + texts vendor) and "Approve & send to proposal" (`POST /wo/push-to-scope` with `approve_first: true`: approves silently, converts, links Scope, stage Proposed, NO vendor text until the owner signs). Test: test/push-approve-first.test.mjs (21 assertions). FEATURE_LOG `[FL-20260930-1030-af]`.
+- Not click-tested: no staging UI test login yet (another session is building it). Do NOT open a staging-test PR until that lands.
+- Still open from Sep 28: */15 cron missing on production `maintenance-hub`; stale pending Message_Queue rows (re-check, Brett sent most manually); Nirnay "scheduled for Sep 26" text; Allen George non-release; change-order flow + clawback unbuilt.
+
+---
+
 # WHERE THINGS STAND — Sep 29, 2026 afternoon (audit of Sep 28 builds — nothing left unmerged)
 
 Audit result: every designed Sep 28 build is on `main`; the PR #113 and #116 entries below that say "NOT merged" are STALE — both are merged (prod and staging both report 2026-09-29.1-config-secret-redaction before today's fixes). Merged today, base `main`:

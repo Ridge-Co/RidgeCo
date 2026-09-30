@@ -3930,7 +3930,23 @@ async function woPushToScope(env, body) {
     }
   }
 
-  const approved = woEstimates.filter(e => String(e.Status || '') === 'Approved');
+  let approved = woEstimates.filter(e => String(e.Status || '') === 'Approved');
+  // approve_first (Sep 30 2026): the "Approve & send to proposal" button. When no estimate is Approved
+  // yet, approve the chosen/latest open one SILENTLY as part of this push — no vendor text (the
+  // vendor hears nothing until the owner signs the proposal), no 'Approved' stage flash (the WO goes
+  // straight to Proposed below). The plain /estimate/approve button is unchanged and still texts the
+  // vendor — that is the "approve, no proposal" path.
+  const approveFirst = !!body && (body.approve_first === true || String(body.approve_first).toUpperCase() === 'TRUE');
+  let silentApprove = null;
+  if (approveFirst && approved.length === 0) {
+    const open = woEstimates.filter(e => !['Approved', 'Converted', 'Declined'].includes(String(e.Status || '')));
+    if (!open.length) return json({ error: `WO ${woId} has no open estimate to approve (every version is Declined or already Converted).` }, 400);
+    silentApprove = reqEstimateId
+      ? open.find(e => e.ID === reqEstimateId)
+      : open.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+    if (!silentApprove) return json({ error: `Estimate ${reqEstimateId} is not an open estimate on WO ${woId}` }, 404);
+    approved = [silentApprove];
+  }
   if (approved.length !== 1) {
     return json({
       error: approved.length === 0
@@ -3977,10 +3993,21 @@ async function woPushToScope(env, body) {
       : { will_create: false, scope_id: targetScope.ID, title: targetScope.Title || '', existing_item_count: existingItems.length },
     mapped_items: mappedItems,
     estimate_subtotal: +(+estimate.Subtotal || 0).toFixed(2),
+    will_approve_silently: !!silentApprove,
   };
   if (!apply) return json(preview);
 
   // ---- APPLY ----
+  if (silentApprove) {
+    // Estimate row only: Status + who/when/why. Deliberately NO vendor text and NO
+    // 'Approved' stage — see approve_first note above. A failure here stops before any
+    // Scope is created, so nothing is left half-done.
+    const ar = await updateRow(env, 'Estimates', silentApprove.ID, {
+      Status: 'Approved', Approved_By: (body && body.approved_by) || 'admin', Approved_Date: new Date().toISOString(),
+      Approval_Note: 'Approved for proposal — vendor not texted until the owner signs',
+    });
+    if (ar && typeof ar.status === 'number' && ar.status >= 400) return ar;
+  }
   let scopeId = targetScope ? targetScope.ID : '';
   if (willCreate) {
     const now = new Date().toISOString();
@@ -4035,6 +4062,7 @@ async function woPushToScope(env, body) {
   return json({
     success: true, applied: true, wo_id: woId, scope_id: scopeId, created_new_scope: willCreate,
     estimate_id: estimate.ID, items_added: mappedItems.length, converted_marked: convertedMarked,
+    approved_silently: !!silentApprove, vendor_texted: false,
     warning: convertedMarked ? '' : `Scope ${scopeId} was updated, but marking Estimate ${estimate.ID} Converted failed — set it by hand (Status=Converted, Converted_Scope_ID=${scopeId}) so it stops showing as pending.`,
   });
 }
