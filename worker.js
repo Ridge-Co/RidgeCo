@@ -22253,6 +22253,24 @@ function addonRollsIntoParent(w, estRows) {
   const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
   return String(latest.Status || '') === 'Approved';
 }
+// STANDALONE GUARD (Sep 30 2026): the same gate, applied to a child's OWN invoice. Returns '' for every row
+// that is not an add-on child, and for a child that passes addonRollsIntoParent; otherwise a plain-English reason.
+// qbSendInvoice refuses the real send (409) and warns in the preview; qbReadyQueue flags the row. The
+// explicit override_addon_unapproved:true still lets Brett invoice it deliberately.
+function addonStandaloneBlock(w, estRows) {
+  if (!w || String(w.Type || '') !== 'addon' || !String(w.Parent_WO_ID || '').trim()) return '';
+  if (addonRollsIntoParent(w, estRows)) return '';
+  const id = String(w.ID || '');
+  if (String(w.Voided || '').toUpperCase() === 'TRUE') return 'Additional work ' + id + ' is voided or withdrawn';
+  const st = String(w.Addon_Status || '');
+  if (st !== 'Submitted') return 'Additional work ' + id + ' is ' + (st === 'Withdrawn' ? 'withdrawn' : 'still a draft');
+  const v = (Array.isArray(estRows) ? estRows : []).filter(e => e && String(e.WO_ID) === id && e.Active !== 'FALSE');
+  if (!v.length) return 'Additional work ' + id + ' has no estimate';
+  const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  const es = String(latest.Status || '');
+  if (es === 'Converted') return 'Additional work ' + id + ' was sent to a scope proposal, which bills through its own payment milestones';
+  return 'Additional work ' + id + ' is not approved (estimate is ' + (es || 'blank') + ')';
+}
 function qbGroupOpenRows(irRows, ir, woRows, estRows) {
   const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
   const parentOf = {};
