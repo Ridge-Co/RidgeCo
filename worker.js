@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.3-staging-config-mirror';
+const BUILD_VERSION = '2026-09-30.4-staging-gmail-connect-guard';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -17917,6 +17917,10 @@ async function hubTestWriteAllowed(env, path, body) {
   // Property is (isTestWO); every other referenced entity must itself be TEST- (isTestRecord).
   const _b = body || {};
   if (path === '/staging/ui-test-session' || path === '/telemetry/log') return true; // handler is staging-only / telemetry is non-PII
+  // Only returns Google's consent URL (signed 15-min state, no secrets in the response); the token is
+  // written by /gmail/callback only after a human signs in as GMAIL_SENDER. Lets a session hand Brett the
+  // staging "connect Gmail" link without the staging admin code.
+  if (path === '/gmail/connect-url') return true;
   // Sep 30 2026: lets a session mirror PRODUCTION business-rule Config rows onto staging (read from prod via
   // hub_prod_get /config, written here) so staging tests produce the same prices. Non-secret keys only;
   // anything else (passwords, tokens, phone/email routing, QB keys) stays denied.
