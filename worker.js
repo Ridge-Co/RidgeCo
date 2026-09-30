@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.9-staging-invoice-review-guard';
+const BUILD_VERSION = '2026-09-30.10-qb-paths-require-auth';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -90,7 +90,7 @@ const _hubWorkerCore = {
     // runs later, after POST body parsing, where the gate's own local `_tok` is already out of
     // scope. Never set for a WORKER_SECRET or session-token call — those get full access as today.
     let _viaHubTestToken = false;
-    const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/test','/qb/accounts','/qb/setup-trades','/qb/connect','/qb/callback','/qb/webhook',
+    const PUBLIC_PATHS = ['/health','/version','/vendor-by-pin','/tenant-by-pin','/owner-by-pin','/sms-inbound','/qb/connect','/qb/callback','/qb/webhook',
       // Gemini context snapshot (Sep 22 2026): public at the gate like the other entries below,
       // but geminiContext() self-verifies a query-string token against env.GEMINI_CONTEXT_TOKEN
       // before returning anything. Query-string (not header) auth is required here because this
