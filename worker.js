@@ -7506,7 +7506,7 @@ async function ownerWorkorders(env, url) {
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
-  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
   // vendor relationship mediated through Brett rather than owners going around him. No
   // Master_Keys/viewingVendorId passed — omitLockbox:true already zeroes lockboxes below,
