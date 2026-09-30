@@ -18289,7 +18289,9 @@ async function qbApi(env, path, method = 'GET', body = null, token = null) {
   // this one function, so this single check covers every /qb/* write endpoint
   // and every internal QB-booking path (scope/proposal signatures, trash
   // invoicing, etc.) without touching any of their call sites.
-  if (method && method !== 'GET' && (env.__STAGING__ ?? isStaging(env))) {
+  // Staging writes go to the Intuit SANDBOX (qbBase) when sandbox creds are configured; with no QB creds
+  // at all they stay stubbed exactly as before.
+  if (method && method !== 'GET' && (env.__STAGING__ ?? isStaging(env)) && !(env.QB_CLIENT_ID && env.QB_CLIENT_SECRET && env.QB_REALM_ID)) {
     console.log(`🧪 STAGING — QuickBooks ${method} ${path} stubbed (nothing sent to Intuit)`);
     return { staged: true, would_have: { method, path, body: body || null }, note: '🧪 STAGING MODE — QuickBooks call stubbed, nothing booked.' };
   }
