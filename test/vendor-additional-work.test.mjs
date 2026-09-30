@@ -183,26 +183,65 @@ t('owner-notice: declined add-on is never shown to the owner', /Declined/.test(o
 t('owner-notice: records Addon_Owner_Notified_Date and blocks a silent re-send', /Addon_Owner_Notified_Date: new Date/.test(ownerFn) && /resend/.test(ownerFn));
 t('owner-notice: only before/photo attachments are linked, never the WO folder', /addonPhotosByItem/.test(ownerFn) && !/Drive_Folder/.test(ownerFn + grab('addonPhotosByItem')));
 
-// ── invoice rollup ─────────────────────────────────────────────────────────────
-const { qbGroupOpenRows } = new Function(grab('qbGroupOpenRows') + '\nreturn { qbGroupOpenRows };')();
+// ── invoice rollup (MONEY GATE: only an Approved, Submitted, un-voided add-on child folds into the parent invoice) ──
+const { qbGroupOpenRows, addonRollsIntoParent } = new Function(grab('addonRollsIntoParent') + grab('qbGroupOpenRows') + '\nreturn { qbGroupOpenRows, addonRollsIntoParent };')();
 const P = { ID: '1', WO_ID: 'WO-100', Bill_ID: 'B1', Active: 'TRUE', QB_Invoice_ID: '' };
 const P2 = { ID: '2', WO_ID: 'WO-100', Bill_ID: 'B2', Active: 'TRUE', QB_Invoice_ID: '' };
 const C = { ID: '3', WO_ID: 'WO-101', Bill_ID: 'B3', Active: 'TRUE', QB_Invoice_ID: '' };
 const O = { ID: '4', WO_ID: 'WO-200', Bill_ID: 'B4', Active: 'TRUE', QB_Invoice_ID: '' };
-const wos = [{ ID: 'WO-100', Type: 'manual' }, { ID: 'WO-101', Type: 'addon', Parent_WO_ID: 'WO-100' }, { ID: 'WO-200', Type: 'manual' }];
+const childWo = (over = {}) => ({ ID: 'WO-101', Type: 'addon', Parent_WO_ID: 'WO-100', Addon_Status: 'Submitted', Voided: 'FALSE', ...over });
+const wos = [{ ID: 'WO-100', Type: 'manual' }, childWo(), { ID: 'WO-200', Type: 'manual' }];
+const est = (status, extra = {}) => ({ WO_ID: 'WO-101', Version: '1', Status: status, Active: 'TRUE', ...extra });
+const APPROVED = [est('Approved')];
 const ids = g => g.map(r => r.ID).join(',');
-t('rollup: parent row pulls in its add-on child row', ids(qbGroupOpenRows([P, C, O], P, wos)) === '1,3');
-t('rollup: starting from the CHILD row finds the same group, parent rows first', ids(qbGroupOpenRows([C, P, P2, O], C, wos)) === '1,2,3');
-t('rollup: unrelated WO never joins', !qbGroupOpenRows([P, C, O], P, wos).some(r => r.ID === '4'));
-t('rollup: an already-invoiced child is excluded', ids(qbGroupOpenRows([P, { ...C, QB_Invoice_ID: '77' }], P, wos)) === '1');
-t('rollup: an already-invoiced row never reopens with new siblings', ids(qbGroupOpenRows([{ ...P, QB_Invoice_ID: '9' }, C], { ...P, QB_Invoice_ID: '9' }, wos)) === '1');
-t('rollup: a voided (Active FALSE) child row is excluded', ids(qbGroupOpenRows([P, { ...C, Active: 'FALSE' }], P, wos)) === '1');
-t('rollup: parent already invoiced -> late child invoices alone', ids(qbGroupOpenRows([{ ...P, QB_Invoice_ID: '9' }, C], C, wos)) === '3');
-t('rollup: a WO that merely CLAIMS a parent but is not Type addon is ignored', ids(qbGroupOpenRows([P, C], P, [{ ID: 'WO-101', Type: 'manual', Parent_WO_ID: 'WO-100' }])) === '1');
-// unchanged behaviour without children (same results with and without the woRows argument)
+t('rollup: parent row pulls in its APPROVED add-on child row', ids(qbGroupOpenRows([P, C, O], P, wos, APPROVED)) === '1,3');
+t('rollup: starting from the CHILD row finds the same group, parent rows first', ids(qbGroupOpenRows([C, P, P2, O], C, wos, APPROVED)) === '1,2,3');
+t('rollup: unrelated WO never joins', !qbGroupOpenRows([P, C, O], P, wos, APPROVED).some(r => r.ID === '4'));
+t('rollup: an already-invoiced child is excluded', ids(qbGroupOpenRows([P, { ...C, QB_Invoice_ID: '77' }], P, wos, APPROVED)) === '1');
+t('rollup: an already-invoiced row never reopens with new siblings', ids(qbGroupOpenRows([{ ...P, QB_Invoice_ID: '9' }, C], { ...P, QB_Invoice_ID: '9' }, wos, APPROVED)) === '1');
+t('rollup: a voided (Active FALSE) child row is excluded', ids(qbGroupOpenRows([P, { ...C, Active: 'FALSE' }], P, wos, APPROVED)) === '1');
+t('rollup: parent already invoiced -> late child invoices alone', ids(qbGroupOpenRows([{ ...P, QB_Invoice_ID: '9' }, C], C, wos, APPROVED)) === '3');
+t('rollup: a WO that merely CLAIMS a parent but is not Type addon is ignored', ids(qbGroupOpenRows([P, C], P, [{ ID: 'WO-101', Type: 'manual', Parent_WO_ID: 'WO-100', Addon_Status: 'Submitted' }], APPROVED)) === '1');
+// every excluded child state: the child row never joins, the PARENT invoice is exactly its own rows, and the child row invoices alone
+for (const [label, w, e] of [
+  ['estimate Declined', childWo(), [est('Declined')]],
+  ['estimate Needs Info', childWo(), [est('Needs Info')]],
+  ['estimate Pending', childWo(), [est('Pending')]],
+  ['estimate Withdrawn', childWo(), [est('Withdrawn')]],
+  ['estimate Converted (billed via proposal milestones — never ALSO on the parent invoice)', childWo(), [est('Converted')]],
+  ['child Voided', childWo({ Voided: 'TRUE' }), APPROVED],
+  ['Addon_Status Withdrawn', childWo({ Addon_Status: 'Withdrawn' }), APPROVED],
+  ['Addon_Status Draft', childWo({ Addon_Status: 'Draft' }), APPROVED],
+  ['no estimate row at all', childWo(), []],
+  ['estimates argument omitted (fail closed)', childWo(), undefined],
+]) {
+  const W = [{ ID: 'WO-100', Type: 'manual' }, w];
+  t('rollup excluded: ' + label + ' -> parent group is only its own rows', ids(qbGroupOpenRows([P, P2, C], P, W, e)) === '1,2');
+  t('rollup excluded: ' + label + ' -> child row invoices alone', ids(qbGroupOpenRows([P, C], C, W, e)) === '3');
+  t('rollup excluded: ' + label + ' -> addonRollsIntoParent false', addonRollsIntoParent(w, e) === false);
+}
+t('rollup: latest estimate version wins (v1 Declined, v2 Approved -> included)', ids(qbGroupOpenRows([P, C], P, wos, [est('Declined'), est('Approved', { Version: '2' })])) === '1,3');
+t('rollup: latest estimate version wins (v1 Approved, v2 Needs Info -> excluded)', ids(qbGroupOpenRows([P, C], P, wos, [est('Approved'), est('Needs Info', { Version: '2' })])) === '1');
+t('rollup: an inactive newer estimate is ignored', ids(qbGroupOpenRows([P, C], P, wos, [est('Approved'), est('Declined', { Version: '2', Active: 'FALSE' })])) === '1,3');
+// unchanged behaviour without children (same results with and without the woRows / estimates arguments)
 const sets = [[P], [P, P2], [P, P2, O], [P, { ...P2, Active: 'FALSE' }, O], [{ ...P, QB_Invoice_ID: '5' }, P2]];
 t('no children: results are identical to the original two-argument behaviour for every fixture',
-  sets.every(rows => rows.every(r => ids(qbGroupOpenRows(rows, r)) === ids(qbGroupOpenRows(rows, r, [{ ID: 'WO-100', Type: 'manual' }, { ID: 'WO-200', Type: 'manual' }])) && ids(qbGroupOpenRows(rows, r)) === ids(qbGroupOpenRows(rows, r, [])))));
+  sets.every(rows => rows.every(r => ids(qbGroupOpenRows(rows, r)) === ids(qbGroupOpenRows(rows, r, [{ ID: 'WO-100', Type: 'manual' }, { ID: 'WO-200', Type: 'manual' }], [])) && ids(qbGroupOpenRows(rows, r)) === ids(qbGroupOpenRows(rows, r, [], APPROVED)))));
+
+// qbReadyQueue's combines_with counts use the SAME gate (executed, not just grepped)
+{
+  const rq = new Function('json', 'fetchTabs', 'findWO', 'addonRollsIntoParent', grabAsync('qbReadyQueue') + '\nreturn qbReadyQueue;');
+  const run = async (e, childOver = {}) => {
+    const irRows = [{ ID: '1', WO_ID: 'WO-100', Bill_ID: 'B1', Active: 'TRUE', QB_Invoice_ID: '', QB_Invoice_Status: 'pending' }, { ID: '3', WO_ID: 'WO-101', Bill_ID: 'B3', Active: 'TRUE', QB_Invoice_ID: '', QB_Invoice_Status: 'pending' }];
+    const W = [{ ID: 'WO-100', Type: 'manual' }, childWo(childOver)];
+    const fn = rq(d => ({ _d: d }), async () => [irRows, W, e], (l, id) => l.find(w => w.ID === id) || null, addonRollsIntoParent);
+    const out = (await fn({}, { searchParams: { get: () => '' } }, false))._d;
+    return out.reduce((m, r) => (m[r.id] = r.combines_with, m), {});
+  };
+  let c = await run(APPROVED); t('ready queue: approved child -> each row says it combines with 1 other', c['1'] === 1 && c['3'] === 1);
+  for (const st of ['Declined', 'Needs Info', 'Pending', 'Withdrawn', 'Converted']) { c = await run([est(st)]); t('ready queue: ' + st + ' child is not counted as combining', c['1'] === 0 && c['3'] === 0); }
+  c = await run(APPROVED, { Voided: 'TRUE' }); t('ready queue: voided child is not counted as combining', c['1'] === 0 && c['3'] === 0);
+}
 
 const sendFn = grabAsync('qbSendInvoice');
 t('qbSendInvoice passes the WO list to the grouping', /const groupRows = qbGroupOpenRows\(irRows, ir, wos\);/.test(sendFn));
