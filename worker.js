@@ -15066,7 +15066,7 @@ async function arReportPayLink(env, body) {
   const email = (inv.BillEmail && inv.BillEmail.Address) || auth.owner.Billing_Email || auth.owner.Email || '';
   if (!email) return json({ error: 'no_email', message: 'No email on file for this invoice — please contact Ridge Co.' }, 400);
   try {
-    const rr = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(invoiceId)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
+    const rr = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(invoiceId)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
     const sres = await rr.json().catch(() => null);
     if (!rr.ok || !sres || sres.Fault || !sres.Invoice) throw new Error('send not confirmed');
     return json({ ok: true, sent_to_email: true, email });
