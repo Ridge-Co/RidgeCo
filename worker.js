@@ -17933,6 +17933,26 @@ async function hubTestWriteAllowed(env, path, body) {
     if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { return false; } }
     return typeof _b.value === 'string' && _b.value.length < 5000;
   }
+  // Sep 30 2026: staging QuickBooks is an Intuit SANDBOX company (see qbBase), so /qb/* writes can no longer
+  // reach real books. They still write rows in the staging sheet, so each route is limited to TEST data.
+  // setup-trades / sync-payments take no record id (sandbox-only effect). Everything not listed stays denied
+  // (pay-bills, record-paid-bill, link-vendor-bills, vendor-reconcile, backfill-*, delete-bill, ...).
+  if (path === '/qb/setup-trades' || path === '/qb/sync-payments') return true;
+  if (path === '/qb/map' || path === '/qb/create-subcustomer') {
+    const _tab = { owner: 'Owners', vendor: 'Vendors', property: 'Properties', unit: 'Units' }[String(_b.kind || '').toLowerCase()];
+    if (!_tab || !_b.id) return false;
+    return await isTestRecord(env, _tab, _b.id);
+  }
+  if (path === '/qb/vendor-in-house') return !!_b.id && await isTestRecord(env, 'Vendors', _b.id);
+  if (path === '/qb/reparent-unit') return !!_b.unit_id && await isTestRecord(env, 'Units', _b.unit_id);
+  if (['/qb/send-invoice', '/qb/undo-send', '/qb/repair-invoice', '/qb/reprice-invoice', '/qb/relabel-invoice',
+       '/qb/clear-ir-bill', '/qb/set-ir-bill'].includes(path)) {
+    const _key = _b.ir_id || _b.id;
+    if (!_key && !_b.bill_id) return false;
+    const _irs = await fetchTab(env, 'Invoice_Review');
+    const _ir = _irs.find(r => (_key && String(r.ID) === String(_key)) || (_b.bill_id && String(r.Bill_ID) === String(_b.bill_id)));
+    return !!_ir && !!_ir.WO_ID && await isTestWO(env, _ir.WO_ID);
+  }
   const _WO_KEYED = ['/wo/share-link', '/wo/share-revoke', '/wo/add-note', '/wo/append-description', '/wo/checklist', '/wo/void', '/wo/unvoid',
     '/wo/owner-update', '/wo/set-tenant-visibility', '/wo/admin-update', '/wo/tenant-update-manual', '/workorder/notes', '/log-attachment',
     '/create-upload-session', '/receipt/add', '/time-entry/add', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
