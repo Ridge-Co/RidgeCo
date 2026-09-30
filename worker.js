@@ -3962,10 +3962,21 @@ async function woPushToScope(env, body) {
       : { will_create: false, scope_id: targetScope.ID, title: targetScope.Title || '', existing_item_count: existingItems.length },
     mapped_items: mappedItems,
     estimate_subtotal: +(+estimate.Subtotal || 0).toFixed(2),
+    will_approve_silently: !!silentApprove,
   };
   if (!apply) return json(preview);
 
   // ---- APPLY ----
+  if (silentApprove) {
+    // Estimate row only: Status + who/when/why. Deliberately NO vendor text and NO
+    // 'Approved' stage — see approve_first note above. A failure here stops before any
+    // Scope is created, so nothing is left half-done.
+    const ar = await updateRow(env, 'Estimates', silentApprove.ID, {
+      Status: 'Approved', Approved_By: (body && body.approved_by) || 'admin', Approved_Date: new Date().toISOString(),
+      Approval_Note: 'Approved for proposal — vendor not texted until the owner signs',
+    });
+    if (ar && typeof ar.status === 'number' && ar.status >= 400) return ar;
+  }
   let scopeId = targetScope ? targetScope.ID : '';
   if (willCreate) {
     const now = new Date().toISOString();
