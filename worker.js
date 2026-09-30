@@ -3944,7 +3944,7 @@ async function woPushToScope(env, body) {
   const approveFirst = !!body && (body.approve_first === true || String(body.approve_first).toUpperCase() === 'TRUE');
   let silentApprove = null;
   if (approveFirst && approved.length === 0) {
-    const open = woEstimates.filter(e => !['Approved', 'Converted', 'Declined'].includes(String(e.Status || '')));
+    const open = woEstimates.filter(e => !['Approved', 'Converted', 'Declined', 'Withdrawn'].includes(String(e.Status || '')));
     if (!open.length) return json({ error: `WO ${woId} has no open estimate to approve (every version is Declined or already Converted).` }, 400);
     silentApprove = reqEstimateId
       ? open.find(e => e.ID === reqEstimateId)
