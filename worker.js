@@ -22150,12 +22150,29 @@ function qbBillDocNumber(billRow, ir, siblingIndex) {
 // today's ordinary single-vendor job and behaves identically to before this existed. A row
 // that ALREADY has an invoice (haveInv true) never groups — it is returned alone, so an
 // already-sent invoice is never silently reopened or merged into.
-function qbGroupOpenRows(irRows, ir) {
+//
+// Vendor Additional Work rollup (Sep 30 2026): a row whose WO is an add-on CHILD (Type 'addon' +
+// Parent_WO_ID) groups with its PARENT job's open rows, so the approved add-on rides on the parent's
+// customer invoice. woRows (Work_Orders) is OPTIONAL: without it, or when no WO has a Parent_WO_ID,
+// rootOf() is the identity and this is exactly the original same-WO_ID rule. A parent that is already
+// invoiced contributes no rows (they carry a QB_Invoice_ID), so a late add-on then invoices on its own.
+function qbGroupOpenRows(irRows, ir, woRows) {
   const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
+  const parentOf = {};
+  if (!haveInv && Array.isArray(woRows)) woRows.forEach(w => {
+    const p = String((w && w.Parent_WO_ID) || '').trim();
+    if (p && w.ID && String(w.Type || '') === 'addon') parentOf[String(w.ID)] = p;
+  });
+  const rootOf = id => parentOf[String(id)] || String(id);
   const groupRows = haveInv ? [ir] : irRows.filter(r =>
-    r.Active !== 'FALSE' && String(r.WO_ID) === String(ir.WO_ID) &&
+    r.Active !== 'FALSE' && rootOf(r.WO_ID) === rootOf(ir.WO_ID) &&
     !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim()));
   if (!groupRows.some(r => r.ID === ir.ID)) groupRows.push(ir);
+  // Mixed parent + child rows: the parent's own rows lead (they anchor the invoice's WO), stable otherwise.
+  if (groupRows.some(r => String(r.WO_ID) !== String(groupRows[0].WO_ID))) {
+    const rk = id => parentOf[String(id)] ? 1 : 0;
+    return groupRows.map((r, i) => ({ r, i })).sort((a, b) => (rk(a.r.WO_ID) - rk(b.r.WO_ID)) || (a.i - b.i)).map(x => x.r);
+  }
   return groupRows;
 }
 
