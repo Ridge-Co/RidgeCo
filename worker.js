@@ -502,7 +502,16 @@ const _hubWorkerCore = {
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
       if (request.method === 'POST') {
-        if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
+        if (path === '/upload-photo') {
+          // Runs before the body-level guard below (multipart), so the test-token guard is applied here:
+          // a HUB_TEST_TOKEN / ui-test-window upload may only target a TEST- work order.
+          if (_viaHubTestToken) {
+            let _upOk = false;
+            try { const _fd = await request.clone().formData(); _upOk = await isTestWO(env, String(_fd.get('wo_id') || '').trim()); } catch (e) { _upOk = false; }
+            if (!_upOk) return json({ error: 'HUB_TEST_TOKEN: upload must target a TEST- work order, refusing' }, 403);
+          }
+          return await handlePhotoUploadClean(env, request);
+        }
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
         // Body parsing is now tolerant of an empty/missing body (POST /cron/sweep and any
         // future no-payload POST route don't need to send one) — previously this threw a raw
