@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.1-staging-ui-test-window';
+const BUILD_VERSION = '2026-09-30.2-staging-test-login-all-pages';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -356,6 +356,9 @@ const _hubWorkerCore = {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
+          // Sessions minted by POST /staging/ui-test-session carry stg:1 - they are staging-only
+          // and must never authenticate anywhere else.
+          if (_session.stg && !isStaging(env, url)) return json({ error: 'Unauthorized' }, 401);
           callerRole = _session.role;
           callerSessionId = _session.id;
         }
@@ -499,7 +502,16 @@ const _hubWorkerCore = {
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
       if (request.method === 'POST') {
-        if (path === '/upload-photo') return await handlePhotoUploadClean(env, request);
+        if (path === '/upload-photo') {
+          // Runs before the body-level guard below (multipart), so the test-token guard is applied here:
+          // a HUB_TEST_TOKEN / ui-test-window upload may only target a TEST- work order.
+          if (_viaHubTestToken) {
+            let _upOk = false;
+            try { const _fd = await request.clone().formData(); _upOk = await isTestWO(env, String(_fd.get('wo_id') || '').trim()); } catch (e) { _upOk = false; }
+            if (!_upOk) return json({ error: 'HUB_TEST_TOKEN: upload must target a TEST- work order, refusing' }, 403);
+          }
+          return await handlePhotoUploadClean(env, request);
+        }
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
         // Body parsing is now tolerant of an empty/missing body (POST /cron/sweep and any
         // future no-payload POST route don't need to send one) — previously this threw a raw
@@ -529,6 +541,7 @@ const _hubWorkerCore = {
           if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing', debug: _hubTestErr || undefined }, 403);
         }
         if (path === '/staging/ui-test-window') return await uiTestWindowHandler(env, url, request, body);
+        if (path === '/staging/ui-test-session') return await uiTestSessionHandler(env, url, body);
         if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
         if (path === '/admin/seed-test-receipt') return await seedTestReceipt(env, url, body);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
@@ -17580,6 +17593,47 @@ const TEST_MARKER_FIELD = {
   Units: 'Unit_Label',
 };
 
+// A work order is a TEST fixture iff its Property is (same rule as /status and /schedule above).
+async function isTestWO(env, woId) {
+  if (!woId) return false;
+  const wo = findWO(await fetchTab(env, 'Work_Orders'), String(woId));
+  return !!wo && await isTestRecord(env, 'Properties', wo.Property_ID);
+}
+
+// POST /staging/ui-test-session {role:'vendor'|'owner'|'tenant', id?} (Sep 30 2026). Used by
+// test-login.js so a browser test tab can be logged into a portal without typing a PIN. Staging
+// only (404 elsewhere); reachable only with HUB_TEST_TOKEN / an open ui-test window (auth gate) or
+// WORKER_SECRET. It only ever logs in as a TEST- row (Vendors.Name / Owners.Company|First_Name /
+// Tenants.Last_Name starting 'TEST-') by running the real by-PIN handler with that row's own PIN,
+// then re-signs the token with stg:1 + a 2h TTL, which the gate refuses on any non-staging host.
+async function uiTestSessionHandler(env, url, body) {
+  if (!isStaging(env, url)) return json({ error: 'Not found' }, 404);
+  const role = String((body && body.role) || '');
+  const isT = (v) => String(v || '').startsWith('TEST-');
+  const CFG = {
+    vendor: { tab: 'Vendors', test: (r) => isT(r.Name), first: (r) => (String(r.First_Name || '').trim() || String(r.Name || '').split(' ')[0]), fn: vendorByPin, idOf: (d) => d.vendor_id },
+    owner: { tab: 'Owners', test: (r) => isT(r.Company) || isT(r.First_Name), first: (r) => String(r.First_Name || ''), fn: ownerByPin, idOf: (d) => d.owner_id },
+    tenant: { tab: 'Tenants', test: (r) => isT(r.Last_Name), first: (r) => String(r.First_Name || ''), fn: tenantByPin, idOf: (d) => d.tenant_id },
+  }[role];
+  if (!CFG) return json({ error: 'role must be vendor, owner or tenant' }, 400);
+  const rows = (await fetchTab(env, CFG.tab)).filter((r) => CFG.test(r) && r.PIN && r.Active !== 'FALSE' && CFG.first(r));
+  const want = body && body.id ? String(body.id) : '';
+  const row = want ? rows.find((r) => String(r.ID) === want) : rows[0];
+  if (!row) return json({ error: want ? `no TEST- ${role} with id ${want} and a PIN` : `no TEST- ${role} with a PIN on staging` }, 404);
+  const u = new URL(url.toString());
+  u.search = '';
+  u.searchParams.set('pin', String(row.PIN));
+  u.searchParams.set('name', CFG.first(row));
+  const res = await CFG.fn(env, u);
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok || !data) return json({ error: 'test login failed', status: res.status, detail: data && data.error }, 502);
+  const id = CFG.idOf(data) || row.ID;
+  data.token = await makeSessionToken({ role, id, stg: 1 }, env.WORKER_SECRET, 2 * 60 * 60);
+  data._testmode = true;
+  return json(data);
+}
+
 async function isTestRecord(env, tab, id) {
   if (!id) return false;
   const rows = await fetchTab(env, tab);
@@ -17857,6 +17911,60 @@ async function hubTestWriteAllowed(env, path, body) {
     const rc = row.Confirmed_Receipt_ID ? receipts.find(r => String(r.ID) === String(row.Confirmed_Receipt_ID)) : null;
     if (!rc) return false;
     return await isTestRecord(env, 'Properties', rc.Property_ID);
+  }
+  // ---- Sep 30 2026: UI write paths (WO-scoped and TEST-entity-scoped). Still default-deny: a
+  // path not listed here falls through to `return false`. A WO counts as TEST only when its
+  // Property is (isTestWO); every other referenced entity must itself be TEST- (isTestRecord).
+  const _b = body || {};
+  if (path === '/staging/ui-test-session' || path === '/telemetry/log') return true; // handler is staging-only / telemetry is non-PII
+  const _WO_KEYED = ['/wo/share-link', '/wo/share-revoke', '/wo/add-note', '/wo/append-description', '/wo/checklist', '/wo/void', '/wo/unvoid',
+    '/wo/owner-update', '/wo/set-tenant-visibility', '/wo/admin-update', '/wo/tenant-update-manual', '/workorder/notes', '/log-attachment',
+    '/create-upload-session', '/receipt/add', '/time-entry/add', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
+  if (_WO_KEYED.includes(path)) {
+    const woId = _b.wo_id || _b.wo;
+    if (woId) { if (!(await isTestWO(env, woId))) return false; }
+    else if (path === '/receipt/add' && _b.property_id) { if (!(await isTestRecord(env, 'Properties', _b.property_id))) return false; }
+    else return false;
+    if (path === '/wo/void' && _b.combined_into_wo_id && !(await isTestWO(env, _b.combined_into_wo_id))) return false;
+    if (path === '/wo/admin-update' && _b.fields) {
+      if (_b.fields.Property_ID && !(await isTestRecord(env, 'Properties', _b.fields.Property_ID))) return false;
+      if (_b.fields.Tenant_ID && !(await isTestRecord(env, 'Tenants', _b.fields.Tenant_ID))) return false;
+    }
+    if ((path === '/wo-tenant/add' || path === '/wo-tenant/remove') && !(await isTestRecord(env, 'Tenants', _b.tenant_id))) return false;
+    if (path === '/vendor-task-request/create' && !(await isTestRecord(env, 'Vendors', _b.vendor_id))) return false;
+    if (path === '/wo/tenant-update-manual') {
+      const _w = findWO(await fetchTab(env, 'Work_Orders'), String(woId));
+      if (_w && _w.Tenant_ID && !(await isTestRecord(env, 'Tenants', _w.Tenant_ID))) return false;
+    }
+    return true;
+  }
+  if (path === '/workorder/update') {
+    if (!(await isTestWO(env, _b.id))) return false;
+    const _f = _b.fields || {};
+    if (_f.Property_ID && !(await isTestRecord(env, 'Properties', _f.Property_ID))) return false;
+    if (_f.Tenant_ID && !(await isTestRecord(env, 'Tenants', _f.Tenant_ID))) return false;
+    return true;
+  }
+  if (path === '/attachment/delete') {
+    const _a = (await fetchTab(env, 'Attachments')).find(r => String(r.ID) === String(_b.id));
+    return !!_a && await isTestWO(env, _a.WO_ID);
+  }
+  if (path === '/receipt/delete') {
+    const _r = (await fetchTab(env, 'Receipts')).find(r => String(r.ID) === String(_b.id));
+    return !!_r && await isTestRecord(env, 'Properties', _r.Property_ID);
+  }
+  if (path === '/vendor-bill/update') {
+    const _v = (await fetchTab(env, 'Vendor_Bills')).find(r => String(r.ID) === String(_b.id));
+    return !!_v && await isTestWO(env, _v.WO_ID);
+  }
+  if (path === '/tenant/update') return await isTestRecord(env, 'Tenants', _b.id);
+  if (path === '/vendor/update') return await isTestRecord(env, 'Vendors', _b.id);
+  if (path === '/owner/update') return await isTestRecord(env, 'Owners', _b.id);
+  if (path === '/unit/update') return await isTestRecord(env, 'Units', _b.id);
+  if (path === '/property/update') return await isTestRecord(env, 'Properties', _b.id);
+  if (path === '/vendor/update-contact') return await isTestRecord(env, 'Vendors', _b.vendor_id);
+  if (path === '/vendor-bill/add-standalone' || path === '/workorder/self-serve') {
+    return (await isTestRecord(env, 'Vendors', _b.vendor_id)) && (await isTestRecord(env, 'Properties', _b.property_id));
   }
   return false;
 }
