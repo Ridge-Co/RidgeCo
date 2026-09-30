@@ -9443,9 +9443,14 @@ function awAdminPush(childId) { openPushToScopeUI(childId, true); }
 var _awNotice = null;
 function awAdminNotifyOwner(childId) {
   api('POST', '/wo/additional-work/owner-notice', { child_wo_id: childId, preview: true }).then(function(res) {
-    if (!res || !res.success) { toast((res && res.error) || 'Could not draft the owner notice', 'error'); return; }
+    if (!res || res.error || !(res.preview || res.success)) { toast((res && res.error) || 'Could not draft the owner notice', 'error'); return; }
     _awNotice = { childId: childId, sending: false };
-    var rec = res.recipients;
+    // Worker preview shape: { recipient:{name,phone,email}, sms:{body}, email:{to,subject,html}, warnings:[] }
+    var smsTxt = (res.sms && typeof res.sms === 'object') ? (res.sms.body || '') : (res.sms || '');
+    var emailSubj = res.email_subject || (res.email && res.email.subject) || '';
+    var emailTxt = res.email_body || (res.email && res.email.html ? String(res.email.html).replace(/<\/(p|li|ul)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/\n{3,}/g, '\n\n').trim() : '');
+    var warnTxt = Array.isArray(res.warnings) ? res.warnings.join('\n') : '';
+    var rec = res.recipients || (res.recipient ? [res.recipient] : '');
     var recTxt = Array.isArray(rec) ? rec.map(function(r) {
       return (r && typeof r === 'object') ? [r.name, r.phone, r.email].filter(Boolean).join(' · ') : String(r);
     }).join('\n') : String(rec || '');
