@@ -4031,6 +4031,7 @@ async function woPushToScope(env, body) {
   return json({
     success: true, applied: true, wo_id: woId, scope_id: scopeId, created_new_scope: willCreate,
     estimate_id: estimate.ID, items_added: mappedItems.length, converted_marked: convertedMarked,
+    approved_silently: !!silentApprove, vendor_texted: false,
     warning: convertedMarked ? '' : `Scope ${scopeId} was updated, but marking Estimate ${estimate.ID} Converted failed — set it by hand (Status=Converted, Converted_Scope_ID=${scopeId}) so it stops showing as pending.`,
   });
 }
