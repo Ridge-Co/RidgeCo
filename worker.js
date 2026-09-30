@@ -6429,15 +6429,26 @@ function addonPhotosByItem(attachments, childId) {
 }
 
 // GET /wo/additional-work?parent_wo_id= — admin, or the vendor assigned to the parent.
+// Without parent_wo_id a VENDOR session gets ALL of its own submitted (non-draft, non-withdrawn) add-ons across every
+// parent in ONE call (the portal used to call this once per job card and burned the Sheets read quota). The vendor is
+// always the session vendor; nothing from the body/query is trusted. Admin still must name a parent.
 async function addonList(env, url, callerRole, callerSessionId) {
   const parentId = String(url.searchParams.get('parent_wo_id') || '').trim();
-  if (!parentId) return json({ error: 'parent_wo_id required' }, 400);
+  const allForVendor = !parentId && callerRole === 'vendor';
+  if (!parentId && !allForVendor) return json({ error: 'parent_wo_id required' }, 400);
   const [workorders, estimates, attachments] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments']);
-  const parent = findWO(workorders, parentId);
-  if (!parent) return json({ error: 'Work order not found' }, 404);
-  if (callerRole === 'vendor' && String(parent.Vendor_ID || '') !== String(callerSessionId || '')) return json({ error: 'This work order is not assigned to you' }, 403);
+  let children;
+  if (allForVendor) {
+    const me = String(callerSessionId || '');
+    if (!me) return json({ error: 'Unauthorized' }, 401);
+    children = workorders.filter(w => String(w.Vendor_ID || '') === me && String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() && !addonIsDraft(w) && String(w.Addon_Status || '') !== 'Withdrawn');
+  } else {
+    const parent = findWO(workorders, parentId);
+    if (!parent) return json({ error: 'Work order not found' }, 404);
+    if (callerRole === 'vendor' && String(parent.Vendor_ID || '') !== String(callerSessionId || '')) return json({ error: 'This work order is not assigned to you' }, 403);
+    children = workorders.filter(w => String(w.Parent_WO_ID || '') === parentId && String(w.Type || '') === 'addon' && !addonIsDraft(w));
+  }
   const isAdmin = callerRole !== 'vendor';
-  const children = workorders.filter(w => String(w.Parent_WO_ID || '') === parentId && String(w.Type || '') === 'addon' && !addonIsDraft(w));
   const out = children.map(c => {
     const est = addonLatestEstimate(estimates, c.ID);
     const photos = addonPhotosByItem(attachments, c.ID);
