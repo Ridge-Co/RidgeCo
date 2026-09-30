@@ -302,7 +302,7 @@ t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\
     const rows = [{ ID: 'R1', WO_ID: wo.ID, Vendor_ID: 'V1', Request_Type: 'status_update', Status: 'open', Next_Nudge_At: '2000-01-01T00:00:00Z', Nudge_Count: '0' }];
     const tabs = { Vendor_Requests: rows, Work_Orders: [wo], Vendors: [{ ID: 'V1', Name: 'V' }], Properties: [], Units: [] };
     const f = mkSweep(async () => {}, async (env, tab) => tabs[tab] || [], async () => ({}), (l, id) => l.find(w => w.ID === id) || null,
-      async (env, tab, id, fields) => { rec.updates.push(fields); }, async () => {}, s => addonHoldFn(s), 'Vendor_Requests', ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Closed'], ['Invoiced', 'Paid'], 5, 24, 48,
+      async (env, tab, id, fields) => { rec.updates.push(fields); }, async () => {}, hold, 'Vendor_Requests', ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Closed'], ['Invoiced', 'Paid'], 5, 24, 48,
       async () => { rec.sms++; return { sent: true }; }, async () => { rec.sms++; return { sent: true }; }, async () => { rec.sms++; return { sent: true }; });
     let res; try { res = await f({}); } catch (e) { res = { err: String(e.message || e) }; }
     return { rec, res };
