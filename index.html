@@ -9354,6 +9354,7 @@ function awAdminState(a) {
   var s = String(a.estimate_status || '').toLowerCase();
   if (s === 'approved') return { key: 'approved', label: 'Approved', color: '#166534', bg: '#eaf6ee' };
   if (s === 'needs info') return { key: 'needs', label: 'Needs info (waiting on vendor)', color: '#7a4b00', bg: '#fdf2e2' };
+  if (s === 'converted') return { key: 'converted', label: 'Sent to proposal', color: '#166534', bg: '#eaf6ee' };
   if (s === 'declined') return { key: 'declined', label: 'Declined', color: '#8a1c14', bg: '#fdecea' };
   return { key: 'pending', label: 'Awaiting your decision', color: 'var(--accent)', bg: 'var(--surface)' };
 }

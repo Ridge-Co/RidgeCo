@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.14-vendor-additional-work';
+const BUILD_VERSION = '2026-09-30.15-vendor-additional-work';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -6432,7 +6432,7 @@ function addonPhotosByItem(attachments, childId) {
 async function addonList(env, url, callerRole, callerSessionId) {
   const parentId = String(url.searchParams.get('parent_wo_id') || '').trim();
   if (!parentId) return json({ error: 'parent_wo_id required' }, 400);
-  const [workorders, estimates, attachments] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Estimates'), fetchTab(env, 'Attachments')]);
+  const [workorders, estimates, attachments] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments']);
   const parent = findWO(workorders, parentId);
   if (!parent) return json({ error: 'Work order not found' }, 404);
   if (callerRole === 'vendor' && String(parent.Vendor_ID || '') !== String(callerSessionId || '')) return json({ error: 'This work order is not assigned to you' }, 403);
@@ -7447,7 +7447,7 @@ async function vendorWorkorders(env, url) {
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   // Voided is never shown to a vendor, regardless of include_closed — it isn't a closed
   // status a vendor should be able to page back to, it's a job that shouldn't have existed.
-  const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && String(w.Addon_Status || '') !== 'Draft' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && String(w.Addon_Status || '') !== 'Draft' && !(String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() && String(w.Approval_Stage || '') !== 'Approved') && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // vendors passed through so enrichWO can tell whether THIS vendor is Brett's own
   // in-house record — that's what lets a "Brett Only" code still surface on a WO
   // that's actually assigned to him (see enrichWO's visibleLockboxes). viewingVendorId is
