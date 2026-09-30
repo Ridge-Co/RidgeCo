@@ -22684,8 +22684,8 @@ async function qbSendInvoice(env, body) {
       return json({ ok: true, already_sent: true, invoice_id: ir.QB_Invoice_ID, bill_id: ir.QB_Bill_ID, status: ir.QB_Invoice_Status });
     }
 
-    const [wos, props, owners, vendors, bills, units, allTimeEntries] = await fetchTabs(env, [
-      'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units','Time_Entries',
+    const [wos, props, owners, vendors, bills, units, allTimeEntries, estRowsAll] = await fetchTabs(env, [
+      'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units','Time_Entries','Estimates',
     ]);
     const billRowEarly = bills.find(b => String(b.ID) === String(ir.Bill_ID)) || {};
     if (String(billRowEarly.Standalone || '').toUpperCase() === 'TRUE') {
