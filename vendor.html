@@ -1886,6 +1886,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
       card.style.borderColor = 'var(--accent2)'; card.style.color = 'var(--text)';
       card.innerHTML = icon + ' <a href="' + esc(fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,16)) + '</a>';
       _activeUploads--; // reached a terminal (success) state
+      if (opts && opts.onDone) logP.then(function(r) { opts.onDone(!(r && r.success === false), nextFolder); }, function() { opts.onDone(false, nextFolder); });
       return nextFolder;
     })
     .catch(function(e) {
