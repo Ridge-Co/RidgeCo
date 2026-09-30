@@ -22158,12 +22158,25 @@ function qbBillDocNumber(billRow, ir, siblingIndex) {
 // customer invoice. woRows (Work_Orders) is OPTIONAL: without it, or when no WO has a Parent_WO_ID,
 // rootOf() is the identity and this is exactly the original same-WO_ID rule. A parent that is already
 // invoiced contributes no rows (they carry a QB_Invoice_ID), so a late add-on then invoices on its own.
-function qbGroupOpenRows(irRows, ir, woRows) {
+// MONEY GATE (Sep 30 2026): an add-on child's bill may fold into the PARENT's invoice only when the child
+// is Type 'addon', not Voided, Addon_Status 'Submitted' and its LATEST active estimate is exactly
+// 'Approved'. Declined / Needs Info / Pending / Withdrawn / Converted (sent to a proposal, which bills
+// through scope-proposal milestones) never fold in. estRows (Estimates) is REQUIRED for any roll-up: when it
+// is not supplied nothing rolls up (fail closed — a missing argument must never double-bill).
+function addonRollsIntoParent(w, estRows) {
+  if (!w || !w.ID || String(w.Type || '') !== 'addon' || !String(w.Parent_WO_ID || '').trim()) return false;
+  if (String(w.Voided || '').toUpperCase() === 'TRUE' || String(w.Addon_Status || '') !== 'Submitted') return false;
+  if (!Array.isArray(estRows)) return false;
+  const v = estRows.filter(e => e && String(e.WO_ID) === String(w.ID) && e.Active !== 'FALSE');
+  if (!v.length) return false;
+  const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  return String(latest.Status || '') === 'Approved';
+}
+function qbGroupOpenRows(irRows, ir, woRows, estRows) {
   const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
   const parentOf = {};
   if (!haveInv && Array.isArray(woRows)) woRows.forEach(w => {
-    const p = String((w && w.Parent_WO_ID) || '').trim();
-    if (p && w.ID && String(w.Type || '') === 'addon') parentOf[String(w.ID)] = p;
+    if (addonRollsIntoParent(w, estRows)) parentOf[String(w.ID)] = String(w.Parent_WO_ID).trim();
   });
   const rootOf = id => parentOf[String(id)] || String(id);
   const groupRows = haveInv ? [ir] : irRows.filter(r =>
