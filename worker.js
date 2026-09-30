@@ -18298,7 +18298,7 @@ async function qbApi(env, path, method = 'GET', body = null, token = null) {
   if (!token) token = await qbAccessToken(env);
   const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const res = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/${path}`, opts);
+  const res = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/${path}`, opts);
   return await res.json();
 }
 
