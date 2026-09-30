@@ -6482,6 +6482,20 @@ function addonBuildOwnerNotice({ ownerFirst, address, parentId, itemTexts, photo
   return { sms, subject: 'Something found at ' + address + ' (Ref ' + parentId + ')', html };
 }
 
+// PURE — may the owner EMAIL go out? Same gates as the SMS chokepoint (smsGateDecision kind 'owner': Global + Property + Customer
+// toggles) plus the owner's Notify_Method and Test Mode: in Test Mode SMS is redirected to Brett, but an email has no redirect, so a
+// real owner is never emailed while Test Mode is on. Returns { ok, reason }.
+function addonEmailGate({ cfg, property, owner }) {
+  const global = String((cfg && cfg.TWILIO_ENABLED) || '').toUpperCase() === 'TRUE';
+  const testMode = String((cfg && cfg.TWILIO_TEST_MODE) || '').toUpperCase() !== 'FALSE';
+  const on = v => String(v == null ? '' : v).toUpperCase() !== 'FALSE';
+  if (String((owner && owner.Notify_Method) || 'sms') === 'none') return { ok: false, reason: 'owner notification method is none' };
+  const g = smsGateDecision({ global, propertyOn: on(property && property.SMS_Enabled), ownerOn: on(owner && owner.SMS_Enabled), kind: 'owner' });
+  if (!g.sendOk) return { ok: false, reason: g.gateSnapshot };
+  if (testMode) return { ok: false, reason: 'Test Mode is on — no email to a real owner' };
+  return { ok: true, reason: '' };
+}
+
 // POST /wo/additional-work/owner-notice { child_wo_id, preview?:true, resend? } — ADMIN-ONLY (no ROLE_SCOPES entry).
 async function addonOwnerNotice(env, body) {
   const childId = String((body && body.child_wo_id) || '').trim();
