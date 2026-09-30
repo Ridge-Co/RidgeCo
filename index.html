@@ -9462,8 +9462,9 @@ function awAdminNotifyOwner(childId) {
       '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">Text message</div>' +
       '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px">' + esc(smsTxt) + '</div>' +
       '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">Email</div>' +
-      '<div style="font-size:13px;font-weight:bold;margin-bottom:4px">' + esc(res.email_subject || '') + '</div>' +
-      '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px">' + esc(res.email_body || '') + '</div>';
+      '<div style="font-size:13px;font-weight:bold;margin-bottom:4px">' + esc(emailSubj) + '</div>' +
+      '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px">' + esc(emailTxt) + '</div>' +
+      (warnTxt ? '<div id="aw-notice-warn" style="white-space:pre-wrap;font-size:12px;color:var(--warn)">' + esc(warnTxt) + '</div>' : '');
     var sb = document.getElementById('aw-notice-send'); sb.disabled = false; sb.textContent = 'Send to owner';
     openModal('modal-aw-notice');
   }).catch(function(e) { toast(e.message, 'error'); });
