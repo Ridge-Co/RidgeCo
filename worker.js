@@ -700,6 +700,10 @@ const _hubWorkerCore = {
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
         if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
+        if (path === '/wo/additional-work/start')    return await addonStart(env, body, callerRole, callerSessionId);
+        if (path === '/wo/additional-work/submit')   return await addonSubmit(env, body, callerRole, callerSessionId);
+        if (path === '/wo/additional-work/withdraw') return await addonWithdraw(env, body, callerRole, callerSessionId);
+        if (path === '/wo/additional-work/owner-notice') return await addonOwnerNotice(env, body);   // ADMIN-ONLY: no ROLE_SCOPES entry
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
         if (path === '/estimate/retranslate')     return await retranslateEstimate(env, body);
