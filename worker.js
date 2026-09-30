@@ -17903,6 +17903,60 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!rc) return false;
     return await isTestRecord(env, 'Properties', rc.Property_ID);
   }
+  // ---- Sep 30 2026: UI write paths (WO-scoped and TEST-entity-scoped). Still default-deny: a
+  // path not listed here falls through to `return false`. A WO counts as TEST only when its
+  // Property is (isTestWO); every other referenced entity must itself be TEST- (isTestRecord).
+  const _b = body || {};
+  if (path === '/staging/ui-test-session' || path === '/telemetry/log') return true; // handler is staging-only / telemetry is non-PII
+  const _WO_KEYED = ['/wo/share-link', '/wo/share-revoke', '/wo/add-note', '/wo/append-description', '/wo/checklist', '/wo/void', '/wo/unvoid',
+    '/wo/owner-update', '/wo/set-tenant-visibility', '/wo/admin-update', '/wo/tenant-update-manual', '/workorder/notes', '/log-attachment',
+    '/create-upload-session', '/receipt/add', '/time-entry/add', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
+  if (_WO_KEYED.includes(path)) {
+    const woId = _b.wo_id || _b.wo;
+    if (woId) { if (!(await isTestWO(env, woId))) return false; }
+    else if (path === '/receipt/add' && _b.property_id) { if (!(await isTestRecord(env, 'Properties', _b.property_id))) return false; }
+    else return false;
+    if (path === '/wo/void' && _b.combined_into_wo_id && !(await isTestWO(env, _b.combined_into_wo_id))) return false;
+    if (path === '/wo/admin-update' && _b.fields) {
+      if (_b.fields.Property_ID && !(await isTestRecord(env, 'Properties', _b.fields.Property_ID))) return false;
+      if (_b.fields.Tenant_ID && !(await isTestRecord(env, 'Tenants', _b.fields.Tenant_ID))) return false;
+    }
+    if ((path === '/wo-tenant/add' || path === '/wo-tenant/remove') && !(await isTestRecord(env, 'Tenants', _b.tenant_id))) return false;
+    if (path === '/vendor-task-request/create' && !(await isTestRecord(env, 'Vendors', _b.vendor_id))) return false;
+    if (path === '/wo/tenant-update-manual') {
+      const _w = findWO(await fetchTab(env, 'Work_Orders'), String(woId));
+      if (_w && _w.Tenant_ID && !(await isTestRecord(env, 'Tenants', _w.Tenant_ID))) return false;
+    }
+    return true;
+  }
+  if (path === '/workorder/update') {
+    if (!(await isTestWO(env, _b.id))) return false;
+    const _f = _b.fields || {};
+    if (_f.Property_ID && !(await isTestRecord(env, 'Properties', _f.Property_ID))) return false;
+    if (_f.Tenant_ID && !(await isTestRecord(env, 'Tenants', _f.Tenant_ID))) return false;
+    return true;
+  }
+  if (path === '/attachment/delete') {
+    const _a = (await fetchTab(env, 'Attachments')).find(r => String(r.ID) === String(_b.id));
+    return !!_a && await isTestWO(env, _a.WO_ID);
+  }
+  if (path === '/receipt/delete') {
+    const _r = (await fetchTab(env, 'Receipts')).find(r => String(r.ID) === String(_b.id));
+    return !!_r && await isTestRecord(env, 'Properties', _r.Property_ID);
+  }
+  if (path === '/vendor-bill/update') {
+    const _v = (await fetchTab(env, 'Vendor_Bills')).find(r => String(r.ID) === String(_b.id));
+    return !!_v && await isTestWO(env, _v.WO_ID);
+  }
+  if (path === '/tenant/update') return await isTestRecord(env, 'Tenants', _b.id);
+  if (path === '/vendor/update') return await isTestRecord(env, 'Vendors', _b.id);
+  if (path === '/owner/update') return await isTestRecord(env, 'Owners', _b.id);
+  if (path === '/unit/update') return await isTestRecord(env, 'Units', _b.id);
+  if (path === '/property/update') return await isTestRecord(env, 'Properties', _b.id);
+  if (path === '/vendor/update-contact') return await isTestRecord(env, 'Vendors', _b.vendor_id);
+  if (path === '/vendor-bill/add-standalone' || path === '/workorder/self-serve') {
+    return (await isTestRecord(env, 'Vendors', _b.vendor_id)) && (await isTestRecord(env, 'Properties', _b.property_id));
+  }
   return false;
 }
 
