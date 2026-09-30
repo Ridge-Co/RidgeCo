@@ -23174,7 +23174,14 @@ async function qbSendCombinedInvoice(env, ctx) {
       }
 
       const _inEn = await invoiceInputsEnglish(env, billRow, timeEntries);
-      const inv = buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
+      // Additional work (Sep 30 2026): a row on an add-on CHILD WO is labelled "Additional work — … — WO <parent>"
+      // and carries the parent's WO number. Any other row takes the original path unchanged.
+      const _rowWo = ctx.woList ? findWO(ctx.woList, r.WO_ID) : null;
+      const _isAddon = !!(_rowWo && String(_rowWo.Type || '') === 'addon' && String(_rowWo.Parent_WO_ID || '').trim() && String(r.WO_ID) !== String(woId));
+      const inv = _isAddon
+        ? buildInvoiceLines(Object.assign({}, r, { WO_ID: _rowWo.Parent_WO_ID }), _inEn.billRow, trade, tradeName, _rowWo, null, ownReceipts, _inEn.timeEntries)
+        : buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
+      if (_isAddon) inv.lines.forEach(l => { l.Description = ('Additional work — ' + l.Description).slice(0, 4000); });
       if (inv.laborAmt < 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: materials exceed its customer total — labor line is negative, check the bill.`);
 
       const vendDisplay = vendor.Name || r.Vendor_Name || ('Vendor ' + (r.Vendor_ID || ''));
