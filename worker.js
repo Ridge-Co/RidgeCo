@@ -17281,6 +17281,37 @@ async function getConfig(env) {
   return json(redactConfigForToken(config));
 }
 
+// ── Staging UI test window (Sep 30 2026) ────────────────────────────────────
+// The Hub page's "access code" is just the X-Auth-Token it sends, so a browser test session on
+// STAGING would otherwise need a real code typed in. Instead: index.html?api=staging&testmode=1
+// sends this sentinel, and the auth gate accepts it ONLY on a staging worker AND only while Config
+// `ui_test_mode_until` is in the future. Opened/closed by POST /staging/ui-test-window (HUB_TEST_TOKEN
+// or WORKER_SECRET only). Writes still go through hubTestWriteAllowed (TEST- records only).
+const UI_TEST_SENTINEL = '__staging_ui_test__';
+const UI_TEST_MAX_MINUTES = 120;
+async function uiTestWindowOpen(env) {
+  try {
+    const cfg = await fetchConfig(env);
+    const until = Date.parse(cfg.ui_test_mode_until || '');
+    if (!isFinite(until)) return false;
+    const left = until - Date.now();
+    // Also reject a far-future value: a window can never be longer than the max, even if the Config row is hand-edited.
+    return left > 0 && left <= (UI_TEST_MAX_MINUTES + 1) * 60000;
+  } catch (e) { return false; }
+}
+async function uiTestWindowHandler(env, url, request, body) {
+  if (!isStaging(env, url)) return json({ error: 'Not available' }, 404);
+  const tok = request.headers.get('X-Auth-Token') || '';
+  const ok = (!!env.HUB_TEST_TOKEN && tok === env.HUB_TEST_TOKEN) || (!!env.WORKER_SECRET && tok === env.WORKER_SECRET);
+  if (!ok) return json({ error: 'Unauthorized' }, 401);
+  let minutes = Number(body && body.minutes);
+  if (!isFinite(minutes)) minutes = 60;
+  minutes = Math.max(0, Math.min(UI_TEST_MAX_MINUTES, Math.floor(minutes)));
+  const until = minutes > 0 ? new Date(Date.now() + minutes * 60000).toISOString() : '';
+  await setConfigKey(env, { key: 'ui_test_mode_until', value: until });
+  return json({ ok: true, open: minutes > 0, until: until || null, max_minutes: UI_TEST_MAX_MINUTES });
+}
+
 async function fetchConfig(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return {};
