@@ -17447,7 +17447,7 @@ async function fetchTabs(env, tabs) {
 async function hubBootstrap(env) {
   const [properties, units, tenants, vendors, workorders, invoices, owners, keys] =
     await fetchTabs(env, ['Properties','Units','Tenants','Vendors','Work_Orders','Invoices','Owners','Keys']);
-  return json({ properties, units, tenants, vendors, workorders, invoices, owners, keys });
+  return json({ properties, units, tenants, vendors, workorders: workorders.filter(w => String(w.Addon_Status || '') !== 'Draft'), invoices, owners, keys });
 }
 
 // GET /twilio/message-status?sid=SM...,SM...  — admin-gated diagnostic. Message_Queue's
