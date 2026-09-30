@@ -1768,6 +1768,20 @@ setTimeout(function(){
       if (e && e.message === 'Unauthorized') localStorage.removeItem(SECRET_KEY);
       // else: timeout/network error — leave the saved code alone, just show the login screen.
     });
+  } else if (WORKER.indexOf('staging') !== -1 && /[?&]testmode=1(&|$)/.test(location.search)) {
+    // Staging UI test window (Sep 30 2026). Only on the staging Worker, and only works while the
+    // worker's Config `ui_test_mode_until` window is open (opened by a HUB_TEST_TOKEN call, max 2h).
+    // The sentinel is never saved to localStorage, so it can't linger or be replayed anywhere.
+    AUTH_TOKEN = '__staging_ui_test__';
+    api('GET','/config', null, 12000).then(function() {
+      document.getElementById('login-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
+    }).catch(function(e) {
+      AUTH_TOKEN = '';
+      var el = document.getElementById('login-error');
+      if (el) { el.textContent = 'Staging test window is closed — enter an access code, or ask for it to be opened.'; el.style.color = 'var(--muted)'; el.style.display = 'block'; }
+    });
   }
 }, 0);
 

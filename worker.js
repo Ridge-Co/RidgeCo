@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-29.1-config-secret-redaction';
+const BUILD_VERSION = '2026-09-30.1-staging-ui-test-window';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -270,10 +270,23 @@ const _hubWorkerCore = {
         // in a second, separately-maintained array that kept drifting out of sync (5+ documented
         // incidents in context/CURRENT.md where a write this token should have reached got
         // rejected here first, even though hubTestWriteAllowed would have handled it correctly).
-        const _hubTestOk = !!env.HUB_TEST_TOKEN
+        const _hubTestTokOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
           && (request.method === 'GET' || request.method === 'POST');
+        // Staging UI test window (Sep 30 2026): lets a browser session open the STAGING Hub page
+        // without typing an access code, so UI-only flows can be tested. Same power as
+        // HUB_TEST_TOKEN (reads anything on staging; writes only TEST- records via the same
+        // hubTestWriteAllowed guard below) and it is: staging-only (isStaging), off by default,
+        // and only while Config `ui_test_mode_until` is in the future (max 2h, opened only by a
+        // HUB_TEST_TOKEN/WORKER_SECRET call to POST /staging/ui-test-window). The sentinel is not
+        // a secret — it grants nothing when the window is closed, and nothing at all on production.
+        const _uiTestOk = !_hubTestTokOk
+          && _tok === UI_TEST_SENTINEL
+          && isStaging(env, url)
+          && (request.method === 'GET' || request.method === 'POST')
+          && await uiTestWindowOpen(env);
+        const _hubTestOk = _hubTestTokOk || _uiTestOk;
         if (_hubTestOk) _viaHubTestToken = true;
         // Narrow READ-ONLY token for self-test/verification of PRODUCTION read-only admin endpoints
           // (credential-access gap closed Sep 22 2026, B-012 Vendor Performance follow-up — see
@@ -515,6 +528,7 @@ const _hubWorkerCore = {
           }
           if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing', debug: _hubTestErr || undefined }, 403);
         }
+        if (path === '/staging/ui-test-window') return await uiTestWindowHandler(env, url, request, body);
         if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
         if (path === '/admin/seed-test-receipt') return await seedTestReceipt(env, url, body);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
@@ -17268,6 +17282,37 @@ async function getConfig(env) {
   return json(redactConfigForToken(config));
 }
 
+// ── Staging UI test window (Sep 30 2026) ────────────────────────────────────
+// The Hub page's "access code" is just the X-Auth-Token it sends, so a browser test session on
+// STAGING would otherwise need a real code typed in. Instead: index.html?api=staging&testmode=1
+// sends this sentinel, and the auth gate accepts it ONLY on a staging worker AND only while Config
+// `ui_test_mode_until` is in the future. Opened/closed by POST /staging/ui-test-window (HUB_TEST_TOKEN
+// or WORKER_SECRET only). Writes still go through hubTestWriteAllowed (TEST- records only).
+const UI_TEST_SENTINEL = '__staging_ui_test__';
+const UI_TEST_MAX_MINUTES = 120;
+async function uiTestWindowOpen(env) {
+  try {
+    const cfg = await fetchConfig(env);
+    const until = Date.parse(cfg.ui_test_mode_until || '');
+    if (!isFinite(until)) return false;
+    const left = until - Date.now();
+    // Also reject a far-future value: a window can never be longer than the max, even if the Config row is hand-edited.
+    return left > 0 && left <= (UI_TEST_MAX_MINUTES + 1) * 60000;
+  } catch (e) { return false; }
+}
+async function uiTestWindowHandler(env, url, request, body) {
+  if (!isStaging(env, url)) return json({ error: 'Not available' }, 404);
+  const tok = request.headers.get('X-Auth-Token') || '';
+  const ok = (!!env.HUB_TEST_TOKEN && tok === env.HUB_TEST_TOKEN) || (!!env.WORKER_SECRET && tok === env.WORKER_SECRET);
+  if (!ok) return json({ error: 'Unauthorized' }, 401);
+  let minutes = Number(body && body.minutes);
+  if (!isFinite(minutes)) minutes = 60;
+  minutes = Math.max(0, Math.min(UI_TEST_MAX_MINUTES, Math.floor(minutes)));
+  const until = minutes > 0 ? new Date(Date.now() + minutes * 60000).toISOString() : '';
+  await setConfigKey(env, { key: 'ui_test_mode_until', value: until });
+  return json({ ok: true, open: minutes > 0, until: until || null, max_minutes: UI_TEST_MAX_MINUTES });
+}
+
 async function fetchConfig(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return {};
@@ -17549,6 +17594,7 @@ async function isTestRecord(env, tab, id) {
 // false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
   if (['/admin/receipt-duplicate-audit/build-index', '/admin/receipt-duplicate-audit/scan', '/admin/receipt-duplicate-audit/mark'].includes(path)) {
     // These only ever write to two brand-new, isolated, non-PII cache/audit tabs
     // (QB_Invoice_Line_Cache, Receipt_Duplicate_Audit) and never touch a real
