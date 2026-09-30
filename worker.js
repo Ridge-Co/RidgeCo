@@ -18254,7 +18254,7 @@ const QB_API_BASE  = 'https://quickbooks.api.intuit.com/v3/company';
 const QB_SANDBOX_API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
 // Staging ALWAYS talks to Intuit's SANDBOX server (a sandbox realm does not exist on the production
 // server, and a production realm is rejected by the sandbox server), so staging can never touch the
-// real books. Production is unchanged.
+// real books. Production is unchanged. (Staging writes reach the sandbox only when QB_* creds are set.)
 function qbBase(env) { return (env && (env.__STAGING__ ?? isStaging(env))) ? QB_SANDBOX_API_BASE : QB_API_BASE; }
 
 async function qbAccessToken(env) {
