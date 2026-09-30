@@ -17584,6 +17584,47 @@ const TEST_MARKER_FIELD = {
   Units: 'Unit_Label',
 };
 
+// A work order is a TEST fixture iff its Property is (same rule as /status and /schedule above).
+async function isTestWO(env, woId) {
+  if (!woId) return false;
+  const wo = findWO(await fetchTab(env, 'Work_Orders'), String(woId));
+  return !!wo && await isTestRecord(env, 'Properties', wo.Property_ID);
+}
+
+// POST /staging/ui-test-session {role:'vendor'|'owner'|'tenant', id?} (Sep 30 2026). Used by
+// test-login.js so a browser test tab can be logged into a portal without typing a PIN. Staging
+// only (404 elsewhere); reachable only with HUB_TEST_TOKEN / an open ui-test window (auth gate) or
+// WORKER_SECRET. It only ever logs in as a TEST- row (Vendors.Name / Owners.Company|First_Name /
+// Tenants.Last_Name starting 'TEST-') by running the real by-PIN handler with that row's own PIN,
+// then re-signs the token with stg:1 + a 2h TTL, which the gate refuses on any non-staging host.
+async function uiTestSessionHandler(env, url, body) {
+  if (!isStaging(env, url)) return json({ error: 'Not found' }, 404);
+  const role = String((body && body.role) || '');
+  const isT = (v) => String(v || '').startsWith('TEST-');
+  const CFG = {
+    vendor: { tab: 'Vendors', test: (r) => isT(r.Name), first: (r) => (String(r.First_Name || '').trim() || String(r.Name || '').split(' ')[0]), fn: vendorByPin, idOf: (d) => d.vendor_id },
+    owner: { tab: 'Owners', test: (r) => isT(r.Company) || isT(r.First_Name), first: (r) => String(r.First_Name || ''), fn: ownerByPin, idOf: (d) => d.owner_id },
+    tenant: { tab: 'Tenants', test: (r) => isT(r.Last_Name), first: (r) => String(r.First_Name || ''), fn: tenantByPin, idOf: (d) => d.tenant_id },
+  }[role];
+  if (!CFG) return json({ error: 'role must be vendor, owner or tenant' }, 400);
+  const rows = (await fetchTab(env, CFG.tab)).filter((r) => CFG.test(r) && r.PIN && r.Active !== 'FALSE' && CFG.first(r));
+  const want = body && body.id ? String(body.id) : '';
+  const row = want ? rows.find((r) => String(r.ID) === want) : rows[0];
+  if (!row) return json({ error: want ? `no TEST- ${role} with id ${want} and a PIN` : `no TEST- ${role} with a PIN on staging` }, 404);
+  const u = new URL(url.toString());
+  u.search = '';
+  u.searchParams.set('pin', String(row.PIN));
+  u.searchParams.set('name', CFG.first(row));
+  const res = await CFG.fn(env, u);
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok || !data) return json({ error: 'test login failed', status: res.status, detail: data && data.error }, 502);
+  const id = CFG.idOf(data) || row.ID;
+  data.token = await makeSessionToken({ role, id, stg: 1 }, env.WORKER_SECRET, 2 * 60 * 60);
+  data._testmode = true;
+  return json(data);
+}
+
 async function isTestRecord(env, tab, id) {
   if (!id) return false;
   const rows = await fetchTab(env, tab);
