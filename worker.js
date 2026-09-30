@@ -17947,6 +17947,25 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!_tab || !_b.id) return false;
     return await isTestRecord(env, _tab, _b.id);
   }
+  // Remaining /qb/* routes. The first group act only on QuickBooks ids (no sheet record ids) and staging QB is the
+  // Intuit sandbox, so they can only ever touch sandbox data. The second group carries a Hub record id -> TEST only.
+  if (['/qb/find-bills', '/qb/delete-bill', '/qb/set-bill-docnumber', '/qb/attach-to-bill', '/qb/record-paid-bill',
+       '/qb/pay-bills'].includes(path)) return true;
+  if (path === '/qb/vendor-reconcile' || path === '/qb/link-vendor-bills') return !!_b.vendor_id && await isTestRecord(env, 'Vendors', _b.vendor_id);
+  if (path === '/qb/backfill-emails') {
+    if (!Array.isArray(_b.ids) || !_b.ids.length) return false;
+    for (const _i of _b.ids) if (!(await isTestRecord(env, 'Owners', _i))) return false;
+    return true;
+  }
+  if (path === '/qb/backfill-invoice-emails') {
+    if (!Array.isArray(_b.ids) || !_b.ids.length) return false;
+    const _irs3 = await fetchTab(env, 'Invoice_Review');
+    for (const _i of _b.ids) {
+      const _r = _irs3.find(r => String(r.ID) === String(_i));
+      if (!_r || !_r.WO_ID || !(await isTestWO(env, _r.WO_ID))) return false;
+    }
+    return true;
+  }
   if (path === '/invoice-review/approve') return !!_b.wo_id && await isTestWO(env, _b.wo_id);
   if (path === '/invoice-review/unapprove') {
     if (!_b.id) return false;
