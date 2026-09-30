@@ -6384,7 +6384,7 @@ async function addonSubmit(env, body, callerRole, callerSessionId) {
     if (!est || est.error || !est.success) return estRes;
   }
   // Un-hide the child: it is now a normal job awaiting approval.
-  await updateWOFields(env, childId, { Voided: 'FALSE', Addon_Status: 'Submitted' });
+  await updateWOFields(env, childId, { Voided: 'FALSE', Void_Reason: '', Void_Reason_Detail: '', Addon_Status: 'Submitted' });
   const est2 = addonLatestEstimate(await fetchTab(env, 'Estimates'), childId);
   return json({ success: true, child_wo_id: childId, version: est2 ? (parseInt(est2.Version) || 1) : 1, subtotal: est2 ? est2.Subtotal : amount.toFixed(2) });
 }
