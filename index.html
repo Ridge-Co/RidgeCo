@@ -9338,6 +9338,160 @@ function openPushToScopeUI(woId, approveFirst) {
     }).catch(function(e) { toast(e.message, 'error'); });
 }
 
+// ── Additional work (vendor "Found something else?") — admin side ────────────
+// Submitted add-ons are CHILD work orders (Type 'addon', Parent_WO_ID = this WO), each carrying
+// one normal Estimate. This section is deliberately separate from the addBtn(...) action block
+// and from the estimate panel: it lists the add-ons under the PARENT with photos + lump-sum
+// amount and drives the existing estimate helpers with the CHILD wo_id.
+var _awAdmin = {};          // parentId -> [add-on rows from GET /wo/additional-work]
+var _awAdminChildren = {};  // childId  -> parentId (so estimate actions on a child can refresh this section)
+function awAdminRow(childId) {
+  var p = _awAdminChildren[childId], l = (p && _awAdmin[p]) || [];
+  for (var i = 0; i < l.length; i++) { if (l[i].child_wo_id === childId) return l[i]; }
+  return null;
+}
+function awAdminState(a) {
+  var s = String(a.estimate_status || '').toLowerCase();
+  if (s === 'approved') return { key: 'approved', label: 'Approved', color: '#166534', bg: '#eaf6ee' };
+  if (s === 'needs info') return { key: 'needs', label: 'Needs info (waiting on vendor)', color: '#7a4b00', bg: '#fdf2e2' };
+  if (s === 'declined') return { key: 'declined', label: 'Declined', color: '#8a1c14', bg: '#fdecea' };
+  return { key: 'pending', label: 'Awaiting your decision', color: 'var(--accent)', bg: 'var(--surface)' };
+}
+function loadHubAdditionalWork(woId, detailBody) {
+  var holder = document.getElementById('aw-admin-' + woId);
+  if (!holder) {
+    holder = document.createElement('div');
+    holder.id = 'aw-admin-' + woId;
+    holder.style.display = 'none'; // stays hidden unless this WO actually has submitted add-ons
+    if (detailBody) detailBody.appendChild(holder);
+  }
+  reloadHubAdditionalWork(woId);
+}
+function reloadHubAdditionalWork(woId) {
+  var holder = document.getElementById('aw-admin-' + woId);
+  if (!holder) return Promise.resolve();
+  return api('GET', '/wo/additional-work?parent_wo_id=' + encodeURIComponent(woId)).then(function(res) {
+    var list = (res && res.success && Array.isArray(res.items)) ? res.items : [];
+    _awAdmin[woId] = list;
+    list.forEach(function(a) { _awAdminChildren[a.child_wo_id] = woId; });
+    renderHubAdditionalWork(woId, list, holder);
+  }).catch(function() { /* non-critical — section simply stays hidden */ });
+}
+// Called from refreshHubEstimateView: any estimate action taken on a child (approve, needs-info,
+// decline, push-to-scope) re-renders its parent's Additional work section.
+function awOnChildChanged(childId) {
+  var parentId = _awAdminChildren[childId];
+  if (parentId) reloadHubAdditionalWork(parentId);
+}
+function renderHubAdditionalWork(woId, list, holder) {
+  if (!holder) return;
+  if (!list.length) { holder.style.display = 'none'; holder.innerHTML = ''; return; }
+  var pending = list.filter(function(a) { return awAdminState(a).key === 'pending'; }).length;
+  holder.style.display = '';
+  holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid ' + (pending ? 'var(--warn)' : 'var(--border)') + ';border-radius:8px;padding:12px">' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">' +
+      '<span style="color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase">➕ ADDITIONAL WORK (vendor found)</span>' +
+      (pending ? '<span style="background:var(--warn);color:#fff;font-size:11px;font-weight:bold;padding:2px 8px;border-radius:10px">' + pending + ' pending</span>' : '') +
+    '</div>' + list.map(function(a) { return awAdminCard(woId, a); }).join('') + '</div>';
+}
+function awAdminCard(woId, a) {
+  var si = awAdminState(a), cid = esc(a.child_wo_id);
+  var amt = parseFloat(a.amount || 0);
+  var bs = 'min-height:44px;margin:0';
+  var items = (a.items || []).map(function(it) {
+    var photos = (it.photos || []).map(function(p) {
+      return '<a href="' + esc(p.url) + '" target="_blank" rel="noopener" title="' + esc(p.file_name || '') + '" style="display:inline-block;width:64px;height:64px;border-radius:6px;overflow:hidden;border:1px solid var(--border);background:var(--surface);text-align:center;line-height:64px;text-decoration:none">' +
+        '<img src="' + esc(p.url) + '" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;vertical-align:top" onerror="this.replaceWith(document.createTextNode(\'📷\'))"></a>';
+    }).join('');
+    return '<div style="margin-top:8px"><div style="font-size:13px;white-space:pre-wrap">• ' + esc(it.desc || '') + '</div>' +
+      ((it.desc_en && it.desc_en !== it.desc) ? '<div style="font-size:12px;color:var(--muted);white-space:pre-wrap;margin-left:10px">EN: ' + esc(it.desc_en) + '</div>' : '') +
+      (photos ? '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">' + photos + '</div>' : '<div style="font-size:11px;color:var(--danger);margin-top:4px">No photos</div>') + '</div>';
+  }).join('');
+  var open = si.key === 'pending' || si.key === 'needs';
+  var btns = '';
+  if (open) {
+    btns += '<button class="btn small success" style="' + bs + '" onclick="awAdminApprove(\'' + cid + '\')">✓ Approve — go ahead now</button>' +
+      '<button class="btn small" style="' + bs + '" onclick="awAdminPush(\'' + cid + '\')">📄 Approve &amp; send to proposal</button>';
+  }
+  if (si.key !== 'declined') {
+    btns += '<button class="btn small secondary" style="' + bs + '" onclick="awAdminNotifyOwner(\'' + cid + '\')">✉ Notify owner (no price)' + (a.owner_notified ? ' — again' : '') + '</button>';
+  }
+  if (open) {
+    btns += (si.key === 'pending' ? '<button class="btn small secondary" style="' + bs + '" onclick="estimateNeedsInfoUI(\'' + cid + '\')">❓ Needs info</button>' : '') +
+      '<button class="btn small danger" style="' + bs + '" onclick="estimateDeclineUI(\'' + cid + '\')">Decline</button>';
+  }
+  return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:10px">' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap">' +
+      '<a href="javascript:void(0)" onclick="openWODetail(\'' + cid + '\')" style="color:var(--info);font-weight:bold;font-size:12px">' + cid + ' →</a>' +
+      '<span style="font-size:11px;font-weight:bold;padding:3px 8px;border-radius:10px;background:' + si.bg + ';color:' + si.color + ';border:1px solid ' + si.color + '">' + esc(si.label) + '</span>' +
+    '</div>' +
+    '<div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:6px"><span style="font-size:24px;font-weight:bold;color:var(--accent2)">$' + amt.toFixed(2) + '</span>' +
+      '<span style="font-size:11px;color:var(--muted)">lump sum</span>' +
+      (a.tenant_mentioned ? '<span style="font-size:11px;background:#e8f0fb;color:var(--accent);padding:2px 7px;border-radius:10px">🗣 Tenant mentioned it</span>' : '') +
+      (a.owner_notified ? '<span style="font-size:11px;background:#eaf6ee;color:#166534;padding:2px 7px;border-radius:10px">✉ Owner notified</span>' : '') +
+    '</div>' + items +
+    (btns ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">' + btns + '</div>' : '') +
+    '</div>';
+}
+function awAdminApprove(childId) {
+  var a = awAdminRow(childId);
+  var amt = a ? parseFloat(a.amount || 0).toFixed(2) : '?';
+  if (!confirm('Approve $' + amt + ' of extra work (' + childId + ')?\n\nThe vendor gets the standard approval text (no dollar amounts) and is cleared to go ahead now.')) return;
+  approveEstimateUI(childId);
+}
+function awAdminPush(childId) { openPushToScopeUI(childId, true); }
+var _awNotice = null;
+function awAdminNotifyOwner(childId) {
+  api('POST', '/wo/additional-work/owner-notice', { child_wo_id: childId, preview: true }).then(function(res) {
+    if (!res || !res.success) { toast((res && res.error) || 'Could not draft the owner notice', 'error'); return; }
+    _awNotice = { childId: childId, sending: false };
+    var rec = res.recipients;
+    var recTxt = Array.isArray(rec) ? rec.map(function(r) {
+      return (r && typeof r === 'object') ? [r.name, r.phone, r.email].filter(Boolean).join(' · ') : String(r);
+    }).join('\n') : String(rec || '');
+    var b = document.getElementById('aw-notice-body');
+    b.innerHTML =
+      '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Information only — photos, no price. Nothing is sent until you tap Send.</div>' +
+      '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">To</div>' +
+      '<div style="white-space:pre-wrap;font-size:13px;margin-bottom:10px">' + (esc(recTxt) || '<span style="color:var(--danger)">No recipients on file</span>') + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">Text message</div>' +
+      '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px">' + esc(res.sms || '') + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">Email</div>' +
+      '<div style="font-size:13px;font-weight:bold;margin-bottom:4px">' + esc(res.email_subject || '') + '</div>' +
+      '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px">' + esc(res.email_body || '') + '</div>';
+    var sb = document.getElementById('aw-notice-send'); sb.disabled = false; sb.textContent = 'Send to owner';
+    openModal('modal-aw-notice');
+  }).catch(function(e) { toast(e.message, 'error'); });
+}
+function awNoticeSend() {
+  if (!_awNotice || _awNotice.sending) return;
+  _awNotice.sending = true;
+  var sb = document.getElementById('aw-notice-send'); sb.disabled = true; sb.textContent = 'Sending…';
+  var childId = _awNotice.childId;
+  api('POST', '/wo/additional-work/owner-notice', { child_wo_id: childId, preview: false }).then(function(res) {
+    if (!res || !res.success) { _awNotice.sending = false; sb.disabled = false; sb.textContent = 'Send to owner'; toast((res && res.error) || 'Send failed', 'error'); return; }
+    toast('Owner notified', 'success');
+    closeModal('modal-aw-notice'); _awNotice = null;
+    awOnChildChanged(childId);
+  }).catch(function(e) { if (_awNotice) _awNotice.sending = false; sb.disabled = false; sb.textContent = 'Send to owner'; toast(e.message, 'error'); });
+}
+// "+N extra" badge on the parent WO list card (cached per workorders array so the list stays cheap).
+var _awBadgeCache = { src: null, n: 0, counts: {} };
+function awExtraBadgeHTML(w) {
+  try {
+    var src = state.workorders;
+    if (_awBadgeCache.src !== src || _awBadgeCache.n !== (src || []).length) {
+      var c = {};
+      safeArray(src).forEach(function(x) {
+        if (x.Parent_WO_ID && String(x.Type || '').toLowerCase() === 'addon' && x.Voided !== 'TRUE' && ['cancelled', 'draft', 'withdrawn'].indexOf(String(x.Status || '').toLowerCase()) === -1) c[x.Parent_WO_ID] = (c[x.Parent_WO_ID] || 0) + 1;
+      });
+      _awBadgeCache = { src: src, n: (src || []).length, counts: c };
+    }
+    var n = _awBadgeCache.counts[w.ID] || 0;
+    return n ? '<span class="badge" style="background:#e8f0fb;border:1px solid var(--accent);color:var(--accent);margin-left:4px" title="Vendor-found additional work">+' + n + ' extra</span>' : '';
+  } catch (e) { return ''; }
+}
+
 // ── Hub Receipt Tracking ──────────────────────────────────────
 function loadHubReceiptTracking(woId, detailBody) {
   var holder = document.getElementById('receipts-' + woId);
