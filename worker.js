@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.4-staging-gmail-connect-guard';
+const BUILD_VERSION = '2026-09-30.6-staging-qb-clear-stale-token';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -14744,7 +14744,7 @@ async function arRemind(env, body) {
     // Require a POSITIVE confirmation (2xx + Invoice + EmailStatus) — never report "sent" on a
     // response that merely lacks a Fault, or the audit log would claim a send that never went.
     try {
-      const rr = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(id)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
+      const rr = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(id)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
       const sres = await rr.json().catch(() => null);
       if (!rr.ok || !sres || sres.Fault || !sres.Invoice) throw new Error('send not confirmed (HTTP ' + rr.status + '): ' + JSON.stringify((sres && sres.Fault) || sres || '').slice(0, 150));
       const es = sres.Invoice.EmailStatus;
@@ -15066,7 +15066,7 @@ async function arReportPayLink(env, body) {
   const email = (inv.BillEmail && inv.BillEmail.Address) || auth.owner.Billing_Email || auth.owner.Email || '';
   if (!email) return json({ error: 'no_email', message: 'No email on file for this invoice — please contact Ridge Co.' }, 400);
   try {
-    const rr = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(invoiceId)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
+    const rr = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(invoiceId)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
     const sres = await rr.json().catch(() => null);
     if (!rr.ok || !sres || sres.Fault || !sres.Invoice) throw new Error('send not confirmed');
     return json({ ok: true, sent_to_email: true, email });
@@ -17926,6 +17926,9 @@ async function hubTestWriteAllowed(env, path, body) {
   // anything else (passwords, tokens, phone/email routing, QB keys) stays denied.
   if (path === '/config/set') {
     const _k = String(_b.key || '');
+    // Clear-only: the staging Config sheet can hold a stale token copied from another environment, and the
+    // Config value outranks the env secret in qbAccessToken. Empty string only - never writes a token.
+    if (_k === 'QB_REFRESH_TOKEN') return _b.value === '';
     if (!['pricing_config', 'Access_Trade_Defaults', 'US_HOLIDAYS'].includes(_k)) return false;
     if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { return false; } }
     return typeof _b.value === 'string' && _b.value.length < 5000;
@@ -18248,6 +18251,11 @@ async function updateWOFields(env, woId, fields) {
 // ── QUICKBOOKS ONLINE (production) ───────────────────────────
 const QB_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const QB_API_BASE  = 'https://quickbooks.api.intuit.com/v3/company';
+const QB_SANDBOX_API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
+// Staging ALWAYS talks to Intuit's SANDBOX server (a sandbox realm does not exist on the production
+// server, and a production realm is rejected by the sandbox server), so staging can never touch the
+// real books. Production is unchanged. (Staging writes reach the sandbox only when QB_* creds are set.)
+function qbBase(env) { return (env && (env.__STAGING__ ?? isStaging(env))) ? QB_SANDBOX_API_BASE : QB_API_BASE; }
 
 async function qbAccessToken(env) {
   if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REALM_ID)
@@ -18284,14 +18292,16 @@ async function qbApi(env, path, method = 'GET', body = null, token = null) {
   // this one function, so this single check covers every /qb/* write endpoint
   // and every internal QB-booking path (scope/proposal signatures, trash
   // invoicing, etc.) without touching any of their call sites.
-  if (method && method !== 'GET' && (env.__STAGING__ ?? isStaging(env))) {
+  // Staging writes go to the Intuit SANDBOX (qbBase) when sandbox creds are configured; with no QB creds
+  // at all they stay stubbed exactly as before.
+  if (method && method !== 'GET' && (env.__STAGING__ ?? isStaging(env)) && !(env.QB_CLIENT_ID && env.QB_CLIENT_SECRET && env.QB_REALM_ID)) {
     console.log(`🧪 STAGING — QuickBooks ${method} ${path} stubbed (nothing sent to Intuit)`);
     return { staged: true, would_have: { method, path, body: body || null }, note: '🧪 STAGING MODE — QuickBooks call stubbed, nothing booked.' };
   }
   if (!token) token = await qbAccessToken(env);
   const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const res = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/${path}`, opts);
+  const res = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/${path}`, opts);
   return await res.json();
 }
 
@@ -21124,7 +21134,7 @@ async function qbAttachToBill(env, body) {
     const fd = new FormData();
     fd.append('file_metadata_01', new Blob([JSON.stringify(meta)], { type: 'application/json' }), 'metadata.json');
     fd.append('file_content_01', new Blob([bytes], { type: 'application/pdf' }), fileName);
-    const up = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/upload?minorversion=73`, {
+    const up = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/upload?minorversion=73`, {
       method: 'POST', headers: { Authorization: `Bearer ${qtok}`, Accept: 'application/json' }, body: fd });
     const jr = await up.json();
     const resp = jr && jr.AttachableResponse && jr.AttachableResponse[0];
@@ -21942,7 +21952,7 @@ async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, 
   const form = new FormData();
   form.append('file_metadata_01', new Blob([JSON.stringify(meta)], { type: 'application/json' }), 'metadata.json');
   form.append('file_content_01', new Blob([bytes], { type: mime }), filename);
-  const res = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/upload`, {
+  const res = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${qbToken}`, Accept: 'application/json' },
     body: form,
