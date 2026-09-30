@@ -9443,9 +9443,14 @@ function awAdminPush(childId) { openPushToScopeUI(childId, true); }
 var _awNotice = null;
 function awAdminNotifyOwner(childId) {
   api('POST', '/wo/additional-work/owner-notice', { child_wo_id: childId, preview: true }).then(function(res) {
-    if (!res || !res.success) { toast((res && res.error) || 'Could not draft the owner notice', 'error'); return; }
+    if (!res || res.error || !(res.preview || res.success)) { toast((res && res.error) || 'Could not draft the owner notice', 'error'); return; }
     _awNotice = { childId: childId, sending: false };
-    var rec = res.recipients;
+    // Worker preview shape: { recipient:{name,phone,email}, sms:{body}, email:{to,subject,html}, warnings:[] }
+    var smsTxt = (res.sms && typeof res.sms === 'object') ? (res.sms.body || '') : (res.sms || '');
+    var emailSubj = res.email_subject || (res.email && res.email.subject) || '';
+    var emailTxt = res.email_body || (res.email && res.email.html ? String(res.email.html).replace(/<\/(p|li|ul)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/\n{3,}/g, '\n\n').trim() : '');
+    var warnTxt = Array.isArray(res.warnings) ? res.warnings.join('\n') : '';
+    var rec = res.recipients || (res.recipient ? [res.recipient] : '');
     var recTxt = Array.isArray(rec) ? rec.map(function(r) {
       return (r && typeof r === 'object') ? [r.name, r.phone, r.email].filter(Boolean).join(' · ') : String(r);
     }).join('\n') : String(rec || '');
@@ -9455,10 +9460,11 @@ function awAdminNotifyOwner(childId) {
       '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">To</div>' +
       '<div style="white-space:pre-wrap;font-size:13px;margin-bottom:10px">' + (esc(recTxt) || '<span style="color:var(--danger)">No recipients on file</span>') + '</div>' +
       '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">Text message</div>' +
-      '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px">' + esc(res.sms || '') + '</div>' +
+      '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:10px">' + esc(smsTxt) + '</div>' +
       '<div style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">Email</div>' +
-      '<div style="font-size:13px;font-weight:bold;margin-bottom:4px">' + esc(res.email_subject || '') + '</div>' +
-      '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px">' + esc(res.email_body || '') + '</div>';
+      '<div style="font-size:13px;font-weight:bold;margin-bottom:4px">' + esc(emailSubj) + '</div>' +
+      '<div style="white-space:pre-wrap;font-size:13px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px">' + esc(emailTxt) + '</div>' +
+      (warnTxt ? '<div id="aw-notice-warn" style="white-space:pre-wrap;font-size:12px;color:var(--warn)">' + esc(warnTxt) + '</div>' : '');
     var sb = document.getElementById('aw-notice-send'); sb.disabled = false; sb.textContent = 'Send to owner';
     openModal('modal-aw-notice');
   }).catch(function(e) { toast(e.message, 'error'); });

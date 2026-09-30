@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.13-vendor-additional-work';
+const BUILD_VERSION = '2026-09-30.14-vendor-additional-work';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -6453,11 +6453,13 @@ async function addonList(env, url, callerRole, callerSessionId) {
       items, amount: est ? (est.Subtotal || '') : (c.Current_Estimate || ''),
       tenant_mentioned: String(c.Addon_Tenant_Mentioned || '') === 'TRUE',
       estimate: est ? { id: est.ID, version: parseInt(est.Version) || 1, status: est.Status || 'Pending' } : null,
+      estimate_status: est ? (est.Status || 'Pending') : 'Pending',
     };
     if (isAdmin) { row.owner_notified = !!String(c.Addon_Owner_Notified_Date || '').trim(); row.owner_notified_date = c.Addon_Owner_Notified_Date || ''; }
     return row;
   }).sort((a, b) => String(a.created_date).localeCompare(String(b.created_date)));
-  return json({ parent_wo_id: parentId, additional_work: out, pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
+  // success + items + per-row estimate_status are the contract vendor.html / index.html read (withdrawn rows are not listed in `items`).
+  return json({ success: true, parent_wo_id: parentId, additional_work: out, items: out.filter(r => !r.withdrawn), pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
 }
 
 // PURE — the INFORMATION-ONLY owner message. No price, no vendor bill/receipt anywhere. Photo links are
@@ -6526,7 +6528,7 @@ async function addonOwnerNotice(env, body) {
   }
   let emailResult = { sent: false, reason: 'no owner email' };
   if (ownerEmail) {
-    try { await gmailSendEmail(env, { to: ownerEmail, subject: msg.subject, html: msg.html }); emailResult = { sent: true }; }
+    try { const _er = await gmailSendEmail(env, { to: ownerEmail, subject: msg.subject, html: msg.html }); emailResult = (_er && _er.sent === false) ? { sent: false, staged: !!_er.staged, reason: _er.note || 'not sent' } : { sent: true }; }
     catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; }
   }
   const anyOut = !!(smsResult && (smsResult.sent || smsResult.held_for_quiet_hours)) || emailResult.sent;
