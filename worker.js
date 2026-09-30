@@ -6432,7 +6432,7 @@ function addonPhotosByItem(attachments, childId) {
 async function addonList(env, url, callerRole, callerSessionId) {
   const parentId = String(url.searchParams.get('parent_wo_id') || '').trim();
   if (!parentId) return json({ error: 'parent_wo_id required' }, 400);
-  const [workorders, estimates, attachments] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Estimates'), fetchTab(env, 'Attachments')]);
+  const [workorders, estimates, attachments] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments']);
   const parent = findWO(workorders, parentId);
   if (!parent) return json({ error: 'Work order not found' }, 404);
   if (callerRole === 'vendor' && String(parent.Vendor_ID || '') !== String(callerSessionId || '')) return json({ error: 'This work order is not assigned to you' }, 403);
