@@ -231,7 +231,7 @@ t('no children: results are identical to the original two-argument behaviour for
 
 // qbReadyQueue's combines_with counts use the SAME gate (executed, not just grepped)
 {
-  const rq = new Function('json', 'fetchTabs', 'findWO', 'addonRollsIntoParent', grabAsync('qbReadyQueue') + '\nreturn qbReadyQueue;');
+  const rq = new Function('json', 'fetchTabs', 'findWO', 'addonRollsIntoParent', 'addonStandaloneBlock', grabAsync('qbReadyQueue') + '\nreturn qbReadyQueue;');
   const run = async (e, childOver = {}) => {
     const irRows = [{ ID: '1', WO_ID: 'WO-100', Bill_ID: 'B1', Active: 'TRUE', QB_Invoice_ID: '', QB_Invoice_Status: 'pending' }, { ID: '3', WO_ID: 'WO-101', Bill_ID: 'B3', Active: 'TRUE', QB_Invoice_ID: '', QB_Invoice_Status: 'pending' }];
     const W = [{ ID: 'WO-100', Type: 'manual' }, childWo(childOver)];
