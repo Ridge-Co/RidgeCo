@@ -13,6 +13,14 @@
 
 ---
 
+# WHERE THINGS STAND — Sep 30, 2026 (vendor additional work — PR #156, base `main`, NOT merged)
+
+- **PR #156** (base `main`, head `feat/vendor-additional-work`, awaiting Brett's merge; money-adjacent): vendors propose extra work found on a job. Child WO (`Type=addon`, `Parent_WO_ID`) + normal pending estimate, photos required per item (server-enforced two-phase start/submit), texts Brett as "Additional work". Approved add-ons roll into the parent invoice; unapproved/declined never do (`addonRollsIntoParent`, `addonStandaloneBlock`). Owner info-only notice is preview-then-send on Brett's tap. Brief: `context/VENDOR_ADDITIONAL_WORK_BUILD_BRIEF_v1.0.md`. Tests: test/vendor-additional-work*.test.mjs (246 + 65 + 22), build `2026-09-30.17-vendor-additional-work`.
+- Not verified on staging: real Drive photo upload, QuickBooks invoice send, real SMS/email, real-device camera. After merge, run one real low-dollar add-on end to end.
+- Known gaps: parent combine/split ignores live add-ons; abandoned Draft children stay hidden and use a WO number.
+
+---
+
 # WHERE THINGS STAND — Sep 30, 2026 (two-button estimate approval — PR #132, base `main`, NOT merged)
 
 - **PR #132** (base `main`, head `fix/approve-and-send-to-proposal`, awaiting Brett's merge): the WO estimate panel now has "Approve (no proposal)" (unchanged: approves + texts vendor) and "Approve & send to proposal" (`POST /wo/push-to-scope` with `approve_first: true`: approves silently, converts, links Scope, stage Proposed, NO vendor text until the owner signs). Test: test/push-approve-first.test.mjs (21 assertions). FEATURE_LOG `[FL-20260930-1030-af]`.
