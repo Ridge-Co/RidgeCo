@@ -6506,6 +6506,7 @@ async function addonOwnerNotice(env, body) {
   if (!child || !addonIsChild(child)) return json({ error: 'Additional-work job not found' }, 404);
   const status = String(child.Addon_Status || '');
   if (status !== 'Submitted') return json({ error: 'Only a submitted additional-work item can be shared with the owner' }, 400);
+  if (String(child.Voided || '').toUpperCase() === 'TRUE') return json({ error: 'This additional work is voided' }, 400);
   const est = addonLatestEstimate(estimates, childId);
   if (est && String(est.Status || '') === 'Declined') return json({ error: 'This additional work was declined — it is never shown to the owner' }, 400);
   const parent = findWO(workorders, child.Parent_WO_ID) || child;
