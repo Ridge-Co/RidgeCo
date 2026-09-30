@@ -18248,6 +18248,11 @@ async function updateWOFields(env, woId, fields) {
 // ── QUICKBOOKS ONLINE (production) ───────────────────────────
 const QB_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 const QB_API_BASE  = 'https://quickbooks.api.intuit.com/v3/company';
+const QB_SANDBOX_API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/company';
+// Staging ALWAYS talks to Intuit's SANDBOX server (a sandbox realm does not exist on the production
+// server, and a production realm is rejected by the sandbox server), so staging can never touch the
+// real books. Production is unchanged.
+function qbBase(env) { return (env && (env.__STAGING__ ?? isStaging(env))) ? QB_SANDBOX_API_BASE : QB_API_BASE; }
 
 async function qbAccessToken(env) {
   if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REALM_ID)
