@@ -20418,7 +20418,6 @@ async function applyStagingQbTradeMap(env) {
       QB_TRADE_MAP[t.trade] = { item: String(it.Id), income: String(it.IncomeAccountRef.value), expense: exp ? String(exp.Id) : QB_TRADE_MAP[t.trade].expense };
       n++;
     }
-    const g = items['general'] || null; // fall back for trades that book to General (Locks, Pest Control, General)
     if (n) _stgQbTradeApplied = true;
     console.log(`🧪 STAGING — QB trade map re-pointed at sandbox ids for ${n} trades`);
   } catch (e) { console.log('staging QB trade map apply failed: ' + (e && e.message)); }
